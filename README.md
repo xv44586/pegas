@@ -1,0 +1,61 @@
+# Pegas
+
+Pegas 是一个以自然对话为统一入口的个人智能代理。
+
+你只需要表达目标、需求或灵感；Pegas 负责理解上下文、组织任务、调用工具、持续执行，并在需要你参与时回来找你。用户不需要管理 session、模型、工作流或执行进程。
+
+名字来自《宇宙骑士 BLADE》中的支援机器人 Pegas（柏卡斯）：它不是主角本身，而是承接意图、提供能力并帮助完成“变身”的长期搭档。
+
+## 核心承诺
+
+- 一个持续存在的 Pegas：Web、App、macOS 和消息渠道共享身份、任务和记忆。
+- 对话是唯一必需的入口：用户可以随时插入新想法，不必先分类或切换工作区。
+- 后台自动管理多个任务：识别新任务、旧任务补充、临时想法、周期事项和等待条件。
+- 长任务可以跨进程、跨设备、跨时间继续运行，失败后能够恢复。
+- 只在有阶段成果、需要决策、遇到阻塞或完成时主动联系用户。
+- 自主性服从风险边界：权限、审批、执行记录和撤销能力是产品的一部分。
+
+## 当前阶段
+
+项目目前处于 MVP 验证阶段。仓库已经包含最小 Control Plane、SQLite 持久层、持久 Router/Run Worker、DSH headless Adapter、独立 Supervisor、恢复 API、React Web 客户端和 CI 骨架。第一阶段以 DSH 作为 Agent Runtime，Pegas 自己维护产品领域与任务控制层。
+
+- [产品定位](docs/product-positioning.md)
+- [系统架构](docs/architecture.md)
+- [MVP 计划](docs/mvp-plan.md)
+
+## 本地验证
+
+需要 Node.js 22.19+ 或 24+，以及 pnpm 11：
+
+```bash
+pnpm install
+pnpm check
+pnpm smoke
+```
+
+启动开发进程：
+
+```bash
+pnpm build
+pnpm start:supervisor
+```
+
+单独开发 Web 客户端时，分别启动 Control Plane、Worker 和 Vite：
+
+```bash
+pnpm dev
+pnpm dev:worker
+pnpm dev:web
+```
+
+Web 开发服务器默认位于 `http://127.0.0.1:4319`，并将 API 请求代理到 `http://127.0.0.1:4317`。生产构建由 Control Plane 在同一地址直接提供。
+
+默认情况下 Control Plane 和 Recovery API 只监听本机回环地址。对外暴露任何接口前必须配置独立访问令牌。
+
+Worker 默认通过 DSH headless 执行 Run。自动化测试使用显式的 `PEGAS_EXECUTOR=echo`，不会调用模型；生产或人工验证不能使用该测试执行器。
+
+## 最重要的产品判断
+
+Conversation 是用户输入流，Task 才是工作的生命周期。
+
+Pegas 可以在内部创建任意数量的 session、worker 或 sub-agent，但这些都属于实现细节。用户始终只面对同一个 Pegas；可选的任务中心用于查看和接管，而不是要求用户进行日常维护。

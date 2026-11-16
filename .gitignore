@@ -1,0 +1,25 @@
+# Local research material and downloaded third-party pages.
+research/
+
+# Dependencies and build output.
+node_modules/
+dist/
+coverage/
+
+# Runtime state, releases, and local configuration.
+data/
+releases/
+.env
+.env.*
+!.env.example
+
+# Local editor and OS files.
+.DS_Store
+*.log
+
+# Local browser and design review artifacts.
+.playwright-cli/
+output/
+.impeccable/hook.cache.json
+.impeccable/review/
+*.tsbuildinfo

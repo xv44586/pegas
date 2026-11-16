@@ -1,0 +1,137 @@
+import { describe, expect, it } from 'vitest'
+import { setTimeout as wait } from 'node:timers/promises'
+
+import { PegasStore } from '../src/storage/sqlite-store.js'
+
+describe('PegasStore', () => {
+  it('deduplicates source events without losing the original event', () => {
+    const store = new PegasStore(':memory:')
+    const input = {
+      userId: 'user-1',
+      type: 'user.message',
+      source: 'mobile',
+      dedupeKey: 'message-1',
+      payload: { text: 'Build a feature' },
+    }
+
+    const first = store.enqueueEvent(input)
+    const duplicate = store.enqueueEvent(input)
+
+    expect(first.inserted).toBe(true)
+    expect(duplicate.inserted).toBe(false)
+    expect(duplicate.event.id).toBe(first.event.id)
+    store.close()
+  })
+
+  it('leases events and only lets the owner complete them', () => {
+    const store = new PegasStore(':memory:')
+    store.enqueueEvent({
+      userId: 'user-1',
+      type: 'user.message',
+      source: 'mobile',
+      payload: { text: 'Hello' },
+    })
+
+    const event = store.claimNextEvent('worker-1')
+
+    expect(event?.status).toBe('processing')
+    expect(() => store.completeEvent(event?.id ?? '', 'worker-2')).toThrow(
+      /does not own/,
+    )
+    store.completeEvent(event?.id ?? '', 'worker-1')
+    expect(store.claimNextEvent('worker-1')).toBeUndefined()
+    store.close()
+  })
+
+  it('creates one task and one outbox message when an event is retried', () => {
+    const store = new PegasStore(':memory:')
+    const { event } = store.enqueueEvent({
+      userId: 'user-1',
+      type: 'user.message',
+      source: 'mobile',
+      payload: { text: 'Add self recovery' },
+    })
+
+    const taskA = store.createTaskFromEvent(event, 'Add self recovery')
+    const taskB = store.createTaskFromEvent(event, 'A duplicate title')
+    const messageA = store.enqueueOutbox({
+      userId: event.userId,
+      taskId: taskA.id,
+      channel: 'mobile',
+      dedupeKey: `task-created:${taskA.id}`,
+      payload: { taskId: taskA.id },
+    })
+    const messageB = store.enqueueOutbox({
+      userId: event.userId,
+      taskId: taskA.id,
+      channel: 'mobile',
+      dedupeKey: `task-created:${taskA.id}`,
+      payload: { taskId: taskA.id },
+    })
+
+    expect(taskB.id).toBe(taskA.id)
+    expect(messageB.id).toBe(messageA.id)
+    expect(store.listTasks()).toHaveLength(1)
+    store.close()
+  })
+
+  it('does not duplicate a run when routing is replayed after a crash', () => {
+    const store = new PegasStore(':memory:')
+    const { event } = store.enqueueEvent({
+      userId: 'user-1',
+      type: 'user.message',
+      source: 'mobile',
+      payload: { text: 'Implement durable routing' },
+    })
+    const decision = {
+      kind: 'create_task' as const,
+      title: 'Implement durable routing',
+      goal: 'Implement durable routing',
+      input: 'Implement durable routing',
+      reason: 'test',
+    }
+
+    const first = store.applyRoutingDecision(event, decision, 'test-executor')
+    const replay = store.applyRoutingDecision(event, decision, 'test-executor')
+
+    expect(replay.task.id).toBe(first.task.id)
+    expect(replay.run.id).toBe(first.run.id)
+    expect(store.listRuns()).toHaveLength(1)
+    store.close()
+  })
+
+  it('lets a new worker resume an expired run from its durable executor ref', async () => {
+    const store = new PegasStore(':memory:')
+    const { event } = store.enqueueEvent({
+      userId: 'user-1',
+      type: 'user.message',
+      source: 'mobile',
+      payload: { text: 'Recover this run' },
+    })
+    store.applyRoutingDecision(
+      event,
+      {
+        kind: 'create_task',
+        title: 'Recover this run',
+        goal: 'Recover this run',
+        input: 'Recover this run',
+        reason: 'test',
+      },
+      'test-executor',
+    )
+    const firstClaim = store.claimNextRun('worker-1', 1)
+    if (!firstClaim) throw new Error('Expected the first claim')
+    store.recordExecutorRef(firstClaim.run.id, 'worker-1', 'session-durable')
+    await wait(10)
+
+    const recovered = store.claimNextRun('worker-2')
+
+    expect(recovered?.run).toMatchObject({
+      id: firstClaim.run.id,
+      executorRef: 'session-durable',
+      claimedBy: 'worker-2',
+      attempts: 2,
+    })
+    store.close()
+  })
+})

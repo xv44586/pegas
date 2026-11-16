@@ -1,0 +1,54 @@
+{
+  "name": "pegas",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "A conversation-first personal agent with durable tasks and recoverable execution.",
+  "packageManager": "pnpm@11.25.0",
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "scripts": {
+    "build": "pnpm build:server && pnpm build:web",
+    "build:server": "tsc -p tsconfig.build.json",
+    "build:web": "vite build --config web/vite.config.ts",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "dev": "tsx src/control-plane/main.ts",
+    "dev:web": "vite --config web/vite.config.ts",
+    "dev:worker": "tsx src/worker/main.ts",
+    "dev:supervisor": "tsx src/supervisor/main.ts",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"web/**/*.{ts,tsx,css,html,json}\" \"scripts/**/*.mjs\" \"*.{json,mjs,yml,yaml}\" \".github/**/*.yml\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\" \"web/**/*.{ts,tsx,css,html,json}\" \"scripts/**/*.mjs\" \"*.{json,mjs,yml,yaml}\" \".github/**/*.yml\"",
+    "lint": "eslint src test web scripts",
+    "smoke": "node scripts/smoke.mjs",
+    "start": "node dist/control-plane/main.js",
+    "start:supervisor": "node dist/supervisor/main.js",
+    "start:worker": "node dist/worker/main.js",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit && tsc -p web/tsconfig.json --noEmit && tsc -p web/tsconfig.node.json --noEmit"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@types/node": "^24.19.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "eslint": "^10.15.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.14.0",
+    "jsdom": "^31.0.1",
+    "prettier": "^3.10.1",
+    "tsx": "^4.23.15",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.72.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0"
+  },
+  "dependencies": {
+    "@fontsource-variable/inter": "^5.3.0",
+    "lucide-react": "^1.73.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  }
+}
