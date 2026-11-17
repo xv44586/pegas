@@ -1,6 +1,10 @@
 # Local research material and downloaded third-party pages.
 research/
 
+# Local Git worktrees and package-manager caches.
+.pegas-worktrees/
+.pnpm-store/
+
 # Dependencies and build output.
 node_modules/
 dist/
