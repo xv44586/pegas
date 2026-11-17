@@ -8,7 +8,7 @@ describe('PegasStore', () => {
     const store = new PegasStore(':memory:')
     const defaults = {
       routerMode: 'model' as const,
-      modelProvider: 'codex-cli' as const,
+      modelProvider: 'openai' as const,
       modelName: 'gpt-default',
       privacyMode: 'disabled' as const,
       rewriteMode: 'disabled' as const,
@@ -40,6 +40,50 @@ describe('PegasStore', () => {
     expect(() => store.updateRuntimeSettings(1, defaults)).toThrow(
       '其他设备更新',
     )
+    store.close()
+  })
+
+  it('updates a provider connection and runtime selection in one revision transaction', () => {
+    const store = new PegasStore(':memory:')
+    const defaults = {
+      routerMode: 'rules' as const,
+      modelProvider: 'openai' as const,
+      modelName: 'gpt-5-mini',
+      privacyMode: 'disabled' as const,
+      rewriteMode: 'disabled' as const,
+    }
+    store.initializeRuntimeSettings(defaults)
+
+    const saved = store.updateRuntimeSettingsAndProvider(
+      1,
+      { ...defaults, routerMode: 'model' },
+      {
+        id: 'openai',
+        name: 'OpenAI',
+        protocol: 'openai-chat',
+        baseUrl: 'https://api.openai.com/v1',
+        apiKeyCiphertext: 'encrypted-key-one',
+        clearApiKey: false,
+      },
+    )
+
+    expect(saved).toMatchObject({ revision: 2, routerMode: 'model' })
+    expect(store.getModelProviderConnection('openai')).toMatchObject({
+      apiKeyCiphertext: 'encrypted-key-one',
+    })
+    expect(() =>
+      store.updateRuntimeSettingsAndProvider(1, defaults, {
+        id: 'openai',
+        name: 'OpenAI',
+        protocol: 'openai-chat',
+        baseUrl: 'https://api.openai.com/v1',
+        apiKeyCiphertext: 'must-not-win',
+        clearApiKey: false,
+      }),
+    ).toThrow('其他设备更新')
+    expect(store.getModelProviderConnection('openai')).toMatchObject({
+      apiKeyCiphertext: 'encrypted-key-one',
+    })
     store.close()
   })
 

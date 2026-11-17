@@ -3,14 +3,19 @@ import {
   Check,
   ChevronRight,
   CircleAlert,
+  CloudCog,
+  KeyRound,
   ListTodo,
   Mic,
   MessageSquareText,
   RotateCw,
+  Route,
   Send,
   Settings2,
+  ShieldCheck,
   Sparkles,
   Square,
+  WandSparkles,
   X,
 } from 'lucide-react'
 import {
@@ -28,6 +33,8 @@ import { MarkdownMessage } from './MarkdownMessage'
 import { useVoiceDictation } from './useVoiceDictation'
 import type {
   InboxEvent,
+  ModelProviderDraft,
+  ModelProviderId,
   OutboxMessage,
   Run,
   RuntimeSettings,
@@ -41,7 +48,10 @@ import type {
 const userId = 'owner'
 interface SettingsClient {
   settings(): Promise<SettingsResponse>
-  saveSettings(settings: RuntimeSettings): Promise<SettingsResponse>
+  saveSettings(
+    settings: RuntimeSettings,
+    provider: ModelProviderDraft,
+  ): Promise<SettingsResponse>
 }
 const emptySnapshot: Snapshot = {
   events: [],
@@ -260,7 +270,7 @@ export function App() {
   }
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${settingsOpen ? ' has-settings' : ''}`}>
       <aside
         className="identity-rail"
         aria-label="Pegas 导航"
@@ -528,12 +538,17 @@ function SettingsPanel({
   onClose: () => void
   compact: boolean
 }) {
+  const [section, setSection] = useState<
+    'models' | 'routing' | 'privacy' | 'rewrite'
+  >('models')
   const [settings, setSettings] = useState<RuntimeSettings>()
   const [capabilities, setCapabilities] = useState<SettingsCapabilities>()
+  const [providerDraft, setProviderDraft] = useState<ModelProviderDraft>()
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [saved, setSaved] = useState(false)
+  const [dirty, setDirty] = useState(false)
   const panel = useRef<HTMLElement>(null)
 
   useEffect(() => {
@@ -547,6 +562,11 @@ function SettingsPanel({
         if (!active) return
         setSettings(response.settings)
         setCapabilities(response.capabilities)
+        setDirty(false)
+        const selected = response.capabilities.providers.find(
+          provider => provider.id === response.settings.modelProvider,
+        )
+        if (selected) setProviderDraft(providerDraftFrom(selected))
       })
       .catch((caught: unknown) => {
         if (!active) return
@@ -562,33 +582,60 @@ function SettingsPanel({
 
   useEffect(() => {
     if (!compact || !open || !panel.current) return
-    const element = panel.current
-    const first = element.querySelector<HTMLElement>(
+    const first = panel.current.querySelector<HTMLElement>(
       '[data-panel-initial-focus]',
     )
     window.requestAnimationFrame(() => first?.focus())
-    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key !== 'Escape') return
+  }, [compact, open])
+
+  const handlePanelKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (!compact) return
+    if (event.key === 'Escape') {
       event.preventDefault()
       onClose()
+      return
     }
-    element.addEventListener('keydown', handleKeyDown)
-    return () => element.removeEventListener('keydown', handleKeyDown)
-  }, [compact, onClose, open])
+    if (event.key !== 'Tab' || !panel.current) return
+    const candidates = Array.from(
+      panel.current.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
+      ),
+    ).filter(candidate => candidate.getClientRects().length > 0)
+    const firstCandidate = candidates[0]
+    const lastCandidate = candidates.at(-1)
+    if (!firstCandidate || !lastCandidate) return
+    if (event.shiftKey && document.activeElement === firstCandidate) {
+      event.preventDefault()
+      lastCandidate.focus()
+    } else if (!event.shiftKey && document.activeElement === lastCandidate) {
+      event.preventDefault()
+      firstCandidate.focus()
+    }
+  }
 
   async function save(event: SyntheticEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
-    if (!settings || saving) return
+    if (!settings || !providerDraft || saving) return
     setSaving(true)
     setSaved(false)
     setError('')
     try {
-      const response = await api.saveSettings({
-        ...settings,
-        modelName: settings.modelName.trim(),
-      })
+      const response = await api.saveSettings(
+        { ...settings, modelName: settings.modelName.trim() },
+        {
+          ...providerDraft,
+          name: providerDraft.name.trim(),
+          baseUrl: providerDraft.baseUrl.trim(),
+          apiKey: providerDraft.apiKey.trim(),
+        },
+      )
       setSettings(response.settings)
       setCapabilities(response.capabilities)
+      const selected = response.capabilities.providers.find(
+        provider => provider.id === response.settings.modelProvider,
+      )
+      if (selected) setProviderDraft(providerDraftFrom(selected))
+      setDirty(false)
       setSaved(true)
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '设置保存失败')
@@ -601,9 +648,51 @@ function SettingsPanel({
     key: Key,
     value: RuntimeSettings[Key],
   ) => {
+    setDirty(true)
     setSaved(false)
     setSettings(current => (current ? { ...current, [key]: value } : current))
   }
+  const selectProvider = (id: ModelProviderId) => {
+    const provider = capabilities?.providers.find(
+      candidate => candidate.id === id,
+    )
+    if (!provider) return
+    setDirty(true)
+    setSaved(false)
+    setSettings(current =>
+      current
+        ? {
+            ...current,
+            modelProvider: id,
+            modelName: provider.defaultModel || current.modelName,
+          }
+        : current,
+    )
+    setProviderDraft(providerDraftFrom(provider))
+  }
+  const selectedProvider = capabilities?.providers.find(
+    provider => provider.id === settings?.modelProvider,
+  )
+  const customProvider = settings?.modelProvider === 'custom'
+  const featuredProviderIds: readonly ModelProviderId[] = [
+    'openai',
+    'anthropic',
+    'google',
+    'deepseek',
+    'ollama',
+    'custom',
+  ]
+  const featuredProviders = capabilities?.providers.filter(provider =>
+    featuredProviderIds.includes(provider.id),
+  )
+  const additionalProviders = capabilities?.providers.filter(
+    provider => !featuredProviderIds.includes(provider.id),
+  )
+  const canSave = Boolean(
+    settings?.modelName.trim() &&
+    providerDraft?.name.trim() &&
+    providerDraft.baseUrl.trim(),
+  )
   if (compact && !open) return null
   return (
     <aside
@@ -612,11 +701,12 @@ function SettingsPanel({
       aria-label="设置"
       aria-modal={compact ? true : undefined}
       role={compact ? 'dialog' : undefined}
+      onKeyDown={handlePanelKeyDown}
     >
       <header className="settings-header">
         <div>
           <h2 id="runtime-settings-title">设置</h2>
-          <p>统一控制模型入口、输入处理与隐私边界</p>
+          <p>模型、路由与隐私边界</p>
         </div>
         <button
           className="panel-close settings-close"
@@ -635,145 +725,376 @@ function SettingsPanel({
           <span />
           <span />
         </div>
-      ) : settings && capabilities ? (
+      ) : settings && capabilities && providerDraft && selectedProvider ? (
         <form
           className="settings-form"
           aria-labelledby="runtime-settings-title"
           onSubmit={event => void save(event)}
         >
-          <div className="settings-scroll">
-            <fieldset>
-              <legend>任务路由</legend>
-              <p>决定一条新消息是继续已有任务，还是创建新的任务。</p>
-              <SettingChoice
-                name="router-mode"
-                value="model"
-                checked={settings.routerMode === 'model'}
-                title="智能归类"
-                description="由所选模型判断任务归属，不确定时安全地新建任务。"
-                onChange={() => update('routerMode', 'model')}
-              />
-              <SettingChoice
-                name="router-mode"
-                value="rules"
-                checked={settings.routerMode === 'rules'}
-                title="确定性规则"
-                description="只有明确指定任务时才续接，其余消息一律新建任务。"
-                onChange={() => update('routerMode', 'rules')}
-              />
-            </fieldset>
+          <div className="settings-layout">
+            <nav className="settings-sidebar" aria-label="设置分区">
+              <button
+                type="button"
+                className={section === 'models' ? 'is-active' : ''}
+                aria-current={section === 'models' ? 'page' : undefined}
+                onClick={() => setSection('models')}
+              >
+                <CloudCog aria-hidden="true" />
+                模型服务
+              </button>
+              <button
+                type="button"
+                className={section === 'routing' ? 'is-active' : ''}
+                aria-current={section === 'routing' ? 'page' : undefined}
+                onClick={() => setSection('routing')}
+              >
+                <Route aria-hidden="true" />
+                任务路由
+              </button>
+              <button
+                type="button"
+                className={section === 'privacy' ? 'is-active' : ''}
+                aria-current={section === 'privacy' ? 'page' : undefined}
+                onClick={() => setSection('privacy')}
+              >
+                <ShieldCheck aria-hidden="true" />
+                出站隐私
+              </button>
+              <button
+                type="button"
+                className={section === 'rewrite' ? 'is-active' : ''}
+                aria-current={section === 'rewrite' ? 'page' : undefined}
+                onClick={() => setSection('rewrite')}
+              >
+                <WandSparkles aria-hidden="true" />
+                输入处理
+              </button>
+            </nav>
 
-            <fieldset>
-              <legend>模型服务</legend>
-              <p>
-                Provider 的地址与凭证由服务端管理，浏览器只选择已配置的入口。
-              </p>
-              {capabilities.providers.map(provider => (
-                <SettingChoice
-                  key={provider.id}
-                  name="model-provider"
-                  value={provider.id}
-                  checked={settings.modelProvider === provider.id}
-                  title={
-                    provider.id === 'codex-cli'
-                      ? 'Codex 登录态'
-                      : 'OpenAI-compatible'
-                  }
-                  description={
-                    provider.reason ??
-                    (provider.id === 'codex-cli'
-                      ? '复用本机 Codex CLI 登录态。'
-                      : '使用服务端配置的兼容 API。')
-                  }
-                  disabled={!provider.available}
-                  onChange={() => update('modelProvider', provider.id)}
-                />
-              ))}
-              <label className="settings-text-field" htmlFor="model-name">
-                <span>对应模型</span>
-                <input
-                  id="model-name"
-                  name="modelName"
-                  value={settings.modelName}
-                  onChange={event => update('modelName', event.target.value)}
-                  autoCapitalize="none"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  maxLength={120}
-                  required
-                />
-                <small>
-                  当前 Provider：
-                  {settings.modelProvider === 'codex-cli'
-                    ? 'Codex 登录态'
-                    : 'OpenAI-compatible'}
-                </small>
-              </label>
-            </fieldset>
+            <div className="settings-scroll">
+              {section === 'models' && (
+                <section
+                  className="settings-section"
+                  aria-labelledby="models-title"
+                >
+                  <header>
+                    <h3 id="models-title">模型服务</h3>
+                    <p>选择供应商并配置 Pegas Router 使用的模型连接。</p>
+                  </header>
 
-            <fieldset>
-              <legend>模型出站脱敏</legend>
-              <p>
-                在内容离开 Pegas Worker 前替换高置信度敏感值，返回后再恢复。
-              </p>
-              <SettingChoice
-                name="privacy-mode"
-                value="mask"
-                checked={settings.privacyMode === 'mask'}
-                title="开启脱敏"
-                description={
-                  capabilities.privacyAvailable
-                    ? '保护密钥、密码、邮箱和手机号；原文仍保留在本地权威记录。'
-                    : '服务端尚未配置隐私 HMAC key。'
-                }
-                disabled={!capabilities.privacyAvailable}
-                onChange={() => update('privacyMode', 'mask')}
-              />
-              <SettingChoice
-                name="privacy-mode"
-                value="disabled"
-                checked={settings.privacyMode === 'disabled'}
-                title="关闭脱敏"
-                description="保持原有出站行为。适合完全受控的本地模型链路。"
-                onChange={() => update('privacyMode', 'disabled')}
-              />
-            </fieldset>
+                  <div className="settings-group provider-picker">
+                    <span className="provider-picker-label">常用供应商</span>
+                    <div
+                      className="provider-grid"
+                      role="group"
+                      aria-label="常用供应商"
+                    >
+                      {featuredProviders?.map(provider => (
+                        <ProviderOption
+                          key={provider.id}
+                          provider={provider}
+                          checked={settings.modelProvider === provider.id}
+                          onChange={() => selectProvider(provider.id)}
+                        />
+                      ))}
+                    </div>
+                    <details
+                      className="provider-more"
+                      open={additionalProviders?.some(
+                        provider => provider.id === settings.modelProvider,
+                      )}
+                    >
+                      <summary>更多供应商</summary>
+                      <div
+                        className="provider-grid"
+                        role="group"
+                        aria-label="更多供应商"
+                      >
+                        {additionalProviders?.map(provider => (
+                          <ProviderOption
+                            key={provider.id}
+                            provider={provider}
+                            checked={settings.modelProvider === provider.id}
+                            onChange={() => selectProvider(provider.id)}
+                          />
+                        ))}
+                      </div>
+                    </details>
+                    <p className="provider-description">
+                      {selectedProvider.description}
+                    </p>
+                  </div>
 
-            <fieldset>
-              <legend>输入改写</legend>
-              <p>
-                改写只影响发送给 Router 与 Executor 的执行视图，不覆盖对话原文。
-              </p>
-              <SettingChoice
-                name="rewrite-mode"
-                value="light"
-                checked={settings.rewriteMode === 'light'}
-                title="轻量校正"
-                description="修正明显的语音识别错误、口头语和标点，不补充事实或回答问题。"
-                onChange={() => update('rewriteMode', 'light')}
-              />
-              <SettingChoice
-                name="rewrite-mode"
-                value="disabled"
-                checked={settings.rewriteMode === 'disabled'}
-                title="保持原文"
-                description="Router 与 Executor 直接使用用户发送的文字。"
-                onChange={() => update('rewriteMode', 'disabled')}
-              />
-            </fieldset>
+                  <div className="provider-status" role="status">
+                    <span
+                      className={selectedProvider.available ? 'is-ready' : ''}
+                    />
+                    <strong>{selectedProvider.name}</strong>
+                    <small>
+                      {selectedProvider.available
+                        ? '连接信息已就绪'
+                        : (selectedProvider.reason ?? '需要完成连接配置')}
+                    </small>
+                  </div>
+
+                  <div className="settings-group provider-fields">
+                    {customProvider && (
+                      <>
+                        <label htmlFor="provider-name">连接名称</label>
+                        <input
+                          id="provider-name"
+                          name="providerName"
+                          value={providerDraft.name}
+                          onChange={event => {
+                            setSaved(false)
+                            setProviderDraft(current =>
+                              current
+                                ? { ...current, name: event.target.value }
+                                : current,
+                            )
+                          }}
+                          maxLength={60}
+                          required
+                          onInput={() => setDirty(true)}
+                        />
+                        <label htmlFor="provider-protocol">接口协议</label>
+                        <select
+                          id="provider-protocol"
+                          name="providerProtocol"
+                          value={providerDraft.protocol}
+                          onChange={event => {
+                            setDirty(true)
+                            setSaved(false)
+                            setProviderDraft(current =>
+                              current
+                                ? {
+                                    ...current,
+                                    protocol: event.target
+                                      .value as ModelProviderDraft['protocol'],
+                                  }
+                                : current,
+                            )
+                          }}
+                        >
+                          <option value="openai-chat">
+                            OpenAI Chat Completions
+                          </option>
+                          <option value="anthropic-messages">
+                            Anthropic Messages
+                          </option>
+                        </select>
+                      </>
+                    )}
+                    <label htmlFor="provider-base-url">Base URL</label>
+                    <input
+                      id="provider-base-url"
+                      name="providerBaseUrl"
+                      type="url"
+                      value={providerDraft.baseUrl}
+                      readOnly={!customProvider}
+                      onChange={event => {
+                        setDirty(true)
+                        setSaved(false)
+                        setProviderDraft(current =>
+                          current
+                            ? { ...current, baseUrl: event.target.value }
+                            : current,
+                        )
+                      }}
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      spellCheck={false}
+                      required
+                    />
+                    <label htmlFor="model-name">模型</label>
+                    <input
+                      id="model-name"
+                      name="modelName"
+                      value={settings.modelName}
+                      onChange={event =>
+                        update('modelName', event.target.value)
+                      }
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      spellCheck={false}
+                      maxLength={160}
+                      required
+                    />
+                    <label htmlFor="provider-api-key">API key</label>
+                    <div className="provider-secret-field">
+                      <KeyRound aria-hidden="true" />
+                      <input
+                        id="provider-api-key"
+                        name="providerApiKey"
+                        type="password"
+                        value={providerDraft.apiKey}
+                        placeholder={
+                          selectedProvider.hasApiKey &&
+                          !providerDraft.clearApiKey
+                            ? '已保存；留空保持不变'
+                            : selectedProvider.requiresApiKey
+                              ? '输入 API key'
+                              : '可选'
+                        }
+                        onChange={event => {
+                          setDirty(true)
+                          setSaved(false)
+                          setProviderDraft(current =>
+                            current
+                              ? {
+                                  ...current,
+                                  apiKey: event.target.value,
+                                  clearApiKey: false,
+                                }
+                              : current,
+                          )
+                        }}
+                        autoComplete="new-password"
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                        spellCheck={false}
+                      />
+                    </div>
+                    {selectedProvider.hasApiKey && (
+                      <button
+                        className="clear-provider-key"
+                        type="button"
+                        aria-pressed={providerDraft.clearApiKey}
+                        onClick={() => {
+                          setDirty(true)
+                          setSaved(false)
+                          setProviderDraft(current =>
+                            current
+                              ? {
+                                  ...current,
+                                  apiKey: '',
+                                  clearApiKey: !current.clearApiKey,
+                                }
+                              : current,
+                          )
+                        }}
+                      >
+                        {providerDraft.clearApiKey
+                          ? '保留已保存密钥'
+                          : '清除已保存密钥'}
+                      </button>
+                    )}
+                  </div>
+                </section>
+              )}
+
+              {section === 'routing' && (
+                <section
+                  className="settings-section"
+                  aria-labelledby="routing-title"
+                >
+                  <header>
+                    <h3 id="routing-title">任务路由</h3>
+                    <p>决定新消息继续已有任务，还是创建一件新事情。</p>
+                  </header>
+                  <fieldset className="settings-choice-group">
+                    <legend>路由方式</legend>
+                    <SettingChoice
+                      name="router-mode"
+                      value="model"
+                      checked={settings.routerMode === 'model'}
+                      title="智能归类"
+                      description="由所选模型判断任务归属；不确定时安全新建任务。"
+                      onChange={() => update('routerMode', 'model')}
+                    />
+                    <SettingChoice
+                      name="router-mode"
+                      value="rules"
+                      checked={settings.routerMode === 'rules'}
+                      title="确定性规则"
+                      description="只有明确指定任务时才续接，其余消息一律新建。"
+                      onChange={() => update('routerMode', 'rules')}
+                    />
+                  </fieldset>
+                </section>
+              )}
+
+              {section === 'privacy' && (
+                <section
+                  className="settings-section"
+                  aria-labelledby="privacy-title"
+                >
+                  <header>
+                    <h3 id="privacy-title">模型出站隐私</h3>
+                    <p>内容离开 Worker 前替换高置信度敏感值，返回后恢复。</p>
+                  </header>
+                  <fieldset className="settings-choice-group">
+                    <legend>脱敏策略</legend>
+                    <SettingChoice
+                      name="privacy-mode"
+                      value="mask"
+                      checked={settings.privacyMode === 'mask'}
+                      title="开启脱敏"
+                      description={
+                        capabilities.privacyAvailable
+                          ? '保护密钥、密码、邮箱和手机号；权威记录保留原文。'
+                          : '服务端尚未配置隐私 HMAC key。'
+                      }
+                      disabled={!capabilities.privacyAvailable}
+                      onChange={() => update('privacyMode', 'mask')}
+                    />
+                    <SettingChoice
+                      name="privacy-mode"
+                      value="disabled"
+                      checked={settings.privacyMode === 'disabled'}
+                      title="关闭脱敏"
+                      description="适合完全受控的本地模型链路。"
+                      onChange={() => update('privacyMode', 'disabled')}
+                    />
+                  </fieldset>
+                </section>
+              )}
+
+              {section === 'rewrite' && (
+                <section
+                  className="settings-section"
+                  aria-labelledby="rewrite-title"
+                >
+                  <header>
+                    <h3 id="rewrite-title">输入处理</h3>
+                    <p>只调整执行视图，不覆盖 Conversation 中的用户原文。</p>
+                  </header>
+                  <fieldset className="settings-choice-group">
+                    <legend>改写策略</legend>
+                    <SettingChoice
+                      name="rewrite-mode"
+                      value="light"
+                      checked={settings.rewriteMode === 'light'}
+                      title="轻量校正"
+                      description="修正明显的识别错误、口头语和标点，不补充事实。"
+                      onChange={() => update('rewriteMode', 'light')}
+                    />
+                    <SettingChoice
+                      name="rewrite-mode"
+                      value="disabled"
+                      checked={settings.rewriteMode === 'disabled'}
+                      title="保持原文"
+                      description="Router 与 Executor 直接使用用户发送的文字。"
+                      onChange={() => update('rewriteMode', 'disabled')}
+                    />
+                  </fieldset>
+                </section>
+              )}
+            </div>
           </div>
 
           <footer className="settings-footer">
             <div aria-live="polite" role="status">
-              {saved
-                ? `已保存 · revision ${String(settings.revision)}`
-                : `服务端设置 · revision ${String(settings.revision)}`}
+              {saving
+                ? '正在保存更改'
+                : saved
+                  ? '更改已保存'
+                  : dirty
+                    ? '有未保存的更改'
+                    : '设置已同步'}
             </div>
-            <button
-              type="submit"
-              disabled={saving || !settings.modelName.trim()}
-            >
-              {saving ? '正在保存…' : '保存设置'}
+            <button type="submit" disabled={saving || !canSave}>
+              {saving ? '正在保存…' : '保存更改'}
             </button>
           </footer>
         </form>
@@ -792,6 +1113,50 @@ function SettingsPanel({
       )}
     </aside>
   )
+}
+
+function ProviderOption({
+  provider,
+  checked,
+  onChange,
+}: {
+  provider: SettingsCapabilities['providers'][number]
+  checked: boolean
+  onChange: () => void
+}) {
+  const id = `provider-${provider.id}`
+  return (
+    <label className="provider-option" htmlFor={id}>
+      <input
+        id={id}
+        type="radio"
+        name="modelProvider"
+        value={provider.id}
+        checked={checked}
+        onChange={onChange}
+      />
+      <span>{provider.id === 'custom' ? '自定义' : provider.name}</span>
+      <small>
+        {provider.hasApiKey
+          ? '已配置'
+          : provider.category === 'local'
+            ? '本地'
+            : ''}
+      </small>
+    </label>
+  )
+}
+
+function providerDraftFrom(
+  provider: SettingsCapabilities['providers'][number],
+): ModelProviderDraft {
+  return {
+    name: provider.name,
+    protocol: provider.protocol,
+    baseUrl: provider.baseUrl,
+    apiKey: '',
+    clearApiKey: false,
+  }
 }
 
 function SettingChoice({

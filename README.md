@@ -66,23 +66,23 @@ Web 开发服务器默认位于 `http://127.0.0.1:4319`，并将 API 请求代�
 
 Worker 默认通过 DSH headless 执行 Run。自动化测试使用显式的 `PEGAS_EXECUTOR=echo`，不会调用模型；生产或人工验证不能使用该测试执行器。
 
-Router 默认使用本机 Codex CLI 的登录态和 `gpt-5.6-luna`，判断一条新消息是在继续已有 Task，还是应该创建新 Task；无需向 Pegas 复制 Codex 凭证：
+Router 默认使用确定性规则，不假设机器安装或登录了某个模型客户端。需要模型辅助归类时，可在 Web 设置页选择常见供应商、自托管服务或自定义兼容入口，并由 Pegas 保存连接：
 
 ```bash
 PEGAS_ROUTER=model
-PEGAS_MODEL_PROVIDER=codex-cli
-PEGAS_CODEX_COMMAND=codex
-PEGAS_MODEL_NAME=gpt-5.6-luna
+PEGAS_MODEL_PROVIDER=openai
+PEGAS_MODEL_BASE_URL=https://api.openai.com/v1
+PEGAS_MODEL_API_KEY=replace-me
+PEGAS_MODEL_NAME=gpt-5-mini
 ```
 
-Codex Provider 以 ephemeral、read-only、无项目规则的非交互进程运行，并关闭 Router 不需要的 Apps、Plugins、Hooks 和模型发现，只接收任务摘要并按 JSON Schema 输出。模型不可用或输出无效时，Router 会安全降级为创建独立 Task。测试或离线开发可显式设置 `PEGAS_ROUTER=rules`；如需接入其他服务，也可切换到 `openai-compatible` 并提供 Base URL、模型和可选 API Key。
+设置页内置 OpenAI、Anthropic、Gemini、DeepSeek、xAI、Kimi、GLM、MiniMax、通义千问、OpenRouter、Groq、Mistral、SiliconFlow、Ollama 和 LM Studio，并支持 OpenAI Chat Completions 或 Anthropic Messages 协议的自定义连接。模型不可用或输出无效时，Router 会安全降级为创建独立 Task。
 
 这里的 Provider 只负责 Router 等轻量控制面判断。DSH 执行任务时使用的模型、凭证和 Provider 仍由 DSH profile 自己管理，两者不会共享隐式 session 或配置。
 
 首次启动后，Router 模式、Provider、对应模型名、脱敏和输入改写由 Web 设置页统一管理，
 并保存在服务端 SQLite 中。以上环境变量只用于初始化第一版默认值；用户保存过设置后，
-重启不会用环境变量覆盖。Provider Base URL、API key 和隐私 HMAC key 仍是服务端密钥，
-不会通过设置 API 返回。详见 `docs/runtime-settings.md`。
+重启不会用环境变量覆盖。API key 使用实例密钥加密后保存在服务端，设置 API 只返回是否已配置，不返回明文或密文；隐私 HMAC key 同样不会返回。详见 `docs/runtime-settings.md`。
 
 如需在用户内容离开 Pegas Worker 前屏蔽高置信度密钥、密码、邮箱和手机号，可开启
 模型出站脱敏。HMAC key 只用于生成稳定占位符，必须作为服务端密钥保存：

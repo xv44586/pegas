@@ -23,19 +23,51 @@ describe('Pegas web app', () => {
     const settings = {
       revision: 1,
       routerMode: 'model' as const,
-      modelProvider: 'codex-cli' as const,
-      modelName: 'gpt-5.6-luna',
+      modelProvider: 'openai' as const,
+      modelName: 'gpt-5-mini',
       privacyMode: 'disabled' as const,
       rewriteMode: 'disabled' as const,
       updatedAt: '2026-11-17T00:00:00.000Z',
     }
     const capabilities = {
       providers: [
-        { id: 'codex-cli' as const, available: true },
         {
-          id: 'openai-compatible' as const,
+          id: 'openai' as const,
+          name: 'OpenAI',
+          category: 'vendor' as const,
+          protocol: 'openai-chat' as const,
+          baseUrl: 'https://api.openai.com/v1',
+          defaultModel: 'gpt-5-mini',
+          description: 'OpenAI API',
+          requiresApiKey: true,
+          hasApiKey: true,
+          available: true,
+        },
+        {
+          id: 'anthropic' as const,
+          name: 'Anthropic',
+          category: 'vendor' as const,
+          protocol: 'anthropic-messages' as const,
+          baseUrl: 'https://api.anthropic.com',
+          defaultModel: 'claude-sonnet-4-5',
+          description: 'Anthropic Messages API',
+          requiresApiKey: true,
+          hasApiKey: false,
           available: false,
-          reason: '服务端尚未配置兼容 API',
+          reason: '需要 API key',
+        },
+        {
+          id: 'custom' as const,
+          name: '自定义兼容服务',
+          category: 'custom' as const,
+          protocol: 'openai-chat' as const,
+          baseUrl: '',
+          defaultModel: '',
+          description: '连接自托管或其他兼容服务',
+          requiresApiKey: false,
+          hasApiKey: false,
+          available: false,
+          reason: '需要 Base URL 和模型名',
         },
       ],
       privacyAvailable: true,
@@ -49,10 +81,35 @@ describe('Pegas web app', () => {
             : input
       if (path === '/v1/settings' && init?.method === 'PUT') {
         const body = parseRequestBody(init)
+        const customProvider = {
+          ...capabilities.providers[2],
+          name: '公司模型网关',
+          protocol: 'openai-chat' as const,
+          baseUrl: 'https://models.example.com/v1',
+          defaultModel: 'gpt-settings-test',
+          hasApiKey: true,
+          available: true,
+          reason: undefined,
+        }
         return Promise.resolve(
           Response.json({
-            settings: { ...settings, ...body, revision: 2 },
-            capabilities,
+            settings: {
+              ...settings,
+              routerMode: body.routerMode,
+              modelProvider: body.modelProvider,
+              modelName: body.modelName,
+              privacyMode: body.privacyMode,
+              rewriteMode: body.rewriteMode,
+              revision: 2,
+            },
+            capabilities: {
+              ...capabilities,
+              providers: [
+                capabilities.providers[0],
+                capabilities.providers[1],
+                customProvider,
+              ],
+            },
           }),
         )
       }
@@ -75,25 +132,43 @@ describe('Pegas web app', () => {
     expect(
       await screen.findByRole('heading', { name: '设置', level: 2 }),
     ).toBeTruthy()
-    expect(
-      screen.getByRole('radio', { name: /OpenAI-compatible/ }),
-    ).toHaveProperty('disabled', true)
-    fireEvent.change(screen.getByRole('textbox', { name: /对应模型/ }), {
+    expect(screen.queryByText(/Codex/)).toBeNull()
+    fireEvent.click(screen.getByRole('radio', { name: /自定义/ }))
+    fireEvent.change(screen.getByLabelText('连接名称'), {
+      target: { value: '公司模型网关' },
+    })
+    fireEvent.change(screen.getByLabelText('Base URL'), {
+      target: { value: 'https://models.example.com/v1' },
+    })
+    fireEvent.change(screen.getByLabelText('模型'), {
       target: { value: 'gpt-settings-test' },
     })
+    fireEvent.change(screen.getByLabelText('API key'), {
+      target: { value: 'secret-for-test' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '输入处理' }))
     fireEvent.click(screen.getByRole('radio', { name: /轻量校正/ }))
+    fireEvent.click(screen.getByRole('button', { name: '出站隐私' }))
     fireEvent.click(screen.getByRole('radio', { name: /开启脱敏/ }))
-    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
+    fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
 
-    expect(await screen.findByText('已保存 · revision 2')).toBeTruthy()
+    expect(await screen.findByText('更改已保存')).toBeTruthy()
     const put = fetchMock.mock.calls.find(
       ([path, init]) => path === '/v1/settings' && init?.method === 'PUT',
     )
     expect(parseRequestBody(put?.[1])).toMatchObject({
       expectedRevision: 1,
+      modelProvider: 'custom',
       modelName: 'gpt-settings-test',
       privacyMode: 'mask',
       rewriteMode: 'light',
+      provider: {
+        name: '公司模型网关',
+        protocol: 'openai-chat',
+        baseUrl: 'https://models.example.com/v1',
+        apiKey: 'secret-for-test',
+        clearApiKey: false,
+      },
     })
   })
 

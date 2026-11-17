@@ -2,6 +2,7 @@ import type {
   InboxEvent,
   OutboxMessage,
   Run,
+  ModelProviderDraft,
   RuntimeSettings,
   SettingsResponse,
   Snapshot,
@@ -88,7 +89,10 @@ export class PegasApi {
     return this.#get<SettingsResponse>('/v1/settings')
   }
 
-  async saveSettings(settings: RuntimeSettings): Promise<SettingsResponse> {
+  async saveSettings(
+    settings: RuntimeSettings,
+    provider: ModelProviderDraft,
+  ): Promise<SettingsResponse> {
     const response = await fetch('/v1/settings', {
       method: 'PUT',
       headers: this.#headers(true),
@@ -99,6 +103,7 @@ export class PegasApi {
         modelName: settings.modelName,
         privacyMode: settings.privacyMode,
         rewriteMode: settings.rewriteMode,
+        provider,
       }),
     })
     if (!response.ok) await throwResponse(response)

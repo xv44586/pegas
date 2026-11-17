@@ -1,6 +1,8 @@
 import { resolve } from 'node:path'
 
 import { loadConfig } from '../core/config.js'
+import { loadModelCredentialVault } from '../model/model-credential-vault.js'
+import { initializeConfiguredModelProvider } from '../model/provider-factory.js'
 import {
   assertRuntimeSettingsAvailable,
   runtimeSettingsDefaults,
@@ -12,10 +14,15 @@ import { createControlPlane } from './server.js'
 
 const config = loadConfig()
 const store = new PegasStore(config.databasePath)
+const modelCredentialVault = loadModelCredentialVault(
+  config.modelCredentialKeyPath,
+)
+initializeConfiguredModelProvider(store, config, modelCredentialVault)
 const defaults = runtimeSettingsDefaults(config)
-const capabilities = settingsCapabilities(config)
+const capabilities = () =>
+  settingsCapabilities(config, store.listModelProviderConnectionSummaries())
 if (!store.hasRuntimeSettings()) {
-  assertRuntimeSettingsAvailable(defaults, capabilities)
+  assertRuntimeSettingsAvailable(defaults, capabilities())
 }
 store.initializeRuntimeSettings(defaults)
 const speechProvider =
@@ -34,6 +41,7 @@ const server = createControlPlane({
   ...(speechProvider ? { speechProvider } : {}),
   maximumAudioBytes: config.speechMaxAudioBytes,
   settingsCapabilities: capabilities,
+  modelCredentialVault,
 })
 
 server.listen(config.apiPort, config.apiHost, () => {

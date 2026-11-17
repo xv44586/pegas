@@ -3,6 +3,9 @@ import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createControlPlane } from '../src/control-plane/server.js'
+import { loadConfig } from '../src/core/config.js'
+import { ModelCredentialVault } from '../src/model/model-credential-vault.js'
+import { settingsCapabilities } from '../src/settings/runtime-settings.js'
 import { PegasStore } from '../src/storage/sqlite-store.js'
 
 const cleanups: (() => Promise<void>)[] = []
@@ -16,26 +19,29 @@ describe('control plane', () => {
     const store = new PegasStore(':memory:')
     store.initializeRuntimeSettings({
       routerMode: 'model',
-      modelProvider: 'codex-cli',
+      modelProvider: 'openai',
       modelName: 'gpt-default',
       privacyMode: 'disabled',
       rewriteMode: 'disabled',
     })
-    const capabilities = {
-      providers: [
-        { id: 'codex-cli' as const, available: true },
-        {
-          id: 'openai-compatible' as const,
-          available: false,
-          reason: 'OpenAI-compatible unavailable',
-        },
-      ],
-      privacyAvailable: true,
-    }
+    const modelCredentialVault = new ModelCredentialVault(Buffer.alloc(32, 3))
+    store.initializeModelProviderConnection({
+      id: 'openai',
+      name: 'OpenAI',
+      protocol: 'openai-chat',
+      baseUrl: 'https://api.openai.com/v1',
+      apiKeyCiphertext: modelCredentialVault.encrypt('openai-secret'),
+    })
+    const config = loadConfig({
+      PEGAS_PRIVACY_HMAC_KEY: 'privacy-key-long-enough',
+    })
+    const capabilities = () =>
+      settingsCapabilities(config, store.listModelProviderConnectionSummaries())
     const server = createControlPlane({
       store,
       apiToken: 'secret',
       settingsCapabilities: capabilities,
+      modelCredentialVault,
     })
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
     cleanups.push(
@@ -50,15 +56,18 @@ describe('control plane', () => {
     }
 
     const initial = await fetch(url, { headers })
-    expect(await initial.json()).toMatchObject({
+    const initialText = await initial.text()
+    expect(initialText).not.toContain('openai-secret')
+    expect(initialText).not.toContain('v1.')
+    expect(JSON.parse(initialText)).toMatchObject({
       settings: { modelName: 'gpt-default', revision: 1 },
-      capabilities,
+      capabilities: capabilities(),
     })
 
     const updateBody = {
       expectedRevision: 1,
       routerMode: 'rules',
-      modelProvider: 'codex-cli',
+      modelProvider: 'openai',
       modelName: 'gpt-updated',
       privacyMode: 'mask',
       rewriteMode: 'light',
@@ -69,10 +78,13 @@ describe('control plane', () => {
       body: JSON.stringify(updateBody),
     })
     expect(updated.status).toBe(200)
-    expect(await updated.json()).toMatchObject({
+    const updatedText = await updated.text()
+    expect(updatedText).not.toContain('openai-secret')
+    expect(updatedText).not.toContain('v1.')
+    expect(JSON.parse(updatedText)).toMatchObject({
       settings: {
         routerMode: 'rules',
-        modelProvider: 'codex-cli',
+        modelProvider: 'openai',
         modelName: 'gpt-updated',
         privacyMode: 'mask',
         rewriteMode: 'light',
@@ -93,12 +105,12 @@ describe('control plane', () => {
       body: JSON.stringify({
         ...updateBody,
         expectedRevision: 2,
-        modelProvider: 'openai-compatible',
+        modelProvider: 'anthropic',
       }),
     })
     expect(unavailable.status).toBe(400)
     expect(await unavailable.json()).toMatchObject({
-      message: 'OpenAI-compatible unavailable',
+      message: '尚未配置 API key',
     })
   })
 

@@ -68,19 +68,57 @@ export interface Snapshot {
 export interface RuntimeSettings {
   revision: number
   routerMode: 'model' | 'rules'
-  modelProvider: 'codex-cli' | 'openai-compatible'
+  modelProvider: ModelProviderId
   modelName: string
   privacyMode: 'disabled' | 'mask'
   rewriteMode: 'disabled' | 'light'
   updatedAt: string
 }
 
+export type ModelProviderId =
+  | 'openai'
+  | 'anthropic'
+  | 'google'
+  | 'deepseek'
+  | 'xai'
+  | 'moonshot'
+  | 'zhipu'
+  | 'minimax'
+  | 'qwen'
+  | 'openrouter'
+  | 'groq'
+  | 'mistral'
+  | 'siliconflow'
+  | 'ollama'
+  | 'lmstudio'
+  | 'custom'
+
+type ModelProviderProtocol = 'openai-chat' | 'anthropic-messages'
+
+interface ModelProviderCapability {
+  id: ModelProviderId
+  name: string
+  category: 'vendor' | 'gateway' | 'local' | 'custom'
+  protocol: ModelProviderProtocol
+  baseUrl: string
+  defaultModel: string
+  description: string
+  requiresApiKey: boolean
+  hasApiKey: boolean
+  available: boolean
+  reason?: string
+}
+
+export interface ModelProviderDraft {
+  name: string
+  protocol: ModelProviderProtocol
+  baseUrl: string
+  apiKey: string
+  clearApiKey: boolean
+}
+
 export interface SettingsCapabilities {
-  providers: {
-    id: RuntimeSettings['modelProvider']
-    available: boolean
-    reason?: string
-  }[]
+  providers: ModelProviderCapability[]
   privacyAvailable: boolean
 }
 

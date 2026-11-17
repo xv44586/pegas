@@ -14,7 +14,7 @@ describe('settings-aware Worker boundaries', () => {
     const store = new PegasStore(':memory:')
     const defaults = {
       routerMode: 'model' as const,
-      modelProvider: 'codex-cli' as const,
+      modelProvider: 'openai' as const,
       modelName: 'model-one',
       privacyMode: 'disabled' as const,
       rewriteMode: 'disabled' as const,

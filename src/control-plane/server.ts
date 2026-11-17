@@ -10,6 +10,7 @@ import {
 import { extname, resolve, sep } from 'node:path'
 
 import type { NewInboxEvent } from '../core/domain.js'
+import type { ModelCredentialVault } from '../model/model-credential-vault.js'
 import {
   parseRuntimeSettingsUpdate,
   type SettingsCapabilities,
@@ -32,7 +33,8 @@ export interface ControlPlaneOptions {
   webRoot?: string
   speechProvider?: SpeechRecognitionProvider
   maximumAudioBytes?: number
-  settingsCapabilities?: SettingsCapabilities
+  settingsCapabilities?: SettingsCapabilities | (() => SettingsCapabilities)
+  modelCredentialVault?: ModelCredentialVault
 }
 
 export function createControlPlane(options: ControlPlaneOptions): Server {
@@ -69,31 +71,47 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
       }
 
       if (request.url === '/v1/settings' && request.method === 'GET') {
-        if (!options.settingsCapabilities) {
+        const capabilities = resolveSettingsCapabilities(options)
+        if (!capabilities) {
           return sendJson(response, 503, { error: 'settings_unavailable' })
         }
         return sendJson(response, 200, {
           settings: options.store.getRuntimeSettings(),
-          capabilities: options.settingsCapabilities,
+          capabilities,
         })
       }
 
       if (request.url === '/v1/settings' && request.method === 'PUT') {
-        if (!options.settingsCapabilities) {
+        const capabilities = resolveSettingsCapabilities(options)
+        if (!capabilities || !options.modelCredentialVault) {
           return sendJson(response, 503, { error: 'settings_unavailable' })
         }
         const update = parseRuntimeSettingsUpdate(
           await readJson(request),
-          options.settingsCapabilities,
+          capabilities,
         )
         try {
-          const settings = options.store.updateRuntimeSettings(
+          const settings = options.store.updateRuntimeSettingsAndProvider(
             update.expectedRevision,
             update.settings,
+            {
+              id: update.provider.id,
+              name: update.provider.name,
+              protocol: update.provider.protocol,
+              baseUrl: update.provider.baseUrl,
+              ...(update.provider.apiKey
+                ? {
+                    apiKeyCiphertext: options.modelCredentialVault.encrypt(
+                      update.provider.apiKey,
+                    ),
+                  }
+                : {}),
+              clearApiKey: update.provider.clearApiKey,
+            },
           )
           return sendJson(response, 200, {
             settings,
-            capabilities: options.settingsCapabilities,
+            capabilities: resolveSettingsCapabilities(options),
           })
         } catch (error) {
           if (error instanceof SettingsRevisionConflictError) {
@@ -159,6 +177,14 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
       return sendJson(response, 400, { error: 'bad_request', message })
     }
   })
+}
+
+function resolveSettingsCapabilities(
+  options: ControlPlaneOptions,
+): SettingsCapabilities | undefined {
+  return typeof options.settingsCapabilities === 'function'
+    ? options.settingsCapabilities()
+    : options.settingsCapabilities
 }
 
 async function acceptVoiceTranscription(

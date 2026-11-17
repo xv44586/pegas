@@ -1,5 +1,10 @@
 import { resolve } from 'node:path'
 
+import {
+  modelProviderPreset,
+  type ModelProviderId,
+} from '../model/provider-catalog.js'
+
 export interface PegasConfig {
   apiHost: string
   apiPort: number
@@ -15,11 +20,11 @@ export interface PegasConfig {
   workspaceRoot: string
   workerConcurrency: number
   routerMode: 'rules' | 'model'
-  modelProvider: 'codex-cli' | 'openai-compatible'
-  codexCommand: string
+  modelProvider: ModelProviderId
   modelBaseUrl?: string
   modelApiKey?: string
-  modelName?: string
+  modelName: string
+  modelCredentialKeyPath: string
   modelTimeoutMs: number
   privacyMode: 'disabled' | 'mask'
   privacyHmacKey?: string
@@ -43,8 +48,9 @@ export function loadConfig(
   const dataDir = resolve(environment.PEGAS_DATA_DIR ?? './data')
   const apiHost = environment.PEGAS_API_HOST ?? '127.0.0.1'
   const apiToken = environment.PEGAS_API_TOKEN
-  const routerMode = environment.PEGAS_ROUTER === 'rules' ? 'rules' : 'model'
-  const modelProvider = environment.PEGAS_MODEL_PROVIDER ?? 'codex-cli'
+  const routerMode = environment.PEGAS_ROUTER === 'model' ? 'model' : 'rules'
+  const rawModelProvider = environment.PEGAS_MODEL_PROVIDER ?? 'openai'
+  const modelProvider = legacyModelProvider(rawModelProvider)
   const modelBaseUrl = environment.PEGAS_MODEL_BASE_URL
   const modelName = environment.PEGAS_MODEL_NAME
   const privacyMode = environment.PEGAS_PRIVACY_MODE ?? 'disabled'
@@ -66,10 +72,8 @@ export function loadConfig(
       `Unsupported PEGAS_REWRITE_MODE: ${rewriteMode}. Expected disabled or light`,
     )
   }
-  if (modelProvider !== 'codex-cli' && modelProvider !== 'openai-compatible') {
-    throw new Error(
-      `Unsupported PEGAS_MODEL_PROVIDER: ${modelProvider}. Expected codex-cli or openai-compatible`,
-    )
+  if (!modelProviderPreset(modelProvider)) {
+    throw new Error(`Unsupported PEGAS_MODEL_PROVIDER: ${rawModelProvider}`)
   }
   if (privacyMode !== 'disabled' && privacyMode !== 'mask') {
     throw new Error(
@@ -125,13 +129,14 @@ export function loadConfig(
       'PEGAS_WORKER_CONCURRENCY',
     ),
     routerMode,
-    modelProvider,
-    codexCommand: environment.PEGAS_CODEX_COMMAND ?? 'codex',
+    modelProvider: modelProvider as ModelProviderId,
     ...(modelBaseUrl ? { modelBaseUrl } : {}),
     ...(environment.PEGAS_MODEL_API_KEY
       ? { modelApiKey: environment.PEGAS_MODEL_API_KEY }
       : {}),
-    modelName: modelName ?? 'gpt-5.6-luna',
+    modelName:
+      modelName ?? modelProviderPreset(modelProvider)?.defaultModel ?? '',
+    modelCredentialKeyPath: resolve(dataDir, 'model-credentials.key'),
     modelTimeoutMs: parsePositiveInteger(
       environment.PEGAS_MODEL_TIMEOUT_MS,
       90_000,
@@ -172,6 +177,12 @@ export function loadConfig(
       'PEGAS_OUTBOX_MAX_ATTEMPTS',
     ),
   }
+}
+
+function legacyModelProvider(value: string): string {
+  if (value === 'openai-compatible') return 'custom'
+  if (value === 'codex-cli') return 'openai'
+  return value
 }
 
 function commaSeparatedPaths(value: string | undefined): string[] {
