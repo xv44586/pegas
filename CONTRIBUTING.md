@@ -7,6 +7,7 @@ Pegas 仍处于早期阶段，因此现在就把边界、测试和可恢复性�
 1. 阅读 [产品定位](docs/product-positioning.md)、[系统架构](docs/architecture.md)和 [Feature Map](docs/feature-map.md)。
 2. 使用 Feature ID 搜索已有实现和测试；没有 ID 时，先在 Feature Map 中登记能力和预期结果。
 3. 明确唯一事实来源。客户端只做界面和渠道适配，不复制服务端任务状态或路由逻辑。
+4. 阅读 `docs/lessons.md` 中已晋升的经验；候选规则只从 `docs/engineering-todo.md` 按相关 Feature 逐步采用。
 
 ## Definition of Done
 
@@ -19,6 +20,7 @@ Pegas 仍处于早期阶段，因此现在就把边界、测试和可恢复性�
 - 没有新增未解释的 dead code、重复依赖或宽泛配置豁免；
 - Feature Map 的状态、实现入口、测试证据和下一缺口已更新；
 - 架构或运行方式变化时，对应文档同步更新。
+- 已完成 Lesson 检查，并记录新增、更新或“无新 Lesson”。
 
 ## 本地质量检查
 
