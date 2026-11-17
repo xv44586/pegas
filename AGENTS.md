@@ -54,6 +54,14 @@
 
 如果并发任务仍在写入、CI 因其他 Feature 失败、改动尚未隔离或无法区分文件归属，状态必须报告为 `DONE_WITH_CONCERNS` 或 `BLOCKED`，不能提交混合改动或宣告全部完成。
 
+### 8. Learning：让返工成为门禁
+
+1. Bug、回滚、重开的 Issue 或失败 Candidate 关闭前，检查 `docs/lessons.md` 中是否已有同类 Lesson。
+2. 新证据按 Lesson 格式记录 Seen 日期；同类问题在三个独立日期出现后必须晋升为仓库规则或自动化门禁。
+3. 安全、数据丢失和恢复生命线问题确认一次即可晋升，不等待重复发生。
+4. 能自动检查的规则优先落到测试、Lint、CI 或运行时约束，不能只增加文字要求。
+5. 尚未被 Pegas 自身证据验证的候选规则放入 `docs/engineering-todo.md`，不得直接扩张强制标准。
+
 ## 长期架构约束
 
 - Router 只负责输入所属 Task 和控制意图，不判断 Executor 的工具能力，也不代替实际 Agent 向用户答复。
