@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { setTimeout as wait } from 'node:timers/promises'
 
+import type { Clock } from '../src/core/clock.js'
 import { PegasStore } from '../src/storage/sqlite-store.js'
 
 describe('PegasStore', () => {
@@ -100,8 +100,9 @@ describe('PegasStore', () => {
     store.close()
   })
 
-  it('lets a new worker resume an expired run from its durable executor ref', async () => {
-    const store = new PegasStore(':memory:')
+  it('lets a new worker resume exactly when the durable lease expires', () => {
+    const clock = new MutableClock('2026-11-17T00:00:00.000Z')
+    const store = new PegasStore(':memory:', { clock })
     const { event } = store.enqueueEvent({
       userId: 'user-1',
       type: 'user.message',
@@ -119,10 +120,14 @@ describe('PegasStore', () => {
       },
       'test-executor',
     )
-    const firstClaim = store.claimNextRun('worker-1', 1)
+    const firstClaim = store.claimNextRun('worker-1', 1000)
     if (!firstClaim) throw new Error('Expected the first claim')
     store.recordExecutorRef(firstClaim.run.id, 'worker-1', 'session-durable')
-    await wait(10)
+
+    clock.set('2026-11-17T00:00:00.999Z')
+    expect(store.claimNextRun('worker-2')).toBeUndefined()
+
+    clock.set('2026-11-17T00:00:01.000Z')
 
     const recovered = store.claimNextRun('worker-2')
 
@@ -135,3 +140,19 @@ describe('PegasStore', () => {
     store.close()
   })
 })
+
+class MutableClock implements Clock {
+  #value: Date
+
+  constructor(value: string) {
+    this.#value = new Date(value)
+  }
+
+  now(): Date {
+    return new Date(this.#value)
+  }
+
+  set(value: string): void {
+    this.#value = new Date(value)
+  }
+}

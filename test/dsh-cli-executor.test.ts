@@ -163,6 +163,108 @@ console.log(JSON.stringify({
     )
     expect(observedSession).toBe('session-existing')
   })
+
+  it('preserves the session and terminates a malformed event stream', async () => {
+    const command = fakeDsh(`
+console.log(JSON.stringify({ type: 'session', sessionId: 'session-malformed' }))
+console.log('{not-json')
+setInterval(() => {}, 1000)
+`)
+    const executor = new DshCliExecutor({ command, terminationGraceMs: 20 })
+
+    await expect(
+      executor.execute({
+        runId: 'run-malformed',
+        taskId: 'task-1',
+        prompt: 'do the work',
+        workingDirectory: process.cwd(),
+      }),
+    ).rejects.toMatchObject({
+      name: DshExecutionError.name,
+      sessionId: 'session-malformed',
+    })
+  })
+
+  it('rejects oversized events and retains the last durable session id', async () => {
+    const command = fakeDsh(`
+console.log(JSON.stringify({ type: 'session', sessionId: 'session-oversized' }))
+console.log(JSON.stringify({ type: 'text', text: 'x'.repeat(256) }))
+setInterval(() => {}, 1000)
+`)
+    const executor = new DshCliExecutor({
+      command,
+      maximumEventBytes: 64,
+      terminationGraceMs: 20,
+    })
+
+    await expect(
+      executor.execute({
+        runId: 'run-oversized',
+        taskId: 'task-1',
+        prompt: 'do the work',
+        workingDirectory: process.cwd(),
+      }),
+    ).rejects.toMatchObject({
+      message: 'DSH emitted an event larger than the configured limit',
+      sessionId: 'session-oversized',
+    })
+  })
+
+  it('escalates a timed out child from SIGTERM to SIGKILL without leaving it alive', async () => {
+    const command = fakeDsh(`
+process.on('SIGTERM', () => {})
+console.log(JSON.stringify({ type: 'session', sessionId: String(process.pid) }))
+setInterval(() => {}, 1000)
+`)
+    const executor = new DshCliExecutor({
+      command,
+      timeoutMs: 500,
+      terminationGraceMs: 30,
+    })
+    let childPid: number | undefined
+
+    await expect(
+      executor.execute({
+        runId: 'run-timeout',
+        taskId: 'task-1',
+        prompt: 'do the work',
+        workingDirectory: process.cwd(),
+        onExecutorRef: value => {
+          childPid = Number(value)
+        },
+      }),
+    ).rejects.toMatchObject({
+      message: 'DSH execution timed out after 500ms',
+    })
+
+    expect(childPid).toBeTypeOf('number')
+    expect(() => process.kill(childPid ?? 0, 0)).toThrow(
+      expect.objectContaining({ code: 'ESRCH' }),
+    )
+  })
+
+  it('aborts after capturing the session and cleans up the child', async () => {
+    const command = fakeDsh(`
+console.log(JSON.stringify({ type: 'session', sessionId: 'session-aborted' }))
+setInterval(() => {}, 1000)
+`)
+    const executor = new DshCliExecutor({ command, terminationGraceMs: 20 })
+    const abort = new AbortController()
+
+    const execution = executor.execute({
+      runId: 'run-aborted',
+      taskId: 'task-1',
+      prompt: 'do the work',
+      workingDirectory: process.cwd(),
+      signal: abort.signal,
+      onExecutorRef: () => abort.abort(),
+    })
+
+    await expect(execution).rejects.toMatchObject({
+      message: 'DSH execution was aborted',
+      sessionId: 'session-aborted',
+    })
+  })
 })
 
 function fakeDsh(body: string): string {

@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
+import { systemClock, type Clock } from '../core/clock.js'
 import type {
   ClaimedRun,
   InboxEvent,
@@ -232,9 +233,11 @@ interface OutboxRow {
 
 export class PegasStore {
   readonly #database: DatabaseSync
+  readonly #clock: Clock
 
-  constructor(path: string) {
+  constructor(path: string, options: { clock?: Clock } = {}) {
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true })
+    this.#clock = options.clock ?? systemClock
     this.#database = new DatabaseSync(path)
     // Apply the lock wait before any WAL/schema statement so multiple Pegas
     // processes can safely perform a cold start against the same database.
@@ -244,7 +247,7 @@ export class PegasStore {
       .prepare(
         'INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (1, ?)',
       )
-      .run(new Date().toISOString())
+      .run(this.#clock.now().toISOString())
     this.#migrate(2, migration2)
     this.#migrate(3, migration3)
   }
@@ -264,7 +267,7 @@ export class PegasStore {
         .prepare(
           'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
         )
-        .run(version, new Date().toISOString())
+        .run(version, this.#clock.now().toISOString())
       this.#database.exec('COMMIT')
     } catch (error) {
       this.#database.exec('ROLLBACK')
@@ -284,7 +287,7 @@ export class PegasStore {
 
   enqueueEvent(input: NewInboxEvent): { event: InboxEvent; inserted: boolean } {
     const id = input.id ?? randomUUID()
-    const createdAt = new Date().toISOString()
+    const createdAt = this.#clock.now().toISOString()
     const result = this.#database
       .prepare(
         `INSERT OR IGNORE INTO inbox_events
@@ -320,7 +323,7 @@ export class PegasStore {
   }
 
   claimNextEvent(workerId: string, leaseMs = 30_000): InboxEvent | undefined {
-    const now = new Date()
+    const now = this.#clock.now()
     const leaseUntil = new Date(now.getTime() + leaseMs).toISOString()
     this.#database.exec('BEGIN IMMEDIATE')
 
@@ -369,7 +372,7 @@ export class PegasStore {
          SET status = 'processed', processed_at = ?, lease_until = NULL, last_error = NULL
          WHERE id = ? AND status = 'processing' AND claimed_by = ?`,
       )
-      .run(new Date().toISOString(), eventId, workerId)
+      .run(this.#clock.now().toISOString(), eventId, workerId)
     if (result.changes !== 1)
       throw new Error(`Worker ${workerId} does not own event ${eventId}`)
   }
@@ -398,7 +401,7 @@ export class PegasStore {
   }
 
   createTaskFromEvent(event: InboxEvent, title: string): Task {
-    const now = new Date().toISOString()
+    const now = this.#clock.now().toISOString()
     const id = randomUUID()
     this.#database
       .prepare(
@@ -430,7 +433,7 @@ export class PegasStore {
         return { task: existingTask, run: toRun(existingRun) }
       }
 
-      const now = new Date().toISOString()
+      const now = this.#clock.now().toISOString()
       let task: Task
       if (decision.kind === 'create_task') {
         const taskId = randomUUID()
@@ -553,7 +556,7 @@ export class PegasStore {
   }
 
   claimNextRun(workerId: string, leaseMs = 30_000): ClaimedRun | undefined {
-    const now = new Date()
+    const now = this.#clock.now()
     const leaseUntil = new Date(now.getTime() + leaseMs).toISOString()
     this.#database.exec('BEGIN IMMEDIATE')
     try {
@@ -595,7 +598,7 @@ export class PegasStore {
   }
 
   renewRunLease(runId: string, workerId: string, leaseMs = 30_000): void {
-    const now = new Date()
+    const now = this.#clock.now()
     const result = this.#database
       .prepare(
         `UPDATE runs SET lease_until = ?, updated_at = ?
@@ -621,7 +624,7 @@ export class PegasStore {
         `UPDATE runs SET executor_ref = ?, updated_at = ?
          WHERE id = ? AND status = 'running' AND claimed_by = ?`,
       )
-      .run(executorRef, new Date().toISOString(), runId, workerId)
+      .run(executorRef, this.#clock.now().toISOString(), runId, workerId)
     if (result.changes !== 1)
       throw new Error(`Worker ${workerId} does not own run ${runId}`)
   }
@@ -631,7 +634,7 @@ export class PegasStore {
     workerId: string,
     result: { executorRef: string; output: string },
   ): void {
-    const now = new Date().toISOString()
+    const now = this.#clock.now().toISOString()
     this.#database.exec('BEGIN IMMEDIATE')
     try {
       const run = this.#runById(runId)
@@ -674,7 +677,7 @@ export class PegasStore {
   }
 
   failRun(runId: string, workerId: string, error: string): void {
-    const now = new Date().toISOString()
+    const now = this.#clock.now().toISOString()
     this.#database.exec('BEGIN IMMEDIATE')
     try {
       const run = this.#runById(runId)
@@ -717,7 +720,7 @@ export class PegasStore {
     payload: unknown
   }): OutboxMessage {
     const id = randomUUID()
-    const createdAt = new Date().toISOString()
+    const createdAt = this.#clock.now().toISOString()
     this.#database
       .prepare(
         `INSERT OR IGNORE INTO outbox_messages
@@ -757,7 +760,7 @@ export class PegasStore {
     dispatcherId: string,
     leaseMs = 30_000,
   ): OutboxMessage | undefined {
-    const now = new Date()
+    const now = this.#clock.now()
     const nowIso = now.toISOString()
     const leaseUntil = new Date(now.getTime() + leaseMs).toISOString()
     this.#database.exec('BEGIN IMMEDIATE')
@@ -794,7 +797,7 @@ export class PegasStore {
   }
 
   markOutboxSent(messageId: string, dispatcherId: string): void {
-    const now = new Date().toISOString()
+    const now = this.#clock.now().toISOString()
     const result = this.#database
       .prepare(
         `UPDATE outbox_messages
@@ -827,7 +830,7 @@ export class PegasStore {
         `Dispatcher ${dispatcherId} does not own message ${messageId}`,
       )
     const exhausted = row.attempts >= maxAttempts
-    const now = new Date().toISOString()
+    const now = this.#clock.now().toISOString()
     const result = this.#database
       .prepare(
         `UPDATE outbox_messages
