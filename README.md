@@ -22,6 +22,8 @@ Pegas 是一个以自然对话为统一入口的个人智能代理。
 - [产品定位](docs/product-positioning.md)
 - [系统架构](docs/architecture.md)
 - [MVP 计划](docs/mvp-plan.md)
+- [Feature Map](docs/feature-map.md)
+- [贡献与质量门禁](CONTRIBUTING.md)
 
 ## 本地验证
 
@@ -32,6 +34,8 @@ pnpm install
 pnpm check
 pnpm smoke
 ```
+
+`pnpm check` 包含格式、Lint、类型、无用代码、覆盖率阈值和生产构建检查。所有 Feature 在开发前后都需要同步 [Feature Map](docs/feature-map.md)，以复用既有能力并保持唯一事实来源。
 
 启动开发进程：
 

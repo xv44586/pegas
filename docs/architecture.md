@@ -443,14 +443,14 @@ Pegas 可以生成和验证候选版本，但不能绕过这些门禁，也不�
 
 ### 恢复层级
 
-| 故障 | 恢复主体 | 默认动作 |
-| --- | --- | --- |
-| Worker 异常退出 | Supervisor / lease | 重启 Worker，过期事件重新领取 |
-| Control Plane 异常退出 | Supervisor | 重启当前 Release |
-| 候选版本无法启动或观察期失败 | Supervisor | 自动回滚 Previous Release |
-| 数据库损坏或 migration 失败 | Backup / Recovery | 停止自动推进，恢复到已验证恢复点 |
-| Mac 离线 | Control Plane | 将本地 Action 标记为 Waiting，其他 Task 继续 |
-| Control Plane 所在主机失联 | 外部监控或备用节点 | 告警或通过租约接管；同一时刻只能有一个主节点 |
+| 故障                         | 恢复主体           | 默认动作                                     |
+| ---------------------------- | ------------------ | -------------------------------------------- |
+| Worker 异常退出              | Supervisor / lease | 重启 Worker，过期事件重新领取                |
+| Control Plane 异常退出       | Supervisor         | 重启当前 Release                             |
+| 候选版本无法启动或观察期失败 | Supervisor         | 自动回滚 Previous Release                    |
+| 数据库损坏或 migration 失败  | Backup / Recovery  | 停止自动推进，恢复到已验证恢复点             |
+| Mac 离线                     | Control Plane      | 将本地 Action 标记为 Waiting，其他 Task 继续 |
+| Control Plane 所在主机失联   | 外部监控或备用节点 | 告警或通过租约接管；同一时刻只能有一个主节点 |
 
 Supervisor 无法恢复宿主机断电、磁盘完全损坏或网络整体中断，因此长期运行还需要主机级进程守护、备份和外部健康监测。
 

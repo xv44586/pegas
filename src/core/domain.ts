@@ -1,22 +1,14 @@
-export const eventStatuses = [
-  'pending',
-  'processing',
-  'processed',
-  'failed',
-] as const
-export type EventStatus = (typeof eventStatuses)[number]
+type EventStatus = 'pending' | 'processing' | 'processed' | 'failed'
 
-export const taskStatuses = [
-  'inbox',
-  'planning',
-  'running',
-  'waiting',
-  'completed',
-  'failed',
-  'paused',
-  'cancelled',
-] as const
-export type TaskStatus = (typeof taskStatuses)[number]
+type TaskStatus =
+  | 'inbox'
+  | 'planning'
+  | 'running'
+  | 'waiting'
+  | 'completed'
+  | 'failed'
+  | 'paused'
+  | 'cancelled'
 
 export interface InboxEvent {
   id: string
@@ -55,15 +47,8 @@ export interface Task {
   updatedAt: string
 }
 
-export const runStatuses = [
-  'queued',
-  'running',
-  'waiting',
-  'completed',
-  'failed',
-  'cancelled',
-] as const
-export type RunStatus = (typeof runStatuses)[number]
+type RunStatus =
+  'queued' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled'
 
 export interface Run {
   id: string

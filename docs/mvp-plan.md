@@ -11,6 +11,7 @@
 
 - [x] Node.js / TypeScript / pnpm 工程；
 - [x] format、lint、typecheck、unit test、build 和 smoke test；
+- [x] 覆盖率下限、dead-code 检查和 Feature Map 开发协议；
 - [x] GitHub Actions CI 门禁；
 - [x] SQLite 初始 schema；
 - [x] 持久 Event Inbox、来源去重和 Worker lease；

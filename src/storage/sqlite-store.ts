@@ -117,6 +117,9 @@ CREATE TABLE IF NOT EXISTS outbox_messages (
 );
 `
 
+const schemaInitializationAttempts = 3
+const schemaRetryDelayMs = 100
+
 const migration2 = `
 ALTER TABLE tasks ADD COLUMN goal TEXT NOT NULL DEFAULT '';
 
@@ -236,7 +239,7 @@ export class PegasStore {
     // Apply the lock wait before any WAL/schema statement so multiple Pegas
     // processes can safely perform a cold start against the same database.
     this.#database.exec('PRAGMA busy_timeout = 5000;')
-    this.#database.exec(schema)
+    initializeSchema(this.#database)
     this.#database
       .prepare(
         'INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (1, ?)',
@@ -869,6 +872,35 @@ export class PegasStore {
     if (!row) throw new Error(`Outbox message ${messageId} does not exist`)
     return toOutboxMessage(row as unknown as OutboxRow)
   }
+}
+
+function initializeSchema(database: DatabaseSync): void {
+  for (let attempt = 1; attempt <= schemaInitializationAttempts; attempt += 1) {
+    try {
+      database.exec(schema)
+      return
+    } catch (error) {
+      if (!isSqliteBusy(error) || attempt === schemaInitializationAttempts)
+        throw error
+      Atomics.wait(
+        new Int32Array(new SharedArrayBuffer(4)),
+        0,
+        0,
+        schemaRetryDelayMs * attempt,
+      )
+    }
+  }
+}
+
+function isSqliteBusy(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    error.code === 'ERR_SQLITE_ERROR' &&
+    'errcode' in error &&
+    error.errcode === 5
+  )
 }
 
 function toInboxEvent(row: InboxRow): InboxEvent {

@@ -1,0 +1,73 @@
+import { resolve } from 'node:path'
+
+import { describe, expect, it } from 'vitest'
+
+import { loadConfig } from '../src/core/config.js'
+
+describe('loadConfig', () => {
+  it('uses safe local defaults', () => {
+    expect(loadConfig({})).toMatchObject({
+      apiHost: '127.0.0.1',
+      apiPort: 4317,
+      databasePath: resolve('data/pegas.sqlite'),
+      executorMode: 'dsh',
+      modelName: 'gpt-5.6-luna',
+      modelProvider: 'codex-cli',
+      pushMode: 'disabled',
+      routerMode: 'model',
+      workerConcurrency: 2,
+    })
+  })
+
+  it('loads explicit model, executor, webhook, and workspace settings', () => {
+    expect(
+      loadConfig({
+        PEGAS_API_HOST: 'localhost',
+        PEGAS_API_PORT: '5000',
+        PEGAS_DSH_ADD_DIRS: './one, ./two,',
+        PEGAS_EXECUTOR: 'echo',
+        PEGAS_MODEL_BASE_URL: 'https://models.example/v1',
+        PEGAS_MODEL_NAME: 'model-test',
+        PEGAS_MODEL_PROVIDER: 'openai-compatible',
+        PEGAS_PUSH_MODE: 'webhook',
+        PEGAS_PUSH_WEBHOOK_URL: 'https://push.example/pegas',
+        PEGAS_ROUTER: 'rules',
+        PEGAS_WORKER_CONCURRENCY: '4',
+      }),
+    ).toMatchObject({
+      apiHost: 'localhost',
+      apiPort: 5000,
+      dshAdditionalDirectories: [resolve('./one'), resolve('./two')],
+      executorMode: 'echo',
+      modelBaseUrl: 'https://models.example/v1',
+      modelName: 'model-test',
+      modelProvider: 'openai-compatible',
+      pushMode: 'webhook',
+      pushWebhookUrl: 'https://push.example/pegas',
+      routerMode: 'rules',
+      workerConcurrency: 4,
+    })
+  })
+
+  it.each([
+    [
+      { PEGAS_API_HOST: '0.0.0.0' },
+      'PEGAS_API_TOKEN is required when the API listens outside the loopback interface',
+    ],
+    [
+      { PEGAS_MODEL_PROVIDER: 'openai-compatible' },
+      'PEGAS_MODEL_BASE_URL and PEGAS_MODEL_NAME are required when PEGAS_ROUTER=model',
+    ],
+    [
+      { PEGAS_MODEL_PROVIDER: 'unsupported' },
+      'Unsupported PEGAS_MODEL_PROVIDER',
+    ],
+    [
+      { PEGAS_PUSH_MODE: 'webhook' },
+      'PEGAS_PUSH_WEBHOOK_URL is required when PEGAS_PUSH_MODE=webhook',
+    ],
+    [{ PEGAS_API_PORT: '0' }, 'PEGAS_API_PORT must be a positive integer'],
+  ])('rejects unsafe or invalid settings', (environment, message) => {
+    expect(() => loadConfig(environment)).toThrow(message)
+  })
+})

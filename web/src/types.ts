@@ -20,7 +20,7 @@ export interface Task {
   updatedAt: string
 }
 
-export type RunStatus =
+type RunStatus =
   'queued' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled'
 
 export interface Run {
