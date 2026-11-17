@@ -38,7 +38,14 @@ const initialRelease: ReleaseRef = {
     : {}),
   createdAt: new Date().toISOString(),
 }
-state.ensure(initialRelease)
+try {
+  state.ensure(initialRelease)
+} catch (error) {
+  console.error(
+    'Supervisor release state is unavailable; recovery API will remain online',
+    error,
+  )
+}
 
 let children: ChildProcess[] = []
 const lifecycle = { restartRequested: false, stopRequested: false }
@@ -68,7 +75,12 @@ process.on('SIGTERM', () => requestStop('SIGTERM'))
 
 while (!lifecycle.stopRequested) {
   lifecycle.restartRequested = false
-  const release = state.read().active
+  const inspection = state.inspect()
+  if (!inspection.state) {
+    await wait(1000)
+    continue
+  }
+  const release = inspection.state.active
   console.log(`Starting Pegas release ${release.id} from ${release.root}`)
 
   const controlPlane = startProcess(release, 'control-plane/main.js')

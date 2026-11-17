@@ -23,8 +23,20 @@ export function createRecoveryServer(options: RecoveryServerOptions): Server {
     }
 
     if (request.url === '/v1/recovery/status' && request.method === 'GET') {
-      response.writeHead(200, { 'content-type': 'application/json' })
-      return response.end(JSON.stringify(options.state.read()))
+      const inspection = options.state.inspect()
+      response.writeHead(inspection.state ? 200 : 503, {
+        'content-type': 'application/json',
+      })
+      return response.end(
+        JSON.stringify({
+          ...(inspection.state ?? {}),
+          recoveryState: {
+            integrity: inspection.integrity,
+            source: inspection.source,
+            diagnostics: inspection.diagnostics,
+          },
+        }),
+      )
     }
 
     if (request.url === '/v1/recovery/restart' && request.method === 'POST') {
