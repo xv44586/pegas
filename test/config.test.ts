@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest'
 
 import { loadConfig } from '../src/core/config.js'
 
+const privacyHmacKey = ['privacy', 'test', 'key', 'value', '2026'].join('-')
+
 describe('loadConfig', () => {
   it('uses safe local defaults', () => {
     expect(loadConfig({})).toMatchObject({
@@ -14,6 +16,7 @@ describe('loadConfig', () => {
       modelName: 'gpt-5.6-luna',
       modelProvider: 'codex-cli',
       pushMode: 'disabled',
+      privacyMode: 'disabled',
       routerMode: 'model',
       speechModel: 'Qwen/Qwen3-ASR-0.6B',
       speechProvider: 'disabled',
@@ -34,6 +37,8 @@ describe('loadConfig', () => {
         PEGAS_PUSH_MODE: 'webhook',
         PEGAS_PUSH_WEBHOOK_URL: 'https://push.example/pegas',
         PEGAS_ROUTER: 'rules',
+        PEGAS_PRIVACY_HMAC_KEY: privacyHmacKey,
+        PEGAS_PRIVACY_MODE: 'mask',
         PEGAS_SPEECH_BASE_URL: 'http://127.0.0.1:18081/v1',
         PEGAS_SPEECH_MODEL: 'Qwen/Qwen3-ASR-1.7B',
         PEGAS_SPEECH_PROVIDER: 'openai-compatible',
@@ -48,6 +53,8 @@ describe('loadConfig', () => {
       modelName: 'model-test',
       modelProvider: 'openai-compatible',
       pushMode: 'webhook',
+      privacyHmacKey,
+      privacyMode: 'mask',
       pushWebhookUrl: 'https://push.example/pegas',
       routerMode: 'rules',
       speechBaseUrl: 'http://127.0.0.1:18081/v1',
@@ -78,6 +85,11 @@ describe('loadConfig', () => {
       { PEGAS_SPEECH_PROVIDER: 'openai-compatible' },
       'PEGAS_SPEECH_BASE_URL is required when PEGAS_SPEECH_PROVIDER=openai-compatible',
     ],
+    [
+      { PEGAS_PRIVACY_MODE: 'mask' },
+      'PEGAS_PRIVACY_HMAC_KEY must contain at least 16 characters',
+    ],
+    [{ PEGAS_PRIVACY_MODE: 'unsupported' }, 'Unsupported PEGAS_PRIVACY_MODE'],
     [{ PEGAS_API_PORT: '0' }, 'PEGAS_API_PORT must be a positive integer'],
   ])('rejects unsafe or invalid settings', (environment, message) => {
     expect(() => loadConfig(environment)).toThrow(message)

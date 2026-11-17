@@ -482,6 +482,18 @@ Supervisor 无法恢复宿主机断电、磁盘完全损坏或网络整体中断
 - Activity 与任务中心；
 - 跨 Run、跨 session 和跨设备恢复。
 
+## 模型出站隐私边界
+
+Conversation、Task 和 Run 中的用户原文仍由服务端数据库保存为权威状态。开启
+`PRIVACY-001` 后，Worker 只在受控的出站边界创建脱敏视图：Router 的模型 provider
+与 DSH Executor 在收到内容前替换高置信度敏感值，响应回到 Pegas 可信边界后再恢复
+稳定占位符。脱敏失败时调用不会继续，避免把未处理原文降级发送给外部服务。
+
+第一阶段的反向映射仅驻留 Worker 内存，不写入 Conversation、日志或数据库。DSH 在
+执行过程中读取文件、调用工具而产生的后续模型流量仍属于 DSH provider gateway 的
+责任；Pegas 的 Executor wrapper 不能替代这层保护。完整规则、失败与回滚行为见
+`docs/privacy-masking.md`。
+
 ## 部署形态
 
 开发阶段先支持单用户、本地闭环：

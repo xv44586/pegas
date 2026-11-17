@@ -21,6 +21,8 @@ export interface PegasConfig {
   modelApiKey?: string
   modelName?: string
   modelTimeoutMs: number
+  privacyMode: 'disabled' | 'mask'
+  privacyHmacKey?: string
   speechProvider: 'disabled' | 'openai-compatible'
   speechBaseUrl?: string
   speechApiKey?: string
@@ -44,6 +46,8 @@ export function loadConfig(
   const modelProvider = environment.PEGAS_MODEL_PROVIDER ?? 'codex-cli'
   const modelBaseUrl = environment.PEGAS_MODEL_BASE_URL
   const modelName = environment.PEGAS_MODEL_NAME
+  const privacyMode = environment.PEGAS_PRIVACY_MODE ?? 'disabled'
+  const privacyHmacKey = environment.PEGAS_PRIVACY_HMAC_KEY
   const speechProvider = environment.PEGAS_SPEECH_PROVIDER ?? 'disabled'
   const speechBaseUrl = environment.PEGAS_SPEECH_BASE_URL
   const pushMode =
@@ -67,6 +71,19 @@ export function loadConfig(
   if (modelProvider !== 'codex-cli' && modelProvider !== 'openai-compatible') {
     throw new Error(
       `Unsupported PEGAS_MODEL_PROVIDER: ${modelProvider}. Expected codex-cli or openai-compatible`,
+    )
+  }
+  if (privacyMode !== 'disabled' && privacyMode !== 'mask') {
+    throw new Error(
+      `Unsupported PEGAS_PRIVACY_MODE: ${privacyMode}. Expected disabled or mask`,
+    )
+  }
+  if (
+    privacyMode === 'mask' &&
+    (!privacyHmacKey || privacyHmacKey.length < 16)
+  ) {
+    throw new Error(
+      'PEGAS_PRIVACY_HMAC_KEY must contain at least 16 characters when PEGAS_PRIVACY_MODE=mask',
     )
   }
   if (speechProvider === 'openai-compatible' && !speechBaseUrl) {
@@ -130,6 +147,8 @@ export function loadConfig(
       90_000,
       'PEGAS_MODEL_TIMEOUT_MS',
     ),
+    privacyMode,
+    ...(privacyHmacKey ? { privacyHmacKey } : {}),
     speechProvider,
     ...(speechBaseUrl ? { speechBaseUrl } : {}),
     ...(environment.PEGAS_SPEECH_API_KEY

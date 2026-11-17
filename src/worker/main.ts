@@ -7,6 +7,9 @@ import type { RunExecutor } from '../executor/executor.js'
 import { CodexCliProvider } from '../model/codex-cli-provider.js'
 import { OpenAiCompatibleProvider } from '../model/openai-compatible-provider.js'
 import type { JsonModelProvider } from '../model/provider.js'
+import { PrivacyMaskingExecutor } from '../privacy/executor.js'
+import { DeterministicPrivacyMasker } from '../privacy/masker.js'
+import { PrivacyMaskingProvider } from '../privacy/provider.js'
 import {
   ModelTaskRouter,
   RuleBasedTaskRouter,
@@ -22,7 +25,13 @@ import {
 const config = loadConfig()
 const store = new PegasStore(config.databasePath)
 const workerId = `worker-${randomUUID()}`
-const executor: RunExecutor =
+const privacyMasker =
+  config.privacyMode === 'mask'
+    ? new DeterministicPrivacyMasker({
+        hmacKey: required(config.privacyHmacKey, 'privacy HMAC key'),
+      })
+    : undefined
+const baseExecutor: RunExecutor =
   config.executorMode === 'echo'
     ? new EchoExecutor()
     : new DshCliExecutor({
@@ -31,6 +40,9 @@ const executor: RunExecutor =
         additionalDirectories: config.dshAdditionalDirectories,
         timeoutMs: config.dshTimeoutMs,
       })
+const executor: RunExecutor = privacyMasker
+  ? new PrivacyMaskingExecutor(baseExecutor, privacyMasker)
+  : baseExecutor
 const router: TaskRouter =
   config.routerMode === 'model'
     ? new ModelTaskRouter({
@@ -91,17 +103,22 @@ function required(value: string | undefined, name: string): string {
 }
 
 function createModelProvider(): JsonModelProvider {
+  let provider: JsonModelProvider
   if (config.modelProvider === 'codex-cli') {
-    return new CodexCliProvider({
+    provider = new CodexCliProvider({
       command: config.codexCommand,
       model: required(config.modelName, 'model name'),
       timeoutMs: config.modelTimeoutMs,
     })
+  } else {
+    provider = new OpenAiCompatibleProvider({
+      baseUrl: required(config.modelBaseUrl, 'model base URL'),
+      model: required(config.modelName, 'model name'),
+      ...(config.modelApiKey ? { apiKey: config.modelApiKey } : {}),
+      timeoutMs: config.modelTimeoutMs,
+    })
   }
-  return new OpenAiCompatibleProvider({
-    baseUrl: required(config.modelBaseUrl, 'model base URL'),
-    model: required(config.modelName, 'model name'),
-    ...(config.modelApiKey ? { apiKey: config.modelApiKey } : {}),
-    timeoutMs: config.modelTimeoutMs,
-  })
+  return privacyMasker
+    ? new PrivacyMaskingProvider(provider, privacyMasker)
+    : provider
 }
