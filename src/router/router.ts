@@ -53,9 +53,9 @@ export interface ModelTaskRouterOptions {
 }
 
 /**
- * Uses a model only for ambiguous task ownership. Explicit references and
- * zero-task conversations stay deterministic, and every invalid model answer
- * falls back to the rule router instead of blocking the event stream.
+ * Uses a model for every unscoped user message. Explicit references remain
+ * deterministic. Invalid model answers fall back to the rule router instead
+ * of blocking the event stream.
  */
 export class ModelTaskRouter implements TaskRouter {
   readonly #provider: JsonModelProvider
@@ -79,7 +79,6 @@ export class ModelTaskRouter implements TaskRouter {
     const candidates = tasks
       .filter(task => !['completed', 'cancelled'].includes(task.status))
       .slice(0, this.#maximumCandidateTasks)
-    if (candidates.length === 0) return this.#fallback.route(event, tasks)
 
     try {
       const answer = await this.#provider.generateJson({

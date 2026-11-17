@@ -5,6 +5,25 @@ import type { JsonModelProvider } from '../src/model/provider.js'
 import { ModelTaskRouter } from '../src/router/router.js'
 
 describe('ModelTaskRouter', () => {
+  it('uses the model for the first message even without candidate tasks', async () => {
+    const provider = new StubProvider({
+      kind: 'create_task',
+      taskId: '',
+      title: 'First model task',
+      goal: 'Create the first task through the model router.',
+      reason: 'This is a new goal.',
+    })
+    const router = new ModelTaskRouter({ provider })
+
+    const decision = await router.route(message('Start something new'), [])
+
+    expect(decision).toMatchObject({
+      kind: 'create_task',
+      title: 'First model task',
+    })
+    expect(provider.calls).toBe(1)
+  })
+
   it('continues a model-selected active task', async () => {
     const provider = new StubProvider({
       kind: 'continue_task',
