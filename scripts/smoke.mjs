@@ -157,7 +157,10 @@ async function waitForSentOutbox(apiPort) {
       },
     )
     const body = await response.json()
-    const sent = body.messages?.find(message => message.status === 'sent')
+    const sent = body.messages?.find(
+      message =>
+        message.status === 'sent' && message.payload?.type === 'run.completed',
+    )
     if (sent) return sent
     await wait(50)
   }

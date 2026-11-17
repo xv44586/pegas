@@ -43,6 +43,18 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         const body = await readJson(request)
         const input = parseNewInboxEvent(body)
         const result = options.store.enqueueEvent(input)
+        if (result.event.type === 'user.message') {
+          options.store.enqueueOutbox({
+            userId: result.event.userId,
+            channel: 'conversation',
+            dedupeKey: `event-received:${result.event.id}`,
+            payload: {
+              type: 'message.received',
+              eventId: result.event.id,
+              text: '收到，我正在理解并安排这件事。',
+            },
+          })
+        }
         return sendJson(response, result.inserted ? 202 : 200, result)
       }
 

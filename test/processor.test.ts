@@ -34,6 +34,15 @@ describe('event and run processing', () => {
     expect(store.listRuns()).toMatchObject([
       { status: 'queued', input: 'Ship the first vertical slice' },
     ])
+    expect(store.listOutbox('user-1')).toMatchObject([
+      {
+        status: 'pending',
+        payload: {
+          type: 'task.started',
+          text: '我已经把这件事整理为任务「Ship the first vertical slice」，现在开始处理。',
+        },
+      },
+    ])
 
     const claimed = store.claimNextRun('worker-1')
     expect(claimed).toBeDefined()
@@ -107,6 +116,12 @@ describe('event and run processing', () => {
       status: 'queued',
       input: 'Now add recovery tests',
       resumeFromRef: firstSession,
+    })
+    expect(store.listOutbox('user-1').at(-1)).toMatchObject({
+      payload: {
+        type: 'task.continued',
+        text: '收到，我会把这条补充到任务「Create the first version」并继续处理。',
+      },
     })
     store.close()
   })

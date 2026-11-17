@@ -21,8 +21,28 @@ export class RoutingEventHandler implements EventHandler {
       event,
       store.listTasks(event.userId),
     )
-    if (decision)
-      store.applyRoutingDecision(event, decision, this.#executorName)
+    if (!decision) return
+    const { task, run } = store.applyRoutingDecision(
+      event,
+      decision,
+      this.#executorName,
+    )
+    store.enqueueOutbox({
+      userId: event.userId,
+      taskId: task.id,
+      channel: 'conversation',
+      dedupeKey: `run-started:${run.id}`,
+      payload: {
+        type:
+          decision.kind === 'create_task' ? 'task.started' : 'task.continued',
+        taskId: task.id,
+        runId: run.id,
+        text:
+          decision.kind === 'create_task'
+            ? `我已经把这件事整理为任务「${task.title}」，现在开始处理。`
+            : `收到，我会把这条补充到任务「${task.title}」并继续处理。`,
+      },
+    })
   }
 }
 

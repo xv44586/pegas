@@ -64,6 +64,14 @@ describe('control plane', () => {
     expect(events.status).toBe(200)
     expect(eventBody.events).toHaveLength(1)
     expect(eventBody.events[0]?.payload).toEqual({ text: 'Hello Pegas' })
+    expect(store.listOutbox('user-1')).toMatchObject([
+      {
+        payload: {
+          type: 'message.received',
+          text: '收到，我正在理解并安排这件事。',
+        },
+      },
+    ])
   })
 
   it('accepts authenticated proactive agent messages', async () => {
