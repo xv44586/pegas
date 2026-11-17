@@ -30,12 +30,19 @@ import type {
   InboxEvent,
   OutboxMessage,
   Run,
+  RuntimeSettings,
+  SettingsCapabilities,
+  SettingsResponse,
   Snapshot,
   Task,
   TaskStatus,
 } from './types'
 
 const userId = 'owner'
+interface SettingsClient {
+  settings(): Promise<SettingsResponse>
+  saveSettings(settings: RuntimeSettings): Promise<SettingsResponse>
+}
 const emptySnapshot: Snapshot = {
   events: [],
   messages: [],
@@ -73,6 +80,7 @@ export function App() {
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [taskPanelOpen, setTaskPanelOpen] = useState(Boolean(initialTaskId))
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [selectedTaskId, setSelectedTaskId] = useState(initialTaskId)
   const feedEnd = useRef<HTMLDivElement>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
@@ -154,11 +162,13 @@ export function App() {
 
   function openTaskPanel(): void {
     rememberPanelTrigger()
+    setSettingsOpen(false)
     setTaskPanelOpen(true)
   }
 
   function openTask(taskId: string): void {
     rememberPanelTrigger()
+    setSettingsOpen(false)
     setSelectedTaskId(taskId)
     setTaskPanelOpen(true)
     const url = new URL(window.location.href)
@@ -180,8 +190,21 @@ export function App() {
     }
   }
 
+  function openSettings(): void {
+    rememberPanelTrigger()
+    setTaskPanelOpen(false)
+    setSettingsOpen(true)
+  }
+
+  function closeSettings(): void {
+    setSettingsOpen(false)
+    if (compact) {
+      window.requestAnimationFrame(() => previousFocus.current?.focus())
+    }
+  }
+
   function rememberPanelTrigger(): void {
-    if (!compact || taskPanelOpen) return
+    if (!compact || taskPanelOpen || settingsOpen) return
     previousFocus.current =
       document.activeElement instanceof HTMLElement
         ? document.activeElement
@@ -241,8 +264,10 @@ export function App() {
       <aside
         className="identity-rail"
         aria-label="Pegas 导航"
-        aria-hidden={compact && taskPanelOpen ? true : undefined}
-        inert={compact && taskPanelOpen ? true : undefined}
+        aria-hidden={
+          compact && (taskPanelOpen || settingsOpen) ? true : undefined
+        }
+        inert={compact && (taskPanelOpen || settingsOpen) ? true : undefined}
       >
         <button
           className="pegas-mark"
@@ -272,10 +297,10 @@ export function App() {
           </button>
         </nav>
         <button
-          className="rail-button rail-settings"
-          aria-label="连接设置"
-          title="连接设置"
-          onClick={() => setUnauthorized(true)}
+          className={`rail-button rail-settings${settingsOpen ? ' is-active' : ''}`}
+          aria-label="设置"
+          title="设置"
+          onClick={openSettings}
         >
           <Settings2 aria-hidden="true" />
         </button>
@@ -283,8 +308,10 @@ export function App() {
 
       <main
         className="conversation-column"
-        aria-hidden={compact && taskPanelOpen ? true : undefined}
-        inert={compact && taskPanelOpen ? true : undefined}
+        aria-hidden={
+          compact && (taskPanelOpen || settingsOpen) ? true : undefined
+        }
+        inert={compact && (taskPanelOpen || settingsOpen) ? true : undefined}
       >
         <header className="conversation-header">
           <div className="identity-copy">
@@ -308,6 +335,14 @@ export function App() {
                 className={refreshing ? 'is-spinning' : ''}
                 aria-hidden="true"
               />
+            </button>
+            <button
+              className="icon-button mobile-settings-button"
+              aria-label="打开设置"
+              title="设置"
+              onClick={openSettings}
+            >
+              <Settings2 aria-hidden="true" />
             </button>
             <button className="mobile-task-button" onClick={openTaskPanel}>
               <ListTodo aria-hidden="true" />
@@ -459,17 +494,343 @@ export function App() {
         </div>
       </main>
 
-      <TaskPanel
-        open={taskPanelOpen}
-        tasks={snapshot.tasks}
-        runs={snapshot.runs}
-        selectedTask={selectedTask}
-        onOpen={openTask}
-        onBack={closeTask}
-        onClose={closeTaskPanel}
-        compact={compact}
-      />
+      {settingsOpen ? (
+        <SettingsPanel
+          open={settingsOpen}
+          api={api}
+          onClose={closeSettings}
+          compact={compact}
+        />
+      ) : (
+        <TaskPanel
+          open={taskPanelOpen}
+          tasks={snapshot.tasks}
+          runs={snapshot.runs}
+          selectedTask={selectedTask}
+          onOpen={openTask}
+          onBack={closeTask}
+          onClose={closeTaskPanel}
+          compact={compact}
+        />
+      )}
     </div>
+  )
+}
+
+function SettingsPanel({
+  open,
+  api,
+  onClose,
+  compact,
+}: {
+  open: boolean
+  api: SettingsClient
+  onClose: () => void
+  compact: boolean
+}) {
+  const [settings, setSettings] = useState<RuntimeSettings>()
+  const [capabilities, setCapabilities] = useState<SettingsCapabilities>()
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [saved, setSaved] = useState(false)
+  const panel = useRef<HTMLElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    let active = true
+    setLoading(true)
+    setError('')
+    void api
+      .settings()
+      .then(response => {
+        if (!active) return
+        setSettings(response.settings)
+        setCapabilities(response.capabilities)
+      })
+      .catch((caught: unknown) => {
+        if (!active) return
+        setError(caught instanceof Error ? caught.message : '无法读取设置')
+      })
+      .finally(() => {
+        if (active) setLoading(false)
+      })
+    return () => {
+      active = false
+    }
+  }, [api, open])
+
+  useEffect(() => {
+    if (!compact || !open || !panel.current) return
+    const element = panel.current
+    const first = element.querySelector<HTMLElement>(
+      '[data-panel-initial-focus]',
+    )
+    window.requestAnimationFrame(() => first?.focus())
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      onClose()
+    }
+    element.addEventListener('keydown', handleKeyDown)
+    return () => element.removeEventListener('keydown', handleKeyDown)
+  }, [compact, onClose, open])
+
+  async function save(event: SyntheticEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault()
+    if (!settings || saving) return
+    setSaving(true)
+    setSaved(false)
+    setError('')
+    try {
+      const response = await api.saveSettings({
+        ...settings,
+        modelName: settings.modelName.trim(),
+      })
+      setSettings(response.settings)
+      setCapabilities(response.capabilities)
+      setSaved(true)
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '设置保存失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const update = <Key extends keyof RuntimeSettings>(
+    key: Key,
+    value: RuntimeSettings[Key],
+  ) => {
+    setSaved(false)
+    setSettings(current => (current ? { ...current, [key]: value } : current))
+  }
+  if (compact && !open) return null
+  return (
+    <aside
+      ref={panel}
+      className={`task-panel settings-panel${open ? ' is-open' : ''}`}
+      aria-label="设置"
+      aria-modal={compact ? true : undefined}
+      role={compact ? 'dialog' : undefined}
+    >
+      <header className="settings-header">
+        <div>
+          <h2 id="runtime-settings-title">设置</h2>
+          <p>统一控制模型入口、输入处理与隐私边界</p>
+        </div>
+        <button
+          className="panel-close settings-close"
+          type="button"
+          onClick={onClose}
+          aria-label="关闭设置"
+          data-panel-initial-focus
+        >
+          <X aria-hidden="true" />
+        </button>
+      </header>
+
+      {loading ? (
+        <div className="settings-loading" aria-label="正在读取设置">
+          <span />
+          <span />
+          <span />
+        </div>
+      ) : settings && capabilities ? (
+        <form
+          className="settings-form"
+          aria-labelledby="runtime-settings-title"
+          onSubmit={event => void save(event)}
+        >
+          <div className="settings-scroll">
+            <fieldset>
+              <legend>任务路由</legend>
+              <p>决定一条新消息是继续已有任务，还是创建新的任务。</p>
+              <SettingChoice
+                name="router-mode"
+                value="model"
+                checked={settings.routerMode === 'model'}
+                title="智能归类"
+                description="由所选模型判断任务归属，不确定时安全地新建任务。"
+                onChange={() => update('routerMode', 'model')}
+              />
+              <SettingChoice
+                name="router-mode"
+                value="rules"
+                checked={settings.routerMode === 'rules'}
+                title="确定性规则"
+                description="只有明确指定任务时才续接，其余消息一律新建任务。"
+                onChange={() => update('routerMode', 'rules')}
+              />
+            </fieldset>
+
+            <fieldset>
+              <legend>模型服务</legend>
+              <p>
+                Provider 的地址与凭证由服务端管理，浏览器只选择已配置的入口。
+              </p>
+              {capabilities.providers.map(provider => (
+                <SettingChoice
+                  key={provider.id}
+                  name="model-provider"
+                  value={provider.id}
+                  checked={settings.modelProvider === provider.id}
+                  title={
+                    provider.id === 'codex-cli'
+                      ? 'Codex 登录态'
+                      : 'OpenAI-compatible'
+                  }
+                  description={
+                    provider.reason ??
+                    (provider.id === 'codex-cli'
+                      ? '复用本机 Codex CLI 登录态。'
+                      : '使用服务端配置的兼容 API。')
+                  }
+                  disabled={!provider.available}
+                  onChange={() => update('modelProvider', provider.id)}
+                />
+              ))}
+              <label className="settings-text-field" htmlFor="model-name">
+                <span>对应模型</span>
+                <input
+                  id="model-name"
+                  name="modelName"
+                  value={settings.modelName}
+                  onChange={event => update('modelName', event.target.value)}
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  maxLength={120}
+                  required
+                />
+                <small>
+                  当前 Provider：
+                  {settings.modelProvider === 'codex-cli'
+                    ? 'Codex 登录态'
+                    : 'OpenAI-compatible'}
+                </small>
+              </label>
+            </fieldset>
+
+            <fieldset>
+              <legend>模型出站脱敏</legend>
+              <p>
+                在内容离开 Pegas Worker 前替换高置信度敏感值，返回后再恢复。
+              </p>
+              <SettingChoice
+                name="privacy-mode"
+                value="mask"
+                checked={settings.privacyMode === 'mask'}
+                title="开启脱敏"
+                description={
+                  capabilities.privacyAvailable
+                    ? '保护密钥、密码、邮箱和手机号；原文仍保留在本地权威记录。'
+                    : '服务端尚未配置隐私 HMAC key。'
+                }
+                disabled={!capabilities.privacyAvailable}
+                onChange={() => update('privacyMode', 'mask')}
+              />
+              <SettingChoice
+                name="privacy-mode"
+                value="disabled"
+                checked={settings.privacyMode === 'disabled'}
+                title="关闭脱敏"
+                description="保持原有出站行为。适合完全受控的本地模型链路。"
+                onChange={() => update('privacyMode', 'disabled')}
+              />
+            </fieldset>
+
+            <fieldset>
+              <legend>输入改写</legend>
+              <p>
+                改写只影响发送给 Router 与 Executor 的执行视图，不覆盖对话原文。
+              </p>
+              <SettingChoice
+                name="rewrite-mode"
+                value="light"
+                checked={settings.rewriteMode === 'light'}
+                title="轻量校正"
+                description="修正明显的语音识别错误、口头语和标点，不补充事实或回答问题。"
+                onChange={() => update('rewriteMode', 'light')}
+              />
+              <SettingChoice
+                name="rewrite-mode"
+                value="disabled"
+                checked={settings.rewriteMode === 'disabled'}
+                title="保持原文"
+                description="Router 与 Executor 直接使用用户发送的文字。"
+                onChange={() => update('rewriteMode', 'disabled')}
+              />
+            </fieldset>
+          </div>
+
+          <footer className="settings-footer">
+            <div aria-live="polite" role="status">
+              {saved
+                ? `已保存 · revision ${String(settings.revision)}`
+                : `服务端设置 · revision ${String(settings.revision)}`}
+            </div>
+            <button
+              type="submit"
+              disabled={saving || !settings.modelName.trim()}
+            >
+              {saving ? '正在保存…' : '保存设置'}
+            </button>
+          </footer>
+        </form>
+      ) : null}
+
+      {error && (
+        <div className="settings-error" role="alert">
+          <CircleAlert aria-hidden="true" />
+          <span>{error}</span>
+          {!settings && (
+            <button type="button" onClick={() => onClose()}>
+              返回
+            </button>
+          )}
+        </div>
+      )}
+    </aside>
+  )
+}
+
+function SettingChoice({
+  name,
+  value,
+  checked,
+  title,
+  description,
+  disabled = false,
+  onChange,
+}: {
+  name: string
+  value: string
+  checked: boolean
+  title: string
+  description: string
+  disabled?: boolean
+  onChange: () => void
+}) {
+  const id = `${name}-${value}`
+  return (
+    <label
+      className={`setting-choice${disabled ? ' is-disabled' : ''}`}
+      htmlFor={id}
+    >
+      <input
+        id={id}
+        type="radio"
+        name={name}
+        value={value}
+        checked={checked}
+        disabled={disabled}
+        onChange={onChange}
+      />
+      <span>
+        <strong>{title}</strong>
+        <small>{description}</small>
+      </span>
+    </label>
   )
 }
 

@@ -4,6 +4,45 @@ import type { Clock } from '../src/core/clock.js'
 import { PegasStore } from '../src/storage/sqlite-store.js'
 
 describe('PegasStore', () => {
+  it('persists runtime settings without overwriting saved choices', () => {
+    const store = new PegasStore(':memory:')
+    const defaults = {
+      routerMode: 'model' as const,
+      modelProvider: 'codex-cli' as const,
+      modelName: 'gpt-default',
+      privacyMode: 'disabled' as const,
+      rewriteMode: 'disabled' as const,
+    }
+
+    expect(store.initializeRuntimeSettings(defaults)).toMatchObject({
+      ...defaults,
+      revision: 1,
+    })
+    const saved = store.updateRuntimeSettings(1, {
+      ...defaults,
+      modelName: 'gpt-saved',
+      privacyMode: 'mask',
+      rewriteMode: 'light',
+    })
+
+    expect(saved).toMatchObject({
+      modelName: 'gpt-saved',
+      privacyMode: 'mask',
+      rewriteMode: 'light',
+      revision: 2,
+    })
+    expect(
+      store.initializeRuntimeSettings({
+        ...defaults,
+        modelName: 'gpt-new-env',
+      }),
+    ).toEqual(saved)
+    expect(() => store.updateRuntimeSettings(1, defaults)).toThrow(
+      '其他设备更新',
+    )
+    store.close()
+  })
+
   it('deduplicates source events without losing the original event', () => {
     const store = new PegasStore(':memory:')
     const input = {

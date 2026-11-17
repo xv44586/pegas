@@ -23,6 +23,7 @@ export interface PegasConfig {
   modelTimeoutMs: number
   privacyMode: 'disabled' | 'mask'
   privacyHmacKey?: string
+  rewriteMode: 'disabled' | 'light'
   speechProvider: 'disabled' | 'openai-compatible'
   speechBaseUrl?: string
   speechApiKey?: string
@@ -48,6 +49,7 @@ export function loadConfig(
   const modelName = environment.PEGAS_MODEL_NAME
   const privacyMode = environment.PEGAS_PRIVACY_MODE ?? 'disabled'
   const privacyHmacKey = environment.PEGAS_PRIVACY_HMAC_KEY
+  const rewriteMode = environment.PEGAS_REWRITE_MODE ?? 'disabled'
   const speechProvider = environment.PEGAS_SPEECH_PROVIDER ?? 'disabled'
   const speechBaseUrl = environment.PEGAS_SPEECH_BASE_URL
   const pushMode =
@@ -59,13 +61,9 @@ export function loadConfig(
       'PEGAS_API_TOKEN is required when the API listens outside the loopback interface',
     )
   }
-  if (
-    routerMode === 'model' &&
-    modelProvider === 'openai-compatible' &&
-    (!modelBaseUrl || !modelName)
-  ) {
+  if (rewriteMode !== 'disabled' && rewriteMode !== 'light') {
     throw new Error(
-      'PEGAS_MODEL_BASE_URL and PEGAS_MODEL_NAME are required when PEGAS_ROUTER=model',
+      `Unsupported PEGAS_REWRITE_MODE: ${rewriteMode}. Expected disabled or light`,
     )
   }
   if (modelProvider !== 'codex-cli' && modelProvider !== 'openai-compatible') {
@@ -76,14 +74,6 @@ export function loadConfig(
   if (privacyMode !== 'disabled' && privacyMode !== 'mask') {
     throw new Error(
       `Unsupported PEGAS_PRIVACY_MODE: ${privacyMode}. Expected disabled or mask`,
-    )
-  }
-  if (
-    privacyMode === 'mask' &&
-    (!privacyHmacKey || privacyHmacKey.length < 16)
-  ) {
-    throw new Error(
-      'PEGAS_PRIVACY_HMAC_KEY must contain at least 16 characters when PEGAS_PRIVACY_MODE=mask',
     )
   }
   if (speechProvider === 'openai-compatible' && !speechBaseUrl) {
@@ -149,6 +139,7 @@ export function loadConfig(
     ),
     privacyMode,
     ...(privacyHmacKey ? { privacyHmacKey } : {}),
+    rewriteMode,
     speechProvider,
     ...(speechBaseUrl ? { speechBaseUrl } : {}),
     ...(environment.PEGAS_SPEECH_API_KEY

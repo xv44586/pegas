@@ -19,6 +19,84 @@ afterEach(() => {
 })
 
 describe('Pegas web app', () => {
+  it('centralizes model, privacy, and rewriting choices in server settings', async () => {
+    const settings = {
+      revision: 1,
+      routerMode: 'model' as const,
+      modelProvider: 'codex-cli' as const,
+      modelName: 'gpt-5.6-luna',
+      privacyMode: 'disabled' as const,
+      rewriteMode: 'disabled' as const,
+      updatedAt: '2026-11-17T00:00:00.000Z',
+    }
+    const capabilities = {
+      providers: [
+        { id: 'codex-cli' as const, available: true },
+        {
+          id: 'openai-compatible' as const,
+          available: false,
+          reason: '服务端尚未配置兼容 API',
+        },
+      ],
+      privacyAvailable: true,
+    }
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path =
+        input instanceof Request
+          ? input.url
+          : input instanceof URL
+            ? input.href
+            : input
+      if (path === '/v1/settings' && init?.method === 'PUT') {
+        const body = parseRequestBody(init)
+        return Promise.resolve(
+          Response.json({
+            settings: { ...settings, ...body, revision: 2 },
+            capabilities,
+          }),
+        )
+      }
+      if (path === '/v1/settings') {
+        return Promise.resolve(Response.json({ settings, capabilities }))
+      }
+      if (path.startsWith('/v1/events'))
+        return Promise.resolve(Response.json({ events: [] }))
+      if (path.startsWith('/v1/tasks'))
+        return Promise.resolve(Response.json({ tasks: [] }))
+      if (path.startsWith('/v1/runs'))
+        return Promise.resolve(Response.json({ runs: [] }))
+      return Promise.resolve(Response.json({ messages: [] }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: '设置' }))
+
+    expect(
+      await screen.findByRole('heading', { name: '设置', level: 2 }),
+    ).toBeTruthy()
+    expect(
+      screen.getByRole('radio', { name: /OpenAI-compatible/ }),
+    ).toHaveProperty('disabled', true)
+    fireEvent.change(screen.getByRole('textbox', { name: /对应模型/ }), {
+      target: { value: 'gpt-settings-test' },
+    })
+    fireEvent.click(screen.getByRole('radio', { name: /轻量校正/ }))
+    fireEvent.click(screen.getByRole('radio', { name: /开启脱敏/ }))
+    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
+
+    expect(await screen.findByText('已保存 · revision 2')).toBeTruthy()
+    const put = fetchMock.mock.calls.find(
+      ([path, init]) => path === '/v1/settings' && init?.method === 'PUT',
+    )
+    expect(parseRequestBody(put?.[1])).toMatchObject({
+      expectedRevision: 1,
+      modelName: 'gpt-settings-test',
+      privacyMode: 'mask',
+      rewriteMode: 'light',
+    })
+  })
+
   it('presents conversation as the primary entry', async () => {
     vi.stubGlobal(
       'fetch',
@@ -247,3 +325,10 @@ describe('Pegas web app', () => {
     expect(screen.queryByText('alert("unsafe")')).toBeNull()
   })
 })
+
+function parseRequestBody(
+  init: RequestInit | undefined,
+): Record<string, unknown> {
+  if (typeof init?.body !== 'string') throw new Error('Expected a JSON body')
+  return JSON.parse(init.body) as Record<string, unknown>
+}

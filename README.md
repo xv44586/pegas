@@ -79,12 +79,18 @@ Codex Provider 以 ephemeral、read-only、无项目规则的非交互进程运�
 
 这里的 Provider 只负责 Router 等轻量控制面判断。DSH 执行任务时使用的模型、凭证和 Provider 仍由 DSH profile 自己管理，两者不会共享隐式 session 或配置。
 
+首次启动后，Router 模式、Provider、对应模型名、脱敏和输入改写由 Web 设置页统一管理，
+并保存在服务端 SQLite 中。以上环境变量只用于初始化第一版默认值；用户保存过设置后，
+重启不会用环境变量覆盖。Provider Base URL、API key 和隐私 HMAC key 仍是服务端密钥，
+不会通过设置 API 返回。详见 `docs/runtime-settings.md`。
+
 如需在用户内容离开 Pegas Worker 前屏蔽高置信度密钥、密码、邮箱和手机号，可开启
 模型出站脱敏。HMAC key 只用于生成稳定占位符，必须作为服务端密钥保存：
 
 ```bash
 PEGAS_PRIVACY_MODE=mask
 PEGAS_PRIVACY_HMAC_KEY=replace-with-a-stable-random-secret
+PEGAS_REWRITE_MODE=disabled
 ```
 
 脱敏同时覆盖 Router provider 和 DSH Executor 的初始 prompt；DSH 执行中的文件与

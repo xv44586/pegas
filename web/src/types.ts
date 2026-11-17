@@ -64,3 +64,27 @@ export interface Snapshot {
   runs: Run[]
   tasks: Task[]
 }
+
+export interface RuntimeSettings {
+  revision: number
+  routerMode: 'model' | 'rules'
+  modelProvider: 'codex-cli' | 'openai-compatible'
+  modelName: string
+  privacyMode: 'disabled' | 'mask'
+  rewriteMode: 'disabled' | 'light'
+  updatedAt: string
+}
+
+export interface SettingsCapabilities {
+  providers: {
+    id: RuntimeSettings['modelProvider']
+    available: boolean
+    reason?: string
+  }[]
+  privacyAvailable: boolean
+}
+
+export interface SettingsResponse {
+  settings: RuntimeSettings
+  capabilities: SettingsCapabilities
+}

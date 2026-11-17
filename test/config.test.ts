@@ -17,6 +17,7 @@ describe('loadConfig', () => {
       modelProvider: 'codex-cli',
       pushMode: 'disabled',
       privacyMode: 'disabled',
+      rewriteMode: 'disabled',
       routerMode: 'model',
       speechModel: 'Qwen/Qwen3-ASR-0.6B',
       speechProvider: 'disabled',
@@ -39,6 +40,7 @@ describe('loadConfig', () => {
         PEGAS_ROUTER: 'rules',
         PEGAS_PRIVACY_HMAC_KEY: privacyHmacKey,
         PEGAS_PRIVACY_MODE: 'mask',
+        PEGAS_REWRITE_MODE: 'light',
         PEGAS_SPEECH_BASE_URL: 'http://127.0.0.1:18081/v1',
         PEGAS_SPEECH_MODEL: 'Qwen/Qwen3-ASR-1.7B',
         PEGAS_SPEECH_PROVIDER: 'openai-compatible',
@@ -55,6 +57,7 @@ describe('loadConfig', () => {
       pushMode: 'webhook',
       privacyHmacKey,
       privacyMode: 'mask',
+      rewriteMode: 'light',
       pushWebhookUrl: 'https://push.example/pegas',
       routerMode: 'rules',
       speechBaseUrl: 'http://127.0.0.1:18081/v1',
@@ -70,10 +73,6 @@ describe('loadConfig', () => {
       'PEGAS_API_TOKEN is required when the API listens outside the loopback interface',
     ],
     [
-      { PEGAS_MODEL_PROVIDER: 'openai-compatible' },
-      'PEGAS_MODEL_BASE_URL and PEGAS_MODEL_NAME are required when PEGAS_ROUTER=model',
-    ],
-    [
       { PEGAS_MODEL_PROVIDER: 'unsupported' },
       'Unsupported PEGAS_MODEL_PROVIDER',
     ],
@@ -85,11 +84,8 @@ describe('loadConfig', () => {
       { PEGAS_SPEECH_PROVIDER: 'openai-compatible' },
       'PEGAS_SPEECH_BASE_URL is required when PEGAS_SPEECH_PROVIDER=openai-compatible',
     ],
-    [
-      { PEGAS_PRIVACY_MODE: 'mask' },
-      'PEGAS_PRIVACY_HMAC_KEY must contain at least 16 characters',
-    ],
     [{ PEGAS_PRIVACY_MODE: 'unsupported' }, 'Unsupported PEGAS_PRIVACY_MODE'],
+    [{ PEGAS_REWRITE_MODE: 'unsupported' }, 'Unsupported PEGAS_REWRITE_MODE'],
     [{ PEGAS_API_PORT: '0' }, 'PEGAS_API_PORT must be a positive integer'],
   ])('rejects unsafe or invalid settings', (environment, message) => {
     expect(() => loadConfig(environment)).toThrow(message)

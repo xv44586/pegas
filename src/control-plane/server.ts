@@ -10,11 +10,18 @@ import {
 import { extname, resolve, sep } from 'node:path'
 
 import type { NewInboxEvent } from '../core/domain.js'
+import {
+  parseRuntimeSettingsUpdate,
+  type SettingsCapabilities,
+} from '../settings/runtime-settings.js'
 import type {
   SpeechRecognitionProvider,
   SpeechTranscript,
 } from '../speech/provider.js'
-import type { PegasStore } from '../storage/sqlite-store.js'
+import {
+  SettingsRevisionConflictError,
+  type PegasStore,
+} from '../storage/sqlite-store.js'
 
 const maximumBodyBytes = 1024 * 1024
 const defaultMaximumAudioBytes = 25 * 1024 * 1024
@@ -25,6 +32,7 @@ export interface ControlPlaneOptions {
   webRoot?: string
   speechProvider?: SpeechRecognitionProvider
   maximumAudioBytes?: number
+  settingsCapabilities?: SettingsCapabilities
 }
 
 export function createControlPlane(options: ControlPlaneOptions): Server {
@@ -58,6 +66,44 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         request.method === 'POST'
       ) {
         return await acceptVoiceMessage(request, response, options)
+      }
+
+      if (request.url === '/v1/settings' && request.method === 'GET') {
+        if (!options.settingsCapabilities) {
+          return sendJson(response, 503, { error: 'settings_unavailable' })
+        }
+        return sendJson(response, 200, {
+          settings: options.store.getRuntimeSettings(),
+          capabilities: options.settingsCapabilities,
+        })
+      }
+
+      if (request.url === '/v1/settings' && request.method === 'PUT') {
+        if (!options.settingsCapabilities) {
+          return sendJson(response, 503, { error: 'settings_unavailable' })
+        }
+        const update = parseRuntimeSettingsUpdate(
+          await readJson(request),
+          options.settingsCapabilities,
+        )
+        try {
+          const settings = options.store.updateRuntimeSettings(
+            update.expectedRevision,
+            update.settings,
+          )
+          return sendJson(response, 200, {
+            settings,
+            capabilities: options.settingsCapabilities,
+          })
+        } catch (error) {
+          if (error instanceof SettingsRevisionConflictError) {
+            return sendJson(response, 409, {
+              error: 'settings_conflict',
+              message: error.message,
+            })
+          }
+          throw error
+        }
       }
 
       if (request.url === '/v1/events' && request.method === 'POST') {

@@ -1,4 +1,12 @@
-import type { InboxEvent, OutboxMessage, Run, Snapshot, Task } from './types'
+import type {
+  InboxEvent,
+  OutboxMessage,
+  Run,
+  RuntimeSettings,
+  SettingsResponse,
+  Snapshot,
+  Task,
+} from './types'
 
 export interface VoiceTranscript {
   text: string
@@ -74,6 +82,27 @@ export class PegasApi {
     if (!response.ok) await throwResponse(response)
     const body = (await response.json()) as { transcript: VoiceTranscript }
     return body.transcript
+  }
+
+  settings(): Promise<SettingsResponse> {
+    return this.#get<SettingsResponse>('/v1/settings')
+  }
+
+  async saveSettings(settings: RuntimeSettings): Promise<SettingsResponse> {
+    const response = await fetch('/v1/settings', {
+      method: 'PUT',
+      headers: this.#headers(true),
+      body: JSON.stringify({
+        expectedRevision: settings.revision,
+        routerMode: settings.routerMode,
+        modelProvider: settings.modelProvider,
+        modelName: settings.modelName,
+        privacyMode: settings.privacyMode,
+        rewriteMode: settings.rewriteMode,
+      }),
+    })
+    if (!response.ok) await throwResponse(response)
+    return (await response.json()) as SettingsResponse
   }
 
   async #get<T>(path: string): Promise<T> {

@@ -12,6 +12,96 @@ afterEach(async () => {
 })
 
 describe('control plane', () => {
+  it('reads and atomically updates server-authoritative runtime settings', async () => {
+    const store = new PegasStore(':memory:')
+    store.initializeRuntimeSettings({
+      routerMode: 'model',
+      modelProvider: 'codex-cli',
+      modelName: 'gpt-default',
+      privacyMode: 'disabled',
+      rewriteMode: 'disabled',
+    })
+    const capabilities = {
+      providers: [
+        { id: 'codex-cli' as const, available: true },
+        {
+          id: 'openai-compatible' as const,
+          available: false,
+          reason: 'OpenAI-compatible unavailable',
+        },
+      ],
+      privacyAvailable: true,
+    }
+    const server = createControlPlane({
+      store,
+      apiToken: 'secret',
+      settingsCapabilities: capabilities,
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    cleanups.push(
+      () => new Promise<void>(resolve => server.close(() => resolve())),
+      () => Promise.resolve(store.close()),
+    )
+    const { port } = server.address() as AddressInfo
+    const url = `http://127.0.0.1:${String(port)}/v1/settings`
+    const headers = {
+      authorization: 'Bearer secret',
+      'content-type': 'application/json',
+    }
+
+    const initial = await fetch(url, { headers })
+    expect(await initial.json()).toMatchObject({
+      settings: { modelName: 'gpt-default', revision: 1 },
+      capabilities,
+    })
+
+    const updateBody = {
+      expectedRevision: 1,
+      routerMode: 'rules',
+      modelProvider: 'codex-cli',
+      modelName: 'gpt-updated',
+      privacyMode: 'mask',
+      rewriteMode: 'light',
+    }
+    const updated = await fetch(url, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify(updateBody),
+    })
+    expect(updated.status).toBe(200)
+    expect(await updated.json()).toMatchObject({
+      settings: {
+        routerMode: 'rules',
+        modelProvider: 'codex-cli',
+        modelName: 'gpt-updated',
+        privacyMode: 'mask',
+        rewriteMode: 'light',
+        revision: 2,
+      },
+    })
+
+    const stale = await fetch(url, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify(updateBody),
+    })
+    expect(stale.status).toBe(409)
+
+    const unavailable = await fetch(url, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({
+        ...updateBody,
+        expectedRevision: 2,
+        modelProvider: 'openai-compatible',
+      }),
+    })
+    expect(unavailable.status).toBe(400)
+    expect(await unavailable.json()).toMatchObject({
+      message: 'OpenAI-compatible unavailable',
+    })
+  })
+
   it('accepts authenticated events and deduplicates retries', async () => {
     const store = new PegasStore(':memory:')
     const server = createControlPlane({ store, apiToken: 'secret' })

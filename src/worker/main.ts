@@ -10,11 +10,23 @@ import type { JsonModelProvider } from '../model/provider.js'
 import { PrivacyMaskingExecutor } from '../privacy/executor.js'
 import { DeterministicPrivacyMasker } from '../privacy/masker.js'
 import { PrivacyMaskingProvider } from '../privacy/provider.js'
+import { ModelInputRewriter } from '../rewrite/model-input-rewriter.js'
+import { RewritingTaskRouter } from '../rewrite/rewriting-router.js'
 import {
   ModelTaskRouter,
   RuleBasedTaskRouter,
   type TaskRouter,
 } from '../router/router.js'
+import {
+  assertRuntimeSettingsAvailable,
+  runtimeSettingsDefaults,
+  settingsCapabilities,
+  type RuntimeSettings,
+} from '../settings/runtime-settings.js'
+import {
+  SettingsAwareExecutor,
+  SettingsAwareTaskRouter,
+} from '../settings/settings-aware-runtime.js'
 import { PegasStore } from '../storage/sqlite-store.js'
 import {
   executeClaimedRun,
@@ -24,13 +36,12 @@ import {
 
 const config = loadConfig()
 const store = new PegasStore(config.databasePath)
+const defaults = runtimeSettingsDefaults(config)
+if (!store.hasRuntimeSettings()) {
+  assertRuntimeSettingsAvailable(defaults, settingsCapabilities(config))
+}
+store.initializeRuntimeSettings(defaults)
 const workerId = `worker-${randomUUID()}`
-const privacyMasker =
-  config.privacyMode === 'mask'
-    ? new DeterministicPrivacyMasker({
-        hmacKey: required(config.privacyHmacKey, 'privacy HMAC key'),
-      })
-    : undefined
 const baseExecutor: RunExecutor =
   config.executorMode === 'echo'
     ? new EchoExecutor()
@@ -40,15 +51,12 @@ const baseExecutor: RunExecutor =
         additionalDirectories: config.dshAdditionalDirectories,
         timeoutMs: config.dshTimeoutMs,
       })
-const executor: RunExecutor = privacyMasker
-  ? new PrivacyMaskingExecutor(baseExecutor, privacyMasker)
-  : baseExecutor
-const router: TaskRouter =
-  config.routerMode === 'model'
-    ? new ModelTaskRouter({
-        provider: createModelProvider(),
-      })
-    : new RuleBasedTaskRouter()
+const executor = new SettingsAwareExecutor(
+  store,
+  baseExecutor.name,
+  createExecutor,
+)
+const router = new SettingsAwareTaskRouter(store, createRouter)
 const eventHandler = new RoutingEventHandler(router, executor.name)
 const lifecycle = { stopping: false }
 const shutdown = new AbortController()
@@ -57,7 +65,7 @@ const activeRuns = new Set<Promise<void>>()
 process.on('SIGINT', requestStop)
 process.on('SIGTERM', requestStop)
 
-console.log(`Pegas worker ${workerId} started with ${executor.name}`)
+console.log(`Pegas worker ${workerId} started with ${baseExecutor.name}`)
 
 while (!lifecycle.stopping) {
   const routed = await processNextEvent(store, eventHandler, workerId)
@@ -102,23 +110,47 @@ function required(value: string | undefined, name: string): string {
   return value
 }
 
-function createModelProvider(): JsonModelProvider {
+function createRouter(settings: RuntimeSettings): TaskRouter {
+  let provider: JsonModelProvider | undefined
+  const baseRouter: TaskRouter =
+    settings.routerMode === 'model'
+      ? new ModelTaskRouter({
+          provider: (provider = createModelProvider(settings)),
+        })
+      : new RuleBasedTaskRouter()
+  if (settings.rewriteMode === 'disabled') return baseRouter
+  provider ??= createModelProvider(settings)
+  return new RewritingTaskRouter(baseRouter, new ModelInputRewriter(provider))
+}
+
+function createExecutor(settings: RuntimeSettings): RunExecutor {
+  if (settings.privacyMode === 'disabled') return baseExecutor
+  return new PrivacyMaskingExecutor(baseExecutor, createPrivacyMasker())
+}
+
+function createModelProvider(settings: RuntimeSettings): JsonModelProvider {
   let provider: JsonModelProvider
-  if (config.modelProvider === 'codex-cli') {
+  if (settings.modelProvider === 'codex-cli') {
     provider = new CodexCliProvider({
       command: config.codexCommand,
-      model: required(config.modelName, 'model name'),
+      model: settings.modelName,
       timeoutMs: config.modelTimeoutMs,
     })
   } else {
     provider = new OpenAiCompatibleProvider({
       baseUrl: required(config.modelBaseUrl, 'model base URL'),
-      model: required(config.modelName, 'model name'),
+      model: settings.modelName,
       ...(config.modelApiKey ? { apiKey: config.modelApiKey } : {}),
       timeoutMs: config.modelTimeoutMs,
     })
   }
-  return privacyMasker
-    ? new PrivacyMaskingProvider(provider, privacyMasker)
+  return settings.privacyMode === 'mask'
+    ? new PrivacyMaskingProvider(provider, createPrivacyMasker())
     : provider
+}
+
+function createPrivacyMasker(): DeterministicPrivacyMasker {
+  return new DeterministicPrivacyMasker({
+    hmacKey: required(config.privacyHmacKey, 'privacy HMAC key'),
+  })
 }

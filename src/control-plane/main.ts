@@ -1,12 +1,23 @@
 import { resolve } from 'node:path'
 
 import { loadConfig } from '../core/config.js'
+import {
+  assertRuntimeSettingsAvailable,
+  runtimeSettingsDefaults,
+  settingsCapabilities,
+} from '../settings/runtime-settings.js'
 import { OpenAiTranscriptionProvider } from '../speech/openai-transcription-provider.js'
 import { PegasStore } from '../storage/sqlite-store.js'
 import { createControlPlane } from './server.js'
 
 const config = loadConfig()
 const store = new PegasStore(config.databasePath)
+const defaults = runtimeSettingsDefaults(config)
+const capabilities = settingsCapabilities(config)
+if (!store.hasRuntimeSettings()) {
+  assertRuntimeSettingsAvailable(defaults, capabilities)
+}
+store.initializeRuntimeSettings(defaults)
 const speechProvider =
   config.speechProvider === 'openai-compatible'
     ? new OpenAiTranscriptionProvider({
@@ -22,6 +33,7 @@ const server = createControlPlane({
   ...(config.apiToken ? { apiToken: config.apiToken } : {}),
   ...(speechProvider ? { speechProvider } : {}),
   maximumAudioBytes: config.speechMaxAudioBytes,
+  settingsCapabilities: capabilities,
 })
 
 server.listen(config.apiPort, config.apiHost, () => {

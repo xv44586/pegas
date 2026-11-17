@@ -494,6 +494,18 @@ Conversation、Task 和 Run 中的用户原文仍由服务端数据库保存为�
 责任；Pegas 的 Executor wrapper 不能替代这层保护。完整规则、失败与回滚行为见
 `docs/privacy-masking.md`。
 
+## 运行设置边界
+
+Router 模式、模型 Provider 与模型名、脱敏策略和输入改写策略由 Control Plane 通过
+鉴权 API 写入 SQLite 单例记录。Web 与未来原生客户端只呈现这份服务端权威状态；
+Worker 在每条事件和每个 Run 开始时读取完整 revision，因此变更无需重启，但不会中途
+改变已经开始的调用。
+
+Provider Base URL、API key、隐私 HMAC key、DSH profile 与可执行命令仍属于部署密钥
+和运行能力，只能由服务端环境或密钥存储提供。设置 API 仅返回某项能力是否可用，
+不能返回、修改或推断凭证。输入改写产生临时执行视图，Conversation Event 原文不变。
+完整 schema、冲突与回滚行为见 `docs/runtime-settings.md`。
+
 ## 部署形态
 
 开发阶段先支持单用户、本地闭环：

@@ -21,8 +21,9 @@ Conversation Event、Task 和本地工具仍以原文为事实来源。
 3. provider 的嵌套 JSON 返回、Executor 的 acknowledgement 与最终文本都能恢复占位
    符；未知占位符保持原样。
 4. `user.message`、Task goal/input 和 Run input 继续保存用户原文，不被原地改写。
-5. 脱敏开启但 HMAC key 缺失或过短时，Worker 启动失败；运行中 masker 抛错时不会把
-   未处理原文交给 provider 或 Executor。
+5. 首次初始化选择脱敏但 HMAC key 缺失或过短时启动失败；已保存设置所依赖的密钥被
+   移除后，Control Plane 仍可用于恢复设置，但 Worker 不会把未处理原文交给 provider
+   或 Executor。
 6. 关闭脱敏时保持现有行为和配置兼容。
 
 ## 边界与数据流
@@ -56,8 +57,12 @@ PEGAS_PRIVACY_MODE=mask
 PEGAS_PRIVACY_HMAC_KEY=至少十六个字符的独立随机密钥
 ```
 
+HMAC key 配置后，是否启用脱敏由设置页持久化控制；环境变量中的 privacy mode 只作为
+数据库尚无运行设置时的首次默认值。
+
 - 默认 `disabled`，避免升级后在未配置密钥时改变现有运行方式。
-- `mask` 模式必须提供至少 16 个字符的 HMAC key，配置错误时 fail closed。
+- `mask` 模式必须提供至少 16 个字符的 HMAC key；首次初始化配置错误时拒绝启动，
+  运行中密钥缺失或 masker 异常时 fail closed。
 - Worker 重启后反向映射会丢失；后续请求再次携带原值时会生成同一个占位符并恢复
   映射。恢复前收到的历史占位符保持原样，不猜测原值。
 - 回滚只需将 `PEGAS_PRIVACY_MODE` 改回 `disabled` 并重启 Worker；不会迁移或改写
@@ -66,6 +71,7 @@ PEGAS_PRIVACY_HMAC_KEY=至少十六个字符的独立随机密钥
 ## 非目标
 
 - 第一版不使用 LLM 或云服务识别人名、地址等语义 PII。
-- 不在本 Feature 中增加 Web 设置页、持久化 vault、数据库加密或录音脱敏。
+- Web 设置页由 `SETTINGS-001` 提供；持久化 vault、数据库加密和录音脱敏仍不在本
+  Feature 范围内。
 - 不替代 DSH provider gateway 对文件内容、工具结果和流式 tool-call arguments 的
   保护。

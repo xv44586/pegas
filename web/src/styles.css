@@ -271,6 +271,10 @@ textarea:focus-visible {
   font-weight: 650;
 }
 
+.mobile-settings-button {
+  display: none;
+}
+
 .mobile-task-button svg {
   width: 17px;
   height: 17px;
@@ -1104,6 +1108,266 @@ textarea:focus-visible {
   background: var(--panel);
 }
 
+.settings-panel {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  background: var(--paper);
+}
+
+.settings-header {
+  display: flex;
+  min-height: 108px;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 26px 24px 20px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.settings-header h2 {
+  margin: 0;
+  font-size: 1.18rem;
+  font-weight: 710;
+  letter-spacing: -0.025em;
+  text-wrap: balance;
+}
+
+.settings-header p {
+  max-width: 30ch;
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 0.77rem;
+  line-height: 1.5;
+}
+
+.settings-close {
+  display: grid;
+  flex: 0 0 auto;
+}
+
+.settings-form {
+  display: grid;
+  min-height: 0;
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.settings-scroll {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 6px 24px 32px;
+  scroll-padding-bottom: 88px;
+}
+
+.settings-scroll fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 25px 0 18px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.settings-scroll fieldset:last-child {
+  border-bottom: 0;
+}
+
+.settings-scroll legend {
+  padding: 0;
+  color: var(--ink);
+  font-size: 0.88rem;
+  font-weight: 690;
+  letter-spacing: -0.012em;
+}
+
+.settings-scroll fieldset > p {
+  margin: 6px 0 11px;
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+
+.setting-choice {
+  display: grid;
+  min-height: 54px;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
+  gap: 11px;
+  margin: 0 -10px;
+  padding: 10px;
+  border-radius: 10px;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.setting-choice:hover:not(.is-disabled) {
+  background: var(--panel);
+}
+
+.setting-choice:has(input:checked) {
+  background: var(--blue-soft);
+}
+
+.setting-choice input {
+  width: 17px;
+  height: 17px;
+  margin: 2px 0 0;
+  accent-color: var(--blue);
+}
+
+.setting-choice input:focus-visible {
+  outline-offset: 3px;
+}
+
+.setting-choice strong,
+.setting-choice small {
+  display: block;
+}
+
+.setting-choice strong {
+  font-size: 0.78rem;
+  font-weight: 660;
+  line-height: 1.35;
+}
+
+.setting-choice small {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.69rem;
+  line-height: 1.45;
+  text-wrap: pretty;
+}
+
+.setting-choice.is-disabled {
+  color: #7d8799;
+  cursor: not-allowed;
+}
+
+.setting-choice.is-disabled small {
+  color: #727e92;
+}
+
+.settings-text-field {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.settings-text-field > span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 650;
+}
+
+.settings-text-field input {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  color: var(--ink);
+  background: var(--paper);
+  font: inherit;
+  font-size: max(1rem, 1em);
+}
+
+.settings-text-field small {
+  color: var(--faint);
+  font-size: 0.68rem;
+  line-height: 1.4;
+}
+
+.settings-footer {
+  display: flex;
+  min-height: 72px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 20px max(12px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+  background: var(--paper);
+}
+
+.settings-footer > div {
+  min-width: 0;
+  color: var(--faint);
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-footer button {
+  min-height: 42px;
+  padding: 0 15px;
+  border-radius: 10px;
+  color: var(--paper);
+  background: var(--blue);
+  font-size: 0.76rem;
+  font-weight: 680;
+}
+
+.settings-footer button:hover:not(:disabled) {
+  background: var(--blue-dark);
+}
+
+.settings-footer button:disabled {
+  color: var(--muted);
+  background: var(--panel);
+  cursor: wait;
+}
+
+.settings-loading {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding: 30px 24px;
+}
+
+.settings-loading span {
+  height: 72px;
+  border-radius: 10px;
+  background: var(--panel);
+  animation: skeleton-pulse 1.4s ease-in-out infinite alternate;
+}
+
+.settings-error {
+  position: absolute;
+  right: 16px;
+  bottom: 84px;
+  left: 16px;
+  z-index: 2;
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  color: var(--red);
+  background: var(--red-soft);
+  font-size: 0.73rem;
+  line-height: 1.45;
+}
+
+.settings-error svg {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+}
+
+.settings-error span {
+  min-width: 0;
+  flex: 1;
+}
+
+.settings-error button {
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 8px;
+  color: var(--paper);
+  background: var(--red);
+  font-weight: 650;
+}
+
 .panel-header {
   display: flex;
   min-height: 108px;
@@ -1131,6 +1395,10 @@ textarea:focus-visible {
   display: none;
   width: 40px;
   height: 40px;
+}
+
+.panel-close.settings-close {
+  display: grid;
 }
 
 .task-filters {
@@ -1577,6 +1845,10 @@ textarea:focus-visible {
     display: flex;
   }
 
+  .mobile-settings-button {
+    display: grid;
+  }
+
   .task-panel {
     position: fixed;
     z-index: 10;
@@ -1604,6 +1876,15 @@ textarea:focus-visible {
   .panel-header {
     min-height: 92px;
     padding: max(18px, env(safe-area-inset-top)) 18px 16px;
+  }
+
+  .settings-header {
+    min-height: 92px;
+    padding: max(18px, env(safe-area-inset-top)) 18px 16px;
+  }
+
+  .settings-scroll {
+    padding-inline: 18px;
   }
 
   .task-list {
@@ -1653,6 +1934,16 @@ textarea:focus-visible {
   .token-input-row {
     align-items: stretch;
     flex-direction: column;
+  }
+}
+
+@media (pointer: coarse) {
+  .setting-choice {
+    min-height: 60px;
+  }
+
+  .settings-footer button {
+    min-height: 48px;
   }
 }
 

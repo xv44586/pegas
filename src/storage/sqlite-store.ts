@@ -13,6 +13,10 @@ import type {
   Run,
   Task,
 } from '../core/domain.js'
+import type {
+  RuntimeSettings,
+  RuntimeSettingsSelection,
+} from '../settings/runtime-settings.js'
 
 const schema = `
 PRAGMA journal_mode = WAL;
@@ -168,6 +172,19 @@ CREATE INDEX outbox_messages_claim
 ON outbox_messages (status, next_attempt_at, lease_until, created_at);
 `
 
+const migration4 = `
+CREATE TABLE runtime_settings (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  revision INTEGER NOT NULL CHECK (revision > 0),
+  router_mode TEXT NOT NULL CHECK (router_mode IN ('model', 'rules')),
+  model_provider TEXT NOT NULL CHECK (model_provider IN ('codex-cli', 'openai-compatible')),
+  model_name TEXT NOT NULL,
+  privacy_mode TEXT NOT NULL CHECK (privacy_mode IN ('disabled', 'mask')),
+  rewrite_mode TEXT NOT NULL CHECK (rewrite_mode IN ('disabled', 'light')),
+  updated_at TEXT NOT NULL
+);
+`
+
 interface InboxRow {
   id: string
   user_id: string
@@ -231,6 +248,22 @@ interface OutboxRow {
   sent_at: string | null
 }
 
+interface RuntimeSettingsRow {
+  revision: number
+  router_mode: RuntimeSettings['routerMode']
+  model_provider: RuntimeSettings['modelProvider']
+  model_name: string
+  privacy_mode: RuntimeSettings['privacyMode']
+  rewrite_mode: RuntimeSettings['rewriteMode']
+  updated_at: string
+}
+
+export class SettingsRevisionConflictError extends Error {
+  constructor() {
+    super('设置已在其他设备更新，请刷新后重试')
+  }
+}
+
 export class PegasStore {
   readonly #database: DatabaseSync
   readonly #clock: Clock
@@ -250,6 +283,7 @@ export class PegasStore {
       .run(this.#clock.now().toISOString())
     this.#migrate(2, migration2)
     this.#migrate(3, migration3)
+    this.#migrate(4, migration4)
   }
 
   #migrate(version: number, sql: string): void {
@@ -283,6 +317,68 @@ export class PegasStore {
     const row = this.#database.prepare('SELECT 1 AS ok').get() as
       { ok: number } | undefined
     return row?.ok === 1
+  }
+
+  initializeRuntimeSettings(
+    defaults: RuntimeSettingsSelection,
+  ): RuntimeSettings {
+    const now = this.#clock.now().toISOString()
+    this.#database
+      .prepare(
+        `INSERT OR IGNORE INTO runtime_settings
+          (id, revision, router_mode, model_provider, model_name,
+           privacy_mode, rewrite_mode, updated_at)
+         VALUES (1, 1, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        defaults.routerMode,
+        defaults.modelProvider,
+        defaults.modelName,
+        defaults.privacyMode,
+        defaults.rewriteMode,
+        now,
+      )
+    return this.getRuntimeSettings()
+  }
+
+  hasRuntimeSettings(): boolean {
+    return Boolean(
+      this.#database
+        .prepare('SELECT 1 AS present FROM runtime_settings WHERE id = 1')
+        .get(),
+    )
+  }
+
+  getRuntimeSettings(): RuntimeSettings {
+    const row = this.#database
+      .prepare('SELECT * FROM runtime_settings WHERE id = 1')
+      .get() as unknown as RuntimeSettingsRow | undefined
+    if (!row) throw new Error('Runtime settings have not been initialized')
+    return toRuntimeSettings(row)
+  }
+
+  updateRuntimeSettings(
+    expectedRevision: number,
+    settings: RuntimeSettingsSelection,
+  ): RuntimeSettings {
+    const result = this.#database
+      .prepare(
+        `UPDATE runtime_settings
+         SET revision = revision + 1, router_mode = ?, model_provider = ?,
+             model_name = ?, privacy_mode = ?, rewrite_mode = ?, updated_at = ?
+         WHERE id = 1 AND revision = ?`,
+      )
+      .run(
+        settings.routerMode,
+        settings.modelProvider,
+        settings.modelName,
+        settings.privacyMode,
+        settings.rewriteMode,
+        this.#clock.now().toISOString(),
+        expectedRevision,
+      )
+    if (result.changes !== 1) throw new SettingsRevisionConflictError()
+    return this.getRuntimeSettings()
   }
 
   enqueueEvent(input: NewInboxEvent): { event: InboxEvent; inserted: boolean } {
@@ -921,6 +1017,18 @@ function toInboxEvent(row: InboxRow): InboxEvent {
     createdAt: row.created_at,
     ...(row.processed_at ? { processedAt: row.processed_at } : {}),
     ...(row.last_error ? { lastError: row.last_error } : {}),
+  }
+}
+
+function toRuntimeSettings(row: RuntimeSettingsRow): RuntimeSettings {
+  return {
+    revision: row.revision,
+    routerMode: row.router_mode,
+    modelProvider: row.model_provider,
+    modelName: row.model_name,
+    privacyMode: row.privacy_mode,
+    rewriteMode: row.rewrite_mode,
+    updatedAt: row.updated_at,
   }
 }
 
