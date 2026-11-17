@@ -1,5 +1,10 @@
 import type { InboxEvent, OutboxMessage, Run, Snapshot, Task } from './types'
 
+export interface VoiceTranscript {
+  text: string
+  language?: string
+}
+
 export class ApiError extends Error {
   readonly status: number
 
@@ -53,13 +58,31 @@ export class PegasApi {
     if (!response.ok) await throwResponse(response)
   }
 
+  async transcribeVoice(
+    audio: Blob,
+    language = 'zh',
+  ): Promise<VoiceTranscript> {
+    const params = new URLSearchParams({ language })
+    const response = await fetch(`/v1/voice/transcriptions?${params}`, {
+      method: 'POST',
+      headers: {
+        ...this.#headers(false),
+        'content-type': audio.type || 'application/octet-stream',
+      },
+      body: audio,
+    })
+    if (!response.ok) await throwResponse(response)
+    const body = (await response.json()) as { transcript: VoiceTranscript }
+    return body.transcript
+  }
+
   async #get<T>(path: string): Promise<T> {
     const response = await fetch(path, { headers: this.#headers(false) })
     if (!response.ok) await throwResponse(response)
     return (await response.json()) as T
   }
 
-  #headers(json: boolean): HeadersInit {
+  #headers(json: boolean): Record<string, string> {
     return {
       ...(this.#token ? { authorization: `Bearer ${this.#token}` } : {}),
       ...(json ? { 'content-type': 'application/json' } : {}),

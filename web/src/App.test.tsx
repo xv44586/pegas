@@ -1,12 +1,20 @@
 // @vitest-environment jsdom
 
-import { render, screen } from '@testing-library/react'
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { App, formatRelativeTime } from './App'
 
 afterEach(() => {
+  cleanup()
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
   sessionStorage.clear()
 })
 
@@ -45,6 +53,90 @@ describe('Pegas web app', () => {
   it('formats recent updates in conversational language', () => {
     const now = new Date('2026-11-16T10:00:00.000Z').getTime()
     expect(formatRelativeTime('2026-11-16T09:58:00.000Z', now)).toBe('2分钟前')
+  })
+
+  it('turns recorded speech into an editable draft without sending it', async () => {
+    const stopTrack = vi.fn()
+    const getUserMedia = vi.fn(() =>
+      Promise.resolve({
+        getTracks: () => [{ stop: stopTrack }],
+      } as unknown as MediaStream),
+    )
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path =
+        input instanceof Request
+          ? input.url
+          : input instanceof URL
+            ? input.href
+            : input
+      if (path.startsWith('/v1/voice/transcriptions'))
+        return Promise.resolve(
+          Response.json({ transcript: { text: '帮我整理会议记录' } }),
+        )
+      if (path.startsWith('/v1/events'))
+        return Promise.resolve(Response.json({ events: [] }))
+      if (path.startsWith('/v1/tasks'))
+        return Promise.resolve(Response.json({ tasks: [] }))
+      if (path.startsWith('/v1/runs'))
+        return Promise.resolve(Response.json({ runs: [] }))
+      if (init?.method === 'POST') return Promise.resolve(new Response(null))
+      return Promise.resolve(Response.json({ messages: [] }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('navigator', {
+      mediaDevices: {
+        getUserMedia,
+      },
+    })
+
+    class TestMediaRecorder {
+      static isTypeSupported(): boolean {
+        return true
+      }
+
+      readonly mimeType = 'audio/webm;codecs=opus'
+      state = 'inactive'
+      ondataavailable: ((event: BlobEvent) => void) | null = null
+      onerror: (() => void) | null = null
+      onstop: (() => void) | null = null
+
+      start(): void {
+        this.state = 'recording'
+      }
+
+      stop(): void {
+        this.state = 'inactive'
+        this.ondataavailable?.({
+          data: new Blob(['recorded-audio'], { type: this.mimeType }),
+        } as BlobEvent)
+        this.onstop?.()
+      }
+    }
+    vi.stubGlobal('MediaRecorder', TestMediaRecorder)
+
+    render(<App />)
+    const composer = await screen.findByLabelText('告诉 Pegas 你想完成什么')
+    const start = screen.getByRole('button', { name: '开始听写' })
+    fireEvent.click(start)
+    const stop = await screen.findByRole('button', { name: '停止听写' })
+    fireEvent.click(stop)
+
+    await waitFor(() => {
+      expect(composer).toHaveProperty('value', '帮我整理会议记录')
+    })
+    expect(stopTrack).toHaveBeenCalledOnce()
+    expect(getUserMedia).toHaveBeenCalledWith({ audio: true })
+    expect(
+      fetchMock.mock.calls.some(([path, init]) => {
+        const requestedPath =
+          path instanceof Request
+            ? path.url
+            : path instanceof URL
+              ? path.href
+              : path
+        return requestedPath.startsWith('/v1/events') && init?.method === 'POST'
+      }),
+    ).toBe(false)
   })
 
   it('shows delivery as message metadata instead of a Pegas reply', async () => {
