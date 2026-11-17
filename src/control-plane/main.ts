@@ -1,6 +1,7 @@
 import { resolve } from 'node:path'
 
 import { loadConfig } from '../core/config.js'
+import { loadDshModelCatalog } from '../executor/dsh-model-catalog.js'
 import { loadModelCredentialVault } from '../model/model-credential-vault.js'
 import { initializeConfiguredModelProvider } from '../model/provider-factory.js'
 import {
@@ -42,6 +43,12 @@ const server = createControlPlane({
   maximumAudioBytes: config.speechMaxAudioBytes,
   settingsCapabilities: capabilities,
   modelCredentialVault,
+  modelTimeoutMs: config.modelTimeoutMs,
+  agentModelCatalog: () =>
+    loadDshModelCatalog({
+      command: config.dshCommand,
+      profile: config.dshProfile,
+    }),
 })
 
 server.listen(config.apiPort, config.apiHost, () => {

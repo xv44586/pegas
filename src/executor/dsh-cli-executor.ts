@@ -1,4 +1,7 @@
 import { spawn } from 'node:child_process'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 
 import type { ExecutorInput, ExecutorResult, RunExecutor } from './executor.js'
@@ -13,6 +16,7 @@ export interface DshCliExecutorOptions {
   terminationGraceMs?: number
   maximumEventBytes?: number
   maximumStderrBytes?: number
+  agentModel?: { provider: string; model: string }
 }
 
 interface DshSessionEvent {
@@ -56,6 +60,7 @@ export class DshCliExecutor implements RunExecutor {
   readonly #terminationGraceMs: number
   readonly #maximumEventBytes: number
   readonly #maximumStderrBytes: number
+  readonly #agentModel?: { provider: string; model: string }
 
   constructor(options: DshCliExecutorOptions = {}) {
     this.#command = options.command ?? 'dsh'
@@ -67,12 +72,18 @@ export class DshCliExecutor implements RunExecutor {
     this.#terminationGraceMs = options.terminationGraceMs ?? 5000
     this.#maximumEventBytes = options.maximumEventBytes ?? 8 * 1024 * 1024
     this.#maximumStderrBytes = options.maximumStderrBytes ?? 64 * 1024
+    this.#agentModel = options.agentModel
   }
 
   async execute(input: ExecutorInput): Promise<ExecutorResult> {
+    const patch =
+      !input.resumeSessionId && this.#agentModel
+        ? createAgentModelPatch(this.#agentModel)
+        : undefined
     const arguments_ = [
       '--profile',
       this.#profile,
+      ...(patch ? ['--patch', patch.path] : []),
       '--json',
       '--permission-mode',
       this.#permissionMode,
@@ -180,6 +191,7 @@ export class DshCliExecutor implements RunExecutor {
       if (killTimer) clearTimeout(killTimer)
       input.signal?.removeEventListener('abort', abort)
       lines.close()
+      patch?.remove()
     }
     const { code, signal } = exit
     const stderr = Buffer.concat(stderrChunks).toString('utf8')
@@ -203,6 +215,28 @@ export class DshCliExecutor implements RunExecutor {
       executorRef: finalEvent.sessionId,
       output: finalEvent.text,
     }
+  }
+}
+
+function createAgentModelPatch(model: { provider: string; model: string }): {
+  path: string
+  remove: () => void
+} {
+  const directory = mkdtempSync(join(tmpdir(), 'pegas-dsh-model-'))
+  const path = join(directory, 'agent-model.json')
+  writeFileSync(
+    path,
+    JSON.stringify([
+      {
+        id: 'agent-default-model',
+        config: { provider: model.provider, model: model.model },
+      },
+    ]),
+    { mode: 0o600 },
+  )
+  return {
+    path,
+    remove: () => rmSync(directory, { recursive: true, force: true }),
   }
 }
 

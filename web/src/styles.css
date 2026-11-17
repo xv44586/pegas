@@ -1345,6 +1345,12 @@ textarea:focus-visible {
   background: #f5f7fa;
 }
 
+.provider-fields input:user-invalid,
+.agent-model-field input:user-invalid {
+  border-color: #c65766;
+  box-shadow: 0 0 0 3px rgba(198, 87, 102, 0.1);
+}
+
 .provider-description {
   margin: 0;
   color: var(--muted);
@@ -1425,6 +1431,65 @@ textarea:focus-visible {
   background: #f5f7fa;
   font-size: 0.69rem;
   font-weight: 650;
+}
+
+.model-actions {
+  display: flex;
+  grid-column: 2;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.model-actions button {
+  min-height: 36px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: #34415a;
+  background: #f5f7fa;
+  font-size: 0.7rem;
+  font-weight: 660;
+}
+
+.model-actions button:hover:not(:disabled) {
+  border-color: #b8c4d8;
+  background: #eef2f8;
+}
+
+.model-action-status {
+  grid-column: 2;
+  margin: -5px 0 0;
+  color: var(--muted);
+  font-size: 0.68rem;
+  line-height: 1.45;
+}
+
+.agent-model-group {
+  margin-top: 18px;
+}
+
+.agent-model-field {
+  display: grid;
+  gap: 7px;
+  padding: 12px 11px 10px;
+  border-top: 1px solid #e2e7ef;
+}
+
+.agent-model-field label {
+  color: #445069;
+  font-size: 0.7rem;
+  font-weight: 680;
+}
+
+.agent-model-field input {
+  width: 100%;
+  min-height: 46px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  color: var(--ink);
+  background: var(--paper);
+  font-size: max(0.86rem, 16px);
 }
 
 .settings-choice-group {
@@ -2244,6 +2309,11 @@ textarea:focus-visible {
   .clear-provider-key {
     grid-column: 1;
   }
+
+  .model-actions,
+  .model-action-status {
+    grid-column: 1;
+  }
 }
 
 @media (pointer: coarse) {
@@ -2255,6 +2325,8 @@ textarea:focus-visible {
   .provider-fields input,
   .provider-fields select,
   .clear-provider-key,
+  .model-actions button,
+  .agent-model-field input,
   .setting-choice {
     min-height: 48px;
   }

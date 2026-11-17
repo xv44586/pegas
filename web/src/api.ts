@@ -1,5 +1,7 @@
 import type {
   InboxEvent,
+  DshModelCatalog,
+  ModelCatalogItem,
   OutboxMessage,
   Run,
   ModelProviderDraft,
@@ -101,6 +103,9 @@ export class PegasApi {
         routerMode: settings.routerMode,
         modelProvider: settings.modelProvider,
         modelName: settings.modelName,
+        agentModelMode: settings.agentModelMode,
+        agentModelProvider: settings.agentModelProvider,
+        agentModelName: settings.agentModelName,
         privacyMode: settings.privacyMode,
         rewriteMode: settings.rewriteMode,
         provider,
@@ -108,6 +113,39 @@ export class PegasApi {
     })
     if (!response.ok) await throwResponse(response)
     return (await response.json()) as SettingsResponse
+  }
+
+  async discoverModels(
+    modelProvider: RuntimeSettings['modelProvider'],
+    modelName: string,
+    provider: ModelProviderDraft,
+  ): Promise<ModelCatalogItem[]> {
+    const response = await fetch('/v1/settings/models/discover', {
+      method: 'POST',
+      headers: this.#headers(true),
+      body: JSON.stringify({ modelProvider, modelName, provider }),
+    })
+    if (!response.ok) await throwResponse(response)
+    const body = (await response.json()) as { models: ModelCatalogItem[] }
+    return body.models
+  }
+
+  async testModel(
+    modelProvider: RuntimeSettings['modelProvider'],
+    modelName: string,
+    provider: ModelProviderDraft,
+  ): Promise<{ ok: true; latencyMs: number }> {
+    const response = await fetch('/v1/settings/models/test', {
+      method: 'POST',
+      headers: this.#headers(true),
+      body: JSON.stringify({ modelProvider, modelName, provider }),
+    })
+    if (!response.ok) await throwResponse(response)
+    return (await response.json()) as { ok: true; latencyMs: number }
+  }
+
+  agentModels(): Promise<DshModelCatalog> {
+    return this.#get<DshModelCatalog>('/v1/settings/agent-models')
   }
 
   async #get<T>(path: string): Promise<T> {

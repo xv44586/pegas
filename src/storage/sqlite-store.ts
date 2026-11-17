@@ -215,6 +215,13 @@ CREATE TABLE model_provider_connections (
 );
 `
 
+const migration6 = `
+ALTER TABLE runtime_settings ADD COLUMN agent_model_mode TEXT NOT NULL DEFAULT 'profile'
+  CHECK (agent_model_mode IN ('profile', 'override'));
+ALTER TABLE runtime_settings ADD COLUMN agent_model_provider TEXT NOT NULL DEFAULT '';
+ALTER TABLE runtime_settings ADD COLUMN agent_model_name TEXT NOT NULL DEFAULT '';
+`
+
 interface InboxRow {
   id: string
   user_id: string
@@ -284,6 +291,9 @@ interface RuntimeSettingsRow {
   model_provider: string
   model_connection_id: string | null
   model_name: string
+  agent_model_mode: RuntimeSettings['agentModelMode']
+  agent_model_provider: string
+  agent_model_name: string
   privacy_mode: RuntimeSettings['privacyMode']
   rewrite_mode: RuntimeSettings['rewriteMode']
   updated_at: string
@@ -334,6 +344,7 @@ export class PegasStore {
     this.#migrate(3, migration3)
     this.#migrate(4, migration4)
     this.#migrate(5, migration5)
+    this.#migrate(6, migration6)
   }
 
   #migrate(version: number, sql: string): void {
@@ -377,13 +388,17 @@ export class PegasStore {
       .prepare(
         `INSERT OR IGNORE INTO runtime_settings
           (id, revision, router_mode, model_provider, model_connection_id, model_name,
+           agent_model_mode, agent_model_provider, agent_model_name,
            privacy_mode, rewrite_mode, updated_at)
-         VALUES (1, 1, ?, 'openai-compatible', ?, ?, ?, ?, ?)`,
+         VALUES (1, 1, ?, 'openai-compatible', ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         defaults.routerMode,
         defaults.modelProvider,
         defaults.modelName,
+        defaults.agentModelMode,
+        defaults.agentModelProvider,
+        defaults.agentModelName,
         defaults.privacyMode,
         defaults.rewriteMode,
         now,
@@ -416,13 +431,17 @@ export class PegasStore {
         `UPDATE runtime_settings
          SET revision = revision + 1, router_mode = ?,
              model_provider = 'openai-compatible', model_connection_id = ?,
-             model_name = ?, privacy_mode = ?, rewrite_mode = ?, updated_at = ?
+             model_name = ?, agent_model_mode = ?, agent_model_provider = ?,
+             agent_model_name = ?, privacy_mode = ?, rewrite_mode = ?, updated_at = ?
          WHERE id = 1 AND revision = ?`,
       )
       .run(
         settings.routerMode,
         settings.modelProvider,
         settings.modelName,
+        settings.agentModelMode,
+        settings.agentModelProvider,
+        settings.agentModelName,
         settings.privacyMode,
         settings.rewriteMode,
         this.#clock.now().toISOString(),
@@ -526,13 +545,17 @@ export class PegasStore {
           `UPDATE runtime_settings
            SET revision = revision + 1, router_mode = ?,
                model_provider = 'openai-compatible', model_connection_id = ?,
-               model_name = ?, privacy_mode = ?, rewrite_mode = ?, updated_at = ?
+               model_name = ?, agent_model_mode = ?, agent_model_provider = ?,
+               agent_model_name = ?, privacy_mode = ?, rewrite_mode = ?, updated_at = ?
            WHERE id = 1 AND revision = ?`,
         )
         .run(
           settings.routerMode,
           settings.modelProvider,
           settings.modelName,
+          settings.agentModelMode,
+          settings.agentModelProvider,
+          settings.agentModelName,
           settings.privacyMode,
           settings.rewriteMode,
           now,
@@ -1196,6 +1219,9 @@ function toRuntimeSettings(row: RuntimeSettingsRow): RuntimeSettings {
     routerMode: row.router_mode,
     modelProvider: modelProvider as ModelProviderId,
     modelName: row.model_name,
+    agentModelMode: row.agent_model_mode,
+    agentModelProvider: row.agent_model_provider,
+    agentModelName: row.agent_model_name,
     privacyMode: row.privacy_mode,
     rewriteMode: row.rewrite_mode,
     updatedAt: row.updated_at,

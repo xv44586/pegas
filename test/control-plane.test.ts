@@ -1,4 +1,5 @@
 import type { AddressInfo } from 'node:net'
+import { createServer, type ServerResponse } from 'node:http'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -14,6 +15,18 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup()
 })
 
+async function startJsonServer(
+  respond: (path: string, response: ServerResponse) => void,
+): Promise<{ server: ReturnType<typeof createServer>; baseUrl: string }> {
+  const server = createServer((request, response) => {
+    response.setHeader('content-type', 'application/json')
+    respond(request.url ?? '/', response)
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const { port } = server.address() as AddressInfo
+  return { server, baseUrl: `http://127.0.0.1:${String(port)}/v1` }
+}
+
 describe('control plane', () => {
   it('reads and atomically updates server-authoritative runtime settings', async () => {
     const store = new PegasStore(':memory:')
@@ -21,6 +34,9 @@ describe('control plane', () => {
       routerMode: 'model',
       modelProvider: 'openai',
       modelName: 'gpt-default',
+      agentModelMode: 'profile',
+      agentModelProvider: '',
+      agentModelName: '',
       privacyMode: 'disabled',
       rewriteMode: 'disabled',
     })
@@ -69,6 +85,9 @@ describe('control plane', () => {
       routerMode: 'rules',
       modelProvider: 'openai',
       modelName: 'gpt-updated',
+      agentModelMode: 'override',
+      agentModelProvider: 'magpie',
+      agentModelName: 'agent-model',
       privacyMode: 'mask',
       rewriteMode: 'light',
     }
@@ -86,6 +105,9 @@ describe('control plane', () => {
         routerMode: 'rules',
         modelProvider: 'openai',
         modelName: 'gpt-updated',
+        agentModelMode: 'override',
+        agentModelProvider: 'magpie',
+        agentModelName: 'agent-model',
         privacyMode: 'mask',
         rewriteMode: 'light',
         revision: 2,
@@ -167,6 +189,91 @@ describe('control plane', () => {
     expect(eventBody.events).toHaveLength(1)
     expect(eventBody.events[0]?.payload).toEqual({ text: 'Hello Pegas' })
     expect(store.listOutbox('user-1')).toEqual([])
+  })
+
+  it('discovers and tests the draft model connection and exposes DSH models', async () => {
+    const upstream = await startJsonServer((path, response) => {
+      if (path === '/v1/models') {
+        response.end(JSON.stringify({ data: [{ id: 'router-model' }] }))
+        return
+      }
+      response.end(
+        JSON.stringify({
+          choices: [{ message: { content: '{"ok":true}' } }],
+        }),
+      )
+    })
+    const store = new PegasStore(':memory:')
+    store.initializeRuntimeSettings({
+      routerMode: 'rules',
+      modelProvider: 'custom',
+      modelName: 'router-model',
+      agentModelMode: 'profile',
+      agentModelProvider: '',
+      agentModelName: '',
+      privacyMode: 'disabled',
+      rewriteMode: 'disabled',
+    })
+    const config = loadConfig()
+    const server = createControlPlane({
+      store,
+      settingsCapabilities: () =>
+        settingsCapabilities(
+          config,
+          store.listModelProviderConnectionSummaries(),
+        ),
+      modelCredentialVault: new ModelCredentialVault(Buffer.alloc(32, 9)),
+      agentModelCatalog: () =>
+        Promise.resolve({
+          defaultProvider: 'magpie',
+          defaultModel: 'agent-default',
+          models: [
+            { provider: 'magpie', id: 'agent-default', name: 'Agent default' },
+          ],
+        }),
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    cleanups.push(
+      () => new Promise<void>(resolve => server.close(() => resolve())),
+      () =>
+        new Promise<void>(resolve => upstream.server.close(() => resolve())),
+      () => Promise.resolve(store.close()),
+    )
+    const { port } = server.address() as AddressInfo
+    const baseUrl = `http://127.0.0.1:${String(port)}`
+    const body = JSON.stringify({
+      modelProvider: 'custom',
+      modelName: 'router-model',
+      provider: {
+        name: 'Local test',
+        protocol: 'openai-chat',
+        baseUrl: upstream.baseUrl,
+        apiKey: '',
+        clearApiKey: false,
+      },
+    })
+    const headers = { 'content-type': 'application/json' }
+
+    const discovered = await fetch(`${baseUrl}/v1/settings/models/discover`, {
+      method: 'POST',
+      headers,
+      body,
+    })
+    const tested = await fetch(`${baseUrl}/v1/settings/models/test`, {
+      method: 'POST',
+      headers,
+      body,
+    })
+    const agentModels = await fetch(`${baseUrl}/v1/settings/agent-models`)
+
+    expect(await discovered.json()).toEqual({
+      models: [{ id: 'router-model', name: 'router-model' }],
+    })
+    expect(await tested.json()).toMatchObject({ ok: true })
+    expect(await agentModels.json()).toMatchObject({
+      defaultProvider: 'magpie',
+      defaultModel: 'agent-default',
+    })
   })
 
   it('accepts authenticated proactive agent messages', async () => {

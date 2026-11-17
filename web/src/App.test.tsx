@@ -25,6 +25,9 @@ describe('Pegas web app', () => {
       routerMode: 'model' as const,
       modelProvider: 'openai' as const,
       modelName: 'gpt-5-mini',
+      agentModelMode: 'profile' as const,
+      agentModelProvider: '',
+      agentModelName: '',
       privacyMode: 'disabled' as const,
       rewriteMode: 'disabled' as const,
       updatedAt: '2026-11-17T00:00:00.000Z',
@@ -98,6 +101,9 @@ describe('Pegas web app', () => {
               routerMode: body.routerMode,
               modelProvider: body.modelProvider,
               modelName: body.modelName,
+              agentModelMode: body.agentModelMode,
+              agentModelProvider: body.agentModelProvider,
+              agentModelName: body.agentModelName,
               privacyMode: body.privacyMode,
               rewriteMode: body.rewriteMode,
               revision: 2,
@@ -115,6 +121,31 @@ describe('Pegas web app', () => {
       }
       if (path === '/v1/settings') {
         return Promise.resolve(Response.json({ settings, capabilities }))
+      }
+      if (path === '/v1/settings/agent-models') {
+        return Promise.resolve(
+          Response.json({
+            defaultProvider: 'magpie',
+            defaultModel: 'agent-default',
+            models: [
+              {
+                provider: 'magpie',
+                id: 'agent-fast',
+                name: 'Agent fast',
+              },
+            ],
+          }),
+        )
+      }
+      if (path === '/v1/settings/models/discover') {
+        return Promise.resolve(
+          Response.json({
+            models: [{ id: 'gpt-settings-test', name: 'Settings test' }],
+          }),
+        )
+      }
+      if (path === '/v1/settings/models/test') {
+        return Promise.resolve(Response.json({ ok: true, latencyMs: 42 }))
       }
       if (path.startsWith('/v1/events'))
         return Promise.resolve(Response.json({ events: [] }))
@@ -140,11 +171,19 @@ describe('Pegas web app', () => {
     fireEvent.change(screen.getByLabelText('Base URL'), {
       target: { value: 'https://models.example.com/v1' },
     })
-    fireEvent.change(screen.getByLabelText('模型'), {
+    fireEvent.change(screen.getByLabelText('Router / 输入处理模型'), {
       target: { value: 'gpt-settings-test' },
     })
     fireEvent.change(screen.getByLabelText('API key'), {
       target: { value: 'secret-for-test' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '获取模型列表' }))
+    expect(await screen.findByText('已获取 1 个模型')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '测试模型' }))
+    expect(await screen.findByText('模型可用 · 42 ms')).toBeTruthy()
+    fireEvent.click(screen.getByRole('radio', { name: /覆盖新 Agent session/ }))
+    fireEvent.change(screen.getByLabelText('DSH provider 与模型'), {
+      target: { value: 'magpie::agent-fast' },
     })
     fireEvent.click(screen.getByRole('button', { name: '输入处理' }))
     fireEvent.click(screen.getByRole('radio', { name: /轻量校正/ }))
@@ -160,6 +199,9 @@ describe('Pegas web app', () => {
       expectedRevision: 1,
       modelProvider: 'custom',
       modelName: 'gpt-settings-test',
+      agentModelMode: 'override',
+      agentModelProvider: 'magpie',
+      agentModelName: 'agent-fast',
       privacyMode: 'mask',
       rewriteMode: 'light',
       provider: {

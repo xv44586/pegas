@@ -70,6 +70,9 @@ export interface RuntimeSettings {
   routerMode: 'model' | 'rules'
   modelProvider: ModelProviderId
   modelName: string
+  agentModelMode: 'profile' | 'override'
+  agentModelProvider: string
+  agentModelName: string
   privacyMode: 'disabled' | 'mask'
   rewriteMode: 'disabled' | 'light'
   updatedAt: string
@@ -125,4 +128,21 @@ export interface SettingsCapabilities {
 export interface SettingsResponse {
   settings: RuntimeSettings
   capabilities: SettingsCapabilities
+}
+
+export interface ModelCatalogItem {
+  id: string
+  name: string
+}
+
+interface DshModelCatalogItem {
+  provider: string
+  id: string
+  name: string
+}
+
+export interface DshModelCatalog {
+  defaultProvider: string
+  defaultModel: string
+  models: DshModelCatalogItem[]
 }

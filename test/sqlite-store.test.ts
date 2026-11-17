@@ -10,6 +10,9 @@ describe('PegasStore', () => {
       routerMode: 'model' as const,
       modelProvider: 'openai' as const,
       modelName: 'gpt-default',
+      agentModelMode: 'profile' as const,
+      agentModelProvider: '',
+      agentModelName: '',
       privacyMode: 'disabled' as const,
       rewriteMode: 'disabled' as const,
     }
@@ -49,6 +52,9 @@ describe('PegasStore', () => {
       routerMode: 'rules' as const,
       modelProvider: 'openai' as const,
       modelName: 'gpt-5-mini',
+      agentModelMode: 'profile' as const,
+      agentModelProvider: '',
+      agentModelName: '',
       privacyMode: 'disabled' as const,
       rewriteMode: 'disabled' as const,
     }

@@ -16,6 +16,9 @@ describe('settings-aware Worker boundaries', () => {
       routerMode: 'model' as const,
       modelProvider: 'openai' as const,
       modelName: 'model-one',
+      agentModelMode: 'profile' as const,
+      agentModelProvider: '',
+      agentModelName: '',
       privacyMode: 'disabled' as const,
       rewriteMode: 'disabled' as const,
     }

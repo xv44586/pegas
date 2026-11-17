@@ -9,6 +9,9 @@ const defaults = {
   routerMode: 'model' as const,
   modelProvider: 'openai' as const,
   modelName: 'gpt-test',
+  agentModelMode: 'profile' as const,
+  agentModelProvider: '',
+  agentModelName: '',
   privacyMode: 'disabled' as const,
   rewriteMode: 'disabled' as const,
 }

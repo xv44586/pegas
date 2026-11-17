@@ -134,8 +134,25 @@ function createRouter(settings: RuntimeSettings): TaskRouter {
 }
 
 function createExecutor(settings: RuntimeSettings): RunExecutor {
-  if (settings.privacyMode === 'disabled') return baseExecutor
-  return new PrivacyMaskingExecutor(baseExecutor, createPrivacyMasker())
+  const runtimeExecutor =
+    config.executorMode === 'echo'
+      ? baseExecutor
+      : new DshCliExecutor({
+          command: config.dshCommand,
+          profile: config.dshProfile,
+          additionalDirectories: config.dshAdditionalDirectories,
+          timeoutMs: config.dshTimeoutMs,
+          ...(settings.agentModelMode === 'override'
+            ? {
+                agentModel: {
+                  provider: settings.agentModelProvider,
+                  model: settings.agentModelName,
+                },
+              }
+            : {}),
+        })
+  if (settings.privacyMode === 'disabled') return runtimeExecutor
+  return new PrivacyMaskingExecutor(runtimeExecutor, createPrivacyMasker())
 }
 
 function createModelProvider(settings: RuntimeSettings): JsonModelProvider {

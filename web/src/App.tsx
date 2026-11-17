@@ -33,6 +33,8 @@ import { MarkdownMessage } from './MarkdownMessage'
 import { useVoiceDictation } from './useVoiceDictation'
 import type {
   InboxEvent,
+  DshModelCatalog,
+  ModelCatalogItem,
   ModelProviderDraft,
   ModelProviderId,
   OutboxMessage,
@@ -48,6 +50,17 @@ import type {
 const userId = 'owner'
 interface SettingsClient {
   settings(): Promise<SettingsResponse>
+  discoverModels(
+    modelProvider: ModelProviderId,
+    modelName: string,
+    provider: ModelProviderDraft,
+  ): Promise<ModelCatalogItem[]>
+  testModel(
+    modelProvider: ModelProviderId,
+    modelName: string,
+    provider: ModelProviderDraft,
+  ): Promise<{ ok: true; latencyMs: number }>
+  agentModels(): Promise<DshModelCatalog>
   saveSettings(
     settings: RuntimeSettings,
     provider: ModelProviderDraft,
@@ -544,6 +557,12 @@ function SettingsPanel({
   const [settings, setSettings] = useState<RuntimeSettings>()
   const [capabilities, setCapabilities] = useState<SettingsCapabilities>()
   const [providerDraft, setProviderDraft] = useState<ModelProviderDraft>()
+  const [routerModels, setRouterModels] = useState<ModelCatalogItem[]>([])
+  const [agentCatalog, setAgentCatalog] = useState<DshModelCatalog>()
+  const [modelAction, setModelAction] = useState<
+    'discovering' | 'testing' | undefined
+  >()
+  const [modelStatus, setModelStatus] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -556,9 +575,8 @@ function SettingsPanel({
     let active = true
     setLoading(true)
     setError('')
-    void api
-      .settings()
-      .then(response => {
+    void Promise.all([api.settings(), api.agentModels().catch(() => undefined)])
+      .then(([response, catalog]) => {
         if (!active) return
         setSettings(response.settings)
         setCapabilities(response.capabilities)
@@ -567,6 +585,7 @@ function SettingsPanel({
           provider => provider.id === response.settings.modelProvider,
         )
         if (selected) setProviderDraft(providerDraftFrom(selected))
+        setAgentCatalog(catalog)
       })
       .catch((caught: unknown) => {
         if (!active) return
@@ -621,7 +640,12 @@ function SettingsPanel({
     setError('')
     try {
       const response = await api.saveSettings(
-        { ...settings, modelName: settings.modelName.trim() },
+        {
+          ...settings,
+          modelName: settings.modelName.trim(),
+          agentModelProvider: settings.agentModelProvider.trim(),
+          agentModelName: settings.agentModelName.trim(),
+        },
         {
           ...providerDraft,
           name: providerDraft.name.trim(),
@@ -669,6 +693,49 @@ function SettingsPanel({
         : current,
     )
     setProviderDraft(providerDraftFrom(provider))
+    setRouterModels([])
+    setModelStatus('')
+  }
+  const discoverModels = async () => {
+    if (!settings || !providerDraft || modelAction) return
+    setModelAction('discovering')
+    setModelStatus('')
+    setError('')
+    try {
+      const models = await api.discoverModels(
+        settings.modelProvider,
+        settings.modelName,
+        providerDraft,
+      )
+      setRouterModels(models)
+      setModelStatus(
+        models.length > 0
+          ? `已获取 ${String(models.length)} 个模型`
+          : '连接成功，但目录中没有可用模型',
+      )
+    } catch (caught) {
+      setModelStatus(caught instanceof Error ? caught.message : '模型获取失败')
+    } finally {
+      setModelAction(undefined)
+    }
+  }
+  const testSelectedModel = async () => {
+    if (!settings || !providerDraft || modelAction) return
+    setModelAction('testing')
+    setModelStatus('')
+    setError('')
+    try {
+      const result = await api.testModel(
+        settings.modelProvider,
+        settings.modelName.trim(),
+        providerDraft,
+      )
+      setModelStatus(`模型可用 · ${String(result.latencyMs)} ms`)
+    } catch (caught) {
+      setModelStatus(caught instanceof Error ? caught.message : '模型测试失败')
+    } finally {
+      setModelAction(undefined)
+    }
   }
   const selectedProvider = capabilities?.providers.find(
     provider => provider.id === settings?.modelProvider,
@@ -691,7 +758,9 @@ function SettingsPanel({
   const canSave = Boolean(
     settings?.modelName.trim() &&
     providerDraft?.name.trim() &&
-    providerDraft.baseUrl.trim(),
+    providerDraft.baseUrl.trim() &&
+    (settings.agentModelMode === 'profile' ||
+      (settings.agentModelProvider.trim() && settings.agentModelName.trim())),
   )
   if (compact && !open) return null
   return (
@@ -906,20 +975,6 @@ function SettingsPanel({
                       spellCheck={false}
                       required
                     />
-                    <label htmlFor="model-name">模型</label>
-                    <input
-                      id="model-name"
-                      name="modelName"
-                      value={settings.modelName}
-                      onChange={event =>
-                        update('modelName', event.target.value)
-                      }
-                      autoCapitalize="none"
-                      autoCorrect="off"
-                      spellCheck={false}
-                      maxLength={160}
-                      required
-                    />
                     <label htmlFor="provider-api-key">API key</label>
                     <div className="provider-secret-field">
                       <KeyRound aria-hidden="true" />
@@ -979,7 +1034,126 @@ function SettingsPanel({
                           : '清除已保存密钥'}
                       </button>
                     )}
+                    <label htmlFor="model-name">Router / 输入处理模型</label>
+                    <input
+                      id="model-name"
+                      name="modelName"
+                      list="router-model-options"
+                      value={settings.modelName}
+                      onChange={event =>
+                        update('modelName', event.target.value)
+                      }
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      spellCheck={false}
+                      maxLength={160}
+                      required
+                    />
+                    <datalist id="router-model-options">
+                      {routerModels.map(model => (
+                        <option key={model.id} value={model.id}>
+                          {model.name}
+                        </option>
+                      ))}
+                    </datalist>
+                    <div className="model-actions">
+                      <button
+                        type="button"
+                        onClick={() => void discoverModels()}
+                        disabled={Boolean(modelAction)}
+                      >
+                        {modelAction === 'discovering'
+                          ? '正在获取…'
+                          : '获取模型列表'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void testSelectedModel()}
+                        disabled={
+                          Boolean(modelAction) || !settings.modelName.trim()
+                        }
+                      >
+                        {modelAction === 'testing' ? '正在测试…' : '测试模型'}
+                      </button>
+                    </div>
+                    <p
+                      className="model-action-status"
+                      role="status"
+                      aria-live="polite"
+                    >
+                      {modelStatus ||
+                        '可手工输入，也可从当前连接读取模型目录。'}
+                    </p>
                   </div>
+
+                  <fieldset className="settings-choice-group agent-model-group">
+                    <legend>Agent 执行模型</legend>
+                    <SettingChoice
+                      name="agent-model-mode"
+                      value="profile"
+                      checked={settings.agentModelMode === 'profile'}
+                      title="跟随 DSH profile"
+                      description={
+                        agentCatalog
+                          ? `当前默认 ${agentCatalog.defaultProvider} / ${agentCatalog.defaultModel}`
+                          : '由运行环境的 DSH profile 决定。'
+                      }
+                      onChange={() => update('agentModelMode', 'profile')}
+                    />
+                    <SettingChoice
+                      name="agent-model-mode"
+                      value="override"
+                      checked={settings.agentModelMode === 'override'}
+                      title="覆盖新 Agent session"
+                      description="只影响新建 session；恢复中的 Task 继续沿用原模型。"
+                      onChange={() => update('agentModelMode', 'override')}
+                    />
+                    {settings.agentModelMode === 'override' && (
+                      <div className="agent-model-field">
+                        <label htmlFor="agent-model-name">
+                          DSH provider 与模型
+                        </label>
+                        <input
+                          id="agent-model-name"
+                          list="agent-model-options"
+                          value={
+                            settings.agentModelProvider
+                              ? `${settings.agentModelProvider}::${settings.agentModelName}`
+                              : settings.agentModelName
+                          }
+                          onChange={event => {
+                            const value = event.target.value
+                            const separator = value.indexOf('::')
+                            update(
+                              'agentModelProvider',
+                              separator >= 0 ? value.slice(0, separator) : '',
+                            )
+                            update(
+                              'agentModelName',
+                              separator >= 0
+                                ? value.slice(separator + 2)
+                                : value,
+                            )
+                          }}
+                          placeholder="provider::model"
+                          autoCapitalize="none"
+                          autoCorrect="off"
+                          spellCheck={false}
+                          required
+                        />
+                        <datalist id="agent-model-options">
+                          {agentCatalog?.models.map(model => (
+                            <option
+                              key={`${model.provider}:${model.id}`}
+                              value={`${model.provider}::${model.id}`}
+                            >
+                              {model.name}
+                            </option>
+                          ))}
+                        </datalist>
+                      </div>
+                    )}
+                  </fieldset>
                 </section>
               )}
 

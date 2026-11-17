@@ -10,11 +10,15 @@ import {
 type RouterMode = 'model' | 'rules'
 type PrivacyMode = 'disabled' | 'mask'
 type RewriteMode = 'disabled' | 'light'
+type AgentModelMode = 'profile' | 'override'
 
 export interface RuntimeSettingsSelection {
   routerMode: RouterMode
   modelProvider: ModelProviderId
   modelName: string
+  agentModelMode: AgentModelMode
+  agentModelProvider: string
+  agentModelName: string
   privacyMode: PrivacyMode
   rewriteMode: RewriteMode
 }
@@ -75,6 +79,9 @@ export function runtimeSettingsDefaults(
     routerMode: config.routerMode,
     modelProvider: config.modelProvider,
     modelName: config.modelName,
+    agentModelMode: 'profile',
+    agentModelProvider: '',
+    agentModelName: '',
     privacyMode: config.privacyMode,
     rewriteMode: config.rewriteMode,
   }
@@ -147,6 +154,20 @@ export function parseRuntimeSettingsUpdate(
     'light',
   ])
   const modelName = requiredString(value.modelName, 'modelName', 160)
+  const agentModelMode = enumValue(value.agentModelMode, 'agentModelMode', [
+    'profile',
+    'override',
+  ])
+  const agentModelProvider =
+    optionalString(value.agentModelProvider, 'agentModelProvider', 160) ?? ''
+  const agentModelName =
+    optionalString(value.agentModelName, 'agentModelName', 240) ?? ''
+  if (
+    agentModelMode === 'override' &&
+    (!agentModelProvider || !agentModelName)
+  ) {
+    throw new Error('Agent 模型覆盖需要 provider 和 model')
+  }
   const selected = capabilities.providers.find(
     provider => provider.id === modelProvider,
   )
@@ -177,6 +198,9 @@ export function parseRuntimeSettingsUpdate(
     routerMode,
     modelProvider,
     modelName,
+    agentModelMode,
+    agentModelProvider,
+    agentModelName,
     privacyMode,
     rewriteMode,
   }
