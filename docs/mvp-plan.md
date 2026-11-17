@@ -63,7 +63,7 @@
 - [ ] 隔离 worktree / sandbox 创建和清理；
 - [ ] Pegas 生成修改后强制运行完整 CI；
 - [ ] 将 commit 构建成不可变 Release；
-- [ ] Release manifest、产物校验值和 schema 兼容范围；
+- [ ] Release manifest、产物校验值和 schema 兼容范围（Candidate evidence 校验已完成，artifact 打包与签名待实现）；
 - [ ] 发布前自动备份；
 - [ ] Candidate readiness 和关键路径 smoke test；
 - [ ] Supervisor 原子切换、观察期和自动回滚；

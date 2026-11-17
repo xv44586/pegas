@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { ReleaseRef } from '../src/core/domain.js'
+import { createCandidateManifest } from '../src/supervisor/candidate-manifest.js'
 import { createRecoveryServer } from '../src/supervisor/recovery-server.js'
 import { ReleaseStateStore } from '../src/supervisor/release-state.js'
 
@@ -95,11 +96,41 @@ describe('recovery server', () => {
       root: '/releases/release-1',
       createdAt: '2026-11-17T00:00:00.000Z',
     })
-    state.stage({
+    const candidate = {
       id: 'release-2',
       root: '/releases/release-2',
+      commit: 'b'.repeat(40),
       createdAt: '2026-11-17T01:00:00.000Z',
-    })
+    }
+    const artifactPath = join(directory, 'release-2.tar')
+    writeFileSync(artifactPath, 'immutable candidate')
+    state.stage(
+      createCandidateManifest(
+        {
+          release: candidate,
+          compatibility: { minimumSchema: 1, maximumSchema: 3 },
+          verification: {
+            testedCommit: candidate.commit,
+            ci: {
+              workflow: 'CI',
+              runId: 'run-123',
+              url: 'https://ci.example/runs/123',
+              conclusion: 'success',
+              completedAt: '2026-11-17T01:05:00.000Z',
+            },
+            commands: [{ command: 'pnpm check', testCount: 44 }],
+            smoke: {
+              command: 'pnpm smoke',
+              status: 'passed',
+              completedAt: '2026-11-17T01:07:00.000Z',
+            },
+            notTried: [],
+          },
+        },
+        artifactPath,
+      ),
+      artifactPath,
+    )
     writeFileSync(state.path, '{bad primary')
     writeFileSync(state.backupPath, '{bad backup')
     const server = createRecoveryServer({
