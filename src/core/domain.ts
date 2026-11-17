@@ -110,7 +110,13 @@ export interface OutboxMessage {
   dedupeKey: string
   payload: unknown
   status: 'pending' | 'sending' | 'sent' | 'failed' | 'unknown'
+  attempts: number
+  claimedBy?: string
+  leaseUntil?: string
+  nextAttemptAt?: string
+  lastError?: string
   createdAt: string
+  updatedAt: string
   sentAt?: string
 }
 

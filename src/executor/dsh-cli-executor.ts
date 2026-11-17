@@ -5,8 +5,13 @@ import type { ExecutorInput, ExecutorResult, RunExecutor } from './executor.js'
 
 export interface DshCliExecutorOptions {
   command?: string
+  profile?: string
   permissionMode?: string
   approvalPolicy?: 'ask' | 'never'
+  additionalDirectories?: string[]
+  timeoutMs?: number
+  terminationGraceMs?: number
+  maximumEventBytes?: number
   maximumStderrBytes?: number
 }
 
@@ -34,26 +39,40 @@ interface DshOtherEvent {
 export class DshCliExecutor implements RunExecutor {
   readonly name = 'dsh-headless'
   readonly #command: string
+  readonly #profile: string
   readonly #permissionMode: string
   readonly #approvalPolicy: 'ask' | 'never'
+  readonly #additionalDirectories: string[]
+  readonly #timeoutMs: number
+  readonly #terminationGraceMs: number
+  readonly #maximumEventBytes: number
   readonly #maximumStderrBytes: number
 
   constructor(options: DshCliExecutorOptions = {}) {
     this.#command = options.command ?? 'dsh'
+    this.#profile = options.profile ?? 'headless'
     this.#permissionMode = options.permissionMode ?? 'workspace-write'
     this.#approvalPolicy = options.approvalPolicy ?? 'never'
+    this.#additionalDirectories = options.additionalDirectories ?? []
+    this.#timeoutMs = options.timeoutMs ?? 60 * 60 * 1000
+    this.#terminationGraceMs = options.terminationGraceMs ?? 5000
+    this.#maximumEventBytes = options.maximumEventBytes ?? 8 * 1024 * 1024
     this.#maximumStderrBytes = options.maximumStderrBytes ?? 64 * 1024
   }
 
   async execute(input: ExecutorInput): Promise<ExecutorResult> {
     const arguments_ = [
       '--profile',
-      'headless',
+      this.#profile,
       '--json',
       '--permission-mode',
       this.#permissionMode,
       '--approval-policy',
       this.#approvalPolicy,
+      ...this.#additionalDirectories.flatMap(directory => [
+        '--add-dir',
+        directory,
+      ]),
       ...(input.resumeSessionId ? ['--session-id', input.resumeSessionId] : []),
       '-',
     ]
@@ -63,51 +82,91 @@ export class DshCliExecutor implements RunExecutor {
       shell: false,
       stdio: ['pipe', 'pipe', 'pipe'],
     })
-    const abort = (): void => {
+    let terminationError: string | undefined
+    let killTimer: NodeJS.Timeout | undefined
+    const terminate = (message: string): void => {
+      terminationError ??= message
       child.kill('SIGTERM')
+      killTimer ??= setTimeout(
+        () => child.kill('SIGKILL'),
+        this.#terminationGraceMs,
+      )
+      killTimer.unref()
     }
+    const abort = (): void => terminate('DSH execution was aborted')
     input.signal?.addEventListener('abort', abort, { once: true })
     if (input.signal?.aborted) abort()
+    const timeout = setTimeout(
+      () =>
+        terminate(`DSH execution timed out after ${String(this.#timeoutMs)}ms`),
+      this.#timeoutMs,
+    )
+    timeout.unref()
 
     let sessionId = input.resumeSessionId
     let finalEvent: DshFinalEvent | undefined
     let streamError: string | undefined
-    let stderr = ''
+    const stderrChunks: Buffer[] = []
+    let stderrBytes = 0
 
-    child.stderr.setEncoding('utf8')
-    child.stderr.on('data', (chunk: string) => {
-      if (Buffer.byteLength(stderr) < this.#maximumStderrBytes) stderr += chunk
+    child.stderr.on('data', (chunk: Buffer) => {
+      const remaining = this.#maximumStderrBytes - stderrBytes
+      if (remaining <= 0) return
+      const bounded = chunk.subarray(0, remaining)
+      stderrChunks.push(bounded)
+      stderrBytes += bounded.length
     })
 
     const lines = createInterface({ input: child.stdout, crlfDelay: Infinity })
     lines.on('line', line => {
       if (!line.trim()) return
       try {
+        if (Buffer.byteLength(line) > this.#maximumEventBytes) {
+          throw new Error(
+            'DSH emitted an event larger than the configured limit',
+          )
+        }
         const event = parseDshEvent(line)
         if (event.type === 'session') {
           sessionId = event.sessionId
           input.onExecutorRef?.(event.sessionId)
         }
-        if (event.type === 'final') finalEvent = event
+        if (event.type === 'final') {
+          finalEvent = event
+          sessionId = event.sessionId
+          input.onExecutorRef?.(event.sessionId)
+        }
         if (event.type === 'error')
           streamError = event.message ?? 'Unknown DSH error'
       } catch (error) {
         streamError =
           error instanceof Error ? error.message : 'Invalid DSH event stream'
+        terminate(streamError)
       }
     })
 
     child.stdin.end(input.prompt)
-    const { code, signal } = await waitForExit(child)
-    input.signal?.removeEventListener('abort', abort)
+    let exit: { code: number | null; signal: NodeJS.Signals | null }
+    try {
+      exit = await waitForExit(child)
+    } finally {
+      clearTimeout(timeout)
+      if (killTimer) clearTimeout(killTimer)
+      input.signal?.removeEventListener('abort', abort)
+      lines.close()
+    }
+    const { code, signal } = exit
+    const stderr = Buffer.concat(stderrChunks).toString('utf8')
 
     if (
+      terminationError !== undefined ||
       code !== 0 ||
       streamError !== undefined ||
       !finalEvent ||
       !isCompletedReason(finalEvent.reason)
     ) {
       const detail =
+        terminationError ??
         streamError ??
         (stderr.trim() ||
           `DSH exited with code ${String(code)} signal ${signal ?? 'none'}`)

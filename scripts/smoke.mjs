@@ -1,11 +1,29 @@
 import { spawn } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'
+import { createServer as createHttpServer } from 'node:http'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
 const dataDirectory = mkdtempSync(join(tmpdir(), 'pegas-smoke-'))
 const port = await availablePort()
+const deliveries = []
+const webhookServer = createHttpServer(async (request, response) => {
+  const chunks = []
+  for await (const chunk of request) chunks.push(Buffer.from(chunk))
+  deliveries.push({
+    idempotencyKey: request.headers['idempotency-key'],
+    body: JSON.parse(Buffer.concat(chunks).toString('utf8')),
+  })
+  response.writeHead(204).end()
+})
+await new Promise((resolveListen, rejectListen) => {
+  webhookServer.once('error', rejectListen)
+  webhookServer.listen(0, '127.0.0.1', resolveListen)
+})
+const webhookAddress = webhookServer.address()
+if (!webhookAddress || typeof webhookAddress === 'string')
+  throw new Error('Webhook receiver has no TCP address')
 const apiToken = `smoke-${process.pid}`
 const environment = {
   ...process.env,
@@ -15,6 +33,9 @@ const environment = {
   PEGAS_DATA_DIR: dataDirectory,
   PEGAS_EVENT_POLL_MS: '25',
   PEGAS_EXECUTOR: 'echo',
+  PEGAS_PUSH_MODE: 'webhook',
+  PEGAS_PUSH_WEBHOOK_URL: `http://127.0.0.1:${webhookAddress.port}/push`,
+  PEGAS_OUTBOX_POLL_MS: '25',
 }
 const children = [
   spawn(process.execPath, [resolve('dist/control-plane/main.js')], {
@@ -22,6 +43,10 @@ const children = [
     stdio: 'inherit',
   }),
   spawn(process.execPath, [resolve('dist/worker/main.js')], {
+    env: environment,
+    stdio: 'inherit',
+  }),
+  spawn(process.execPath, [resolve('dist/notification/main.js')], {
     env: environment,
     stdio: 'inherit',
   }),
@@ -56,9 +81,13 @@ try {
   const run = await waitForCompletedRun(port, task.id)
   if (run.output !== 'Verify the durable task loop')
     throw new Error('Run output did not round-trip')
-  const message = await waitForOutbox(port)
+  const message = await waitForSentOutbox(port)
   if (message.payload?.type !== 'run.completed')
     throw new Error('Completion was not persisted to the outbox')
+  if (deliveries[0]?.idempotencyKey !== message.dedupeKey)
+    throw new Error('Completion was not delivered with its idempotency key')
+  if (deliveries[0]?.body?.payload?.type !== 'run.completed')
+    throw new Error('Webhook did not receive the completion payload')
   console.log(`Smoke test passed with task ${task.id} and run ${run.id}`)
 } finally {
   for (const child of children) child.kill('SIGTERM')
@@ -66,6 +95,7 @@ try {
     Promise.all(children.map(child => waitForExit(child))),
     new Promise(resolveTimeout => setTimeout(resolveTimeout, 3000)),
   ])
+  await new Promise(resolveClose => webhookServer.close(resolveClose))
   rmSync(dataDirectory, { recursive: true, force: true })
 }
 
@@ -116,7 +146,7 @@ async function waitForCompletedRun(apiPort, taskId) {
   throw new Error('Worker did not complete a run')
 }
 
-async function waitForOutbox(apiPort) {
+async function waitForSentOutbox(apiPort) {
   const deadline = Date.now() + 5000
   while (Date.now() < deadline) {
     const response = await fetch(
@@ -126,10 +156,11 @@ async function waitForOutbox(apiPort) {
       },
     )
     const body = await response.json()
-    if (body.messages?.[0]) return body.messages[0]
+    const sent = body.messages?.find(message => message.status === 'sent')
+    if (sent) return sent
     await wait(50)
   }
-  throw new Error('Worker did not persist an outbox message')
+  throw new Error('Dispatcher did not deliver an outbox message')
 }
 
 function availablePort() {

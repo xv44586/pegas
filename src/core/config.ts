@@ -9,8 +9,22 @@ export interface PegasConfig {
   eventPollMs: number
   executorMode: 'dsh' | 'echo'
   dshCommand: string
+  dshProfile: string
+  dshAdditionalDirectories: string[]
+  dshTimeoutMs: number
   workspaceRoot: string
   workerConcurrency: number
+  routerMode: 'rules' | 'model'
+  modelProvider: 'openai-compatible'
+  modelBaseUrl?: string
+  modelApiKey?: string
+  modelName?: string
+  modelTimeoutMs: number
+  pushMode: 'disabled' | 'webhook'
+  pushWebhookUrl?: string
+  pushWebhookToken?: string
+  outboxPollMs: number
+  outboxMaxAttempts: number
 }
 
 export function loadConfig(
@@ -19,10 +33,32 @@ export function loadConfig(
   const dataDir = resolve(environment.PEGAS_DATA_DIR ?? './data')
   const apiHost = environment.PEGAS_API_HOST ?? '127.0.0.1'
   const apiToken = environment.PEGAS_API_TOKEN
+  const routerMode = environment.PEGAS_ROUTER === 'model' ? 'model' : 'rules'
+  const modelProvider = environment.PEGAS_MODEL_PROVIDER ?? 'openai-compatible'
+  const modelBaseUrl = environment.PEGAS_MODEL_BASE_URL
+  const modelName = environment.PEGAS_MODEL_NAME
+  const pushMode =
+    environment.PEGAS_PUSH_MODE === 'webhook' ? 'webhook' : 'disabled'
+  const pushWebhookUrl = environment.PEGAS_PUSH_WEBHOOK_URL
 
   if (!isLoopback(apiHost) && !apiToken) {
     throw new Error(
       'PEGAS_API_TOKEN is required when the API listens outside the loopback interface',
+    )
+  }
+  if (routerMode === 'model' && (!modelBaseUrl || !modelName)) {
+    throw new Error(
+      'PEGAS_MODEL_BASE_URL and PEGAS_MODEL_NAME are required when PEGAS_ROUTER=model',
+    )
+  }
+  if (modelProvider !== 'openai-compatible') {
+    throw new Error(
+      `Unsupported PEGAS_MODEL_PROVIDER: ${modelProvider}. Expected openai-compatible`,
+    )
+  }
+  if (pushMode === 'webhook' && !pushWebhookUrl) {
+    throw new Error(
+      'PEGAS_PUSH_WEBHOOK_URL is required when PEGAS_PUSH_MODE=webhook',
     )
   }
 
@@ -43,13 +79,58 @@ export function loadConfig(
     ),
     executorMode: environment.PEGAS_EXECUTOR === 'echo' ? 'echo' : 'dsh',
     dshCommand: environment.PEGAS_DSH_COMMAND ?? 'dsh',
+    dshProfile: environment.PEGAS_DSH_PROFILE ?? 'headless',
+    dshAdditionalDirectories: commaSeparatedPaths(
+      environment.PEGAS_DSH_ADD_DIRS,
+    ),
+    dshTimeoutMs: parsePositiveInteger(
+      environment.PEGAS_DSH_TIMEOUT_MS,
+      60 * 60 * 1000,
+      'PEGAS_DSH_TIMEOUT_MS',
+    ),
     workspaceRoot: resolve(environment.PEGAS_WORKSPACE_ROOT ?? '.'),
     workerConcurrency: parsePositiveInteger(
       environment.PEGAS_WORKER_CONCURRENCY,
       2,
       'PEGAS_WORKER_CONCURRENCY',
     ),
+    routerMode,
+    modelProvider,
+    ...(modelBaseUrl ? { modelBaseUrl } : {}),
+    ...(environment.PEGAS_MODEL_API_KEY
+      ? { modelApiKey: environment.PEGAS_MODEL_API_KEY }
+      : {}),
+    ...(modelName ? { modelName } : {}),
+    modelTimeoutMs: parsePositiveInteger(
+      environment.PEGAS_MODEL_TIMEOUT_MS,
+      15_000,
+      'PEGAS_MODEL_TIMEOUT_MS',
+    ),
+    pushMode,
+    ...(pushWebhookUrl ? { pushWebhookUrl } : {}),
+    ...(environment.PEGAS_PUSH_WEBHOOK_TOKEN
+      ? { pushWebhookToken: environment.PEGAS_PUSH_WEBHOOK_TOKEN }
+      : {}),
+    outboxPollMs: parsePositiveInteger(
+      environment.PEGAS_OUTBOX_POLL_MS,
+      500,
+      'PEGAS_OUTBOX_POLL_MS',
+    ),
+    outboxMaxAttempts: parsePositiveInteger(
+      environment.PEGAS_OUTBOX_MAX_ATTEMPTS,
+      8,
+      'PEGAS_OUTBOX_MAX_ATTEMPTS',
+    ),
   }
+}
+
+function commaSeparatedPaths(value: string | undefined): string[] {
+  if (!value) return []
+  return value
+    .split(',')
+    .map(path => path.trim())
+    .filter(Boolean)
+    .map(path => resolve(path))
 }
 
 function parsePositiveInteger(

@@ -4,7 +4,12 @@ import { loadConfig } from '../core/config.js'
 import { DshCliExecutor } from '../executor/dsh-cli-executor.js'
 import { EchoExecutor } from '../executor/echo-executor.js'
 import type { RunExecutor } from '../executor/executor.js'
-import { RuleBasedTaskRouter } from '../router/router.js'
+import { OpenAiCompatibleProvider } from '../model/openai-compatible-provider.js'
+import {
+  ModelTaskRouter,
+  RuleBasedTaskRouter,
+  type TaskRouter,
+} from '../router/router.js'
 import { PegasStore } from '../storage/sqlite-store.js'
 import {
   executeClaimedRun,
@@ -18,11 +23,24 @@ const workerId = `worker-${randomUUID()}`
 const executor: RunExecutor =
   config.executorMode === 'echo'
     ? new EchoExecutor()
-    : new DshCliExecutor({ command: config.dshCommand })
-const eventHandler = new RoutingEventHandler(
-  new RuleBasedTaskRouter(),
-  executor.name,
-)
+    : new DshCliExecutor({
+        command: config.dshCommand,
+        profile: config.dshProfile,
+        additionalDirectories: config.dshAdditionalDirectories,
+        timeoutMs: config.dshTimeoutMs,
+      })
+const router: TaskRouter =
+  config.routerMode === 'model'
+    ? new ModelTaskRouter({
+        provider: new OpenAiCompatibleProvider({
+          baseUrl: required(config.modelBaseUrl, 'model base URL'),
+          model: required(config.modelName, 'model name'),
+          ...(config.modelApiKey ? { apiKey: config.modelApiKey } : {}),
+          timeoutMs: config.modelTimeoutMs,
+        }),
+      })
+    : new RuleBasedTaskRouter()
+const eventHandler = new RoutingEventHandler(router, executor.name)
 const lifecycle = { stopping: false }
 const shutdown = new AbortController()
 const activeRuns = new Set<Promise<void>>()
@@ -68,4 +86,9 @@ function requestStop(): void {
 
 function wait(milliseconds: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, milliseconds))
+}
+
+function required(value: string | undefined, name: string): string {
+  if (!value) throw new Error(`Missing ${name}`)
+  return value
 }

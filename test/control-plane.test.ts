@@ -65,4 +65,36 @@ describe('control plane', () => {
     expect(eventBody.events).toHaveLength(1)
     expect(eventBody.events[0]?.payload).toEqual({ text: 'Hello Pegas' })
   })
+
+  it('accepts authenticated proactive agent messages', async () => {
+    const store = new PegasStore(':memory:')
+    const server = createControlPlane({ store, apiToken: 'secret' })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    cleanups.push(
+      () => new Promise<void>(resolve => server.close(() => resolve())),
+      () => Promise.resolve(store.close()),
+    )
+    const { port } = server.address() as AddressInfo
+    const response = await fetch(`http://127.0.0.1:${String(port)}/v1/outbox`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer secret',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        userId: 'user-1',
+        dedupeKey: 'agent-message-1',
+        payload: { type: 'agent.message', text: 'A decision is needed.' },
+      }),
+    })
+
+    expect(response.status).toBe(202)
+    expect(store.listOutbox('user-1')).toMatchObject([
+      {
+        channel: 'conversation',
+        status: 'pending',
+        payload: { type: 'agent.message', text: 'A decision is needed.' },
+      },
+    ])
+  })
 })

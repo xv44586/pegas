@@ -150,6 +150,20 @@ CREATE TABLE routing_decisions (
 );
 `
 
+const migration3 = `
+ALTER TABLE outbox_messages ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE outbox_messages ADD COLUMN claimed_by TEXT;
+ALTER TABLE outbox_messages ADD COLUMN lease_until TEXT;
+ALTER TABLE outbox_messages ADD COLUMN next_attempt_at TEXT;
+ALTER TABLE outbox_messages ADD COLUMN last_error TEXT;
+ALTER TABLE outbox_messages ADD COLUMN updated_at TEXT;
+
+UPDATE outbox_messages SET updated_at = created_at WHERE updated_at IS NULL;
+
+CREATE INDEX outbox_messages_claim
+ON outbox_messages (status, next_attempt_at, lease_until, created_at);
+`
+
 interface InboxRow {
   id: string
   user_id: string
@@ -203,7 +217,13 @@ interface OutboxRow {
   dedupe_key: string
   payload_json: string
   status: OutboxMessage['status']
+  attempts: number
+  claimed_by: string | null
+  lease_until: string | null
+  next_attempt_at: string | null
+  last_error: string | null
   created_at: string
+  updated_at: string | null
   sent_at: string | null
 }
 
@@ -213,6 +233,9 @@ export class PegasStore {
   constructor(path: string) {
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true })
     this.#database = new DatabaseSync(path)
+    // Apply the lock wait before any WAL/schema statement so multiple Pegas
+    // processes can safely perform a cold start against the same database.
+    this.#database.exec('PRAGMA busy_timeout = 5000;')
     this.#database.exec(schema)
     this.#database
       .prepare(
@@ -220,6 +243,7 @@ export class PegasStore {
       )
       .run(new Date().toISOString())
     this.#migrate(2, migration2)
+    this.#migrate(3, migration3)
   }
 
   #migrate(version: number, sql: string): void {
@@ -694,8 +718,9 @@ export class PegasStore {
     this.#database
       .prepare(
         `INSERT OR IGNORE INTO outbox_messages
-          (id, user_id, task_id, channel, dedupe_key, payload_json, status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`,
+          (id, user_id, task_id, channel, dedupe_key, payload_json, status,
+           created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
       )
       .run(
         id,
@@ -704,6 +729,7 @@ export class PegasStore {
         input.channel,
         input.dedupeKey,
         JSON.stringify(input.payload),
+        createdAt,
         createdAt,
       )
     const row = this.#database
@@ -724,6 +750,102 @@ export class PegasStore {
     return rows.map(row => toOutboxMessage(row as unknown as OutboxRow))
   }
 
+  claimNextOutbox(
+    dispatcherId: string,
+    leaseMs = 30_000,
+  ): OutboxMessage | undefined {
+    const now = new Date()
+    const nowIso = now.toISOString()
+    const leaseUntil = new Date(now.getTime() + leaseMs).toISOString()
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const row = this.#database
+        .prepare(
+          `SELECT * FROM outbox_messages
+           WHERE (status = 'pending' AND
+                    (next_attempt_at IS NULL OR next_attempt_at <= ?))
+              OR (status = 'sending' AND lease_until <= ?)
+           ORDER BY created_at ASC LIMIT 1`,
+        )
+        .get(nowIso, nowIso) as unknown as OutboxRow | undefined
+      if (!row) {
+        this.#database.exec('COMMIT')
+        return undefined
+      }
+
+      this.#database
+        .prepare(
+          `UPDATE outbox_messages
+           SET status = 'sending', claimed_by = ?, lease_until = ?,
+               attempts = attempts + 1, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(dispatcherId, leaseUntil, nowIso, row.id)
+      const claimed = this.#outboxById(row.id)
+      this.#database.exec('COMMIT')
+      return claimed
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  markOutboxSent(messageId: string, dispatcherId: string): void {
+    const now = new Date().toISOString()
+    const result = this.#database
+      .prepare(
+        `UPDATE outbox_messages
+         SET status = 'sent', claimed_by = NULL, lease_until = NULL,
+             next_attempt_at = NULL, last_error = NULL, sent_at = ?, updated_at = ?
+         WHERE id = ? AND status = 'sending' AND claimed_by = ?`,
+      )
+      .run(now, now, messageId, dispatcherId)
+    if (result.changes !== 1)
+      throw new Error(
+        `Dispatcher ${dispatcherId} does not own message ${messageId}`,
+      )
+  }
+
+  failOutbox(
+    messageId: string,
+    dispatcherId: string,
+    error: string,
+    retryAt: Date,
+    maxAttempts = 5,
+  ): void {
+    const row = this.#database
+      .prepare(
+        `SELECT attempts FROM outbox_messages
+         WHERE id = ? AND status = 'sending' AND claimed_by = ?`,
+      )
+      .get(messageId, dispatcherId) as { attempts: number } | undefined
+    if (!row)
+      throw new Error(
+        `Dispatcher ${dispatcherId} does not own message ${messageId}`,
+      )
+    const exhausted = row.attempts >= maxAttempts
+    const now = new Date().toISOString()
+    const result = this.#database
+      .prepare(
+        `UPDATE outbox_messages
+         SET status = ?, claimed_by = NULL, lease_until = NULL,
+             next_attempt_at = ?, last_error = ?, updated_at = ?
+         WHERE id = ? AND claimed_by = ?`,
+      )
+      .run(
+        exhausted ? 'failed' : 'pending',
+        exhausted ? null : retryAt.toISOString(),
+        error,
+        now,
+        messageId,
+        dispatcherId,
+      )
+    if (result.changes !== 1)
+      throw new Error(
+        `Dispatcher ${dispatcherId} lost ownership of message ${messageId}`,
+      )
+  }
+
   #taskById(taskId: string): Task {
     const row = this.#database
       .prepare('SELECT * FROM tasks WHERE id = ?')
@@ -738,6 +860,14 @@ export class PegasStore {
       .get(runId)
     if (!row) throw new Error(`Run ${runId} does not exist`)
     return toRun(row as unknown as RunRow)
+  }
+
+  #outboxById(messageId: string): OutboxMessage {
+    const row = this.#database
+      .prepare('SELECT * FROM outbox_messages WHERE id = ?')
+      .get(messageId)
+    if (!row) throw new Error(`Outbox message ${messageId} does not exist`)
+    return toOutboxMessage(row as unknown as OutboxRow)
   }
 }
 
@@ -803,7 +933,13 @@ function toOutboxMessage(row: OutboxRow): OutboxMessage {
     dedupeKey: row.dedupe_key,
     payload: JSON.parse(row.payload_json) as unknown,
     status: row.status,
+    attempts: row.attempts,
+    ...(row.claimed_by ? { claimedBy: row.claimed_by } : {}),
+    ...(row.lease_until ? { leaseUntil: row.lease_until } : {}),
+    ...(row.next_attempt_at ? { nextAttemptAt: row.next_attempt_at } : {}),
+    ...(row.last_error ? { lastError: row.last_error } : {}),
     createdAt: row.created_at,
+    updatedAt: row.updated_at ?? row.created_at,
     ...(row.sent_at ? { sentAt: row.sent_at } : {}),
   }
 }

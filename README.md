@@ -17,7 +17,7 @@ Pegas 是一个以自然对话为统一入口的个人智能代理。
 
 ## 当前阶段
 
-项目目前处于 MVP 验证阶段。仓库已经包含最小 Control Plane、SQLite 持久层、持久 Router/Run Worker、DSH headless Adapter、独立 Supervisor、恢复 API、React Web 客户端和 CI 骨架。第一阶段以 DSH 作为 Agent Runtime，Pegas 自己维护产品领域与任务控制层。
+项目目前处于 MVP 验证阶段。仓库已经包含最小 Control Plane、SQLite 持久层、模型 Router、可恢复 Run Worker、DSH headless Adapter、可靠 Outbox/Webhook Dispatcher、独立 Supervisor、恢复 API、React Web 客户端和 CI 骨架。第一阶段以 DSH 作为 Agent Runtime，Pegas 自己维护产品领域与任务控制层。
 
 - [产品定位](docs/product-positioning.md)
 - [系统架构](docs/architecture.md)
@@ -48,11 +48,33 @@ pnpm dev:worker
 pnpm dev:web
 ```
 
+如需让 Agent 主动投递消息，再配置 Webhook 并启动 Dispatcher：
+
+```bash
+PEGAS_PUSH_MODE=webhook \
+PEGAS_PUSH_WEBHOOK_URL=https://example.com/pegas \
+pnpm dev:notification
+```
+
 Web 开发服务器默认位于 `http://127.0.0.1:4319`，并将 API 请求代理到 `http://127.0.0.1:4317`。生产构建由 Control Plane 在同一地址直接提供。
 
 默认情况下 Control Plane 和 Recovery API 只监听本机回环地址。对外暴露任何接口前必须配置独立访问令牌。
 
 Worker 默认通过 DSH headless 执行 Run。自动化测试使用显式的 `PEGAS_EXECUTOR=echo`，不会调用模型；生产或人工验证不能使用该测试执行器。
+
+Router 默认使用零依赖的确定性规则。设置 `PEGAS_ROUTER=model` 后，它会通过 OpenAI-compatible Provider 判断一条新消息是在继续已有 Task，还是应该创建新 Task：
+
+```bash
+PEGAS_ROUTER=model
+PEGAS_MODEL_PROVIDER=openai-compatible
+PEGAS_MODEL_BASE_URL=https://api.example.com/v1
+PEGAS_MODEL_API_KEY=...
+PEGAS_MODEL_NAME=...
+```
+
+这里的 Provider 只负责 Router 等轻量控制面判断。DSH 执行任务时使用的模型、凭证和 Provider 仍由 DSH profile 自己管理，两者不会共享隐式 session 或配置。
+
+受认证的客户端或 Agent 也可以向 `POST /v1/outbox` 写入带稳定 `dedupeKey` 的消息。Dispatcher 会以租约领取、失败重试并携带 `Idempotency-Key` 投递；未来 iOS/APNs 只需实现新的 Notification Channel，不改变任务和 Outbox 语义。
 
 ## 最重要的产品判断
 

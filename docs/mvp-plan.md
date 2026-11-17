@@ -1,7 +1,7 @@
 # Pegas MVP 计划
 
 > 状态：In Progress
-> 更新日期：2026-11-16
+> 更新日期：2026-11-17
 
 ## MVP 验证目标
 
@@ -20,6 +20,10 @@
 - [x] Run lease、并发执行和过期接管；
 - [x] DSH headless Adapter、NDJSON 结果判定和 session ID 持久化；
 - [x] 显式 Task continuation 复用原 DSH session；
+- [x] 可选 Model Router 与确定性降级；
+- [x] OpenAI-compatible 控制面 Model Provider；
+- [x] Outbox lease、重试、失败封顶和 Webhook Dispatcher；
+- [x] 受认证的 Agent 主动消息写入 API；
 - [x] 独立 Supervisor 进程；
 - [x] Release 状态、候选观察期和回滚模型；
 - [x] 独立 Recovery API 的状态、重启和回滚端点；
@@ -32,12 +36,12 @@
 - [ ] Channel & Identity Gateway；
 - [ ] 单用户认证和移动端设备登录；
 - [ ] 同一用户的 Router lease / fencing；
-- [ ] 新建、补充、纠正和取消 Task 的路由；
+- [ ] 新建、补充、纠正和取消 Task 的完整路由；
 - [ ] Task 与 Run 完整状态迁移；
 - [x] 第一版 DSH headless Executor Adapter；
 - [x] Run 与 DSH session 映射及租约过期恢复；
-- [ ] Outbox dispatcher 与一个真实投递渠道；
-- [ ] Activity/Task 只读视图；
+- [x] Outbox dispatcher 与一个真实投递渠道；
+- [x] Activity/Task 只读视图；
 - [ ] 结构化日志、指标和错误追踪。
 
 ## 长期运行闭环
@@ -67,7 +71,7 @@
 ## 手机长期使用闭环
 
 - [ ] 响应式 Web/PWA 或第一种消息渠道；
-- [ ] 推送或可靠主动通知；
+- [x] 可靠主动通知（Webhook；iOS APNs 待接入）；
 - [ ] 对话、任务状态和审批跨设备一致；
 - [ ] Mac 执行节点注册、心跳和离线状态；
 - [ ] Remote Sandbox 执行节点；

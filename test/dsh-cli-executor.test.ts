@@ -67,6 +67,46 @@ process.exitCode = 1
       sessionId: 'session-failed',
     })
   })
+
+  it('passes resume and additional workspace grants to headless DSH', async () => {
+    const command = fakeDsh(`
+const sessionId = process.argv[process.argv.indexOf('--session-id') + 1]
+console.log(JSON.stringify({
+  type: 'final',
+  sessionId,
+  text: JSON.stringify(process.argv.slice(2)),
+  reason: { kind: 'completed' }
+}))
+`)
+    const executor = new DshCliExecutor({
+      command,
+      additionalDirectories: ['/tmp/git-metadata'],
+    })
+    let observedSession: string | undefined
+
+    const result = await executor.execute({
+      runId: 'run-1',
+      taskId: 'task-1',
+      prompt: 'continue the work',
+      workingDirectory: process.cwd(),
+      resumeSessionId: 'session-existing',
+      onExecutorRef: value => {
+        observedSession = value
+      },
+    })
+
+    expect(JSON.parse(result.output)).toEqual(
+      expect.arrayContaining([
+        '--profile',
+        'headless',
+        '--add-dir',
+        '/tmp/git-metadata',
+        '--session-id',
+        'session-existing',
+      ]),
+    )
+    expect(observedSession).toBe('session-existing')
+  })
 })
 
 function fakeDsh(body: string): string {

@@ -71,6 +71,12 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         })
       }
 
+      if (request.url === '/v1/outbox' && request.method === 'POST') {
+        const body = parseNewOutboxMessage(await readJson(request))
+        const message = options.store.enqueueOutbox(body)
+        return sendJson(response, 202, { message })
+      }
+
       if (request.url?.startsWith('/v1/outbox') && request.method === 'GET') {
         const url = new URL(request.url, 'http://localhost')
         const userId = url.searchParams.get('userId')
@@ -86,6 +92,25 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
       return sendJson(response, 400, { error: 'bad_request', message })
     }
   })
+}
+
+function parseNewOutboxMessage(value: unknown): {
+  userId: string
+  taskId?: string
+  channel: string
+  dedupeKey: string
+  payload: unknown
+} {
+  if (!isRecord(value)) throw new Error('Request body must be an object')
+  if (!Object.hasOwn(value, 'payload')) throw new Error('payload is required')
+  const taskId = optionalString(value.taskId, 'taskId')
+  return {
+    userId: requiredString(value.userId, 'userId'),
+    ...(taskId ? { taskId } : {}),
+    channel: optionalString(value.channel, 'channel') ?? 'conversation',
+    dedupeKey: requiredString(value.dedupeKey, 'dedupeKey'),
+    payload: value.payload,
+  }
 }
 
 const contentTypes: Record<string, string> = {
