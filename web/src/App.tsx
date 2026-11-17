@@ -22,6 +22,7 @@ import {
 } from 'react'
 
 import { ApiError, PegasApi } from './api'
+import { MarkdownMessage } from './MarkdownMessage'
 import type {
   InboxEvent,
   OutboxMessage,
@@ -487,7 +488,7 @@ function PegasMessage({ message, run }: { message: OutboxMessage; run?: Run }) {
         P
       </div>
       <div>
-        <p>{text}</p>
+        <MarkdownMessage content={text} />
         <time dateTime={message.createdAt}>
           {formatTime(message.createdAt)}
         </time>

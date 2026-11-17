@@ -382,14 +382,188 @@ textarea:focus-visible {
 }
 
 .message-row > div:last-child {
+  min-width: 0;
   max-width: min(72ch, 82%);
 }
 
-.message-row p {
+.message-row.is-user p {
   margin: 0;
   white-space: pre-wrap;
   font-size: 0.94rem;
   line-height: 1.65;
+}
+
+.message-markdown {
+  min-width: 0;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+  font-size: 1rem;
+  line-height: 1.68;
+  text-wrap: pretty;
+}
+
+.message-markdown > :first-child {
+  margin-top: 0;
+}
+
+.message-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.message-markdown p {
+  margin: 0 0 0.82em;
+}
+
+.message-markdown h1,
+.message-markdown h2,
+.message-markdown h3,
+.message-markdown h4,
+.message-markdown h5,
+.message-markdown h6 {
+  margin: 1.35em 0 0.48em;
+  color: var(--ink);
+  font-weight: 710;
+  letter-spacing: -0.018em;
+  line-height: 1.32;
+  text-wrap: balance;
+}
+
+.message-markdown h1 {
+  font-size: 1.18rem;
+}
+
+.message-markdown h2 {
+  font-size: 1.1rem;
+}
+
+.message-markdown h3,
+.message-markdown h4,
+.message-markdown h5,
+.message-markdown h6 {
+  font-size: 1rem;
+}
+
+.message-markdown strong {
+  font-weight: 700;
+}
+
+.message-markdown ul,
+.message-markdown ol {
+  margin: 0.58em 0 0.9em;
+  padding-inline-start: 1.45em;
+}
+
+.message-markdown li + li {
+  margin-top: 0.3em;
+}
+
+.message-markdown li > p {
+  margin-bottom: 0.36em;
+}
+
+.message-markdown blockquote {
+  margin: 0.86em 0;
+  padding: 0.08em 0 0.08em 1em;
+  border-left: 1px solid var(--blue);
+  color: var(--muted);
+}
+
+.message-markdown blockquote p {
+  margin: 0;
+}
+
+.message-markdown a {
+  color: var(--blue);
+  text-decoration-color: rgba(36, 87, 214, 0.42);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+}
+
+.message-markdown a:hover {
+  text-decoration-color: currentColor;
+}
+
+.message-markdown a:focus-visible,
+.message-markdown pre:focus-visible {
+  outline: 3px solid rgba(36, 87, 214, 0.28);
+  outline-offset: 2px;
+}
+
+.message-markdown code {
+  padding: 0.14em 0.36em;
+  border-radius: 4px;
+  background: var(--panel);
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
+    monospace;
+  font-size: 0.9em;
+  font-variant-ligatures: none;
+}
+
+.message-markdown pre {
+  max-width: 100%;
+  margin: 0.9em 0 1em;
+  overflow-x: auto;
+  padding: 13px 15px;
+  border: 1px solid #2a3650;
+  border-radius: var(--radius-sm);
+  color: #edf2ff;
+  background: #172033;
+  scrollbar-color: #64718b transparent;
+}
+
+.message-markdown pre code {
+  padding: 0;
+  border-radius: 0;
+  color: inherit;
+  background: transparent;
+  font-size: 0.82rem;
+  line-height: 1.62;
+  overflow-wrap: normal;
+  white-space: pre;
+}
+
+.message-markdown hr {
+  margin: 1.1em 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+
+.message-markdown table {
+  display: block;
+  max-width: 100%;
+  margin: 0.9em 0 1em;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.message-markdown th,
+.message-markdown td {
+  min-width: 7rem;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.message-markdown th {
+  background: var(--panel);
+  font-weight: 680;
+}
+
+.message-markdown input[type='checkbox'] {
+  margin: 0 0.42em 0 0;
+  accent-color: var(--blue);
+}
+
+.message-markdown img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0.9em 0 1em;
+  border-radius: var(--radius-sm);
 }
 
 .message-row time {
@@ -448,10 +622,16 @@ textarea:focus-visible {
 }
 
 .message-row.is-pegas > div:last-child {
+  width: 100%;
   padding-top: 4px;
 }
 
-.message-row.is-error p {
+.message-row.is-pegas time {
+  margin-top: 8px;
+}
+
+.message-row.is-error .message-markdown,
+.message-row.is-error .message-markdown :is(h1, h2, h3, h4, h5, h6) {
   color: #a43441;
 }
 
@@ -1321,7 +1501,7 @@ textarea:focus-visible {
     max-width: 88%;
   }
 
-  .message-row p {
+  .message-row.is-user p {
     font-size: 0.9rem;
   }
 
