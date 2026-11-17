@@ -85,9 +85,12 @@ try {
   const message = await waitForSentOutbox(port)
   if (message.payload?.type !== 'run.completed')
     throw new Error('Completion was not persisted to the outbox')
-  if (deliveries[0]?.idempotencyKey !== message.dedupeKey)
+  const completionDelivery = deliveries.find(
+    delivery => delivery.idempotencyKey === message.dedupeKey,
+  )
+  if (!completionDelivery)
     throw new Error('Completion was not delivered with its idempotency key')
-  if (deliveries[0]?.body?.payload?.type !== 'run.completed')
+  if (completionDelivery.body?.payload?.type !== 'run.completed')
     throw new Error('Webhook did not receive the completion payload')
   console.log(`Smoke test passed with task ${task.id} and run ${run.id}`)
 } finally {
