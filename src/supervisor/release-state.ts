@@ -12,6 +12,10 @@ import {
 import { dirname } from 'node:path'
 
 import type { ReleaseRef, SupervisorState } from '../core/domain.js'
+import {
+  verifyCandidateManifest,
+  type CandidateManifest,
+} from './candidate-manifest.js'
 
 interface StoredSupervisorState {
   schemaVersion: 1
@@ -75,7 +79,8 @@ export class ReleaseStateStore {
     return inspection.state
   }
 
-  stage(candidate: ReleaseRef): SupervisorState {
+  stage(manifest: CandidateManifest, artifactPath: string): SupervisorState {
+    const candidate = verifyCandidateManifest(manifest, artifactPath).release
     const current = this.read()
     if (candidate.id === current.active.id) return current
     const next: SupervisorState = {

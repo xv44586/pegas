@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import type { ReleaseRef } from '../src/core/domain.js'
+import { createCandidateManifest } from '../src/supervisor/candidate-manifest.js'
 import {
   RecoveryStateUnavailableError,
   ReleaseStateStore,
@@ -30,7 +31,10 @@ describe('ReleaseStateStore', () => {
       active: first,
       phase: 'stable',
     })
-    expect(state.stage(second)).toMatchObject({
+    const artifactPath = join(directory, 'release-2.tar')
+    writeFileSync(artifactPath, 'immutable candidate')
+    const manifest = candidateManifest(second, artifactPath)
+    expect(state.stage(manifest, artifactPath)).toMatchObject({
       active: second,
       previous: first,
       phase: 'verifying',
@@ -55,7 +59,7 @@ describe('ReleaseStateStore', () => {
     const state = new ReleaseStateStore(join(directory, 'supervisor.json'))
     const first = release('release-1')
     state.ensure(first)
-    state.stage(release('release-2'))
+    stageCandidate(state, release('release-2'), directory)
 
     writeFileSync(state.path, '{"schemaVersion": 1')
 
@@ -72,7 +76,7 @@ describe('ReleaseStateStore', () => {
     temporaryDirectories.push(directory)
     const state = new ReleaseStateStore(join(directory, 'supervisor.json'))
     state.ensure(release('release-1'))
-    state.stage(release('release-2'))
+    stageCandidate(state, release('release-2'), directory)
     writeFileSync(state.path, '{bad primary')
     writeFileSync(state.backupPath, '{bad backup')
 
@@ -118,8 +122,26 @@ describe('ReleaseStateStore', () => {
     writeFileSync(state.path, JSON.stringify(legacy))
 
     expect(state.read()).toEqual(legacy)
-    state.stage(release('release-2'))
+    stageCandidate(state, release('release-2'), directory)
     expect(readFileSync(state.path, 'utf8')).toContain('"schemaVersion": 1')
+  })
+
+  it('keeps the active release when candidate evidence no longer matches', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'pegas-release-state-'))
+    temporaryDirectories.push(directory)
+    const state = new ReleaseStateStore(join(directory, 'supervisor.json'))
+    const first = release('release-1')
+    const second = release('release-2')
+    state.ensure(first)
+    const artifactPath = join(directory, 'release-2.tar')
+    writeFileSync(artifactPath, 'immutable candidate')
+    const manifest = candidateManifest(second, artifactPath)
+    writeFileSync(artifactPath, 'candidate changed after verification')
+
+    expect(() => state.stage(manifest, artifactPath)).toThrow(
+      /artifact size does not match|artifact checksum does not match/,
+    )
+    expect(state.read()).toMatchObject({ active: first, phase: 'stable' })
   })
 })
 
@@ -127,6 +149,46 @@ function release(id: string): ReleaseRef {
   return {
     id,
     root: `/releases/${id}`,
+    commit: 'a'.repeat(40),
     createdAt: '2026-11-16T00:00:00.000Z',
   }
+}
+
+function candidateManifest(releaseRef: ReleaseRef, artifactPath: string) {
+  if (!releaseRef.commit) throw new Error('Candidate commit is required')
+  return createCandidateManifest(
+    {
+      release: { ...releaseRef, commit: releaseRef.commit },
+      compatibility: { minimumSchema: 1, maximumSchema: 3 },
+      verification: {
+        testedCommit: releaseRef.commit,
+        ci: {
+          workflow: 'CI',
+          runId: 'run-123',
+          url: 'https://ci.example/runs/123',
+          conclusion: 'success',
+          completedAt: '2026-11-16T00:10:00.000Z',
+        },
+        commands: [{ command: 'pnpm check', testCount: 35 }],
+        smoke: {
+          command: 'pnpm smoke',
+          status: 'passed',
+          completedAt: '2026-11-16T00:12:00.000Z',
+        },
+        notTried: [],
+      },
+      createdAt: '2026-11-16T00:15:00.000Z',
+    },
+    artifactPath,
+  )
+}
+
+function stageCandidate(
+  state: ReleaseStateStore,
+  releaseRef: ReleaseRef,
+  directory: string,
+) {
+  const artifactPath = join(directory, `${releaseRef.id}.tar`)
+  writeFileSync(artifactPath, `immutable candidate ${releaseRef.id}`)
+  return state.stage(candidateManifest(releaseRef, artifactPath), artifactPath)
 }
