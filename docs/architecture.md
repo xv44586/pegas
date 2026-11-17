@@ -104,6 +104,8 @@ Recovery API 第一阶段只提供状态、重启和回滚，不提供任意命�
 
 渠道只负责收发消息，不保存 Task 的权威状态。
 
+语音是 Channel 输入适配，不是新的任务类型。Web 输入器使用浏览器 `MediaRecorder` 捕获一段用户主动发起的录音，Control Plane 通过可替换的 `SpeechRecognitionProvider` 调用独立模型服务。听写接口只把最终文字返回输入器供用户校对；用户明确发送后，文字才作为普通 `user.message` 进入 Durable Event Inbox。无输入器客户端也可使用幂等的直接语音消息接口。音频和流式 partial transcript 默认不持久化，ASR 失败时不能创建半成品用户消息。模型服务与 Pegas 进程分离，以便独立选择运行节点、升级模型和控制 GPU 资源。
+
 ### 2. Conversation Event Stream
 
 记录用户、Pegas、工具和外部系统产生的事实事件。

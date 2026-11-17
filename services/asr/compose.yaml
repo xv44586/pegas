@@ -1,0 +1,41 @@
+services:
+  qwen3-asr:
+    build:
+      context: .
+      args:
+        ASR_BASE_IMAGE: ${PEGAS_ASR_BASE_IMAGE:-pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime}
+    environment:
+      HF_ENDPOINT: ${PEGAS_ASR_HF_ENDPOINT:-https://huggingface.co}
+      HF_HOME: /models/huggingface
+      HF_HUB_DISABLE_XET: ${PEGAS_ASR_HF_DISABLE_XET:-0}
+      PEGAS_ASR_API_KEY: ${PEGAS_ASR_API_KEY:-local-dev}
+      PEGAS_ASR_DTYPE: ${PEGAS_ASR_DTYPE:-float16}
+      PEGAS_ASR_MAX_AUDIO_BYTES: ${PEGAS_ASR_MAX_AUDIO_BYTES:-52428800}
+      PEGAS_ASR_MAX_NEW_TOKENS: ${PEGAS_ASR_MAX_NEW_TOKENS:-1024}
+      PEGAS_ASR_MODEL: ${PEGAS_ASR_MODEL:-Qwen/Qwen3-ASR-0.6B}
+    ipc: host
+    ports:
+      - 127.0.0.1:${PEGAS_ASR_PORT:-18081}:8000
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=5)
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10m
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      - qwen-models:/models
+
+volumes:
+  qwen-models:

@@ -79,6 +79,17 @@ Codex Provider 以 ephemeral、read-only、无项目规则的非交互进程运�
 
 这里的 Provider 只负责 Router 等轻量控制面判断。DSH 执行任务时使用的模型、凭证和 Provider 仍由 DSH profile 自己管理，两者不会共享隐式 session 或配置。
 
+Web 输入器支持类似 Codex 的听写：点击麦克风录音，再次点击结束，转录文字会先回填草稿供校对，只有用户点击发送后才进入 Conversation。ASR 作为独立的 OpenAI-compatible 模型服务部署，Control Plane 只依赖其 HTTP 契约：
+
+```bash
+PEGAS_SPEECH_PROVIDER=openai-compatible
+PEGAS_SPEECH_BASE_URL=http://127.0.0.1:18081/v1
+PEGAS_SPEECH_API_KEY=replace-me
+PEGAS_SPEECH_MODEL=Qwen/Qwen3-ASR-0.6B
+```
+
+仓库内的 Qwen3-ASR GPU 服务、远程 SSH 转发和验证方式见 [services/asr/README.md](services/asr/README.md)，听写数据与失败边界见 [docs/voice-input.md](docs/voice-input.md)。
+
 受认证的客户端或 Agent 也可以向 `POST /v1/outbox` 写入带稳定 `dedupeKey` 的消息。Dispatcher 会以租约领取、失败重试并携带 `Idempotency-Key` 投递；未来 iOS/APNs 只需实现新的 Notification Channel，不改变任务和 Outbox 语义。
 
 ## 最重要的产品判断

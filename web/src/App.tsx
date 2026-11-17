@@ -4,11 +4,13 @@ import {
   ChevronRight,
   CircleAlert,
   ListTodo,
+  Mic,
   MessageSquareText,
   RotateCw,
   Send,
   Settings2,
   Sparkles,
+  Square,
   X,
 } from 'lucide-react'
 import {
@@ -23,6 +25,7 @@ import {
 
 import { ApiError, PegasApi } from './api'
 import { MarkdownMessage } from './MarkdownMessage'
+import { useVoiceDictation } from './useVoiceDictation'
 import type {
   InboxEvent,
   OutboxMessage,
@@ -72,8 +75,18 @@ export function App() {
   const [taskPanelOpen, setTaskPanelOpen] = useState(Boolean(initialTaskId))
   const [selectedTaskId, setSelectedTaskId] = useState(initialTaskId)
   const feedEnd = useRef<HTMLDivElement>(null)
+  const composer = useRef<HTMLTextAreaElement>(null)
   const previousFocus = useRef<HTMLElement | null>(null)
   const api = useMemo(() => new PegasApi(userId, token), [token])
+  const appendTranscript = useCallback((text: string) => {
+    setDraft(current => `${current}${current.trim() ? '\n' : ''}${text}`)
+    window.requestAnimationFrame(() => composer.current?.focus())
+  }, [])
+  const dictation = useVoiceDictation({
+    transcribe: audio => api.transcribeVoice(audio),
+    onTranscript: appendTranscript,
+  })
+  const dictationBusy = dictation.state !== 'idle'
 
   const loadSnapshot = useCallback(
     async (quiet = false) => {
@@ -177,7 +190,7 @@ export function App() {
 
   async function submitMessage(): Promise<void> {
     const text = draft.trim()
-    if (!text || sending) return
+    if (!text || sending || dictationBusy) return
     setSending(true)
     setError('')
     try {
@@ -360,6 +373,7 @@ export function App() {
           <div className="composer-wrap">
             <label htmlFor="message-composer">告诉 Pegas 你想完成什么</label>
             <textarea
+              ref={composer}
               id="message-composer"
               value={draft}
               onChange={event => setDraft(event.target.value)}
@@ -369,23 +383,78 @@ export function App() {
               disabled={sending || unauthorized}
             />
             <div className="composer-footer">
-              <span>Enter 发送 · Shift + Enter 换行</span>
-              <button
-                className="send-button"
-                aria-label={sending ? '正在发送' : '发送给 Pegas'}
-                onClick={() => void submitMessage()}
-                disabled={!draft.trim() || sending || unauthorized}
-              >
-                {sending ? (
-                  <span className="send-loader" />
-                ) : (
-                  <Send aria-hidden="true" />
-                )}
-              </button>
+              <span className="composer-status">
+                {dictation.state === 'requesting' && '正在请求麦克风…'}
+                {dictation.state === 'recording' &&
+                  `正在听写 · ${formatDuration(dictation.elapsedSeconds)}`}
+                {dictation.state === 'transcribing' && '正在转成文字…'}
+                {dictation.state === 'idle' &&
+                  'Enter 发送 · Shift + Enter 换行'}
+              </span>
+              <div className="composer-actions">
+                <div className="dictation-control">
+                  <button
+                    type="button"
+                    className={`dictation-button ${
+                      dictation.state === 'recording' ? 'is-recording' : ''
+                    }`}
+                    aria-label={
+                      dictation.state === 'recording'
+                        ? '停止听写'
+                        : dictation.state === 'transcribing'
+                          ? '正在转写语音'
+                          : dictation.state === 'requesting'
+                            ? '正在请求麦克风'
+                            : '开始听写'
+                    }
+                    aria-pressed={dictation.state === 'recording'}
+                    onClick={dictation.toggle}
+                    disabled={
+                      sending ||
+                      unauthorized ||
+                      dictation.state === 'requesting' ||
+                      dictation.state === 'transcribing'
+                    }
+                  >
+                    {dictation.state === 'transcribing' ||
+                    dictation.state === 'requesting' ? (
+                      <span className="dictation-loader" aria-hidden="true" />
+                    ) : dictation.state === 'recording' ? (
+                      <Square aria-hidden="true" />
+                    ) : (
+                      <Mic aria-hidden="true" />
+                    )}
+                  </button>
+                  <span className="dictation-tooltip" role="tooltip">
+                    {dictation.state === 'recording' ? '停止听写' : '听写'}
+                  </span>
+                </div>
+                <button
+                  className="send-button"
+                  aria-label={sending ? '正在发送' : '发送给 Pegas'}
+                  onClick={() => void submitMessage()}
+                  disabled={
+                    !draft.trim() || sending || unauthorized || dictationBusy
+                  }
+                >
+                  {sending ? (
+                    <span className="send-loader" />
+                  ) : (
+                    <Send aria-hidden="true" />
+                  )}
+                </button>
+              </div>
             </div>
+            {dictation.error && (
+              <p className="dictation-error" role="alert">
+                {dictation.error}
+              </p>
+            )}
           </div>
           <div className="sr-only" aria-live="polite">
-            {sending ? '正在发送消息' : ''}
+            {sending && '正在发送消息'}
+            {dictation.state === 'recording' && '听写已开始'}
+            {dictation.state === 'transcribing' && '录音结束，正在转成文字'}
           </div>
         </div>
       </main>
@@ -402,6 +471,14 @@ export function App() {
       />
     </div>
   )
+}
+
+function formatDuration(seconds: number): string {
+  const minutes = Math.floor(seconds / 60)
+  return `${String(minutes).padStart(2, '0')}:${String(seconds % 60).padStart(
+    2,
+    '0',
+  )}`
 }
 
 function TokenForm({

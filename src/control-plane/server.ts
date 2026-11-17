@@ -10,14 +10,21 @@ import {
 import { extname, resolve, sep } from 'node:path'
 
 import type { NewInboxEvent } from '../core/domain.js'
+import type {
+  SpeechRecognitionProvider,
+  SpeechTranscript,
+} from '../speech/provider.js'
 import type { PegasStore } from '../storage/sqlite-store.js'
 
 const maximumBodyBytes = 1024 * 1024
+const defaultMaximumAudioBytes = 25 * 1024 * 1024
 
 export interface ControlPlaneOptions {
   store: PegasStore
   apiToken?: string
   webRoot?: string
+  speechProvider?: SpeechRecognitionProvider
+  maximumAudioBytes?: number
 }
 
 export function createControlPlane(options: ControlPlaneOptions): Server {
@@ -37,6 +44,20 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
 
       if (!isAuthorized(request, options.apiToken)) {
         return sendJson(response, 401, { error: 'unauthorized' })
+      }
+
+      if (
+        request.url?.startsWith('/v1/voice/transcriptions') &&
+        request.method === 'POST'
+      ) {
+        return await acceptVoiceTranscription(request, response, options)
+      }
+
+      if (
+        request.url?.startsWith('/v1/voice/messages') &&
+        request.method === 'POST'
+      ) {
+        return await acceptVoiceMessage(request, response, options)
       }
 
       if (request.url === '/v1/events' && request.method === 'POST') {
@@ -92,6 +113,121 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
       return sendJson(response, 400, { error: 'bad_request', message })
     }
   })
+}
+
+async function acceptVoiceTranscription(
+  request: IncomingMessage,
+  response: ServerResponse,
+  options: ControlPlaneOptions,
+): Promise<void> {
+  const transcript = await transcribeVoiceRequest(request, response, options)
+  if (!transcript) return
+  return sendJson(response, 200, {
+    transcript,
+    provider: options.speechProvider?.name,
+    model: options.speechProvider?.model,
+  })
+}
+
+async function acceptVoiceMessage(
+  request: IncomingMessage,
+  response: ServerResponse,
+  options: ControlPlaneOptions,
+): Promise<void> {
+  const url = new URL(request.url ?? '', 'http://localhost')
+  const userId = requiredQuery(url, 'userId')
+  const source = optionalQuery(url, 'source') ?? 'web'
+  const language = optionalQuery(url, 'language')
+  const taskId = optionalQuery(url, 'taskId')
+  const dedupeKey = headerValue(request, 'idempotency-key')?.trim()
+  if (!dedupeKey) {
+    return sendJson(response, 400, {
+      error: 'bad_request',
+      message: 'Idempotency-Key header is required',
+    })
+  }
+
+  const transcript = await transcribeVoiceRequest(request, response, options)
+  if (!transcript) return
+
+  const result = options.store.enqueueEvent({
+    userId,
+    type: 'user.message',
+    source,
+    dedupeKey,
+    payload: {
+      text: transcript.text,
+      inputMode: 'voice',
+      ...(taskId ? { taskId } : {}),
+      voice: {
+        provider: options.speechProvider?.name,
+        model: options.speechProvider?.model,
+        ...(language ? { requestedLanguage: language } : {}),
+        ...(transcript.language
+          ? { detectedLanguage: transcript.language }
+          : {}),
+      },
+    },
+  })
+
+  return sendJson(response, result.inserted ? 202 : 200, {
+    ...result,
+    transcript,
+  })
+}
+
+async function transcribeVoiceRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  options: ControlPlaneOptions,
+): Promise<SpeechTranscript | undefined> {
+  if (!options.speechProvider) {
+    sendJson(response, 503, {
+      error: 'speech_unavailable',
+      message: 'Speech recognition is not configured',
+    })
+    return undefined
+  }
+
+  const contentType = request.headers['content-type']?.split(';', 1)[0]?.trim()
+  if (!contentType?.startsWith('audio/')) {
+    sendJson(response, 415, {
+      error: 'unsupported_media_type',
+      message: 'Content-Type must be an audio media type',
+    })
+    return undefined
+  }
+
+  const audio = await readBytes(
+    request,
+    options.maximumAudioBytes ?? defaultMaximumAudioBytes,
+  )
+  if (audio.length === 0) {
+    sendJson(response, 400, {
+      error: 'bad_request',
+      message: 'Audio body is required',
+    })
+    return undefined
+  }
+
+  const url = new URL(request.url ?? '', 'http://localhost')
+  const language = optionalQuery(url, 'language')
+  try {
+    return await options.speechProvider.transcribe({
+      audio,
+      contentType,
+      filename: `utterance.${audioExtension(contentType)}`,
+      ...(language ? { language } : {}),
+    })
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : 'Speech recognition failed'
+    sendJson(response, 502, {
+      error: 'speech_provider_failed',
+      message,
+    })
+    return undefined
+  }
 }
 
 function parseNewOutboxMessage(value: unknown): {
@@ -171,17 +307,63 @@ function isAuthorized(
 }
 
 async function readJson(request: IncomingMessage): Promise<unknown> {
+  const raw = (await readBytes(request, maximumBodyBytes)).toString('utf8')
+  if (!raw) throw new Error('Request body is required')
+  return JSON.parse(raw) as unknown
+}
+
+async function readBytes(
+  request: IncomingMessage,
+  maximumBytes: number,
+): Promise<Buffer> {
+  const declaredLength = Number(request.headers['content-length'])
+  if (Number.isFinite(declaredLength) && declaredLength > maximumBytes) {
+    throw new Error('Request body is too large')
+  }
+
   const chunks: Buffer[] = []
   let size = 0
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string)
     size += buffer.length
-    if (size > maximumBodyBytes) throw new Error('Request body is too large')
+    if (size > maximumBytes) throw new Error('Request body is too large')
     chunks.push(buffer)
   }
-  const raw = Buffer.concat(chunks).toString('utf8')
-  if (!raw) throw new Error('Request body is required')
-  return JSON.parse(raw) as unknown
+  return Buffer.concat(chunks)
+}
+
+function requiredQuery(url: URL, name: string): string {
+  const value = optionalQuery(url, name)
+  if (!value) throw new Error(`${name} is required`)
+  return value
+}
+
+function optionalQuery(url: URL, name: string): string | undefined {
+  const value = url.searchParams.get(name)?.trim()
+  return value === '' ? undefined : value
+}
+
+function audioExtension(contentType: string): string {
+  const extensions: Record<string, string> = {
+    'audio/aac': 'aac',
+    'audio/flac': 'flac',
+    'audio/mp4': 'm4a',
+    'audio/mpeg': 'mp3',
+    'audio/ogg': 'ogg',
+    'audio/wav': 'wav',
+    'audio/webm': 'webm',
+    'audio/x-m4a': 'm4a',
+    'audio/x-wav': 'wav',
+  }
+  return extensions[contentType] ?? 'audio'
+}
+
+function headerValue(
+  request: IncomingMessage,
+  name: string,
+): string | undefined {
+  const value = request.headers[name]
+  return Array.isArray(value) ? value[0] : value
 }
 
 function parseNewInboxEvent(value: unknown): NewInboxEvent {

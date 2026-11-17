@@ -21,6 +21,12 @@ export interface PegasConfig {
   modelApiKey?: string
   modelName?: string
   modelTimeoutMs: number
+  speechProvider: 'disabled' | 'openai-compatible'
+  speechBaseUrl?: string
+  speechApiKey?: string
+  speechModel: string
+  speechTimeoutMs: number
+  speechMaxAudioBytes: number
   pushMode: 'disabled' | 'webhook'
   pushWebhookUrl?: string
   pushWebhookToken?: string
@@ -38,6 +44,8 @@ export function loadConfig(
   const modelProvider = environment.PEGAS_MODEL_PROVIDER ?? 'codex-cli'
   const modelBaseUrl = environment.PEGAS_MODEL_BASE_URL
   const modelName = environment.PEGAS_MODEL_NAME
+  const speechProvider = environment.PEGAS_SPEECH_PROVIDER ?? 'disabled'
+  const speechBaseUrl = environment.PEGAS_SPEECH_BASE_URL
   const pushMode =
     environment.PEGAS_PUSH_MODE === 'webhook' ? 'webhook' : 'disabled'
   const pushWebhookUrl = environment.PEGAS_PUSH_WEBHOOK_URL
@@ -59,6 +67,16 @@ export function loadConfig(
   if (modelProvider !== 'codex-cli' && modelProvider !== 'openai-compatible') {
     throw new Error(
       `Unsupported PEGAS_MODEL_PROVIDER: ${modelProvider}. Expected codex-cli or openai-compatible`,
+    )
+  }
+  if (speechProvider === 'openai-compatible' && !speechBaseUrl) {
+    throw new Error(
+      'PEGAS_SPEECH_BASE_URL is required when PEGAS_SPEECH_PROVIDER=openai-compatible',
+    )
+  }
+  if (speechProvider !== 'disabled' && speechProvider !== 'openai-compatible') {
+    throw new Error(
+      `Unsupported PEGAS_SPEECH_PROVIDER: ${speechProvider}. Expected disabled or openai-compatible`,
     )
   }
   if (pushMode === 'webhook' && !pushWebhookUrl) {
@@ -111,6 +129,22 @@ export function loadConfig(
       environment.PEGAS_MODEL_TIMEOUT_MS,
       90_000,
       'PEGAS_MODEL_TIMEOUT_MS',
+    ),
+    speechProvider,
+    ...(speechBaseUrl ? { speechBaseUrl } : {}),
+    ...(environment.PEGAS_SPEECH_API_KEY
+      ? { speechApiKey: environment.PEGAS_SPEECH_API_KEY }
+      : {}),
+    speechModel: environment.PEGAS_SPEECH_MODEL ?? 'Qwen/Qwen3-ASR-0.6B',
+    speechTimeoutMs: parsePositiveInteger(
+      environment.PEGAS_SPEECH_TIMEOUT_MS,
+      120_000,
+      'PEGAS_SPEECH_TIMEOUT_MS',
+    ),
+    speechMaxAudioBytes: parsePositiveInteger(
+      environment.PEGAS_SPEECH_MAX_AUDIO_BYTES,
+      25 * 1024 * 1024,
+      'PEGAS_SPEECH_MAX_AUDIO_BYTES',
     ),
     pushMode,
     ...(pushWebhookUrl ? { pushWebhookUrl } : {}),

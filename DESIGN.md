@@ -86,12 +86,22 @@ components:
   button-send:
     backgroundColor: "{colors.blue}"
     textColor: "{colors.paper}"
-    rounded: "{rounded.sm}"
+    rounded: "50%"
     size: "36px"
   button-send-disabled:
     backgroundColor: "#e4e8ef"
     textColor: "#9aa6bd"
-    rounded: "{rounded.sm}"
+    rounded: "50%"
+    size: "36px"
+  button-dictation:
+    backgroundColor: "#edf0f5"
+    textColor: "#273248"
+    rounded: "50%"
+    size: "36px"
+  button-dictation-recording:
+    backgroundColor: "{colors.blue}"
+    textColor: "{colors.paper}"
+    rounded: "50%"
     size: "36px"
   composer:
     backgroundColor: "{colors.paper}"
@@ -232,6 +242,7 @@ Components feel precise, calm, and ready to inspect. Every interactive component
 - **Hover / Focus:** Darken cobalt slightly on hover and use the shared 3px translucent cobalt focus outline with a 2px offset.
 - **Disabled:** Replace the accent with a quiet cool gray and preserve an unmistakable disabled cursor and contrast change.
 - **Icon controls:** Use transparent backgrounds at rest; reveal a quiet neutral fill on hover or active state.
+- **Dictation:** The circular microphone sits beside Send. Its cool neutral rest state keeps sending primary; active recording alone turns cobalt and swaps the microphone for a stop icon. Permission and transcription work use the same control with a spinner, while status copy remains in the composer footer.
 
 ### Chips
 

@@ -15,6 +15,8 @@ describe('loadConfig', () => {
       modelProvider: 'codex-cli',
       pushMode: 'disabled',
       routerMode: 'model',
+      speechModel: 'Qwen/Qwen3-ASR-0.6B',
+      speechProvider: 'disabled',
       workerConcurrency: 2,
     })
   })
@@ -32,6 +34,9 @@ describe('loadConfig', () => {
         PEGAS_PUSH_MODE: 'webhook',
         PEGAS_PUSH_WEBHOOK_URL: 'https://push.example/pegas',
         PEGAS_ROUTER: 'rules',
+        PEGAS_SPEECH_BASE_URL: 'http://127.0.0.1:18081/v1',
+        PEGAS_SPEECH_MODEL: 'Qwen/Qwen3-ASR-1.7B',
+        PEGAS_SPEECH_PROVIDER: 'openai-compatible',
         PEGAS_WORKER_CONCURRENCY: '4',
       }),
     ).toMatchObject({
@@ -45,6 +50,9 @@ describe('loadConfig', () => {
       pushMode: 'webhook',
       pushWebhookUrl: 'https://push.example/pegas',
       routerMode: 'rules',
+      speechBaseUrl: 'http://127.0.0.1:18081/v1',
+      speechModel: 'Qwen/Qwen3-ASR-1.7B',
+      speechProvider: 'openai-compatible',
       workerConcurrency: 4,
     })
   })
@@ -65,6 +73,10 @@ describe('loadConfig', () => {
     [
       { PEGAS_PUSH_MODE: 'webhook' },
       'PEGAS_PUSH_WEBHOOK_URL is required when PEGAS_PUSH_MODE=webhook',
+    ],
+    [
+      { PEGAS_SPEECH_PROVIDER: 'openai-compatible' },
+      'PEGAS_SPEECH_BASE_URL is required when PEGAS_SPEECH_PROVIDER=openai-compatible',
     ],
     [{ PEGAS_API_PORT: '0' }, 'PEGAS_API_PORT must be a positive integer'],
   ])('rejects unsafe or invalid settings', (environment, message) => {
