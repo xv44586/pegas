@@ -32,6 +32,15 @@ interface DshErrorEvent {
   message?: string
 }
 
+interface DshTextEvent {
+  type: 'text'
+  text: string
+}
+
+interface DshToolCallEvent {
+  type: 'tool_call'
+}
+
 interface DshOtherEvent {
   type: 'other'
 }
@@ -106,6 +115,8 @@ export class DshCliExecutor implements RunExecutor {
     let sessionId = input.resumeSessionId
     let finalEvent: DshFinalEvent | undefined
     let streamError: string | undefined
+    let pendingAssistantText: string[] = []
+    let acknowledgementEmitted = false
     const stderrChunks: Buffer[] = []
     let stderrBytes = 0
 
@@ -136,6 +147,21 @@ export class DshCliExecutor implements RunExecutor {
           sessionId = event.sessionId
           input.onExecutorRef?.(event.sessionId)
         }
+        if (event.type === 'text' && !acknowledgementEmitted) {
+          pendingAssistantText.push(event.text)
+        }
+        if (
+          event.type === 'tool_call' &&
+          !acknowledgementEmitted &&
+          pendingAssistantText.length > 0
+        ) {
+          const text = pendingAssistantText.join('').trim()
+          pendingAssistantText = []
+          if (text) {
+            input.onProgress?.({ type: 'acknowledgement', text })
+            acknowledgementEmitted = true
+          }
+        }
         if (event.type === 'error')
           streamError = event.message ?? 'Unknown DSH error'
       } catch (error) {
@@ -145,7 +171,7 @@ export class DshCliExecutor implements RunExecutor {
       }
     })
 
-    child.stdin.end(input.prompt)
+    child.stdin.end(executorPrompt(input.prompt))
     let exit: { code: number | null; signal: NodeJS.Signals | null }
     try {
       exit = await waitForExit(child)
@@ -192,7 +218,13 @@ export class DshExecutionError extends Error {
 
 function parseDshEvent(
   line: string,
-): DshSessionEvent | DshFinalEvent | DshErrorEvent | DshOtherEvent {
+):
+  | DshSessionEvent
+  | DshFinalEvent
+  | DshErrorEvent
+  | DshTextEvent
+  | DshToolCallEvent
+  | DshOtherEvent {
   const parsed = JSON.parse(line) as unknown
   if (!isRecord(parsed) || typeof parsed.type !== 'string') {
     throw new Error('DSH emitted an invalid JSON event')
@@ -220,6 +252,10 @@ function parseDshEvent(
         : {}),
     }
   }
+  if (parsed.type === 'text' && typeof parsed.text === 'string') {
+    return { type: 'text', text: parsed.text }
+  }
+  if (parsed.type === 'tool_call') return { type: 'tool_call' }
   return { type: 'other' }
 }
 
@@ -229,6 +265,18 @@ function isCompletedReason(value: unknown): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function executorPrompt(userInput: string): string {
+  return `${userInput}
+
+<pegas_execution_contract>
+你是直接负责完成这项工作的执行 Agent。你能看到当前真实可用的工具、权限和工作区，能力判断必须以实际检查结果为准，不能由上游路由器代替判断。
+
+如果任务需要调用工具，在第一次实质工具调用前，先用一句简短自然的中文确认你将处理的具体对象和预期结果。这句话会原样展示给用户；说完立即继续执行，不要等待用户再次确认。先检查已有工具和权限，不要仅凭猜测声称缺少工具或要求安装工具。
+
+如果任务无需工具即可直接回答，就直接给出最终答案，不要额外发送形式化回执。后续普通执行进度不需要反复汇报；只在需要用户决策、遇到无法自行解决的阻塞或取得最终结果时面向用户输出。
+</pegas_execution_contract>`
 }
 
 function waitForExit(

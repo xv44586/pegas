@@ -394,10 +394,24 @@ textarea:focus-visible {
 
 .message-row time {
   display: block;
-  margin-top: 7px;
   color: var(--faint);
   font-size: 0.7rem;
   font-variant-numeric: tabular-nums;
+}
+
+.message-meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 7px;
+  color: #bdc8e0;
+  font-size: 0.7rem;
+}
+
+.message-meta span::before {
+  margin-right: 8px;
+  content: '·';
 }
 
 .message-row.is-user {
@@ -413,7 +427,6 @@ textarea:focus-visible {
 
 .message-row.is-user time {
   color: #bdc8e0;
-  text-align: right;
 }
 
 .message-row.is-pegas {

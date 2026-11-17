@@ -5,7 +5,13 @@ export interface ExecutorInput {
   workingDirectory: string
   resumeSessionId?: string
   onExecutorRef?(executorRef: string): void
+  onProgress?(event: ExecutorProgressEvent): void
   signal?: AbortSignal
+}
+
+interface ExecutorProgressEvent {
+  type: 'acknowledgement'
+  text: string
 }
 
 export interface ExecutorResult {

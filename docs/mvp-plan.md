@@ -27,7 +27,8 @@
 - [x] 独立 Supervisor 进程；
 - [x] Release 状态、候选观察期和回滚模型；
 - [x] 独立 Recovery API 的状态、重启和回滚端点；
-- [x] 自动化测试与端到端 smoke test。
+- [x] 自动化测试与端到端 smoke test；
+- [x] Router 只做 Task 归属，实际 Agent 基于真实工具生成执行确认。
 
 这些能力目前是可运行骨架，不代表完整产品功能。Control Plane 默认只允许本机访问，尚未提供可直接使用的移动端界面。
 

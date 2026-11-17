@@ -125,18 +125,18 @@ Recovery API 第一阶段只提供状态、重启和回滚，不提供任意命�
 
 ### 3. Intent / Task Router
 
-Router 判断一条新消息应该：
+Router 只负责确定一条新输入属于哪个 Task 或控制对象，例如：
 
-- 直接回答；
 - 创建新 Task；
 - 补充或纠正现有 Task；
 - steer 某个正在运行的 Run；
 - 保存为 Idea；
 - 创建或修改 Trigger；
-- 回答一个 Approval；
-- 在无法可靠判断时向用户询问。
+- 回答一个 Approval。
 
-Router 可以使用模型进行判断，但归属结果必须写入结构化数据。已有 Task 的执行单元也可以把不属于自身目标的消息退回 Router 重新分配。
+Router 不直接回答任务内容，不判断某个工具是否存在，也不因为自己看不到 Executor 的工具而向用户索要安装或配置。工具能力、权限是否足够以及任务本身是否需要澄清，只能由加载了真实运行环境的 Agent 判断。Router 只有在“输入究竟属于哪个 Task”无法可靠确定时，才可以提出归属澄清。
+
+Router 可以使用模型进行归属判断，但结果必须写入结构化数据。已有 Task 的执行单元也可以把不属于自身目标的消息退回 Router 重新分配。
 
 第一版提供两级策略：显式 `taskId` 和无候选任务时使用确定性规则；存在多个活跃候选 Task 时可启用 Model Router。模型只返回 `create_task` 或引用候选 ID 的 `continue_task` 结构，输出无法解析、引用越权或 Provider 不可用时自动退回确定性新建策略，不能阻塞 Durable Inbox。
 
@@ -261,6 +261,8 @@ artifacts(run) → artifact refs
 适配层把 DSH session、turn、tool call 和 Agent 状态转换为 Pegas Run Event。Pegas 核心领域不得直接保存或依赖 DSH 内部对象。
 
 第一版 Adapter 使用 DSH headless 的进程边界：每个 Run 读取 NDJSON 事件流，收到 opening session event 后立即持久化 session ID，只有进程退出码为零且 final reason 为 completed 时才完成 Run。Worker 崩溃或租约过期后，新 Worker 使用已保存的 session ID 在同一 workspace 恢复，而不是创建一个无法关联的新 session。
+
+用户消息写入 Inbox 后，HTTP 层只返回协议接收结果，Web 可以把 Inbox 状态显示为消息元数据，但不能生成一条冒充 Pegas 的固定回复。Router 完成归属后也不发送模板化“已开始”消息。真正的 Agent 加载当前工具、权限和工作区后，如果即将进行实质工具调用，应先生成一次具体确认，说明处理对象和预期结果，然后立即继续执行；直接回答则不额外制造确认。普通工具日志留在 Task Activity，只有结果、需要用户决策的问题和无法自行解决的阻塞进入 Conversation。
 
 Adapter 对执行时间、stderr 和单条事件大小设置上限；中止或超时先发送 SIGTERM，宽限期后再 SIGKILL。额外可写目录通过重复的 `--add-dir` 显式传递，每次恢复都重新声明。即使 opening session event 缺失，terminal final event 中的 session ID 也会被持久化。
 

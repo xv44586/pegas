@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
 import { EchoExecutor } from '../src/executor/echo-executor.js'
+import type {
+  ExecutorInput,
+  ExecutorResult,
+  RunExecutor,
+} from '../src/executor/executor.js'
 import { RuleBasedTaskRouter } from '../src/router/router.js'
 import { PegasStore } from '../src/storage/sqlite-store.js'
 import {
@@ -34,15 +39,7 @@ describe('event and run processing', () => {
     expect(store.listRuns()).toMatchObject([
       { status: 'queued', input: 'Ship the first vertical slice' },
     ])
-    expect(store.listOutbox('user-1')).toMatchObject([
-      {
-        status: 'pending',
-        payload: {
-          type: 'task.started',
-          text: '我已经把这件事整理为任务「Ship the first vertical slice」，现在开始处理。',
-        },
-      },
-    ])
+    expect(store.listOutbox('user-1')).toEqual([])
 
     const claimed = store.claimNextRun('worker-1')
     expect(claimed).toBeDefined()
@@ -117,12 +114,63 @@ describe('event and run processing', () => {
       input: 'Now add recovery tests',
       resumeFromRef: firstSession,
     })
-    expect(store.listOutbox('user-1').at(-1)).toMatchObject({
-      payload: {
-        type: 'task.continued',
-        text: '收到，我会把这条补充到任务「Create the first version」并继续处理。',
-      },
+    expect(store.listOutbox('user-1')).toHaveLength(1)
+    store.close()
+  })
+
+  it('publishes the executor acknowledgement before the final result', async () => {
+    const store = new PegasStore(':memory:')
+    const executor = new AcknowledgingExecutor()
+    store.enqueueEvent({
+      userId: 'user-1',
+      type: 'user.message',
+      source: 'web',
+      payload: { text: 'Review the release workflow' },
     })
+    await processNextEvent(
+      store,
+      new RoutingEventHandler(new RuleBasedTaskRouter(), executor.name),
+      'worker-1',
+    )
+    const claimed = store.claimNextRun('worker-1')
+    if (!claimed) throw new Error('Expected a claimed run')
+
+    await executeClaimedRun(
+      store,
+      executor,
+      claimed,
+      'worker-1',
+      process.cwd(),
+      new AbortController().signal,
+    )
+
+    expect(store.listOutbox('user-1')).toMatchObject([
+      {
+        payload: {
+          type: 'run.acknowledged',
+          text: '我会检查发布流程和恢复路径，并给出可验证的改进结果。',
+        },
+      },
+      {
+        payload: { type: 'run.completed', text: 'Review complete' },
+      },
+    ])
     store.close()
   })
 })
+
+class AcknowledgingExecutor implements RunExecutor {
+  readonly name = 'acknowledging-test'
+
+  execute(input: ExecutorInput): Promise<ExecutorResult> {
+    input.onExecutorRef?.('session-ack')
+    input.onProgress?.({
+      type: 'acknowledgement',
+      text: '我会检查发布流程和恢复路径，并给出可验证的改进结果。',
+    })
+    return Promise.resolve({
+      executorRef: 'session-ack',
+      output: 'Review complete',
+    })
+  }
+}

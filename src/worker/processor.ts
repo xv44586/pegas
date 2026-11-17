@@ -22,27 +22,7 @@ export class RoutingEventHandler implements EventHandler {
       store.listTasks(event.userId),
     )
     if (!decision) return
-    const { task, run } = store.applyRoutingDecision(
-      event,
-      decision,
-      this.#executorName,
-    )
-    store.enqueueOutbox({
-      userId: event.userId,
-      taskId: task.id,
-      channel: 'conversation',
-      dedupeKey: `run-started:${run.id}`,
-      payload: {
-        type:
-          decision.kind === 'create_task' ? 'task.started' : 'task.continued',
-        taskId: task.id,
-        runId: run.id,
-        text:
-          decision.kind === 'create_task'
-            ? `我已经把这件事整理为任务「${task.title}」，现在开始处理。`
-            : `收到，我会把这条补充到任务「${task.title}」并继续处理。`,
-      },
-    })
+    store.applyRoutingDecision(event, decision, this.#executorName)
   }
 }
 
@@ -96,6 +76,20 @@ export async function executeClaimedRun(
         : {}),
       onExecutorRef: executorRef => {
         store.recordExecutorRef(claimed.run.id, workerId, executorRef)
+      },
+      onProgress: event => {
+        store.enqueueOutbox({
+          userId: claimed.task.userId,
+          taskId: claimed.task.id,
+          channel: 'conversation',
+          dedupeKey: `run-acknowledged:${claimed.run.id}`,
+          payload: {
+            type: 'run.acknowledged',
+            taskId: claimed.task.id,
+            runId: claimed.run.id,
+            text: event.text,
+          },
+        })
       },
       signal,
     })

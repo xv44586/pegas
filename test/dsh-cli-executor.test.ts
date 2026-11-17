@@ -46,6 +46,62 @@ console.log(JSON.stringify({
     expect(observedSession).toBe('session-test')
   })
 
+  it('emits committed assistant text as acknowledgement only when work starts', async () => {
+    const command = fakeDsh(`
+console.log(JSON.stringify({ type: 'session', sessionId: 'session-test' }))
+console.log(JSON.stringify({ type: 'text', text: 'I will inspect the project ' }))
+console.log(JSON.stringify({ type: 'text', text: 'and verify the fix.' }))
+console.log(JSON.stringify({ type: 'tool_call', callId: 'call-1', tool: 'read' }))
+console.log(JSON.stringify({ type: 'text', text: 'intermediate update' }))
+console.log(JSON.stringify({ type: 'tool_call', callId: 'call-2', tool: 'test' }))
+console.log(JSON.stringify({
+  type: 'final',
+  sessionId: 'session-test',
+  text: 'finished',
+  reason: { kind: 'completed' }
+}))
+`)
+    const executor = new DshCliExecutor({ command })
+    const acknowledgements: string[] = []
+
+    await executor.execute({
+      runId: 'run-1',
+      taskId: 'task-1',
+      prompt: 'do the work',
+      workingDirectory: process.cwd(),
+      onProgress: event => acknowledgements.push(event.text),
+    })
+
+    expect(acknowledgements).toEqual([
+      'I will inspect the project and verify the fix.',
+    ])
+  })
+
+  it('does not mistake a direct answer for an acknowledgement', async () => {
+    const command = fakeDsh(`
+console.log(JSON.stringify({ type: 'session', sessionId: 'session-test' }))
+console.log(JSON.stringify({ type: 'text', text: 'The direct answer.' }))
+console.log(JSON.stringify({
+  type: 'final',
+  sessionId: 'session-test',
+  text: 'The direct answer.',
+  reason: { kind: 'completed' }
+}))
+`)
+    const executor = new DshCliExecutor({ command })
+    const acknowledgements: string[] = []
+
+    await executor.execute({
+      runId: 'run-1',
+      taskId: 'task-1',
+      prompt: 'answer directly',
+      workingDirectory: process.cwd(),
+      onProgress: event => acknowledgements.push(event.text),
+    })
+
+    expect(acknowledgements).toEqual([])
+  })
+
   it('preserves a session id when DSH exits unsuccessfully', async () => {
     const command = fakeDsh(`
 console.log(JSON.stringify({ type: 'session', sessionId: 'session-failed' }))

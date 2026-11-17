@@ -462,7 +462,10 @@ function UserMessage({ event }: { event: InboxEvent }) {
     <article className="message-row is-user">
       <div>
         <p>{payloadText(event.payload, '消息内容不可用')}</p>
-        <time dateTime={event.createdAt}>{formatTime(event.createdAt)}</time>
+        <div className="message-meta">
+          <time dateTime={event.createdAt}>{formatTime(event.createdAt)}</time>
+          <span>{eventStatusCopy(event.status)}</span>
+        </div>
       </div>
     </article>
   )
@@ -491,6 +494,19 @@ function PegasMessage({ message, run }: { message: OutboxMessage; run?: Run }) {
       </div>
     </article>
   )
+}
+
+function eventStatusCopy(status: InboxEvent['status']): string {
+  switch (status) {
+    case 'pending':
+      return '已送达'
+    case 'processing':
+      return '正在分配'
+    case 'processed':
+      return '已进入任务'
+    case 'failed':
+      return '处理失败'
+  }
 }
 
 function TaskPulse({
