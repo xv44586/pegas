@@ -94,6 +94,7 @@ export class ModelTaskRouter implements TaskRouter {
             statusReason: task.statusReason ?? null,
           })),
         }),
+        schema: routerDecisionSchema,
       })
       return modelDecision(answer, payload.text, candidates)
     } catch {
@@ -105,10 +106,23 @@ export class ModelTaskRouter implements TaskRouter {
 const routerSystemPrompt = `You route one user message into durable personal-agent tasks.
 Return one JSON object only.
 If the message clearly continues exactly one listed task, return:
-{"kind":"continue_task","taskId":"listed id","reason":"short reason"}
+{"kind":"continue_task","taskId":"listed id","title":"","goal":"","reason":"short reason"}
 Otherwise return:
-{"kind":"create_task","title":"concise title","goal":"complete user goal","reason":"short reason"}
+{"kind":"create_task","taskId":"","title":"concise title","goal":"complete user goal","reason":"short reason"}
 Never invent a task id. Prefer create_task when uncertain or when the message introduces an independent idea.`
+
+const routerDecisionSchema = {
+  type: 'object',
+  properties: {
+    kind: { type: 'string', enum: ['create_task', 'continue_task'] },
+    taskId: { type: 'string' },
+    title: { type: 'string' },
+    goal: { type: 'string' },
+    reason: { type: 'string' },
+  },
+  required: ['kind', 'taskId', 'title', 'goal', 'reason'],
+  additionalProperties: false,
+}
 
 interface MessagePayload {
   text: string

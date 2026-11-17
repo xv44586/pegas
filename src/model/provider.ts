@@ -1,6 +1,7 @@
 export interface JsonModelRequest {
   system: string
   input: string
+  schema?: Record<string, unknown>
   signal?: AbortSignal
 }
 

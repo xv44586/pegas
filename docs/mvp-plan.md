@@ -21,7 +21,7 @@
 - [x] DSH headless Adapter、NDJSON 结果判定和 session ID 持久化；
 - [x] 显式 Task continuation 复用原 DSH session；
 - [x] 可选 Model Router 与确定性降级；
-- [x] OpenAI-compatible 控制面 Model Provider；
+- [x] Codex CLI（默认）与 OpenAI-compatible 控制面 Model Provider；
 - [x] Outbox lease、重试、失败封顶和 Webhook Dispatcher；
 - [x] 受认证的 Agent 主动消息写入 API；
 - [x] 独立 Supervisor 进程；

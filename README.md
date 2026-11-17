@@ -62,15 +62,16 @@ Web 开发服务器默认位于 `http://127.0.0.1:4319`，并将 API 请求代�
 
 Worker 默认通过 DSH headless 执行 Run。自动化测试使用显式的 `PEGAS_EXECUTOR=echo`，不会调用模型；生产或人工验证不能使用该测试执行器。
 
-Router 默认使用零依赖的确定性规则。设置 `PEGAS_ROUTER=model` 后，它会通过 OpenAI-compatible Provider 判断一条新消息是在继续已有 Task，还是应该创建新 Task：
+Router 默认使用本机 Codex CLI 的登录态和 `gpt-5.6-luna`，判断一条新消息是在继续已有 Task，还是应该创建新 Task；无需向 Pegas 复制 Codex 凭证：
 
 ```bash
 PEGAS_ROUTER=model
-PEGAS_MODEL_PROVIDER=openai-compatible
-PEGAS_MODEL_BASE_URL=https://api.example.com/v1
-PEGAS_MODEL_API_KEY=...
-PEGAS_MODEL_NAME=...
+PEGAS_MODEL_PROVIDER=codex-cli
+PEGAS_CODEX_COMMAND=codex
+PEGAS_MODEL_NAME=gpt-5.6-luna
 ```
+
+Codex Provider 以 ephemeral、read-only、无项目规则的非交互进程运行，并关闭 Router 不需要的 Apps、Plugins、Hooks 和模型发现，只接收任务摘要并按 JSON Schema 输出。模型不可用或输出无效时，Router 会安全降级为创建独立 Task。测试或离线开发可显式设置 `PEGAS_ROUTER=rules`；如需接入其他服务，也可切换到 `openai-compatible` 并提供 Base URL、模型和可选 API Key。
 
 这里的 Provider 只负责 Router 等轻量控制面判断。DSH 执行任务时使用的模型、凭证和 Provider 仍由 DSH profile 自己管理，两者不会共享隐式 session 或配置。
 

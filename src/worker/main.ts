@@ -4,7 +4,9 @@ import { loadConfig } from '../core/config.js'
 import { DshCliExecutor } from '../executor/dsh-cli-executor.js'
 import { EchoExecutor } from '../executor/echo-executor.js'
 import type { RunExecutor } from '../executor/executor.js'
+import { CodexCliProvider } from '../model/codex-cli-provider.js'
 import { OpenAiCompatibleProvider } from '../model/openai-compatible-provider.js'
+import type { JsonModelProvider } from '../model/provider.js'
 import {
   ModelTaskRouter,
   RuleBasedTaskRouter,
@@ -32,12 +34,7 @@ const executor: RunExecutor =
 const router: TaskRouter =
   config.routerMode === 'model'
     ? new ModelTaskRouter({
-        provider: new OpenAiCompatibleProvider({
-          baseUrl: required(config.modelBaseUrl, 'model base URL'),
-          model: required(config.modelName, 'model name'),
-          ...(config.modelApiKey ? { apiKey: config.modelApiKey } : {}),
-          timeoutMs: config.modelTimeoutMs,
-        }),
+        provider: createModelProvider(),
       })
     : new RuleBasedTaskRouter()
 const eventHandler = new RoutingEventHandler(router, executor.name)
@@ -91,4 +88,20 @@ function wait(milliseconds: number): Promise<void> {
 function required(value: string | undefined, name: string): string {
   if (!value) throw new Error(`Missing ${name}`)
   return value
+}
+
+function createModelProvider(): JsonModelProvider {
+  if (config.modelProvider === 'codex-cli') {
+    return new CodexCliProvider({
+      command: config.codexCommand,
+      model: required(config.modelName, 'model name'),
+      timeoutMs: config.modelTimeoutMs,
+    })
+  }
+  return new OpenAiCompatibleProvider({
+    baseUrl: required(config.modelBaseUrl, 'model base URL'),
+    model: required(config.modelName, 'model name'),
+    ...(config.modelApiKey ? { apiKey: config.modelApiKey } : {}),
+    timeoutMs: config.modelTimeoutMs,
+  })
 }

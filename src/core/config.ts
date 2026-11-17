@@ -15,7 +15,8 @@ export interface PegasConfig {
   workspaceRoot: string
   workerConcurrency: number
   routerMode: 'rules' | 'model'
-  modelProvider: 'openai-compatible'
+  modelProvider: 'codex-cli' | 'openai-compatible'
+  codexCommand: string
   modelBaseUrl?: string
   modelApiKey?: string
   modelName?: string
@@ -33,8 +34,8 @@ export function loadConfig(
   const dataDir = resolve(environment.PEGAS_DATA_DIR ?? './data')
   const apiHost = environment.PEGAS_API_HOST ?? '127.0.0.1'
   const apiToken = environment.PEGAS_API_TOKEN
-  const routerMode = environment.PEGAS_ROUTER === 'model' ? 'model' : 'rules'
-  const modelProvider = environment.PEGAS_MODEL_PROVIDER ?? 'openai-compatible'
+  const routerMode = environment.PEGAS_ROUTER === 'rules' ? 'rules' : 'model'
+  const modelProvider = environment.PEGAS_MODEL_PROVIDER ?? 'codex-cli'
   const modelBaseUrl = environment.PEGAS_MODEL_BASE_URL
   const modelName = environment.PEGAS_MODEL_NAME
   const pushMode =
@@ -46,14 +47,18 @@ export function loadConfig(
       'PEGAS_API_TOKEN is required when the API listens outside the loopback interface',
     )
   }
-  if (routerMode === 'model' && (!modelBaseUrl || !modelName)) {
+  if (
+    routerMode === 'model' &&
+    modelProvider === 'openai-compatible' &&
+    (!modelBaseUrl || !modelName)
+  ) {
     throw new Error(
       'PEGAS_MODEL_BASE_URL and PEGAS_MODEL_NAME are required when PEGAS_ROUTER=model',
     )
   }
-  if (modelProvider !== 'openai-compatible') {
+  if (modelProvider !== 'codex-cli' && modelProvider !== 'openai-compatible') {
     throw new Error(
-      `Unsupported PEGAS_MODEL_PROVIDER: ${modelProvider}. Expected openai-compatible`,
+      `Unsupported PEGAS_MODEL_PROVIDER: ${modelProvider}. Expected codex-cli or openai-compatible`,
     )
   }
   if (pushMode === 'webhook' && !pushWebhookUrl) {
@@ -96,14 +101,15 @@ export function loadConfig(
     ),
     routerMode,
     modelProvider,
+    codexCommand: environment.PEGAS_CODEX_COMMAND ?? 'codex',
     ...(modelBaseUrl ? { modelBaseUrl } : {}),
     ...(environment.PEGAS_MODEL_API_KEY
       ? { modelApiKey: environment.PEGAS_MODEL_API_KEY }
       : {}),
-    ...(modelName ? { modelName } : {}),
+    modelName: modelName ?? 'gpt-5.6-luna',
     modelTimeoutMs: parsePositiveInteger(
       environment.PEGAS_MODEL_TIMEOUT_MS,
-      15_000,
+      90_000,
       'PEGAS_MODEL_TIMEOUT_MS',
     ),
     pushMode,

@@ -33,6 +33,7 @@ const environment = {
   PEGAS_DATA_DIR: dataDirectory,
   PEGAS_EVENT_POLL_MS: '25',
   PEGAS_EXECUTOR: 'echo',
+  PEGAS_ROUTER: 'rules',
   PEGAS_PUSH_MODE: 'webhook',
   PEGAS_PUSH_WEBHOOK_URL: `http://127.0.0.1:${webhookAddress.port}/push`,
   PEGAS_OUTBOX_POLL_MS: '25',
