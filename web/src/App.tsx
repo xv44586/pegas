@@ -1,13 +1,15 @@
 import {
-  ArrowLeft,
   ArrowUpRight,
   Check,
   ChevronRight,
   CircleAlert,
   Clock3,
+  FileOutput,
   ListTodo,
   Mic,
   MessageSquareText,
+  PanelRightOpen,
+  Plus,
   RotateCw,
   Search,
   Send,
@@ -69,6 +71,16 @@ type TimelineItem =
   | { kind: 'event'; createdAt: string; value: InboxEvent }
   | { kind: 'message'; createdAt: string; value: OutboxMessage }
 
+type AppView = 'conversation' | 'tasks' | 'settings'
+
+function viewFromUrl(): AppView {
+  const parameters = new URLSearchParams(window.location.search)
+  const view = parameters.get('view')
+  if (view === 'conversation' || view === 'tasks' || view === 'settings')
+    return view
+  return parameters.has('task') ? 'tasks' : 'conversation'
+}
+
 export function App() {
   const compact = useMediaQuery('(max-width: 820px)')
   const initialTaskId =
@@ -83,12 +95,13 @@ export function App() {
   const [error, setError] = useState('')
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
-  const [taskPanelOpen, setTaskPanelOpen] = useState(Boolean(initialTaskId))
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [activeView, setActiveView] = useState<AppView>(viewFromUrl)
+  const [workspaceOpen, setWorkspaceOpen] = useState(Boolean(initialTaskId))
   const [selectedTaskId, setSelectedTaskId] = useState(initialTaskId)
+  const [attachmentHelpOpen, setAttachmentHelpOpen] = useState(false)
   const feedEnd = useRef<HTMLDivElement>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
-  const previousFocus = useRef<HTMLElement | null>(null)
+  const workspaceTrigger = useRef<HTMLElement | null>(null)
   const api = useMemo(() => new PegasApi(userId, token), [token])
   const appendTranscript = useCallback((text: string) => {
     setDraft(current => `${current}${current.trim() ? '\n' : ''}${text}`)
@@ -139,7 +152,8 @@ export function App() {
       const taskId =
         new URLSearchParams(window.location.search).get('task') ?? ''
       setSelectedTaskId(taskId)
-      setTaskPanelOpen(Boolean(taskId))
+      setWorkspaceOpen(Boolean(taskId))
+      setActiveView(viewFromUrl())
     }
     window.addEventListener('popstate', handlePopState)
     return () => window.removeEventListener('popstate', handlePopState)
@@ -167,55 +181,47 @@ export function App() {
 
   const selectedTask = snapshot.tasks.find(task => task.id === selectedTaskId)
 
-  function openTaskPanel(): void {
-    rememberPanelTrigger()
-    setSettingsOpen(false)
-    setTaskPanelOpen(true)
-  }
-
   function openTask(taskId: string): void {
-    rememberPanelTrigger()
-    setSettingsOpen(false)
+    rememberWorkspaceTrigger()
+    setActiveView('tasks')
     setSelectedTaskId(taskId)
-    setTaskPanelOpen(true)
+    setWorkspaceOpen(true)
     const url = new URL(window.location.href)
+    url.searchParams.set('view', 'tasks')
     url.searchParams.set('task', taskId)
     window.history.pushState({ taskId }, '', url)
   }
 
-  function closeTask(): void {
+  function closeWorkspace(): void {
+    setWorkspaceOpen(false)
     setSelectedTaskId('')
     const url = new URL(window.location.href)
     url.searchParams.delete('task')
-    window.history.pushState({}, '', url)
+    window.history.replaceState({}, '', url)
+    if (compact)
+      window.requestAnimationFrame(() => workspaceTrigger.current?.focus())
   }
 
-  function closeTaskPanel(): void {
-    setTaskPanelOpen(false)
-    if (compact) {
-      window.requestAnimationFrame(() => previousFocus.current?.focus())
-    }
-  }
-
-  function openSettings(): void {
-    rememberPanelTrigger()
-    setTaskPanelOpen(false)
-    setSettingsOpen(true)
-  }
-
-  function closeSettings(): void {
-    setSettingsOpen(false)
-    if (compact) {
-      window.requestAnimationFrame(() => previousFocus.current?.focus())
-    }
-  }
-
-  function rememberPanelTrigger(): void {
-    if (!compact || taskPanelOpen || settingsOpen) return
-    previousFocus.current =
+  function rememberWorkspaceTrigger(): void {
+    if (!compact || workspaceOpen) return
+    workspaceTrigger.current =
       document.activeElement instanceof HTMLElement
         ? document.activeElement
         : null
+  }
+
+  function navigate(view: AppView): void {
+    setActiveView(view)
+    const url = new URL(window.location.href)
+    if (view === 'conversation' && !url.searchParams.has('task'))
+      url.searchParams.delete('view')
+    else url.searchParams.set('view', view)
+    window.history.pushState({ view }, '', url)
+  }
+
+  function openWorkspace(): void {
+    rememberWorkspaceTrigger()
+    setWorkspaceOpen(true)
   }
 
   function usePrompt(prompt: string): void {
@@ -272,72 +278,93 @@ export function App() {
   }
 
   return (
-    <div className="app-shell">
-      <a className="skip-link" href="#conversation-title">
-        跳到对话
+    <div className={`app-shell${workspaceOpen ? ' has-workspace' : ''}`}>
+      <a className="skip-link" href="#page-title">
+        跳到主要内容
       </a>
       <aside
         className="identity-rail"
         aria-label="Pegas 导航"
-        aria-hidden={
-          compact && (taskPanelOpen || settingsOpen) ? true : undefined
-        }
-        inert={compact && (taskPanelOpen || settingsOpen) ? true : undefined}
+        aria-hidden={compact && workspaceOpen ? true : undefined}
+        inert={compact && workspaceOpen ? true : undefined}
       >
         <button
           className="pegas-mark"
           aria-label="返回对话"
-          onClick={() => window.scrollTo({ top: 0 })}
+          onClick={() => navigate('conversation')}
         >
           P
         </button>
-        <nav className="rail-nav" aria-label="主要功能">
+        <div className="rail-brand">
+          <strong>Pegas</strong>
+          <span>Personal agent</span>
+        </div>
+        <nav className="rail-nav" aria-label="主要页面">
           <button
-            className="rail-button is-active"
+            className={`rail-button${activeView === 'conversation' ? ' is-active' : ''}`}
             aria-label="对话"
-            title="对话"
+            aria-current={activeView === 'conversation' ? 'page' : undefined}
+            onClick={() => navigate('conversation')}
           >
             <MessageSquareText aria-hidden="true" />
+            <span>对话</span>
           </button>
           <button
-            className="rail-button"
+            className={`rail-button${activeView === 'tasks' ? ' is-active' : ''}`}
             aria-label="任务"
-            title="任务"
-            onClick={openTaskPanel}
+            aria-current={activeView === 'tasks' ? 'page' : undefined}
+            onClick={() => navigate('tasks')}
           >
             <ListTodo aria-hidden="true" />
-            {snapshot.tasks.some(task => isActiveTask(task.status)) && (
-              <span className="rail-indicator" aria-label="有正在进行的任务" />
+            <span>任务</span>
+            {activeTaskCount > 0 && (
+              <span
+                className="rail-count"
+                aria-label={`${String(activeTaskCount)} 个进行中任务`}
+              >
+                {activeTaskCount}
+              </span>
             )}
           </button>
         </nav>
         <button
-          className={`rail-button rail-settings${settingsOpen ? ' is-active' : ''}`}
+          className={`rail-button rail-settings${activeView === 'settings' ? ' is-active' : ''}`}
           aria-label="设置"
-          title="设置"
-          onClick={openSettings}
+          aria-current={activeView === 'settings' ? 'page' : undefined}
+          onClick={() => navigate('settings')}
         >
           <Settings2 aria-hidden="true" />
+          <span>设置</span>
         </button>
       </aside>
 
       <main
-        className="conversation-column"
-        aria-hidden={
-          compact && (taskPanelOpen || settingsOpen) ? true : undefined
-        }
-        inert={compact && (taskPanelOpen || settingsOpen) ? true : undefined}
+        className="main-column"
+        aria-hidden={compact && workspaceOpen ? true : undefined}
+        inert={compact && workspaceOpen ? true : undefined}
       >
-        <header className="conversation-header">
+        <header className="conversation-header page-header">
           <div className="identity-copy">
             <div className="status-orbit" aria-hidden="true">
               <span />
             </div>
             <div>
-              <h1 id="conversation-title" tabIndex={-1}>
-                Pegas
+              <h1 id="page-title" tabIndex={-1}>
+                {activeView === 'conversation'
+                  ? '对话'
+                  : activeView === 'tasks'
+                    ? '任务'
+                    : '设置'}
               </h1>
-              <span>{error ? '连接中断' : '在线，随时可以开始'}</span>
+              <span>
+                {activeView === 'conversation'
+                  ? error
+                    ? '连接中断'
+                    : '在线，随时可以开始'
+                  : activeView === 'tasks'
+                    ? `${String(activeTaskCount)} 件正在推进`
+                    : '模型、语音与路由偏好'}
+              </span>
             </div>
           </div>
           <div className="header-actions">
@@ -354,16 +381,13 @@ export function App() {
               />
             </button>
             <button
-              className="icon-button mobile-settings-button"
-              aria-label="打开设置"
-              title="设置"
-              onClick={openSettings}
+              className="workspace-toggle"
+              aria-label="打开工作区"
+              aria-expanded={workspaceOpen}
+              onClick={openWorkspace}
             >
-              <Settings2 aria-hidden="true" />
-            </button>
-            <button className="mobile-task-button" onClick={openTaskPanel}>
-              <ListTodo aria-hidden="true" />
-              任务
+              <PanelRightOpen aria-hidden="true" />
+              <span>工作区</span>
             </button>
           </div>
         </header>
@@ -380,192 +404,217 @@ export function App() {
           {unauthorized && <TokenForm onSubmit={saveToken} />}
         </div>
 
-        <section className="conversation-feed" aria-label="与 Pegas 的对话">
-          {loading ? (
-            <ConversationSkeleton />
-          ) : timeline.length === 0 ? (
-            <EmptyConversation
-              activeTaskCount={activeTaskCount}
-              onPrompt={usePrompt}
-            />
-          ) : (
-            timeline.map(item => {
-              if (item.kind === 'event') {
-                const task = snapshot.tasks.find(
-                  candidate => candidate.originEventId === item.value.id,
-                )
-                return (
-                  <div
-                    className="timeline-group"
-                    key={`event-${item.value.id}`}
-                  >
-                    <UserMessage event={item.value} />
-                    {task && (
-                      <TaskPulse
-                        task={task}
-                        runs={snapshot.runs.filter(
-                          run => run.taskId === task.id,
-                        )}
-                        onOpen={() => openTask(task.id)}
-                      />
-                    )}
-                  </div>
-                )
-              }
-              return (
-                <PegasMessage
-                  key={`message-${item.value.id}`}
-                  message={item.value}
-                  run={runForMessage(item.value, snapshot.runs)}
+        {activeView === 'conversation' ? (
+          <>
+            <section className="conversation-feed" aria-label="与 Pegas 的对话">
+              {loading ? (
+                <ConversationSkeleton />
+              ) : timeline.length === 0 ? (
+                <EmptyConversation
+                  activeTaskCount={activeTaskCount}
+                  onPrompt={usePrompt}
                 />
-              )
-            })
-          )}
-          <div ref={feedEnd} />
-        </section>
+              ) : (
+                timeline.map(item => {
+                  if (item.kind === 'event') {
+                    const task = snapshot.tasks.find(
+                      candidate => candidate.originEventId === item.value.id,
+                    )
+                    return (
+                      <div
+                        className="timeline-group"
+                        key={`event-${item.value.id}`}
+                      >
+                        <UserMessage event={item.value} />
+                        {task && (
+                          <TaskPulse
+                            task={task}
+                            runs={snapshot.runs.filter(
+                              run => run.taskId === task.id,
+                            )}
+                            onOpen={() => openTask(task.id)}
+                          />
+                        )}
+                      </div>
+                    )
+                  }
+                  return (
+                    <PegasMessage
+                      key={`message-${item.value.id}`}
+                      message={item.value}
+                      run={runForMessage(item.value, snapshot.runs)}
+                    />
+                  )
+                })
+              )}
+              <div ref={feedEnd} />
+            </section>
 
-        <div className="composer-dock">
-          <form
-            className="composer-wrap"
-            onSubmit={event => {
-              event.preventDefault()
-              void submitMessage()
-            }}
-          >
-            <label htmlFor="message-composer">告诉 Pegas 你想完成什么</label>
-            <textarea
-              ref={composer}
-              id="message-composer"
-              value={draft}
-              onChange={event => setDraft(event.target.value)}
-              onKeyDown={handleComposerKeyDown}
-              placeholder="提出一个问题、任务，或者刚想到的点子…"
-              rows={2}
-              name="message"
-              aria-describedby="composer-hint"
-              disabled={sending || unauthorized}
-            />
-            <div className="composer-footer">
-              <span className="composer-status" id="composer-hint">
-                {dictation.state === 'requesting' && '正在请求麦克风…'}
-                {dictation.state === 'recording' &&
-                  `正在听写 · ${formatDuration(dictation.elapsedSeconds)}`}
-                {dictation.state === 'transcribing' && '正在转成文字…'}
-                {dictation.state === 'idle' &&
-                  'Enter 发送 · Shift + Enter 换行'}
-              </span>
-              <div className="composer-actions">
-                <div className="dictation-control">
+            <div className="composer-dock">
+              {attachmentHelpOpen && (
+                <div className="attachment-help" role="status">
+                  <FileOutput aria-hidden="true" />
+                  <span>
+                    附件接入正在准备中。目前可以直接粘贴链接或文字内容。
+                  </span>
                   <button
                     type="button"
-                    className={`dictation-button ${
-                      dictation.state === 'recording' ? 'is-recording' : ''
-                    }`}
-                    aria-label={
-                      dictation.state === 'recording'
-                        ? '停止听写'
-                        : dictation.state === 'transcribing'
-                          ? '正在转写语音'
-                          : dictation.state === 'requesting'
-                            ? '正在请求麦克风'
-                            : '开始听写'
-                    }
-                    aria-pressed={dictation.state === 'recording'}
-                    onClick={dictation.toggle}
-                    disabled={
-                      sending ||
-                      unauthorized ||
-                      dictation.state === 'requesting' ||
-                      dictation.state === 'transcribing'
-                    }
+                    onClick={() => setAttachmentHelpOpen(false)}
+                    aria-label="关闭附件说明"
                   >
-                    {dictation.state === 'transcribing' ||
-                    dictation.state === 'requesting' ? (
-                      <span className="dictation-loader" aria-hidden="true" />
-                    ) : dictation.state === 'recording' ? (
-                      <Square aria-hidden="true" />
-                    ) : (
-                      <Mic aria-hidden="true" />
-                    )}
+                    <X aria-hidden="true" />
                   </button>
-                  <span className="dictation-tooltip" role="tooltip">
-                    {dictation.state === 'recording' ? '停止听写' : '听写'}
-                  </span>
                 </div>
-                <button
-                  type="submit"
-                  className="send-button"
-                  aria-label={sending ? '正在发送' : '发送给 Pegas'}
-                  disabled={
-                    !draft.trim() || sending || unauthorized || dictationBusy
-                  }
-                >
-                  {sending ? (
-                    <span className="send-loader" />
-                  ) : (
-                    <Send aria-hidden="true" />
-                  )}
-                </button>
+              )}
+              <form
+                className="composer-wrap"
+                onSubmit={event => {
+                  event.preventDefault()
+                  void submitMessage()
+                }}
+              >
+                <label htmlFor="message-composer">
+                  告诉 Pegas 你想完成什么
+                </label>
+                <textarea
+                  ref={composer}
+                  id="message-composer"
+                  value={draft}
+                  onChange={event => setDraft(event.target.value)}
+                  onKeyDown={handleComposerKeyDown}
+                  placeholder="提出一个问题、任务，或者刚想到的点子…"
+                  rows={2}
+                  name="message"
+                  aria-describedby="composer-hint"
+                  disabled={sending || unauthorized}
+                />
+                <div className="composer-footer">
+                  <span className="composer-status" id="composer-hint">
+                    {dictation.state === 'requesting' && '正在请求麦克风…'}
+                    {dictation.state === 'recording' &&
+                      `正在听写 · ${formatDuration(dictation.elapsedSeconds)}`}
+                    {dictation.state === 'transcribing' && '正在转成文字…'}
+                    {dictation.state === 'idle' &&
+                      'Enter 发送 · Shift + Enter 换行'}
+                  </span>
+                  <div className="composer-actions">
+                    <button
+                      type="button"
+                      className="attachment-button"
+                      aria-label="添加附件"
+                      aria-expanded={attachmentHelpOpen}
+                      onClick={() => setAttachmentHelpOpen(open => !open)}
+                      disabled={sending || unauthorized}
+                    >
+                      <Plus aria-hidden="true" />
+                    </button>
+                    <div className="dictation-control">
+                      <button
+                        type="button"
+                        className={`dictation-button ${
+                          dictation.state === 'recording' ? 'is-recording' : ''
+                        }`}
+                        aria-label={
+                          dictation.state === 'recording'
+                            ? '停止听写'
+                            : dictation.state === 'transcribing'
+                              ? '正在转写语音'
+                              : dictation.state === 'requesting'
+                                ? '正在请求麦克风'
+                                : '开始听写'
+                        }
+                        aria-pressed={dictation.state === 'recording'}
+                        onClick={dictation.toggle}
+                        disabled={
+                          sending ||
+                          unauthorized ||
+                          dictation.state === 'requesting' ||
+                          dictation.state === 'transcribing'
+                        }
+                      >
+                        {dictation.state === 'transcribing' ||
+                        dictation.state === 'requesting' ? (
+                          <span
+                            className="dictation-loader"
+                            aria-hidden="true"
+                          />
+                        ) : dictation.state === 'recording' ? (
+                          <Square aria-hidden="true" />
+                        ) : (
+                          <Mic aria-hidden="true" />
+                        )}
+                      </button>
+                      <span className="dictation-tooltip" role="tooltip">
+                        {dictation.state === 'recording' ? '停止听写' : '听写'}
+                      </span>
+                    </div>
+                    <button
+                      type="submit"
+                      className="send-button"
+                      aria-label={sending ? '正在发送' : '发送给 Pegas'}
+                      disabled={
+                        !draft.trim() ||
+                        sending ||
+                        unauthorized ||
+                        dictationBusy
+                      }
+                    >
+                      {sending ? (
+                        <span className="send-loader" />
+                      ) : (
+                        <Send aria-hidden="true" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+                {dictation.error && (
+                  <p className="dictation-error" role="alert">
+                    {dictation.error}
+                  </p>
+                )}
+              </form>
+              <div className="sr-only" aria-live="polite">
+                {sending && '正在发送消息'}
+                {dictation.state === 'recording' && '听写已开始'}
+                {dictation.state === 'transcribing' && '录音结束，正在转成文字'}
               </div>
             </div>
-            {dictation.error && (
-              <p className="dictation-error" role="alert">
-                {dictation.error}
-              </p>
-            )}
-          </form>
-          <div className="sr-only" aria-live="polite">
-            {sending && '正在发送消息'}
-            {dictation.state === 'recording' && '听写已开始'}
-            {dictation.state === 'transcribing' && '录音结束，正在转成文字'}
-          </div>
-        </div>
+          </>
+        ) : activeView === 'tasks' ? (
+          <TasksPage
+            tasks={snapshot.tasks}
+            runs={snapshot.runs}
+            onOpen={openTask}
+          />
+        ) : (
+          <SettingsPage api={api} />
+        )}
       </main>
 
-      {settingsOpen ? (
-        <SettingsPanel
-          open={settingsOpen}
-          api={api}
-          onClose={closeSettings}
-          compact={compact}
-        />
-      ) : (
-        <TaskPanel
-          open={taskPanelOpen}
-          tasks={snapshot.tasks}
-          runs={snapshot.runs}
-          selectedTask={selectedTask}
-          onOpen={openTask}
-          onBack={closeTask}
-          onClose={closeTaskPanel}
-          compact={compact}
-        />
-      )}
+      <WorkspacePanel
+        open={workspaceOpen}
+        selectedTask={selectedTask}
+        runs={
+          selectedTask
+            ? snapshot.runs.filter(run => run.taskId === selectedTask.id)
+            : []
+        }
+        onClose={closeWorkspace}
+        compact={compact}
+      />
     </div>
   )
 }
 
-function SettingsPanel({
-  open,
-  api,
-  onClose,
-  compact,
-}: {
-  open: boolean
-  api: SettingsClient
-  onClose: () => void
-  compact: boolean
-}) {
+function SettingsPage({ api }: { api: SettingsClient }) {
   const [settings, setSettings] = useState<RuntimeSettings>()
   const [capabilities, setCapabilities] = useState<SettingsCapabilities>()
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [saved, setSaved] = useState(false)
-  const panel = useRef<HTMLElement>(null)
 
   useEffect(() => {
-    if (!open) return
     let active = true
     setLoading(true)
     setError('')
@@ -586,23 +635,7 @@ function SettingsPanel({
     return () => {
       active = false
     }
-  }, [api, open])
-
-  useEffect(() => {
-    if (!compact || !open || !panel.current) return
-    const element = panel.current
-    const first = element.querySelector<HTMLElement>(
-      '[data-panel-initial-focus]',
-    )
-    window.requestAnimationFrame(() => first?.focus())
-    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key !== 'Escape') return
-      event.preventDefault()
-      onClose()
-    }
-    element.addEventListener('keydown', handleKeyDown)
-    return () => element.removeEventListener('keydown', handleKeyDown)
-  }, [compact, onClose, open])
+  }, [api])
 
   async function save(event: SyntheticEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
@@ -632,30 +665,34 @@ function SettingsPanel({
     setSaved(false)
     setSettings(current => (current ? { ...current, [key]: value } : current))
   }
-  if (compact && !open) return null
   return (
-    <aside
-      ref={panel}
-      className={`task-panel settings-panel${open ? ' is-open' : ''}`}
-      aria-label="设置"
-      aria-modal={compact ? true : undefined}
-      role={compact ? 'dialog' : undefined}
-    >
+    <section className="settings-page" aria-labelledby="runtime-settings-title">
       <header className="settings-header">
         <div>
-          <h2 id="runtime-settings-title">设置</h2>
-          <p>统一控制模型入口、输入处理与隐私边界</p>
+          <p className="page-eyebrow">SYSTEM PREFERENCES</p>
+          <h2 id="runtime-settings-title">让 Pegas 按你的方式工作</h2>
+          <p>模型凭证和权威配置仍保留在服务端，Web 只修改允许公开的偏好。</p>
         </div>
-        <button
-          className="panel-close settings-close"
-          type="button"
-          onClick={onClose}
-          aria-label="关闭设置"
-          data-panel-initial-focus
-        >
-          <X aria-hidden="true" />
-        </button>
       </header>
+
+      <section
+        className="voice-settings-card"
+        aria-labelledby="voice-settings-title"
+      >
+        <div className="settings-card-icon">
+          <Mic aria-hidden="true" />
+        </div>
+        <div>
+          <h3 id="voice-settings-title">语音输入</h3>
+          <p>在对话输入框中录音，转成可编辑文字后再由你确认发送。</p>
+        </div>
+        <span>
+          {'mediaDevices' in navigator &&
+          typeof navigator.mediaDevices.getUserMedia === 'function'
+            ? '浏览器可用'
+            : '浏览器不支持'}
+        </span>
+      </section>
 
       {loading ? (
         <div className="settings-loading" aria-label="正在读取设置">
@@ -811,14 +848,9 @@ function SettingsPanel({
         <div className="settings-error" role="alert">
           <CircleAlert aria-hidden="true" />
           <span>{error}</span>
-          {!settings && (
-            <button type="button" onClick={() => onClose()}>
-              返回
-            </button>
-          )}
         </div>
       )}
-    </aside>
+    </section>
   )
 }
 
@@ -1084,52 +1116,168 @@ function TaskPulse({
   )
 }
 
-function TaskPanel({
-  open,
+const taskColumns: {
+  id: string
+  title: string
+  description: string
+  statuses: TaskStatus[]
+}[] = [
+  {
+    id: 'planned',
+    title: '待安排',
+    description: '已接收，正在形成计划',
+    statuses: ['inbox', 'planning'],
+  },
+  {
+    id: 'active',
+    title: '进行中',
+    description: 'Pegas 正在执行',
+    statuses: ['running', 'paused'],
+  },
+  {
+    id: 'waiting',
+    title: '等待中',
+    description: '等待你的反馈或确认',
+    statuses: ['waiting'],
+  },
+  {
+    id: 'finished',
+    title: '已结束',
+    description: '已完成或停止的工作',
+    statuses: ['completed', 'failed', 'cancelled'],
+  },
+]
+
+function TasksPage({
   tasks,
   runs,
-  selectedTask,
   onOpen,
-  onBack,
+}: {
+  tasks: Task[]
+  runs: Run[]
+  onOpen: (taskId: string) => void
+}) {
+  return (
+    <section className="tasks-page" aria-labelledby="task-board-title">
+      <header className="tasks-intro">
+        <div>
+          <p className="page-eyebrow">LIVE WORK QUEUE</p>
+          <h2 id="task-board-title">任务现场一目了然</h2>
+          <p>这里不改变任务状态，只呈现 Pegas 服务端记录的真实进度。</p>
+        </div>
+        <dl className="task-summary">
+          <div>
+            <dt>进行中</dt>
+            <dd>
+              {String(tasks.filter(task => isActiveTask(task.status)).length)}
+            </dd>
+          </div>
+          <div>
+            <dt>已完成</dt>
+            <dd>
+              {String(tasks.filter(task => task.status === 'completed').length)}
+            </dd>
+          </div>
+        </dl>
+      </header>
+
+      <div className="task-board" aria-label="按状态分组的任务">
+        {taskColumns.map(column => {
+          const columnTasks = tasks.filter(task =>
+            column.statuses.includes(task.status),
+          )
+          return (
+            <section
+              className="task-column"
+              key={column.id}
+              aria-labelledby={`column-${column.id}`}
+            >
+              <header>
+                <div>
+                  <h3 id={`column-${column.id}`}>{column.title}</h3>
+                  <span>{columnTasks.length}</span>
+                </div>
+                <p>{column.description}</p>
+              </header>
+              <div className="task-column-list">
+                {columnTasks.length === 0 ? (
+                  <div className="task-column-empty">
+                    <Check aria-hidden="true" />
+                    <span>暂无任务</span>
+                  </div>
+                ) : (
+                  columnTasks.map(task => {
+                    const taskRuns = runs.filter(run => run.taskId === task.id)
+                    return (
+                      <button
+                        className="task-board-card"
+                        key={task.id}
+                        onClick={() => onOpen(task.id)}
+                        aria-label={`打开任务现场：${task.title}`}
+                      >
+                        <span className={`task-state status-${task.status}`}>
+                          <span className="status-dot" />
+                          {statusCopy[task.status]}
+                        </span>
+                        <strong>{task.title}</strong>
+                        <p>{task.goal}</p>
+                        <span className="task-card-meta">
+                          <span>
+                            {taskRuns.length > 0
+                              ? `${String(taskRuns.length)} 次执行`
+                              : '尚无执行记录'}
+                          </span>
+                          <time dateTime={task.updatedAt}>
+                            {formatRelativeTime(task.updatedAt)}
+                          </time>
+                        </span>
+                      </button>
+                    )
+                  })
+                )}
+              </div>
+            </section>
+          )
+        })}
+      </div>
+    </section>
+  )
+}
+
+function WorkspacePanel({
+  open,
+  selectedTask,
+  runs,
   onClose,
   compact,
 }: {
   open: boolean
-  tasks: Task[]
-  runs: Run[]
   selectedTask?: Task
-  onOpen: (taskId: string) => void
-  onBack: () => void
+  runs: Run[]
   onClose: () => void
   compact: boolean
 }) {
-  const [filter, setFilter] = useState<'active' | 'completed'>('active')
   const panel = useRef<HTMLElement>(null)
 
   useEffect(() => {
-    if (!compact || !open || !panel.current) return
+    if (!open || !panel.current) return
     const element = panel.current
-    const focusable = () =>
-      Array.from(
-        element.querySelectorAll<HTMLElement>(
-          'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-        ),
-      )
-    const initial = element.querySelector<HTMLElement>(
-      '[data-panel-initial-focus]',
-    )
-    window.requestAnimationFrame(() => initial?.focus())
-
+    const initial = element.querySelector<HTMLElement>('[data-workspace-focus]')
+    if (compact) window.requestAnimationFrame(() => initial?.focus())
     const handleKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault()
         onClose()
         return
       }
-      if (event.key !== 'Tab') return
-      const candidates = focusable()
-      const first = candidates[0]
-      const last = candidates.at(-1)
+      if (!compact || event.key !== 'Tab') return
+      const focusable = Array.from(
+        element.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      )
+      const first = focusable[0]
+      const last = focusable.at(-1)
       if (!first || !last) return
       if (event.shiftKey && document.activeElement === first) {
         event.preventDefault()
@@ -1139,98 +1287,53 @@ function TaskPanel({
         first.focus()
       }
     }
-
-    element.addEventListener('keydown', handleKeyDown)
-    return () => element.removeEventListener('keydown', handleKeyDown)
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
   }, [compact, onClose, open])
 
-  if (compact && !open) return null
-  const visibleTasks = tasks.filter(task =>
-    filter === 'active'
-      ? isActiveTask(task.status)
-      : !isActiveTask(task.status),
-  )
-
+  if (!open) return null
   return (
     <aside
       ref={panel}
-      className={`task-panel${open ? ' is-open' : ''}`}
-      aria-label="任务工作台"
+      className="workspace-panel"
+      aria-label="工作区"
       aria-modal={compact ? true : undefined}
-      role={compact ? 'dialog' : undefined}
+      role={compact ? 'dialog' : 'complementary'}
     >
       {selectedTask ? (
-        <TaskDetail
-          task={selectedTask}
-          runs={runs.filter(run => run.taskId === selectedTask.id)}
-          onBack={onBack}
-          onClose={onClose}
-        />
+        <TaskDetail task={selectedTask} runs={runs} onClose={onClose} />
       ) : (
-        <>
-          <header className="panel-header">
+        <div className="workspace-empty">
+          <header>
             <div>
-              <h2>任务</h2>
-              <p>
-                {tasks.filter(task => isActiveTask(task.status)).length}{' '}
-                件正在推进
-              </p>
+              <span>WORKSPACE</span>
+              <h2>工作区</h2>
             </div>
             <button
               className="panel-close"
               onClick={onClose}
-              aria-label="关闭任务面板"
-              data-panel-initial-focus
+              aria-label="关闭工作区"
+              data-workspace-focus
             >
               <X aria-hidden="true" />
             </button>
           </header>
-          <div className="task-filters" role="group" aria-label="筛选任务">
-            <button
-              className={filter === 'active' ? 'is-active' : ''}
-              onClick={() => setFilter('active')}
-            >
-              进行中
-            </button>
-            <button
-              className={filter === 'completed' ? 'is-active' : ''}
-              onClick={() => setFilter('completed')}
-            >
-              已结束
-            </button>
+          <div className="workspace-empty-art">
+            <FileOutput aria-hidden="true" />
           </div>
-          <div className="task-list">
-            {visibleTasks.length === 0 ? (
-              <div className="empty-task-list">
-                <Check aria-hidden="true" />
-                <strong>
-                  {filter === 'active'
-                    ? '当前没有进行中的任务'
-                    : '还没有已结束的任务'}
-                </strong>
-                <span>从对话中交给 Pegas 一件事情，它会出现在这里。</span>
-              </div>
-            ) : (
-              visibleTasks.map(task => (
-                <button
-                  className="task-list-item"
-                  key={task.id}
-                  onClick={() => onOpen(task.id)}
-                >
-                  <span className={`status-dot status-${task.status}`} />
-                  <span className="task-list-copy">
-                    <strong>{task.title}</strong>
-                    <span>
-                      {statusCopy[task.status]} ·{' '}
-                      {formatRelativeTime(task.updatedAt)}
-                    </span>
-                  </span>
-                  <ChevronRight aria-hidden="true" />
-                </button>
-              ))
-            )}
+          <h3>结果会在这里打开</h3>
+          <p>
+            选择一个任务查看现场；后续生成的文档、图片和侧边对话也会留在这个可关闭的空间里。
+          </p>
+          <div className="workspace-capabilities">
+            <span>
+              <FileOutput aria-hidden="true" /> 内容预览
+            </span>
+            <span>
+              <MessageSquareText aria-hidden="true" /> 侧边对话
+            </span>
           </div>
-        </>
+        </div>
       )}
     </aside>
   )
@@ -1239,12 +1342,10 @@ function TaskPanel({
 function TaskDetail({
   task,
   runs,
-  onBack,
   onClose,
 }: {
   task: Task
   runs: Run[]
-  onBack: () => void
   onClose: () => void
 }) {
   const latestRun = runs.at(-1)
@@ -1252,19 +1353,15 @@ function TaskDetail({
   return (
     <div className="task-detail">
       <header className="detail-header">
-        <button
-          className="icon-button"
-          onClick={onBack}
-          aria-label="返回任务列表"
-          data-panel-initial-focus
-        >
-          <ArrowLeft aria-hidden="true" />
-        </button>
-        <span>任务详情</span>
+        <div>
+          <span>WORKSPACE</span>
+          <strong>任务现场</strong>
+        </div>
         <button
           className="panel-close"
           onClick={onClose}
-          aria-label="关闭任务面板"
+          aria-label="关闭工作区"
+          data-workspace-focus
         >
           <X aria-hidden="true" />
         </button>

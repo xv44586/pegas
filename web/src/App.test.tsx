@@ -16,6 +16,7 @@ afterEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
   sessionStorage.clear()
+  window.history.replaceState({}, '', '/')
 })
 
 describe('Pegas web app', () => {
@@ -73,7 +74,13 @@ describe('Pegas web app', () => {
     fireEvent.click(screen.getByRole('button', { name: '设置' }))
 
     expect(
-      await screen.findByRole('heading', { name: '设置', level: 2 }),
+      await screen.findByRole('heading', {
+        name: '让 Pegas 按你的方式工作',
+        level: 2,
+      }),
+    ).toBeTruthy()
+    expect(
+      screen.getByRole('heading', { name: '语音输入', level: 3 }),
     ).toBeTruthy()
     expect(
       screen.getByRole('radio', { name: /OpenAI-compatible/ }),
@@ -122,22 +129,78 @@ describe('Pegas web app', () => {
     expect(
       await screen.findByRole('heading', { name: '现在想先推进什么？' }),
     ).toBeTruthy()
-    expect(
-      screen.getByRole('heading', { name: 'Pegas', level: 1 }),
-    ).toBeTruthy()
+    expect(screen.getByRole('heading', { name: '对话', level: 1 })).toBeTruthy()
     expect(screen.getByLabelText('告诉 Pegas 你想完成什么')).toBeTruthy()
     expect(
       screen.getByText('高风险动作会先确认', { exact: false }),
     ).toBeTruthy()
-    expect(
-      screen.getByRole('complementary', { name: '任务工作台' }),
-    ).toBeTruthy()
+    expect(screen.queryByRole('complementary', { name: '工作区' })).toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: /研究并比较/ }))
     expect(screen.getByLabelText('告诉 Pegas 你想完成什么')).toHaveProperty(
       'value',
       '帮我研究并比较下面这个问题，最后给我一个建议：',
     )
+  })
+
+  it('shows tasks as a board and opens the selected task in the workspace', async () => {
+    const tasks = [
+      {
+        id: 'task-running',
+        userId: 'owner',
+        originEventId: 'event-running',
+        title: '整理发布说明',
+        goal: '生成一份可审阅的发布说明',
+        status: 'running',
+        createdAt: '2026-11-18T08:00:00.000Z',
+        updatedAt: '2026-11-18T09:00:00.000Z',
+      },
+      {
+        id: 'task-done',
+        userId: 'owner',
+        originEventId: 'event-done',
+        title: '检查测试结果',
+        goal: '确认回归测试通过',
+        status: 'completed',
+        createdAt: '2026-11-17T08:00:00.000Z',
+        updatedAt: '2026-11-17T09:00:00.000Z',
+      },
+    ]
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const path =
+          input instanceof Request
+            ? input.url
+            : input instanceof URL
+              ? input.href
+              : input
+        if (path.startsWith('/v1/events'))
+          return Promise.resolve(Response.json({ events: [] }))
+        if (path.startsWith('/v1/tasks'))
+          return Promise.resolve(Response.json({ tasks }))
+        if (path.startsWith('/v1/runs'))
+          return Promise.resolve(Response.json({ runs: [] }))
+        return Promise.resolve(Response.json({ messages: [] }))
+      }),
+    )
+
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: /任务/ }))
+
+    expect(
+      await screen.findByRole('heading', { name: '任务现场一目了然' }),
+    ).toBeTruthy()
+    expect(screen.getByRole('heading', { name: '进行中' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: '已结束' })).toBeTruthy()
+
+    fireEvent.click(
+      screen.getByRole('button', { name: '打开任务现场：整理发布说明' }),
+    )
+    expect(screen.getByRole('complementary', { name: '工作区' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: '整理发布说明' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '关闭工作区' }))
+    expect(screen.queryByRole('complementary', { name: '工作区' })).toBeNull()
   })
 
   it('formats recent updates in conversational language', () => {
