@@ -426,7 +426,18 @@ describe('PegasStore', () => {
         const versions = db
           .prepare('SELECT version FROM schema_migrations ORDER BY version')
           .all() as { version: number }[]
-        expect(versions.map(row => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7])
+        expect(versions.map(row => row.version)).toEqual([
+          1, 2, 3, 4, 5, 6, 7, 8,
+        ])
+        expect(
+          (
+            db
+              .prepare(
+                "SELECT name FROM sqlite_master WHERE name = 'speech_connections'",
+              )
+              .get() as { name: string } | undefined
+          )?.name,
+        ).toBe('speech_connections')
         expect(
           (
             db.prepare('PRAGMA table_info(runtime_settings)').all() as {

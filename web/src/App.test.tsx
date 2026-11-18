@@ -510,6 +510,94 @@ describe('Pegas web app', () => {
     expect(formatRelativeTime('2026-11-16T09:58:00.000Z', now)).toBe('2分钟前')
   })
 
+  it('opens voice settings without requesting the microphone when speech is unconfigured', async () => {
+    const getUserMedia = vi.fn()
+    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } })
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const path =
+        input instanceof Request
+          ? input.url
+          : input instanceof URL
+            ? input.href
+            : input
+      if (path === '/v1/settings')
+        return Promise.resolve(
+          Response.json({
+            settings: {
+              revision: 1,
+              routerMode: 'rules',
+              modelProvider: 'openai',
+              modelName: 'gpt-test',
+              agentModelMode: 'profile',
+              agentModelProvider: '',
+              agentModelName: '',
+              privacyMode: 'disabled',
+              rewriteMode: 'disabled',
+              updatedAt: '2026-11-18T00:00:00.000Z',
+            },
+            capabilities: {
+              providers: [
+                {
+                  id: 'openai',
+                  name: 'OpenAI',
+                  category: 'vendor',
+                  protocol: 'openai-chat',
+                  baseUrl: 'https://api.openai.com/v1',
+                  defaultModel: 'gpt-test',
+                  description: '',
+                  requiresApiKey: true,
+                  hasApiKey: true,
+                  available: true,
+                },
+              ],
+              privacyAvailable: false,
+            },
+            speech: {
+              provider: 'disabled',
+              baseUrl: '',
+              model: 'asr-test',
+              hasApiKey: false,
+            },
+          }),
+        )
+      if (path === '/v1/settings/agent-models')
+        return Promise.resolve(
+          Response.json({
+            defaultProvider: 'magpie',
+            defaultModel: 'agent',
+            models: [],
+          }),
+        )
+      if (path.startsWith('/v1/events'))
+        return Promise.resolve(Response.json({ events: [] }))
+      if (path.startsWith('/v1/tasks'))
+        return Promise.resolve(Response.json({ tasks: [] }))
+      if (path.startsWith('/v1/runs'))
+        return Promise.resolve(Response.json({ runs: [] }))
+      return Promise.resolve(Response.json({ messages: [] }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '开始听写' }))
+    expect(
+      (await screen.findByRole('tab', { name: '语音与输入' })).getAttribute(
+        'aria-selected',
+      ),
+    ).toBe('true')
+    expect(screen.getByText('未启用')).toBeTruthy()
+    expect(getUserMedia).not.toHaveBeenCalled()
+    expect(
+      fetchMock.mock.calls.some(([path]) =>
+        (path instanceof Request
+          ? path.url
+          : path instanceof URL
+            ? path.href
+            : path
+        ).startsWith('/v1/voice/transcriptions'),
+      ),
+    ).toBe(false)
+  })
+
   it('turns recorded speech into an editable draft without sending it', async () => {
     const stopTrack = vi.fn()
     const getUserMedia = vi.fn(() =>

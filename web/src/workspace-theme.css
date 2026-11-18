@@ -1063,6 +1063,38 @@ textarea:focus-visible {
   margin: 0 0 28px;
   padding: 18px;
 }
+.settings-page .voice-provider-choice {
+  margin-bottom: 20px;
+}
+.settings-page .speech-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 16px;
+  padding: 4px 0 22px;
+}
+.settings-page .speech-fields .settings-text-field:first-child {
+  grid-column: 1 / -1;
+}
+.settings-page .speech-fields .settings-text-field {
+  margin-top: 14px;
+}
+.settings-page .speech-clear-key {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.settings-page .speech-browser-status {
+  margin: 8px 0 26px;
+  color: var(--muted);
+  font-size: 12px;
+}
+@media (max-width: 640px) {
+  .settings-page .speech-fields {
+    grid-template-columns: 1fr;
+  }
+}
 @media (max-width: 560px) {
   .settings-page {
     padding-top: 16px;

@@ -24,6 +24,11 @@ import {
   type ModelProviderId,
   type ModelProviderProtocol,
 } from '../model/provider-catalog.js'
+import {
+  defaultSpeechConnection,
+  type SpeechConnection,
+  type SpeechSettingsSummary,
+} from '../speech/speech-settings.js'
 
 const schema = `
 PRAGMA journal_mode = WAL;
@@ -243,6 +248,17 @@ WHEN NEW.status NOT IN ('backlog','unstarted','started','completed','cancelled')
 BEGIN SELECT RAISE(ABORT, 'Invalid task status'); END;
 `
 
+const migration8 = `
+CREATE TABLE speech_connections (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  provider TEXT NOT NULL CHECK (provider IN ('disabled', 'openai-compatible')),
+  base_url TEXT NOT NULL,
+  model TEXT NOT NULL,
+  api_key_ciphertext TEXT,
+  updated_at TEXT NOT NULL
+);
+`
+
 interface InboxRow {
   id: string
   user_id: string
@@ -339,6 +355,10 @@ export interface ModelProviderConnectionWrite {
   clearApiKey: boolean
 }
 
+export interface SpeechConnectionWrite extends SpeechConnection {
+  clearApiKey?: boolean
+}
+
 export class SettingsRevisionConflictError extends Error {
   constructor() {
     super('设置已在其他设备更新，请刷新后重试')
@@ -369,6 +389,7 @@ export class PegasStore {
     this.#migrate(5, migration5)
     this.#migrate(6, migration6)
     this.#migrate(7, migration7)
+    this.#migrate(8, migration8)
   }
 
   // An earlier UI candidate used v5 for task retries before provider v5
@@ -476,6 +497,54 @@ export class PegasStore {
     return toRuntimeSettings(row)
   }
 
+  initializeSpeechConnection(connection: SpeechConnection): void {
+    this.#database
+      .prepare(
+        `INSERT OR IGNORE INTO speech_connections
+      (id, provider, base_url, model, api_key_ciphertext, updated_at)
+      VALUES (1, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        connection.provider,
+        connection.baseUrl,
+        connection.model,
+        connection.apiKeyCiphertext ?? null,
+        this.#clock.now().toISOString(),
+      )
+  }
+
+  getSpeechConnection(): SpeechConnection {
+    const row = this.#database
+      .prepare('SELECT * FROM speech_connections WHERE id = 1')
+      .get() as
+      | {
+          provider: SpeechConnection['provider']
+          base_url: string
+          model: string
+          api_key_ciphertext: string | null
+        }
+      | undefined
+    if (!row) return defaultSpeechConnection
+    return {
+      provider: row.provider,
+      baseUrl: row.base_url,
+      model: row.model,
+      ...(row.api_key_ciphertext
+        ? { apiKeyCiphertext: row.api_key_ciphertext }
+        : {}),
+    }
+  }
+
+  getSpeechSettings(): SpeechSettingsSummary {
+    const connection = this.getSpeechConnection()
+    return {
+      provider: connection.provider,
+      baseUrl: connection.baseUrl,
+      model: connection.model,
+      hasApiKey: Boolean(connection.apiKeyCiphertext),
+    }
+  }
+
   updateRuntimeSettings(
     expectedRevision: number,
     settings: RuntimeSettingsSelection,
@@ -560,6 +629,7 @@ export class PegasStore {
     expectedRevision: number,
     settings: RuntimeSettingsSelection,
     connection: ModelProviderConnectionWrite,
+    speech?: SpeechConnectionWrite,
   ): RuntimeSettings {
     this.#database.exec('BEGIN IMMEDIATE')
     try {
@@ -594,6 +664,25 @@ export class PegasStore {
           apiKeyCiphertext,
           now,
         )
+      if (speech) {
+        const existingSpeech = this.getSpeechConnection()
+        const speechKey =
+          speech.apiKeyCiphertext ??
+          (speech.clearApiKey
+            ? null
+            : (existingSpeech.apiKeyCiphertext ?? null))
+        this.#database
+          .prepare(
+            `INSERT INTO speech_connections
+          (id, provider, base_url, model, api_key_ciphertext, updated_at)
+          VALUES (1, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET provider = excluded.provider,
+            base_url = excluded.base_url, model = excluded.model,
+            api_key_ciphertext = excluded.api_key_ciphertext,
+            updated_at = excluded.updated_at`,
+          )
+          .run(speech.provider, speech.baseUrl, speech.model, speechKey, now)
+      }
       const result = this.#database
         .prepare(
           `UPDATE runtime_settings

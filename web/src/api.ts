@@ -7,6 +7,7 @@ import type {
   ModelProviderDraft,
   RuntimeSettings,
   SettingsResponse,
+  SpeechSettingsDraft,
   Snapshot,
   Task,
 } from './types'
@@ -106,6 +107,7 @@ export class PegasApi {
   async saveSettings(
     settings: RuntimeSettings,
     provider: ModelProviderDraft,
+    speech?: SpeechSettingsDraft,
   ): Promise<SettingsResponse> {
     const response = await fetch('/v1/settings', {
       method: 'PUT',
@@ -121,6 +123,7 @@ export class PegasApi {
         privacyMode: settings.privacyMode,
         rewriteMode: settings.rewriteMode,
         provider,
+        ...(speech ? { speech } : {}),
       }),
     })
     if (!response.ok) await throwResponse(response)

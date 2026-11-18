@@ -477,4 +477,120 @@ describe('control plane', () => {
       error: 'speech_unavailable',
     })
   })
+
+  it('saves a speech connection and uses it for the next transcription without exposing its key', async () => {
+    let upstreamAuthorization = ''
+    const upstream = createServer((request, response) => {
+      upstreamAuthorization = request.headers.authorization ?? ''
+      request.resume()
+      response.setHeader('content-type', 'application/json')
+      response.end(JSON.stringify({ text: '语音设置已生效' }))
+    })
+    await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve))
+    const upstreamPort = (upstream.address() as AddressInfo).port
+    const store = new PegasStore(':memory:')
+    store.initializeRuntimeSettings({
+      routerMode: 'rules',
+      modelProvider: 'openai',
+      modelName: 'gpt-test',
+      agentModelMode: 'profile',
+      agentModelProvider: '',
+      agentModelName: '',
+      privacyMode: 'disabled',
+      rewriteMode: 'disabled',
+    })
+    const vault = new ModelCredentialVault(Buffer.alloc(32, 5))
+    const server = createControlPlane({
+      store,
+      modelCredentialVault: vault,
+      settingsCapabilities: settingsCapabilities(loadConfig()),
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    cleanups.push(
+      () => new Promise<void>(resolve => server.close(() => resolve())),
+      () => new Promise<void>(resolve => upstream.close(() => resolve())),
+      () => Promise.resolve(store.close()),
+    )
+    const baseUrl = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+    const before = await fetch(`${baseUrl}/v1/voice/transcriptions`, {
+      method: 'POST',
+      headers: { 'content-type': 'audio/webm' },
+      body: Buffer.from('audio'),
+    })
+    expect(before.status).toBe(503)
+
+    const updateBody = {
+      expectedRevision: 1,
+      routerMode: 'rules',
+      modelProvider: 'openai',
+      modelName: 'gpt-test',
+      agentModelMode: 'profile',
+      agentModelProvider: '',
+      agentModelName: '',
+      privacyMode: 'disabled',
+      rewriteMode: 'disabled',
+      speech: {
+        provider: 'openai-compatible',
+        baseUrl: `http://127.0.0.1:${String(upstreamPort)}/v1`,
+        model: 'asr-test',
+        apiKey: 'fixture-key',
+        clearApiKey: false,
+      },
+    }
+    const saved = await fetch(`${baseUrl}/v1/settings`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(updateBody),
+    })
+    expect(saved.status).toBe(200)
+    const savedText = await saved.text()
+    expect(savedText).not.toContain('fixture-key')
+    expect(JSON.parse(savedText)).toMatchObject({
+      speech: {
+        provider: 'openai-compatible',
+        model: 'asr-test',
+        hasApiKey: true,
+      },
+    })
+    const storedKey = store.getSpeechConnection().apiKeyCiphertext
+    expect(storedKey).toBeDefined()
+    expect(storedKey).not.toBe('fixture-key')
+    if (!storedKey) throw new Error('Speech key was not stored')
+    expect(vault.decrypt(storedKey)).toBe('fixture-key')
+    store.initializeSpeechConnection({
+      provider: 'disabled',
+      baseUrl: '',
+      model: 'other',
+    })
+    expect(store.getSpeechSettings().model).toBe('asr-test')
+    const stale = await fetch(`${baseUrl}/v1/settings`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ...updateBody,
+        speech: {
+          ...updateBody.speech,
+          provider: 'disabled',
+          clearApiKey: true,
+        },
+      }),
+    })
+    expect(stale.status).toBe(409)
+    expect(store.getSpeechSettings()).toMatchObject({
+      provider: 'openai-compatible',
+      hasApiKey: true,
+    })
+
+    const transcript = await fetch(`${baseUrl}/v1/voice/transcriptions`, {
+      method: 'POST',
+      headers: { 'content-type': 'audio/webm' },
+      body: Buffer.from('audio'),
+    })
+    expect(transcript.status).toBe(200)
+    expect(await transcript.json()).toMatchObject({
+      transcript: { text: '语音设置已生效' },
+      model: 'asr-test',
+    })
+    expect(upstreamAuthorization).toBe('Bearer fixture-key')
+  })
 })
