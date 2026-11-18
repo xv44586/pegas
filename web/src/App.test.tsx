@@ -74,11 +74,13 @@ describe('Pegas web app', () => {
     fireEvent.click(screen.getByRole('button', { name: '设置' }))
 
     expect(
-      await screen.findByRole('heading', {
-        name: '偏好设置',
-        level: 2,
-      }),
+      await screen.findByRole('heading', { name: '设置', level: 1 }),
     ).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: '偏好设置' })).toBeNull()
+    expect(screen.queryByText('模型、语音与路由偏好')).toBeNull()
+    expect(
+      screen.queryByText('选择模型，调整 Pegas 理解和处理任务的方式。'),
+    ).toBeNull()
     expect(screen.queryByRole('heading', { name: '语音输入' })).toBeNull()
     expect(screen.queryByRole('button', { name: '刷新' })).toBeNull()
     expect(screen.queryByRole('button', { name: '打开工作区' })).toBeNull()

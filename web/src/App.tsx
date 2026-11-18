@@ -360,15 +360,15 @@ export function App() {
                     ? '任务'
                     : '设置'}
               </h1>
-              <span>
-                {activeView === 'conversation'
-                  ? error
-                    ? '连接中断'
-                    : '在线，随时可以开始'
-                  : activeView === 'tasks'
-                    ? `${String(activeTaskCount)} 件正在推进`
-                    : '模型、语音与路由偏好'}
-              </span>
+              {activeView !== 'settings' && (
+                <span>
+                  {activeView === 'conversation'
+                    ? error
+                      ? '连接中断'
+                      : '在线，随时可以开始'
+                    : `${String(activeTaskCount)} 件正在推进`}
+                </span>
+              )}
             </div>
           </div>
           {activeView !== 'settings' && (
@@ -692,15 +692,7 @@ function SettingsPage({ api }: { api: SettingsClient }) {
     setSettings(current => (current ? { ...current, [key]: value } : current))
   }
   return (
-    <section className="settings-page" aria-labelledby="runtime-settings-title">
-      <header className="settings-header">
-        <div>
-          <p className="page-eyebrow">SYSTEM PREFERENCES</p>
-          <h2 id="runtime-settings-title">偏好设置</h2>
-          <p>选择模型，调整 Pegas 理解和处理任务的方式。</p>
-        </div>
-      </header>
-
+    <section className="settings-page" aria-labelledby="page-title">
       {loading ? (
         <div className="settings-loading" aria-label="正在读取设置">
           <span />
@@ -710,7 +702,7 @@ function SettingsPage({ api }: { api: SettingsClient }) {
       ) : settings && capabilities ? (
         <form
           className="settings-form"
-          aria-labelledby="runtime-settings-title"
+          aria-label="设置选项"
           onSubmit={event => void save(event)}
         >
           <div className="settings-tabs" role="tablist" aria-label="设置分类">

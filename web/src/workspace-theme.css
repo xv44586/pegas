@@ -715,20 +715,9 @@ textarea:focus-visible {
 .detail-scroll {
   height: calc(100dvh - 60px);
 }
-.settings-header h2 {
-  font-size: 22px;
-  font-weight: 550;
-  letter-spacing: -0.025em;
-}
-.settings-header .page-eyebrow {
-  display: none;
-}
 .settings-page {
   background: white;
-}
-.settings-page .settings-header > div > p:last-child {
-  color: #7b8390;
-  font-size: 12px;
+  padding-top: 26px;
 }
 .voice-settings-card,
 .settings-page .settings-form {
@@ -761,12 +750,6 @@ textarea:focus-visible {
   border-radius: 5px;
 }
 
-.settings-page .settings-header {
-  min-height: auto;
-  padding: 0 0 28px;
-  background: transparent;
-  border: 0;
-}
 .settings-page .settings-form {
   display: block;
   max-width: 760px;
@@ -841,6 +824,9 @@ textarea:focus-visible {
   padding: 18px;
 }
 @media (max-width: 560px) {
+  .settings-page {
+    padding-top: 16px;
+  }
   .settings-tabs {
     gap: 20px;
   }
