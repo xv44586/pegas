@@ -511,15 +511,48 @@ describe('Pegas web app', () => {
   })
 
   it('opens voice settings without requesting the microphone when speech is unconfigured', async () => {
-    const getUserMedia = vi.fn()
+    const stopTrack = vi.fn()
+    const getUserMedia = vi.fn(() =>
+      Promise.resolve({
+        getTracks: () => [{ stop: stopTrack }],
+      } as unknown as MediaStream),
+    )
     vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } })
-    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+    class TestMediaRecorder {
+      static isTypeSupported(): boolean {
+        return true
+      }
+      readonly mimeType = 'audio/webm'
+      state = 'inactive'
+      ondataavailable: ((event: BlobEvent) => void) | null = null
+      onerror: (() => void) | null = null
+      onstop: (() => void) | null = null
+      start(): void {
+        this.state = 'recording'
+      }
+      stop(): void {
+        this.state = 'inactive'
+        this.ondataavailable?.({
+          data: new Blob(['sample'], { type: this.mimeType }),
+        } as BlobEvent)
+        this.onstop?.()
+      }
+    }
+    vi.stubGlobal('MediaRecorder', TestMediaRecorder)
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const path =
         input instanceof Request
           ? input.url
           : input instanceof URL
             ? input.href
             : input
+      if (path === '/v1/settings/speech/test' && init?.method === 'POST')
+        return Promise.resolve(
+          Response.json({
+            transcript: { text: '这是测试转写' },
+            latencyMs: 1200,
+          }),
+        )
       if (path === '/v1/settings')
         return Promise.resolve(
           Response.json({
@@ -594,6 +627,34 @@ describe('Pegas web app', () => {
             ? path.href
             : path
         ).startsWith('/v1/voice/transcriptions'),
+      ),
+    ).toBe(false)
+    fireEvent.click(screen.getByRole('radio', { name: /OpenAI 兼容转写服务/ }))
+    fireEvent.change(screen.getByLabelText(/服务地址/), {
+      target: { value: 'http://127.0.0.1:18081/v1' },
+    })
+    fireEvent.change(screen.getByLabelText(/API key（可选）/), {
+      target: { value: 'probe-credential' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '录一段测试' }))
+    fireEvent.click(await screen.findByRole('button', { name: /结束并识别/ }))
+    expect(await screen.findByText('这是测试转写')).toBeTruthy()
+    expect(getUserMedia).toHaveBeenCalledOnce()
+    expect(stopTrack).toHaveBeenCalledOnce()
+    const probe = fetchMock.mock.calls.find(
+      ([path]) => path === '/v1/settings/speech/test',
+    )
+    expect(probe?.[1]?.body).toBeInstanceOf(FormData)
+    const probeSpeech = JSON.parse(
+      (probe?.[1]?.body as FormData).get('speech') as string,
+    ) as Record<string, unknown>
+    expect(probeSpeech).toMatchObject({
+      baseUrl: 'http://127.0.0.1:18081/v1',
+      apiKey: 'probe-credential',
+    })
+    expect(
+      fetchMock.mock.calls.some(
+        ([path, init]) => path === '/v1/settings' && init?.method === 'PUT',
       ),
     ).toBe(false)
   })

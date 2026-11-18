@@ -1090,6 +1090,63 @@ textarea:focus-visible {
   color: var(--muted);
   font-size: 12px;
 }
+.settings-page .speech-test-panel {
+  display: grid;
+  gap: 12px;
+  margin: 2px 0 20px;
+  padding: 18px;
+  border: 1px solid #e2e6eb;
+  border-radius: 10px;
+  background: #fafbfc;
+}
+.speech-test-panel strong {
+  font-size: 13px;
+}
+.speech-test-panel p {
+  margin: 5px 0 0;
+  color: #68717d;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.settings-page .speech-test-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: fit-content;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid #d7dce4;
+  border-radius: 7px;
+  background: #fff;
+  color: #303a49;
+  font-size: 12px;
+  font-weight: 650;
+}
+.speech-test-button svg {
+  width: 15px;
+  height: 15px;
+}
+.settings-page .speech-test-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.settings-page .speech-test-result {
+  padding: 12px;
+  border: 1px solid #d5e8dc;
+  border-radius: 7px;
+  background: #f5fbf7;
+}
+.speech-test-result strong {
+  color: #287653;
+}
+.speech-test-result p {
+  color: #27332d;
+  font-size: 13px;
+}
+.speech-test-error {
+  color: #a84242 !important;
+}
 @media (max-width: 640px) {
   .settings-page .speech-fields {
     grid-template-columns: 1fr;

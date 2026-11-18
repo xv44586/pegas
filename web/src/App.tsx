@@ -74,6 +74,13 @@ interface SettingsClient {
     provider: ModelProviderDraft,
     speech?: SpeechSettingsDraft,
   ): Promise<SettingsResponse>
+  testSpeechConnection(
+    audio: Blob,
+    speech: SpeechSettingsDraft,
+  ): Promise<{
+    transcript: { text: string; language?: string }
+    latencyMs: number
+  }>
 }
 const emptySnapshot: Snapshot = {
   events: [],
@@ -1580,73 +1587,80 @@ function SettingsPage({ api }: { api: SettingsClient }) {
                     />
                   </fieldset>
                   {speechDraft?.provider === 'openai-compatible' && (
-                    <div className="speech-fields">
-                      <label
-                        className="settings-text-field"
-                        htmlFor="speech-base-url"
-                      >
-                        <span>服务地址</span>
-                        <input
-                          id="speech-base-url"
-                          type="url"
-                          value={speechDraft.baseUrl}
-                          placeholder="http://127.0.0.1:18081/v1"
-                          required
-                          onChange={event =>
-                            updateSpeech('baseUrl', event.target.value)
-                          }
-                        />
-                        <small>
-                          填写 API 根地址；Pegas 会调用 /audio/transcriptions。
-                        </small>
-                      </label>
-                      <label
-                        className="settings-text-field"
-                        htmlFor="speech-model"
-                      >
-                        <span>语音识别模型</span>
-                        <input
-                          id="speech-model"
-                          value={speechDraft.model}
-                          required
-                          onChange={event =>
-                            updateSpeech('model', event.target.value)
-                          }
-                        />
-                      </label>
-                      <label
-                        className="settings-text-field"
-                        htmlFor="speech-api-key"
-                      >
-                        <span>API key（可选）</span>
-                        <input
-                          id="speech-api-key"
-                          type="password"
-                          value={speechDraft.apiKey}
-                          autoComplete="off"
-                          placeholder={
-                            speechDraft.hasApiKey && !speechDraft.clearApiKey
-                              ? '已保存，留空则保持不变'
-                              : '本地服务可留空'
-                          }
-                          onChange={event =>
-                            updateSpeech('apiKey', event.target.value)
-                          }
-                        />
-                        <small>密钥加密保存在服务端，不会显示原文。</small>
-                      </label>
-                      {speechDraft.hasApiKey && (
-                        <label className="speech-clear-key">
+                    <div className="speech-configuration">
+                      <div className="speech-fields">
+                        <label
+                          className="settings-text-field"
+                          htmlFor="speech-base-url"
+                        >
+                          <span>服务地址</span>
                           <input
-                            type="checkbox"
-                            checked={speechDraft.clearApiKey}
+                            id="speech-base-url"
+                            type="url"
+                            value={speechDraft.baseUrl}
+                            placeholder="http://127.0.0.1:18081/v1"
+                            required
                             onChange={event =>
-                              updateSpeech('clearApiKey', event.target.checked)
+                              updateSpeech('baseUrl', event.target.value)
                             }
                           />
-                          清除已保存的 API key
+                          <small>
+                            填写 API 根地址；Pegas 会调用
+                            /audio/transcriptions。
+                          </small>
                         </label>
-                      )}
+                        <label
+                          className="settings-text-field"
+                          htmlFor="speech-model"
+                        >
+                          <span>语音识别模型</span>
+                          <input
+                            id="speech-model"
+                            value={speechDraft.model}
+                            required
+                            onChange={event =>
+                              updateSpeech('model', event.target.value)
+                            }
+                          />
+                        </label>
+                        <label
+                          className="settings-text-field"
+                          htmlFor="speech-api-key"
+                        >
+                          <span>API key（可选）</span>
+                          <input
+                            id="speech-api-key"
+                            type="password"
+                            value={speechDraft.apiKey}
+                            autoComplete="off"
+                            placeholder={
+                              speechDraft.hasApiKey && !speechDraft.clearApiKey
+                                ? '已保存，留空则保持不变'
+                                : '本地服务可留空'
+                            }
+                            onChange={event =>
+                              updateSpeech('apiKey', event.target.value)
+                            }
+                          />
+                          <small>密钥加密保存在服务端，不会显示原文。</small>
+                        </label>
+                        {speechDraft.hasApiKey && (
+                          <label className="speech-clear-key">
+                            <input
+                              type="checkbox"
+                              checked={speechDraft.clearApiKey}
+                              onChange={event =>
+                                updateSpeech(
+                                  'clearApiKey',
+                                  event.target.checked,
+                                )
+                              }
+                            />
+                            清除已保存的 API key
+                          </label>
+                        )}
+                      </div>
+                      <SpeechConnectionTest api={api} speech={speechDraft} />
                     </div>
                   )}
                   <p className="speech-browser-status">
@@ -1704,6 +1718,72 @@ function SettingsPage({ api }: { api: SettingsClient }) {
         </div>
       )}
     </section>
+  )
+}
+
+function SpeechConnectionTest({
+  api,
+  speech,
+}: {
+  api: SettingsClient
+  speech: SpeechSettingsDraft
+}) {
+  const [result, setResult] = useState<{
+    text: string
+    latencyMs: number
+  }>()
+  useEffect(
+    () => setResult(undefined),
+    [speech.baseUrl, speech.model, speech.apiKey, speech.clearApiKey],
+  )
+  const dictation = useVoiceDictation({
+    maximumSeconds: 20,
+    transcribe: async audio => {
+      const tested = await api.testSpeechConnection(audio, speech)
+      setResult({ text: tested.transcript.text, latencyMs: tested.latencyMs })
+      return tested.transcript
+    },
+  })
+  const busy =
+    dictation.state === 'requesting' || dictation.state === 'transcribing'
+  return (
+    <div className="speech-test-panel">
+      <div>
+        <strong>测试语音识别</strong>
+        <p>
+          用当前填写的连接录一小段话，看看识别效果。测试不会保存设置或发送消息。
+        </p>
+      </div>
+      <button
+        type="button"
+        className="speech-test-button"
+        disabled={busy || !speech.baseUrl.trim() || !speech.model.trim()}
+        onClick={() => {
+          if (dictation.state === 'idle') setResult(undefined)
+          dictation.toggle()
+        }}
+      >
+        <Mic aria-hidden="true" />
+        {dictation.state === 'recording'
+          ? `结束并识别 · ${formatDuration(dictation.elapsedSeconds)}`
+          : dictation.state === 'requesting'
+            ? '正在请求麦克风…'
+            : dictation.state === 'transcribing'
+              ? '正在识别…'
+              : '录一段测试'}
+      </button>
+      {result && (
+        <div className="speech-test-result" role="status">
+          <strong>识别成功 · {(result.latencyMs / 1000).toFixed(1)} 秒</strong>
+          <p>{result.text}</p>
+        </div>
+      )}
+      {dictation.error && (
+        <p className="speech-test-error" role="alert">
+          {dictation.error}
+        </p>
+      )}
+    </div>
   )
 }
 
