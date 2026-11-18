@@ -17,6 +17,8 @@ import {
   testModelConnection,
 } from '../model/model-catalog.js'
 import type { ModelCredentialVault } from '../model/model-credential-vault.js'
+import { OpenAiTranscriptionProvider } from '../speech/openai-transcription-provider.js'
+import { parseSpeechConnectionUpdate } from '../speech/speech-settings.js'
 import { OpenAiCompatibleProvider } from '../model/openai-compatible-provider.js'
 import {
   parseRuntimeSettingsUpdate,
@@ -44,6 +46,7 @@ export interface ControlPlaneOptions {
   modelCredentialVault?: ModelCredentialVault
   agentModelCatalog?: () => Promise<DshModelCatalog>
   modelTimeoutMs?: number
+  speechTimeoutMs?: number
 }
 
 export function createControlPlane(options: ControlPlaneOptions): Server {
@@ -87,6 +90,7 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         return sendJson(response, 200, {
           settings: options.store.getRuntimeSettings(),
           capabilities,
+          speech: options.store.getSpeechSettings(),
         })
       }
 
@@ -95,10 +99,9 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         if (!capabilities || !options.modelCredentialVault) {
           return sendJson(response, 503, { error: 'settings_unavailable' })
         }
-        const update = parseRuntimeSettingsUpdate(
-          await readJson(request),
-          capabilities,
-        )
+        const body = await readJson(request)
+        const update = parseRuntimeSettingsUpdate(body, capabilities)
+        const speech = parseSpeechConnectionUpdate(body)
         try {
           const settings = options.store.updateRuntimeSettingsAndProvider(
             update.expectedRevision,
@@ -117,10 +120,26 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
                 : {}),
               clearApiKey: update.provider.clearApiKey,
             },
+            speech
+              ? {
+                  provider: speech.provider,
+                  baseUrl: speech.baseUrl,
+                  model: speech.model,
+                  ...(speech.apiKey
+                    ? {
+                        apiKeyCiphertext: options.modelCredentialVault.encrypt(
+                          speech.apiKey,
+                        ),
+                      }
+                    : {}),
+                  clearApiKey: speech.clearApiKey,
+                }
+              : undefined,
           )
           return sendJson(response, 200, {
             settings,
             capabilities: resolveSettingsCapabilities(options),
+            speech: options.store.getSpeechSettings(),
           })
         } catch (error) {
           if (error instanceof SettingsRevisionConflictError) {
@@ -311,12 +330,12 @@ async function acceptVoiceTranscription(
   response: ServerResponse,
   options: ControlPlaneOptions,
 ): Promise<void> {
-  const transcript = await transcribeVoiceRequest(request, response, options)
-  if (!transcript) return
+  const result = await transcribeVoiceRequest(request, response, options)
+  if (!result) return
   return sendJson(response, 200, {
-    transcript,
-    provider: options.speechProvider?.name,
-    model: options.speechProvider?.model,
+    transcript: result.transcript,
+    provider: result.provider.name,
+    model: result.provider.model,
   })
 }
 
@@ -338,8 +357,9 @@ async function acceptVoiceMessage(
     })
   }
 
-  const transcript = await transcribeVoiceRequest(request, response, options)
-  if (!transcript) return
+  const voiceResult = await transcribeVoiceRequest(request, response, options)
+  if (!voiceResult) return
+  const { transcript, provider } = voiceResult
 
   const result = options.store.enqueueEvent({
     userId,
@@ -351,8 +371,8 @@ async function acceptVoiceMessage(
       inputMode: 'voice',
       ...(taskId ? { taskId } : {}),
       voice: {
-        provider: options.speechProvider?.name,
-        model: options.speechProvider?.model,
+        provider: provider.name,
+        model: provider.model,
         ...(language ? { requestedLanguage: language } : {}),
         ...(transcript.language
           ? { detectedLanguage: transcript.language }
@@ -371,11 +391,15 @@ async function transcribeVoiceRequest(
   request: IncomingMessage,
   response: ServerResponse,
   options: ControlPlaneOptions,
-): Promise<SpeechTranscript | undefined> {
-  if (!options.speechProvider) {
+): Promise<
+  | { transcript: SpeechTranscript; provider: SpeechRecognitionProvider }
+  | undefined
+> {
+  const provider = resolveSpeechProvider(options)
+  if (!provider) {
     sendJson(response, 503, {
       error: 'speech_unavailable',
-      message: 'Speech recognition is not configured',
+      message: '语音识别尚未配置，请前往设置添加转写服务。',
     })
     return undefined
   }
@@ -404,21 +428,52 @@ async function transcribeVoiceRequest(
   const url = new URL(request.url ?? '', 'http://localhost')
   const language = optionalQuery(url, 'language')
   try {
-    return await options.speechProvider.transcribe({
+    const transcript = await provider.transcribe({
       audio,
       contentType,
       filename: `utterance.${audioExtension(contentType)}`,
       ...(language ? { language } : {}),
     })
+    return { transcript, provider }
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : 'Speech recognition failed'
+    console.error('Speech recognition failed', {
+      errorType: error instanceof Error ? error.name : 'unknown',
+      providerStatus:
+        error instanceof Error
+          ? /Speech provider returned (\d{3})/.exec(error.message)?.[1]
+          : undefined,
+    })
     sendJson(response, 502, {
       error: 'speech_provider_failed',
-      message,
+      message: '语音服务暂时不可用，请检查服务地址、模型和密钥后重试。',
     })
     return undefined
   }
+}
+
+function resolveSpeechProvider(
+  options: ControlPlaneOptions,
+): SpeechRecognitionProvider | undefined {
+  if (options.speechProvider) return options.speechProvider
+  const connection = options.store.getSpeechConnection()
+  if (
+    connection.provider !== 'openai-compatible' ||
+    !connection.baseUrl ||
+    !options.modelCredentialVault
+  )
+    return undefined
+  return new OpenAiTranscriptionProvider({
+    baseUrl: connection.baseUrl,
+    model: connection.model,
+    ...(connection.apiKeyCiphertext
+      ? {
+          apiKey: options.modelCredentialVault.decrypt(
+            connection.apiKeyCiphertext,
+          ),
+        }
+      : {}),
+    timeoutMs: options.speechTimeoutMs ?? 120_000,
+  })
 }
 
 function parseNewOutboxMessage(value: unknown): {

@@ -49,6 +49,7 @@ import type {
   RuntimeSettings,
   SettingsCapabilities,
   SettingsResponse,
+  SpeechSettingsDraft,
   Snapshot,
   Task,
   TaskStatus,
@@ -71,6 +72,7 @@ interface SettingsClient {
   saveSettings(
     settings: RuntimeSettings,
     provider: ModelProviderDraft,
+    speech?: SpeechSettingsDraft,
   ): Promise<SettingsResponse>
 }
 const emptySnapshot: Snapshot = {
@@ -120,6 +122,7 @@ export function App() {
   const workspaceVisible = workspaceOpen && activeView !== 'settings'
   const [selectedTaskId, setSelectedTaskId] = useState(initialTaskId)
   const [attachmentHelpOpen, setAttachmentHelpOpen] = useState(false)
+  const [voiceGateError, setVoiceGateError] = useState('')
   const feedEnd = useRef<HTMLDivElement>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
   const workspaceTrigger = useRef<HTMLElement | null>(null)
@@ -133,6 +136,26 @@ export function App() {
     onTranscript: appendTranscript,
   })
   const dictationBusy = dictation.state !== 'idle'
+  const toggleDictation = async () => {
+    if (dictation.state === 'recording') {
+      dictation.toggle()
+      return
+    }
+    setVoiceGateError('')
+    try {
+      const response = await api.settings()
+      if (response.speech?.provider === 'disabled') {
+        navigate('settings')
+        const url = new URL(window.location.href)
+        url.searchParams.set('section', 'voice')
+        window.history.replaceState({ view: 'settings' }, '', url)
+        return
+      }
+      dictation.toggle()
+    } catch {
+      setVoiceGateError('无法确认语音服务状态，请检查连接后重试。')
+    }
+  }
   const activeTaskCount = snapshot.tasks.filter(task =>
     isActiveTask(task.status),
   ).length
@@ -536,7 +559,7 @@ export function App() {
                                 : '开始听写'
                         }
                         aria-pressed={dictation.state === 'recording'}
-                        onClick={dictation.toggle}
+                        onClick={() => void toggleDictation()}
                         disabled={
                           sending ||
                           unauthorized ||
@@ -579,9 +602,9 @@ export function App() {
                     </button>
                   </div>
                 </div>
-                {dictation.error && (
+                {(dictation.error || voiceGateError) && (
                   <p className="dictation-error" role="alert">
-                    {dictation.error}
+                    {voiceGateError || dictation.error}
                   </p>
                 )}
               </form>
@@ -680,10 +703,16 @@ function SettingsPage({ api }: { api: SettingsClient }) {
   }
   const [section, setSection] = useState<
     'models' | 'routing' | 'rewrite' | 'privacy'
-  >('models')
+  >(
+    new URLSearchParams(window.location.search).get('section') === 'voice'
+      ? 'rewrite'
+      : 'models',
+  )
   const [settings, setSettings] = useState<RuntimeSettings>()
   const [capabilities, setCapabilities] = useState<SettingsCapabilities>()
   const [providerDraft, setProviderDraft] = useState<ModelProviderDraft>()
+  const [speechDraft, setSpeechDraft] = useState<SpeechSettingsDraft>()
+  const [savedSpeech, setSavedSpeech] = useState<SettingsResponse['speech']>()
   const [routerModels, setRouterModels] = useState<ModelCatalogItem[]>([])
   const [modelSearch, setModelSearch] = useState('')
   const [modelPickerOpen, setModelPickerOpen] = useState(false)
@@ -709,6 +738,15 @@ function SettingsPage({ api }: { api: SettingsClient }) {
         if (!active) return
         setSettings(response.settings)
         setCapabilities(response.capabilities)
+        setSavedSpeech(response.speech)
+        setSpeechDraft({
+          provider: response.speech?.provider ?? 'disabled',
+          baseUrl: response.speech?.baseUrl ?? '',
+          model: response.speech?.model ?? 'Qwen/Qwen3-ASR-0.6B',
+          hasApiKey: response.speech?.hasApiKey ?? false,
+          apiKey: '',
+          clearApiKey: false,
+        })
         setDirty(false)
         const selected = response.capabilities.providers.find(
           provider => provider.id === response.settings.modelProvider,
@@ -748,9 +786,18 @@ function SettingsPage({ api }: { api: SettingsClient }) {
           baseUrl: providerDraft.baseUrl.trim(),
           apiKey: providerDraft.apiKey.trim(),
         },
+        speechDraft && {
+          ...speechDraft,
+          baseUrl: speechDraft.baseUrl.trim(),
+          model: speechDraft.model.trim(),
+          apiKey: speechDraft.apiKey.trim(),
+        },
       )
       setSettings(response.settings)
       setCapabilities(response.capabilities)
+      setSavedSpeech(response.speech)
+      if (response.speech)
+        setSpeechDraft({ ...response.speech, apiKey: '', clearApiKey: false })
       const selected = response.capabilities.providers.find(
         provider => provider.id === response.settings.modelProvider,
       )
@@ -771,6 +818,16 @@ function SettingsPage({ api }: { api: SettingsClient }) {
     setDirty(true)
     setSaved(false)
     setSettings(current => (current ? { ...current, [key]: value } : current))
+  }
+  const updateSpeech = <Key extends keyof SpeechSettingsDraft>(
+    key: Key,
+    value: SpeechSettingsDraft[Key],
+  ) => {
+    setDirty(true)
+    setSaved(false)
+    setSpeechDraft(current =>
+      current ? { ...current, [key]: value } : current,
+    )
   }
   const resetModelLookup = () => {
     modelRequestRef.current += 1
@@ -899,9 +956,23 @@ function SettingsPage({ api }: { api: SettingsClient }) {
     settings?.modelName.trim() &&
     providerDraft?.name.trim() &&
     providerDraft.baseUrl.trim() &&
+    (speechDraft?.provider !== 'openai-compatible' ||
+      (speechDraft.baseUrl.trim() && speechDraft.model.trim())) &&
     (settings.agentModelMode === 'profile' ||
       (settings.agentModelProvider.trim() && settings.agentModelName.trim())),
   )
+  const speechStatus =
+    speechDraft?.provider === 'disabled'
+      ? '未启用'
+      : !speechDraft?.baseUrl.trim()
+        ? '待填写服务地址'
+        : speechDraft.provider === savedSpeech?.provider &&
+            speechDraft.baseUrl.trim() === savedSpeech.baseUrl &&
+            speechDraft.model.trim() === savedSpeech.model &&
+            !speechDraft.apiKey &&
+            !speechDraft.clearApiKey
+          ? '已配置'
+          : '待保存'
   return (
     <section className="settings-page" aria-labelledby="page-title">
       {loading ? (
@@ -1474,8 +1545,8 @@ function SettingsPage({ api }: { api: SettingsClient }) {
                   aria-labelledby="settings-tab-rewrite"
                 >
                   <header>
-                    <h2 id="rewrite-title">输入处理</h2>
-                    <p>只调整执行视图，不覆盖 Conversation 中的用户原文。</p>
+                    <h2 id="rewrite-title">语音与输入</h2>
+                    <p>连接语音识别服务，把录音转成可编辑文字。</p>
                   </header>
                   <div className="voice-settings-card">
                     <div className="settings-card-icon">
@@ -1485,13 +1556,106 @@ function SettingsPage({ api }: { api: SettingsClient }) {
                       <h3>语音输入</h3>
                       <p>在对话输入框中听写，转成可编辑文字后再发送。</p>
                     </div>
-                    <span>
-                      {'mediaDevices' in navigator &&
-                      typeof navigator.mediaDevices.getUserMedia === 'function'
-                        ? '浏览器可用'
-                        : '浏览器不支持'}
-                    </span>
+                    <span>{speechStatus}</span>
                   </div>
+                  <fieldset className="settings-choice-group voice-provider-choice">
+                    <legend>转写服务</legend>
+                    <SettingChoice
+                      name="speech-provider"
+                      value="disabled"
+                      checked={speechDraft?.provider === 'disabled'}
+                      title="关闭语音输入"
+                      description="麦克风按钮会引导到此页面。"
+                      onChange={() => updateSpeech('provider', 'disabled')}
+                    />
+                    <SettingChoice
+                      name="speech-provider"
+                      value="openai-compatible"
+                      checked={speechDraft?.provider === 'openai-compatible'}
+                      title="OpenAI 兼容转写服务"
+                      description="连接支持 /audio/transcriptions 的服务。"
+                      onChange={() =>
+                        updateSpeech('provider', 'openai-compatible')
+                      }
+                    />
+                  </fieldset>
+                  {speechDraft?.provider === 'openai-compatible' && (
+                    <div className="speech-fields">
+                      <label
+                        className="settings-text-field"
+                        htmlFor="speech-base-url"
+                      >
+                        <span>服务地址</span>
+                        <input
+                          id="speech-base-url"
+                          type="url"
+                          value={speechDraft.baseUrl}
+                          placeholder="http://127.0.0.1:18081/v1"
+                          required
+                          onChange={event =>
+                            updateSpeech('baseUrl', event.target.value)
+                          }
+                        />
+                        <small>
+                          填写 API 根地址；Pegas 会调用 /audio/transcriptions。
+                        </small>
+                      </label>
+                      <label
+                        className="settings-text-field"
+                        htmlFor="speech-model"
+                      >
+                        <span>语音识别模型</span>
+                        <input
+                          id="speech-model"
+                          value={speechDraft.model}
+                          required
+                          onChange={event =>
+                            updateSpeech('model', event.target.value)
+                          }
+                        />
+                      </label>
+                      <label
+                        className="settings-text-field"
+                        htmlFor="speech-api-key"
+                      >
+                        <span>API key（可选）</span>
+                        <input
+                          id="speech-api-key"
+                          type="password"
+                          value={speechDraft.apiKey}
+                          autoComplete="off"
+                          placeholder={
+                            speechDraft.hasApiKey && !speechDraft.clearApiKey
+                              ? '已保存，留空则保持不变'
+                              : '本地服务可留空'
+                          }
+                          onChange={event =>
+                            updateSpeech('apiKey', event.target.value)
+                          }
+                        />
+                        <small>密钥加密保存在服务端，不会显示原文。</small>
+                      </label>
+                      {speechDraft.hasApiKey && (
+                        <label className="speech-clear-key">
+                          <input
+                            type="checkbox"
+                            checked={speechDraft.clearApiKey}
+                            onChange={event =>
+                              updateSpeech('clearApiKey', event.target.checked)
+                            }
+                          />
+                          清除已保存的 API key
+                        </label>
+                      )}
+                    </div>
+                  )}
+                  <p className="speech-browser-status">
+                    浏览器录音：
+                    {'mediaDevices' in navigator &&
+                    typeof navigator.mediaDevices.getUserMedia === 'function'
+                      ? '可用（仍需允许麦克风权限）'
+                      : '当前浏览器不支持'}
+                  </p>
                   <fieldset className="settings-choice-group">
                     <legend>改写策略</legend>
                     <SettingChoice

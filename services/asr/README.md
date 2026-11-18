@@ -51,7 +51,10 @@ host:
 ssh -N -L 18081:127.0.0.1:18081 dev-remote
 ```
 
-Then configure the Control Plane:
+Then open Pegas → 设置 → 语音与输入, select “OpenAI 兼容转写服务”, and enter
+`http://127.0.0.1:18081/v1`, the model name, and the service API key. Save the
+settings before recording. Existing deployments may also provide these values
+as first-start defaults through the Control Plane environment:
 
 ```bash
 PEGAS_SPEECH_PROVIDER=openai-compatible

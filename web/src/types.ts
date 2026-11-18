@@ -122,6 +122,19 @@ export interface SettingsCapabilities {
 export interface SettingsResponse {
   settings: RuntimeSettings
   capabilities: SettingsCapabilities
+  speech?: SpeechSettings
+}
+
+interface SpeechSettings {
+  provider: 'disabled' | 'openai-compatible'
+  baseUrl: string
+  model: string
+  hasApiKey: boolean
+}
+
+export interface SpeechSettingsDraft extends SpeechSettings {
+  apiKey: string
+  clearApiKey: boolean
 }
 
 export interface ModelCatalogItem {

@@ -9,7 +9,6 @@ import {
   runtimeSettingsDefaults,
   settingsCapabilities,
 } from '../settings/runtime-settings.js'
-import { OpenAiTranscriptionProvider } from '../speech/openai-transcription-provider.js'
 import { PegasStore } from '../storage/sqlite-store.js'
 import { createControlPlane } from './server.js'
 
@@ -26,21 +25,22 @@ if (!store.hasRuntimeSettings()) {
   assertRuntimeSettingsAvailable(defaults, capabilities())
 }
 store.initializeRuntimeSettings(defaults)
-const speechProvider =
-  config.speechProvider === 'openai-compatible'
-    ? new OpenAiTranscriptionProvider({
-        baseUrl: required(config.speechBaseUrl, 'speech base URL'),
-        model: config.speechModel,
-        ...(config.speechApiKey ? { apiKey: config.speechApiKey } : {}),
-        timeoutMs: config.speechTimeoutMs,
-      })
-    : undefined
+store.initializeSpeechConnection({
+  provider: config.speechProvider,
+  baseUrl: config.speechBaseUrl ?? '',
+  model: config.speechModel,
+  ...(config.speechApiKey
+    ? {
+        apiKeyCiphertext: modelCredentialVault.encrypt(config.speechApiKey),
+      }
+    : {}),
+})
 const server = createControlPlane({
   store,
   webRoot: resolve('dist/web'),
   ...(config.apiToken ? { apiToken: config.apiToken } : {}),
-  ...(speechProvider ? { speechProvider } : {}),
   maximumAudioBytes: config.speechMaxAudioBytes,
+  speechTimeoutMs: config.speechTimeoutMs,
   settingsCapabilities: capabilities,
   modelCredentialVault,
   modelTimeoutMs: config.modelTimeoutMs,
@@ -67,8 +67,3 @@ function shutdown(signal: string): void {
 
 process.on('SIGINT', () => shutdown('SIGINT'))
 process.on('SIGTERM', () => shutdown('SIGTERM'))
-
-function required(value: string | undefined, name: string): string {
-  if (!value) throw new Error(`Missing ${name}`)
-  return value
-}

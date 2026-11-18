@@ -95,6 +95,18 @@
 - Enforcement：尚未晋升；测试已改为确定性字节篡改。
 - Owner / next action：后续出现同类问题时补充独立日期证据。
 
+### LESSON-20261118-04：录音能力与语音服务状态混淆
+
+- Rule：语音入口应分别显示浏览器录音能力和服务端转写配置，并在申请麦克风权限前检查服务配置。
+- Why：设置页显示“浏览器可用”，实际服务端未配置 ASR，录音结束后才出现英文错误，且用户无法在页面修复。
+- Feature：VOICE-001
+- Evidence：用户提供的输入器和设置截图；`web/src/App.test.tsx` 未配置引导回归及 `test/control-plane.test.ts` 保存后转写回归。
+- Seen：1（2026-11-18）
+- Severity：normal
+- Status：Observed
+- Enforcement：尚未晋升；本轮以回归测试覆盖。
+- Owner / next action：后续出现同类问题时补充独立日期证据。
+
 <!--
 ### LESSON-YYYYMMDD-NN：简短标题
 
