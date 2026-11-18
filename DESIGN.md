@@ -1,288 +1,280 @@
 ---
 name: Pegas
-description: A restrained cobalt-and-cool-paper system for conversation-led durable work.
+description: A quiet operating shell that turns natural dialogue into durable, inspectable work.
 colors:
-  ink: "#172033"
-  muted: "#667085"
-  faint: "#59667e"
-  line: "#d7deea"
-  line-strong: "#c7d0df"
-  canvas: "#f8f9fc"
+  pegas-blue: "#4d6bfe"
+  pegas-blue-soft: "#eef1ff"
+  ink: "#141414"
+  user-ink: "#070707"
+  secondary-ink: "rgba(20, 20, 20, 0.62)"
+  metadata: "#666666"
+  canvas: "#fcfcfc"
   paper: "#ffffff"
-  panel: "#eef2f7"
-  blue: "#2457d6"
-  blue-dark: "#1a2b58"
-  blue-soft: "#e7edff"
-  green: "#19865c"
-  green-soft: "#e2f4eb"
-  amber: "#a76208"
-  amber-soft: "#fff0d5"
-  red: "#c33c4a"
-  red-soft: "#fae7e9"
+  sidebar: "#f7f7f7"
+  conversation: "#eeeeee"
+  line: "rgba(20, 20, 20, 0.08)"
+  line-strong: "rgba(20, 20, 20, 0.15)"
+  positive: "#177a52"
+  caution: "#94610a"
+  critical: "#b5293b"
+  on-accent: "#ffffff"
 typography:
   display:
-    fontFamily: "Inter Variable, Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
-    fontSize: "clamp(1.55rem, 2.5vw, 2rem)"
-    fontWeight: 720
-    letterSpacing: "-0.03em"
-  headline:
-    fontFamily: "Inter Variable, Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
-    fontSize: "1.18rem"
-    fontWeight: 710
-    letterSpacing: "-0.025em"
-  title:
-    fontFamily: "Inter Variable, Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
-    fontSize: "0.94rem"
-    fontWeight: 670
-    letterSpacing: "-0.012em"
-  body:
-    fontFamily: "Inter Variable, Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
-    fontSize: "0.94rem"
-    fontWeight: 400
-    lineHeight: 1.65
-  compact-body:
-    fontFamily: "Inter Variable, Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
-    fontSize: "0.78rem"
-    fontWeight: 400
-    lineHeight: 1.55
-  label:
-    fontFamily: "Inter Variable, Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
-    fontSize: "0.72rem"
+    fontFamily: "Inter Variable, Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+    fontSize: "clamp(2rem, 1.35rem + 2.1vw, 3.15rem)"
     fontWeight: 650
+    lineHeight: 1.08
+    letterSpacing: "-0.04em"
+  title:
+    fontFamily: "Inter Variable, Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+    fontSize: "1.0625rem"
+    fontWeight: 620
+    lineHeight: 1.41
+    letterSpacing: "-0.01em"
+  body:
+    fontFamily: "Inter Variable, Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+    fontSize: "0.9rem"
+    fontWeight: 400
+    lineHeight: 1.68
+  label:
+    fontFamily: "Inter Variable, Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+    fontSize: "0.8125rem"
+    fontWeight: 620
+    lineHeight: 1.38
+  metadata:
+    fontFamily: "Inter Variable, Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+    fontSize: "0.68rem"
+    fontWeight: 400
+    lineHeight: 1.45
 rounded:
-  status: "8px"
-  field: "9px"
   sm: "10px"
-  control: "11px"
-  surface: "12px"
-  md: "14px"
-  bubble: "15px"
-  composer: "16px"
+  md: "12px"
+  lg: "16px"
+  xl: "20px"
+  composer: "22px"
+  pill: "999px"
+  circle: "50%"
 spacing:
-  xxs: "4px"
+  2xs: "4px"
   xs: "8px"
   sm: "12px"
   md: "16px"
   lg: "24px"
-  xl: "28px"
-  feed: "40px"
+  xl: "32px"
+  2xl: "56px"
 components:
-  navigation-rail-button:
-    textColor: "#aebce2"
-    rounded: "{rounded.control}"
-    size: "42px"
-  navigation-rail-button-active:
-    backgroundColor: "rgba(255, 255, 255, 0.1)"
-    textColor: "{colors.paper}"
-    rounded: "{rounded.control}"
-    size: "42px"
-  button-task:
-    backgroundColor: "{colors.blue-dark}"
-    textColor: "{colors.paper}"
+  action-primary:
+    backgroundColor: "{colors.pegas-blue}"
+    textColor: "{colors.on-accent}"
     typography: "{typography.label}"
     rounded: "{rounded.sm}"
+    padding: "0 18px"
+    height: "36px"
+  navigation-item:
+    backgroundColor: "transparent"
+    textColor: "{colors.secondary-ink}"
+    typography: "{typography.label}"
+    rounded: "{rounded.md}"
     padding: "0 13px"
-    height: "42px"
-  button-send:
-    backgroundColor: "{colors.blue}"
-    textColor: "{colors.paper}"
-    rounded: "50%"
-    size: "36px"
-  button-send-disabled:
-    backgroundColor: "#e4e8ef"
-    textColor: "#9aa6bd"
-    rounded: "50%"
-    size: "36px"
-  button-dictation:
-    backgroundColor: "#edf0f5"
-    textColor: "#273248"
-    rounded: "50%"
-    size: "36px"
-  button-dictation-recording:
-    backgroundColor: "{colors.blue}"
-    textColor: "{colors.paper}"
-    rounded: "50%"
-    size: "36px"
+    height: "48px"
+  navigation-item-selected:
+    backgroundColor: "rgba(20, 20, 20, 0.09)"
+    textColor: "{colors.ink}"
+    typography: "{typography.label}"
+    rounded: "{rounded.md}"
+    padding: "0 13px"
+    height: "48px"
+  message-pegas:
+    backgroundColor: "{colors.conversation}"
+    textColor: "{colors.ink}"
+    typography: "{typography.body}"
+    rounded: "{rounded.lg}"
+    padding: "13px 16px"
+  message-user:
+    backgroundColor: "{colors.user-ink}"
+    textColor: "{colors.on-accent}"
+    typography: "{typography.body}"
+    rounded: "{rounded.lg}"
+    padding: "13px 18px"
   composer:
     backgroundColor: "{colors.paper}"
     textColor: "{colors.ink}"
+    typography: "{typography.body}"
     rounded: "{rounded.composer}"
-    padding: "12px 12px 10px 16px"
-  task-pulse:
+    padding: "11px 12px 9px 15px"
+    height: "56px"
+  settings-group:
     backgroundColor: "{colors.paper}"
     textColor: "{colors.ink}"
     rounded: "{rounded.md}"
-    padding: "17px 18px 15px"
-  task-filter-active:
-    backgroundColor: "{colors.paper}"
+    padding: "12px 16px"
+  page-pill:
+    backgroundColor: "{colors.canvas}"
     textColor: "{colors.ink}"
-    typography: "{typography.compact-body}"
-    rounded: "{rounded.status}"
-    height: "36px"
-  user-message:
-    backgroundColor: "#25375d"
-    textColor: "{colors.paper}"
-    rounded: "15px 15px 4px 15px"
-    padding: "13px 16px"
+    typography: "{typography.label}"
+    rounded: "18px"
+    padding: "4px 7px 4px 12px"
+    height: "48px"
 ---
 
 # Design System: Pegas
 
 ## Overview
 
-**Creative North Star: "The Quiet Relay"**
+**Creative North Star: "The Quiet Task Ledger"**
 
-Pegas is a calm handoff from intent to durable action. Cool paper surfaces and ink-dark text keep the conversation primary; cobalt appears only where the interface is carrying work forward, while compact status signals make long-running activity legible without turning the product into a dashboard.
+Pegas should feel like a reliable execution partner keeping a calm, legible record beside the user. Natural dialogue is the foreground; durable tasks, progress, and controls remain close enough to inspect without turning the product into a cockpit. The visual system therefore favors quiet neutral fields, compact controls, and obvious state changes over decoration.
 
-The system pairs a task-pulse conversation entry with an on-demand personal control center. Work grows naturally out of a message, stays visible in the conversation, and reveals its runs, timing, output, and errors only when the user asks for depth. Precision comes from thin rules, measured density, consistent curved geometry, and restrained motion—not decoration.
+The shell is restrained and workmanlike: near-white canvas, pale navigation, soft gray conversation surfaces, strong black ink, and one clear Pegas blue. Identity appears through the P or robot mark and through disciplined blue moments—not through ornamental branding. Density is comfortable rather than sparse, and every floating element must earn its elevation through function.
 
 **Key Characteristics:**
 
-- Conversation-first hierarchy with task state embedded in the flow.
-- Cool, quiet paper layers anchored by deep ink and restrained cobalt.
-- Progressive disclosure from task pulse to a focused task workbench.
-- Compact, plain-language status cues with semantic color support.
-- Responsive continuity: the same information model becomes a full-screen task detail on mobile.
+- Neutral, actor-led workspace with dialogue at the center.
+- Pegas blue reserved for identity, selection, progress, and primary action.
+- Durable task state embedded in the conversation and available in deeper work views.
+- Flat, inspectable surfaces with ambient elevation only for floating controls and overlays.
+- Desktop structure that collapses cleanly into touch-safe mobile navigation and full-screen settings.
 
 ## Colors
 
-The palette is a cool-paper field with dark blue-black ink, one cobalt execution voice, and muted semantic signals.
+The palette is a warm-neutral monochrome shell punctuated by a single crisp identity blue and restrained semantic status colors.
 
 ### Primary
 
-- **Relay Cobalt** (`blue`): Use for execution progress, active steps, send actions, and the smallest high-value navigation cues.
-- **Deep Cobalt** (`blue-dark`): Anchor the desktop identity rail and primary mobile task action; it supplies gravity without widening the accent palette.
-- **Cobalt Wash** (`blue-soft`): Use behind blue status text and restrained informational emphasis.
-
-### Secondary
-
-- **Completion Green** (`green`) and **Completion Wash** (`green-soft`): Reserve for completed steps, online presence, and successful runs.
-- **Attention Amber** (`amber`) and **Attention Wash** (`amber-soft`): Reserve for paused or user-waiting states.
-- **Recovery Red** (`red`) and **Recovery Wash** (`red-soft`): Reserve for failures, connection problems, and error recovery.
+- **Pegas Blue:** The identity, selected-control, progress, focus, and primary-action color. Its rarity makes each use read as intentional.
+- **Pegas Blue Soft:** A low-intensity selection field for chosen providers, options, and other active rows.
 
 ### Neutral
 
-- **Working Ink** (`ink`): Primary copy and high-emphasis titles.
-- **Quiet Text** (`muted`) and **Faint Text** (`faint`): Secondary explanations, timestamps, metadata, and low-priority controls.
-- **Cool Canvas** (`canvas`): Main conversation surface.
-- **Clean Paper** (`paper`): Composer, pulse, selected filters, and result containers.
-- **Workbench Panel** (`panel`): Task list and detail surface.
-- **Fine Rule** (`line`) and **Strong Rule** (`line-strong`): Structural separators and interactive boundaries.
+- **Core Ink:** Primary text, icons, and decisive controls.
+- **User Ink:** The near-black user-message surface, used only where authored dialogue needs strong separation.
+- **Secondary Ink:** Supporting text and inactive controls.
+- **Metadata Gray:** Time, counts, hints, and tertiary status copy.
+- **Canvas White:** The continuous application background.
+- **Paper White:** Inputs, grouped rows, cards, and floating control surfaces.
+- **Sidebar Mist:** Navigation rails and low-contrast structural regions.
+- **Conversation Gray:** Pegas messages, task pulses, and profile surfaces.
+- **Quiet Line / Strong Line:** Dividers and control boundaries, never decorative framing.
+
+### Secondary
+
+- **Positive Green:** Healthy, connected, or completed status.
+- **Caution Amber:** Warning states that require attention without implying failure.
+- **Critical Red:** Errors, blocked states, and destructive feedback.
 
 ### Named Rules
 
-**The One Execution Voice Rule.** Cobalt marks actions and active execution; do not introduce another brand accent for equivalent emphasis.
+**The One Blue Voice Rule.** Pegas blue is reserved for identity, selection, progress, focus, and the primary action; it must not become ambient decoration.
 
-**The Semantic Restraint Rule.** Green, amber, and red communicate state only; they never become decorative surface colors.
+**The Neutral Field Rule.** Build hierarchy by moving between canvas, paper, sidebar, and conversation neutrals before adding color.
 
 ## Typography
 
-**Display Font:** Inter Variable (with Inter, system UI, and sans-serif fallbacks)
+**Display Font:** Inter Variable (with Inter, system sans-serif fallbacks)
 
-**Body Font:** Inter Variable (with Inter, system UI, and sans-serif fallbacks)
+**Body Font:** Inter Variable (with Inter, system sans-serif fallbacks)
 
-**Label Font:** Inter Variable (with Inter, system UI, and sans-serif fallbacks)
+**Label Font:** Inter Variable (with Inter, system sans-serif fallbacks)
 
-**Character:** One highly legible sans-serif family keeps conversation, status, and execution detail in the same voice. Weight and density—not font changes—create hierarchy, with slightly tightened headings and tabular numerals for time and run metadata.
+**Character:** A single compact sans-serif family keeps conversation, task state, and settings controls visually continuous. Hierarchy comes from weight, size, line height, and modest negative tracking rather than multiple typefaces.
 
 ### Hierarchy
 
-- **Display** (720, responsive `display`, tightened): Empty-state headings only; keep it brief and centered.
-- **Headline** (710, `headline`, tightened): Panel and task-detail titles.
-- **Title** (670, `title`, tightened): Task-pulse titles and other high-signal row titles.
-- **Body** (400, `body`): Conversation copy, constrained to roughly 72 characters where practical.
-- **Compact Body** (400, `compact-body`): Task explanations, form notes, and workbench detail.
-- **Label** (650, `label`): Status, metadata headers, task actions, and compact controls.
+- **Display:** Semibold, tightly tracked, and balanced; reserved for meaningful empty-state or home introductions.
+- **Title:** Compact section and dialog headings with a slightly tightened rhythm.
+- **Body:** Highly readable dialogue and descriptive text; long-form conversation uses the roomiest line height in the system.
+- **Label:** Dense navigation, row titles, and control labels; sentence case is the default.
+- **Metadata:** Quiet times, counts, helper text, and compact operational state.
 
 ### Named Rules
 
-**The One Voice Rule.** Keep all interface language in the Inter family; hierarchy comes from weight, scale, spacing, and placement.
-
-**The Human First Rule.** User-facing task and status language stays plain; runtime vocabulary belongs inside the expanded task workbench.
+**The Conversation First Rule.** Body text must remain more readable than surrounding metadata; operational chrome should never compete with the dialogue.
 
 ## Layout
 
-Desktop uses a three-part working frame: a 72px identity rail, a fluid conversation column with a 460px minimum, and a 320–380px task workbench. The central feed and composer share a 760px maximum width so messages, pulse cards, and input remain visually continuous. The composer is docked to the bottom of the conversation column, while the feed alone scrolls.
+The desktop shell uses a fixed 280px application navigation rail and a flexible main column. Conversation content is centered within a maximum 960px flow, while the composer widens slightly to 992px. A floating page pill sits at the top of the main column, and the capsule composer anchors the bottom without enclosing the whole conversation in a card.
 
-At 1080px, the rail tightens to 64px, the conversation minimum becomes 420px, and the workbench settles at 330px. At 820px and below, the rail disappears, the conversation becomes the full viewport, and the task workbench becomes a full-screen modal surface entered from the header or a task pulse. At 520px and below, message width expands to 88%, task pulses use the full content width, and low-priority composer guidance is removed.
+At 1180px and below, the application rail contracts to 88px and becomes icon-led. At 820px and below, navigation becomes a 62px top bar; the main column consumes the remaining viewport, conversation gutters contract, and task columns stack. Coarse-pointer actions preserve at least a 44px touch target. At 560px and below, message widths expand carefully, profile geometry compacts, and settings content uses 18px side padding.
 
-The spacing rhythm is compact and repeatable: 8–16px inside controls, 24–28px between structural groups, and 40px for feed-level breathing room. Preserve the conversation as the default scene; task inspection adds depth instead of replacing the entry model.
+Settings are a modal operating surface on desktop: a centered dialog up to 1100px wide and 780px tall, with a 198px category rail, a flexible content region, and a fixed 58px save footer. At 820px and below, settings become a full-viewport sheet with horizontally scrollable category tabs and independently scrolling content.
 
-**The Conversation Continuity Rule.** A task begins in the conversation and opens into more detail without asking the user to choose a project or management mode first.
+Use the 4/8/12/16/24/32px rhythm for component gaps and padding, with larger 56px gutters only where the shell has enough width. Maintain one continuous spatial hierarchy; avoid subdividing every region into a card.
 
 ## Elevation & Depth
 
-Pegas is flat by default. Cool tonal layers and fine rules establish structure; shadows appear only where a surface floats, responds, or enters from outside the current plane. The composer uses a soft downward ambient shadow, a hovered task pulse lifts by one pixel, and the mobile task workbench carries a left-cast panel shadow. Avoid glow, glass, and decorative gradients.
+The system is flat by default. Canvas, paper, sidebar, conversation gray, dividers, and selection fills establish most depth. Ambient shadows are reserved for the floating page pill, bottom composer, desktop settings dialog, and a barely perceptible grouped-row lift. The settings scrim uses a soft dark veil and slight blur to separate the overlay from the shell.
 
 ### Shadow Vocabulary
 
-- **Composer Ambient** (`0 10px 28px rgba(31, 47, 82, 0.1)`): Keeps the docked input distinct from the scrolling feed.
-- **Composer Focus** (`0 10px 30px rgba(31, 47, 82, 0.13)`): Slightly increases definition when the input contains focus.
-- **Pulse Hover** (`0 10px 24px rgba(35, 54, 95, 0.1)`): Accompanies the task pulse's one-pixel lift.
-- **Mobile Workbench** (`-14px 0 40px rgba(27, 43, 81, 0.12)`): Clarifies the full-screen panel's entrance direction.
+- **Floating Pill:** A compact ambient shadow that separates the page control without making it look like a card.
+- **Composer Rest / Focus:** A low shadow at rest that deepens slightly when the writing surface is active.
+- **Settings Dialog:** The strongest shadow in the system, used only for the centered modal layer.
+- **Grouped Row:** A near-flat shadow that prevents pale grouped controls from disappearing into the canvas.
 
 ### Named Rules
 
-**The Flat Until Active Rule.** Resting surfaces rely on tone and border; elevation appears only for focus, hover, or panel transition.
+**The Flat-by-Default Rule.** Resting content surfaces use tone and dividers; elevation belongs only to functional floating layers.
 
 ## Shapes
 
-The form language is gently curved and compact. Small status and filter elements use 8–10px corners, controls and cards use 11–14px corners, and the composer uses the broadest 16px curve. Borders are thin and cool. Circular dots and step nodes carry status; they are functional markers, not ornament.
+Pegas uses gently rounded rectangles rather than pills for ordinary controls. Small fields and buttons use 10px corners, navigation and grouped rows use 12px, conversation surfaces use 16px, the settings dialog uses 20px, and the composer uses 22px. Circular geometry is reserved for compact icon actions, status dots, and radio-like indicators; count badges may use a full pill radius.
 
-The user message bubble is the only intentionally asymmetric silhouette: three 15px corners and a 4px lower-right tail. Keep signature shapes quiet, aligned to the grid, and free of ornamental clipping.
+Borders are quiet and structural. Use the strong line for interactive boundaries and the lighter line for internal dividers. Do not add ornamental outlines, clipped novelty shapes, or gradient borders. The P and robot marks are the only recurring branded silhouettes.
 
 ## Components
 
-Components feel precise, calm, and ready to inspect. Every interactive component has a visible focus ring; hover changes remain small and immediate.
-
 ### Buttons
 
-- **Shape:** Compact curves (`rounded.status` through `rounded.control`) with 36–42px square or minimum-height targets.
-- **Primary:** Cobalt send actions use white iconography; the mobile Task action uses deep cobalt with a label.
-- **Hover / Focus:** Darken cobalt slightly on hover and use the shared 3px translucent cobalt focus outline with a 2px offset.
-- **Disabled:** Replace the accent with a quiet cool gray and preserve an unmistakable disabled cursor and contrast change.
-- **Icon controls:** Use transparent backgrounds at rest; reveal a quiet neutral fill on hover or active state.
-- **Dictation:** The circular microphone sits beside Send. Its cool neutral rest state keeps sending primary; active recording alone turns cobalt and swaps the microphone for a stop icon. Permission and transcription work use the same control with a spinner, while status copy remains in the composer footer.
+- **Shape:** Compact rounded rectangles for text actions and true circles for icon-only actions.
+- **Primary:** Pegas blue with white text; the settings save action uses a 36px minimum height and compact horizontal padding.
+- **Hover / Focus:** Hover may deepen to core ink; keyboard focus uses a clearly offset blue outline. Pressed navigation and icon actions may compress subtly.
+- **Secondary / Ghost:** Neutral paper or transparent surfaces with ink text and a quiet neutral hover fill.
 
 ### Chips
 
-- **Style:** Status labels pair a small semantic dot with compact text on a pale neutral or semantic wash.
-- **State:** The task filter is a two-option segmented control; only the selected option becomes clean paper with a subtle shadow.
+- **Style:** Small neutral metadata capsules use subdued ink on a faint gray fill; blue is reserved for an actual selected or progressed state.
+- **State:** Counts, task stages, and status tags remain compact, tabular where numeric, and subordinate to the row title.
 
 ### Cards / Containers
 
-- **Task Pulse:** Clean paper, a strong cool border, a 14px curve, and a one-pixel semantic state rail on the left. It contains status, title, a four-stage progress strip, execution count, and one detail affordance.
-- **Run Record:** A lightly bordered, 11px-radius record on a translucent paper surface; status sits opposite the run label and metadata stays aligned in definition rows.
-- **Task List Item:** Borderless at rest and full-width; a faint paper fill appears on hover instead of adding elevation.
+- **Corner Style:** Conversation and task containers use gentle 14–16px corners; settings groups use 12px.
+- **Background:** Prefer paper for interactive grouped content and conversation gray for Pegas-authored or summarized state.
+- **Shadow Strategy:** Flat by default; grouped settings rows may use the near-flat grouped-row shadow.
+- **Border:** Use one quiet structural border, with internal dividers between related rows.
+- **Internal Padding:** Typically 12–16px; larger profile surfaces may use 22–24px.
 
 ### Inputs / Fields
 
-- **Composer:** A paper surface with a 16px curve, cool border, ambient shadow, and a border/shadow increase on `:focus-within`. The text area itself remains borderless.
-- **Token Field:** A 44px minimum-height white field with a 9px curve and a clear focus outline.
-- **Error / Disabled:** Errors appear in the dedicated red recovery system; disabled composition is visibly unavailable, never merely lower-opacity text.
+- **Style:** Paper surface, strong neutral border, 10–11px corners, and a minimum 40px height. Textareas inherit the same visual language at a larger size.
+- **Focus:** Shift the border toward Pegas blue and show the shared offset focus outline without adding glow.
+- **Error / Disabled:** Use semantic color and copy together; disabled actions move to a low-contrast neutral surface rather than relying on opacity alone.
 
 ### Navigation
 
-The desktop identity rail is deep cobalt and intentionally narrow. Navigation buttons are 42px squares with 11px corners; active and hover states use a translucent white fill. On mobile, navigation collapses to identity, refresh, and a labeled Task action in the header.
+The desktop rail uses 48px rows, compact icons, sentence-case labels, and a neutral selected fill. At medium widths it becomes an 88px icon rail; on mobile it becomes a 62px top bar with 44px targets. Selected navigation remains neutral—the Pegas mark and small counts carry the blue identity.
 
-### Task Workbench
+### Conversation Composer
 
-The workbench is the personal control center reached on demand. Its list, filters, task stages, run records, output, and timing sit on one cool panel plane. Desktop keeps it beside the conversation; mobile turns it into a full-screen dialog with focus containment, explicit close/back actions, and a 220ms right-to-left entrance. All meaningful motion collapses under reduced-motion preferences.
+The composer is a bottom capsule with a quiet border, one ambient shadow, readable 1rem input text, and circular attachment, dictation, and send actions. It must feel like the primary place to act without becoming a large hero card. Focus deepens the shadow and shifts the boundary toward blue.
+
+### Settings Dialog
+
+The settings overlay keeps categories, scrollable detail, and save state visibly separate. Grouped rows use 12px corners and internal dividers; the fixed footer preserves the primary action while content scrolls. Mobile uses the same hierarchy as a full-height sheet with horizontal tabs.
 
 ## Do's and Don'ts
 
 ### Do:
 
-- **Do** keep the conversation and composer visually dominant on first view.
-- **Do** express task progress as a compact pulse in the conversation before revealing runs and metadata.
-- **Do** use cobalt selectively for active execution, actions, focus, and progress.
-- **Do** preserve the same task information hierarchy across desktop and mobile.
-- **Do** pair every semantic color with plain-language status copy.
+- **Do** keep dialogue and durable task state in one continuous, inspectable flow.
+- **Do** use Pegas blue sparingly for identity, selection, progress, focus, and primary actions.
+- **Do** preserve the 280px → 88px → 62px navigation transformation across desktop, compact desktop, and mobile.
+- **Do** use tonal layering and quiet dividers before reaching for shadow or color.
+- **Do** preserve clear focus indication, readable contrast, reduced-motion behavior, and 44px coarse-pointer targets.
 
 ### Don't:
 
-- **Don't** make users enter a project, task manager, or runtime view before they can speak naturally.
-- **Don't** turn the default view into a dense dashboard of counts, logs, or system controls.
-- **Don't** use glow, glass, decorative gradients, or saturated color fields.
-- **Don't** expose sessions, workers, or model selection in the conversation-first layer.
-- **Don't** add shadows to resting surfaces when a cool tonal layer or fine rule can define structure.
+- **Don't** introduce decorative gradients, cobalt-tinted paper fields, or ornamental effects.
+- **Don't** turn the interface into a collection of generic dashboard cards or oversized hero panels.
+- **Don't** use Pegas blue as a broad background wash or decoration unrelated to state or action.
+- **Don't** make transport, runtime, or implementation details louder than the user's conversation and tasks.
+- **Don't** replace the Pegas P or robot identity with unrelated mascots or borrowed brand motifs.

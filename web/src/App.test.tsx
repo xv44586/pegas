@@ -186,6 +186,18 @@ describe('Pegas web app', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: '任务首页' }))
+    expect(
+      await screen.findByRole('heading', { name: '首页', level: 1 }),
+    ).toBeTruthy()
+    expect(
+      screen.getByRole('heading', { name: 'Pegas', level: 2 }),
+    ).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Pegas 设置' }))
+    expect(
+      await screen.findByRole('heading', { name: 'Pegas 设置', level: 1 }),
+    ).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Agent 模型' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '设置' }))
 
     expect(
@@ -193,6 +205,7 @@ describe('Pegas web app', () => {
     ).toBeTruthy()
     expect(screen.queryByText(/Codex/)).toBeNull()
     expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual([
+      'Pegas',
       '模型与供应商',
       '任务路由',
       '语音与输入',
@@ -390,7 +403,7 @@ describe('Pegas web app', () => {
     )
 
     render(<App />)
-    fireEvent.click(screen.getByRole('button', { name: /任务/ }))
+    fireEvent.click(screen.getByRole('button', { name: '任务首页' }))
 
     expect(
       await screen.findByRole('heading', { name: '任务看板' }),
@@ -421,7 +434,7 @@ describe('Pegas web app', () => {
     expect(screen.getByRole('heading', { name: '整理发布说明' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '设置' }))
     expect(screen.queryByRole('complementary', { name: '工作区' })).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: '任务' }))
+    fireEvent.click(screen.getByRole('button', { name: '任务首页' }))
     expect(screen.getByRole('complementary', { name: '工作区' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '关闭工作区' }))
     expect(screen.queryByRole('complementary', { name: '工作区' })).toBeNull()
@@ -530,7 +543,7 @@ describe('Pegas web app', () => {
       }),
     )
     render(<App />)
-    fireEvent.click(screen.getByRole('button', { name: '任务' }))
+    fireEvent.click(screen.getByRole('button', { name: '任务首页' }))
     fireEvent.click(
       await screen.findByRole('button', { name: '打开任务现场：可重试的任务' }),
     )
