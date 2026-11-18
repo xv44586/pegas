@@ -123,6 +123,20 @@ export interface SettingsResponse {
   settings: RuntimeSettings
   capabilities: SettingsCapabilities
   speech?: SpeechSettings
+  rewrite?: RewriteSettings
+}
+
+interface RewriteSettings {
+  mode: 'router' | 'custom'
+  protocol: 'openai-chat' | 'anthropic-messages'
+  baseUrl: string
+  model: string
+  hasApiKey: boolean
+}
+
+export interface RewriteSettingsDraft extends RewriteSettings {
+  apiKey: string
+  clearApiKey: boolean
 }
 
 interface SpeechSettings {

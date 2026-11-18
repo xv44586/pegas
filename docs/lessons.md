@@ -111,13 +111,13 @@
 
 - Rule：新增外部服务连接表单时，提供基于当前未保存配置的真实请求测试和可理解的结果反馈。
 - Why：用户可以填入语音地址、模型和密钥，却要保存并返回对话录音后才知道连接是否可用。
-- Feature：VOICE-001
-- Evidence：用户提供的语音设置截图；`test/control-plane.test.ts` 未保存连接探测、失败脱敏回归与 Web 录音测试回归。
+- Feature：VOICE-001、SETTINGS-001
+- Evidence：用户提供的语音与改写设置截图；`test/control-plane.test.ts` 未保存连接探测、失败脱敏及改写回归，`web/src/App.test.tsx` 对应交互回归。
 - Seen：1（2026-11-18）
 - Severity：normal
 - Status：Observed
 - Enforcement：尚未晋升；本轮以回归测试覆盖。
-- Owner / next action：若其他外部连接重复出现同类问题，再评估统一门禁。
+- Owner / next action：同日改写服务再次出现缺少测试入口，后续独立日期复发时评估统一门禁。
 
 <!--
 ### LESSON-YYYYMMDD-NN：简短标题

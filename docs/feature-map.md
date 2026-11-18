@@ -42,6 +42,8 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 | QUALITY-001  | 格式、Lint、类型、测试、构建、smoke 和经验晋升流程形成统一质量门禁                 | Usable   | `package.json`, `.github/workflows/ci.yml`, `docs/lessons.md`                                                                        | `pnpm check`, `pnpm smoke`, PR evidence checklist                                                            | 分支保护、发布门禁、Lesson 自动 Guard        |
 | QUALITY-002  | 覆盖率下限和无用代码检查防止质量倒退                                               | Usable   | `vitest.config.ts`, `knip.json`                                                                                                      | `pnpm test:coverage`, `pnpm deadcode`                                                                        | 逐步提高阈值、补 UI 与 Recovery 测试         |
 
+**SETTINGS-001 更新（2026-11-18）**：独立改写服务和未保存配置测试已形成 Usable 闭环。权威实现为 `src/rewrite/*`、`src/control-plane/server.ts`、`src/storage/sqlite-store.ts` 与 `web/src/App.tsx`；自动化证据包括改写草稿探测、错误脱敏、密钥地址切换、Web 测试交互回归，以及 `pnpm check` 和 `pnpm smoke`。下一缺口仍为多用户 scope、按 Task 覆盖和持续健康监控。
+
 ## Feature 开发协议
 
 每次功能开发都遵循下面的顺序：

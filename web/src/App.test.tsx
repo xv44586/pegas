@@ -83,6 +83,16 @@ describe('Pegas web app', () => {
           : input instanceof URL
             ? input.href
             : input
+      if (path === '/v1/settings/rewrite/test' && init?.method === 'POST') {
+        return Promise.resolve(
+          Response.json({
+            original: '呃，请安排会议',
+            rewritten: '请安排会议。',
+            changed: true,
+            latencyMs: 850,
+          }),
+        )
+      }
       if (path === '/v1/settings' && init?.method === 'PUT') {
         const body = parseRequestBody(init)
         const customProvider = {
@@ -240,6 +250,32 @@ describe('Pegas web app', () => {
     })
     fireEvent.click(screen.getByRole('tab', { name: '语音与输入' }))
     fireEvent.click(screen.getByRole('radio', { name: /轻量校正/ }))
+    fireEvent.click(screen.getByRole('radio', { name: /独立改写服务/ }))
+    fireEvent.change(screen.getByLabelText('API 根地址'), {
+      target: { value: 'https://rewrite.example.com/v1' },
+    })
+    fireEvent.change(screen.getByLabelText('改写模型'), {
+      target: { value: 'rewrite-model' },
+    })
+    fireEvent.change(screen.getByLabelText('测试文本'), {
+      target: { value: '呃，请安排会议' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '测试改写' }))
+    expect(await screen.findByText('请安排会议。')).toBeTruthy()
+    expect(
+      parseRequestBody(
+        fetchMock.mock.calls.find(
+          ([path, init]) =>
+            path === '/v1/settings/rewrite/test' && init?.method === 'POST',
+        )?.[1],
+      ),
+    ).toMatchObject({
+      rewrite: {
+        mode: 'custom',
+        baseUrl: 'https://rewrite.example.com/v1',
+        model: 'rewrite-model',
+      },
+    })
     fireEvent.click(screen.getByRole('tab', { name: '隐私' }))
     fireEvent.click(screen.getByRole('radio', { name: /开启脱敏/ }))
     fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
@@ -257,6 +293,11 @@ describe('Pegas web app', () => {
       agentModelName: 'agent-fast',
       privacyMode: 'mask',
       rewriteMode: 'light',
+      rewrite: {
+        mode: 'custom',
+        baseUrl: 'https://rewrite.example.com/v1',
+        model: 'rewrite-model',
+      },
       provider: {
         name: '公司模型网关',
         protocol: 'openai-chat',

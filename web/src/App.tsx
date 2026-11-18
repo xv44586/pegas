@@ -50,6 +50,7 @@ import type {
   SettingsCapabilities,
   SettingsResponse,
   SpeechSettingsDraft,
+  RewriteSettingsDraft,
   Snapshot,
   Task,
   TaskStatus,
@@ -73,12 +74,24 @@ interface SettingsClient {
     settings: RuntimeSettings,
     provider: ModelProviderDraft,
     speech?: SpeechSettingsDraft,
+    rewrite?: RewriteSettingsDraft,
   ): Promise<SettingsResponse>
   testSpeechConnection(
     audio: Blob,
     speech: SpeechSettingsDraft,
   ): Promise<{
     transcript: { text: string; language?: string }
+    latencyMs: number
+  }>
+  testRewrite(
+    text: string,
+    rewrite: RewriteSettingsDraft,
+    settings: RuntimeSettings,
+    provider: ModelProviderDraft,
+  ): Promise<{
+    original: string
+    rewritten: string
+    changed: boolean
     latencyMs: number
   }>
 }
@@ -719,6 +732,7 @@ function SettingsPage({ api }: { api: SettingsClient }) {
   const [capabilities, setCapabilities] = useState<SettingsCapabilities>()
   const [providerDraft, setProviderDraft] = useState<ModelProviderDraft>()
   const [speechDraft, setSpeechDraft] = useState<SpeechSettingsDraft>()
+  const [rewriteDraft, setRewriteDraft] = useState<RewriteSettingsDraft>()
   const [savedSpeech, setSavedSpeech] = useState<SettingsResponse['speech']>()
   const [routerModels, setRouterModels] = useState<ModelCatalogItem[]>([])
   const [modelSearch, setModelSearch] = useState('')
@@ -751,6 +765,15 @@ function SettingsPage({ api }: { api: SettingsClient }) {
           baseUrl: response.speech?.baseUrl ?? '',
           model: response.speech?.model ?? 'Qwen/Qwen3-ASR-0.6B',
           hasApiKey: response.speech?.hasApiKey ?? false,
+          apiKey: '',
+          clearApiKey: false,
+        })
+        setRewriteDraft({
+          mode: response.rewrite?.mode ?? 'router',
+          protocol: response.rewrite?.protocol ?? 'openai-chat',
+          baseUrl: response.rewrite?.baseUrl ?? '',
+          model: response.rewrite?.model ?? '',
+          hasApiKey: response.rewrite?.hasApiKey ?? false,
           apiKey: '',
           clearApiKey: false,
         })
@@ -799,12 +822,20 @@ function SettingsPage({ api }: { api: SettingsClient }) {
           model: speechDraft.model.trim(),
           apiKey: speechDraft.apiKey.trim(),
         },
+        rewriteDraft && {
+          ...rewriteDraft,
+          baseUrl: rewriteDraft.baseUrl.trim(),
+          model: rewriteDraft.model.trim(),
+          apiKey: rewriteDraft.apiKey.trim(),
+        },
       )
       setSettings(response.settings)
       setCapabilities(response.capabilities)
       setSavedSpeech(response.speech)
       if (response.speech)
         setSpeechDraft({ ...response.speech, apiKey: '', clearApiKey: false })
+      if (response.rewrite)
+        setRewriteDraft({ ...response.rewrite, apiKey: '', clearApiKey: false })
       const selected = response.capabilities.providers.find(
         provider => provider.id === response.settings.modelProvider,
       )
@@ -833,6 +864,16 @@ function SettingsPage({ api }: { api: SettingsClient }) {
     setDirty(true)
     setSaved(false)
     setSpeechDraft(current =>
+      current ? { ...current, [key]: value } : current,
+    )
+  }
+  const updateRewrite = <Key extends keyof RewriteSettingsDraft>(
+    key: Key,
+    value: RewriteSettingsDraft[Key],
+  ) => {
+    setDirty(true)
+    setSaved(false)
+    setRewriteDraft(current =>
       current ? { ...current, [key]: value } : current,
     )
   }
@@ -965,6 +1006,9 @@ function SettingsPage({ api }: { api: SettingsClient }) {
     providerDraft.baseUrl.trim() &&
     (speechDraft?.provider !== 'openai-compatible' ||
       (speechDraft.baseUrl.trim() && speechDraft.model.trim())) &&
+    (settings.rewriteMode !== 'light' ||
+      rewriteDraft?.mode !== 'custom' ||
+      (rewriteDraft.baseUrl.trim() && rewriteDraft.model.trim())) &&
     (settings.agentModelMode === 'profile' ||
       (settings.agentModelProvider.trim() && settings.agentModelName.trim())),
   )
@@ -1689,6 +1733,130 @@ function SettingsPage({ api }: { api: SettingsClient }) {
                       onChange={() => update('rewriteMode', 'disabled')}
                     />
                   </fieldset>
+                  {settings.rewriteMode === 'light' && rewriteDraft && (
+                    <div className="rewrite-configuration">
+                      <fieldset className="settings-choice-group rewrite-source-choice">
+                        <legend>改写模型来源</legend>
+                        <SettingChoice
+                          name="rewrite-source"
+                          value="router"
+                          checked={rewriteDraft.mode === 'router'}
+                          title="跟随 Router 模型"
+                          description="使用模型页选择的连接与模型。"
+                          onChange={() => updateRewrite('mode', 'router')}
+                        />
+                        <SettingChoice
+                          name="rewrite-source"
+                          value="custom"
+                          checked={rewriteDraft.mode === 'custom'}
+                          title="独立改写服务"
+                          description="为文字校正单独指定服务和模型。"
+                          onChange={() => updateRewrite('mode', 'custom')}
+                        />
+                      </fieldset>
+                      {rewriteDraft.mode === 'custom' && (
+                        <div className="rewrite-fields">
+                          <label
+                            className="settings-text-field"
+                            htmlFor="rewrite-protocol"
+                          >
+                            <span>接口协议</span>
+                            <select
+                              id="rewrite-protocol"
+                              value={rewriteDraft.protocol}
+                              onChange={event =>
+                                updateRewrite(
+                                  'protocol',
+                                  event.target
+                                    .value as RewriteSettingsDraft['protocol'],
+                                )
+                              }
+                            >
+                              <option value="openai-chat">
+                                OpenAI Chat Completions
+                              </option>
+                              <option value="anthropic-messages">
+                                Anthropic Messages
+                              </option>
+                            </select>
+                          </label>
+                          <label
+                            className="settings-text-field"
+                            htmlFor="rewrite-base-url"
+                          >
+                            <span>API 根地址</span>
+                            <input
+                              id="rewrite-base-url"
+                              type="url"
+                              required
+                              placeholder="http://127.0.0.1:3425/v1"
+                              value={rewriteDraft.baseUrl}
+                              onChange={event =>
+                                updateRewrite('baseUrl', event.target.value)
+                              }
+                            />
+                          </label>
+                          <label
+                            className="settings-text-field"
+                            htmlFor="rewrite-model"
+                          >
+                            <span>改写模型</span>
+                            <input
+                              id="rewrite-model"
+                              required
+                              value={rewriteDraft.model}
+                              placeholder="provider/model"
+                              onChange={event =>
+                                updateRewrite('model', event.target.value)
+                              }
+                            />
+                          </label>
+                          <label
+                            className="settings-text-field"
+                            htmlFor="rewrite-api-key"
+                          >
+                            <span>API key（可选）</span>
+                            <input
+                              id="rewrite-api-key"
+                              type="password"
+                              autoComplete="off"
+                              value={rewriteDraft.apiKey}
+                              placeholder={
+                                rewriteDraft.hasApiKey &&
+                                !rewriteDraft.clearApiKey
+                                  ? '已保存，留空则保持不变'
+                                  : '本地服务可留空'
+                              }
+                              onChange={event =>
+                                updateRewrite('apiKey', event.target.value)
+                              }
+                            />
+                          </label>
+                          {rewriteDraft.hasApiKey && (
+                            <label className="speech-clear-key">
+                              <input
+                                type="checkbox"
+                                checked={rewriteDraft.clearApiKey}
+                                onChange={event =>
+                                  updateRewrite(
+                                    'clearApiKey',
+                                    event.target.checked,
+                                  )
+                                }
+                              />
+                              清除已保存的 API key
+                            </label>
+                          )}
+                        </div>
+                      )}
+                      <RewriteConnectionTest
+                        api={api}
+                        rewrite={rewriteDraft}
+                        settings={settings}
+                        provider={providerDraft}
+                      />
+                    </div>
+                  )}
                 </section>
               )}
             </div>
@@ -1718,6 +1886,132 @@ function SettingsPage({ api }: { api: SettingsClient }) {
         </div>
       )}
     </section>
+  )
+}
+
+function RewriteConnectionTest({
+  api,
+  rewrite,
+  settings,
+  provider,
+}: {
+  api: SettingsClient
+  rewrite: RewriteSettingsDraft
+  settings: RuntimeSettings
+  provider: ModelProviderDraft
+}) {
+  const [sample, setSample] = useState(
+    '呃，帮我把明天上午的会议安排一下，然后提醒我带上材料。',
+  )
+  const [result, setResult] = useState<{
+    original: string
+    rewritten: string
+    changed: boolean
+    latencyMs: number
+  }>()
+  const [error, setError] = useState('')
+  const [testing, setTesting] = useState(false)
+  const requestId = useRef(0)
+  useEffect(() => {
+    requestId.current += 1
+    setResult(undefined)
+    setError('')
+    setTesting(false)
+  }, [
+    rewrite.mode,
+    rewrite.protocol,
+    rewrite.baseUrl,
+    rewrite.model,
+    rewrite.apiKey,
+    rewrite.clearApiKey,
+    settings.modelProvider,
+    settings.modelName,
+    settings.privacyMode,
+    provider.baseUrl,
+    provider.protocol,
+    provider.apiKey,
+    provider.clearApiKey,
+  ])
+  const test = async () => {
+    const activeId = ++requestId.current
+    setTesting(true)
+    setError('')
+    setResult(undefined)
+    try {
+      const response = await api.testRewrite(
+        sample,
+        rewrite,
+        settings,
+        provider,
+      )
+      if (activeId === requestId.current) setResult(response)
+    } catch (caught) {
+      if (activeId === requestId.current)
+        setError(
+          caught instanceof Error
+            ? caught.message
+            : '改写测试失败，请检查连接后重试',
+        )
+    } finally {
+      if (activeId === requestId.current) setTesting(false)
+    }
+  }
+  return (
+    <div className="rewrite-test-panel">
+      <div>
+        <strong>试写一段文字</strong>
+        <p>用当前填写的连接测试，结果仅用于预览，不会保存设置或发送消息。</p>
+      </div>
+      <label htmlFor="rewrite-sample">测试文本</label>
+      <textarea
+        id="rewrite-sample"
+        value={sample}
+        maxLength={4000}
+        rows={3}
+        onChange={event => {
+          requestId.current += 1
+          setSample(event.target.value)
+          setResult(undefined)
+          setTesting(false)
+        }}
+      />
+      <button
+        type="button"
+        className="speech-test-button"
+        disabled={
+          testing ||
+          !sample.trim() ||
+          (rewrite.mode === 'custom' &&
+            (!rewrite.baseUrl.trim() || !rewrite.model.trim()))
+        }
+        onClick={() => void test()}
+      >
+        {testing ? '正在测试…' : '测试改写'}
+      </button>
+      {result && (
+        <div className="rewrite-test-result" role="status">
+          <strong>
+            {result.changed ? '改写完成' : '未发现需要校正的内容'} ·{' '}
+            {(result.latencyMs / 1000).toFixed(1)} 秒
+          </strong>
+          <div className="rewrite-result-grid">
+            <div>
+              <span>原文</span>
+              <p>{result.original}</p>
+            </div>
+            <div>
+              <span>改写后</span>
+              <p>{result.rewritten}</p>
+            </div>
+          </div>
+        </div>
+      )}
+      {error && (
+        <p className="speech-test-error" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
   )
 }
 

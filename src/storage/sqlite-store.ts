@@ -29,6 +29,11 @@ import {
   type SpeechConnection,
   type SpeechSettingsSummary,
 } from '../speech/speech-settings.js'
+import {
+  defaultRewriteConnection,
+  type RewriteConnection,
+  type RewriteSettingsSummary,
+} from '../rewrite/rewrite-settings.js'
 
 const schema = `
 PRAGMA journal_mode = WAL;
@@ -259,6 +264,18 @@ CREATE TABLE speech_connections (
 );
 `
 
+const migration9 = `
+CREATE TABLE rewrite_connections (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  mode TEXT NOT NULL CHECK (mode IN ('router', 'custom')),
+  protocol TEXT NOT NULL CHECK (protocol IN ('openai-chat', 'anthropic-messages')),
+  base_url TEXT NOT NULL,
+  model TEXT NOT NULL,
+  api_key_ciphertext TEXT,
+  updated_at TEXT NOT NULL
+);
+`
+
 interface InboxRow {
   id: string
   user_id: string
@@ -359,6 +376,10 @@ export interface SpeechConnectionWrite extends SpeechConnection {
   clearApiKey?: boolean
 }
 
+export interface RewriteConnectionWrite extends RewriteConnection {
+  clearApiKey?: boolean
+}
+
 export class SettingsRevisionConflictError extends Error {
   constructor() {
     super('设置已在其他设备更新，请刷新后重试')
@@ -390,6 +411,7 @@ export class PegasStore {
     this.#migrate(6, migration6)
     this.#migrate(7, migration7)
     this.#migrate(8, migration8)
+    this.#migrate(9, migration9)
   }
 
   // An earlier UI candidate used v5 for task retries before provider v5
@@ -545,6 +567,41 @@ export class PegasStore {
     }
   }
 
+  getRewriteConnection(): RewriteConnection {
+    const row = this.#database
+      .prepare('SELECT * FROM rewrite_connections WHERE id = 1')
+      .get() as
+      | {
+          mode: RewriteConnection['mode']
+          protocol: RewriteConnection['protocol']
+          base_url: string
+          model: string
+          api_key_ciphertext: string | null
+        }
+      | undefined
+    if (!row) return defaultRewriteConnection
+    return {
+      mode: row.mode,
+      protocol: row.protocol,
+      baseUrl: row.base_url,
+      model: row.model,
+      ...(row.api_key_ciphertext
+        ? { apiKeyCiphertext: row.api_key_ciphertext }
+        : {}),
+    }
+  }
+
+  getRewriteSettings(): RewriteSettingsSummary {
+    const connection = this.getRewriteConnection()
+    return {
+      mode: connection.mode,
+      protocol: connection.protocol,
+      baseUrl: connection.baseUrl,
+      model: connection.model,
+      hasApiKey: Boolean(connection.apiKeyCiphertext),
+    }
+  }
+
   updateRuntimeSettings(
     expectedRevision: number,
     settings: RuntimeSettingsSelection,
@@ -630,6 +687,7 @@ export class PegasStore {
     settings: RuntimeSettingsSelection,
     connection: ModelProviderConnectionWrite,
     speech?: SpeechConnectionWrite,
+    rewrite?: RewriteConnectionWrite,
   ): RuntimeSettings {
     this.#database.exec('BEGIN IMMEDIATE')
     try {
@@ -682,6 +740,32 @@ export class PegasStore {
             updated_at = excluded.updated_at`,
           )
           .run(speech.provider, speech.baseUrl, speech.model, speechKey, now)
+      }
+      if (rewrite) {
+        const existingRewrite = this.getRewriteConnection()
+        const rewriteKey =
+          rewrite.apiKeyCiphertext ??
+          (rewrite.clearApiKey || rewrite.baseUrl !== existingRewrite.baseUrl
+            ? null
+            : (existingRewrite.apiKeyCiphertext ?? null))
+        this.#database
+          .prepare(
+            `INSERT INTO rewrite_connections
+            (id, mode, protocol, base_url, model, api_key_ciphertext, updated_at)
+           VALUES (1, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET mode = excluded.mode,
+             protocol = excluded.protocol, base_url = excluded.base_url,
+             model = excluded.model, api_key_ciphertext = excluded.api_key_ciphertext,
+             updated_at = excluded.updated_at`,
+          )
+          .run(
+            rewrite.mode,
+            rewrite.protocol,
+            rewrite.baseUrl,
+            rewrite.model,
+            rewriteKey,
+            now,
+          )
       }
       const result = this.#database
         .prepare(
