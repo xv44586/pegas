@@ -1,5 +1,4 @@
 import {
-  ArrowUp,
   ArrowUpRight,
   Bot,
   Check,
@@ -13,19 +12,14 @@ import {
   CircleDashed,
   Columns3,
   FileOutput,
-  Home,
   KeyRound,
   ListTodo,
   Mic,
   MessageSquareText,
-  PanelRightOpen,
-  Plus,
   Search,
-  Settings2,
   ShieldCheck,
   Sparkles,
   Square,
-  X,
 } from 'lucide-react'
 import {
   type KeyboardEvent,
@@ -39,6 +33,24 @@ import {
 
 import { ApiError, PegasApi } from './api'
 import { MarkdownMessage } from './MarkdownMessage'
+import {
+  DsArrowUpIcon,
+  DsCloseIcon,
+  DsDotsIcon,
+  DsFolderIcon,
+  DsGearIcon,
+  DsMainStarIcon,
+  DsMicIcon,
+  DsPanelIcon,
+  DsPlugIcon,
+  DsPlusIcon,
+  DsReplyIcon,
+  DsSearchIcon,
+  DsSidebarIcon,
+  DsSmileIcon,
+  DsWaveIcon,
+  DsWhaleMark,
+} from './DsBotIcons'
 import { useVoiceDictation } from './useVoiceDictation'
 import type {
   DshModelCatalog,
@@ -116,7 +128,7 @@ type TimelineItem =
   | { kind: 'event'; createdAt: string; value: InboxEvent }
   | { kind: 'message'; createdAt: string; value: OutboxMessage }
 
-type AppView = 'conversation' | 'tasks' | 'bot' | 'settings'
+type AppView = 'conversation' | 'tasks' | 'bot' | 'settings' | 'plugins'
 
 function viewFromUrl(): AppView {
   const parameters = new URLSearchParams(window.location.search)
@@ -125,10 +137,11 @@ function viewFromUrl(): AppView {
     view === 'conversation' ||
     view === 'tasks' ||
     view === 'bot' ||
-    view === 'settings'
+    view === 'settings' ||
+    view === 'plugins'
   )
     return view
-  return parameters.has('task') ? 'tasks' : 'conversation'
+  return 'conversation'
 }
 
 export function App() {
@@ -145,15 +158,20 @@ export function App() {
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [activeView, setActiveView] = useState<AppView>(viewFromUrl)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [workspaceOpen, setWorkspaceOpen] = useState(Boolean(initialTaskId))
   const workspaceVisible =
-    workspaceOpen && activeView !== 'settings' && activeView !== 'bot'
+    workspaceOpen &&
+    activeView !== 'settings' &&
+    activeView !== 'bot' &&
+    activeView !== 'plugins'
   const [selectedTaskId, setSelectedTaskId] = useState(initialTaskId)
   const [attachmentHelpOpen, setAttachmentHelpOpen] = useState(false)
   const [voiceGateError, setVoiceGateError] = useState('')
   const feedEnd = useRef<HTMLDivElement>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
   const workspaceTrigger = useRef<HTMLElement | null>(null)
+  const modalTrigger = useRef<HTMLElement | null>(null)
   const api = useMemo(() => new PegasApi(userId, token), [token])
   const appendTranscript = useCallback((text: string) => {
     setDraft(current => `${current}${current.trim() ? '\n' : ''}${text}`)
@@ -247,6 +265,34 @@ export function App() {
   }, [snapshot.events, snapshot.messages])
 
   const selectedTask = snapshot.tasks.find(task => task.id === selectedTaskId)
+  const startingNewTask = selectedTaskId === '__new__'
+  const sidebarSelectedTask = startingNewTask
+    ? undefined
+    : (selectedTask ??
+      snapshot.tasks.find(task => isActiveTask(task.status)) ??
+      snapshot.tasks[0])
+
+  function startNewTask(): void {
+    setActiveView('conversation')
+    setSelectedTaskId('__new__')
+    setWorkspaceOpen(false)
+    const url = new URL(window.location.href)
+    url.searchParams.delete('view')
+    url.searchParams.delete('task')
+    window.history.pushState({ view: 'conversation' }, '', url)
+    usePrompt('')
+  }
+
+  function selectTask(taskId: string): void {
+    rememberWorkspaceTrigger()
+    setActiveView('conversation')
+    setSelectedTaskId(taskId)
+    setWorkspaceOpen(true)
+    const url = new URL(window.location.href)
+    url.searchParams.delete('view')
+    url.searchParams.set('task', taskId)
+    window.history.pushState({ taskId }, '', url)
+  }
 
   function openTask(taskId: string): void {
     rememberWorkspaceTrigger()
@@ -302,7 +348,7 @@ export function App() {
     setSending(true)
     setError('')
     try {
-      await api.sendMessage(text)
+      await api.sendMessage(text, sidebarSelectedTask?.id)
       setDraft('')
       await loadSnapshot()
       window.setTimeout(
@@ -345,73 +391,176 @@ export function App() {
   }
 
   return (
-    <div className={`app-shell${workspaceVisible ? ' has-workspace' : ''}`}>
+    <div
+      className={`app-shell${workspaceVisible ? ' has-workspace' : ''}${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}
+    >
       <a className="skip-link" href="#page-title">
         跳到主要内容
       </a>
       <aside
         className="identity-rail"
         aria-label="Pegas 导航"
-        aria-hidden={compact && workspaceVisible ? true : undefined}
-        inert={compact && workspaceVisible ? true : undefined}
+        aria-hidden={
+          (compact && workspaceVisible) ||
+          activeView === 'settings' ||
+          activeView === 'bot' ||
+          activeView === 'plugins'
+            ? true
+            : undefined
+        }
+        inert={
+          (compact && workspaceVisible) ||
+          activeView === 'settings' ||
+          activeView === 'bot' ||
+          activeView === 'plugins'
+            ? true
+            : undefined
+        }
       >
-        <button
-          className="pegas-mark"
-          aria-label="返回对话"
-          onClick={() => navigate('conversation')}
-        >
-          P
-        </button>
-        <div className="rail-brand">
-          <strong>Pegas</strong>
-          <span>Personal agent</span>
-        </div>
-        <nav className="rail-nav" aria-label="主要页面">
+        <div className="task-sidebar-head">
           <button
-            className={`rail-button${activeView === 'tasks' ? ' is-active' : ''}`}
-            aria-label="任务首页"
-            aria-current={activeView === 'tasks' ? 'page' : undefined}
-            onClick={() => navigate('tasks')}
-          >
-            <Home aria-hidden="true" />
-            <span>首页</span>
-            {activeTaskCount > 0 && (
-              <span
-                className="rail-count"
-                aria-label={`${String(activeTaskCount)} 个进行中任务`}
-              >
-                {activeTaskCount}
-              </span>
-            )}
-          </button>
-          <button
-            className={`rail-button${activeView === 'conversation' ? ' is-active' : ''}`}
-            aria-label="对话"
-            aria-current={activeView === 'conversation' ? 'page' : undefined}
+            className="task-sidebar-brand"
+            aria-label="返回对话"
             onClick={() => navigate('conversation')}
           >
-            <MessageSquareText aria-hidden="true" />
-            <span>对话</span>
+            <span className="task-sidebar-brand-mark">
+              <DsWhaleMark size={24} />
+            </span>
+            <strong>Pegas</strong>
+          </button>
+          <div className="task-sidebar-actions" aria-label="任务工具">
+            <button
+              className="ds-round-button"
+              aria-label="任务文件夹"
+              title="任务文件夹"
+              onClick={() => navigate('tasks')}
+            >
+              <DsFolderIcon />
+            </button>
+            <button
+              className="ds-round-button"
+              aria-label="搜索任务"
+              title="搜索任务"
+              onClick={() => navigate('tasks')}
+            >
+              <DsSearchIcon />
+            </button>
+            <button
+              className="ds-round-button"
+              aria-label="新建任务"
+              title="新建任务"
+              onClick={startNewTask}
+            >
+              <DsPlusIcon size={18} />
+            </button>
+            <button
+              className="ds-round-button"
+              aria-label={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
+              title={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
+              aria-expanded={!sidebarCollapsed}
+              onClick={() => setSidebarCollapsed(value => !value)}
+            >
+              <DsSidebarIcon />
+            </button>
+          </div>
+        </div>
+
+        <nav className="task-sidebar-list" aria-label="任务列表">
+          <button
+            type="button"
+            className="task-featured-card"
+            aria-label={
+              sidebarSelectedTask
+                ? `设置任务：${sidebarSelectedTask.title}`
+                : 'Pegas 设置'
+            }
+            onClick={event => {
+              modalTrigger.current = event.currentTarget
+              navigate('bot')
+            }}
+          >
+            <span className="task-featured-mark">
+              <DsWhaleMark size={54} />
+              <span className="task-featured-star">
+                <DsMainStarIcon size={20} />
+              </span>
+            </span>
+            <strong>{sidebarSelectedTask?.title ?? 'Pegas'}</strong>
+            <span>
+              {sidebarSelectedTask
+                ? statusCopy[sidebarSelectedTask.status]
+                : 'Personal agent'}
+            </span>
+          </button>
+
+          <div className="task-rows">
+            {snapshot.tasks.length === 0 ? (
+              <button
+                type="button"
+                className="task-row is-active"
+                aria-label="开始新任务"
+                onClick={startNewTask}
+              >
+                <span className="task-row-mark">
+                  <DsWhaleMark size={34} />
+                </span>
+                <span className="task-row-copy">
+                  <strong>新任务</strong>
+                  <small>告诉 Pegas 你想完成什么</small>
+                </span>
+              </button>
+            ) : (
+              snapshot.tasks.map(task => (
+                <button
+                  type="button"
+                  className={`task-row${sidebarSelectedTask?.id === task.id ? ' is-active' : ''}`}
+                  aria-label={`打开任务：${task.title}`}
+                  aria-current={
+                    sidebarSelectedTask?.id === task.id ? 'page' : undefined
+                  }
+                  key={task.id}
+                  onClick={() => selectTask(task.id)}
+                >
+                  <span className="task-row-mark">
+                    <DsWhaleMark size={34} />
+                  </span>
+                  <span className="task-row-copy">
+                    <strong>{task.title}</strong>
+                    <small>{task.goal}</small>
+                  </span>
+                  {isActiveTask(task.status) && (
+                    <span className="task-unread" aria-hidden="true" />
+                  )}
+                </button>
+              ))
+            )}
+          </div>
+        </nav>
+
+        <div className="task-sidebar-foot">
+          <button
+            className={`ds-foot-button${activeView === 'settings' ? ' is-active' : ''}`}
+            aria-label="设置"
+            aria-current={activeView === 'settings' ? 'page' : undefined}
+            onClick={event => {
+              modalTrigger.current = event.currentTarget
+              navigate('settings')
+            }}
+          >
+            <DsGearIcon />
           </button>
           <button
-            className={`rail-button${activeView === 'bot' ? ' is-active' : ''}`}
-            aria-label="Pegas 设置"
-            aria-current={activeView === 'bot' ? 'page' : undefined}
-            onClick={() => navigate('bot')}
+            className={`ds-foot-button${activeView === 'plugins' ? ' is-active' : ''}`}
+            aria-label="插件"
+            aria-current={activeView === 'plugins' ? 'page' : undefined}
+            onClick={event => {
+              modalTrigger.current = event.currentTarget
+              navigate('plugins')
+            }}
           >
-            <Bot aria-hidden="true" />
-            <span>Pegas</span>
+            <DsPlugIcon />
           </button>
-        </nav>
-        <button
-          className={`rail-button rail-settings${activeView === 'settings' ? ' is-active' : ''}`}
-          aria-label="设置"
-          aria-current={activeView === 'settings' ? 'page' : undefined}
-          onClick={() => navigate('settings')}
-        >
-          <Settings2 aria-hidden="true" />
-          <span>设置</span>
-        </button>
+        </div>
       </aside>
 
       <main
@@ -427,37 +576,28 @@ export function App() {
             <div>
               <h1 id="page-title" tabIndex={-1}>
                 {activeView === 'conversation'
-                  ? '对话'
+                  ? (sidebarSelectedTask?.title ?? 'Pegas')
                   : activeView === 'tasks'
                     ? '首页'
                     : activeView === 'bot'
                       ? 'Pegas 设置'
-                      : '设置'}
+                      : activeView === 'plugins'
+                        ? '插件'
+                        : '设置'}
               </h1>
-              {activeView !== 'settings' && activeView !== 'bot' && (
-                <span>
-                  {activeView === 'conversation'
-                    ? error
-                      ? '连接中断'
-                      : '在线，随时可以开始'
-                    : `${String(activeTaskCount)} 件正在推进`}
-                </span>
-              )}
+              {activeView !== 'settings' &&
+                activeView !== 'bot' &&
+                activeView !== 'plugins' && (
+                  <span>
+                    {activeView === 'conversation'
+                      ? error
+                        ? '连接中断'
+                        : '在线，随时可以开始'
+                      : `${String(activeTaskCount)} 件正在推进`}
+                  </span>
+                )}
             </div>
           </div>
-          {activeView === 'conversation' && (
-            <div className="header-actions">
-              <button
-                className="workspace-toggle"
-                aria-label="打开工作区"
-                aria-expanded={workspaceOpen}
-                onClick={openWorkspace}
-              >
-                <PanelRightOpen aria-hidden="true" />
-                <span>工作区</span>
-              </button>
-            </div>
-          )}
         </header>
 
         <div className="notice-stack">
@@ -530,7 +670,7 @@ export function App() {
                     onClick={() => setAttachmentHelpOpen(false)}
                     aria-label="关闭附件说明"
                   >
-                    <X aria-hidden="true" />
+                    <DsCloseIcon />
                   </button>
                 </div>
               )}
@@ -544,102 +684,107 @@ export function App() {
                 <label className="sr-only" htmlFor="message-composer">
                   告诉 Pegas 你想完成什么
                 </label>
+                <button
+                  type="button"
+                  className="attachment-button"
+                  aria-label="添加附件"
+                  title="添加附件"
+                  aria-expanded={attachmentHelpOpen}
+                  onClick={() => setAttachmentHelpOpen(open => !open)}
+                  disabled={sending || unauthorized}
+                >
+                  <DsPlusIcon />
+                </button>
                 <textarea
                   ref={composer}
                   id="message-composer"
                   value={draft}
                   onChange={event => setDraft(event.target.value)}
                   onKeyDown={handleComposerKeyDown}
-                  placeholder="和 Pegas 一起工作"
-                  rows={2}
+                  placeholder={`给 ${sidebarSelectedTask?.title ?? 'Pegas'} 发消息`}
+                  rows={1}
                   name="message"
                   aria-describedby="composer-hint"
                   disabled={sending || unauthorized}
                 />
-                <div className="composer-footer">
-                  <div className="composer-tools">
+                <span className="composer-status" id="composer-hint">
+                  {dictation.state === 'requesting' && '正在请求麦克风…'}
+                  {dictation.state === 'recording' &&
+                    `正在听写 · ${formatDuration(dictation.elapsedSeconds)}`}
+                  {dictation.state === 'transcribing' && '正在转成文字…'}
+                  {dictation.state === 'idle' && 'Shift + Enter 换行'}
+                </span>
+                <div className="composer-actions">
+                  <div className="dictation-control">
                     <button
                       type="button"
-                      className="attachment-button"
-                      aria-label="添加附件"
-                      title="添加附件"
-                      aria-expanded={attachmentHelpOpen}
-                      onClick={() => setAttachmentHelpOpen(open => !open)}
-                      disabled={sending || unauthorized}
-                    >
-                      <Plus aria-hidden="true" />
-                    </button>
-                    <span className="composer-status" id="composer-hint">
-                      {dictation.state === 'requesting' && '正在请求麦克风…'}
-                      {dictation.state === 'recording' &&
-                        `正在听写 · ${formatDuration(dictation.elapsedSeconds)}`}
-                      {dictation.state === 'transcribing' && '正在转成文字…'}
-                      {dictation.state === 'idle' && (
-                        <span className="composer-shortcut">
-                          Shift + Enter 换行
-                        </span>
-                      )}
-                    </span>
-                  </div>
-                  <div className="composer-actions">
-                    <div className="dictation-control">
-                      <button
-                        type="button"
-                        className={`dictation-button ${
-                          dictation.state === 'recording' ? 'is-recording' : ''
-                        }`}
-                        aria-label={
-                          dictation.state === 'recording'
-                            ? '停止听写'
-                            : dictation.state === 'transcribing'
-                              ? '正在转写语音'
-                              : dictation.state === 'requesting'
-                                ? '正在请求麦克风'
-                                : '开始听写'
-                        }
-                        aria-pressed={dictation.state === 'recording'}
-                        onClick={() => void toggleDictation()}
-                        disabled={
-                          sending ||
-                          unauthorized ||
-                          dictation.state === 'requesting' ||
-                          dictation.state === 'transcribing'
-                        }
-                      >
-                        {dictation.state === 'transcribing' ||
-                        dictation.state === 'requesting' ? (
-                          <span
-                            className="dictation-loader"
-                            aria-hidden="true"
-                          />
-                        ) : dictation.state === 'recording' ? (
-                          <Square aria-hidden="true" />
-                        ) : (
-                          <Mic aria-hidden="true" />
-                        )}
-                      </button>
-                      <span className="dictation-tooltip" role="tooltip">
-                        {dictation.state === 'recording' ? '停止听写' : '听写'}
-                      </span>
-                    </div>
-                    <button
-                      type="submit"
-                      className="send-button"
-                      aria-label={sending ? '正在发送' : '发送给 Pegas'}
+                      className={`dictation-button ${
+                        dictation.state === 'recording' ? 'is-recording' : ''
+                      }`}
+                      aria-label={
+                        dictation.state === 'recording'
+                          ? '停止听写'
+                          : dictation.state === 'transcribing'
+                            ? '正在转写语音'
+                            : dictation.state === 'requesting'
+                              ? '正在请求麦克风'
+                              : '开始听写'
+                      }
+                      aria-pressed={dictation.state === 'recording'}
+                      onClick={() => void toggleDictation()}
                       disabled={
-                        !draft.trim() ||
                         sending ||
                         unauthorized ||
-                        dictationBusy
+                        dictation.state === 'requesting' ||
+                        dictation.state === 'transcribing'
                       }
                     >
-                      {sending ? (
-                        <span className="send-loader" aria-hidden="true" />
+                      {dictation.state === 'transcribing' ||
+                      dictation.state === 'requesting' ? (
+                        <span className="dictation-loader" aria-hidden="true" />
+                      ) : dictation.state === 'recording' ? (
+                        <Square aria-hidden="true" />
                       ) : (
-                        <ArrowUp aria-hidden="true" />
+                        <DsMicIcon />
                       )}
                     </button>
+                    <span className="dictation-tooltip" role="tooltip">
+                      {dictation.state === 'recording' ? '停止听写' : '听写'}
+                    </span>
                   </div>
+                  <button
+                    type="button"
+                    className={`voice-button${dictation.state === 'recording' ? ' is-recording' : ''}`}
+                    aria-label={
+                      dictation.state === 'recording'
+                        ? '停止语音输入'
+                        : '开始语音输入'
+                    }
+                    aria-pressed={dictation.state === 'recording'}
+                    onClick={() => void toggleDictation()}
+                    disabled={
+                      sending ||
+                      unauthorized ||
+                      dictation.state === 'requesting' ||
+                      dictation.state === 'transcribing'
+                    }
+                  >
+                    <DsWaveIcon />
+                  </button>
+                  <button
+                    type="submit"
+                    className="send-button"
+                    aria-label={sending ? '正在发送' : '发送给 Pegas'}
+                    disabled={
+                      !draft.trim() || sending || unauthorized || dictationBusy
+                    }
+                  >
+                    {sending ? (
+                      <span className="send-loader" aria-hidden="true" />
+                    ) : (
+                      <DsArrowUpIcon />
+                    )}
+                  </button>
                 </div>
                 {(dictation.error || voiceGateError) && (
                   <p className="dictation-error" role="alert">
@@ -664,19 +809,42 @@ export function App() {
           <SettingsPage
             api={api}
             mode="bot"
+            restoreFocusTo={modalTrigger.current}
             onClose={() => navigate('conversation')}
             onOpenBot={() => navigate('bot')}
             onOpenGeneral={() => navigate('settings')}
           />
+        ) : activeView === 'plugins' ? (
+          <PluginsPage
+            onClose={() => navigate('conversation')}
+            restoreFocusTo={modalTrigger.current}
+          />
         ) : (
           <SettingsPage
             api={api}
+            restoreFocusTo={modalTrigger.current}
             onClose={() => navigate('conversation')}
             onOpenBot={() => navigate('bot')}
             onOpenGeneral={() => navigate('settings')}
           />
         )}
       </main>
+
+      {!workspaceVisible &&
+        (activeView === 'conversation' || activeView === 'tasks') && (
+          <div className="workspace-rail" aria-label="工作区标签">
+            <button
+              type="button"
+              className="workspace-tab"
+              aria-label="打开工作区"
+              aria-expanded="false"
+              onClick={openWorkspace}
+            >
+              <DsPanelIcon />
+              <span>工作区</span>
+            </button>
+          </div>
+        )}
 
       <WorkspacePanel
         onRetry={async runId => {
@@ -697,18 +865,238 @@ export function App() {
   )
 }
 
+const pluginCatalog = [
+  {
+    id: 'dsh',
+    name: 'DSH 执行器',
+    description: '承载 Task 的 Agent session、工具与工作区。',
+    status: '由服务端管理',
+  },
+  {
+    id: 'speech',
+    name: '语音输入',
+    description: '把输入框录音转成可编辑文字，再由你确认发送。',
+    status: '在设置中配置',
+  },
+  {
+    id: 'channels',
+    name: '消息渠道',
+    description: '为未来的 Web、移动端和消息应用保留统一入口。',
+    status: '尚未接入',
+  },
+] as const
+
+function PluginsPage({
+  onClose,
+  restoreFocusTo,
+}: {
+  onClose: () => void
+  restoreFocusTo: HTMLElement | null
+}) {
+  const [selected, setSelected] = useState<(typeof pluginCatalog)[number]>()
+  const pluginDialog = useRef<HTMLDivElement>(null)
+  const onCloseRef = useRef(onClose)
+  const detailLayer = useRef<HTMLDivElement>(null)
+  const detailTrigger = useRef<HTMLButtonElement>(null)
+  onCloseRef.current = onClose
+
+  useEffect(() => {
+    const dialog = pluginDialog.current
+    if (!dialog) return
+    const initial = dialog.querySelector<HTMLElement>(
+      '[data-plugin-page-focus]',
+    )
+    const frame = window.requestAnimationFrame(() => initial?.focus())
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (detailLayer.current) return
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onCloseRef.current()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const focusable = Array.from(
+        dialog.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]):not([tabindex="-1"]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      )
+      const first = focusable[0]
+      const last = focusable.at(-1)
+      if (!first || !last) return
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.cancelAnimationFrame(frame)
+      window.removeEventListener('keydown', handleKeyDown)
+      window.requestAnimationFrame(() => restoreFocusTo?.focus())
+    }
+  }, [restoreFocusTo])
+
+  const closeDetail = useCallback(() => {
+    setSelected(undefined)
+    window.requestAnimationFrame(() => detailTrigger.current?.focus())
+  }, [])
+
+  useEffect(() => {
+    if (!selected || !detailLayer.current) return
+    const layer = detailLayer.current
+    const initial = layer.querySelector<HTMLElement>(
+      '[data-plugin-detail-focus]',
+    )
+    const frame = window.requestAnimationFrame(() => initial?.focus())
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        closeDetail()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const focusable = Array.from(
+        layer.querySelectorAll<HTMLElement>(
+          'button:not([disabled]):not([tabindex="-1"]), input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      )
+      const first = focusable[0]
+      const last = focusable.at(-1)
+      if (!first || !last) return
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.cancelAnimationFrame(frame)
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [closeDetail, selected])
+
+  return (
+    <section className="plugin-page" aria-labelledby="plugin-page-title">
+      <button
+        className="settings-scrim"
+        aria-hidden="true"
+        tabIndex={-1}
+        onClick={onClose}
+        inert={selected ? true : undefined}
+      />
+      <div
+        ref={pluginDialog}
+        className="plugin-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="plugin-page-title"
+        inert={selected ? true : undefined}
+      >
+        <header>
+          <div>
+            <span>PLUGINS</span>
+            <h1 id="plugin-page-title">插件</h1>
+          </div>
+          <button
+            className="settings-close"
+            aria-label="关闭插件"
+            data-plugin-page-focus
+            onClick={onClose}
+          >
+            <DsCloseIcon />
+          </button>
+        </header>
+        <div className="plugin-grid">
+          {pluginCatalog.map(plugin => (
+            <button
+              className="plugin-card"
+              type="button"
+              key={plugin.id}
+              aria-label={`查看插件：${plugin.name}`}
+              onClick={event => {
+                detailTrigger.current = event.currentTarget
+                setSelected(plugin)
+              }}
+            >
+              <span className="plugin-mark">
+                <DsPlugIcon size={20} />
+              </span>
+              <span>
+                <strong>{plugin.name}</strong>
+                <small>{plugin.description}</small>
+              </span>
+              <em>{plugin.status}</em>
+            </button>
+          ))}
+        </div>
+      </div>
+      {selected && (
+        <div
+          ref={detailLayer}
+          className="plugin-detail-layer"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={`plugin-detail-${selected.id}`}
+        >
+          <button
+            className="plugin-detail-scrim"
+            aria-hidden="true"
+            tabIndex={-1}
+            onClick={closeDetail}
+          />
+          <article className="plugin-detail">
+            <header>
+              <span className="plugin-mark">
+                <DsPlugIcon size={20} />
+              </span>
+              <div>
+                <h2 id={`plugin-detail-${selected.id}`}>{selected.name}</h2>
+                <p>{selected.status}</p>
+              </div>
+              <button
+                className="settings-close"
+                aria-label="关闭插件详情"
+                data-plugin-detail-focus
+                onClick={closeDetail}
+              >
+                <DsCloseIcon />
+              </button>
+            </header>
+            <p>{selected.description}</p>
+            <div className="plugin-boundary">
+              <strong>配置边界</strong>
+              <p>
+                连接状态和凭证由 Pegas
+                服务端管理；此页不会在浏览器保存或伪造插件配置。
+              </p>
+            </div>
+          </article>
+        </div>
+      )}
+    </section>
+  )
+}
+
 function SettingsPage({
   api,
   mode = 'general',
   onClose,
   onOpenBot,
   onOpenGeneral,
+  restoreFocusTo,
 }: {
   api: SettingsClient
   mode?: 'general' | 'bot'
   onClose: () => void
   onOpenBot: () => void
   onOpenGeneral: () => void
+  restoreFocusTo: HTMLElement | null
 }) {
   interface ModelFeedback {
     kind: 'success' | 'error' | 'info'
@@ -793,6 +1181,15 @@ function SettingsPage({
   const [error, setError] = useState('')
   const [saved, setSaved] = useState(false)
   const [dirty, setDirty] = useState(false)
+  const settingsLayer = useRef<HTMLElement>(null)
+  const settingsCloseRef = useRef(onClose)
+  settingsCloseRef.current = onClose
+
+  useEffect(() => {
+    return () => {
+      window.requestAnimationFrame(() => restoreFocusTo?.focus())
+    }
+  }, [restoreFocusTo])
 
   useEffect(() => {
     let active = true
@@ -1127,17 +1524,65 @@ function SettingsPage({
       ))}
     </div>
   )
+  useEffect(() => {
+    if (!settingsLayer.current) return
+    const layer = settingsLayer.current
+    const initial = layer.querySelector<HTMLElement>('[data-settings-focus]')
+    const frame = window.requestAnimationFrame(() => initial?.focus())
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        settingsCloseRef.current()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const focusable = Array.from(
+        layer.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]):not([tabindex="-1"]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      )
+      const first = focusable[0]
+      const last = focusable.at(-1)
+      if (!first || !last) return
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.cancelAnimationFrame(frame)
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [mode])
+
   return (
     <section
+      ref={settingsLayer}
       className="settings-page settings-layer"
-      aria-labelledby="page-title"
+      aria-label={mode === 'bot' ? 'Pegas 设置' : '设置选项'}
+      aria-modal="true"
+      role="dialog"
     >
       <button
         type="button"
         className="settings-scrim"
-        aria-label="关闭设置"
+        aria-hidden="true"
+        tabIndex={-1}
         onClick={onClose}
       />
+      <button
+        type="button"
+        className="settings-close settings-layer-close"
+        aria-label="关闭设置"
+        data-settings-focus
+        onClick={onClose}
+      >
+        <DsCloseIcon />
+      </button>
       {loading ? (
         <div className="settings-loading" aria-label="正在读取设置">
           <span />
@@ -1147,19 +1592,8 @@ function SettingsPage({
       ) : settings && capabilities && providerDraft && selectedProvider ? (
         <form
           className={`settings-form${mode === 'bot' ? ' is-bot-settings' : ''}`}
-          aria-label={mode === 'bot' ? 'Pegas 设置' : '设置选项'}
-          aria-modal="true"
-          role="dialog"
           onSubmit={event => void save(event)}
         >
-          <button
-            type="button"
-            className="settings-close"
-            aria-label="关闭设置"
-            onClick={onClose}
-          >
-            <X aria-hidden="true" />
-          </button>
           {mode === 'bot' ? (
             <div className="settings-layout bot-settings-layout">
               {settingsNavigation}
@@ -2549,9 +2983,22 @@ function PegasMessage({ message, run }: { message: OutboxMessage; run?: Run }) {
       </div>
       <div>
         <MarkdownMessage content={text} />
-        <time dateTime={message.createdAt}>
-          {formatTime(message.createdAt)}
-        </time>
+        <div className="assistant-message-meta">
+          <time dateTime={message.createdAt}>
+            {formatTime(message.createdAt)}
+          </time>
+          <div className="message-actions" aria-label="消息操作">
+            <button type="button" aria-label="添加回应">
+              <DsSmileIcon />
+            </button>
+            <button type="button" aria-label="回复">
+              <DsReplyIcon />
+            </button>
+            <button type="button" aria-label="更多操作">
+              <DsDotsIcon />
+            </button>
+          </div>
+        </div>
       </div>
     </article>
   )
@@ -2887,7 +3334,7 @@ function WorkspacePanel({
               aria-label="关闭工作区"
               data-workspace-focus
             >
-              <X aria-hidden="true" />
+              <DsCloseIcon />
             </button>
           </header>
           <div className="workspace-empty-art">
@@ -2939,7 +3386,7 @@ function TaskDetail({
           aria-label="关闭工作区"
           data-workspace-focus
         >
-          <X aria-hidden="true" />
+          <DsCloseIcon />
         </button>
       </header>
       <div className="detail-scroll">

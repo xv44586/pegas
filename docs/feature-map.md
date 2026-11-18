@@ -19,7 +19,7 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 | ID           | 用户能力 / 产品承诺                                                                | 状态     | 权威实现                                                                                                                             | 自动化证据                                                                                                   | 下一缺口                                     |
 | ------------ | ---------------------------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ | -------------------------------------------- |
 | CONV-001     | 所有端通过统一事件入口与同一个 Pegas 对话                                          | Partial  | `src/control-plane/server.ts`, `src/storage/sqlite-store.ts`                                                                         | `test/control-plane.test.ts`, `test/sqlite-store.test.ts`                                                    | 设备身份、附件、跨端游标                     |
-| CONV-002     | Web 端以自然对话为主入口，并可在任务看板与可关闭工作区跟进现场                     | Usable   | `web/src/App.tsx`, `web/src/workspace-theme.css`, `web/src/api.ts`, `DESIGN.md`                                                      | 101 个 Web/共享回归、四入口桌面与移动端浏览器截图、`pnpm check`、`pnpm smoke`                                | 流式更新、附件、PWA、实机无障碍验证          |
+| CONV-002     | Web 端以 DS Bot 壳层呈现 Task、对话与可关闭工作区                                  | Usable   | `web/src/App.tsx`, `web/src/DsBotIcons.tsx`, `web/src/workspace-theme.css`, `web/src/api.ts`, `DESIGN.md`                            | Task=Bot/显式 taskId、语音草稿、Markdown 与工作区回归；桌面、938px 与移动截图；`pnpm check`, `pnpm smoke`    | Task 级模型配置、流式更新、附件、PWA         |
 | CONV-003     | 消息送达与处理状态作为界面元数据展示，不伪装成 Agent 回复                          | Usable   | `web/src/App.tsx`, Inbox Event status                                                                                                | `web/src/App.test.tsx`, `test/control-plane.test.ts`                                                         | 更细的失败恢复操作                           |
 | CONV-004     | 用户发送内容链接后，Pegas 自动整理为笔记并在确认后写入 Obsidian                    | Planned  | 尚未实现；本地调研见 `research/x-bookmarks/`                                                                                         | 暂无                                                                                                         | 链接规范化、内容抓取、卡片生成、确认写入     |
 | VOICE-001    | 用户可配置并测试语音服务，在输入器中听写、校对文字，再发送给同一个 Pegas           | Usable   | `web/src/App.tsx`, `web/src/useVoiceDictation.ts`, `src/speech/*`, `src/control-plane/server.ts`, `src/storage/sqlite-store.ts`      | Web 未配置引导及未保存连接测试、服务端真实转写和密钥边界回归；`pnpm check`, `pnpm smoke`                     | 流式字幕、原生移动端录音、Voice Session 恢复 |
@@ -46,11 +46,11 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 
 ### CONV-002：DS Bot 交互重构验收边界（2026-11-18）
 
-- **用户结果**：首页、对话、设置与 Pegas（Bot）设置共享同一套轻量中性壳层；桌面端使用可折叠信息侧栏、悬浮会话标题、宽对话流、底部胶囊输入器和按需右侧详情；设置统一进入带 198px 分类栏的居中弹窗，移动端改为全屏设置页并安全收起侧栏与详情。
-- **验收条件**：四个入口均可从主导航到达；对话发送、IME、语音草稿、任务搜索、任务详情、失败重试、Provider/Router/Agent/隐私/输入设置保存与错误反馈继续工作；新增自动化回归覆盖首页与 Pegas 设置入口；桌面和移动端截图验证无溢出、遮挡或不可达控件。
-- **非目标**：不复制 DS Bot 的品牌名、角色形象、产品文案或多 Bot 领域模型；不新增客户端任务事实来源，不改变 Router/Executor 责任，也不改服务端 API、数据库或发布链路。
+- **用户结果**：DS Bot 是 Pegas 的交互与视觉壳；DS Bot 中的一个 Bot 在 Pegas 中对应一个服务端 Task。桌面首页复用其 280px 可折叠 Task 侧栏、悬浮当前 Task 标题、960px 对话流、Markdown 气泡、48px 胶囊输入器和默认收缩的右侧工作区 tab；设置、插件及二级详情继续使用同一套弹层语言。
+- **验收条件**：服务端 Task 出现在 DS Bot 风格的顶部当前 Task 卡与 Task 列表；选择 Task 后工作区在右侧展开且后续消息显式携带该 `taskId`；工作区关闭时保持为右侧 tab；对话发送、IME、麦克风听写、空输入语音入口、Markdown、任务搜索、任务详情、失败重试、设置保存与错误反馈继续工作；桌面、938px 工作区展开和 390px 移动截图均无横向溢出、越线、输入框消失或不可达控件。
+- **非目标**：本轮不伪造尚不存在的 Task 级模型配置持久化；当前 Agent 模型仍是实例级默认值。除已按 Apache-2.0 归属复用、且明确为后续替换预留边界的 DS Bot 图标与鲸鱼角色几何外，不复制其品牌名、产品文案或服务端领域模型；不新增客户端事实来源，不改变 Router/Executor 责任，也不改数据库和发布链路。
 - **数据与权限边界**：Conversation、Task、Run 与设置仍以服务端响应为准；API key 继续只通过现有设置接口提交且不回显；Web 仅保存既有 session token 与未提交输入草稿。
-- **失败与恢复**：未授权继续显示 token 恢复入口；快照加载失败可重连；发送和设置保存失败保留用户输入；执行失败保留历史并可在同一 Task 新建 Run 重试；移动端详情支持 Escape/显式关闭并把焦点还给触发控件。
+- **失败与恢复**：未授权继续显示 token 恢复入口；快照加载失败可重连；发送和设置保存失败保留用户输入；执行失败保留历史并可在同一 Task 新建 Run 重试；窄屏工作区成为右侧覆盖面板，支持 Escape/显式关闭并把焦点还给触发控件。
 
 ## Feature 开发协议
 
