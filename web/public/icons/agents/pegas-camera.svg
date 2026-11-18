@@ -1,0 +1,17 @@
+<svg class="pegas-agent-icon pegas-agent-icon--camera" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="pegas-camera-title pegas-camera-desc">
+  <title id="pegas-camera-title">Camera Agent</title>
+  <desc id="pegas-camera-desc">A minimal white camera symbol on a blue rounded square.</desc>
+  <style>
+    .pegas-agent-icon {
+      --pegas-icon-background: #5b6ff5;
+      --pegas-icon-foreground: #ffffff;
+    }
+  </style>
+  <rect width="64" height="64" rx="14" fill="var(--pegas-icon-background)"/>
+  <g fill="none" stroke="var(--pegas-icon-foreground)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="m23 21 4-6h10l4 6"/>
+    <rect x="10" y="20" width="44" height="32" rx="6"/>
+    <circle cx="32" cy="36" r="9"/>
+  </g>
+  <circle cx="46" cy="27" r="2.25" fill="var(--pegas-icon-foreground)"/>
+</svg>
