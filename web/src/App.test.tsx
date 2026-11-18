@@ -319,6 +319,8 @@ describe('Pegas web app', () => {
     expect(screen.getByRole('heading', { name: '进行中' })).toBeTruthy()
     expect(screen.getByRole('heading', { name: '已完成' })).toBeTruthy()
     expect(screen.getByRole('heading', { name: '已取消' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '刷新' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '打开工作区' })).toBeNull()
 
     fireEvent.change(screen.getByRole('textbox', { name: '搜索任务' }), {
       target: { value: '发布' },

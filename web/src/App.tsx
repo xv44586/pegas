@@ -18,7 +18,6 @@ import {
   MessageSquareText,
   PanelRightOpen,
   Plus,
-  RotateCw,
   Search,
   Settings2,
   ShieldCheck,
@@ -112,7 +111,6 @@ export function App() {
   )
   const [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot)
   const [loading, setLoading] = useState(true)
-  const [refreshing, setRefreshing] = useState(false)
   const [unauthorized, setUnauthorized] = useState(false)
   const [error, setError] = useState('')
   const [draft, setDraft] = useState('')
@@ -139,34 +137,29 @@ export function App() {
     isActiveTask(task.status),
   ).length
 
-  const loadSnapshot = useCallback(
-    async (quiet = false) => {
-      if (!quiet) setRefreshing(true)
-      try {
-        const next = await api.snapshot()
-        setSnapshot(next)
-        setUnauthorized(false)
+  const loadSnapshot = useCallback(async () => {
+    try {
+      const next = await api.snapshot()
+      setSnapshot(next)
+      setUnauthorized(false)
+      setError('')
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 401) {
+        setUnauthorized(true)
         setError('')
-      } catch (caught) {
-        if (caught instanceof ApiError && caught.status === 401) {
-          setUnauthorized(true)
-          setError('')
-        } else {
-          setError(
-            caught instanceof Error ? caught.message : '暂时无法连接 Pegas',
-          )
-        }
-      } finally {
-        setLoading(false)
-        setRefreshing(false)
+      } else {
+        setError(
+          caught instanceof Error ? caught.message : '暂时无法连接 Pegas',
+        )
       }
-    },
-    [api],
-  )
+    } finally {
+      setLoading(false)
+    }
+  }, [api])
 
   useEffect(() => {
-    void loadSnapshot(true)
-    const interval = window.setInterval(() => void loadSnapshot(true), 2500)
+    void loadSnapshot()
+    const interval = window.setInterval(() => void loadSnapshot(), 2500)
     return () => window.clearInterval(interval)
   }, [loadSnapshot])
 
@@ -260,7 +253,7 @@ export function App() {
     try {
       await api.sendMessage(text)
       setDraft('')
-      await loadSnapshot(true)
+      await loadSnapshot()
       window.setTimeout(
         () => feedEnd.current?.scrollIntoView({ behavior: 'smooth' }),
         0,
@@ -390,20 +383,8 @@ export function App() {
               )}
             </div>
           </div>
-          {activeView !== 'settings' && (
+          {activeView === 'conversation' && (
             <div className="header-actions">
-              <button
-                className="icon-button"
-                aria-label="刷新"
-                title="刷新"
-                onClick={() => void loadSnapshot()}
-                disabled={refreshing}
-              >
-                <RotateCw
-                  className={refreshing ? 'is-spinning' : ''}
-                  aria-hidden="true"
-                />
-              </button>
               <button
                 className="workspace-toggle"
                 aria-label="打开工作区"
@@ -625,7 +606,7 @@ export function App() {
       <WorkspacePanel
         onRetry={async runId => {
           await api.retryRun(runId)
-          await loadSnapshot(true)
+          await loadSnapshot()
         }}
         open={workspaceVisible}
         selectedTask={selectedTask}
