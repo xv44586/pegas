@@ -1887,6 +1887,12 @@ a:focus-visible {
   padding-block-start: 6px;
 }
 
+.sidebar-collapsed .task-sidebar-brand,
+.sidebar-collapsed .task-sidebar-list,
+.sidebar-collapsed .task-sidebar-foot {
+  display: none;
+}
+
 .sidebar-collapsed .task-sidebar-brand strong,
 .sidebar-collapsed .task-sidebar-actions > :not(:last-child),
 .sidebar-collapsed .task-featured-card,
@@ -2333,6 +2339,15 @@ a:focus-visible {
   min-inline-size: 0;
 }
 
+.workspace-empty {
+  position: relative;
+}
+
+.workspace-empty > header {
+  inset-inline: 0;
+  width: 100%;
+}
+
 .workspace-empty > p,
 .detail-title p,
 .run-output,
@@ -2573,6 +2588,7 @@ a:focus-visible {
   .workspace-panel {
     position: fixed;
     inset-block: 0;
+    inset-inline-start: auto;
     inset-inline-end: 0;
     z-index: 20;
     inline-size: min(420px, calc(100% - 56px));

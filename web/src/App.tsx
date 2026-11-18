@@ -421,6 +421,7 @@ export function App() {
           <button
             className="task-sidebar-brand"
             aria-label="返回对话"
+            hidden={sidebarCollapsed}
             onClick={() => navigate('conversation')}
           >
             <span className="task-sidebar-brand-mark">
@@ -433,6 +434,7 @@ export function App() {
               className="ds-round-button"
               aria-label="任务文件夹"
               title="任务文件夹"
+              hidden={sidebarCollapsed}
               onClick={() => navigate('tasks')}
             >
               <DsFolderIcon />
@@ -441,6 +443,7 @@ export function App() {
               className="ds-round-button"
               aria-label="搜索任务"
               title="搜索任务"
+              hidden={sidebarCollapsed}
               onClick={() => navigate('tasks')}
             >
               <DsSearchIcon />
@@ -449,6 +452,7 @@ export function App() {
               className="ds-round-button"
               aria-label="新建任务"
               title="新建任务"
+              hidden={sidebarCollapsed}
               onClick={startNewTask}
             >
               <DsPlusIcon size={18} />
@@ -465,7 +469,11 @@ export function App() {
           </div>
         </div>
 
-        <nav className="task-sidebar-list" aria-label="任务列表">
+        <nav
+          className="task-sidebar-list"
+          aria-label="任务列表"
+          hidden={sidebarCollapsed}
+        >
           <button
             type="button"
             className="task-featured-card"
@@ -537,7 +545,7 @@ export function App() {
           </div>
         </nav>
 
-        <div className="task-sidebar-foot">
+        <div className="task-sidebar-foot" hidden={sidebarCollapsed}>
           <button
             className={`ds-foot-button${activeView === 'settings' ? ' is-active' : ''}`}
             aria-label="设置"

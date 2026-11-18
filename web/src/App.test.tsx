@@ -378,11 +378,47 @@ describe('Pegas web app', () => {
     expect(screen.getByRole('button', { name: '开始语音输入' })).toBeTruthy()
     expect(screen.queryByRole('complementary', { name: '工作区' })).toBeNull()
 
+    fireEvent.click(screen.getByRole('button', { name: '收起侧栏' }))
+    const collapsedNavigation = screen.getByRole('complementary', {
+      name: 'Pegas 导航',
+    })
+    expect(within(collapsedNavigation).getAllByRole('button')).toHaveLength(1)
+    expect(
+      within(collapsedNavigation).getByRole('button', { name: '展开侧栏' }),
+    ).toBeTruthy()
+
     fireEvent.click(screen.getByRole('button', { name: /研究并比较/ }))
     expect(screen.getByLabelText('告诉 Pegas 你想完成什么')).toHaveProperty(
       'value',
       '帮我研究并比较下面这个问题，最后给我一个建议：',
     )
+  })
+
+  it('anchors the empty workspace header inside the opened panel', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const path =
+          input instanceof Request
+            ? input.url
+            : input instanceof URL
+              ? input.href
+              : input
+        if (path.startsWith('/v1/events'))
+          return Promise.resolve(Response.json({ events: [] }))
+        if (path.startsWith('/v1/tasks'))
+          return Promise.resolve(Response.json({ tasks: [] }))
+        if (path.startsWith('/v1/runs'))
+          return Promise.resolve(Response.json({ runs: [] }))
+        return Promise.resolve(Response.json({ messages: [] }))
+      }),
+    )
+
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '打开工作区' }))
+
+    const workspace = screen.getByRole('complementary', { name: '工作区' })
+    expect(workspace.querySelector('.workspace-empty > header')).not.toBeNull()
   })
 
   it('traps plugin detail focus, closes with Escape, and restores the trigger', async () => {

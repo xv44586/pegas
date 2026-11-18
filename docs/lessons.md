@@ -119,6 +119,18 @@
 - Enforcement：尚未晋升；本轮以回归测试覆盖。
 - Owner / next action：同日改写服务再次出现缺少测试入口，后续独立日期复发时评估统一门禁。
 
+### LESSON-20261118-06：绝对定位子元素必须有明确的局部包含块
+
+- Rule：面板内绝对定位的标题栏必须锚定到面板自身的定位上下文，并为收缩态的可见控件数量增加回归证据。
+- Why：工作区空态标题以 viewport 为包含块，导致窄屏覆盖面板中的文字和分隔线跨过左边界；左 rail 收缩后也保留了多余入口。
+- Feature：CONV-002
+- Evidence：用户提供的工作区与收缩 rail 截图；`web/src/App.test.tsx` 单按钮回归与 `test/workspace-theme.test.ts` 定位合同。
+- Seen：1（2026-11-18）
+- Severity：normal
+- Status：Observed
+- Enforcement：尚未晋升；本轮以 DOM 和 CSS 回归测试覆盖。
+- Owner / next action：后续独立日期复发时补充可视化几何门禁。
+
 <!--
 ### LESSON-YYYYMMDD-NN：简短标题
 
