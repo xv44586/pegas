@@ -4,6 +4,11 @@ import {
   ChevronRight,
   CircleAlert,
   Clock3,
+  Circle,
+  CircleCheck,
+  CircleDot,
+  CircleDashed,
+  Columns3,
   FileOutput,
   ListTodo,
   Mic,
@@ -1157,14 +1162,31 @@ function TasksPage({
   runs: Run[]
   onOpen: (taskId: string) => void
 }) {
+  const [query, setQuery] = useState('')
+  const visibleTasks = tasks.filter(task =>
+    `${task.title} ${task.goal}`
+      .toLocaleLowerCase()
+      .includes(query.trim().toLocaleLowerCase()),
+  )
   return (
     <section className="tasks-page" aria-labelledby="task-board-title">
       <header className="tasks-intro">
         <div>
-          <p className="page-eyebrow">LIVE WORK QUEUE</p>
-          <h2 id="task-board-title">任务现场一目了然</h2>
-          <p>这里不改变任务状态，只呈现 Pegas 服务端记录的真实进度。</p>
+          <h2 id="task-board-title">
+            <Columns3 aria-hidden="true" />
+            任务看板
+          </h2>
+          <span className="board-total">{tasks.length} 个任务</span>
         </div>
+        <label className="task-search">
+          <Search aria-hidden="true" />
+          <input
+            aria-label="搜索任务"
+            placeholder="搜索任务…"
+            value={query}
+            onChange={event => setQuery(event.target.value)}
+          />
+        </label>
         <dl className="task-summary">
           <div>
             <dt>进行中</dt>
@@ -1183,7 +1205,7 @@ function TasksPage({
 
       <div className="task-board" aria-label="按状态分组的任务">
         {taskColumns.map(column => {
-          const columnTasks = tasks.filter(task =>
+          const columnTasks = visibleTasks.filter(task =>
             column.statuses.includes(task.status),
           )
           return (
@@ -1194,6 +1216,15 @@ function TasksPage({
             >
               <header>
                 <div>
+                  {column.id === 'planned' ? (
+                    <CircleDashed aria-hidden="true" />
+                  ) : column.id === 'active' ? (
+                    <CircleDot aria-hidden="true" />
+                  ) : column.id === 'waiting' ? (
+                    <Circle aria-hidden="true" />
+                  ) : (
+                    <CircleCheck aria-hidden="true" />
+                  )}
                   <h3 id={`column-${column.id}`}>{column.title}</h3>
                   <span>{columnTasks.length}</span>
                 </div>
@@ -1202,8 +1233,7 @@ function TasksPage({
               <div className="task-column-list">
                 {columnTasks.length === 0 ? (
                   <div className="task-column-empty">
-                    <Check aria-hidden="true" />
-                    <span>暂无任务</span>
+                    <span>{query ? '没有匹配的任务' : '暂无任务'}</span>
                   </div>
                 ) : (
                   columnTasks.map(task => {
@@ -1215,13 +1245,18 @@ function TasksPage({
                         onClick={() => onOpen(task.id)}
                         aria-label={`打开任务现场：${task.title}`}
                       >
-                        <span className={`task-state status-${task.status}`}>
-                          <span className="status-dot" />
-                          {statusCopy[task.status]}
+                        <span className="task-card-id">
+                          <ListTodo aria-hidden="true" />
+                          {task.id.slice(0, 8).toUpperCase()}
+                          <ArrowUpRight aria-hidden="true" />
                         </span>
                         <strong>{task.title}</strong>
                         <p>{task.goal}</p>
                         <span className="task-card-meta">
+                          <span className={`task-state status-${task.status}`}>
+                            <span className="status-dot" />
+                            {statusCopy[task.status]}
+                          </span>
                           <span>
                             {taskRuns.length > 0
                               ? `${String(taskRuns.length)} 次执行`

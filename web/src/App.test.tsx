@@ -189,10 +189,23 @@ describe('Pegas web app', () => {
     fireEvent.click(screen.getByRole('button', { name: /任务/ }))
 
     expect(
-      await screen.findByRole('heading', { name: '任务现场一目了然' }),
+      await screen.findByRole('heading', { name: '任务看板' }),
     ).toBeTruthy()
     expect(screen.getByRole('heading', { name: '进行中' })).toBeTruthy()
     expect(screen.getByRole('heading', { name: '已结束' })).toBeTruthy()
+
+    fireEvent.change(screen.getByRole('textbox', { name: '搜索任务' }), {
+      target: { value: '发布' },
+    })
+    expect(
+      screen.queryByRole('button', { name: '打开任务现场：检查测试结果' }),
+    ).toBeNull()
+    fireEvent.change(screen.getByRole('textbox', { name: '搜索任务' }), {
+      target: { value: '' },
+    })
+    expect(
+      screen.getByRole('button', { name: '打开任务现场：检查测试结果' }),
+    ).toBeTruthy()
 
     fireEvent.click(
       screen.getByRole('button', { name: '打开任务现场：整理发布说明' }),
