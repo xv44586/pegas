@@ -1210,8 +1210,8 @@ function SettingsPage({
         setCapabilities(response.capabilities)
         setSavedSpeech(response.speech)
         setSpeechDraft({
-          provider: response.speech?.provider ?? 'disabled',
-          baseUrl: response.speech?.baseUrl ?? '',
+          provider: response.speech?.provider ?? 'openai-compatible',
+          baseUrl: response.speech?.baseUrl ?? 'http://127.0.0.1:18081/v1',
           model: response.speech?.model ?? 'Qwen/Qwen3-ASR-0.6B',
           hasApiKey: response.speech?.hasApiKey ?? false,
           apiKey: '',

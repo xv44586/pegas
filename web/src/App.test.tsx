@@ -77,6 +77,12 @@ describe('Pegas web app', () => {
       ],
       privacyAvailable: true,
     }
+    const speech = {
+      provider: 'openai-compatible' as const,
+      baseUrl: 'http://127.0.0.1:18081/v1',
+      model: 'Qwen/Qwen3-ASR-0.6B',
+      hasApiKey: true,
+    }
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const path =
         input instanceof Request
@@ -132,7 +138,9 @@ describe('Pegas web app', () => {
         )
       }
       if (path === '/v1/settings') {
-        return Promise.resolve(Response.json({ settings, capabilities }))
+        return Promise.resolve(
+          Response.json({ settings, capabilities, speech }),
+        )
       }
       if (path === '/v1/settings/agent-models') {
         return Promise.resolve(
@@ -228,6 +236,16 @@ describe('Pegas web app', () => {
       '语音与输入',
       '隐私',
     ])
+    fireEvent.click(screen.getByRole('tab', { name: '语音与输入' }))
+    const savedSpeechKey =
+      screen.getByLabelText<HTMLInputElement>(/API key（可选）/)
+    expect(savedSpeechKey.type).toBe('password')
+    expect(savedSpeechKey.value).toBe('')
+    expect(savedSpeechKey.placeholder).toBe('已保存，留空则保持不变')
+    expect(
+      screen.getByText('密钥加密保存在服务端，不会显示原文。'),
+    ).toBeTruthy()
+    fireEvent.click(screen.getByRole('tab', { name: '模型与供应商' }))
     fireEvent.click(screen.getByRole('radio', { name: /自定义/ }))
     fireEvent.change(screen.getByLabelText('连接名称'), {
       target: { value: '公司模型网关' },

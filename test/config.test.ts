@@ -19,8 +19,9 @@ describe('loadConfig', () => {
       privacyMode: 'disabled',
       rewriteMode: 'disabled',
       routerMode: 'rules',
+      speechBaseUrl: 'http://127.0.0.1:18081/v1',
       speechModel: 'Qwen/Qwen3-ASR-0.6B',
-      speechProvider: 'disabled',
+      speechProvider: 'openai-compatible',
       workerConcurrency: 2,
     })
   })
@@ -81,7 +82,10 @@ describe('loadConfig', () => {
       'PEGAS_PUSH_WEBHOOK_URL is required when PEGAS_PUSH_MODE=webhook',
     ],
     [
-      { PEGAS_SPEECH_PROVIDER: 'openai-compatible' },
+      {
+        PEGAS_SPEECH_PROVIDER: 'openai-compatible',
+        PEGAS_SPEECH_BASE_URL: '',
+      },
       'PEGAS_SPEECH_BASE_URL is required when PEGAS_SPEECH_PROVIDER=openai-compatible',
     ],
     [{ PEGAS_PRIVACY_MODE: 'unsupported' }, 'Unsupported PEGAS_PRIVACY_MODE'],

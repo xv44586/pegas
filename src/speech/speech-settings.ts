@@ -28,6 +28,12 @@ export const defaultSpeechConnection: SpeechConnection = {
   model: 'Qwen/Qwen3-ASR-0.6B',
 }
 
+export const initialSpeechConnection: SpeechConnection = {
+  provider: 'openai-compatible',
+  baseUrl: 'http://127.0.0.1:18081/v1',
+  model: defaultSpeechConnection.model,
+}
+
 export function parseSpeechConnectionUpdate(
   value: unknown,
 ): SpeechConnectionUpdate | undefined {
