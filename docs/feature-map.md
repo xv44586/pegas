@@ -2,7 +2,7 @@
 
 > 状态：Living Document
 >
-> 更新日期：2026-11-17
+> 更新日期：2026-11-18
 
 Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查这里和代码，确认能力是否已经存在、权威实现在哪里、还缺什么；功能合入时必须同步更新对应条目。它不代替 Issue 或路线图，而是防止同一能力被不同入口重复实现。
 
@@ -19,7 +19,7 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 | ID           | 用户能力 / 产品承诺                                                | 状态     | 权威实现                                                                                        | 自动化证据                                                               | 下一缺口                                     |
 | ------------ | ------------------------------------------------------------------ | -------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ | -------------------------------------------- |
 | CONV-001     | 所有端通过统一事件入口与同一个 Pegas 对话                          | Partial  | `src/control-plane/server.ts`, `src/storage/sqlite-store.ts`                                    | `test/control-plane.test.ts`, `test/sqlite-store.test.ts`                | 设备身份、附件、跨端游标                     |
-| CONV-002     | Web 端以自然对话为主入口，并可查看任务详情                         | Usable   | `web/src/App.tsx`, `web/src/api.ts`, `web/src/MarkdownMessage.tsx`                              | `web/src/App.test.tsx`, smoke test                                       | 流式更新、PWA、完整移动端适配                |
+| CONV-002     | Web 端以自然对话为主入口，并可查看任务详情                         | Usable   | `web/src/App.tsx`, `web/src/api.ts`, `web/src/MarkdownMessage.tsx`, `docs/web-home-design.md`   | `web/src/App.test.tsx`（首页入口、快捷意图与任务工作台）、smoke test     | 流式更新、PWA、实机无障碍验证                |
 | CONV-003     | 消息送达与处理状态作为界面元数据展示，不伪装成 Agent 回复          | Usable   | `web/src/App.tsx`, Inbox Event status                                                           | `web/src/App.test.tsx`, `test/control-plane.test.ts`                     | 更细的失败恢复操作                           |
 | CONV-004     | 用户发送内容链接后，Pegas 自动整理为笔记并在确认后写入 Obsidian    | Planned  | 尚未实现；本地调研见 `research/x-bookmarks/`                                                    | 暂无                                                                     | 链接规范化、内容抓取、卡片生成、确认写入     |
 | VOICE-001    | 用户可在输入器中听写、校对文字，再发送给同一个 Pegas               | Usable   | `web/src/useVoiceDictation.ts`, `src/speech/*`, `src/control-plane/server.ts`, `services/asr/*` | Web、provider、control-plane 与 config tests；`pnpm check`, `pnpm smoke` | 流式字幕、原生移动端录音、Voice Session 恢复 |

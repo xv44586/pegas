@@ -120,12 +120,24 @@ describe('Pegas web app', () => {
     render(<App />)
 
     expect(
-      await screen.findByRole('heading', { name: '和 Pegas 说点什么' }),
+      await screen.findByRole('heading', { name: '现在想先推进什么？' }),
+    ).toBeTruthy()
+    expect(
+      screen.getByRole('heading', { name: 'Pegas', level: 1 }),
     ).toBeTruthy()
     expect(screen.getByLabelText('告诉 Pegas 你想完成什么')).toBeTruthy()
     expect(
+      screen.getByText('高风险动作会先确认', { exact: false }),
+    ).toBeTruthy()
+    expect(
       screen.getByRole('complementary', { name: '任务工作台' }),
     ).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: /研究并比较/ }))
+    expect(screen.getByLabelText('告诉 Pegas 你想完成什么')).toHaveProperty(
+      'value',
+      '帮我研究并比较下面这个问题，最后给我一个建议：',
+    )
   })
 
   it('formats recent updates in conversational language', () => {

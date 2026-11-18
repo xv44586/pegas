@@ -1,14 +1,18 @@
 import {
   ArrowLeft,
+  ArrowUpRight,
   Check,
   ChevronRight,
   CircleAlert,
+  Clock3,
   ListTodo,
   Mic,
   MessageSquareText,
   RotateCw,
+  Search,
   Send,
   Settings2,
+  ShieldCheck,
   Sparkles,
   Square,
   X,
@@ -95,6 +99,9 @@ export function App() {
     onTranscript: appendTranscript,
   })
   const dictationBusy = dictation.state !== 'idle'
+  const activeTaskCount = snapshot.tasks.filter(task =>
+    isActiveTask(task.status),
+  ).length
 
   const loadSnapshot = useCallback(
     async (quiet = false) => {
@@ -211,6 +218,11 @@ export function App() {
         : null
   }
 
+  function usePrompt(prompt: string): void {
+    setDraft(prompt)
+    window.requestAnimationFrame(() => composer.current?.focus())
+  }
+
   async function submitMessage(): Promise<void> {
     const text = draft.trim()
     if (!text || sending || dictationBusy) return
@@ -261,6 +273,9 @@ export function App() {
 
   return (
     <div className="app-shell">
+      <a className="skip-link" href="#conversation-title">
+        跳到对话
+      </a>
       <aside
         className="identity-rail"
         aria-label="Pegas 导航"
@@ -319,7 +334,9 @@ export function App() {
               <span />
             </div>
             <div>
-              <strong>Pegas</strong>
+              <h1 id="conversation-title" tabIndex={-1}>
+                Pegas
+              </h1>
               <span>{error ? '连接中断' : '在线，随时可以开始'}</span>
             </div>
           </div>
@@ -367,7 +384,10 @@ export function App() {
           {loading ? (
             <ConversationSkeleton />
           ) : timeline.length === 0 ? (
-            <EmptyConversation />
+            <EmptyConversation
+              activeTaskCount={activeTaskCount}
+              onPrompt={usePrompt}
+            />
           ) : (
             timeline.map(item => {
               if (item.kind === 'event') {
@@ -405,7 +425,13 @@ export function App() {
         </section>
 
         <div className="composer-dock">
-          <div className="composer-wrap">
+          <form
+            className="composer-wrap"
+            onSubmit={event => {
+              event.preventDefault()
+              void submitMessage()
+            }}
+          >
             <label htmlFor="message-composer">告诉 Pegas 你想完成什么</label>
             <textarea
               ref={composer}
@@ -414,11 +440,13 @@ export function App() {
               onChange={event => setDraft(event.target.value)}
               onKeyDown={handleComposerKeyDown}
               placeholder="提出一个问题、任务，或者刚想到的点子…"
-              rows={1}
+              rows={2}
+              name="message"
+              aria-describedby="composer-hint"
               disabled={sending || unauthorized}
             />
             <div className="composer-footer">
-              <span className="composer-status">
+              <span className="composer-status" id="composer-hint">
                 {dictation.state === 'requesting' && '正在请求麦克风…'}
                 {dictation.state === 'recording' &&
                   `正在听写 · ${formatDuration(dictation.elapsedSeconds)}`}
@@ -465,9 +493,9 @@ export function App() {
                   </span>
                 </div>
                 <button
+                  type="submit"
                   className="send-button"
                   aria-label={sending ? '正在发送' : '发送给 Pegas'}
-                  onClick={() => void submitMessage()}
                   disabled={
                     !draft.trim() || sending || unauthorized || dictationBusy
                   }
@@ -485,7 +513,7 @@ export function App() {
                 {dictation.error}
               </p>
             )}
-          </div>
+          </form>
           <div className="sr-only" aria-live="polite">
             {sending && '正在发送消息'}
             {dictation.state === 'recording' && '听写已开始'}
@@ -868,19 +896,76 @@ function TokenForm({
   )
 }
 
-function EmptyConversation() {
+const starterPrompts = [
+  {
+    title: '梳理一个计划',
+    description: '把模糊想法变成可执行的下一步',
+    prompt: '帮我把这个想法梳理成一份清晰的执行计划：',
+    icon: ListTodo,
+  },
+  {
+    title: '研究并比较',
+    description: '收集信息，给出有依据的建议',
+    prompt: '帮我研究并比较下面这个问题，最后给我一个建议：',
+    icon: Search,
+  },
+  {
+    title: '持续跟进',
+    description: '记住目标，在关键节点再联系你',
+    prompt: '请持续跟进这件事，只在需要我判断或完成时告诉我：',
+    icon: Clock3,
+  },
+]
+
+function EmptyConversation({
+  activeTaskCount,
+  onPrompt,
+}: {
+  activeTaskCount: number
+  onPrompt: (prompt: string) => void
+}) {
   return (
     <div className="empty-conversation">
-      <div className="empty-mark">
-        <Sparkles aria-hidden="true" />
+      <div className="empty-hero">
+        <div className="empty-mark">
+          <Sparkles aria-hidden="true" />
+        </div>
+        <p className="empty-eyebrow">你的个人智能代理</p>
+        <h2>现在想先推进什么？</h2>
+        <p>
+          直接说出目标，不必先创建项目或挑选工具。Pegas
+          会组织任务、持续执行，并在真正需要你时回来。
+        </p>
       </div>
-      <h1>和 Pegas 说点什么</h1>
-      <p>
-        不必先创建任务，也不用决定该放在哪里。直接告诉我你想完成什么，剩下的由我来组织。
-      </p>
-      <div className="empty-prompts" aria-label="示例">
-        <span>“把刚才的想法整理成一份方案”</span>
-        <span>“帮我持续跟进这个功能，完成后告诉我”</span>
+
+      <div className="starter-grid" aria-label="常用开始方式">
+        {starterPrompts.map(({ title, description, prompt, icon: Icon }) => (
+          <button key={title} type="button" onClick={() => onPrompt(prompt)}>
+            <span className="starter-icon">
+              <Icon aria-hidden="true" />
+            </span>
+            <span>
+              <strong>{title}</strong>
+              <small>{description}</small>
+            </span>
+            <ArrowUpRight aria-hidden="true" />
+          </button>
+        ))}
+      </div>
+
+      <div className="trust-strip" aria-label="Pegas 工作方式">
+        <span>
+          <span className="trust-value">{activeTaskCount}</span>
+          件事情正在推进
+        </span>
+        <span>
+          <ShieldCheck aria-hidden="true" />
+          高风险动作会先确认
+        </span>
+        <span>
+          <ListTodo aria-hidden="true" />
+          过程与结果随时可查
+        </span>
       </div>
     </div>
   )
