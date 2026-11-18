@@ -171,7 +171,7 @@ describe('Pegas web app', () => {
         originEventId: 'event-running',
         title: '整理发布说明',
         goal: '生成一份可审阅的发布说明',
-        status: 'running',
+        status: 'started',
         createdAt: '2026-11-18T08:00:00.000Z',
         updatedAt: '2026-11-18T09:00:00.000Z',
       },
@@ -212,7 +212,8 @@ describe('Pegas web app', () => {
       await screen.findByRole('heading', { name: '任务看板' }),
     ).toBeTruthy()
     expect(screen.getByRole('heading', { name: '进行中' })).toBeTruthy()
-    expect(screen.getByRole('heading', { name: '已结束' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: '已完成' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: '已取消' })).toBeTruthy()
 
     fireEvent.change(screen.getByRole('textbox', { name: '搜索任务' }), {
       target: { value: '发布' },
@@ -279,6 +280,83 @@ describe('Pegas web app', () => {
     expect(input).toHaveProperty('value', '整理这个想法')
     expect(
       fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST'),
+    ).toHaveLength(1)
+  })
+
+  it('keeps failed execution history and retries within the same work item', async () => {
+    const task = {
+      id: 'task-retry',
+      userId: 'owner',
+      originEventId: 'event-retry',
+      title: '可重试的任务',
+      goal: '保留目标',
+      status: 'started',
+      statusReason: 'last_run_failed',
+      createdAt: '2026-11-18T08:00:00.000Z',
+      updatedAt: '2026-11-18T08:00:00.000Z',
+    }
+    const failed = {
+      id: 'run-failed',
+      taskId: task.id,
+      executor: 'test',
+      status: 'failed',
+      input: '原输入',
+      attempts: 1,
+      lastError: 'provider timeout',
+      createdAt: task.createdAt,
+      updatedAt: task.updatedAt,
+    }
+    const runs = [failed]
+    let attempts = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const path =
+          input instanceof Request
+            ? input.url
+            : input instanceof URL
+              ? input.href
+              : input
+        if (path.endsWith('/retry')) {
+          expect(parseRequestBody(init)).toEqual({ userId: 'owner' })
+          attempts++
+          if (attempts === 1)
+            return Promise.resolve(
+              Response.json({ message: '暂时无法重试' }, { status: 503 }),
+            )
+          const retry = {
+            ...failed,
+            id: 'run-retry',
+            status: 'queued',
+            attempts: 0,
+            lastError: '',
+          }
+          runs.push(retry)
+          return Promise.resolve(Response.json({ run: retry }))
+        }
+        if (path.startsWith('/v1/tasks'))
+          return Promise.resolve(Response.json({ tasks: [task] }))
+        if (path.startsWith('/v1/runs'))
+          return Promise.resolve(Response.json({ runs }))
+        if (path.startsWith('/v1/events'))
+          return Promise.resolve(Response.json({ events: [] }))
+        return Promise.resolve(Response.json({ messages: [] }))
+      }),
+    )
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: '任务' }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: '打开任务现场：可重试的任务' }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '新建 Run 重试' }))
+    expect(await screen.findByText('暂时无法重试')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '新建 Run 重试' }))
+    expect(await screen.findByText('Run 2')).toBeTruthy()
+    expect(screen.getByText('Run 1')).toBeTruthy()
+    expect(screen.getByText('provider timeout')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '新建 Run 重试' })).toBeNull()
+    expect(
+      screen.getAllByRole('button', { name: '打开任务现场：可重试的任务' }),
     ).toHaveLength(1)
   })
 

@@ -257,7 +257,8 @@ textarea:focus-visible {
   font-weight: 550;
 }
 .task-board {
-  min-width: 1000px;
+  min-width: 1250px;
+  grid-template-columns: repeat(5, minmax(220px, 1fr));
   padding: 24px 26px;
   gap: 20px;
 }
@@ -393,13 +394,13 @@ textarea:focus-visible {
   background: transparent;
   box-shadow: none;
 }
-.task-state.status-running {
+.task-state.status-started {
   color: #a47111;
 }
 .task-state.status-completed {
   color: #397d62;
 }
-.task-state.status-failed {
+.task-state.status-cancelled {
   color: #b84d51;
 }
 
@@ -941,4 +942,20 @@ textarea:focus-visible {
     min-width: 44px;
     min-height: 44px;
   }
+}
+
+.status-backlog,
+.status-unstarted {
+  --status-color: #78818c;
+}
+.status-started {
+  --status-color: #a47111;
+}
+.status-dot.status-backlog,
+.status-dot.status-unstarted,
+.status-dot.status-started {
+  background: var(--status-color);
+}
+.task-column > header .lucide-circle-x {
+  color: #8b7178;
 }

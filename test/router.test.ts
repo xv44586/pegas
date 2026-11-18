@@ -119,7 +119,7 @@ function task(id: string, title: string): Task {
     originEventId: 'origin-1',
     title,
     goal: title,
-    status: 'waiting',
+    status: 'started',
     createdAt: '2026-11-17T00:00:00.000Z',
     updatedAt: '2026-11-17T00:00:00.000Z',
   }

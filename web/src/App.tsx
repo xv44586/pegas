@@ -7,6 +7,7 @@ import {
   Clock3,
   Circle,
   CircleCheck,
+  CircleX,
   CircleDot,
   CircleDashed,
   Columns3,
@@ -62,13 +63,10 @@ const emptySnapshot: Snapshot = {
 }
 
 const statusCopy: Record<TaskStatus, string> = {
-  inbox: '已接收',
-  planning: '规划中',
-  running: '执行中',
-  waiting: '等你确认',
+  backlog: '待安排',
+  unstarted: '未开始',
+  started: '进行中',
   completed: '已完成',
-  failed: '出现问题',
-  paused: '已暂停',
   cancelled: '已取消',
 }
 
@@ -606,6 +604,10 @@ export function App() {
       </main>
 
       <WorkspacePanel
+        onRetry={async runId => {
+          await api.retryRun(runId)
+          await loadSnapshot(true)
+        }}
         open={workspaceVisible}
         selectedTask={selectedTask}
         runs={
@@ -1205,25 +1207,31 @@ const taskColumns: {
     id: 'planned',
     title: '待安排',
     description: '已接收，正在形成计划',
-    statuses: ['inbox', 'planning'],
+    statuses: ['backlog'],
+  },
+  {
+    id: 'unstarted',
+    title: '未开始',
+    description: '已安排，等待执行',
+    statuses: ['unstarted'],
   },
   {
     id: 'active',
     title: '进行中',
-    description: 'Pegas 正在执行',
-    statuses: ['running', 'paused'],
-  },
-  {
-    id: 'waiting',
-    title: '等待中',
-    description: '等待你的反馈或确认',
-    statuses: ['waiting'],
+    description: '目标正在推进',
+    statuses: ['started'],
   },
   {
     id: 'finished',
-    title: '已结束',
-    description: '已完成或停止的工作',
-    statuses: ['completed', 'failed', 'cancelled'],
+    title: '已完成',
+    description: '目标已完成',
+    statuses: ['completed'],
+  },
+  {
+    id: 'cancelled',
+    title: '已取消',
+    description: '不再继续的目标',
+    statuses: ['cancelled'],
   },
 ]
 
@@ -1294,8 +1302,10 @@ function TasksPage({
                     <CircleDashed aria-hidden="true" />
                   ) : column.id === 'active' ? (
                     <CircleDot aria-hidden="true" />
-                  ) : column.id === 'waiting' ? (
+                  ) : column.id === 'unstarted' ? (
                     <Circle aria-hidden="true" />
+                  ) : column.id === 'cancelled' ? (
+                    <CircleX aria-hidden="true" />
                   ) : (
                     <CircleCheck aria-hidden="true" />
                   )}
@@ -1326,6 +1336,15 @@ function TasksPage({
                         </span>
                         <strong>{task.title}</strong>
                         <p>{task.goal}</p>
+                        {taskRuns.at(-1)?.status === 'failed' &&
+                          isActiveTask(task.status) && (
+                            <span className="run-error">
+                              最近执行失败 · 可重试
+                            </span>
+                          )}
+                        {task.statusReason === 'awaiting_user_review' && (
+                          <span className="task-state">等待你的确认</span>
+                        )}
                         <span className="task-card-meta">
                           <span className={`task-state status-${task.status}`}>
                             <span className="status-dot" />
@@ -1354,12 +1373,14 @@ function TasksPage({
 }
 
 function WorkspacePanel({
+  onRetry,
   open,
   selectedTask,
   runs,
   onClose,
   compact,
 }: {
+  onRetry: (runId: string) => Promise<void>
   open: boolean
   selectedTask?: Task
   runs: Run[]
@@ -1410,7 +1431,13 @@ function WorkspacePanel({
       role={compact ? 'dialog' : 'complementary'}
     >
       {selectedTask ? (
-        <TaskDetail task={selectedTask} runs={runs} onClose={onClose} />
+        <TaskDetail
+          key={selectedTask.id}
+          task={selectedTask}
+          runs={runs}
+          onClose={onClose}
+          onRetry={onRetry}
+        />
       ) : (
         <div className="workspace-empty">
           <header>
@@ -1449,15 +1476,19 @@ function WorkspacePanel({
 }
 
 function TaskDetail({
+  onRetry,
   task,
   runs,
   onClose,
 }: {
+  onRetry: (runId: string) => Promise<void>
   task: Task
   runs: Run[]
   onClose: () => void
 }) {
   const latestRun = runs.at(-1)
+  const [retrying, setRetrying] = useState(false)
+  const [retryError, setRetryError] = useState('')
   const steps = taskSteps(task.status)
   return (
     <div className="task-detail">
@@ -1504,6 +1535,26 @@ function TaskDetail({
 
         <section className="detail-section">
           <h3>执行记录</h3>
+          {latestRun?.status === 'failed' && isActiveTask(task.status) && (
+            <button
+              className="workspace-toggle"
+              disabled={retrying}
+              onClick={() => {
+                setRetrying(true)
+                setRetryError('')
+                void onRetry(latestRun.id)
+                  .catch((caught: unknown) =>
+                    setRetryError(
+                      caught instanceof Error ? caught.message : '重试失败',
+                    ),
+                  )
+                  .finally(() => setRetrying(false))
+              }}
+            >
+              {retrying ? '正在安排…' : '新建 Run 重试'}
+            </button>
+          )}
+          {retryError && <p role="alert">{retryError}</p>}
           {runs.length === 0 ? (
             <p className="detail-empty">
               Pegas 正在为这件事建立第一条执行记录。
@@ -1534,6 +1585,11 @@ function TaskDetail({
                   </dl>
                   {run.lastError && (
                     <p className="run-error">{run.lastError}</p>
+                  )}
+                  {run.retryOfRunId && (
+                    <p className="detail-empty">
+                      重试自 {run.retryOfRunId.slice(0, 8)}
+                    </p>
                   )}
                 </article>
               ))}
@@ -1605,40 +1661,41 @@ function runForMessage(message: OutboxMessage, runs: Run[]): Run | undefined {
 }
 
 function isActiveTask(status: TaskStatus): boolean {
-  return !['completed', 'failed', 'cancelled'].includes(status)
+  return !['completed', 'cancelled'].includes(status)
 }
 
 function taskSubtitle(task: Task, run?: Run): string {
-  if (task.status === 'running') return 'Pegas 正在执行，重要进展会在这里出现。'
-  if (task.status === 'planning') return '正在理解目标并安排下一步。'
-  if (task.status === 'waiting') return '本轮执行已结束，等待你的反馈。'
+  if (run?.status === 'failed')
+    return run.lastError ?? '最近执行失败，可以重试。'
+  if (task.status === 'started') return '任务正在推进，执行记录可随时查看。'
+  if (task.status === 'unstarted') return '已安排，等待执行。'
   if (task.status === 'completed') return '目标已经完成。'
-  if (task.status === 'failed')
-    return run?.lastError ?? '执行遇到问题，可以从详情中检查。'
-  if (task.status === 'paused') return '任务已暂停，状态和上下文都已保存。'
+  if (task.status === 'cancelled') return '任务已取消，不再继续。'
   return '任务已经进入 Pegas 的工作队列。'
 }
 
 function reasonCopy(reason: string): string {
+  if (reason === 'last_run_failed')
+    return '最近执行失败，可在详情中新建 Run 重试。'
+  if (reason === 'retry_queued') return '重试已安排，等待执行。'
+  if (reason === 'paused') return '任务已暂停。'
   if (reason === 'awaiting_user_review') return '本轮执行已结束，等待你的反馈。'
   return reason.replaceAll('_', ' ')
 }
 
 function taskStageIndex(status: TaskStatus): number {
   const stage: Record<TaskStatus, number> = {
-    inbox: 0,
-    planning: 1,
-    running: 2,
-    waiting: 3,
+    backlog: 0,
+    unstarted: 1,
+    started: 2,
     completed: 3,
-    failed: 3,
-    paused: 2,
     cancelled: 3,
   }
   return stage[status]
 }
 
 function taskStageLabel(status: TaskStatus): string {
+  if (status === 'cancelled') return '任务已取消'
   const labels = ['已接收', '规划', '执行', '交付']
   return `当前阶段：${labels[taskStageIndex(status)] ?? '未知'}`
 }
@@ -1658,14 +1715,19 @@ function runStatusCopy(status: Run['status']): string {
 function taskSteps(
   status: TaskStatus,
 ): { label: string; detail: string; state: 'done' | 'active' | 'pending' }[] {
+  if (status === 'cancelled')
+    return [
+      {
+        label: '已取消',
+        detail: '目标已关闭，执行记录仍保留。',
+        state: 'done',
+      },
+    ]
   const position: Record<TaskStatus, number> = {
-    inbox: 0,
-    planning: 1,
-    running: 2,
-    waiting: 3,
+    backlog: 0,
+    unstarted: 1,
+    started: 2,
     completed: 4,
-    failed: 3,
-    paused: 2,
     cancelled: 3,
   }
   const current = position[status]

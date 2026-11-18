@@ -102,6 +102,75 @@ describe('control plane', () => {
     })
   })
 
+  it('authenticates retries and creates only one successor for repeated requests', async () => {
+    const store = new PegasStore(':memory:')
+    const event = store.enqueueEvent({
+      userId: 'owner',
+      source: 'web',
+      type: 'user.message',
+      payload: { text: 'Retry me' },
+    }).event
+    const initial = store.applyRoutingDecision(
+      event,
+      {
+        kind: 'create_task',
+        title: 'Retry',
+        goal: 'Retry',
+        input: 'Retry',
+        reason: 'test',
+      },
+      'test',
+    )
+    store.claimNextRun('worker')
+    store.failRun(initial.run.id, 'worker', 'timeout')
+    const server = createControlPlane({ store, apiToken: 'secret' })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    cleanups.push(
+      () => new Promise<void>(resolve => server.close(() => resolve())),
+      () => Promise.resolve(store.close()),
+    )
+    const { port } = server.address() as AddressInfo
+    const url = `http://127.0.0.1:${String(port)}/v1/runs/${initial.run.id}/retry`
+    const headers = {
+      authorization: 'Bearer secret',
+      'content-type': 'application/json',
+    }
+    expect(
+      (
+        await fetch(url, {
+          method: 'POST',
+          body: JSON.stringify({ userId: 'owner' }),
+        })
+      ).status,
+    ).toBe(401)
+    expect(
+      (await fetch(url, { method: 'POST', headers, body: '{}' })).status,
+    ).toBe(400)
+    expect(
+      (
+        await fetch(url, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ userId: 'other' }),
+        })
+      ).status,
+    ).toBe(400)
+    const first = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ userId: 'owner' }),
+    })
+    const replay = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ userId: 'owner' }),
+    })
+    expect(first.status).toBe(200)
+    expect(await replay.json()).toEqual(await first.json())
+    expect(store.listRuns()).toHaveLength(2)
+    expect(store.listTasks()).toHaveLength(1)
+  })
+
   it('accepts authenticated events and deduplicates retries', async () => {
     const store = new PegasStore(':memory:')
     const server = createControlPlane({ store, apiToken: 'secret' })

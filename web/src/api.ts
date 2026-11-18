@@ -88,6 +88,18 @@ export class PegasApi {
     return this.#get<SettingsResponse>('/v1/settings')
   }
 
+  async retryRun(runId: string): Promise<void> {
+    const response = await fetch(
+      `/v1/runs/${encodeURIComponent(runId)}/retry`,
+      {
+        method: 'POST',
+        headers: this.#headers(true),
+        body: JSON.stringify({ userId: this.#userId }),
+      },
+    )
+    if (!response.ok) await throwResponse(response)
+  }
+
   async saveSettings(settings: RuntimeSettings): Promise<SettingsResponse> {
     const response = await fetch('/v1/settings', {
       method: 'PUT',

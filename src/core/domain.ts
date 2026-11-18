@@ -1,14 +1,7 @@
 type EventStatus = 'pending' | 'processing' | 'processed' | 'failed'
 
 type TaskStatus =
-  | 'inbox'
-  | 'planning'
-  | 'running'
-  | 'waiting'
-  | 'completed'
-  | 'failed'
-  | 'paused'
-  | 'cancelled'
+  'backlog' | 'unstarted' | 'started' | 'completed' | 'cancelled'
 
 export interface InboxEvent {
   id: string
@@ -53,6 +46,7 @@ type RunStatus =
 export interface Run {
   id: string
   taskId: string
+  retryOfRunId?: string
   executor: string
   executorRef?: string
   resumeFromRef?: string

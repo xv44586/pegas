@@ -1,3 +1,7 @@
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
 
 import type { Clock } from '../src/core/clock.js'
@@ -139,6 +143,191 @@ describe('PegasStore', () => {
     store.close()
   })
 
+  it('retries with a new immutable execution record and idempotent lineage', () => {
+    const store = new PegasStore(':memory:')
+    const { event } = store.enqueueEvent({
+      userId: 'owner',
+      source: 'web',
+      type: 'user.message',
+      payload: { text: 'Build' },
+    })
+    const decision = {
+      kind: 'create_task' as const,
+      title: 'Build',
+      goal: 'Build',
+      input: 'Original input',
+      reason: 'test',
+    }
+    const initial = store.applyRoutingDecision(event, decision, 'test-executor')
+    expect(initial.task.status).toBe('unstarted')
+    expect(() => store.retryRun(initial.run.id, 'owner')).toThrow('Only failed')
+    const claimed = store.claimNextRun('worker')
+    expect(claimed?.task.status).toBe('started')
+    store.recordExecutorRef(initial.run.id, 'worker', 'session-1')
+    store.failRun(initial.run.id, 'worker', 'provider unavailable')
+    const failed = store.listRuns()[0]
+    expect(store.listTasks()[0]).toMatchObject({
+      status: 'started',
+      statusReason: 'last_run_failed',
+    })
+    expect(() => store.retryRun(initial.run.id, 'someone-else')).toThrow(
+      'another user',
+    )
+    expect(() => store.retryRun('missing', 'owner')).toThrow('not found')
+    const retry = store.retryRun(initial.run.id, 'owner')
+    expect(retry.id).not.toBe(initial.run.id)
+    expect(retry).toMatchObject({
+      taskId: initial.task.id,
+      retryOfRunId: initial.run.id,
+      status: 'queued',
+      input: 'Original input',
+      resumeFromRef: 'session-1',
+      attempts: 0,
+    })
+    expect(store.retryRun(initial.run.id, 'owner')).toEqual(retry)
+    expect(
+      store.applyRoutingDecision(event, decision, 'test-executor').run.id,
+    ).toBe(initial.run.id)
+    expect(store.listRuns()[0]).toEqual(failed)
+    expect(store.listTasks()).toHaveLength(1)
+    expect(store.listRuns()).toHaveLength(2)
+    expect(store.claimNextRun('worker-2')?.run.id).toBe(retry.id)
+    store.failRun(retry.id, 'worker-2', 'failed again')
+    const secondRetry = store.retryRun(retry.id, 'owner')
+    expect(secondRetry.retryOfRunId).toBe(retry.id)
+    expect(secondRetry.resumeFromRef).toBe('session-1')
+    expect(store.claimNextRun('worker-3')?.run.id).toBe(secondRetry.id)
+    store.completeRun(secondRetry.id, 'worker-3', {
+      executorRef: 'session-1',
+      output: 'Ready for review',
+    })
+    expect(store.listTasks()[0]).toMatchObject({
+      status: 'started',
+      statusReason: 'awaiting_user_review',
+    })
+    expect(store.listRuns()).toHaveLength(3)
+    store.close()
+  })
+
+  it('serializes runs for one task and rejects retrying superseded failures', () => {
+    const store = new PegasStore(':memory:')
+    const event = () =>
+      store.enqueueEvent({
+        userId: 'owner',
+        source: 'web',
+        type: 'user.message',
+        payload: { text: 'Build' },
+      }).event
+    const initial = store.applyRoutingDecision(
+      event(),
+      {
+        kind: 'create_task',
+        title: 'Build',
+        goal: 'Build',
+        input: 'First',
+        reason: 'test',
+      },
+      'test',
+    )
+    store.claimNextRun('worker')
+    const continuation = store.applyRoutingDecision(
+      event(),
+      {
+        kind: 'continue_task',
+        taskId: initial.task.id,
+        input: 'Follow up',
+        reason: 'test',
+      },
+      'test',
+    )
+    expect(store.claimNextRun('worker-2')).toBeUndefined()
+    store.failRun(initial.run.id, 'worker', 'error')
+    expect(() => store.retryRun(initial.run.id, 'owner')).toThrow('active work')
+    expect(store.claimNextRun('worker-2')?.run.id).toBe(continuation.run.id)
+    store.failRun(continuation.run.id, 'worker-2', 'later error')
+    expect(() => store.retryRun(initial.run.id, 'owner')).toThrow(
+      'latest failed',
+    )
+    store.close()
+  })
+
+  it('upgrades every legacy task state without losing failed runs or reopening closed work', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'pegas-task-migration-'))
+    const path = join(directory, 'pegas.sqlite')
+    const legacy = new DatabaseSync(path)
+    legacy.exec(
+      readFileSync(
+        new URL('./fixtures/schema-v4.sql', import.meta.url),
+        'utf8',
+      ),
+    )
+    const statuses = [
+      'inbox',
+      'planning',
+      'running',
+      'waiting',
+      'failed',
+      'paused',
+      'completed',
+      'cancelled',
+    ]
+    for (const status of statuses) {
+      legacy
+        .prepare(
+          `INSERT INTO inbox_events (id,user_id,type,source,payload_json,status,created_at) VALUES (?,'owner','user.message','web','{}','processed','2026-11-17')`,
+        )
+        .run(status)
+      legacy
+        .prepare(
+          `INSERT INTO tasks (id,user_id,origin_event_id,title,goal,status,created_at,updated_at) VALUES (?,'owner',?,?,?,?,'2026-11-17','2026-11-17')`,
+        )
+        .run(status, status, status, status, status)
+      legacy
+        .prepare(
+          `INSERT INTO runs (id,task_id,executor,status,input_json,last_error,created_at,updated_at) VALUES (?,?,'test','failed','"Original"','Keep this error','2026-11-17','2026-11-17')`,
+        )
+        .run(status, status)
+    }
+    legacy.close()
+    const store = new PegasStore(path)
+    try {
+      const mapped = Object.fromEntries(
+        store.listTasks().map(task => [task.id, task.status]),
+      )
+      expect(mapped).toEqual({
+        inbox: 'backlog',
+        planning: 'unstarted',
+        running: 'started',
+        waiting: 'started',
+        failed: 'started',
+        paused: 'started',
+        completed: 'completed',
+        cancelled: 'cancelled',
+      })
+      expect(store.listRuns('failed')[0]).toMatchObject({
+        status: 'failed',
+        lastError: 'Keep this error',
+        input: 'Original',
+      })
+      expect(() => store.retryRun('completed', 'owner')).toThrow('closed')
+      expect(() => store.retryRun('cancelled', 'owner')).toThrow('closed')
+      const db = new DatabaseSync(path)
+      expect(() => db.exec("UPDATE tasks SET status = 'failed'")).toThrow(
+        'Invalid task status',
+      )
+      db.close()
+    } finally {
+      store.close()
+    }
+    const reopened = new PegasStore(path)
+    try {
+      expect(reopened.listTasks()).toHaveLength(8)
+    } finally {
+      reopened.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
   it('lets a new worker resume exactly when the durable lease expires', () => {
     const clock = new MutableClock('2026-11-17T00:00:00.000Z')
     const store = new PegasStore(':memory:', { clock })
@@ -171,11 +360,22 @@ describe('PegasStore', () => {
     const recovered = store.claimNextRun('worker-2')
 
     expect(recovered?.run).toMatchObject({
-      id: firstClaim.run.id,
-      executorRef: 'session-durable',
+      retryOfRunId: firstClaim.run.id,
+      resumeFromRef: 'session-durable',
       claimedBy: 'worker-2',
-      attempts: 2,
+      attempts: 1,
     })
+    expect(recovered?.run.id).not.toBe(firstClaim.run.id)
+    expect(store.listRuns()[0]).toMatchObject({
+      status: 'failed',
+      lastError: 'lease_expired',
+    })
+    expect(() =>
+      store.completeRun(firstClaim.run.id, 'worker-1', {
+        executorRef: 'stale',
+        output: 'stale',
+      }),
+    ).toThrow(/does not own/)
     store.close()
   })
 })
