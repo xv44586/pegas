@@ -18,7 +18,7 @@
 
 1. 设置页展示并保存 Router 模式、Provider、对应模型名、脱敏策略和输入改写策略；
    保存成功后显示服务端 revision 与更新时间。
-2. Provider 目录至少包含 OpenAI、Anthropic、Google Gemini、DeepSeek、xAI、Kimi、
+2. Provider 目录以本机 Magpie 为默认项，并包含 OpenAI、Anthropic、Google Gemini、DeepSeek、xAI、Kimi、
    智谱 GLM、MiniMax、阿里云百炼、OpenRouter、Groq、Mistral、SiliconFlow、Ollama
    与 LM Studio；预设提供协议和 Base URL，模型名始终可编辑。
 3. 自定义 Provider 支持名称、OpenAI Chat Completions 或 Anthropic Messages 协议、
@@ -48,6 +48,7 @@
 14. 模型测试结果先给出可理解的结论与下一步：连接正常时显示响应时间；404、鉴权失败、限流和服务故障分别提示模型选择、密钥权限、额度与稍后重试。供应商原始错误不得直接铺到页面或回显凭证。
 15. 开启轻量改写后可选择沿用 Router 模型，或填写独立的协议、API 根地址、模型名和可选密钥。测试使用未保存的表单值与可编辑示例文本，返回原文、改写结果及耗时；不保存设置，不写入 Conversation 或 Event。
 16. 独立改写连接与运行设置同一事务保存，密钥加密且不回显；旧设置默认沿用 Router。切换连接地址时不得把旧地址的密钥发送到新地址。测试失败显示可操作的归类提示；运行时改写失败回退原文，脱敏失败仍禁止出站。
+17. 新实例在用户没有显式指定模型时，从 Magpie `http://127.0.0.1:3425/v1/models` 按上游返回顺序选择第一个可用模型；目录不可达时使用已知 fallback，不覆盖已保存选择。设置页将 Magpie 放在常用供应商首位，Gemini 放入“更多供应商”。
 
 ## 数据与权限边界
 

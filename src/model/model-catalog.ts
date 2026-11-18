@@ -60,7 +60,7 @@ export async function discoverModelCatalog(
     const existing = byId.get(id)
     if (!existing || existing.name === id) byId.set(id, { id, name })
   }
-  return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name))
+  return [...byId.values()]
 }
 
 export async function testModelConnection(

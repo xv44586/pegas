@@ -35,8 +35,8 @@ describe('model catalog operations', () => {
         fetcher,
       ),
     ).resolves.toEqual([
-      { id: 'model-a', name: 'Model A' },
       { id: 'model-b', name: 'model-b' },
+      { id: 'model-a', name: 'Model A' },
     ])
     const [url, init] = fetcher.mock.calls[0] ?? []
     expect(url).toEqual(new URL('https://models.example/v1/models'))

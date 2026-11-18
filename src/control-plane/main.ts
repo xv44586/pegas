@@ -9,6 +9,7 @@ import {
   runtimeSettingsDefaults,
   settingsCapabilities,
 } from '../settings/runtime-settings.js'
+import { resolveInitialModelName } from '../settings/initial-model.js'
 import { PegasStore } from '../storage/sqlite-store.js'
 import { createControlPlane } from './server.js'
 
@@ -18,7 +19,14 @@ const modelCredentialVault = loadModelCredentialVault(
   config.modelCredentialKeyPath,
 )
 initializeConfiguredModelProvider(store, config, modelCredentialVault)
-const defaults = runtimeSettingsDefaults(config)
+const initialModelName = await resolveInitialModelName(config, {
+  hasRuntimeSettings: store.hasRuntimeSettings(),
+  modelNameExplicit: Boolean(process.env.PEGAS_MODEL_NAME?.trim()),
+})
+const defaults = runtimeSettingsDefaults({
+  ...config,
+  modelName: initialModelName,
+})
 const capabilities = () =>
   settingsCapabilities(config, store.listModelProviderConnectionSummaries())
 if (!store.hasRuntimeSettings()) {

@@ -73,6 +73,7 @@ export interface RuntimeSettings {
 }
 
 export type ModelProviderId =
+  | 'magpie'
   | 'openai'
   | 'anthropic'
   | 'google'

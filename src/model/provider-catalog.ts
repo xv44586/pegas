@@ -14,6 +14,16 @@ export interface ModelProviderPreset {
 
 export const modelProviderPresets = [
   {
+    id: 'magpie',
+    name: 'Magpie',
+    category: 'gateway',
+    protocol: 'openai-chat',
+    baseUrl: 'http://127.0.0.1:3425/v1',
+    defaultModel: 'group/free-small-models',
+    requiresApiKey: false,
+    description: '本机 Magpie 模型网关，从可用模型列表自动选择默认模型。',
+  },
+  {
     id: 'openai',
     name: 'OpenAI',
     category: 'vendor',
