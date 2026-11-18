@@ -164,13 +164,11 @@ Task Control Plane 是 Pegas 的核心，也是 Task 状态的唯一事实来源
 第一版状态：
 
 ```text
-Inbox → Planning → Running → Waiting → Completed
-                     ↘ Failed
-
-任意未结束状态均可进入 Paused 或 Cancelled
+Backlog → Unstarted → Started → Completed
+                         ↘ Cancelled
 ```
 
-状态需要同时保存原因，例如 Waiting 必须明确是在等待用户、时间、外部系统还是其他 Task。
+Task 只使用这五个工作项状态；等待审阅、暂停与最近执行失败作为原因表达。Run 单独保存 queued、running、waiting、completed、failed、cancelled。执行失败不会结束 Task；重试与租约恢复创建关联旧记录的新 Run，保留错误和恢复点。成功 Run 默认等待审阅，不自动完成 Task。当前尚未提供工作项完成/取消控制入口，状态模型与迁移、幂等和回滚边界见 `docs/task-lifecycle.md`。
 
 ### 5. Memory
 

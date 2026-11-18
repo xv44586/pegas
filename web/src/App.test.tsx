@@ -16,6 +16,7 @@ afterEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
   sessionStorage.clear()
+  window.history.replaceState({}, '', '/')
 })
 
 describe('Pegas web app', () => {
@@ -140,11 +141,28 @@ describe('Pegas web app', () => {
       if (path === '/v1/settings/models/discover') {
         return Promise.resolve(
           Response.json({
-            models: [{ id: 'gpt-settings-test', name: 'Settings test' }],
+            models: [
+              { id: 'gpt-settings-test', name: 'Settings test' },
+              ...Array.from({ length: 163 }, (_, index) => ({
+                id: `model-${String(index)}`,
+                name: `Model ${String(index)}`,
+              })),
+              { id: 'company/fast', name: 'Company fast' },
+            ],
           }),
         )
       }
       if (path === '/v1/settings/models/test') {
+        if (parseRequestBody(init).modelName === 'gpt-5-mini')
+          return Promise.resolve(
+            Response.json(
+              {
+                message:
+                  'Model provider returned 404: magpie knows no model gpt-5-mini; available models: company/fast, gpt-settings-test, many others',
+              },
+              { status: 400 },
+            ),
+          )
         return Promise.resolve(Response.json({ ok: true, latencyMs: 42 }))
       }
       if (path.startsWith('/v1/events'))
@@ -161,9 +179,15 @@ describe('Pegas web app', () => {
     fireEvent.click(screen.getByRole('button', { name: '设置' }))
 
     expect(
-      await screen.findByRole('heading', { name: '设置', level: 2 }),
+      await screen.findByRole('heading', { name: '设置', level: 1 }),
     ).toBeTruthy()
     expect(screen.queryByText(/Codex/)).toBeNull()
+    expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual([
+      '模型与供应商',
+      '任务路由',
+      '语音与输入',
+      '隐私',
+    ])
     fireEvent.click(screen.getByRole('radio', { name: /自定义/ }))
     fireEvent.change(screen.getByLabelText('连接名称'), {
       target: { value: '公司模型网关' },
@@ -177,17 +201,46 @@ describe('Pegas web app', () => {
     fireEvent.change(screen.getByLabelText('API key'), {
       target: { value: 'secret-for-test' },
     })
+    fireEvent.click(screen.getByRole('tab', { name: '任务路由' }))
+    fireEvent.click(screen.getByRole('tab', { name: '模型与供应商' }))
+    expect(screen.getByLabelText<HTMLInputElement>('连接名称').value).toBe(
+      '公司模型网关',
+    )
+    expect(screen.getByLabelText<HTMLInputElement>('API key').value).toBe(
+      'secret-for-test',
+    )
     fireEvent.click(screen.getByRole('button', { name: '获取模型列表' }))
-    expect(await screen.findByText('已获取 1 个模型')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: '测试模型' }))
-    expect(await screen.findByText('模型可用 · 42 ms')).toBeTruthy()
+    expect(await screen.findByText('已获取 165 个模型')).toBeTruthy()
+    fireEvent.change(
+      screen.getByRole('searchbox', { name: '搜索已获取模型' }),
+      {
+        target: { value: 'company' },
+      },
+    )
+    fireEvent.click(
+      screen.getByRole('button', { name: '选择模型 company/fast' }),
+    )
+    expect(
+      screen.getByLabelText<HTMLInputElement>('Router / 输入处理模型').value,
+    ).toBe('company/fast')
+    fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
+    expect(await screen.findByText('模型连接正常')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Router / 输入处理模型'), {
+      target: { value: 'gpt-5-mini' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
+    expect(await screen.findByText('找不到这个模型')).toBeTruthy()
+    expect(screen.queryByText(/magpie knows no model/)).toBeNull()
+    fireEvent.change(screen.getByLabelText('Router / 输入处理模型'), {
+      target: { value: 'company/fast' },
+    })
     fireEvent.click(screen.getByRole('radio', { name: /覆盖新 Agent session/ }))
     fireEvent.change(screen.getByLabelText('DSH provider 与模型'), {
       target: { value: 'magpie::agent-fast' },
     })
-    fireEvent.click(screen.getByRole('button', { name: '输入处理' }))
+    fireEvent.click(screen.getByRole('tab', { name: '语音与输入' }))
     fireEvent.click(screen.getByRole('radio', { name: /轻量校正/ }))
-    fireEvent.click(screen.getByRole('button', { name: '出站隐私' }))
+    fireEvent.click(screen.getByRole('tab', { name: '隐私' }))
     fireEvent.click(screen.getByRole('radio', { name: /开启脱敏/ }))
     fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
 
@@ -198,7 +251,7 @@ describe('Pegas web app', () => {
     expect(parseRequestBody(put?.[1])).toMatchObject({
       expectedRevision: 1,
       modelProvider: 'custom',
-      modelName: 'gpt-settings-test',
+      modelName: 'company/fast',
       agentModelMode: 'override',
       agentModelProvider: 'magpie',
       agentModelName: 'agent-fast',
@@ -237,12 +290,219 @@ describe('Pegas web app', () => {
     render(<App />)
 
     expect(
-      await screen.findByRole('heading', { name: '和 Pegas 说点什么' }),
+      await screen.findByRole('heading', { name: '现在想先推进什么？' }),
     ).toBeTruthy()
+    expect(screen.getByRole('heading', { name: '对话', level: 1 })).toBeTruthy()
     expect(screen.getByLabelText('告诉 Pegas 你想完成什么')).toBeTruthy()
     expect(
-      screen.getByRole('complementary', { name: '任务工作台' }),
+      screen.getByText('高风险动作会先确认', { exact: false }),
     ).toBeTruthy()
+    expect(screen.queryByRole('complementary', { name: '工作区' })).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: /研究并比较/ }))
+    expect(screen.getByLabelText('告诉 Pegas 你想完成什么')).toHaveProperty(
+      'value',
+      '帮我研究并比较下面这个问题，最后给我一个建议：',
+    )
+  })
+
+  it('shows tasks as a board and opens the selected task in the workspace', async () => {
+    const tasks = [
+      {
+        id: 'task-running',
+        userId: 'owner',
+        originEventId: 'event-running',
+        title: '整理发布说明',
+        goal: '生成一份可审阅的发布说明',
+        status: 'started',
+        createdAt: '2026-11-18T08:00:00.000Z',
+        updatedAt: '2026-11-18T09:00:00.000Z',
+      },
+      {
+        id: 'task-done',
+        userId: 'owner',
+        originEventId: 'event-done',
+        title: '检查测试结果',
+        goal: '确认回归测试通过',
+        status: 'completed',
+        createdAt: '2026-11-17T08:00:00.000Z',
+        updatedAt: '2026-11-17T09:00:00.000Z',
+      },
+    ]
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const path =
+          input instanceof Request
+            ? input.url
+            : input instanceof URL
+              ? input.href
+              : input
+        if (path.startsWith('/v1/events'))
+          return Promise.resolve(Response.json({ events: [] }))
+        if (path.startsWith('/v1/tasks'))
+          return Promise.resolve(Response.json({ tasks }))
+        if (path.startsWith('/v1/runs'))
+          return Promise.resolve(Response.json({ runs: [] }))
+        return Promise.resolve(Response.json({ messages: [] }))
+      }),
+    )
+
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: /任务/ }))
+
+    expect(
+      await screen.findByRole('heading', { name: '任务看板' }),
+    ).toBeTruthy()
+    expect(screen.getByRole('heading', { name: '进行中' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: '已完成' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: '已取消' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '刷新' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '打开工作区' })).toBeNull()
+
+    fireEvent.change(screen.getByRole('textbox', { name: '搜索任务' }), {
+      target: { value: '发布' },
+    })
+    expect(
+      screen.queryByRole('button', { name: '打开任务现场：检查测试结果' }),
+    ).toBeNull()
+    fireEvent.change(screen.getByRole('textbox', { name: '搜索任务' }), {
+      target: { value: '' },
+    })
+    expect(
+      screen.getByRole('button', { name: '打开任务现场：检查测试结果' }),
+    ).toBeTruthy()
+
+    fireEvent.click(
+      screen.getByRole('button', { name: '打开任务现场：整理发布说明' }),
+    )
+    expect(screen.getByRole('complementary', { name: '工作区' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: '整理发布说明' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '设置' }))
+    expect(screen.queryByRole('complementary', { name: '工作区' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '任务' }))
+    expect(screen.getByRole('complementary', { name: '工作区' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '关闭工作区' }))
+    expect(screen.queryByRole('complementary', { name: '工作区' })).toBeNull()
+  })
+
+  it('preserves composed text and failed drafts in the composer', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path =
+        input instanceof Request
+          ? input.url
+          : input instanceof URL
+            ? input.href
+            : input
+      if (init?.method === 'POST')
+        return Promise.resolve(
+          Response.json({ error: '发送失败，请重试' }, { status: 503 }),
+        )
+      if (path.startsWith('/v1/events'))
+        return Promise.resolve(Response.json({ events: [] }))
+      if (path.startsWith('/v1/tasks'))
+        return Promise.resolve(Response.json({ tasks: [] }))
+      if (path.startsWith('/v1/runs'))
+        return Promise.resolve(Response.json({ runs: [] }))
+      return Promise.resolve(Response.json({ messages: [] }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    const input = await screen.findByRole('textbox', {
+      name: '告诉 Pegas 你想完成什么',
+    })
+    const send = screen.getByRole('button', { name: '发送给 Pegas' })
+    expect(send).toHaveProperty('disabled', true)
+    fireEvent.change(input, { target: { value: '整理这个想法' } })
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true })
+    fireEvent.keyDown(input, { key: 'Enter', keyCode: 229 })
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: true })
+    expect(
+      fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST'),
+    ).toHaveLength(0)
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => expect(send).toHaveProperty('disabled', false))
+    expect(input).toHaveProperty('value', '整理这个想法')
+    expect(
+      fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST'),
+    ).toHaveLength(1)
+  })
+
+  it('keeps failed execution history and retries within the same work item', async () => {
+    const task = {
+      id: 'task-retry',
+      userId: 'owner',
+      originEventId: 'event-retry',
+      title: '可重试的任务',
+      goal: '保留目标',
+      status: 'started',
+      statusReason: 'last_run_failed',
+      createdAt: '2026-11-18T08:00:00.000Z',
+      updatedAt: '2026-11-18T08:00:00.000Z',
+    }
+    const failed = {
+      id: 'run-failed',
+      taskId: task.id,
+      executor: 'test',
+      status: 'failed',
+      input: '原输入',
+      attempts: 1,
+      lastError: 'provider timeout',
+      createdAt: task.createdAt,
+      updatedAt: task.updatedAt,
+    }
+    const runs = [failed]
+    let attempts = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const path =
+          input instanceof Request
+            ? input.url
+            : input instanceof URL
+              ? input.href
+              : input
+        if (path.endsWith('/retry')) {
+          expect(parseRequestBody(init)).toEqual({ userId: 'owner' })
+          attempts++
+          if (attempts === 1)
+            return Promise.resolve(
+              Response.json({ message: '暂时无法重试' }, { status: 503 }),
+            )
+          const retry = {
+            ...failed,
+            id: 'run-retry',
+            status: 'queued',
+            attempts: 0,
+            lastError: '',
+          }
+          runs.push(retry)
+          return Promise.resolve(Response.json({ run: retry }))
+        }
+        if (path.startsWith('/v1/tasks'))
+          return Promise.resolve(Response.json({ tasks: [task] }))
+        if (path.startsWith('/v1/runs'))
+          return Promise.resolve(Response.json({ runs }))
+        if (path.startsWith('/v1/events'))
+          return Promise.resolve(Response.json({ events: [] }))
+        return Promise.resolve(Response.json({ messages: [] }))
+      }),
+    )
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: '任务' }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: '打开任务现场：可重试的任务' }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '新建 Run 重试' }))
+    expect(await screen.findByText('暂时无法重试')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '新建 Run 重试' }))
+    expect(await screen.findByText('Run 2')).toBeTruthy()
+    expect(screen.getByText('Run 1')).toBeTruthy()
+    expect(screen.getByText('provider timeout')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '新建 Run 重试' })).toBeNull()
+    expect(
+      screen.getAllByRole('button', { name: '打开任务现场：可重试的任务' }),
+    ).toHaveLength(1)
   })
 
   it('formats recent updates in conversational language', () => {

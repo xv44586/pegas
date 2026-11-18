@@ -1,21 +1,28 @@
 import {
-  ArrowLeft,
+  ArrowUp,
+  ArrowUpRight,
   Check,
   ChevronRight,
   CircleAlert,
-  CloudCog,
+  Clock3,
+  Circle,
+  CircleCheck,
+  CircleX,
+  CircleDot,
+  CircleDashed,
+  Columns3,
+  FileOutput,
   KeyRound,
   ListTodo,
   Mic,
   MessageSquareText,
-  RotateCw,
-  Route,
-  Send,
+  PanelRightOpen,
+  Plus,
+  Search,
   Settings2,
   ShieldCheck,
   Sparkles,
   Square,
-  WandSparkles,
   X,
 } from 'lucide-react'
 import {
@@ -32,11 +39,11 @@ import { ApiError, PegasApi } from './api'
 import { MarkdownMessage } from './MarkdownMessage'
 import { useVoiceDictation } from './useVoiceDictation'
 import type {
-  InboxEvent,
   DshModelCatalog,
   ModelCatalogItem,
   ModelProviderDraft,
   ModelProviderId,
+  InboxEvent,
   OutboxMessage,
   Run,
   RuntimeSettings,
@@ -74,19 +81,26 @@ const emptySnapshot: Snapshot = {
 }
 
 const statusCopy: Record<TaskStatus, string> = {
-  inbox: '已接收',
-  planning: '规划中',
-  running: '执行中',
-  waiting: '等你确认',
+  backlog: '待安排',
+  unstarted: '未开始',
+  started: '进行中',
   completed: '已完成',
-  failed: '出现问题',
-  paused: '已暂停',
   cancelled: '已取消',
 }
 
 type TimelineItem =
   | { kind: 'event'; createdAt: string; value: InboxEvent }
   | { kind: 'message'; createdAt: string; value: OutboxMessage }
+
+type AppView = 'conversation' | 'tasks' | 'settings'
+
+function viewFromUrl(): AppView {
+  const parameters = new URLSearchParams(window.location.search)
+  const view = parameters.get('view')
+  if (view === 'conversation' || view === 'tasks' || view === 'settings')
+    return view
+  return parameters.has('task') ? 'tasks' : 'conversation'
+}
 
 export function App() {
   const compact = useMediaQuery('(max-width: 820px)')
@@ -97,17 +111,18 @@ export function App() {
   )
   const [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot)
   const [loading, setLoading] = useState(true)
-  const [refreshing, setRefreshing] = useState(false)
   const [unauthorized, setUnauthorized] = useState(false)
   const [error, setError] = useState('')
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
-  const [taskPanelOpen, setTaskPanelOpen] = useState(Boolean(initialTaskId))
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [activeView, setActiveView] = useState<AppView>(viewFromUrl)
+  const [workspaceOpen, setWorkspaceOpen] = useState(Boolean(initialTaskId))
+  const workspaceVisible = workspaceOpen && activeView !== 'settings'
   const [selectedTaskId, setSelectedTaskId] = useState(initialTaskId)
+  const [attachmentHelpOpen, setAttachmentHelpOpen] = useState(false)
   const feedEnd = useRef<HTMLDivElement>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
-  const previousFocus = useRef<HTMLElement | null>(null)
+  const workspaceTrigger = useRef<HTMLElement | null>(null)
   const api = useMemo(() => new PegasApi(userId, token), [token])
   const appendTranscript = useCallback((text: string) => {
     setDraft(current => `${current}${current.trim() ? '\n' : ''}${text}`)
@@ -118,35 +133,33 @@ export function App() {
     onTranscript: appendTranscript,
   })
   const dictationBusy = dictation.state !== 'idle'
+  const activeTaskCount = snapshot.tasks.filter(task =>
+    isActiveTask(task.status),
+  ).length
 
-  const loadSnapshot = useCallback(
-    async (quiet = false) => {
-      if (!quiet) setRefreshing(true)
-      try {
-        const next = await api.snapshot()
-        setSnapshot(next)
-        setUnauthorized(false)
+  const loadSnapshot = useCallback(async () => {
+    try {
+      const next = await api.snapshot()
+      setSnapshot(next)
+      setUnauthorized(false)
+      setError('')
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 401) {
+        setUnauthorized(true)
         setError('')
-      } catch (caught) {
-        if (caught instanceof ApiError && caught.status === 401) {
-          setUnauthorized(true)
-          setError('')
-        } else {
-          setError(
-            caught instanceof Error ? caught.message : '暂时无法连接 Pegas',
-          )
-        }
-      } finally {
-        setLoading(false)
-        setRefreshing(false)
+      } else {
+        setError(
+          caught instanceof Error ? caught.message : '暂时无法连接 Pegas',
+        )
       }
-    },
-    [api],
-  )
+    } finally {
+      setLoading(false)
+    }
+  }, [api])
 
   useEffect(() => {
-    void loadSnapshot(true)
-    const interval = window.setInterval(() => void loadSnapshot(true), 2500)
+    void loadSnapshot()
+    const interval = window.setInterval(() => void loadSnapshot(), 2500)
     return () => window.clearInterval(interval)
   }, [loadSnapshot])
 
@@ -155,7 +168,8 @@ export function App() {
       const taskId =
         new URLSearchParams(window.location.search).get('task') ?? ''
       setSelectedTaskId(taskId)
-      setTaskPanelOpen(Boolean(taskId))
+      setWorkspaceOpen(Boolean(taskId))
+      setActiveView(viewFromUrl())
     }
     window.addEventListener('popstate', handlePopState)
     return () => window.removeEventListener('popstate', handlePopState)
@@ -183,55 +197,52 @@ export function App() {
 
   const selectedTask = snapshot.tasks.find(task => task.id === selectedTaskId)
 
-  function openTaskPanel(): void {
-    rememberPanelTrigger()
-    setSettingsOpen(false)
-    setTaskPanelOpen(true)
-  }
-
   function openTask(taskId: string): void {
-    rememberPanelTrigger()
-    setSettingsOpen(false)
+    rememberWorkspaceTrigger()
+    setActiveView('tasks')
     setSelectedTaskId(taskId)
-    setTaskPanelOpen(true)
+    setWorkspaceOpen(true)
     const url = new URL(window.location.href)
+    url.searchParams.set('view', 'tasks')
     url.searchParams.set('task', taskId)
     window.history.pushState({ taskId }, '', url)
   }
 
-  function closeTask(): void {
+  function closeWorkspace(): void {
+    setWorkspaceOpen(false)
     setSelectedTaskId('')
     const url = new URL(window.location.href)
     url.searchParams.delete('task')
-    window.history.pushState({}, '', url)
+    window.history.replaceState({}, '', url)
+    if (compact)
+      window.requestAnimationFrame(() => workspaceTrigger.current?.focus())
   }
 
-  function closeTaskPanel(): void {
-    setTaskPanelOpen(false)
-    if (compact) {
-      window.requestAnimationFrame(() => previousFocus.current?.focus())
-    }
-  }
-
-  function openSettings(): void {
-    rememberPanelTrigger()
-    setTaskPanelOpen(false)
-    setSettingsOpen(true)
-  }
-
-  function closeSettings(): void {
-    setSettingsOpen(false)
-    if (compact) {
-      window.requestAnimationFrame(() => previousFocus.current?.focus())
-    }
-  }
-
-  function rememberPanelTrigger(): void {
-    if (!compact || taskPanelOpen || settingsOpen) return
-    previousFocus.current =
+  function rememberWorkspaceTrigger(): void {
+    if (!compact || workspaceOpen) return
+    workspaceTrigger.current =
       document.activeElement instanceof HTMLElement
         ? document.activeElement
         : null
+  }
+
+  function navigate(view: AppView): void {
+    setActiveView(view)
+    const url = new URL(window.location.href)
+    if (view === 'conversation' && !url.searchParams.has('task'))
+      url.searchParams.delete('view')
+    else url.searchParams.set('view', view)
+    window.history.pushState({ view }, '', url)
+  }
+
+  function openWorkspace(): void {
+    rememberWorkspaceTrigger()
+    setWorkspaceOpen(true)
+  }
+
+  function usePrompt(prompt: string): void {
+    setDraft(prompt)
+    window.requestAnimationFrame(() => composer.current?.focus())
   }
 
   async function submitMessage(): Promise<void> {
@@ -242,7 +253,7 @@ export function App() {
     try {
       await api.sendMessage(text)
       setDraft('')
-      await loadSnapshot(true)
+      await loadSnapshot()
       window.setTimeout(
         () => feedEnd.current?.scrollIntoView({ behavior: 'smooth' }),
         0,
@@ -283,95 +294,108 @@ export function App() {
   }
 
   return (
-    <div className={`app-shell${settingsOpen ? ' has-settings' : ''}`}>
+    <div className={`app-shell${workspaceVisible ? ' has-workspace' : ''}`}>
+      <a className="skip-link" href="#page-title">
+        跳到主要内容
+      </a>
       <aside
         className="identity-rail"
         aria-label="Pegas 导航"
-        aria-hidden={
-          compact && (taskPanelOpen || settingsOpen) ? true : undefined
-        }
-        inert={compact && (taskPanelOpen || settingsOpen) ? true : undefined}
+        aria-hidden={compact && workspaceVisible ? true : undefined}
+        inert={compact && workspaceVisible ? true : undefined}
       >
         <button
           className="pegas-mark"
           aria-label="返回对话"
-          onClick={() => window.scrollTo({ top: 0 })}
+          onClick={() => navigate('conversation')}
         >
           P
         </button>
-        <nav className="rail-nav" aria-label="主要功能">
+        <div className="rail-brand">
+          <strong>Pegas</strong>
+          <span>Personal agent</span>
+        </div>
+        <nav className="rail-nav" aria-label="主要页面">
           <button
-            className="rail-button is-active"
+            className={`rail-button${activeView === 'conversation' ? ' is-active' : ''}`}
             aria-label="对话"
-            title="对话"
+            aria-current={activeView === 'conversation' ? 'page' : undefined}
+            onClick={() => navigate('conversation')}
           >
             <MessageSquareText aria-hidden="true" />
+            <span>对话</span>
           </button>
           <button
-            className="rail-button"
+            className={`rail-button${activeView === 'tasks' ? ' is-active' : ''}`}
             aria-label="任务"
-            title="任务"
-            onClick={openTaskPanel}
+            aria-current={activeView === 'tasks' ? 'page' : undefined}
+            onClick={() => navigate('tasks')}
           >
             <ListTodo aria-hidden="true" />
-            {snapshot.tasks.some(task => isActiveTask(task.status)) && (
-              <span className="rail-indicator" aria-label="有正在进行的任务" />
+            <span>任务</span>
+            {activeTaskCount > 0 && (
+              <span
+                className="rail-count"
+                aria-label={`${String(activeTaskCount)} 个进行中任务`}
+              >
+                {activeTaskCount}
+              </span>
             )}
           </button>
         </nav>
         <button
-          className={`rail-button rail-settings${settingsOpen ? ' is-active' : ''}`}
+          className={`rail-button rail-settings${activeView === 'settings' ? ' is-active' : ''}`}
           aria-label="设置"
-          title="设置"
-          onClick={openSettings}
+          aria-current={activeView === 'settings' ? 'page' : undefined}
+          onClick={() => navigate('settings')}
         >
           <Settings2 aria-hidden="true" />
+          <span>设置</span>
         </button>
       </aside>
 
       <main
-        className="conversation-column"
-        aria-hidden={
-          compact && (taskPanelOpen || settingsOpen) ? true : undefined
-        }
-        inert={compact && (taskPanelOpen || settingsOpen) ? true : undefined}
+        className="main-column"
+        aria-hidden={compact && workspaceVisible ? true : undefined}
+        inert={compact && workspaceVisible ? true : undefined}
       >
-        <header className="conversation-header">
+        <header className="conversation-header page-header">
           <div className="identity-copy">
             <div className="status-orbit" aria-hidden="true">
               <span />
             </div>
             <div>
-              <strong>Pegas</strong>
-              <span>{error ? '连接中断' : '在线，随时可以开始'}</span>
+              <h1 id="page-title" tabIndex={-1}>
+                {activeView === 'conversation'
+                  ? '对话'
+                  : activeView === 'tasks'
+                    ? '任务'
+                    : '设置'}
+              </h1>
+              {activeView !== 'settings' && (
+                <span>
+                  {activeView === 'conversation'
+                    ? error
+                      ? '连接中断'
+                      : '在线，随时可以开始'
+                    : `${String(activeTaskCount)} 件正在推进`}
+                </span>
+              )}
             </div>
           </div>
-          <div className="header-actions">
-            <button
-              className="icon-button"
-              aria-label="刷新"
-              title="刷新"
-              onClick={() => void loadSnapshot()}
-              disabled={refreshing}
-            >
-              <RotateCw
-                className={refreshing ? 'is-spinning' : ''}
-                aria-hidden="true"
-              />
-            </button>
-            <button
-              className="icon-button mobile-settings-button"
-              aria-label="打开设置"
-              title="设置"
-              onClick={openSettings}
-            >
-              <Settings2 aria-hidden="true" />
-            </button>
-            <button className="mobile-task-button" onClick={openTaskPanel}>
-              <ListTodo aria-hidden="true" />
-              任务
-            </button>
-          </div>
+          {activeView === 'conversation' && (
+            <div className="header-actions">
+              <button
+                className="workspace-toggle"
+                aria-label="打开工作区"
+                aria-expanded={workspaceOpen}
+                onClick={openWorkspace}
+              >
+                <PanelRightOpen aria-hidden="true" />
+                <span>工作区</span>
+              </button>
+            </div>
+          )}
         </header>
 
         <div className="notice-stack">
@@ -386,192 +410,297 @@ export function App() {
           {unauthorized && <TokenForm onSubmit={saveToken} />}
         </div>
 
-        <section className="conversation-feed" aria-label="与 Pegas 的对话">
-          {loading ? (
-            <ConversationSkeleton />
-          ) : timeline.length === 0 ? (
-            <EmptyConversation />
-          ) : (
-            timeline.map(item => {
-              if (item.kind === 'event') {
-                const task = snapshot.tasks.find(
-                  candidate => candidate.originEventId === item.value.id,
-                )
-                return (
-                  <div
-                    className="timeline-group"
-                    key={`event-${item.value.id}`}
-                  >
-                    <UserMessage event={item.value} />
-                    {task && (
-                      <TaskPulse
-                        task={task}
-                        runs={snapshot.runs.filter(
-                          run => run.taskId === task.id,
-                        )}
-                        onOpen={() => openTask(task.id)}
-                      />
-                    )}
-                  </div>
-                )
-              }
-              return (
-                <PegasMessage
-                  key={`message-${item.value.id}`}
-                  message={item.value}
-                  run={runForMessage(item.value, snapshot.runs)}
+        {activeView === 'conversation' ? (
+          <>
+            <section className="conversation-feed" aria-label="与 Pegas 的对话">
+              {loading ? (
+                <ConversationSkeleton />
+              ) : timeline.length === 0 ? (
+                <EmptyConversation
+                  activeTaskCount={activeTaskCount}
+                  onPrompt={usePrompt}
                 />
-              )
-            })
-          )}
-          <div ref={feedEnd} />
-        </section>
+              ) : (
+                timeline.map(item => {
+                  if (item.kind === 'event') {
+                    const task = snapshot.tasks.find(
+                      candidate => candidate.originEventId === item.value.id,
+                    )
+                    return (
+                      <div
+                        className="timeline-group"
+                        key={`event-${item.value.id}`}
+                      >
+                        <UserMessage event={item.value} />
+                        {task && (
+                          <TaskPulse
+                            task={task}
+                            runs={snapshot.runs.filter(
+                              run => run.taskId === task.id,
+                            )}
+                            onOpen={() => openTask(task.id)}
+                          />
+                        )}
+                      </div>
+                    )
+                  }
+                  return (
+                    <PegasMessage
+                      key={`message-${item.value.id}`}
+                      message={item.value}
+                      run={runForMessage(item.value, snapshot.runs)}
+                    />
+                  )
+                })
+              )}
+              <div ref={feedEnd} />
+            </section>
 
-        <div className="composer-dock">
-          <div className="composer-wrap">
-            <label htmlFor="message-composer">告诉 Pegas 你想完成什么</label>
-            <textarea
-              ref={composer}
-              id="message-composer"
-              value={draft}
-              onChange={event => setDraft(event.target.value)}
-              onKeyDown={handleComposerKeyDown}
-              placeholder="提出一个问题、任务，或者刚想到的点子…"
-              rows={1}
-              disabled={sending || unauthorized}
-            />
-            <div className="composer-footer">
-              <span className="composer-status">
-                {dictation.state === 'requesting' && '正在请求麦克风…'}
-                {dictation.state === 'recording' &&
-                  `正在听写 · ${formatDuration(dictation.elapsedSeconds)}`}
-                {dictation.state === 'transcribing' && '正在转成文字…'}
-                {dictation.state === 'idle' &&
-                  'Enter 发送 · Shift + Enter 换行'}
-              </span>
-              <div className="composer-actions">
-                <div className="dictation-control">
+            <div className="composer-dock">
+              {attachmentHelpOpen && (
+                <div className="attachment-help" role="status">
+                  <FileOutput aria-hidden="true" />
+                  <span>
+                    附件接入正在准备中。目前可以直接粘贴链接或文字内容。
+                  </span>
                   <button
                     type="button"
-                    className={`dictation-button ${
-                      dictation.state === 'recording' ? 'is-recording' : ''
-                    }`}
-                    aria-label={
-                      dictation.state === 'recording'
-                        ? '停止听写'
-                        : dictation.state === 'transcribing'
-                          ? '正在转写语音'
-                          : dictation.state === 'requesting'
-                            ? '正在请求麦克风'
-                            : '开始听写'
-                    }
-                    aria-pressed={dictation.state === 'recording'}
-                    onClick={dictation.toggle}
-                    disabled={
-                      sending ||
-                      unauthorized ||
-                      dictation.state === 'requesting' ||
-                      dictation.state === 'transcribing'
-                    }
+                    onClick={() => setAttachmentHelpOpen(false)}
+                    aria-label="关闭附件说明"
                   >
-                    {dictation.state === 'transcribing' ||
-                    dictation.state === 'requesting' ? (
-                      <span className="dictation-loader" aria-hidden="true" />
-                    ) : dictation.state === 'recording' ? (
-                      <Square aria-hidden="true" />
-                    ) : (
-                      <Mic aria-hidden="true" />
-                    )}
+                    <X aria-hidden="true" />
                   </button>
-                  <span className="dictation-tooltip" role="tooltip">
-                    {dictation.state === 'recording' ? '停止听写' : '听写'}
-                  </span>
                 </div>
-                <button
-                  className="send-button"
-                  aria-label={sending ? '正在发送' : '发送给 Pegas'}
-                  onClick={() => void submitMessage()}
-                  disabled={
-                    !draft.trim() || sending || unauthorized || dictationBusy
-                  }
-                >
-                  {sending ? (
-                    <span className="send-loader" />
-                  ) : (
-                    <Send aria-hidden="true" />
-                  )}
-                </button>
+              )}
+              <form
+                className="composer-wrap"
+                onSubmit={event => {
+                  event.preventDefault()
+                  void submitMessage()
+                }}
+              >
+                <label className="sr-only" htmlFor="message-composer">
+                  告诉 Pegas 你想完成什么
+                </label>
+                <textarea
+                  ref={composer}
+                  id="message-composer"
+                  value={draft}
+                  onChange={event => setDraft(event.target.value)}
+                  onKeyDown={handleComposerKeyDown}
+                  placeholder="和 Pegas 一起工作"
+                  rows={2}
+                  name="message"
+                  aria-describedby="composer-hint"
+                  disabled={sending || unauthorized}
+                />
+                <div className="composer-footer">
+                  <div className="composer-tools">
+                    <button
+                      type="button"
+                      className="attachment-button"
+                      aria-label="添加附件"
+                      title="添加附件"
+                      aria-expanded={attachmentHelpOpen}
+                      onClick={() => setAttachmentHelpOpen(open => !open)}
+                      disabled={sending || unauthorized}
+                    >
+                      <Plus aria-hidden="true" />
+                    </button>
+                    <span className="composer-status" id="composer-hint">
+                      {dictation.state === 'requesting' && '正在请求麦克风…'}
+                      {dictation.state === 'recording' &&
+                        `正在听写 · ${formatDuration(dictation.elapsedSeconds)}`}
+                      {dictation.state === 'transcribing' && '正在转成文字…'}
+                      {dictation.state === 'idle' && (
+                        <span className="composer-shortcut">
+                          Shift + Enter 换行
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                  <div className="composer-actions">
+                    <div className="dictation-control">
+                      <button
+                        type="button"
+                        className={`dictation-button ${
+                          dictation.state === 'recording' ? 'is-recording' : ''
+                        }`}
+                        aria-label={
+                          dictation.state === 'recording'
+                            ? '停止听写'
+                            : dictation.state === 'transcribing'
+                              ? '正在转写语音'
+                              : dictation.state === 'requesting'
+                                ? '正在请求麦克风'
+                                : '开始听写'
+                        }
+                        aria-pressed={dictation.state === 'recording'}
+                        onClick={dictation.toggle}
+                        disabled={
+                          sending ||
+                          unauthorized ||
+                          dictation.state === 'requesting' ||
+                          dictation.state === 'transcribing'
+                        }
+                      >
+                        {dictation.state === 'transcribing' ||
+                        dictation.state === 'requesting' ? (
+                          <span
+                            className="dictation-loader"
+                            aria-hidden="true"
+                          />
+                        ) : dictation.state === 'recording' ? (
+                          <Square aria-hidden="true" />
+                        ) : (
+                          <Mic aria-hidden="true" />
+                        )}
+                      </button>
+                      <span className="dictation-tooltip" role="tooltip">
+                        {dictation.state === 'recording' ? '停止听写' : '听写'}
+                      </span>
+                    </div>
+                    <button
+                      type="submit"
+                      className="send-button"
+                      aria-label={sending ? '正在发送' : '发送给 Pegas'}
+                      disabled={
+                        !draft.trim() ||
+                        sending ||
+                        unauthorized ||
+                        dictationBusy
+                      }
+                    >
+                      {sending ? (
+                        <span className="send-loader" aria-hidden="true" />
+                      ) : (
+                        <ArrowUp aria-hidden="true" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+                {dictation.error && (
+                  <p className="dictation-error" role="alert">
+                    {dictation.error}
+                  </p>
+                )}
+              </form>
+              <div className="sr-only" aria-live="polite">
+                {sending && '正在发送消息'}
+                {dictation.state === 'recording' && '听写已开始'}
+                {dictation.state === 'transcribing' && '录音结束，正在转成文字'}
               </div>
             </div>
-            {dictation.error && (
-              <p className="dictation-error" role="alert">
-                {dictation.error}
-              </p>
-            )}
-          </div>
-          <div className="sr-only" aria-live="polite">
-            {sending && '正在发送消息'}
-            {dictation.state === 'recording' && '听写已开始'}
-            {dictation.state === 'transcribing' && '录音结束，正在转成文字'}
-          </div>
-        </div>
+          </>
+        ) : activeView === 'tasks' ? (
+          <TasksPage
+            tasks={snapshot.tasks}
+            runs={snapshot.runs}
+            onOpen={openTask}
+          />
+        ) : (
+          <SettingsPage api={api} />
+        )}
       </main>
 
-      {settingsOpen ? (
-        <SettingsPanel
-          open={settingsOpen}
-          api={api}
-          onClose={closeSettings}
-          compact={compact}
-        />
-      ) : (
-        <TaskPanel
-          open={taskPanelOpen}
-          tasks={snapshot.tasks}
-          runs={snapshot.runs}
-          selectedTask={selectedTask}
-          onOpen={openTask}
-          onBack={closeTask}
-          onClose={closeTaskPanel}
-          compact={compact}
-        />
-      )}
+      <WorkspacePanel
+        onRetry={async runId => {
+          await api.retryRun(runId)
+          await loadSnapshot()
+        }}
+        open={workspaceVisible}
+        selectedTask={selectedTask}
+        runs={
+          selectedTask
+            ? snapshot.runs.filter(run => run.taskId === selectedTask.id)
+            : []
+        }
+        onClose={closeWorkspace}
+        compact={compact}
+      />
     </div>
   )
 }
 
-function SettingsPanel({
-  open,
-  api,
-  onClose,
-  compact,
-}: {
-  open: boolean
-  api: SettingsClient
-  onClose: () => void
-  compact: boolean
-}) {
+function SettingsPage({ api }: { api: SettingsClient }) {
+  interface ModelFeedback {
+    kind: 'success' | 'error' | 'info'
+    title: string
+    description: string
+  }
+  const modelFailure = (
+    caught: unknown,
+    action: 'discover' | 'test',
+  ): ModelFeedback => {
+    if (caught instanceof ApiError) {
+      const upstreamStatus =
+        caught.status === 400
+          ? /(?:Model provider returned|模型目录返回)\s+([1-5]\d\d)\b/.exec(
+              caught.message,
+            )?.[1]
+          : undefined
+      const status = upstreamStatus ? Number(upstreamStatus) : caught.status
+      if (status === 404)
+        return action === 'test'
+          ? {
+              kind: 'error',
+              title: '找不到这个模型',
+              description: '检查模型 ID，或从已获取的模型列表中选择后重试。',
+            }
+          : {
+              kind: 'error',
+              title: '无法获取模型列表',
+              description: '该服务可能没有模型目录。仍可手动填写模型 ID。',
+            }
+      if (status === 401 || status === 403)
+        return {
+          kind: 'error',
+          title: '连接未获授权',
+          description:
+            '检查 API key 是否正确，以及当前账号是否有权限使用此模型。',
+        }
+      if (status === 429)
+        return {
+          kind: 'error',
+          title: '请求过于频繁',
+          description: '稍后重试，或检查供应商的额度和限流设置。',
+        }
+      if (status >= 500)
+        return {
+          kind: 'error',
+          title: '供应商暂时不可用',
+          description: '稍后重试；如果持续失败，请检查服务地址和供应商状态。',
+        }
+    }
+    return {
+      kind: 'error',
+      title: action === 'test' ? '模型测试未通过' : '模型列表获取失败',
+      description: '检查服务地址、网络与连接配置后重试。',
+    }
+  }
   const [section, setSection] = useState<
-    'models' | 'routing' | 'privacy' | 'rewrite'
+    'models' | 'routing' | 'rewrite' | 'privacy'
   >('models')
   const [settings, setSettings] = useState<RuntimeSettings>()
   const [capabilities, setCapabilities] = useState<SettingsCapabilities>()
   const [providerDraft, setProviderDraft] = useState<ModelProviderDraft>()
   const [routerModels, setRouterModels] = useState<ModelCatalogItem[]>([])
+  const [modelSearch, setModelSearch] = useState('')
+  const [modelPickerOpen, setModelPickerOpen] = useState(false)
+  const [modelFeedback, setModelFeedback] = useState<ModelFeedback>()
+  const modelSearchRef = useRef<HTMLInputElement>(null)
+  const modelRequestRef = useRef(0)
   const [agentCatalog, setAgentCatalog] = useState<DshModelCatalog>()
   const [modelAction, setModelAction] = useState<
     'discovering' | 'testing' | undefined
   >()
-  const [modelStatus, setModelStatus] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [saved, setSaved] = useState(false)
   const [dirty, setDirty] = useState(false)
-  const panel = useRef<HTMLElement>(null)
 
   useEffect(() => {
-    if (!open) return
     let active = true
     setLoading(true)
     setError('')
@@ -597,40 +726,7 @@ function SettingsPanel({
     return () => {
       active = false
     }
-  }, [api, open])
-
-  useEffect(() => {
-    if (!compact || !open || !panel.current) return
-    const first = panel.current.querySelector<HTMLElement>(
-      '[data-panel-initial-focus]',
-    )
-    window.requestAnimationFrame(() => first?.focus())
-  }, [compact, open])
-
-  const handlePanelKeyDown = (event: KeyboardEvent<HTMLElement>) => {
-    if (!compact) return
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      onClose()
-      return
-    }
-    if (event.key !== 'Tab' || !panel.current) return
-    const candidates = Array.from(
-      panel.current.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
-      ),
-    ).filter(candidate => candidate.getClientRects().length > 0)
-    const firstCandidate = candidates[0]
-    const lastCandidate = candidates.at(-1)
-    if (!firstCandidate || !lastCandidate) return
-    if (event.shiftKey && document.activeElement === firstCandidate) {
-      event.preventDefault()
-      lastCandidate.focus()
-    } else if (!event.shiftKey && document.activeElement === lastCandidate) {
-      event.preventDefault()
-      firstCandidate.focus()
-    }
-  }
+  }, [api])
 
   async function save(event: SyntheticEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
@@ -676,6 +772,20 @@ function SettingsPanel({
     setSaved(false)
     setSettings(current => (current ? { ...current, [key]: value } : current))
   }
+  const resetModelLookup = () => {
+    modelRequestRef.current += 1
+    setModelAction(undefined)
+    setRouterModels([])
+    setModelSearch('')
+    setModelPickerOpen(false)
+    setModelFeedback(undefined)
+  }
+  const changeModelName = (name: string) => {
+    modelRequestRef.current += 1
+    setModelAction(undefined)
+    setModelFeedback(undefined)
+    update('modelName', name)
+  }
   const selectProvider = (id: ModelProviderId) => {
     const provider = capabilities?.providers.find(
       candidate => candidate.id === id,
@@ -693,13 +803,13 @@ function SettingsPanel({
         : current,
     )
     setProviderDraft(providerDraftFrom(provider))
-    setRouterModels([])
-    setModelStatus('')
+    resetModelLookup()
   }
   const discoverModels = async () => {
     if (!settings || !providerDraft || modelAction) return
+    const requestId = ++modelRequestRef.current
     setModelAction('discovering')
-    setModelStatus('')
+    setModelFeedback(undefined)
     setError('')
     try {
       const models = await api.discoverModels(
@@ -707,22 +817,37 @@ function SettingsPanel({
         settings.modelName,
         providerDraft,
       )
+      if (requestId !== modelRequestRef.current) return
       setRouterModels(models)
-      setModelStatus(
+      setModelSearch('')
+      setModelPickerOpen(models.length > 0)
+      setModelFeedback(
         models.length > 0
-          ? `已获取 ${String(models.length)} 个模型`
-          : '连接成功，但目录中没有可用模型',
+          ? {
+              kind: 'success',
+              title: `已获取 ${String(models.length)} 个模型`,
+              description: '从列表选择一个模型，或继续手动填写模型 ID。',
+            }
+          : {
+              kind: 'info',
+              title: '模型列表为空',
+              description: '该连接没有返回模型，仍可手动填写模型 ID。',
+            },
       )
+      if (models.length > 0)
+        window.requestAnimationFrame(() => modelSearchRef.current?.focus())
     } catch (caught) {
-      setModelStatus(caught instanceof Error ? caught.message : '模型获取失败')
+      if (requestId === modelRequestRef.current)
+        setModelFeedback(modelFailure(caught, 'discover'))
     } finally {
-      setModelAction(undefined)
+      if (requestId === modelRequestRef.current) setModelAction(undefined)
     }
   }
   const testSelectedModel = async () => {
     if (!settings || !providerDraft || modelAction) return
+    const requestId = ++modelRequestRef.current
     setModelAction('testing')
-    setModelStatus('')
+    setModelFeedback(undefined)
     setError('')
     try {
       const result = await api.testModel(
@@ -730,13 +855,28 @@ function SettingsPanel({
         settings.modelName.trim(),
         providerDraft,
       )
-      setModelStatus(`模型可用 · ${String(result.latencyMs)} ms`)
+      if (requestId !== modelRequestRef.current) return
+      setModelFeedback({
+        kind: 'success',
+        title: '模型连接正常',
+        description: `已收到模型响应，耗时 ${String(result.latencyMs)} 毫秒。`,
+      })
     } catch (caught) {
-      setModelStatus(caught instanceof Error ? caught.message : '模型测试失败')
+      if (requestId === modelRequestRef.current)
+        setModelFeedback(modelFailure(caught, 'test'))
     } finally {
-      setModelAction(undefined)
+      if (requestId === modelRequestRef.current) setModelAction(undefined)
     }
   }
+  const filteredModels = routerModels.filter(model =>
+    `${model.id} ${model.name}`
+      .toLocaleLowerCase()
+      .includes(modelSearch.trim().toLocaleLowerCase()),
+  )
+  const shownModels = filteredModels.slice(0, 50)
+  const modelNotListed =
+    routerModels.length > 0 &&
+    !routerModels.some(model => model.id === settings?.modelName.trim())
   const selectedProvider = capabilities?.providers.find(
     provider => provider.id === settings?.modelProvider,
   )
@@ -762,32 +902,8 @@ function SettingsPanel({
     (settings.agentModelMode === 'profile' ||
       (settings.agentModelProvider.trim() && settings.agentModelName.trim())),
   )
-  if (compact && !open) return null
   return (
-    <aside
-      ref={panel}
-      className={`task-panel settings-panel${open ? ' is-open' : ''}`}
-      aria-label="设置"
-      aria-modal={compact ? true : undefined}
-      role={compact ? 'dialog' : undefined}
-      onKeyDown={handlePanelKeyDown}
-    >
-      <header className="settings-header">
-        <div>
-          <h2 id="runtime-settings-title">设置</h2>
-          <p>模型、路由与隐私边界</p>
-        </div>
-        <button
-          className="panel-close settings-close"
-          type="button"
-          onClick={onClose}
-          aria-label="关闭设置"
-          data-panel-initial-focus
-        >
-          <X aria-hidden="true" />
-        </button>
-      </header>
-
+    <section className="settings-page" aria-labelledby="page-title">
       {loading ? (
         <div className="settings-loading" aria-label="正在读取设置">
           <span />
@@ -797,57 +913,62 @@ function SettingsPanel({
       ) : settings && capabilities && providerDraft && selectedProvider ? (
         <form
           className="settings-form"
-          aria-labelledby="runtime-settings-title"
+          aria-label="设置选项"
           onSubmit={event => void save(event)}
         >
           <div className="settings-layout">
-            <nav className="settings-sidebar" aria-label="设置分区">
-              <button
-                type="button"
-                className={section === 'models' ? 'is-active' : ''}
-                aria-current={section === 'models' ? 'page' : undefined}
-                onClick={() => setSection('models')}
-              >
-                <CloudCog aria-hidden="true" />
-                模型服务
-              </button>
-              <button
-                type="button"
-                className={section === 'routing' ? 'is-active' : ''}
-                aria-current={section === 'routing' ? 'page' : undefined}
-                onClick={() => setSection('routing')}
-              >
-                <Route aria-hidden="true" />
-                任务路由
-              </button>
-              <button
-                type="button"
-                className={section === 'privacy' ? 'is-active' : ''}
-                aria-current={section === 'privacy' ? 'page' : undefined}
-                onClick={() => setSection('privacy')}
-              >
-                <ShieldCheck aria-hidden="true" />
-                出站隐私
-              </button>
-              <button
-                type="button"
-                className={section === 'rewrite' ? 'is-active' : ''}
-                aria-current={section === 'rewrite' ? 'page' : undefined}
-                onClick={() => setSection('rewrite')}
-              >
-                <WandSparkles aria-hidden="true" />
-                输入处理
-              </button>
-            </nav>
-
+            <div className="settings-tabs" role="tablist" aria-label="设置分类">
+              {(
+                [
+                  ['models', '模型与供应商'],
+                  ['routing', '任务路由'],
+                  ['rewrite', '语音与输入'],
+                  ['privacy', '隐私'],
+                ] as const
+              ).map(([id, label], index, tabs) => (
+                <button
+                  type="button"
+                  role="tab"
+                  id={`settings-tab-${id}`}
+                  key={id}
+                  aria-selected={section === id}
+                  aria-controls={
+                    section === id ? `settings-panel-${id}` : undefined
+                  }
+                  tabIndex={section === id ? 0 : -1}
+                  onClick={() => setSection(id)}
+                  onKeyDown={event => {
+                    let next: number
+                    if (event.key === 'ArrowRight')
+                      next = (index + 1) % tabs.length
+                    else if (event.key === 'ArrowLeft')
+                      next = (index + tabs.length - 1) % tabs.length
+                    else if (event.key === 'Home') next = 0
+                    else if (event.key === 'End') next = tabs.length - 1
+                    else return
+                    event.preventDefault()
+                    const nextTab = tabs[next]
+                    if (!nextTab) return
+                    setSection(nextTab[0])
+                    event.currentTarget.parentElement
+                      ?.querySelectorAll<HTMLButtonElement>('[role=tab]')
+                      [next]?.focus()
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
             <div className="settings-scroll">
               {section === 'models' && (
                 <section
                   className="settings-section"
-                  aria-labelledby="models-title"
+                  role="tabpanel"
+                  id="settings-panel-models"
+                  aria-labelledby="settings-tab-models"
                 >
                   <header>
-                    <h3 id="models-title">模型服务</h3>
+                    <h2 id="models-title">模型服务</h2>
                     <p>选择供应商并配置 Pegas Router 使用的模型连接。</p>
                   </header>
 
@@ -915,6 +1036,7 @@ function SettingsPanel({
                           name="providerName"
                           value={providerDraft.name}
                           onChange={event => {
+                            resetModelLookup()
                             setSaved(false)
                             setProviderDraft(current =>
                               current
@@ -932,6 +1054,7 @@ function SettingsPanel({
                           name="providerProtocol"
                           value={providerDraft.protocol}
                           onChange={event => {
+                            resetModelLookup()
                             setDirty(true)
                             setSaved(false)
                             setProviderDraft(current =>
@@ -962,6 +1085,7 @@ function SettingsPanel({
                       value={providerDraft.baseUrl}
                       readOnly={!customProvider}
                       onChange={event => {
+                        resetModelLookup()
                         setDirty(true)
                         setSaved(false)
                         setProviderDraft(current =>
@@ -992,6 +1116,7 @@ function SettingsPanel({
                               : '可选'
                         }
                         onChange={event => {
+                          resetModelLookup()
                           setDirty(true)
                           setSaved(false)
                           setProviderDraft(current =>
@@ -1016,6 +1141,7 @@ function SettingsPanel({
                         type="button"
                         aria-pressed={providerDraft.clearApiKey}
                         onClick={() => {
+                          resetModelLookup()
                           setDirty(true)
                           setSaved(false)
                           setProviderDraft(current =>
@@ -1035,27 +1161,118 @@ function SettingsPanel({
                       </button>
                     )}
                     <label htmlFor="model-name">Router / 输入处理模型</label>
-                    <input
-                      id="model-name"
-                      name="modelName"
-                      list="router-model-options"
-                      value={settings.modelName}
-                      onChange={event =>
-                        update('modelName', event.target.value)
-                      }
-                      autoCapitalize="none"
-                      autoCorrect="off"
-                      spellCheck={false}
-                      maxLength={160}
-                      required
-                    />
-                    <datalist id="router-model-options">
-                      {routerModels.map(model => (
-                        <option key={model.id} value={model.id}>
-                          {model.name}
-                        </option>
-                      ))}
-                    </datalist>
+                    <div className="model-input-row">
+                      <input
+                        id="model-name"
+                        name="modelName"
+                        value={settings.modelName}
+                        onChange={event => changeModelName(event.target.value)}
+                        aria-describedby="model-guidance"
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                        spellCheck={false}
+                        maxLength={160}
+                        required
+                      />
+                      {routerModels.length > 0 && (
+                        <button
+                          type="button"
+                          className="model-picker-toggle"
+                          aria-expanded={modelPickerOpen}
+                          aria-controls="router-model-picker"
+                          onClick={() => {
+                            setModelPickerOpen(open => !open)
+                            if (!modelPickerOpen)
+                              window.requestAnimationFrame(() =>
+                                modelSearchRef.current?.focus(),
+                              )
+                          }}
+                        >
+                          选择模型
+                          <ChevronRight aria-hidden="true" />
+                        </button>
+                      )}
+                    </div>
+                    {routerModels.length > 0 && (
+                      <div
+                        id="router-model-picker"
+                        className="model-picker-panel"
+                        hidden={!modelPickerOpen}
+                      >
+                        <div className="model-picker-head">
+                          <strong>
+                            {String(routerModels.length)} 个可选模型
+                          </strong>
+                          <span>选中后填入上方模型 ID</span>
+                        </div>
+                        <label htmlFor="router-model-search">
+                          搜索已获取模型
+                        </label>
+                        <div className="model-picker-search">
+                          <Search aria-hidden="true" />
+                          <input
+                            ref={modelSearchRef}
+                            id="router-model-search"
+                            name="modelSearch"
+                            type="search"
+                            value={modelSearch}
+                            onChange={event =>
+                              setModelSearch(event.target.value)
+                            }
+                            onKeyDown={event => {
+                              if (event.key === 'Enter') event.preventDefault()
+                              if (event.key === 'Escape') {
+                                event.preventDefault()
+                                setModelPickerOpen(false)
+                              }
+                            }}
+                            placeholder="按名称或 ID 查找"
+                            autoCapitalize="none"
+                            autoCorrect="off"
+                            spellCheck={false}
+                          />
+                        </div>
+                        <div
+                          className="model-picker-list"
+                          role="group"
+                          aria-label="可选模型"
+                        >
+                          {shownModels.map(model => (
+                            <button
+                              type="button"
+                              key={model.id}
+                              className={
+                                settings.modelName === model.id
+                                  ? 'is-selected'
+                                  : undefined
+                              }
+                              aria-label={`选择模型 ${model.id}`}
+                              onClick={() => {
+                                changeModelName(model.id)
+                                setModelPickerOpen(false)
+                                setModelSearch('')
+                              }}
+                            >
+                              <span>{model.name}</span>
+                              {model.name !== model.id && (
+                                <code>{model.id}</code>
+                              )}
+                              {settings.modelName === model.id && (
+                                <Check aria-hidden="true" />
+                              )}
+                            </button>
+                          ))}
+                          {filteredModels.length === 0 && (
+                            <p>没有匹配的模型。可直接在上方填写模型 ID。</p>
+                          )}
+                        </div>
+                        {filteredModels.length > shownModels.length && (
+                          <p className="model-picker-more">
+                            当前显示前 50 个结果，输入关键词可查找其余模型。
+                          </p>
+                        )}
+                      </div>
+                    )}
                     <div className="model-actions">
                       <button
                         type="button"
@@ -1064,7 +1281,9 @@ function SettingsPanel({
                       >
                         {modelAction === 'discovering'
                           ? '正在获取…'
-                          : '获取模型列表'}
+                          : routerModels.length > 0
+                            ? '刷新模型列表'
+                            : '获取模型列表'}
                       </button>
                       <button
                         type="button"
@@ -1073,17 +1292,36 @@ function SettingsPanel({
                           Boolean(modelAction) || !settings.modelName.trim()
                         }
                       >
-                        {modelAction === 'testing' ? '正在测试…' : '测试模型'}
+                        {modelAction === 'testing' ? '正在测试…' : '测试连接'}
                       </button>
                     </div>
-                    <p
-                      className="model-action-status"
-                      role="status"
-                      aria-live="polite"
-                    >
-                      {modelStatus ||
-                        '可手工输入，也可从当前连接读取模型目录。'}
+                    <p id="model-guidance" className="model-action-status">
+                      可手动填写模型 ID；获取列表后也可搜索选择。
                     </p>
+                    {modelNotListed && (
+                      <p className="model-mismatch">
+                        当前模型不在刚获取的列表中。请选择列表中的模型，或继续测试手填值。
+                      </p>
+                    )}
+                    {modelFeedback && (
+                      <div
+                        className={`model-feedback is-${modelFeedback.kind}`}
+                        role="status"
+                        aria-live="polite"
+                      >
+                        {modelFeedback.kind === 'success' ? (
+                          <CircleCheck aria-hidden="true" />
+                        ) : modelFeedback.kind === 'error' ? (
+                          <CircleAlert aria-hidden="true" />
+                        ) : (
+                          <Circle aria-hidden="true" />
+                        )}
+                        <div>
+                          <strong>{modelFeedback.title}</strong>
+                          <span>{modelFeedback.description}</span>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   <fieldset className="settings-choice-group agent-model-group">
@@ -1160,10 +1398,12 @@ function SettingsPanel({
               {section === 'routing' && (
                 <section
                   className="settings-section"
-                  aria-labelledby="routing-title"
+                  role="tabpanel"
+                  id="settings-panel-routing"
+                  aria-labelledby="settings-tab-routing"
                 >
                   <header>
-                    <h3 id="routing-title">任务路由</h3>
+                    <h2 id="routing-title">任务路由</h2>
                     <p>决定新消息继续已有任务，还是创建一件新事情。</p>
                   </header>
                   <fieldset className="settings-choice-group">
@@ -1191,10 +1431,12 @@ function SettingsPanel({
               {section === 'privacy' && (
                 <section
                   className="settings-section"
-                  aria-labelledby="privacy-title"
+                  role="tabpanel"
+                  id="settings-panel-privacy"
+                  aria-labelledby="settings-tab-privacy"
                 >
                   <header>
-                    <h3 id="privacy-title">模型出站隐私</h3>
+                    <h2 id="privacy-title">模型出站隐私</h2>
                     <p>内容离开 Worker 前替换高置信度敏感值，返回后恢复。</p>
                   </header>
                   <fieldset className="settings-choice-group">
@@ -1227,12 +1469,29 @@ function SettingsPanel({
               {section === 'rewrite' && (
                 <section
                   className="settings-section"
-                  aria-labelledby="rewrite-title"
+                  role="tabpanel"
+                  id="settings-panel-rewrite"
+                  aria-labelledby="settings-tab-rewrite"
                 >
                   <header>
-                    <h3 id="rewrite-title">输入处理</h3>
+                    <h2 id="rewrite-title">输入处理</h2>
                     <p>只调整执行视图，不覆盖 Conversation 中的用户原文。</p>
                   </header>
+                  <div className="voice-settings-card">
+                    <div className="settings-card-icon">
+                      <Mic aria-hidden="true" />
+                    </div>
+                    <div>
+                      <h3>语音输入</h3>
+                      <p>在对话输入框中听写，转成可编辑文字后再发送。</p>
+                    </div>
+                    <span>
+                      {'mediaDevices' in navigator &&
+                      typeof navigator.mediaDevices.getUserMedia === 'function'
+                        ? '浏览器可用'
+                        : '浏览器不支持'}
+                    </span>
+                  </div>
                   <fieldset className="settings-choice-group">
                     <legend>改写策略</legend>
                     <SettingChoice
@@ -1278,14 +1537,9 @@ function SettingsPanel({
         <div className="settings-error" role="alert">
           <CircleAlert aria-hidden="true" />
           <span>{error}</span>
-          {!settings && (
-            <button type="button" onClick={() => onClose()}>
-              返回
-            </button>
-          )}
         </div>
       )}
-    </aside>
+    </section>
   )
 }
 
@@ -1407,19 +1661,76 @@ function TokenForm({
   )
 }
 
-function EmptyConversation() {
+const starterPrompts = [
+  {
+    title: '梳理一个计划',
+    description: '把模糊想法变成可执行的下一步',
+    prompt: '帮我把这个想法梳理成一份清晰的执行计划：',
+    icon: ListTodo,
+  },
+  {
+    title: '研究并比较',
+    description: '收集信息，给出有依据的建议',
+    prompt: '帮我研究并比较下面这个问题，最后给我一个建议：',
+    icon: Search,
+  },
+  {
+    title: '持续跟进',
+    description: '记住目标，在关键节点再联系你',
+    prompt: '请持续跟进这件事，只在需要我判断或完成时告诉我：',
+    icon: Clock3,
+  },
+]
+
+function EmptyConversation({
+  activeTaskCount,
+  onPrompt,
+}: {
+  activeTaskCount: number
+  onPrompt: (prompt: string) => void
+}) {
   return (
     <div className="empty-conversation">
-      <div className="empty-mark">
-        <Sparkles aria-hidden="true" />
+      <div className="empty-hero">
+        <div className="empty-mark">
+          <Sparkles aria-hidden="true" />
+        </div>
+        <p className="empty-eyebrow">你的个人智能代理</p>
+        <h2>现在想先推进什么？</h2>
+        <p>
+          直接说出目标，不必先创建项目或挑选工具。Pegas
+          会组织任务、持续执行，并在真正需要你时回来。
+        </p>
       </div>
-      <h1>和 Pegas 说点什么</h1>
-      <p>
-        不必先创建任务，也不用决定该放在哪里。直接告诉我你想完成什么，剩下的由我来组织。
-      </p>
-      <div className="empty-prompts" aria-label="示例">
-        <span>“把刚才的想法整理成一份方案”</span>
-        <span>“帮我持续跟进这个功能，完成后告诉我”</span>
+
+      <div className="starter-grid" aria-label="常用开始方式">
+        {starterPrompts.map(({ title, description, prompt, icon: Icon }) => (
+          <button key={title} type="button" onClick={() => onPrompt(prompt)}>
+            <span className="starter-icon">
+              <Icon aria-hidden="true" />
+            </span>
+            <span>
+              <strong>{title}</strong>
+              <small>{description}</small>
+            </span>
+            <ArrowUpRight aria-hidden="true" />
+          </button>
+        ))}
+      </div>
+
+      <div className="trust-strip" aria-label="Pegas 工作方式">
+        <span>
+          <span className="trust-value">{activeTaskCount}</span>
+          件事情正在推进
+        </span>
+        <span>
+          <ShieldCheck aria-hidden="true" />
+          高风险动作会先确认
+        </span>
+        <span>
+          <ListTodo aria-hidden="true" />
+          过程与结果随时可查
+        </span>
       </div>
     </div>
   )
@@ -1538,52 +1849,217 @@ function TaskPulse({
   )
 }
 
-function TaskPanel({
-  open,
+const taskColumns: {
+  id: string
+  title: string
+  description: string
+  statuses: TaskStatus[]
+}[] = [
+  {
+    id: 'planned',
+    title: '待安排',
+    description: '已接收，正在形成计划',
+    statuses: ['backlog'],
+  },
+  {
+    id: 'unstarted',
+    title: '未开始',
+    description: '已安排，等待执行',
+    statuses: ['unstarted'],
+  },
+  {
+    id: 'active',
+    title: '进行中',
+    description: '目标正在推进',
+    statuses: ['started'],
+  },
+  {
+    id: 'finished',
+    title: '已完成',
+    description: '目标已完成',
+    statuses: ['completed'],
+  },
+  {
+    id: 'cancelled',
+    title: '已取消',
+    description: '不再继续的目标',
+    statuses: ['cancelled'],
+  },
+]
+
+function TasksPage({
   tasks,
   runs,
-  selectedTask,
   onOpen,
-  onBack,
+}: {
+  tasks: Task[]
+  runs: Run[]
+  onOpen: (taskId: string) => void
+}) {
+  const [query, setQuery] = useState('')
+  const visibleTasks = tasks.filter(task =>
+    `${task.title} ${task.goal}`
+      .toLocaleLowerCase()
+      .includes(query.trim().toLocaleLowerCase()),
+  )
+  return (
+    <section className="tasks-page" aria-labelledby="task-board-title">
+      <header className="tasks-intro">
+        <div>
+          <h2 id="task-board-title">
+            <Columns3 aria-hidden="true" />
+            任务看板
+          </h2>
+          <span className="board-total">{tasks.length} 个任务</span>
+        </div>
+        <label className="task-search">
+          <Search aria-hidden="true" />
+          <input
+            aria-label="搜索任务"
+            placeholder="搜索任务…"
+            value={query}
+            onChange={event => setQuery(event.target.value)}
+          />
+        </label>
+        <dl className="task-summary">
+          <div>
+            <dt>进行中</dt>
+            <dd>
+              {String(tasks.filter(task => isActiveTask(task.status)).length)}
+            </dd>
+          </div>
+          <div>
+            <dt>已完成</dt>
+            <dd>
+              {String(tasks.filter(task => task.status === 'completed').length)}
+            </dd>
+          </div>
+        </dl>
+      </header>
+
+      <div className="task-board" aria-label="按状态分组的任务">
+        {taskColumns.map(column => {
+          const columnTasks = visibleTasks.filter(task =>
+            column.statuses.includes(task.status),
+          )
+          return (
+            <section
+              className="task-column"
+              key={column.id}
+              aria-labelledby={`column-${column.id}`}
+            >
+              <header>
+                <div>
+                  {column.id === 'planned' ? (
+                    <CircleDashed aria-hidden="true" />
+                  ) : column.id === 'active' ? (
+                    <CircleDot aria-hidden="true" />
+                  ) : column.id === 'unstarted' ? (
+                    <Circle aria-hidden="true" />
+                  ) : column.id === 'cancelled' ? (
+                    <CircleX aria-hidden="true" />
+                  ) : (
+                    <CircleCheck aria-hidden="true" />
+                  )}
+                  <h3 id={`column-${column.id}`}>{column.title}</h3>
+                  <span>{columnTasks.length}</span>
+                </div>
+                <p>{column.description}</p>
+              </header>
+              <div className="task-column-list">
+                {columnTasks.length === 0 ? (
+                  <div className="task-column-empty">
+                    <span>{query ? '没有匹配的任务' : '暂无任务'}</span>
+                  </div>
+                ) : (
+                  columnTasks.map(task => {
+                    const taskRuns = runs.filter(run => run.taskId === task.id)
+                    return (
+                      <button
+                        className="task-board-card"
+                        key={task.id}
+                        onClick={() => onOpen(task.id)}
+                        aria-label={`打开任务现场：${task.title}`}
+                      >
+                        <span className="task-card-id">
+                          <ListTodo aria-hidden="true" />
+                          {task.id.slice(0, 8).toUpperCase()}
+                          <ArrowUpRight aria-hidden="true" />
+                        </span>
+                        <strong>{task.title}</strong>
+                        <p>{task.goal}</p>
+                        {taskRuns.at(-1)?.status === 'failed' &&
+                          isActiveTask(task.status) && (
+                            <span className="run-error">
+                              最近执行失败 · 可重试
+                            </span>
+                          )}
+                        {task.statusReason === 'awaiting_user_review' && (
+                          <span className="task-state">等待你的确认</span>
+                        )}
+                        <span className="task-card-meta">
+                          <span className={`task-state status-${task.status}`}>
+                            <span className="status-dot" />
+                            {statusCopy[task.status]}
+                          </span>
+                          <span>
+                            {taskRuns.length > 0
+                              ? `${String(taskRuns.length)} 次执行`
+                              : '尚无执行记录'}
+                          </span>
+                          <time dateTime={task.updatedAt}>
+                            {formatRelativeTime(task.updatedAt)}
+                          </time>
+                        </span>
+                      </button>
+                    )
+                  })
+                )}
+              </div>
+            </section>
+          )
+        })}
+      </div>
+    </section>
+  )
+}
+
+function WorkspacePanel({
+  onRetry,
+  open,
+  selectedTask,
+  runs,
   onClose,
   compact,
 }: {
+  onRetry: (runId: string) => Promise<void>
   open: boolean
-  tasks: Task[]
-  runs: Run[]
   selectedTask?: Task
-  onOpen: (taskId: string) => void
-  onBack: () => void
+  runs: Run[]
   onClose: () => void
   compact: boolean
 }) {
-  const [filter, setFilter] = useState<'active' | 'completed'>('active')
   const panel = useRef<HTMLElement>(null)
 
   useEffect(() => {
-    if (!compact || !open || !panel.current) return
+    if (!open || !panel.current) return
     const element = panel.current
-    const focusable = () =>
-      Array.from(
-        element.querySelectorAll<HTMLElement>(
-          'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-        ),
-      )
-    const initial = element.querySelector<HTMLElement>(
-      '[data-panel-initial-focus]',
-    )
-    window.requestAnimationFrame(() => initial?.focus())
-
+    const initial = element.querySelector<HTMLElement>('[data-workspace-focus]')
+    if (compact) window.requestAnimationFrame(() => initial?.focus())
     const handleKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault()
         onClose()
         return
       }
-      if (event.key !== 'Tab') return
-      const candidates = focusable()
-      const first = candidates[0]
-      const last = candidates.at(-1)
+      if (!compact || event.key !== 'Tab') return
+      const focusable = Array.from(
+        element.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      )
+      const first = focusable[0]
+      const last = focusable.at(-1)
       if (!first || !last) return
       if (event.shiftKey && document.activeElement === first) {
         event.preventDefault()
@@ -1593,132 +2069,91 @@ function TaskPanel({
         first.focus()
       }
     }
-
-    element.addEventListener('keydown', handleKeyDown)
-    return () => element.removeEventListener('keydown', handleKeyDown)
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
   }, [compact, onClose, open])
 
-  if (compact && !open) return null
-  const visibleTasks = tasks.filter(task =>
-    filter === 'active'
-      ? isActiveTask(task.status)
-      : !isActiveTask(task.status),
-  )
-
+  if (!open) return null
   return (
     <aside
       ref={panel}
-      className={`task-panel${open ? ' is-open' : ''}`}
-      aria-label="任务工作台"
+      className="workspace-panel"
+      aria-label="工作区"
       aria-modal={compact ? true : undefined}
-      role={compact ? 'dialog' : undefined}
+      role={compact ? 'dialog' : 'complementary'}
     >
       {selectedTask ? (
         <TaskDetail
+          key={selectedTask.id}
           task={selectedTask}
-          runs={runs.filter(run => run.taskId === selectedTask.id)}
-          onBack={onBack}
+          runs={runs}
           onClose={onClose}
+          onRetry={onRetry}
         />
       ) : (
-        <>
-          <header className="panel-header">
+        <div className="workspace-empty">
+          <header>
             <div>
-              <h2>任务</h2>
-              <p>
-                {tasks.filter(task => isActiveTask(task.status)).length}{' '}
-                件正在推进
-              </p>
+              <span>WORKSPACE</span>
+              <h2>工作区</h2>
             </div>
             <button
               className="panel-close"
               onClick={onClose}
-              aria-label="关闭任务面板"
-              data-panel-initial-focus
+              aria-label="关闭工作区"
+              data-workspace-focus
             >
               <X aria-hidden="true" />
             </button>
           </header>
-          <div className="task-filters" role="group" aria-label="筛选任务">
-            <button
-              className={filter === 'active' ? 'is-active' : ''}
-              onClick={() => setFilter('active')}
-            >
-              进行中
-            </button>
-            <button
-              className={filter === 'completed' ? 'is-active' : ''}
-              onClick={() => setFilter('completed')}
-            >
-              已结束
-            </button>
+          <div className="workspace-empty-art">
+            <FileOutput aria-hidden="true" />
           </div>
-          <div className="task-list">
-            {visibleTasks.length === 0 ? (
-              <div className="empty-task-list">
-                <Check aria-hidden="true" />
-                <strong>
-                  {filter === 'active'
-                    ? '当前没有进行中的任务'
-                    : '还没有已结束的任务'}
-                </strong>
-                <span>从对话中交给 Pegas 一件事情，它会出现在这里。</span>
-              </div>
-            ) : (
-              visibleTasks.map(task => (
-                <button
-                  className="task-list-item"
-                  key={task.id}
-                  onClick={() => onOpen(task.id)}
-                >
-                  <span className={`status-dot status-${task.status}`} />
-                  <span className="task-list-copy">
-                    <strong>{task.title}</strong>
-                    <span>
-                      {statusCopy[task.status]} ·{' '}
-                      {formatRelativeTime(task.updatedAt)}
-                    </span>
-                  </span>
-                  <ChevronRight aria-hidden="true" />
-                </button>
-              ))
-            )}
+          <h3>结果会在这里打开</h3>
+          <p>
+            选择一个任务查看现场；后续生成的文档、图片和侧边对话也会留在这个可关闭的空间里。
+          </p>
+          <div className="workspace-capabilities">
+            <span>
+              <FileOutput aria-hidden="true" /> 内容预览
+            </span>
+            <span>
+              <MessageSquareText aria-hidden="true" /> 侧边对话
+            </span>
           </div>
-        </>
+        </div>
       )}
     </aside>
   )
 }
 
 function TaskDetail({
+  onRetry,
   task,
   runs,
-  onBack,
   onClose,
 }: {
+  onRetry: (runId: string) => Promise<void>
   task: Task
   runs: Run[]
-  onBack: () => void
   onClose: () => void
 }) {
   const latestRun = runs.at(-1)
+  const [retrying, setRetrying] = useState(false)
+  const [retryError, setRetryError] = useState('')
   const steps = taskSteps(task.status)
   return (
     <div className="task-detail">
       <header className="detail-header">
-        <button
-          className="icon-button"
-          onClick={onBack}
-          aria-label="返回任务列表"
-          data-panel-initial-focus
-        >
-          <ArrowLeft aria-hidden="true" />
-        </button>
-        <span>任务详情</span>
+        <div>
+          <span>WORKSPACE</span>
+          <strong>任务现场</strong>
+        </div>
         <button
           className="panel-close"
           onClick={onClose}
-          aria-label="关闭任务面板"
+          aria-label="关闭工作区"
+          data-workspace-focus
         >
           <X aria-hidden="true" />
         </button>
@@ -1752,6 +2187,26 @@ function TaskDetail({
 
         <section className="detail-section">
           <h3>执行记录</h3>
+          {latestRun?.status === 'failed' && isActiveTask(task.status) && (
+            <button
+              className="workspace-toggle"
+              disabled={retrying}
+              onClick={() => {
+                setRetrying(true)
+                setRetryError('')
+                void onRetry(latestRun.id)
+                  .catch((caught: unknown) =>
+                    setRetryError(
+                      caught instanceof Error ? caught.message : '重试失败',
+                    ),
+                  )
+                  .finally(() => setRetrying(false))
+              }}
+            >
+              {retrying ? '正在安排…' : '新建 Run 重试'}
+            </button>
+          )}
+          {retryError && <p role="alert">{retryError}</p>}
           {runs.length === 0 ? (
             <p className="detail-empty">
               Pegas 正在为这件事建立第一条执行记录。
@@ -1782,6 +2237,11 @@ function TaskDetail({
                   </dl>
                   {run.lastError && (
                     <p className="run-error">{run.lastError}</p>
+                  )}
+                  {run.retryOfRunId && (
+                    <p className="detail-empty">
+                      重试自 {run.retryOfRunId.slice(0, 8)}
+                    </p>
                   )}
                 </article>
               ))}
@@ -1853,40 +2313,41 @@ function runForMessage(message: OutboxMessage, runs: Run[]): Run | undefined {
 }
 
 function isActiveTask(status: TaskStatus): boolean {
-  return !['completed', 'failed', 'cancelled'].includes(status)
+  return !['completed', 'cancelled'].includes(status)
 }
 
 function taskSubtitle(task: Task, run?: Run): string {
-  if (task.status === 'running') return 'Pegas 正在执行，重要进展会在这里出现。'
-  if (task.status === 'planning') return '正在理解目标并安排下一步。'
-  if (task.status === 'waiting') return '本轮执行已结束，等待你的反馈。'
+  if (run?.status === 'failed')
+    return run.lastError ?? '最近执行失败，可以重试。'
+  if (task.status === 'started') return '任务正在推进，执行记录可随时查看。'
+  if (task.status === 'unstarted') return '已安排，等待执行。'
   if (task.status === 'completed') return '目标已经完成。'
-  if (task.status === 'failed')
-    return run?.lastError ?? '执行遇到问题，可以从详情中检查。'
-  if (task.status === 'paused') return '任务已暂停，状态和上下文都已保存。'
+  if (task.status === 'cancelled') return '任务已取消，不再继续。'
   return '任务已经进入 Pegas 的工作队列。'
 }
 
 function reasonCopy(reason: string): string {
+  if (reason === 'last_run_failed')
+    return '最近执行失败，可在详情中新建 Run 重试。'
+  if (reason === 'retry_queued') return '重试已安排，等待执行。'
+  if (reason === 'paused') return '任务已暂停。'
   if (reason === 'awaiting_user_review') return '本轮执行已结束，等待你的反馈。'
   return reason.replaceAll('_', ' ')
 }
 
 function taskStageIndex(status: TaskStatus): number {
   const stage: Record<TaskStatus, number> = {
-    inbox: 0,
-    planning: 1,
-    running: 2,
-    waiting: 3,
+    backlog: 0,
+    unstarted: 1,
+    started: 2,
     completed: 3,
-    failed: 3,
-    paused: 2,
     cancelled: 3,
   }
   return stage[status]
 }
 
 function taskStageLabel(status: TaskStatus): string {
+  if (status === 'cancelled') return '任务已取消'
   const labels = ['已接收', '规划', '执行', '交付']
   return `当前阶段：${labels[taskStageIndex(status)] ?? '未知'}`
 }
@@ -1906,14 +2367,19 @@ function runStatusCopy(status: Run['status']): string {
 function taskSteps(
   status: TaskStatus,
 ): { label: string; detail: string; state: 'done' | 'active' | 'pending' }[] {
+  if (status === 'cancelled')
+    return [
+      {
+        label: '已取消',
+        detail: '目标已关闭，执行记录仍保留。',
+        state: 'done',
+      },
+    ]
   const position: Record<TaskStatus, number> = {
-    inbox: 0,
-    planning: 1,
-    running: 2,
-    waiting: 3,
+    backlog: 0,
+    unstarted: 1,
+    started: 2,
     completed: 4,
-    failed: 3,
-    paused: 2,
     cancelled: 3,
   }
   const current = position[status]

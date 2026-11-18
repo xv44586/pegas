@@ -222,6 +222,27 @@ ALTER TABLE runtime_settings ADD COLUMN agent_model_provider TEXT NOT NULL DEFAU
 ALTER TABLE runtime_settings ADD COLUMN agent_model_name TEXT NOT NULL DEFAULT '';
 `
 
+const migration7 = `
+ALTER TABLE runs ADD COLUMN retry_of_run_id TEXT REFERENCES runs(id);
+CREATE UNIQUE INDEX runs_retry_predecessor ON runs(retry_of_run_id);
+UPDATE tasks SET status_reason = CASE
+  WHEN status = 'failed' THEN 'last_run_failed'
+  WHEN status = 'paused' THEN 'paused'
+  WHEN status = 'waiting' THEN COALESCE(status_reason, 'awaiting_user_review')
+  ELSE status_reason END;
+UPDATE tasks SET status = CASE status
+  WHEN 'inbox' THEN 'backlog' WHEN 'planning' THEN 'unstarted'
+  WHEN 'running' THEN 'started' WHEN 'waiting' THEN 'started'
+  WHEN 'failed' THEN 'started' WHEN 'paused' THEN 'started'
+  ELSE status END;
+CREATE TRIGGER task_status_insert BEFORE INSERT ON tasks
+WHEN NEW.status NOT IN ('backlog','unstarted','started','completed','cancelled')
+BEGIN SELECT RAISE(ABORT, 'Invalid task status'); END;
+CREATE TRIGGER task_status_update BEFORE UPDATE OF status ON tasks
+WHEN NEW.status NOT IN ('backlog','unstarted','started','completed','cancelled')
+BEGIN SELECT RAISE(ABORT, 'Invalid task status'); END;
+`
+
 interface InboxRow {
   id: string
   user_id: string
@@ -252,6 +273,7 @@ interface TaskRow {
 
 interface RunRow {
   id: string
+  retry_of_run_id: string | null
   task_id: string
   executor: string
   executor_ref: string | null
@@ -343,8 +365,40 @@ export class PegasStore {
     this.#migrate(2, migration2)
     this.#migrate(3, migration3)
     this.#migrate(4, migration4)
+    this.#reconcileTaskOnlyV5()
     this.#migrate(5, migration5)
     this.#migrate(6, migration6)
+    this.#migrate(7, migration7)
+  }
+
+  // An earlier UI candidate used v5 for task retries before provider v5
+  // landed on main. Move only that fully applied migration marker to v7.
+  #reconcileTaskOnlyV5(): void {
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const hasV5 = this.#database
+        .prepare('SELECT 1 FROM schema_migrations WHERE version = 5')
+        .get()
+      const hasTaskRetry = (
+        this.#database.prepare('PRAGMA table_info(runs)').all() as {
+          name: string
+        }[]
+      ).some(column => column.name === 'retry_of_run_id')
+      const hasProviderColumn = (
+        this.#database.prepare('PRAGMA table_info(runtime_settings)').all() as {
+          name: string
+        }[]
+      ).some(column => column.name === 'model_connection_id')
+      if (hasV5 && hasTaskRetry && !hasProviderColumn) {
+        this.#database
+          .prepare('UPDATE schema_migrations SET version = 7 WHERE version = 5')
+          .run()
+      }
+      this.#database.exec('COMMIT')
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
   }
 
   #migrate(version: number, sql: string): void {
@@ -692,7 +746,7 @@ export class PegasStore {
       .prepare(
         `INSERT OR IGNORE INTO tasks
           (id, user_id, origin_event_id, title, goal, status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 'inbox', ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, 'backlog', ?, ?)`,
       )
       .run(id, event.userId, event.id, title, title, now, now)
     const row = this.#database
@@ -726,7 +780,7 @@ export class PegasStore {
           .prepare(
             `INSERT INTO tasks
               (id, user_id, origin_event_id, title, goal, status, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, 'planning', ?, ?)`,
+             VALUES (?, ?, ?, ?, ?, 'unstarted', ?, ?)`,
           )
           .run(
             taskId,
@@ -789,7 +843,7 @@ export class PegasStore {
         )
       this.#database
         .prepare(
-          `UPDATE tasks SET status = 'planning', status_reason = NULL, updated_at = ?
+          `UPDATE tasks SET status = CASE WHEN status = 'started' THEN 'started' ELSE 'unstarted' END, status_reason = NULL, updated_at = ?
            WHERE id = ?`,
         )
         .run(now, task.id)
@@ -808,11 +862,11 @@ export class PegasStore {
     const rows = taskId
       ? this.#database
           .prepare(
-            'SELECT * FROM runs WHERE task_id = ? ORDER BY created_at ASC',
+            'SELECT * FROM runs WHERE task_id = ? ORDER BY created_at ASC, rowid ASC',
           )
           .all(taskId)
       : this.#database
-          .prepare('SELECT * FROM runs ORDER BY created_at ASC')
+          .prepare('SELECT * FROM runs ORDER BY created_at ASC, rowid ASC')
           .all()
     return rows.map(row => toRun(row as unknown as RunRow))
   }
@@ -845,17 +899,31 @@ export class PegasStore {
     const leaseUntil = new Date(now.getTime() + leaseMs).toISOString()
     this.#database.exec('BEGIN IMMEDIATE')
     try {
-      const row = this.#database
+      let row = this.#database
         .prepare(
           `SELECT * FROM runs
-           WHERE status = 'queued'
-              OR (status = 'running' AND lease_until <= ?)
-           ORDER BY created_at ASC LIMIT 1`,
+           WHERE task_id IN (SELECT id FROM tasks WHERE status NOT IN ('completed','cancelled'))
+           AND ((status = 'queued' AND NOT EXISTS (
+             SELECT 1 FROM runs AS active WHERE active.task_id = runs.task_id AND active.status = 'running'
+           )) OR (status = 'running' AND lease_until <= ?))
+           ORDER BY created_at ASC, rowid ASC LIMIT 1`,
         )
         .get(now.toISOString()) as unknown as RunRow | undefined
       if (!row) {
         this.#database.exec('COMMIT')
         return undefined
+      }
+
+      if (row.status === 'running') {
+        this.#database
+          .prepare(
+            `UPDATE runs SET status = 'failed', last_error = 'lease_expired', claimed_by = NULL, lease_until = NULL, updated_at = ? WHERE id = ?`,
+          )
+          .run(now.toISOString(), row.id)
+        const replacement = this.#createRetry(row, now.toISOString())
+        row = this.#database
+          .prepare('SELECT * FROM runs WHERE id = ?')
+          .get(replacement.id) as unknown as RunRow
       }
 
       this.#database
@@ -868,7 +936,7 @@ export class PegasStore {
         .run(workerId, leaseUntil, now.toISOString(), row.id)
       this.#database
         .prepare(
-          `UPDATE tasks SET status = 'running', status_reason = NULL, updated_at = ?
+          `UPDATE tasks SET status = 'started', status_reason = NULL, updated_at = ?
            WHERE id = ?`,
         )
         .run(now.toISOString(), row.task_id)
@@ -938,7 +1006,7 @@ export class PegasStore {
       this.#database
         .prepare(
           `UPDATE tasks
-           SET status = 'waiting', status_reason = 'awaiting_user_review', updated_at = ?
+           SET status = 'started', status_reason = 'awaiting_user_review', updated_at = ?
            WHERE id = ?`,
         )
         .run(now, task.id)
@@ -979,10 +1047,10 @@ export class PegasStore {
         .run(error, now, runId)
       this.#database
         .prepare(
-          `UPDATE tasks SET status = 'failed', status_reason = ?, updated_at = ?
+          `UPDATE tasks SET status = 'started', status_reason = 'last_run_failed', updated_at = ?
            WHERE id = ?`,
         )
-        .run(error, now, task.id)
+        .run(now, task.id)
       this.enqueueOutbox({
         userId: task.userId,
         taskId: task.id,
@@ -995,6 +1063,73 @@ export class PegasStore {
       this.#database.exec('ROLLBACK')
       throw caught
     }
+  }
+
+  retryRun(runId: string, userId: string): Run {
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const row = this.#database
+        .prepare('SELECT * FROM runs WHERE id = ?')
+        .get(runId) as unknown as RunRow | undefined
+      if (!row) throw new Error('Run not found')
+      const task = this.#taskById(row.task_id)
+      if (task.userId !== userId)
+        throw new Error('Task belongs to another user')
+      const existing = this.#database
+        .prepare('SELECT * FROM runs WHERE retry_of_run_id = ?')
+        .get(runId) as unknown as RunRow | undefined
+      if (existing) {
+        this.#database.exec('COMMIT')
+        return toRun(existing)
+      }
+      if (task.status === 'completed' || task.status === 'cancelled')
+        throw new Error('Task is closed')
+      if (row.status !== 'failed')
+        throw new Error('Only failed runs can be retried')
+      if (
+        this.#database
+          .prepare(
+            `SELECT 1 FROM runs WHERE task_id = ? AND status IN ('queued','running')`,
+          )
+          .get(task.id)
+      )
+        throw new Error('Task already has active work')
+      if (this.listRuns(task.id).at(-1)?.id !== runId)
+        throw new Error('Only the latest failed run can be retried')
+      const now = this.#clock.now().toISOString()
+      const run = this.#createRetry(row, now)
+      this.#database
+        .prepare(
+          `UPDATE tasks SET status = 'started', status_reason = 'retry_queued', updated_at = ? WHERE id = ?`,
+        )
+        .run(now, task.id)
+      this.#database.exec('COMMIT')
+      return run
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  #createRetry(row: RunRow, now: string): Run {
+    const id = randomUUID()
+    this.#database
+      .prepare(
+        `INSERT INTO runs
+      (id, task_id, executor, resume_from_ref, retry_of_run_id, status, input_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?)`,
+      )
+      .run(
+        id,
+        row.task_id,
+        row.executor,
+        row.executor_ref ?? row.resume_from_ref,
+        row.id,
+        row.input_json,
+        now,
+        now,
+      )
+    return this.#runById(id)
   }
 
   enqueueOutbox(input: {
@@ -1264,6 +1399,7 @@ function toRun(row: RunRow): Run {
   return {
     id: row.id,
     taskId: row.task_id,
+    ...(row.retry_of_run_id ? { retryOfRunId: row.retry_of_run_id } : {}),
     executor: row.executor,
     ...(row.executor_ref ? { executorRef: row.executor_ref } : {}),
     ...(row.resume_from_ref ? { resumeFromRef: row.resume_from_ref } : {}),

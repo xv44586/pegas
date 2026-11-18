@@ -34,7 +34,7 @@ describe('event and run processing', () => {
 
     expect(processed).toBe(true)
     expect(store.listTasks('user-1')).toMatchObject([
-      { title: 'Ship the first vertical slice', status: 'planning' },
+      { title: 'Ship the first vertical slice', status: 'unstarted' },
     ])
     expect(store.listRuns()).toMatchObject([
       { status: 'queued', input: 'Ship the first vertical slice' },
@@ -62,7 +62,7 @@ describe('event and run processing', () => {
     ])
     expect(completedRuns[0]?.executorRef).toMatch(/^echo-/)
     expect(store.listTasks('user-1')).toMatchObject([
-      { status: 'waiting', statusReason: 'awaiting_user_review' },
+      { status: 'started', statusReason: 'awaiting_user_review' },
     ])
     store.close()
   })

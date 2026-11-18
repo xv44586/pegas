@@ -57,7 +57,7 @@ try {
   await waitUntilReady(port)
   const webResponse = await fetch(`http://127.0.0.1:${port}/`)
   const webDocument = await webResponse.text()
-  if (!webResponse.ok || !webDocument.includes('<title>Pegas</title>'))
+  if (!webResponse.ok || !webDocument.includes('<title>Pegas'))
     throw new Error('Control plane did not serve the Pegas web client')
   const eventResponse = await fetch(`http://127.0.0.1:${port}/v1/events`, {
     method: 'POST',
