@@ -19,6 +19,7 @@ import {
 import type { ModelCredentialVault } from '../model/model-credential-vault.js'
 import { OpenAiTranscriptionProvider } from '../speech/openai-transcription-provider.js'
 import { parseSpeechConnectionUpdate } from '../speech/speech-settings.js'
+import { parseSpeechTestUpload } from '../speech/speech-test-upload.js'
 import { OpenAiCompatibleProvider } from '../model/openai-compatible-provider.js'
 import {
   parseRuntimeSettingsUpdate,
@@ -80,6 +81,13 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         request.method === 'POST'
       ) {
         return await acceptVoiceMessage(request, response, options)
+      }
+
+      if (
+        request.url === '/v1/settings/speech/test' &&
+        request.method === 'POST'
+      ) {
+        return await testSpeechConnection(request, response, options)
       }
 
       if (request.url === '/v1/settings' && request.method === 'GET') {
@@ -474,6 +482,79 @@ function resolveSpeechProvider(
       : {}),
     timeoutMs: options.speechTimeoutMs ?? 120_000,
   })
+}
+
+async function testSpeechConnection(
+  request: IncomingMessage,
+  response: ServerResponse,
+  options: ControlPlaneOptions,
+): Promise<void> {
+  const contentType = request.headers['content-type'] ?? ''
+  if (!contentType.startsWith('multipart/form-data;')) {
+    return sendJson(response, 415, {
+      error: 'unsupported_media_type',
+      message: '请提供录音和语音服务设置。',
+    })
+  }
+  const maximumAudioBytes =
+    options.maximumAudioBytes ?? defaultMaximumAudioBytes
+  const body = await readBytes(request, maximumAudioBytes + 32_768)
+  const upload = await parseSpeechTestUpload(
+    body,
+    contentType,
+    maximumAudioBytes,
+  )
+  const speech = parseSpeechConnectionUpdate({
+    speech: JSON.parse(upload.speech) as unknown,
+  })
+  if (speech?.provider !== 'openai-compatible')
+    throw new Error('请先选择转写服务。')
+  if (!upload.audio.length) {
+    throw new Error('测试录音无效或过大，请重新录制。')
+  }
+  const saved = options.store.getSpeechConnection()
+  const savedKey =
+    !speech.apiKey &&
+    !speech.clearApiKey &&
+    saved.provider === 'openai-compatible' &&
+    saved.baseUrl === speech.baseUrl &&
+    saved.apiKeyCiphertext &&
+    options.modelCredentialVault
+      ? options.modelCredentialVault.decrypt(saved.apiKeyCiphertext)
+      : undefined
+  const apiKey = speech.apiKey ?? savedKey
+  const provider = new OpenAiTranscriptionProvider({
+    baseUrl: speech.baseUrl,
+    model: speech.model,
+    ...(apiKey ? { apiKey } : {}),
+    timeoutMs: options.speechTimeoutMs ?? 120_000,
+  })
+  const started = performance.now()
+  try {
+    const transcript = await provider.transcribe({
+      audio: upload.audio,
+      contentType: upload.audioType,
+      filename: `test.${audioExtension(upload.audioType)}`,
+    })
+    return sendJson(response, 200, {
+      transcript,
+      latencyMs: Math.round(performance.now() - started),
+    })
+  } catch (error) {
+    const status =
+      error instanceof Error
+        ? Number(/Speech provider returned (\d{3})/.exec(error.message)?.[1])
+        : 0
+    const message =
+      status === 401 || status === 403
+        ? '语音服务未授权，请检查 API 密钥。'
+        : status === 404
+          ? '找不到转写接口或模型，请检查服务地址和模型名。'
+          : status === 429
+            ? '语音服务请求过于频繁，请稍后重试。'
+            : '无法完成语音测试，请检查服务是否运行、地址和网络。'
+    return sendJson(response, 502, { error: 'speech_probe_failed', message })
+  }
 }
 
 function parseNewOutboxMessage(value: unknown): {

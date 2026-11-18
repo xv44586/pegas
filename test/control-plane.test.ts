@@ -593,4 +593,97 @@ describe('control plane', () => {
     })
     expect(upstreamAuthorization).toBe('Bearer fixture-key')
   })
+
+  it('tests an unsaved speech connection with sample audio without persisting it', async () => {
+    let upstreamAuthorization = ''
+    let upstreamModel = ''
+    let failWithUnauthorized = false
+    const upstream = createServer(async (request, response) => {
+      upstreamAuthorization = request.headers.authorization ?? ''
+      const chunks: Buffer[] = []
+      for await (const chunk of request)
+        chunks.push(Buffer.from(chunk as Buffer))
+      upstreamModel = Buffer.concat(chunks)
+        .toString('utf8')
+        .includes('asr-test')
+        ? 'asr-test'
+        : ''
+      response.setHeader('content-type', 'application/json')
+      response.statusCode = failWithUnauthorized ? 401 : 200
+      response.end(
+        failWithUnauthorized
+          ? JSON.stringify({ error: 'private upstream detail' })
+          : JSON.stringify({ text: '这是测试转写' }),
+      )
+    })
+    await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve))
+    const store = new PegasStore(':memory:')
+    const vault = new ModelCredentialVault(Buffer.alloc(32, 7))
+    const server = createControlPlane({ store, modelCredentialVault: vault })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    cleanups.push(
+      () => new Promise<void>(resolve => server.close(() => resolve())),
+      () => new Promise<void>(resolve => upstream.close(() => resolve())),
+      () => Promise.resolve(store.close()),
+    )
+    const baseUrl = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+    const speech = {
+      provider: 'openai-compatible',
+      baseUrl: `http://127.0.0.1:${String((upstream.address() as AddressInfo).port)}/v1`,
+      model: 'asr-test',
+      apiKey: 'probe-key',
+      clearApiKey: false,
+    }
+    const sample = () => {
+      const form = new FormData()
+      form.set('speech', JSON.stringify(speech))
+      form.set(
+        'audio',
+        new Blob(['audio-test'], { type: 'audio/webm' }),
+        'test.webm',
+      )
+      return form
+    }
+    const tested = await fetch(`${baseUrl}/v1/settings/speech/test`, {
+      method: 'POST',
+      body: sample(),
+    })
+    expect(tested.status).toBe(200)
+    const testedBody = (await tested.json()) as {
+      transcript: { text: string }
+      latencyMs: number
+    }
+    expect(testedBody).toMatchObject({
+      transcript: { text: '这是测试转写' },
+    })
+    expect(testedBody.latencyMs).toBeGreaterThanOrEqual(0)
+    expect(upstreamAuthorization).toBe('Bearer probe-key')
+    expect(upstreamModel).toBe('asr-test')
+    expect(store.getSpeechSettings().provider).toBe('disabled')
+    expect(store.listEvents('owner')).toHaveLength(0)
+
+    store.initializeSpeechConnection({
+      provider: 'openai-compatible',
+      baseUrl: 'http://different.example/v1',
+      model: 'saved-model',
+      apiKeyCiphertext: vault.encrypt('saved-credential'),
+    })
+    speech.apiKey = ''
+    const changedTarget = await fetch(`${baseUrl}/v1/settings/speech/test`, {
+      method: 'POST',
+      body: sample(),
+    })
+    expect(changedTarget.status).toBe(200)
+    expect(upstreamAuthorization).toBe('')
+
+    failWithUnauthorized = true
+    const failed = await fetch(`${baseUrl}/v1/settings/speech/test`, {
+      method: 'POST',
+      body: sample(),
+    })
+    expect(failed.status).toBe(502)
+    const failedText = await failed.text()
+    expect(failedText).toContain('密钥')
+    expect(failedText).not.toContain('private upstream detail')
+  })
 })

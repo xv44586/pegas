@@ -7,7 +7,7 @@ export type DictationState =
 
 interface UseVoiceDictationOptions {
   transcribe: (audio: Blob) => Promise<VoiceTranscript>
-  onTranscript: (text: string) => void
+  onTranscript?: (text: string) => void
   maximumSeconds?: number
 }
 
@@ -83,7 +83,7 @@ export function useVoiceDictation({
     try {
       const transcript = await transcribeRef.current(audio)
       if (transcript.text.trim())
-        onTranscriptRef.current(transcript.text.trim())
+        onTranscriptRef.current?.(transcript.text.trim())
       setState('idle')
       setElapsedSeconds(0)
       setError(

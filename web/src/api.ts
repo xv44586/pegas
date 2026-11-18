@@ -88,6 +88,25 @@ export class PegasApi {
     return body.transcript
   }
 
+  async testSpeechConnection(
+    audio: Blob,
+    speech: SpeechSettingsDraft,
+  ): Promise<{ transcript: VoiceTranscript; latencyMs: number }> {
+    const form = new FormData()
+    form.set('speech', JSON.stringify(speech))
+    form.set('audio', audio, 'sample.webm')
+    const response = await fetch('/v1/settings/speech/test', {
+      method: 'POST',
+      headers: this.#headers(false),
+      body: form,
+    })
+    if (!response.ok) await throwResponse(response)
+    return (await response.json()) as {
+      transcript: VoiceTranscript
+      latencyMs: number
+    }
+  }
+
   settings(): Promise<SettingsResponse> {
     return this.#get<SettingsResponse>('/v1/settings')
   }
