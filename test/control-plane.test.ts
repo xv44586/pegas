@@ -1,8 +1,12 @@
 import type { AddressInfo } from 'node:net'
+import { createServer, type ServerResponse } from 'node:http'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createControlPlane } from '../src/control-plane/server.js'
+import { loadConfig } from '../src/core/config.js'
+import { ModelCredentialVault } from '../src/model/model-credential-vault.js'
+import { settingsCapabilities } from '../src/settings/runtime-settings.js'
 import { PegasStore } from '../src/storage/sqlite-store.js'
 
 const cleanups: (() => Promise<void>)[] = []
@@ -11,31 +15,49 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup()
 })
 
+async function startJsonServer(
+  respond: (path: string, response: ServerResponse) => void,
+): Promise<{ server: ReturnType<typeof createServer>; baseUrl: string }> {
+  const server = createServer((request, response) => {
+    response.setHeader('content-type', 'application/json')
+    respond(request.url ?? '/', response)
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const { port } = server.address() as AddressInfo
+  return { server, baseUrl: `http://127.0.0.1:${String(port)}/v1` }
+}
+
 describe('control plane', () => {
   it('reads and atomically updates server-authoritative runtime settings', async () => {
     const store = new PegasStore(':memory:')
     store.initializeRuntimeSettings({
       routerMode: 'model',
-      modelProvider: 'codex-cli',
+      modelProvider: 'openai',
       modelName: 'gpt-default',
+      agentModelMode: 'profile',
+      agentModelProvider: '',
+      agentModelName: '',
       privacyMode: 'disabled',
       rewriteMode: 'disabled',
     })
-    const capabilities = {
-      providers: [
-        { id: 'codex-cli' as const, available: true },
-        {
-          id: 'openai-compatible' as const,
-          available: false,
-          reason: 'OpenAI-compatible unavailable',
-        },
-      ],
-      privacyAvailable: true,
-    }
+    const modelCredentialVault = new ModelCredentialVault(Buffer.alloc(32, 3))
+    store.initializeModelProviderConnection({
+      id: 'openai',
+      name: 'OpenAI',
+      protocol: 'openai-chat',
+      baseUrl: 'https://api.openai.com/v1',
+      apiKeyCiphertext: modelCredentialVault.encrypt('openai-secret'),
+    })
+    const config = loadConfig({
+      PEGAS_PRIVACY_HMAC_KEY: 'privacy-key-long-enough',
+    })
+    const capabilities = () =>
+      settingsCapabilities(config, store.listModelProviderConnectionSummaries())
     const server = createControlPlane({
       store,
       apiToken: 'secret',
       settingsCapabilities: capabilities,
+      modelCredentialVault,
     })
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
     cleanups.push(
@@ -50,16 +72,22 @@ describe('control plane', () => {
     }
 
     const initial = await fetch(url, { headers })
-    expect(await initial.json()).toMatchObject({
+    const initialText = await initial.text()
+    expect(initialText).not.toContain('openai-secret')
+    expect(initialText).not.toContain('v1.')
+    expect(JSON.parse(initialText)).toMatchObject({
       settings: { modelName: 'gpt-default', revision: 1 },
-      capabilities,
+      capabilities: capabilities(),
     })
 
     const updateBody = {
       expectedRevision: 1,
       routerMode: 'rules',
-      modelProvider: 'codex-cli',
+      modelProvider: 'openai',
       modelName: 'gpt-updated',
+      agentModelMode: 'override',
+      agentModelProvider: 'magpie',
+      agentModelName: 'agent-model',
       privacyMode: 'mask',
       rewriteMode: 'light',
     }
@@ -69,11 +97,17 @@ describe('control plane', () => {
       body: JSON.stringify(updateBody),
     })
     expect(updated.status).toBe(200)
-    expect(await updated.json()).toMatchObject({
+    const updatedText = await updated.text()
+    expect(updatedText).not.toContain('openai-secret')
+    expect(updatedText).not.toContain('v1.')
+    expect(JSON.parse(updatedText)).toMatchObject({
       settings: {
         routerMode: 'rules',
-        modelProvider: 'codex-cli',
+        modelProvider: 'openai',
         modelName: 'gpt-updated',
+        agentModelMode: 'override',
+        agentModelProvider: 'magpie',
+        agentModelName: 'agent-model',
         privacyMode: 'mask',
         rewriteMode: 'light',
         revision: 2,
@@ -93,12 +127,12 @@ describe('control plane', () => {
       body: JSON.stringify({
         ...updateBody,
         expectedRevision: 2,
-        modelProvider: 'openai-compatible',
+        modelProvider: 'anthropic',
       }),
     })
     expect(unavailable.status).toBe(400)
     expect(await unavailable.json()).toMatchObject({
-      message: 'OpenAI-compatible unavailable',
+      message: '尚未配置 API key',
     })
   })
 
@@ -224,6 +258,91 @@ describe('control plane', () => {
     expect(eventBody.events).toHaveLength(1)
     expect(eventBody.events[0]?.payload).toEqual({ text: 'Hello Pegas' })
     expect(store.listOutbox('user-1')).toEqual([])
+  })
+
+  it('discovers and tests the draft model connection and exposes DSH models', async () => {
+    const upstream = await startJsonServer((path, response) => {
+      if (path === '/v1/models') {
+        response.end(JSON.stringify({ data: [{ id: 'router-model' }] }))
+        return
+      }
+      response.end(
+        JSON.stringify({
+          choices: [{ message: { content: '{"ok":true}' } }],
+        }),
+      )
+    })
+    const store = new PegasStore(':memory:')
+    store.initializeRuntimeSettings({
+      routerMode: 'rules',
+      modelProvider: 'custom',
+      modelName: 'router-model',
+      agentModelMode: 'profile',
+      agentModelProvider: '',
+      agentModelName: '',
+      privacyMode: 'disabled',
+      rewriteMode: 'disabled',
+    })
+    const config = loadConfig()
+    const server = createControlPlane({
+      store,
+      settingsCapabilities: () =>
+        settingsCapabilities(
+          config,
+          store.listModelProviderConnectionSummaries(),
+        ),
+      modelCredentialVault: new ModelCredentialVault(Buffer.alloc(32, 9)),
+      agentModelCatalog: () =>
+        Promise.resolve({
+          defaultProvider: 'magpie',
+          defaultModel: 'agent-default',
+          models: [
+            { provider: 'magpie', id: 'agent-default', name: 'Agent default' },
+          ],
+        }),
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    cleanups.push(
+      () => new Promise<void>(resolve => server.close(() => resolve())),
+      () =>
+        new Promise<void>(resolve => upstream.server.close(() => resolve())),
+      () => Promise.resolve(store.close()),
+    )
+    const { port } = server.address() as AddressInfo
+    const baseUrl = `http://127.0.0.1:${String(port)}`
+    const body = JSON.stringify({
+      modelProvider: 'custom',
+      modelName: 'router-model',
+      provider: {
+        name: 'Local test',
+        protocol: 'openai-chat',
+        baseUrl: upstream.baseUrl,
+        apiKey: '',
+        clearApiKey: false,
+      },
+    })
+    const headers = { 'content-type': 'application/json' }
+
+    const discovered = await fetch(`${baseUrl}/v1/settings/models/discover`, {
+      method: 'POST',
+      headers,
+      body,
+    })
+    const tested = await fetch(`${baseUrl}/v1/settings/models/test`, {
+      method: 'POST',
+      headers,
+      body,
+    })
+    const agentModels = await fetch(`${baseUrl}/v1/settings/agent-models`)
+
+    expect(await discovered.json()).toEqual({
+      models: [{ id: 'router-model', name: 'router-model' }],
+    })
+    expect(await tested.json()).toMatchObject({ ok: true })
+    expect(await agentModels.json()).toMatchObject({
+      defaultProvider: 'magpie',
+      defaultModel: 'agent-default',
+    })
   })
 
   it('accepts authenticated proactive agent messages', async () => {

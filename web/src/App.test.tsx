@@ -24,19 +24,54 @@ describe('Pegas web app', () => {
     const settings = {
       revision: 1,
       routerMode: 'model' as const,
-      modelProvider: 'codex-cli' as const,
-      modelName: 'gpt-5.6-luna',
+      modelProvider: 'openai' as const,
+      modelName: 'gpt-5-mini',
+      agentModelMode: 'profile' as const,
+      agentModelProvider: '',
+      agentModelName: '',
       privacyMode: 'disabled' as const,
       rewriteMode: 'disabled' as const,
       updatedAt: '2026-11-17T00:00:00.000Z',
     }
     const capabilities = {
       providers: [
-        { id: 'codex-cli' as const, available: true },
         {
-          id: 'openai-compatible' as const,
+          id: 'openai' as const,
+          name: 'OpenAI',
+          category: 'vendor' as const,
+          protocol: 'openai-chat' as const,
+          baseUrl: 'https://api.openai.com/v1',
+          defaultModel: 'gpt-5-mini',
+          description: 'OpenAI API',
+          requiresApiKey: true,
+          hasApiKey: true,
+          available: true,
+        },
+        {
+          id: 'anthropic' as const,
+          name: 'Anthropic',
+          category: 'vendor' as const,
+          protocol: 'anthropic-messages' as const,
+          baseUrl: 'https://api.anthropic.com',
+          defaultModel: 'claude-sonnet-4-5',
+          description: 'Anthropic Messages API',
+          requiresApiKey: true,
+          hasApiKey: false,
           available: false,
-          reason: '服务端尚未配置兼容 API',
+          reason: '需要 API key',
+        },
+        {
+          id: 'custom' as const,
+          name: '自定义兼容服务',
+          category: 'custom' as const,
+          protocol: 'openai-chat' as const,
+          baseUrl: '',
+          defaultModel: '',
+          description: '连接自托管或其他兼容服务',
+          requiresApiKey: false,
+          hasApiKey: false,
+          available: false,
+          reason: '需要 Base URL 和模型名',
         },
       ],
       privacyAvailable: true,
@@ -50,15 +85,68 @@ describe('Pegas web app', () => {
             : input
       if (path === '/v1/settings' && init?.method === 'PUT') {
         const body = parseRequestBody(init)
+        const customProvider = {
+          ...capabilities.providers[2],
+          name: '公司模型网关',
+          protocol: 'openai-chat' as const,
+          baseUrl: 'https://models.example.com/v1',
+          defaultModel: 'gpt-settings-test',
+          hasApiKey: true,
+          available: true,
+          reason: undefined,
+        }
         return Promise.resolve(
           Response.json({
-            settings: { ...settings, ...body, revision: 2 },
-            capabilities,
+            settings: {
+              ...settings,
+              routerMode: body.routerMode,
+              modelProvider: body.modelProvider,
+              modelName: body.modelName,
+              agentModelMode: body.agentModelMode,
+              agentModelProvider: body.agentModelProvider,
+              agentModelName: body.agentModelName,
+              privacyMode: body.privacyMode,
+              rewriteMode: body.rewriteMode,
+              revision: 2,
+            },
+            capabilities: {
+              ...capabilities,
+              providers: [
+                capabilities.providers[0],
+                capabilities.providers[1],
+                customProvider,
+              ],
+            },
           }),
         )
       }
       if (path === '/v1/settings') {
         return Promise.resolve(Response.json({ settings, capabilities }))
+      }
+      if (path === '/v1/settings/agent-models') {
+        return Promise.resolve(
+          Response.json({
+            defaultProvider: 'magpie',
+            defaultModel: 'agent-default',
+            models: [
+              {
+                provider: 'magpie',
+                id: 'agent-fast',
+                name: 'Agent fast',
+              },
+            ],
+          }),
+        )
+      }
+      if (path === '/v1/settings/models/discover') {
+        return Promise.resolve(
+          Response.json({
+            models: [{ id: 'gpt-settings-test', name: 'Settings test' }],
+          }),
+        )
+      }
+      if (path === '/v1/settings/models/test') {
+        return Promise.resolve(Response.json({ ok: true, latencyMs: 42 }))
       }
       if (path.startsWith('/v1/events'))
         return Promise.resolve(Response.json({ events: [] }))
@@ -76,53 +164,68 @@ describe('Pegas web app', () => {
     expect(
       await screen.findByRole('heading', { name: '设置', level: 1 }),
     ).toBeTruthy()
-    expect(screen.queryByRole('heading', { name: '偏好设置' })).toBeNull()
-    expect(screen.queryByText('模型、语音与路由偏好')).toBeNull()
-    expect(
-      screen.queryByText('选择模型，调整 Pegas 理解和处理任务的方式。'),
-    ).toBeNull()
-    expect(screen.queryByRole('heading', { name: '语音输入' })).toBeNull()
-    expect(screen.queryByRole('button', { name: '刷新' })).toBeNull()
-    expect(screen.queryByRole('button', { name: '打开工作区' })).toBeNull()
+    expect(screen.queryByText(/Codex/)).toBeNull()
     expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual([
-      '模型',
+      '模型与供应商',
       '任务路由',
       '语音与输入',
       '隐私',
     ])
-    fireEvent.keyDown(screen.getByRole('tab', { name: '模型' }), {
-      key: 'ArrowRight',
+    fireEvent.click(screen.getByRole('radio', { name: /自定义/ }))
+    fireEvent.change(screen.getByLabelText('连接名称'), {
+      target: { value: '公司模型网关' },
     })
-    expect(screen.getByRole('tab', { name: '任务路由' })).toHaveProperty(
-      'tabIndex',
-      0,
-    )
-    expect(screen.getByRole('radio', { name: /智能归类/ })).toBeTruthy()
-    fireEvent.keyDown(screen.getByRole('tab', { name: '任务路由' }), {
-      key: 'Home',
+    fireEvent.change(screen.getByLabelText('Base URL'), {
+      target: { value: 'https://models.example.com/v1' },
     })
-    expect(
-      screen.getByRole('radio', { name: /OpenAI-compatible/ }),
-    ).toHaveProperty('disabled', true)
-    fireEvent.change(screen.getByRole('textbox', { name: /对应模型/ }), {
+    fireEvent.change(screen.getByLabelText('Router / 输入处理模型'), {
       target: { value: 'gpt-settings-test' },
     })
+    fireEvent.change(screen.getByLabelText('API key'), {
+      target: { value: 'secret-for-test' },
+    })
+    fireEvent.click(screen.getByRole('tab', { name: '任务路由' }))
+    fireEvent.click(screen.getByRole('tab', { name: '模型与供应商' }))
+    expect(screen.getByLabelText<HTMLInputElement>('连接名称').value).toBe(
+      '公司模型网关',
+    )
+    expect(screen.getByLabelText<HTMLInputElement>('API key').value).toBe(
+      'secret-for-test',
+    )
+    fireEvent.click(screen.getByRole('button', { name: '获取模型列表' }))
+    expect(await screen.findByText('已获取 1 个模型')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '测试模型' }))
+    expect(await screen.findByText('模型可用 · 42 ms')).toBeTruthy()
+    fireEvent.click(screen.getByRole('radio', { name: /覆盖新 Agent session/ }))
+    fireEvent.change(screen.getByLabelText('DSH provider 与模型'), {
+      target: { value: 'magpie::agent-fast' },
+    })
     fireEvent.click(screen.getByRole('tab', { name: '语音与输入' }))
-    expect(screen.getByRole('heading', { name: '语音输入' })).toBeTruthy()
     fireEvent.click(screen.getByRole('radio', { name: /轻量校正/ }))
     fireEvent.click(screen.getByRole('tab', { name: '隐私' }))
     fireEvent.click(screen.getByRole('radio', { name: /开启脱敏/ }))
-    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
+    fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
 
-    expect(await screen.findByText('设置已保存')).toBeTruthy()
+    expect(await screen.findByText('更改已保存')).toBeTruthy()
     const put = fetchMock.mock.calls.find(
       ([path, init]) => path === '/v1/settings' && init?.method === 'PUT',
     )
     expect(parseRequestBody(put?.[1])).toMatchObject({
       expectedRevision: 1,
+      modelProvider: 'custom',
       modelName: 'gpt-settings-test',
+      agentModelMode: 'override',
+      agentModelProvider: 'magpie',
+      agentModelName: 'agent-fast',
       privacyMode: 'mask',
       rewriteMode: 'light',
+      provider: {
+        name: '公司模型网关',
+        protocol: 'openai-chat',
+        baseUrl: 'https://models.example.com/v1',
+        apiKey: 'secret-for-test',
+        clearApiKey: false,
+      },
     })
   })
 

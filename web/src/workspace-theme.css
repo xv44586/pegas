@@ -720,6 +720,13 @@ textarea:focus-visible {
   padding-top: 26px;
 }
 .voice-settings-card,
+.settings-page .settings-layout {
+  display: block;
+}
+.settings-page .settings-section {
+  width: 100%;
+  margin: 0;
+}
 .settings-page .settings-form {
   border-radius: 8px;
   border-color: #e6e9ed;
@@ -752,7 +759,7 @@ textarea:focus-visible {
 
 .settings-page .settings-form {
   display: block;
-  max-width: 760px;
+  max-width: 820px;
   border: 0;
   background: transparent;
 }
@@ -785,6 +792,50 @@ textarea:focus-visible {
   position: absolute;
   inset: auto 0 0;
   border-bottom: 2px solid currentColor;
+}
+.settings-page .provider-picker {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.settings-page .provider-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.settings-page .provider-option {
+  min-height: 54px;
+  padding: 10px 12px;
+  border: 1px solid #e2e5e9;
+  border-radius: 8px;
+  background: white;
+}
+.settings-page .provider-option:hover {
+  border-color: #bfc6ce;
+  background: #f9fafb;
+}
+.settings-page .provider-option:has(input:checked) {
+  color: #20252c;
+  border-color: #596474;
+  background: #f7f8fa;
+}
+.settings-page .provider-more {
+  border-top: 0;
+}
+.settings-page .provider-more summary {
+  padding: 9px 0;
+}
+.settings-page .provider-status {
+  margin: 18px 0;
+}
+.settings-page .settings-group.provider-fields,
+.settings-page .agent-model-group {
+  border-radius: 9px;
+  border-color: #e2e5e9;
+}
+@media (max-width: 720px) {
+  .settings-page .provider-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 .settings-page .settings-scroll {
   display: block;

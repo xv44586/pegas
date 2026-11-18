@@ -12,8 +12,11 @@ describe('PegasStore', () => {
     const store = new PegasStore(':memory:')
     const defaults = {
       routerMode: 'model' as const,
-      modelProvider: 'codex-cli' as const,
+      modelProvider: 'openai' as const,
       modelName: 'gpt-default',
+      agentModelMode: 'profile' as const,
+      agentModelProvider: '',
+      agentModelName: '',
       privacyMode: 'disabled' as const,
       rewriteMode: 'disabled' as const,
     }
@@ -44,6 +47,53 @@ describe('PegasStore', () => {
     expect(() => store.updateRuntimeSettings(1, defaults)).toThrow(
       '其他设备更新',
     )
+    store.close()
+  })
+
+  it('updates a provider connection and runtime selection in one revision transaction', () => {
+    const store = new PegasStore(':memory:')
+    const defaults = {
+      routerMode: 'rules' as const,
+      modelProvider: 'openai' as const,
+      modelName: 'gpt-5-mini',
+      agentModelMode: 'profile' as const,
+      agentModelProvider: '',
+      agentModelName: '',
+      privacyMode: 'disabled' as const,
+      rewriteMode: 'disabled' as const,
+    }
+    store.initializeRuntimeSettings(defaults)
+
+    const saved = store.updateRuntimeSettingsAndProvider(
+      1,
+      { ...defaults, routerMode: 'model' },
+      {
+        id: 'openai',
+        name: 'OpenAI',
+        protocol: 'openai-chat',
+        baseUrl: 'https://api.openai.com/v1',
+        apiKeyCiphertext: 'encrypted-key-one',
+        clearApiKey: false,
+      },
+    )
+
+    expect(saved).toMatchObject({ revision: 2, routerMode: 'model' })
+    expect(store.getModelProviderConnection('openai')).toMatchObject({
+      apiKeyCiphertext: 'encrypted-key-one',
+    })
+    expect(() =>
+      store.updateRuntimeSettingsAndProvider(1, defaults, {
+        id: 'openai',
+        name: 'OpenAI',
+        protocol: 'openai-chat',
+        baseUrl: 'https://api.openai.com/v1',
+        apiKeyCiphertext: 'must-not-win',
+        clearApiKey: false,
+      }),
+    ).toThrow('其他设备更新')
+    expect(store.getModelProviderConnection('openai')).toMatchObject({
+      apiKeyCiphertext: 'encrypted-key-one',
+    })
     store.close()
   })
 
@@ -322,6 +372,82 @@ describe('PegasStore', () => {
     const reopened = new PegasStore(path)
     try {
       expect(reopened.listTasks()).toHaveLength(8)
+    } finally {
+      reopened.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('upgrades task-only v5 databases alongside provider settings', () => {
+    const directory = mkdtempSync(
+      join(tmpdir(), 'pegas-task-provider-upgrade-'),
+    )
+    const path = join(directory, 'pegas.sqlite')
+    const legacy = new DatabaseSync(path)
+    try {
+      legacy.exec(
+        readFileSync(
+          new URL('./fixtures/schema-v4.sql', import.meta.url),
+          'utf8',
+        ),
+      )
+      legacy.exec(
+        readFileSync(
+          new URL('./fixtures/task-migration-v5.sql', import.meta.url),
+          'utf8',
+        ),
+      )
+      legacy
+        .prepare(
+          "INSERT INTO schema_migrations (version, applied_at) VALUES (5, '2026-11-18')",
+        )
+        .run()
+      legacy
+        .prepare(
+          "INSERT INTO inbox_events (id,user_id,type,source,payload_json,status,created_at) VALUES ('event','owner','user.message','web','{}','processed','2026-11-18')",
+        )
+        .run()
+      legacy
+        .prepare(
+          "INSERT INTO tasks (id,user_id,origin_event_id,title,goal,status,created_at,updated_at) VALUES ('task','owner','event','Goal','Goal','started','2026-11-18','2026-11-18')",
+        )
+        .run()
+    } finally {
+      legacy.close()
+    }
+    const upgraded = new PegasStore(path)
+    try {
+      expect(upgraded.listTasks()[0]).toMatchObject({
+        status: 'started',
+        title: 'Goal',
+      })
+      const db = new DatabaseSync(path)
+      try {
+        const versions = db
+          .prepare('SELECT version FROM schema_migrations ORDER BY version')
+          .all() as { version: number }[]
+        expect(versions.map(row => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7])
+        expect(
+          (
+            db.prepare('PRAGMA table_info(runtime_settings)').all() as {
+              name: string
+            }[]
+          ).some(column => column.name === 'model_connection_id'),
+        ).toBe(true)
+        expect(
+          (
+            db.prepare('PRAGMA table_info(runs)').all() as { name: string }[]
+          ).some(column => column.name === 'retry_of_run_id'),
+        ).toBe(true)
+      } finally {
+        db.close()
+      }
+    } finally {
+      upgraded.close()
+    }
+    const reopened = new PegasStore(path)
+    try {
+      expect(reopened.listTasks()).toHaveLength(1)
     } finally {
       reopened.close()
       rmSync(directory, { recursive: true, force: true })

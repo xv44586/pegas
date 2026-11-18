@@ -10,6 +10,14 @@ import {
 import { extname, resolve, sep } from 'node:path'
 
 import type { NewInboxEvent } from '../core/domain.js'
+import type { DshModelCatalog } from '../executor/dsh-model-catalog.js'
+import { AnthropicProvider } from '../model/anthropic-provider.js'
+import {
+  discoverModelCatalog,
+  testModelConnection,
+} from '../model/model-catalog.js'
+import type { ModelCredentialVault } from '../model/model-credential-vault.js'
+import { OpenAiCompatibleProvider } from '../model/openai-compatible-provider.js'
 import {
   parseRuntimeSettingsUpdate,
   type SettingsCapabilities,
@@ -32,7 +40,10 @@ export interface ControlPlaneOptions {
   webRoot?: string
   speechProvider?: SpeechRecognitionProvider
   maximumAudioBytes?: number
-  settingsCapabilities?: SettingsCapabilities
+  settingsCapabilities?: SettingsCapabilities | (() => SettingsCapabilities)
+  modelCredentialVault?: ModelCredentialVault
+  agentModelCatalog?: () => Promise<DshModelCatalog>
+  modelTimeoutMs?: number
 }
 
 export function createControlPlane(options: ControlPlaneOptions): Server {
@@ -69,31 +80,47 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
       }
 
       if (request.url === '/v1/settings' && request.method === 'GET') {
-        if (!options.settingsCapabilities) {
+        const capabilities = resolveSettingsCapabilities(options)
+        if (!capabilities) {
           return sendJson(response, 503, { error: 'settings_unavailable' })
         }
         return sendJson(response, 200, {
           settings: options.store.getRuntimeSettings(),
-          capabilities: options.settingsCapabilities,
+          capabilities,
         })
       }
 
       if (request.url === '/v1/settings' && request.method === 'PUT') {
-        if (!options.settingsCapabilities) {
+        const capabilities = resolveSettingsCapabilities(options)
+        if (!capabilities || !options.modelCredentialVault) {
           return sendJson(response, 503, { error: 'settings_unavailable' })
         }
         const update = parseRuntimeSettingsUpdate(
           await readJson(request),
-          options.settingsCapabilities,
+          capabilities,
         )
         try {
-          const settings = options.store.updateRuntimeSettings(
+          const settings = options.store.updateRuntimeSettingsAndProvider(
             update.expectedRevision,
             update.settings,
+            {
+              id: update.provider.id,
+              name: update.provider.name,
+              protocol: update.provider.protocol,
+              baseUrl: update.provider.baseUrl,
+              ...(update.provider.apiKey
+                ? {
+                    apiKeyCiphertext: options.modelCredentialVault.encrypt(
+                      update.provider.apiKey,
+                    ),
+                  }
+                : {}),
+              clearApiKey: update.provider.clearApiKey,
+            },
           )
           return sendJson(response, 200, {
             settings,
-            capabilities: options.settingsCapabilities,
+            capabilities: resolveSettingsCapabilities(options),
           })
         } catch (error) {
           if (error instanceof SettingsRevisionConflictError) {
@@ -104,6 +131,58 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
           }
           throw error
         }
+      }
+
+      if (
+        request.url === '/v1/settings/models/discover' &&
+        request.method === 'POST'
+      ) {
+        const connection = modelProbeConnection(
+          await readJson(request),
+          options,
+        )
+        const models = await discoverModelCatalog({
+          protocol: connection.protocol,
+          baseUrl: connection.baseUrl,
+          ...(connection.apiKey ? { apiKey: connection.apiKey } : {}),
+          timeoutMs: options.modelTimeoutMs ?? 15_000,
+        })
+        return sendJson(response, 200, { models })
+      }
+
+      if (
+        request.url === '/v1/settings/models/test' &&
+        request.method === 'POST'
+      ) {
+        const connection = modelProbeConnection(
+          await readJson(request),
+          options,
+        )
+        const provider =
+          connection.protocol === 'anthropic-messages'
+            ? new AnthropicProvider({
+                baseUrl: connection.baseUrl,
+                model: connection.modelName,
+                ...(connection.apiKey ? { apiKey: connection.apiKey } : {}),
+                timeoutMs: options.modelTimeoutMs ?? 15_000,
+              })
+            : new OpenAiCompatibleProvider({
+                baseUrl: connection.baseUrl,
+                model: connection.modelName,
+                ...(connection.apiKey ? { apiKey: connection.apiKey } : {}),
+                timeoutMs: options.modelTimeoutMs ?? 15_000,
+              })
+        return sendJson(response, 200, await testModelConnection(provider))
+      }
+
+      if (
+        request.url === '/v1/settings/agent-models' &&
+        request.method === 'GET'
+      ) {
+        if (!options.agentModelCatalog) {
+          return sendJson(response, 503, { error: 'agent_models_unavailable' })
+        }
+        return sendJson(response, 200, await options.agentModelCatalog())
       }
 
       if (request.url === '/v1/events' && request.method === 'POST') {
@@ -178,6 +257,53 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
       return sendJson(response, 400, { error: 'bad_request', message })
     }
   })
+}
+
+function modelProbeConnection(
+  value: unknown,
+  options: ControlPlaneOptions,
+): {
+  protocol: 'openai-chat' | 'anthropic-messages'
+  baseUrl: string
+  modelName: string
+  apiKey?: string
+} {
+  const capabilities = resolveSettingsCapabilities(options)
+  if (!capabilities || !options.modelCredentialVault) {
+    throw new Error('模型设置服务不可用')
+  }
+  if (!isRecord(value)) throw new Error('Request body must be an object')
+  const current = options.store.getRuntimeSettings()
+  const update = parseRuntimeSettingsUpdate(
+    {
+      ...current,
+      expectedRevision: current.revision,
+      modelProvider: value.modelProvider,
+      modelName: value.modelName,
+      provider: value.provider,
+    },
+    capabilities,
+  )
+  const stored = options.store.getModelProviderConnection(update.provider.id)
+  const storedApiKey =
+    !update.provider.clearApiKey && stored?.apiKeyCiphertext
+      ? options.modelCredentialVault.decrypt(stored.apiKeyCiphertext)
+      : undefined
+  const apiKey = update.provider.apiKey ?? storedApiKey
+  return {
+    protocol: update.provider.protocol,
+    baseUrl: update.provider.baseUrl,
+    modelName: update.settings.modelName,
+    ...(apiKey ? { apiKey } : {}),
+  }
+}
+
+function resolveSettingsCapabilities(
+  options: ControlPlaneOptions,
+): SettingsCapabilities | undefined {
+  return typeof options.settingsCapabilities === 'function'
+    ? options.settingsCapabilities()
+    : options.settingsCapabilities
 }
 
 async function acceptVoiceTranscription(

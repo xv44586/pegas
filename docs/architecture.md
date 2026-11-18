@@ -142,7 +142,7 @@ Router 可以使用模型进行归属判断，但结果必须写入结构化数�
 
 第一版提供两级策略：显式 `taskId` 和无候选任务时使用确定性规则；存在多个活跃候选 Task 时可启用 Model Router。模型只返回 `create_task` 或引用候选 ID 的 `continue_task` 结构，输出无法解析、引用越权或 Provider 不可用时自动退回确定性新建策略，不能阻塞 Durable Inbox。
 
-Pegas 的 Model Provider 是小型控制面边界，默认通过本机 Codex CLI 的登录态调用 `gpt-5.6-luna`，并提供 OpenAI-compatible 适配器。Codex 调用使用 ephemeral、read-only、忽略项目规则的隔离进程及结构化输出约束。它不承载工具调用和长期执行。DSH Runtime 的模型路由、凭证和 Provider 保持在 DSH profile 内，避免 Pegas 核心与某个执行模型协议耦合。
+Pegas 的 Model Provider 是小型控制面边界，不依赖本机 Agent 客户端或其登录态。第一版提供常见厂商、聚合网关、本地模型服务和自定义连接目录，通过 OpenAI Chat Completions 或 Anthropic Messages 协议完成结构化判断。Provider API key 由服务端实例密钥加密保存，读取接口只暴露是否已配置；它不承载工具调用和长期执行。DSH Runtime 的凭证和 Provider 仍保持在 DSH profile 内；Pegas 只读取 profile 暴露的模型目录，并可通过临时 patch 为新 session 选择默认 Agent 模型，不复制 DSH 凭证，也不改变恢复中 session 的模型。
 
 ### 4. Task Control Plane
 

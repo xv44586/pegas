@@ -4,8 +4,11 @@ import { loadConfig } from '../core/config.js'
 import { DshCliExecutor } from '../executor/dsh-cli-executor.js'
 import { EchoExecutor } from '../executor/echo-executor.js'
 import type { RunExecutor } from '../executor/executor.js'
-import { CodexCliProvider } from '../model/codex-cli-provider.js'
-import { OpenAiCompatibleProvider } from '../model/openai-compatible-provider.js'
+import { loadModelCredentialVault } from '../model/model-credential-vault.js'
+import {
+  createConfiguredModelProvider,
+  initializeConfiguredModelProvider,
+} from '../model/provider-factory.js'
 import type { JsonModelProvider } from '../model/provider.js'
 import { PrivacyMaskingExecutor } from '../privacy/executor.js'
 import { DeterministicPrivacyMasker } from '../privacy/masker.js'
@@ -36,9 +39,16 @@ import {
 
 const config = loadConfig()
 const store = new PegasStore(config.databasePath)
+const modelCredentialVault = loadModelCredentialVault(
+  config.modelCredentialKeyPath,
+)
+initializeConfiguredModelProvider(store, config, modelCredentialVault)
 const defaults = runtimeSettingsDefaults(config)
 if (!store.hasRuntimeSettings()) {
-  assertRuntimeSettingsAvailable(defaults, settingsCapabilities(config))
+  assertRuntimeSettingsAvailable(
+    defaults,
+    settingsCapabilities(config, store.listModelProviderConnectionSummaries()),
+  )
 }
 store.initializeRuntimeSettings(defaults)
 const workerId = `worker-${randomUUID()}`
@@ -124,26 +134,34 @@ function createRouter(settings: RuntimeSettings): TaskRouter {
 }
 
 function createExecutor(settings: RuntimeSettings): RunExecutor {
-  if (settings.privacyMode === 'disabled') return baseExecutor
-  return new PrivacyMaskingExecutor(baseExecutor, createPrivacyMasker())
+  const runtimeExecutor =
+    config.executorMode === 'echo'
+      ? baseExecutor
+      : new DshCliExecutor({
+          command: config.dshCommand,
+          profile: config.dshProfile,
+          additionalDirectories: config.dshAdditionalDirectories,
+          timeoutMs: config.dshTimeoutMs,
+          ...(settings.agentModelMode === 'override'
+            ? {
+                agentModel: {
+                  provider: settings.agentModelProvider,
+                  model: settings.agentModelName,
+                },
+              }
+            : {}),
+        })
+  if (settings.privacyMode === 'disabled') return runtimeExecutor
+  return new PrivacyMaskingExecutor(runtimeExecutor, createPrivacyMasker())
 }
 
 function createModelProvider(settings: RuntimeSettings): JsonModelProvider {
-  let provider: JsonModelProvider
-  if (settings.modelProvider === 'codex-cli') {
-    provider = new CodexCliProvider({
-      command: config.codexCommand,
-      model: settings.modelName,
-      timeoutMs: config.modelTimeoutMs,
-    })
-  } else {
-    provider = new OpenAiCompatibleProvider({
-      baseUrl: required(config.modelBaseUrl, 'model base URL'),
-      model: settings.modelName,
-      ...(config.modelApiKey ? { apiKey: config.modelApiKey } : {}),
-      timeoutMs: config.modelTimeoutMs,
-    })
-  }
+  const provider = createConfiguredModelProvider(
+    settings,
+    store,
+    modelCredentialVault,
+    config.modelTimeoutMs,
+  )
   return settings.privacyMode === 'mask'
     ? new PrivacyMaskingProvider(provider, createPrivacyMasker())
     : provider

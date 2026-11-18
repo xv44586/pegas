@@ -12,6 +12,7 @@ import {
   CircleDashed,
   Columns3,
   FileOutput,
+  KeyRound,
   ListTodo,
   Mic,
   MessageSquareText,
@@ -39,6 +40,10 @@ import { ApiError, PegasApi } from './api'
 import { MarkdownMessage } from './MarkdownMessage'
 import { useVoiceDictation } from './useVoiceDictation'
 import type {
+  DshModelCatalog,
+  ModelCatalogItem,
+  ModelProviderDraft,
+  ModelProviderId,
   InboxEvent,
   OutboxMessage,
   Run,
@@ -53,7 +58,21 @@ import type {
 const userId = 'owner'
 interface SettingsClient {
   settings(): Promise<SettingsResponse>
-  saveSettings(settings: RuntimeSettings): Promise<SettingsResponse>
+  discoverModels(
+    modelProvider: ModelProviderId,
+    modelName: string,
+    provider: ModelProviderDraft,
+  ): Promise<ModelCatalogItem[]>
+  testModel(
+    modelProvider: ModelProviderId,
+    modelName: string,
+    provider: ModelProviderDraft,
+  ): Promise<{ ok: true; latencyMs: number }>
+  agentModels(): Promise<DshModelCatalog>
+  saveSettings(
+    settings: RuntimeSettings,
+    provider: ModelProviderDraft,
+  ): Promise<SettingsResponse>
 }
 const emptySnapshot: Snapshot = {
   events: [],
@@ -622,34 +641,40 @@ export function App() {
   )
 }
 
-const settingsTabs = [
-  { id: 'model', label: '模型' },
-  { id: 'routing', label: '任务路由' },
-  { id: 'input', label: '语音与输入' },
-  { id: 'privacy', label: '隐私' },
-] as const
-
-type SettingsTab = (typeof settingsTabs)[number]['id']
-
 function SettingsPage({ api }: { api: SettingsClient }) {
-  const [activeTab, setActiveTab] = useState<SettingsTab>('model')
+  const [section, setSection] = useState<
+    'models' | 'routing' | 'rewrite' | 'privacy'
+  >('models')
   const [settings, setSettings] = useState<RuntimeSettings>()
   const [capabilities, setCapabilities] = useState<SettingsCapabilities>()
+  const [providerDraft, setProviderDraft] = useState<ModelProviderDraft>()
+  const [routerModels, setRouterModels] = useState<ModelCatalogItem[]>([])
+  const [agentCatalog, setAgentCatalog] = useState<DshModelCatalog>()
+  const [modelAction, setModelAction] = useState<
+    'discovering' | 'testing' | undefined
+  >()
+  const [modelStatus, setModelStatus] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [saved, setSaved] = useState(false)
+  const [dirty, setDirty] = useState(false)
 
   useEffect(() => {
     let active = true
     setLoading(true)
     setError('')
-    void api
-      .settings()
-      .then(response => {
+    void Promise.all([api.settings(), api.agentModels().catch(() => undefined)])
+      .then(([response, catalog]) => {
         if (!active) return
         setSettings(response.settings)
         setCapabilities(response.capabilities)
+        setDirty(false)
+        const selected = response.capabilities.providers.find(
+          provider => provider.id === response.settings.modelProvider,
+        )
+        if (selected) setProviderDraft(providerDraftFrom(selected))
+        setAgentCatalog(catalog)
       })
       .catch((caught: unknown) => {
         if (!active) return
@@ -665,17 +690,32 @@ function SettingsPage({ api }: { api: SettingsClient }) {
 
   async function save(event: SyntheticEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
-    if (!settings || saving) return
+    if (!settings || !providerDraft || saving) return
     setSaving(true)
     setSaved(false)
     setError('')
     try {
-      const response = await api.saveSettings({
-        ...settings,
-        modelName: settings.modelName.trim(),
-      })
+      const response = await api.saveSettings(
+        {
+          ...settings,
+          modelName: settings.modelName.trim(),
+          agentModelProvider: settings.agentModelProvider.trim(),
+          agentModelName: settings.agentModelName.trim(),
+        },
+        {
+          ...providerDraft,
+          name: providerDraft.name.trim(),
+          baseUrl: providerDraft.baseUrl.trim(),
+          apiKey: providerDraft.apiKey.trim(),
+        },
+      )
       setSettings(response.settings)
       setCapabilities(response.capabilities)
+      const selected = response.capabilities.providers.find(
+        provider => provider.id === response.settings.modelProvider,
+      )
+      if (selected) setProviderDraft(providerDraftFrom(selected))
+      setDirty(false)
       setSaved(true)
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '设置保存失败')
@@ -688,9 +728,96 @@ function SettingsPage({ api }: { api: SettingsClient }) {
     key: Key,
     value: RuntimeSettings[Key],
   ) => {
+    setDirty(true)
     setSaved(false)
     setSettings(current => (current ? { ...current, [key]: value } : current))
   }
+  const selectProvider = (id: ModelProviderId) => {
+    const provider = capabilities?.providers.find(
+      candidate => candidate.id === id,
+    )
+    if (!provider) return
+    setDirty(true)
+    setSaved(false)
+    setSettings(current =>
+      current
+        ? {
+            ...current,
+            modelProvider: id,
+            modelName: provider.defaultModel || current.modelName,
+          }
+        : current,
+    )
+    setProviderDraft(providerDraftFrom(provider))
+    setRouterModels([])
+    setModelStatus('')
+  }
+  const discoverModels = async () => {
+    if (!settings || !providerDraft || modelAction) return
+    setModelAction('discovering')
+    setModelStatus('')
+    setError('')
+    try {
+      const models = await api.discoverModels(
+        settings.modelProvider,
+        settings.modelName,
+        providerDraft,
+      )
+      setRouterModels(models)
+      setModelStatus(
+        models.length > 0
+          ? `已获取 ${String(models.length)} 个模型`
+          : '连接成功，但目录中没有可用模型',
+      )
+    } catch (caught) {
+      setModelStatus(caught instanceof Error ? caught.message : '模型获取失败')
+    } finally {
+      setModelAction(undefined)
+    }
+  }
+  const testSelectedModel = async () => {
+    if (!settings || !providerDraft || modelAction) return
+    setModelAction('testing')
+    setModelStatus('')
+    setError('')
+    try {
+      const result = await api.testModel(
+        settings.modelProvider,
+        settings.modelName.trim(),
+        providerDraft,
+      )
+      setModelStatus(`模型可用 · ${String(result.latencyMs)} ms`)
+    } catch (caught) {
+      setModelStatus(caught instanceof Error ? caught.message : '模型测试失败')
+    } finally {
+      setModelAction(undefined)
+    }
+  }
+  const selectedProvider = capabilities?.providers.find(
+    provider => provider.id === settings?.modelProvider,
+  )
+  const customProvider = settings?.modelProvider === 'custom'
+  const featuredProviderIds: readonly ModelProviderId[] = [
+    'openai',
+    'anthropic',
+    'google',
+    'deepseek',
+    'ollama',
+    'custom',
+  ]
+  const featuredProviders = capabilities?.providers.filter(provider =>
+    featuredProviderIds.includes(provider.id),
+  )
+  const additionalProviders = capabilities?.providers.filter(
+    provider => !featuredProviderIds.includes(provider.id),
+  )
+  const canSave = Boolean(
+    settings?.modelName.trim() &&
+    providerDraft?.name.trim() &&
+    providerDraft.baseUrl.trim() &&
+    (settings.agentModelMode === 'profile' ||
+      (settings.agentModelProvider.trim() && settings.agentModelName.trim())),
+  )
   return (
     <section className="settings-page" aria-labelledby="page-title">
       {loading ? (
@@ -699,219 +826,507 @@ function SettingsPage({ api }: { api: SettingsClient }) {
           <span />
           <span />
         </div>
-      ) : settings && capabilities ? (
+      ) : settings && capabilities && providerDraft && selectedProvider ? (
         <form
           className="settings-form"
           aria-label="设置选项"
           onSubmit={event => void save(event)}
         >
-          <div className="settings-tabs" role="tablist" aria-label="设置分类">
-            {settingsTabs.map((tab, index) => (
-              <button
-                type="button"
-                role="tab"
-                id={`settings-tab-${tab.id}`}
-                key={tab.id}
-                aria-selected={activeTab === tab.id}
-                tabIndex={activeTab === tab.id ? 0 : -1}
-                onClick={() => setActiveTab(tab.id)}
-                onKeyDown={event => {
-                  let next: number
-                  if (event.key === 'ArrowRight')
-                    next = (index + 1) % settingsTabs.length
-                  else if (event.key === 'ArrowLeft')
-                    next =
-                      (index + settingsTabs.length - 1) % settingsTabs.length
-                  else if (event.key === 'Home') next = 0
-                  else if (event.key === 'End') next = settingsTabs.length - 1
-                  else return
-                  event.preventDefault()
-                  const nextTab = settingsTabs[next]
-                  if (!nextTab) return
-                  setActiveTab(nextTab.id)
-                  document.getElementById(`settings-tab-${nextTab.id}`)?.focus()
-                }}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-          <div className="settings-scroll">
-            <div
-              role="tabpanel"
-              id="settings-panel-model"
-              aria-labelledby="settings-tab-model"
-              hidden={activeTab !== 'model'}
-            >
-              <fieldset disabled={saving}>
-                <legend>模型服务</legend>
-                <p>
-                  Provider 的地址与凭证由服务端管理，浏览器只选择已配置的入口。
-                </p>
-                {capabilities.providers.map(provider => (
-                  <SettingChoice
-                    key={provider.id}
-                    name="model-provider"
-                    value={provider.id}
-                    checked={settings.modelProvider === provider.id}
-                    title={
-                      provider.id === 'codex-cli'
-                        ? 'Codex 登录态'
-                        : 'OpenAI-compatible'
-                    }
-                    description={
-                      provider.reason ??
-                      (provider.id === 'codex-cli'
-                        ? '复用本机 Codex CLI 登录态。'
-                        : '使用服务端配置的兼容 API。')
-                    }
-                    disabled={!provider.available}
-                    onChange={() => update('modelProvider', provider.id)}
-                  />
-                ))}
-                <label className="settings-text-field" htmlFor="model-name">
-                  <span>对应模型</span>
-                  <input
-                    id="model-name"
-                    name="modelName"
-                    value={settings.modelName}
-                    onChange={event => update('modelName', event.target.value)}
-                    autoCapitalize="none"
-                    autoCorrect="off"
-                    spellCheck={false}
-                    maxLength={120}
-                    required
-                  />
-                  <small>
-                    当前 Provider：
-                    {settings.modelProvider === 'codex-cli'
-                      ? 'Codex 登录态'
-                      : 'OpenAI-compatible'}
-                  </small>
-                </label>
-              </fieldset>
-            </div>
-            <div
-              role="tabpanel"
-              id="settings-panel-routing"
-              aria-labelledby="settings-tab-routing"
-              hidden={activeTab !== 'routing'}
-            >
-              <fieldset disabled={saving}>
-                <legend>任务路由</legend>
-                <p>决定一条新消息是继续已有任务，还是创建新的任务。</p>
-                <SettingChoice
-                  name="router-mode"
-                  value="model"
-                  checked={settings.routerMode === 'model'}
-                  title="智能归类"
-                  description="由所选模型判断任务归属，不确定时安全地新建任务。"
-                  onChange={() => update('routerMode', 'model')}
-                />
-                <SettingChoice
-                  name="router-mode"
-                  value="rules"
-                  checked={settings.routerMode === 'rules'}
-                  title="确定性规则"
-                  description="只有明确指定任务时才续接，其余消息一律新建任务。"
-                  onChange={() => update('routerMode', 'rules')}
-                />
-              </fieldset>
-            </div>
-            <div
-              role="tabpanel"
-              id="settings-panel-input"
-              aria-labelledby="settings-tab-input"
-              hidden={activeTab !== 'input'}
-            >
-              <section
-                className="voice-settings-card"
-                aria-labelledby="voice-settings-title"
-              >
-                <div className="settings-card-icon">
-                  <Mic aria-hidden="true" />
-                </div>
-                <div>
-                  <h3 id="voice-settings-title">语音输入</h3>
-                  <p>在对话输入框中录音，转成可编辑文字后再由你确认发送。</p>
-                </div>
-                <span>
-                  {'mediaDevices' in navigator &&
-                  typeof navigator.mediaDevices.getUserMedia === 'function'
-                    ? '浏览器可用'
-                    : '浏览器不支持'}
-                </span>
-              </section>
-
-              <fieldset disabled={saving}>
-                <legend>输入改写</legend>
-                <p>
-                  改写只影响发送给 Router 与 Executor
-                  的执行视图，不覆盖对话原文。
-                </p>
-                <SettingChoice
-                  name="rewrite-mode"
-                  value="light"
-                  checked={settings.rewriteMode === 'light'}
-                  title="轻量校正"
-                  description="修正明显的语音识别错误、口头语和标点，不补充事实或回答问题。"
-                  onChange={() => update('rewriteMode', 'light')}
-                />
-                <SettingChoice
-                  name="rewrite-mode"
-                  value="disabled"
-                  checked={settings.rewriteMode === 'disabled'}
-                  title="保持原文"
-                  description="Router 与 Executor 直接使用用户发送的文字。"
-                  onChange={() => update('rewriteMode', 'disabled')}
-                />
-              </fieldset>
-            </div>
-            <div
-              role="tabpanel"
-              id="settings-panel-privacy"
-              aria-labelledby="settings-tab-privacy"
-              hidden={activeTab !== 'privacy'}
-            >
-              <fieldset disabled={saving}>
-                <legend>模型出站脱敏</legend>
-                <p>
-                  在内容离开 Pegas Worker 前替换高置信度敏感值，返回后再恢复。
-                </p>
-                <SettingChoice
-                  name="privacy-mode"
-                  value="mask"
-                  checked={settings.privacyMode === 'mask'}
-                  title="开启脱敏"
-                  description={
-                    capabilities.privacyAvailable
-                      ? '保护密钥、密码、邮箱和手机号；原文仍保留在本地权威记录。'
-                      : '服务端尚未配置隐私 HMAC key。'
+          <div className="settings-layout">
+            <div className="settings-tabs" role="tablist" aria-label="设置分类">
+              {(
+                [
+                  ['models', '模型与供应商'],
+                  ['routing', '任务路由'],
+                  ['rewrite', '语音与输入'],
+                  ['privacy', '隐私'],
+                ] as const
+              ).map(([id, label], index, tabs) => (
+                <button
+                  type="button"
+                  role="tab"
+                  id={`settings-tab-${id}`}
+                  key={id}
+                  aria-selected={section === id}
+                  aria-controls={
+                    section === id ? `settings-panel-${id}` : undefined
                   }
-                  disabled={!capabilities.privacyAvailable}
-                  onChange={() => update('privacyMode', 'mask')}
-                />
-                <SettingChoice
-                  name="privacy-mode"
-                  value="disabled"
-                  checked={settings.privacyMode === 'disabled'}
-                  title="关闭脱敏"
-                  description="保持原有出站行为。适合完全受控的本地模型链路。"
-                  onChange={() => update('privacyMode', 'disabled')}
-                />
-              </fieldset>
+                  tabIndex={section === id ? 0 : -1}
+                  onClick={() => setSection(id)}
+                  onKeyDown={event => {
+                    let next: number
+                    if (event.key === 'ArrowRight')
+                      next = (index + 1) % tabs.length
+                    else if (event.key === 'ArrowLeft')
+                      next = (index + tabs.length - 1) % tabs.length
+                    else if (event.key === 'Home') next = 0
+                    else if (event.key === 'End') next = tabs.length - 1
+                    else return
+                    event.preventDefault()
+                    const nextTab = tabs[next]
+                    if (!nextTab) return
+                    setSection(nextTab[0])
+                    event.currentTarget.parentElement
+                      ?.querySelectorAll<HTMLButtonElement>('[role=tab]')
+                      [next]?.focus()
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="settings-scroll">
+              {section === 'models' && (
+                <section
+                  className="settings-section"
+                  role="tabpanel"
+                  id="settings-panel-models"
+                  aria-labelledby="settings-tab-models"
+                >
+                  <header>
+                    <h2 id="models-title">模型服务</h2>
+                    <p>选择供应商并配置 Pegas Router 使用的模型连接。</p>
+                  </header>
+
+                  <div className="settings-group provider-picker">
+                    <span className="provider-picker-label">常用供应商</span>
+                    <div
+                      className="provider-grid"
+                      role="group"
+                      aria-label="常用供应商"
+                    >
+                      {featuredProviders?.map(provider => (
+                        <ProviderOption
+                          key={provider.id}
+                          provider={provider}
+                          checked={settings.modelProvider === provider.id}
+                          onChange={() => selectProvider(provider.id)}
+                        />
+                      ))}
+                    </div>
+                    <details
+                      className="provider-more"
+                      open={additionalProviders?.some(
+                        provider => provider.id === settings.modelProvider,
+                      )}
+                    >
+                      <summary>更多供应商</summary>
+                      <div
+                        className="provider-grid"
+                        role="group"
+                        aria-label="更多供应商"
+                      >
+                        {additionalProviders?.map(provider => (
+                          <ProviderOption
+                            key={provider.id}
+                            provider={provider}
+                            checked={settings.modelProvider === provider.id}
+                            onChange={() => selectProvider(provider.id)}
+                          />
+                        ))}
+                      </div>
+                    </details>
+                    <p className="provider-description">
+                      {selectedProvider.description}
+                    </p>
+                  </div>
+
+                  <div className="provider-status" role="status">
+                    <span
+                      className={selectedProvider.available ? 'is-ready' : ''}
+                    />
+                    <strong>{selectedProvider.name}</strong>
+                    <small>
+                      {selectedProvider.available
+                        ? '连接信息已就绪'
+                        : (selectedProvider.reason ?? '需要完成连接配置')}
+                    </small>
+                  </div>
+
+                  <div className="settings-group provider-fields">
+                    {customProvider && (
+                      <>
+                        <label htmlFor="provider-name">连接名称</label>
+                        <input
+                          id="provider-name"
+                          name="providerName"
+                          value={providerDraft.name}
+                          onChange={event => {
+                            setSaved(false)
+                            setProviderDraft(current =>
+                              current
+                                ? { ...current, name: event.target.value }
+                                : current,
+                            )
+                          }}
+                          maxLength={60}
+                          required
+                          onInput={() => setDirty(true)}
+                        />
+                        <label htmlFor="provider-protocol">接口协议</label>
+                        <select
+                          id="provider-protocol"
+                          name="providerProtocol"
+                          value={providerDraft.protocol}
+                          onChange={event => {
+                            setDirty(true)
+                            setSaved(false)
+                            setProviderDraft(current =>
+                              current
+                                ? {
+                                    ...current,
+                                    protocol: event.target
+                                      .value as ModelProviderDraft['protocol'],
+                                  }
+                                : current,
+                            )
+                          }}
+                        >
+                          <option value="openai-chat">
+                            OpenAI Chat Completions
+                          </option>
+                          <option value="anthropic-messages">
+                            Anthropic Messages
+                          </option>
+                        </select>
+                      </>
+                    )}
+                    <label htmlFor="provider-base-url">Base URL</label>
+                    <input
+                      id="provider-base-url"
+                      name="providerBaseUrl"
+                      type="url"
+                      value={providerDraft.baseUrl}
+                      readOnly={!customProvider}
+                      onChange={event => {
+                        setDirty(true)
+                        setSaved(false)
+                        setProviderDraft(current =>
+                          current
+                            ? { ...current, baseUrl: event.target.value }
+                            : current,
+                        )
+                      }}
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      spellCheck={false}
+                      required
+                    />
+                    <label htmlFor="provider-api-key">API key</label>
+                    <div className="provider-secret-field">
+                      <KeyRound aria-hidden="true" />
+                      <input
+                        id="provider-api-key"
+                        name="providerApiKey"
+                        type="password"
+                        value={providerDraft.apiKey}
+                        placeholder={
+                          selectedProvider.hasApiKey &&
+                          !providerDraft.clearApiKey
+                            ? '已保存；留空保持不变'
+                            : selectedProvider.requiresApiKey
+                              ? '输入 API key'
+                              : '可选'
+                        }
+                        onChange={event => {
+                          setDirty(true)
+                          setSaved(false)
+                          setProviderDraft(current =>
+                            current
+                              ? {
+                                  ...current,
+                                  apiKey: event.target.value,
+                                  clearApiKey: false,
+                                }
+                              : current,
+                          )
+                        }}
+                        autoComplete="new-password"
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                        spellCheck={false}
+                      />
+                    </div>
+                    {selectedProvider.hasApiKey && (
+                      <button
+                        className="clear-provider-key"
+                        type="button"
+                        aria-pressed={providerDraft.clearApiKey}
+                        onClick={() => {
+                          setDirty(true)
+                          setSaved(false)
+                          setProviderDraft(current =>
+                            current
+                              ? {
+                                  ...current,
+                                  apiKey: '',
+                                  clearApiKey: !current.clearApiKey,
+                                }
+                              : current,
+                          )
+                        }}
+                      >
+                        {providerDraft.clearApiKey
+                          ? '保留已保存密钥'
+                          : '清除已保存密钥'}
+                      </button>
+                    )}
+                    <label htmlFor="model-name">Router / 输入处理模型</label>
+                    <input
+                      id="model-name"
+                      name="modelName"
+                      list="router-model-options"
+                      value={settings.modelName}
+                      onChange={event =>
+                        update('modelName', event.target.value)
+                      }
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      spellCheck={false}
+                      maxLength={160}
+                      required
+                    />
+                    <datalist id="router-model-options">
+                      {routerModels.map(model => (
+                        <option key={model.id} value={model.id}>
+                          {model.name}
+                        </option>
+                      ))}
+                    </datalist>
+                    <div className="model-actions">
+                      <button
+                        type="button"
+                        onClick={() => void discoverModels()}
+                        disabled={Boolean(modelAction)}
+                      >
+                        {modelAction === 'discovering'
+                          ? '正在获取…'
+                          : '获取模型列表'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void testSelectedModel()}
+                        disabled={
+                          Boolean(modelAction) || !settings.modelName.trim()
+                        }
+                      >
+                        {modelAction === 'testing' ? '正在测试…' : '测试模型'}
+                      </button>
+                    </div>
+                    <p
+                      className="model-action-status"
+                      role="status"
+                      aria-live="polite"
+                    >
+                      {modelStatus ||
+                        '可手工输入，也可从当前连接读取模型目录。'}
+                    </p>
+                  </div>
+
+                  <fieldset className="settings-choice-group agent-model-group">
+                    <legend>Agent 执行模型</legend>
+                    <SettingChoice
+                      name="agent-model-mode"
+                      value="profile"
+                      checked={settings.agentModelMode === 'profile'}
+                      title="跟随 DSH profile"
+                      description={
+                        agentCatalog
+                          ? `当前默认 ${agentCatalog.defaultProvider} / ${agentCatalog.defaultModel}`
+                          : '由运行环境的 DSH profile 决定。'
+                      }
+                      onChange={() => update('agentModelMode', 'profile')}
+                    />
+                    <SettingChoice
+                      name="agent-model-mode"
+                      value="override"
+                      checked={settings.agentModelMode === 'override'}
+                      title="覆盖新 Agent session"
+                      description="只影响新建 session；恢复中的 Task 继续沿用原模型。"
+                      onChange={() => update('agentModelMode', 'override')}
+                    />
+                    {settings.agentModelMode === 'override' && (
+                      <div className="agent-model-field">
+                        <label htmlFor="agent-model-name">
+                          DSH provider 与模型
+                        </label>
+                        <input
+                          id="agent-model-name"
+                          list="agent-model-options"
+                          value={
+                            settings.agentModelProvider
+                              ? `${settings.agentModelProvider}::${settings.agentModelName}`
+                              : settings.agentModelName
+                          }
+                          onChange={event => {
+                            const value = event.target.value
+                            const separator = value.indexOf('::')
+                            update(
+                              'agentModelProvider',
+                              separator >= 0 ? value.slice(0, separator) : '',
+                            )
+                            update(
+                              'agentModelName',
+                              separator >= 0
+                                ? value.slice(separator + 2)
+                                : value,
+                            )
+                          }}
+                          placeholder="provider::model"
+                          autoCapitalize="none"
+                          autoCorrect="off"
+                          spellCheck={false}
+                          required
+                        />
+                        <datalist id="agent-model-options">
+                          {agentCatalog?.models.map(model => (
+                            <option
+                              key={`${model.provider}:${model.id}`}
+                              value={`${model.provider}::${model.id}`}
+                            >
+                              {model.name}
+                            </option>
+                          ))}
+                        </datalist>
+                      </div>
+                    )}
+                  </fieldset>
+                </section>
+              )}
+
+              {section === 'routing' && (
+                <section
+                  className="settings-section"
+                  role="tabpanel"
+                  id="settings-panel-routing"
+                  aria-labelledby="settings-tab-routing"
+                >
+                  <header>
+                    <h2 id="routing-title">任务路由</h2>
+                    <p>决定新消息继续已有任务，还是创建一件新事情。</p>
+                  </header>
+                  <fieldset className="settings-choice-group">
+                    <legend>路由方式</legend>
+                    <SettingChoice
+                      name="router-mode"
+                      value="model"
+                      checked={settings.routerMode === 'model'}
+                      title="智能归类"
+                      description="由所选模型判断任务归属；不确定时安全新建任务。"
+                      onChange={() => update('routerMode', 'model')}
+                    />
+                    <SettingChoice
+                      name="router-mode"
+                      value="rules"
+                      checked={settings.routerMode === 'rules'}
+                      title="确定性规则"
+                      description="只有明确指定任务时才续接，其余消息一律新建。"
+                      onChange={() => update('routerMode', 'rules')}
+                    />
+                  </fieldset>
+                </section>
+              )}
+
+              {section === 'privacy' && (
+                <section
+                  className="settings-section"
+                  role="tabpanel"
+                  id="settings-panel-privacy"
+                  aria-labelledby="settings-tab-privacy"
+                >
+                  <header>
+                    <h2 id="privacy-title">模型出站隐私</h2>
+                    <p>内容离开 Worker 前替换高置信度敏感值，返回后恢复。</p>
+                  </header>
+                  <fieldset className="settings-choice-group">
+                    <legend>脱敏策略</legend>
+                    <SettingChoice
+                      name="privacy-mode"
+                      value="mask"
+                      checked={settings.privacyMode === 'mask'}
+                      title="开启脱敏"
+                      description={
+                        capabilities.privacyAvailable
+                          ? '保护密钥、密码、邮箱和手机号；权威记录保留原文。'
+                          : '服务端尚未配置隐私 HMAC key。'
+                      }
+                      disabled={!capabilities.privacyAvailable}
+                      onChange={() => update('privacyMode', 'mask')}
+                    />
+                    <SettingChoice
+                      name="privacy-mode"
+                      value="disabled"
+                      checked={settings.privacyMode === 'disabled'}
+                      title="关闭脱敏"
+                      description="适合完全受控的本地模型链路。"
+                      onChange={() => update('privacyMode', 'disabled')}
+                    />
+                  </fieldset>
+                </section>
+              )}
+
+              {section === 'rewrite' && (
+                <section
+                  className="settings-section"
+                  role="tabpanel"
+                  id="settings-panel-rewrite"
+                  aria-labelledby="settings-tab-rewrite"
+                >
+                  <header>
+                    <h2 id="rewrite-title">输入处理</h2>
+                    <p>只调整执行视图，不覆盖 Conversation 中的用户原文。</p>
+                  </header>
+                  <div className="voice-settings-card">
+                    <div className="settings-card-icon">
+                      <Mic aria-hidden="true" />
+                    </div>
+                    <div>
+                      <h3>语音输入</h3>
+                      <p>在对话输入框中听写，转成可编辑文字后再发送。</p>
+                    </div>
+                    <span>
+                      {'mediaDevices' in navigator &&
+                      typeof navigator.mediaDevices.getUserMedia === 'function'
+                        ? '浏览器可用'
+                        : '浏览器不支持'}
+                    </span>
+                  </div>
+                  <fieldset className="settings-choice-group">
+                    <legend>改写策略</legend>
+                    <SettingChoice
+                      name="rewrite-mode"
+                      value="light"
+                      checked={settings.rewriteMode === 'light'}
+                      title="轻量校正"
+                      description="修正明显的识别错误、口头语和标点，不补充事实。"
+                      onChange={() => update('rewriteMode', 'light')}
+                    />
+                    <SettingChoice
+                      name="rewrite-mode"
+                      value="disabled"
+                      checked={settings.rewriteMode === 'disabled'}
+                      title="保持原文"
+                      description="Router 与 Executor 直接使用用户发送的文字。"
+                      onChange={() => update('rewriteMode', 'disabled')}
+                    />
+                  </fieldset>
+                </section>
+              )}
             </div>
           </div>
 
           <footer className="settings-footer">
             <div aria-live="polite" role="status">
-              {saved ? '设置已保存' : '修改后保存，对后续任务生效'}
+              {saving
+                ? '正在保存更改'
+                : saved
+                  ? '更改已保存'
+                  : dirty
+                    ? '有未保存的更改'
+                    : '设置已同步'}
             </div>
-            <button
-              type="submit"
-              disabled={saving || !settings.modelName.trim()}
-            >
-              {saving ? '正在保存…' : '保存设置'}
+            <button type="submit" disabled={saving || !canSave}>
+              {saving ? '正在保存…' : '保存更改'}
             </button>
           </footer>
         </form>
@@ -925,6 +1340,50 @@ function SettingsPage({ api }: { api: SettingsClient }) {
       )}
     </section>
   )
+}
+
+function ProviderOption({
+  provider,
+  checked,
+  onChange,
+}: {
+  provider: SettingsCapabilities['providers'][number]
+  checked: boolean
+  onChange: () => void
+}) {
+  const id = `provider-${provider.id}`
+  return (
+    <label className="provider-option" htmlFor={id}>
+      <input
+        id={id}
+        type="radio"
+        name="modelProvider"
+        value={provider.id}
+        checked={checked}
+        onChange={onChange}
+      />
+      <span>{provider.id === 'custom' ? '自定义' : provider.name}</span>
+      <small>
+        {provider.hasApiKey
+          ? '已配置'
+          : provider.category === 'local'
+            ? '本地'
+            : ''}
+      </small>
+    </label>
+  )
+}
+
+function providerDraftFrom(
+  provider: SettingsCapabilities['providers'][number],
+): ModelProviderDraft {
+  return {
+    name: provider.name,
+    protocol: provider.protocol,
+    baseUrl: provider.baseUrl,
+    apiKey: '',
+    clearApiKey: false,
+  }
 }
 
 function SettingChoice({

@@ -164,6 +164,56 @@ console.log(JSON.stringify({
     expect(observedSession).toBe('session-existing')
   })
 
+  it('patches the selected agent model only for a new session', async () => {
+    const command = fakeDsh(`
+const fs = require('node:fs')
+const patchIndex = process.argv.indexOf('--patch')
+const patch = patchIndex === -1 ? undefined : fs.readFileSync(process.argv[patchIndex + 1], 'utf8')
+console.log(JSON.stringify({
+  type: 'final',
+  sessionId: 'session-new',
+  text: JSON.stringify({ args: process.argv.slice(2), patch }),
+  reason: { kind: 'completed' }
+}))
+`)
+    const executor = new DshCliExecutor({
+      command,
+      agentModel: { provider: 'magpie', model: 'model-a' },
+    })
+
+    const fresh = await executor.execute({
+      runId: 'run-new',
+      taskId: 'task-1',
+      prompt: 'start',
+      workingDirectory: process.cwd(),
+    })
+    const freshOutput = JSON.parse(fresh.output) as {
+      args: string[]
+      patch: string
+    }
+    expect(freshOutput.args).toContain('--patch')
+    expect(JSON.parse(freshOutput.patch)).toEqual([
+      {
+        id: 'agent-default-model',
+        config: { provider: 'magpie', model: 'model-a' },
+      },
+    ])
+
+    const resumed = await executor.execute({
+      runId: 'run-resume',
+      taskId: 'task-1',
+      prompt: 'continue',
+      workingDirectory: process.cwd(),
+      resumeSessionId: 'session-existing',
+    })
+    const resumedOutput = JSON.parse(resumed.output) as {
+      args: string[]
+      patch?: string
+    }
+    expect(resumedOutput.args).not.toContain('--patch')
+    expect(resumedOutput.patch).toBeUndefined()
+  })
+
   it('preserves the session and terminates a malformed event stream', async () => {
     const command = fakeDsh(`
 console.log(JSON.stringify({ type: 'session', sessionId: 'session-malformed' }))

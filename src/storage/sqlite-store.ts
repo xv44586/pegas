@@ -14,9 +14,16 @@ import type {
   Task,
 } from '../core/domain.js'
 import type {
+  ModelProviderConnection,
+  ModelProviderConnectionSummary,
   RuntimeSettings,
   RuntimeSettingsSelection,
 } from '../settings/runtime-settings.js'
+import {
+  modelProviderPreset,
+  type ModelProviderId,
+  type ModelProviderProtocol,
+} from '../model/provider-catalog.js'
 
 const schema = `
 PRAGMA journal_mode = WAL;
@@ -186,6 +193,36 @@ CREATE TABLE runtime_settings (
 `
 
 const migration5 = `
+ALTER TABLE runtime_settings ADD COLUMN model_connection_id TEXT;
+
+UPDATE runtime_settings
+SET model_connection_id = CASE
+  WHEN model_provider = 'openai-compatible' THEN 'custom'
+  ELSE 'openai'
+END;
+
+UPDATE runtime_settings
+SET router_mode = 'rules', model_provider = 'openai-compatible'
+WHERE model_provider = 'codex-cli';
+
+CREATE TABLE model_provider_connections (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  protocol TEXT NOT NULL CHECK (protocol IN ('openai-chat', 'anthropic-messages')),
+  base_url TEXT NOT NULL,
+  api_key_ciphertext TEXT,
+  updated_at TEXT NOT NULL
+);
+`
+
+const migration6 = `
+ALTER TABLE runtime_settings ADD COLUMN agent_model_mode TEXT NOT NULL DEFAULT 'profile'
+  CHECK (agent_model_mode IN ('profile', 'override'));
+ALTER TABLE runtime_settings ADD COLUMN agent_model_provider TEXT NOT NULL DEFAULT '';
+ALTER TABLE runtime_settings ADD COLUMN agent_model_name TEXT NOT NULL DEFAULT '';
+`
+
+const migration7 = `
 ALTER TABLE runs ADD COLUMN retry_of_run_id TEXT REFERENCES runs(id);
 CREATE UNIQUE INDEX runs_retry_predecessor ON runs(retry_of_run_id);
 UPDATE tasks SET status_reason = CASE
@@ -273,11 +310,33 @@ interface OutboxRow {
 interface RuntimeSettingsRow {
   revision: number
   router_mode: RuntimeSettings['routerMode']
-  model_provider: RuntimeSettings['modelProvider']
+  model_provider: string
+  model_connection_id: string | null
   model_name: string
+  agent_model_mode: RuntimeSettings['agentModelMode']
+  agent_model_provider: string
+  agent_model_name: string
   privacy_mode: RuntimeSettings['privacyMode']
   rewrite_mode: RuntimeSettings['rewriteMode']
   updated_at: string
+}
+
+interface ModelProviderConnectionRow {
+  id: string
+  name: string
+  protocol: ModelProviderProtocol
+  base_url: string
+  api_key_ciphertext: string | null
+  updated_at: string
+}
+
+export interface ModelProviderConnectionWrite {
+  id: ModelProviderId
+  name: string
+  protocol: ModelProviderProtocol
+  baseUrl: string
+  apiKeyCiphertext?: string
+  clearApiKey: boolean
 }
 
 export class SettingsRevisionConflictError extends Error {
@@ -306,7 +365,40 @@ export class PegasStore {
     this.#migrate(2, migration2)
     this.#migrate(3, migration3)
     this.#migrate(4, migration4)
+    this.#reconcileTaskOnlyV5()
     this.#migrate(5, migration5)
+    this.#migrate(6, migration6)
+    this.#migrate(7, migration7)
+  }
+
+  // An earlier UI candidate used v5 for task retries before provider v5
+  // landed on main. Move only that fully applied migration marker to v7.
+  #reconcileTaskOnlyV5(): void {
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const hasV5 = this.#database
+        .prepare('SELECT 1 FROM schema_migrations WHERE version = 5')
+        .get()
+      const hasTaskRetry = (
+        this.#database.prepare('PRAGMA table_info(runs)').all() as {
+          name: string
+        }[]
+      ).some(column => column.name === 'retry_of_run_id')
+      const hasProviderColumn = (
+        this.#database.prepare('PRAGMA table_info(runtime_settings)').all() as {
+          name: string
+        }[]
+      ).some(column => column.name === 'model_connection_id')
+      if (hasV5 && hasTaskRetry && !hasProviderColumn) {
+        this.#database
+          .prepare('UPDATE schema_migrations SET version = 7 WHERE version = 5')
+          .run()
+      }
+      this.#database.exec('COMMIT')
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
   }
 
   #migrate(version: number, sql: string): void {
@@ -349,14 +441,18 @@ export class PegasStore {
     this.#database
       .prepare(
         `INSERT OR IGNORE INTO runtime_settings
-          (id, revision, router_mode, model_provider, model_name,
+          (id, revision, router_mode, model_provider, model_connection_id, model_name,
+           agent_model_mode, agent_model_provider, agent_model_name,
            privacy_mode, rewrite_mode, updated_at)
-         VALUES (1, 1, ?, ?, ?, ?, ?, ?)`,
+         VALUES (1, 1, ?, 'openai-compatible', ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         defaults.routerMode,
         defaults.modelProvider,
         defaults.modelName,
+        defaults.agentModelMode,
+        defaults.agentModelProvider,
+        defaults.agentModelName,
         defaults.privacyMode,
         defaults.rewriteMode,
         now,
@@ -387,14 +483,19 @@ export class PegasStore {
     const result = this.#database
       .prepare(
         `UPDATE runtime_settings
-         SET revision = revision + 1, router_mode = ?, model_provider = ?,
-             model_name = ?, privacy_mode = ?, rewrite_mode = ?, updated_at = ?
+         SET revision = revision + 1, router_mode = ?,
+             model_provider = 'openai-compatible', model_connection_id = ?,
+             model_name = ?, agent_model_mode = ?, agent_model_provider = ?,
+             agent_model_name = ?, privacy_mode = ?, rewrite_mode = ?, updated_at = ?
          WHERE id = 1 AND revision = ?`,
       )
       .run(
         settings.routerMode,
         settings.modelProvider,
         settings.modelName,
+        settings.agentModelMode,
+        settings.agentModelProvider,
+        settings.agentModelName,
         settings.privacyMode,
         settings.rewriteMode,
         this.#clock.now().toISOString(),
@@ -402,6 +503,125 @@ export class PegasStore {
       )
     if (result.changes !== 1) throw new SettingsRevisionConflictError()
     return this.getRuntimeSettings()
+  }
+
+  initializeModelProviderConnection(
+    connection: Omit<ModelProviderConnectionWrite, 'clearApiKey'>,
+  ): ModelProviderConnection {
+    const now = this.#clock.now().toISOString()
+    this.#database
+      .prepare(
+        `INSERT OR IGNORE INTO model_provider_connections
+          (id, name, protocol, base_url, api_key_ciphertext, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        connection.id,
+        connection.name,
+        connection.protocol,
+        connection.baseUrl,
+        connection.apiKeyCiphertext ?? null,
+        now,
+      )
+    const stored = this.getModelProviderConnection(connection.id)
+    if (!stored)
+      throw new Error('Model provider connection was not initialized')
+    return stored
+  }
+
+  getModelProviderConnection(
+    id: ModelProviderId,
+  ): ModelProviderConnection | undefined {
+    const row = this.#database
+      .prepare('SELECT * FROM model_provider_connections WHERE id = ?')
+      .get(id) as unknown as ModelProviderConnectionRow | undefined
+    return row ? toModelProviderConnection(row) : undefined
+  }
+
+  listModelProviderConnections(): ModelProviderConnection[] {
+    return (
+      this.#database
+        .prepare('SELECT * FROM model_provider_connections ORDER BY id')
+        .all() as unknown as ModelProviderConnectionRow[]
+    ).map(toModelProviderConnection)
+  }
+
+  listModelProviderConnectionSummaries(): ModelProviderConnectionSummary[] {
+    return this.listModelProviderConnections().map(connection => ({
+      id: connection.id,
+      name: connection.name,
+      protocol: connection.protocol,
+      baseUrl: connection.baseUrl,
+      hasApiKey: Boolean(connection.apiKeyCiphertext),
+    }))
+  }
+
+  updateRuntimeSettingsAndProvider(
+    expectedRevision: number,
+    settings: RuntimeSettingsSelection,
+    connection: ModelProviderConnectionWrite,
+  ): RuntimeSettings {
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const current = this.#database
+        .prepare('SELECT revision FROM runtime_settings WHERE id = 1')
+        .get() as { revision: number } | undefined
+      if (current?.revision !== expectedRevision) {
+        throw new SettingsRevisionConflictError()
+      }
+      const existing = this.getModelProviderConnection(connection.id)
+      const apiKeyCiphertext =
+        connection.apiKeyCiphertext ??
+        (connection.clearApiKey ? null : (existing?.apiKeyCiphertext ?? null))
+      const now = this.#clock.now().toISOString()
+      this.#database
+        .prepare(
+          `INSERT INTO model_provider_connections
+            (id, name, protocol, base_url, api_key_ciphertext, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             name = excluded.name,
+             protocol = excluded.protocol,
+             base_url = excluded.base_url,
+             api_key_ciphertext = excluded.api_key_ciphertext,
+             updated_at = excluded.updated_at`,
+        )
+        .run(
+          connection.id,
+          connection.name,
+          connection.protocol,
+          connection.baseUrl,
+          apiKeyCiphertext,
+          now,
+        )
+      const result = this.#database
+        .prepare(
+          `UPDATE runtime_settings
+           SET revision = revision + 1, router_mode = ?,
+               model_provider = 'openai-compatible', model_connection_id = ?,
+               model_name = ?, agent_model_mode = ?, agent_model_provider = ?,
+               agent_model_name = ?, privacy_mode = ?, rewrite_mode = ?, updated_at = ?
+           WHERE id = 1 AND revision = ?`,
+        )
+        .run(
+          settings.routerMode,
+          settings.modelProvider,
+          settings.modelName,
+          settings.agentModelMode,
+          settings.agentModelProvider,
+          settings.agentModelName,
+          settings.privacyMode,
+          settings.rewriteMode,
+          now,
+          expectedRevision,
+        )
+      if (result.changes !== 1) throw new SettingsRevisionConflictError()
+      this.#database.exec('COMMIT')
+      return this.getRuntimeSettings()
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
   }
 
   enqueueEvent(input: NewInboxEvent): { event: InboxEvent; inserted: boolean } {
@@ -1125,13 +1345,38 @@ function toInboxEvent(row: InboxRow): InboxEvent {
 }
 
 function toRuntimeSettings(row: RuntimeSettingsRow): RuntimeSettings {
+  const modelProvider = row.model_connection_id ?? 'openai'
+  if (!modelProviderPreset(modelProvider)) {
+    throw new Error(`Unknown stored model provider: ${modelProvider}`)
+  }
   return {
     revision: row.revision,
     routerMode: row.router_mode,
-    modelProvider: row.model_provider,
+    modelProvider: modelProvider as ModelProviderId,
     modelName: row.model_name,
+    agentModelMode: row.agent_model_mode,
+    agentModelProvider: row.agent_model_provider,
+    agentModelName: row.agent_model_name,
     privacyMode: row.privacy_mode,
     rewriteMode: row.rewrite_mode,
+    updatedAt: row.updated_at,
+  }
+}
+
+function toModelProviderConnection(
+  row: ModelProviderConnectionRow,
+): ModelProviderConnection {
+  if (!modelProviderPreset(row.id)) {
+    throw new Error(`Unknown stored model provider: ${row.id}`)
+  }
+  return {
+    id: row.id as ModelProviderId,
+    name: row.name,
+    protocol: row.protocol,
+    baseUrl: row.base_url,
+    ...(row.api_key_ciphertext
+      ? { apiKeyCiphertext: row.api_key_ciphertext }
+      : {}),
     updatedAt: row.updated_at,
   }
 }
