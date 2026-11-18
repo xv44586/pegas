@@ -633,7 +633,14 @@ function SettingsPage({ api }: { api: SettingsClient }) {
     action: 'discover' | 'test',
   ): ModelFeedback => {
     if (caught instanceof ApiError) {
-      if (caught.status === 404)
+      const upstreamStatus =
+        caught.status === 400
+          ? /(?:Model provider returned|模型目录返回)\s+([1-5]\d\d)\b/.exec(
+              caught.message,
+            )?.[1]
+          : undefined
+      const status = upstreamStatus ? Number(upstreamStatus) : caught.status
+      if (status === 404)
         return action === 'test'
           ? {
               kind: 'error',
@@ -645,20 +652,20 @@ function SettingsPage({ api }: { api: SettingsClient }) {
               title: '无法获取模型列表',
               description: '该服务可能没有模型目录。仍可手动填写模型 ID。',
             }
-      if (caught.status === 401 || caught.status === 403)
+      if (status === 401 || status === 403)
         return {
           kind: 'error',
           title: '连接未获授权',
           description:
             '检查 API key 是否正确，以及当前账号是否有权限使用此模型。',
         }
-      if (caught.status === 429)
+      if (status === 429)
         return {
           kind: 'error',
           title: '请求过于频繁',
           description: '稍后重试，或检查供应商的额度和限流设置。',
         }
-      if (caught.status >= 500)
+      if (status >= 500)
         return {
           kind: 'error',
           title: '供应商暂时不可用',

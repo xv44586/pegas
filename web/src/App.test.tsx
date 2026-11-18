@@ -160,7 +160,7 @@ describe('Pegas web app', () => {
                 message:
                   'Model provider returned 404: magpie knows no model gpt-5-mini; available models: company/fast, gpt-settings-test, many others',
               },
-              { status: 404 },
+              { status: 400 },
             ),
           )
         return Promise.resolve(Response.json({ ok: true, latencyMs: 42 }))
