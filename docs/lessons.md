@@ -59,7 +59,17 @@
 
 ## Lessons
 
-当前没有已确认的 Pegas Lesson。首次真实事件发生时，从本节开始追加记录。
+### LESSON-20261118-03：密文末字符变更不能稳定代表字节篡改
+
+- Rule：加密完整性测试必须修改解码后的密文字节或认证标签字节，再重新编码；不能只替换编码字符串的末字符。
+- Why：Base64url 末字符可能含不参与解码的尾部位，也可能恰好与替换字符相同，导致 CI 偶发通过解密。
+- Feature：SETTINGS-001
+- Evidence：2026-11-18 主分支 CI run 44248190224 的失败断言；`test/model-credential-vault.test.ts` 的确定性标签篡改测试。
+- Seen：1（2026-11-18）
+- Severity：normal
+- Status：Observed
+- Enforcement：尚未晋升；测试已改为确定性字节篡改。
+- Owner / next action：后续出现同类问题时补充独立日期证据。
 
 <!--
 ### LESSON-YYYYMMDD-NN：简短标题
