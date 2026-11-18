@@ -216,6 +216,48 @@ describe('Pegas web app', () => {
     expect(screen.queryByRole('complementary', { name: '工作区' })).toBeNull()
   })
 
+  it('preserves composed text and failed drafts in the composer', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path =
+        input instanceof Request
+          ? input.url
+          : input instanceof URL
+            ? input.href
+            : input
+      if (init?.method === 'POST')
+        return Promise.resolve(
+          Response.json({ error: '发送失败，请重试' }, { status: 503 }),
+        )
+      if (path.startsWith('/v1/events'))
+        return Promise.resolve(Response.json({ events: [] }))
+      if (path.startsWith('/v1/tasks'))
+        return Promise.resolve(Response.json({ tasks: [] }))
+      if (path.startsWith('/v1/runs'))
+        return Promise.resolve(Response.json({ runs: [] }))
+      return Promise.resolve(Response.json({ messages: [] }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    const input = await screen.findByRole('textbox', {
+      name: '告诉 Pegas 你想完成什么',
+    })
+    const send = screen.getByRole('button', { name: '发送给 Pegas' })
+    expect(send).toHaveProperty('disabled', true)
+    fireEvent.change(input, { target: { value: '整理这个想法' } })
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true })
+    fireEvent.keyDown(input, { key: 'Enter', keyCode: 229 })
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: true })
+    expect(
+      fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST'),
+    ).toHaveLength(0)
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => expect(send).toHaveProperty('disabled', false))
+    expect(input).toHaveProperty('value', '整理这个想法')
+    expect(
+      fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST'),
+    ).toHaveLength(1)
+  })
+
   it('formats recent updates in conversational language', () => {
     const now = new Date('2026-11-16T10:00:00.000Z').getTime()
     expect(formatRelativeTime('2026-11-16T09:58:00.000Z', now)).toBe('2分钟前')

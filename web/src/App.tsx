@@ -1,4 +1,5 @@
 import {
+  ArrowUp,
   ArrowUpRight,
   Check,
   ChevronRight,
@@ -17,7 +18,6 @@ import {
   Plus,
   RotateCw,
   Search,
-  Send,
   Settings2,
   ShieldCheck,
   Sparkles,
@@ -478,7 +478,7 @@ export function App() {
                   void submitMessage()
                 }}
               >
-                <label htmlFor="message-composer">
+                <label className="sr-only" htmlFor="message-composer">
                   告诉 Pegas 你想完成什么
                 </label>
                 <textarea
@@ -487,32 +487,38 @@ export function App() {
                   value={draft}
                   onChange={event => setDraft(event.target.value)}
                   onKeyDown={handleComposerKeyDown}
-                  placeholder="提出一个问题、任务，或者刚想到的点子…"
+                  placeholder="和 Pegas 一起工作"
                   rows={2}
                   name="message"
                   aria-describedby="composer-hint"
                   disabled={sending || unauthorized}
                 />
                 <div className="composer-footer">
-                  <span className="composer-status" id="composer-hint">
-                    {dictation.state === 'requesting' && '正在请求麦克风…'}
-                    {dictation.state === 'recording' &&
-                      `正在听写 · ${formatDuration(dictation.elapsedSeconds)}`}
-                    {dictation.state === 'transcribing' && '正在转成文字…'}
-                    {dictation.state === 'idle' &&
-                      'Enter 发送 · Shift + Enter 换行'}
-                  </span>
-                  <div className="composer-actions">
+                  <div className="composer-tools">
                     <button
                       type="button"
                       className="attachment-button"
                       aria-label="添加附件"
+                      title="添加附件"
                       aria-expanded={attachmentHelpOpen}
                       onClick={() => setAttachmentHelpOpen(open => !open)}
                       disabled={sending || unauthorized}
                     >
                       <Plus aria-hidden="true" />
                     </button>
+                    <span className="composer-status" id="composer-hint">
+                      {dictation.state === 'requesting' && '正在请求麦克风…'}
+                      {dictation.state === 'recording' &&
+                        `正在听写 · ${formatDuration(dictation.elapsedSeconds)}`}
+                      {dictation.state === 'transcribing' && '正在转成文字…'}
+                      {dictation.state === 'idle' && (
+                        <span className="composer-shortcut">
+                          Shift + Enter 换行
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                  <div className="composer-actions">
                     <div className="dictation-control">
                       <button
                         type="button"
@@ -565,9 +571,9 @@ export function App() {
                       }
                     >
                       {sending ? (
-                        <span className="send-loader" />
+                        <span className="send-loader" aria-hidden="true" />
                       ) : (
-                        <Send aria-hidden="true" />
+                        <ArrowUp aria-hidden="true" />
                       )}
                     </button>
                   </div>
