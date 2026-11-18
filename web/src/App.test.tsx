@@ -141,11 +141,28 @@ describe('Pegas web app', () => {
       if (path === '/v1/settings/models/discover') {
         return Promise.resolve(
           Response.json({
-            models: [{ id: 'gpt-settings-test', name: 'Settings test' }],
+            models: [
+              { id: 'gpt-settings-test', name: 'Settings test' },
+              ...Array.from({ length: 163 }, (_, index) => ({
+                id: `model-${String(index)}`,
+                name: `Model ${String(index)}`,
+              })),
+              { id: 'company/fast', name: 'Company fast' },
+            ],
           }),
         )
       }
       if (path === '/v1/settings/models/test') {
+        if (parseRequestBody(init).modelName === 'gpt-5-mini')
+          return Promise.resolve(
+            Response.json(
+              {
+                message:
+                  'Model provider returned 404: magpie knows no model gpt-5-mini; available models: company/fast, gpt-settings-test, many others',
+              },
+              { status: 404 },
+            ),
+          )
         return Promise.resolve(Response.json({ ok: true, latencyMs: 42 }))
       }
       if (path.startsWith('/v1/events'))
@@ -193,9 +210,30 @@ describe('Pegas web app', () => {
       'secret-for-test',
     )
     fireEvent.click(screen.getByRole('button', { name: '获取模型列表' }))
-    expect(await screen.findByText('已获取 1 个模型')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: '测试模型' }))
-    expect(await screen.findByText('模型可用 · 42 ms')).toBeTruthy()
+    expect(await screen.findByText('已获取 165 个模型')).toBeTruthy()
+    fireEvent.change(
+      screen.getByRole('searchbox', { name: '搜索已获取模型' }),
+      {
+        target: { value: 'company' },
+      },
+    )
+    fireEvent.click(
+      screen.getByRole('button', { name: '选择模型 company/fast' }),
+    )
+    expect(
+      screen.getByLabelText<HTMLInputElement>('Router / 输入处理模型').value,
+    ).toBe('company/fast')
+    fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
+    expect(await screen.findByText('模型连接正常')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Router / 输入处理模型'), {
+      target: { value: 'gpt-5-mini' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
+    expect(await screen.findByText('找不到这个模型')).toBeTruthy()
+    expect(screen.queryByText(/magpie knows no model/)).toBeNull()
+    fireEvent.change(screen.getByLabelText('Router / 输入处理模型'), {
+      target: { value: 'company/fast' },
+    })
     fireEvent.click(screen.getByRole('radio', { name: /覆盖新 Agent session/ }))
     fireEvent.change(screen.getByLabelText('DSH provider 与模型'), {
       target: { value: 'magpie::agent-fast' },
@@ -213,7 +251,7 @@ describe('Pegas web app', () => {
     expect(parseRequestBody(put?.[1])).toMatchObject({
       expectedRevision: 1,
       modelProvider: 'custom',
-      modelName: 'gpt-settings-test',
+      modelName: 'company/fast',
       agentModelMode: 'override',
       agentModelProvider: 'magpie',
       agentModelName: 'agent-fast',

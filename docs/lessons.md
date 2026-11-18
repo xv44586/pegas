@@ -71,6 +71,18 @@
 - Enforcement：尚未晋升；本轮以容器查询修复，后续评估浏览器布局自动化。
 - Owner / next action：后续出现同类问题时补充独立日期证据。
 
+### LESSON-20261118-02：模型目录获取成功却无法选用
+
+- Rule：异步获取的选项需要实际点击或键盘选用路径，且失败反馈应提供用户下一步，不直接展示上游长错误。
+- Why：用户获取 165 个模型后无法从输入框选择，404 返回的供应商原文淹没设置页。
+- Feature：SETTINGS-001
+- Evidence：用户提供的模型设置截图；`web/src/App.test.tsx` 的大列表选择及 404 反馈回归。
+- Seen：1（2026-11-18）
+- Severity：normal
+- Status：Observed
+- Enforcement：尚未晋升；本轮以回归测试覆盖主要路径。
+- Owner / next action：后续出现同类问题时补充独立日期证据。
+
 <!--
 ### LESSON-YYYYMMDD-NN：简短标题
 

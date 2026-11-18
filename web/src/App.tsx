@@ -623,6 +623,54 @@ export function App() {
 }
 
 function SettingsPage({ api }: { api: SettingsClient }) {
+  interface ModelFeedback {
+    kind: 'success' | 'error' | 'info'
+    title: string
+    description: string
+  }
+  const modelFailure = (
+    caught: unknown,
+    action: 'discover' | 'test',
+  ): ModelFeedback => {
+    if (caught instanceof ApiError) {
+      if (caught.status === 404)
+        return action === 'test'
+          ? {
+              kind: 'error',
+              title: '找不到这个模型',
+              description: '检查模型 ID，或从已获取的模型列表中选择后重试。',
+            }
+          : {
+              kind: 'error',
+              title: '无法获取模型列表',
+              description: '该服务可能没有模型目录。仍可手动填写模型 ID。',
+            }
+      if (caught.status === 401 || caught.status === 403)
+        return {
+          kind: 'error',
+          title: '连接未获授权',
+          description:
+            '检查 API key 是否正确，以及当前账号是否有权限使用此模型。',
+        }
+      if (caught.status === 429)
+        return {
+          kind: 'error',
+          title: '请求过于频繁',
+          description: '稍后重试，或检查供应商的额度和限流设置。',
+        }
+      if (caught.status >= 500)
+        return {
+          kind: 'error',
+          title: '供应商暂时不可用',
+          description: '稍后重试；如果持续失败，请检查服务地址和供应商状态。',
+        }
+    }
+    return {
+      kind: 'error',
+      title: action === 'test' ? '模型测试未通过' : '模型列表获取失败',
+      description: '检查服务地址、网络与连接配置后重试。',
+    }
+  }
   const [section, setSection] = useState<
     'models' | 'routing' | 'rewrite' | 'privacy'
   >('models')
@@ -630,11 +678,15 @@ function SettingsPage({ api }: { api: SettingsClient }) {
   const [capabilities, setCapabilities] = useState<SettingsCapabilities>()
   const [providerDraft, setProviderDraft] = useState<ModelProviderDraft>()
   const [routerModels, setRouterModels] = useState<ModelCatalogItem[]>([])
+  const [modelSearch, setModelSearch] = useState('')
+  const [modelPickerOpen, setModelPickerOpen] = useState(false)
+  const [modelFeedback, setModelFeedback] = useState<ModelFeedback>()
+  const modelSearchRef = useRef<HTMLInputElement>(null)
+  const modelRequestRef = useRef(0)
   const [agentCatalog, setAgentCatalog] = useState<DshModelCatalog>()
   const [modelAction, setModelAction] = useState<
     'discovering' | 'testing' | undefined
   >()
-  const [modelStatus, setModelStatus] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -713,6 +765,20 @@ function SettingsPage({ api }: { api: SettingsClient }) {
     setSaved(false)
     setSettings(current => (current ? { ...current, [key]: value } : current))
   }
+  const resetModelLookup = () => {
+    modelRequestRef.current += 1
+    setModelAction(undefined)
+    setRouterModels([])
+    setModelSearch('')
+    setModelPickerOpen(false)
+    setModelFeedback(undefined)
+  }
+  const changeModelName = (name: string) => {
+    modelRequestRef.current += 1
+    setModelAction(undefined)
+    setModelFeedback(undefined)
+    update('modelName', name)
+  }
   const selectProvider = (id: ModelProviderId) => {
     const provider = capabilities?.providers.find(
       candidate => candidate.id === id,
@@ -730,13 +796,13 @@ function SettingsPage({ api }: { api: SettingsClient }) {
         : current,
     )
     setProviderDraft(providerDraftFrom(provider))
-    setRouterModels([])
-    setModelStatus('')
+    resetModelLookup()
   }
   const discoverModels = async () => {
     if (!settings || !providerDraft || modelAction) return
+    const requestId = ++modelRequestRef.current
     setModelAction('discovering')
-    setModelStatus('')
+    setModelFeedback(undefined)
     setError('')
     try {
       const models = await api.discoverModels(
@@ -744,22 +810,37 @@ function SettingsPage({ api }: { api: SettingsClient }) {
         settings.modelName,
         providerDraft,
       )
+      if (requestId !== modelRequestRef.current) return
       setRouterModels(models)
-      setModelStatus(
+      setModelSearch('')
+      setModelPickerOpen(models.length > 0)
+      setModelFeedback(
         models.length > 0
-          ? `已获取 ${String(models.length)} 个模型`
-          : '连接成功，但目录中没有可用模型',
+          ? {
+              kind: 'success',
+              title: `已获取 ${String(models.length)} 个模型`,
+              description: '从列表选择一个模型，或继续手动填写模型 ID。',
+            }
+          : {
+              kind: 'info',
+              title: '模型列表为空',
+              description: '该连接没有返回模型，仍可手动填写模型 ID。',
+            },
       )
+      if (models.length > 0)
+        window.requestAnimationFrame(() => modelSearchRef.current?.focus())
     } catch (caught) {
-      setModelStatus(caught instanceof Error ? caught.message : '模型获取失败')
+      if (requestId === modelRequestRef.current)
+        setModelFeedback(modelFailure(caught, 'discover'))
     } finally {
-      setModelAction(undefined)
+      if (requestId === modelRequestRef.current) setModelAction(undefined)
     }
   }
   const testSelectedModel = async () => {
     if (!settings || !providerDraft || modelAction) return
+    const requestId = ++modelRequestRef.current
     setModelAction('testing')
-    setModelStatus('')
+    setModelFeedback(undefined)
     setError('')
     try {
       const result = await api.testModel(
@@ -767,13 +848,28 @@ function SettingsPage({ api }: { api: SettingsClient }) {
         settings.modelName.trim(),
         providerDraft,
       )
-      setModelStatus(`模型可用 · ${String(result.latencyMs)} ms`)
+      if (requestId !== modelRequestRef.current) return
+      setModelFeedback({
+        kind: 'success',
+        title: '模型连接正常',
+        description: `已收到模型响应，耗时 ${String(result.latencyMs)} 毫秒。`,
+      })
     } catch (caught) {
-      setModelStatus(caught instanceof Error ? caught.message : '模型测试失败')
+      if (requestId === modelRequestRef.current)
+        setModelFeedback(modelFailure(caught, 'test'))
     } finally {
-      setModelAction(undefined)
+      if (requestId === modelRequestRef.current) setModelAction(undefined)
     }
   }
+  const filteredModels = routerModels.filter(model =>
+    `${model.id} ${model.name}`
+      .toLocaleLowerCase()
+      .includes(modelSearch.trim().toLocaleLowerCase()),
+  )
+  const shownModels = filteredModels.slice(0, 50)
+  const modelNotListed =
+    routerModels.length > 0 &&
+    !routerModels.some(model => model.id === settings?.modelName.trim())
   const selectedProvider = capabilities?.providers.find(
     provider => provider.id === settings?.modelProvider,
   )
@@ -933,6 +1029,7 @@ function SettingsPage({ api }: { api: SettingsClient }) {
                           name="providerName"
                           value={providerDraft.name}
                           onChange={event => {
+                            resetModelLookup()
                             setSaved(false)
                             setProviderDraft(current =>
                               current
@@ -950,6 +1047,7 @@ function SettingsPage({ api }: { api: SettingsClient }) {
                           name="providerProtocol"
                           value={providerDraft.protocol}
                           onChange={event => {
+                            resetModelLookup()
                             setDirty(true)
                             setSaved(false)
                             setProviderDraft(current =>
@@ -980,6 +1078,7 @@ function SettingsPage({ api }: { api: SettingsClient }) {
                       value={providerDraft.baseUrl}
                       readOnly={!customProvider}
                       onChange={event => {
+                        resetModelLookup()
                         setDirty(true)
                         setSaved(false)
                         setProviderDraft(current =>
@@ -1010,6 +1109,7 @@ function SettingsPage({ api }: { api: SettingsClient }) {
                               : '可选'
                         }
                         onChange={event => {
+                          resetModelLookup()
                           setDirty(true)
                           setSaved(false)
                           setProviderDraft(current =>
@@ -1034,6 +1134,7 @@ function SettingsPage({ api }: { api: SettingsClient }) {
                         type="button"
                         aria-pressed={providerDraft.clearApiKey}
                         onClick={() => {
+                          resetModelLookup()
                           setDirty(true)
                           setSaved(false)
                           setProviderDraft(current =>
@@ -1053,27 +1154,118 @@ function SettingsPage({ api }: { api: SettingsClient }) {
                       </button>
                     )}
                     <label htmlFor="model-name">Router / 输入处理模型</label>
-                    <input
-                      id="model-name"
-                      name="modelName"
-                      list="router-model-options"
-                      value={settings.modelName}
-                      onChange={event =>
-                        update('modelName', event.target.value)
-                      }
-                      autoCapitalize="none"
-                      autoCorrect="off"
-                      spellCheck={false}
-                      maxLength={160}
-                      required
-                    />
-                    <datalist id="router-model-options">
-                      {routerModels.map(model => (
-                        <option key={model.id} value={model.id}>
-                          {model.name}
-                        </option>
-                      ))}
-                    </datalist>
+                    <div className="model-input-row">
+                      <input
+                        id="model-name"
+                        name="modelName"
+                        value={settings.modelName}
+                        onChange={event => changeModelName(event.target.value)}
+                        aria-describedby="model-guidance"
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                        spellCheck={false}
+                        maxLength={160}
+                        required
+                      />
+                      {routerModels.length > 0 && (
+                        <button
+                          type="button"
+                          className="model-picker-toggle"
+                          aria-expanded={modelPickerOpen}
+                          aria-controls="router-model-picker"
+                          onClick={() => {
+                            setModelPickerOpen(open => !open)
+                            if (!modelPickerOpen)
+                              window.requestAnimationFrame(() =>
+                                modelSearchRef.current?.focus(),
+                              )
+                          }}
+                        >
+                          选择模型
+                          <ChevronRight aria-hidden="true" />
+                        </button>
+                      )}
+                    </div>
+                    {routerModels.length > 0 && (
+                      <div
+                        id="router-model-picker"
+                        className="model-picker-panel"
+                        hidden={!modelPickerOpen}
+                      >
+                        <div className="model-picker-head">
+                          <strong>
+                            {String(routerModels.length)} 个可选模型
+                          </strong>
+                          <span>选中后填入上方模型 ID</span>
+                        </div>
+                        <label htmlFor="router-model-search">
+                          搜索已获取模型
+                        </label>
+                        <div className="model-picker-search">
+                          <Search aria-hidden="true" />
+                          <input
+                            ref={modelSearchRef}
+                            id="router-model-search"
+                            name="modelSearch"
+                            type="search"
+                            value={modelSearch}
+                            onChange={event =>
+                              setModelSearch(event.target.value)
+                            }
+                            onKeyDown={event => {
+                              if (event.key === 'Enter') event.preventDefault()
+                              if (event.key === 'Escape') {
+                                event.preventDefault()
+                                setModelPickerOpen(false)
+                              }
+                            }}
+                            placeholder="按名称或 ID 查找"
+                            autoCapitalize="none"
+                            autoCorrect="off"
+                            spellCheck={false}
+                          />
+                        </div>
+                        <div
+                          className="model-picker-list"
+                          role="group"
+                          aria-label="可选模型"
+                        >
+                          {shownModels.map(model => (
+                            <button
+                              type="button"
+                              key={model.id}
+                              className={
+                                settings.modelName === model.id
+                                  ? 'is-selected'
+                                  : undefined
+                              }
+                              aria-label={`选择模型 ${model.id}`}
+                              onClick={() => {
+                                changeModelName(model.id)
+                                setModelPickerOpen(false)
+                                setModelSearch('')
+                              }}
+                            >
+                              <span>{model.name}</span>
+                              {model.name !== model.id && (
+                                <code>{model.id}</code>
+                              )}
+                              {settings.modelName === model.id && (
+                                <Check aria-hidden="true" />
+                              )}
+                            </button>
+                          ))}
+                          {filteredModels.length === 0 && (
+                            <p>没有匹配的模型。可直接在上方填写模型 ID。</p>
+                          )}
+                        </div>
+                        {filteredModels.length > shownModels.length && (
+                          <p className="model-picker-more">
+                            当前显示前 50 个结果，输入关键词可查找其余模型。
+                          </p>
+                        )}
+                      </div>
+                    )}
                     <div className="model-actions">
                       <button
                         type="button"
@@ -1082,7 +1274,9 @@ function SettingsPage({ api }: { api: SettingsClient }) {
                       >
                         {modelAction === 'discovering'
                           ? '正在获取…'
-                          : '获取模型列表'}
+                          : routerModels.length > 0
+                            ? '刷新模型列表'
+                            : '获取模型列表'}
                       </button>
                       <button
                         type="button"
@@ -1091,17 +1285,36 @@ function SettingsPage({ api }: { api: SettingsClient }) {
                           Boolean(modelAction) || !settings.modelName.trim()
                         }
                       >
-                        {modelAction === 'testing' ? '正在测试…' : '测试模型'}
+                        {modelAction === 'testing' ? '正在测试…' : '测试连接'}
                       </button>
                     </div>
-                    <p
-                      className="model-action-status"
-                      role="status"
-                      aria-live="polite"
-                    >
-                      {modelStatus ||
-                        '可手工输入，也可从当前连接读取模型目录。'}
+                    <p id="model-guidance" className="model-action-status">
+                      可手动填写模型 ID；获取列表后也可搜索选择。
                     </p>
+                    {modelNotListed && (
+                      <p className="model-mismatch">
+                        当前模型不在刚获取的列表中。请选择列表中的模型，或继续测试手填值。
+                      </p>
+                    )}
+                    {modelFeedback && (
+                      <div
+                        className={`model-feedback is-${modelFeedback.kind}`}
+                        role="status"
+                        aria-live="polite"
+                      >
+                        {modelFeedback.kind === 'success' ? (
+                          <CircleCheck aria-hidden="true" />
+                        ) : modelFeedback.kind === 'error' ? (
+                          <CircleAlert aria-hidden="true" />
+                        ) : (
+                          <Circle aria-hidden="true" />
+                        )}
+                        <div>
+                          <strong>{modelFeedback.title}</strong>
+                          <span>{modelFeedback.description}</span>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   <fieldset className="settings-choice-group agent-model-group">
