@@ -126,6 +126,7 @@ export function settingsCapabilities(
 export function parseRuntimeSettingsUpdate(
   value: unknown,
   capabilities: SettingsCapabilities,
+  rewriteConnectionAvailable = false,
 ): {
   expectedRevision: number
   settings: RuntimeSettingsSelection
@@ -211,7 +212,12 @@ export function parseRuntimeSettingsUpdate(
       : selected.hasApiKey
   const available =
     Boolean(provider.baseUrl) && (!selected.requiresApiKey || hasApiKey)
-  assertRuntimeSettingsAvailable(settings, capabilities, available)
+  assertRuntimeSettingsAvailable(
+    settings,
+    capabilities,
+    available,
+    rewriteConnectionAvailable,
+  )
   return { expectedRevision, settings, provider }
 }
 
@@ -219,12 +225,14 @@ export function assertRuntimeSettingsAvailable(
   settings: RuntimeSettingsSelection,
   capabilities: SettingsCapabilities,
   selectedProviderAvailable?: boolean,
+  rewriteConnectionAvailable = false,
 ): void {
   const provider = capabilities.providers.find(
     candidate => candidate.id === settings.modelProvider,
   )
   const requiresModel =
-    settings.routerMode === 'model' || settings.rewriteMode === 'light'
+    settings.routerMode === 'model' ||
+    (settings.rewriteMode === 'light' && !rewriteConnectionAvailable)
   if (
     requiresModel &&
     !(selectedProviderAvailable ?? provider?.available ?? false)

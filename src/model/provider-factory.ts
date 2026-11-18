@@ -6,6 +6,33 @@ import type { ModelCredentialVault } from './model-credential-vault.js'
 import { OpenAiCompatibleProvider } from './openai-compatible-provider.js'
 import type { JsonModelProvider } from './provider.js'
 import { modelProviderPreset } from './provider-catalog.js'
+import type { RewriteConnection } from '../rewrite/rewrite-settings.js'
+
+export function createRewriteModelProvider(
+  connection: RewriteConnection,
+  vault: ModelCredentialVault,
+  timeoutMs: number,
+): JsonModelProvider {
+  if (
+    connection.mode !== 'custom' ||
+    !connection.baseUrl ||
+    !connection.model
+  ) {
+    throw new Error('改写服务尚未配置')
+  }
+  const apiKey = connection.apiKeyCiphertext
+    ? vault.decrypt(connection.apiKeyCiphertext)
+    : undefined
+  const options = {
+    baseUrl: connection.baseUrl,
+    model: connection.model,
+    ...(apiKey ? { apiKey } : {}),
+    timeoutMs,
+  }
+  return connection.protocol === 'anthropic-messages'
+    ? new AnthropicProvider(options)
+    : new OpenAiCompatibleProvider(options)
+}
 
 export function createConfiguredModelProvider(
   settings: RuntimeSettings,

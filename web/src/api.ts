@@ -8,6 +8,7 @@ import type {
   RuntimeSettings,
   SettingsResponse,
   SpeechSettingsDraft,
+  RewriteSettingsDraft,
   Snapshot,
   Task,
 } from './types'
@@ -127,6 +128,7 @@ export class PegasApi {
     settings: RuntimeSettings,
     provider: ModelProviderDraft,
     speech?: SpeechSettingsDraft,
+    rewrite?: RewriteSettingsDraft,
   ): Promise<SettingsResponse> {
     const response = await fetch('/v1/settings', {
       method: 'PUT',
@@ -143,10 +145,43 @@ export class PegasApi {
         rewriteMode: settings.rewriteMode,
         provider,
         ...(speech ? { speech } : {}),
+        ...(rewrite ? { rewrite } : {}),
       }),
     })
     if (!response.ok) await throwResponse(response)
     return (await response.json()) as SettingsResponse
+  }
+
+  async testRewrite(
+    text: string,
+    rewrite: RewriteSettingsDraft,
+    settings: RuntimeSettings,
+    provider: ModelProviderDraft,
+  ): Promise<{
+    original: string
+    rewritten: string
+    changed: boolean
+    latencyMs: number
+  }> {
+    const response = await fetch('/v1/settings/rewrite/test', {
+      method: 'POST',
+      headers: this.#headers(true),
+      body: JSON.stringify({
+        text,
+        rewrite,
+        privacyMode: settings.privacyMode,
+        modelProvider: settings.modelProvider,
+        modelName: settings.modelName,
+        provider,
+      }),
+    })
+    if (!response.ok) await throwResponse(response)
+    return (await response.json()) as {
+      original: string
+      rewritten: string
+      changed: boolean
+      latencyMs: number
+    }
   }
 
   async discoverModels(

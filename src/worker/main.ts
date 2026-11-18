@@ -7,6 +7,7 @@ import type { RunExecutor } from '../executor/executor.js'
 import { loadModelCredentialVault } from '../model/model-credential-vault.js'
 import {
   createConfiguredModelProvider,
+  createRewriteModelProvider,
   initializeConfiguredModelProvider,
 } from '../model/provider-factory.js'
 import type { JsonModelProvider } from '../model/provider.js'
@@ -129,7 +130,20 @@ function createRouter(settings: RuntimeSettings): TaskRouter {
         })
       : new RuleBasedTaskRouter()
   if (settings.rewriteMode === 'disabled') return baseRouter
-  provider ??= createModelProvider(settings)
+  const rewriteConnection = store.getRewriteConnection()
+  if (rewriteConnection.mode === 'custom') {
+    const independent = createRewriteModelProvider(
+      rewriteConnection,
+      modelCredentialVault,
+      config.modelTimeoutMs,
+    )
+    provider =
+      settings.privacyMode === 'mask'
+        ? new PrivacyMaskingProvider(independent, createPrivacyMasker())
+        : independent
+  } else {
+    provider ??= createModelProvider(settings)
+  }
   return new RewritingTaskRouter(baseRouter, new ModelInputRewriter(provider))
 }
 

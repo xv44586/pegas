@@ -97,6 +97,62 @@ describe('PegasStore', () => {
     store.close()
   })
 
+  it('saves a rewrite connection with the settings revision and clears a key when its address changes', () => {
+    const store = new PegasStore(':memory:')
+    const settings = {
+      routerMode: 'rules' as const,
+      modelProvider: 'openai' as const,
+      modelName: 'router-model',
+      agentModelMode: 'profile' as const,
+      agentModelProvider: '',
+      agentModelName: '',
+      privacyMode: 'disabled' as const,
+      rewriteMode: 'light' as const,
+    }
+    store.initializeRuntimeSettings(settings)
+    const provider = {
+      id: 'openai' as const,
+      name: 'OpenAI',
+      protocol: 'openai-chat' as const,
+      baseUrl: 'https://api.openai.com/v1',
+      clearApiKey: false,
+    }
+    store.updateRuntimeSettingsAndProvider(1, settings, provider, undefined, {
+      mode: 'custom',
+      protocol: 'openai-chat',
+      baseUrl: 'https://one.example/v1',
+      model: 'rewrite-one',
+      apiKeyCiphertext: 'encrypted-one',
+      clearApiKey: false,
+    })
+    expect(store.getRewriteSettings()).toMatchObject({
+      mode: 'custom',
+      hasApiKey: true,
+    })
+    expect(() =>
+      store.updateRuntimeSettingsAndProvider(1, settings, provider, undefined, {
+        mode: 'custom',
+        protocol: 'openai-chat',
+        baseUrl: 'https://two.example/v1',
+        model: 'rewrite-two',
+        clearApiKey: false,
+      }),
+    ).toThrow('其他设备更新')
+    expect(store.getRewriteConnection().baseUrl).toBe('https://one.example/v1')
+    store.updateRuntimeSettingsAndProvider(2, settings, provider, undefined, {
+      mode: 'custom',
+      protocol: 'openai-chat',
+      baseUrl: 'https://two.example/v1',
+      model: 'rewrite-two',
+      clearApiKey: false,
+    })
+    expect(store.getRewriteSettings()).toMatchObject({
+      baseUrl: 'https://two.example/v1',
+      hasApiKey: false,
+    })
+    store.close()
+  })
+
   it('deduplicates source events without losing the original event', () => {
     const store = new PegasStore(':memory:')
     const input = {
@@ -427,7 +483,7 @@ describe('PegasStore', () => {
           .prepare('SELECT version FROM schema_migrations ORDER BY version')
           .all() as { version: number }[]
         expect(versions.map(row => row.version)).toEqual([
-          1, 2, 3, 4, 5, 6, 7, 8,
+          1, 2, 3, 4, 5, 6, 7, 8, 9,
         ])
         expect(
           (

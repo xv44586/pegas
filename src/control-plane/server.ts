@@ -21,6 +21,11 @@ import { OpenAiTranscriptionProvider } from '../speech/openai-transcription-prov
 import { parseSpeechConnectionUpdate } from '../speech/speech-settings.js'
 import { parseSpeechTestUpload } from '../speech/speech-test-upload.js'
 import { OpenAiCompatibleProvider } from '../model/openai-compatible-provider.js'
+import { ModelInputRewriter } from '../rewrite/model-input-rewriter.js'
+import { parseRewriteConnectionUpdate } from '../rewrite/rewrite-settings.js'
+import { DeterministicPrivacyMasker } from '../privacy/masker.js'
+import { PrivacyMaskingProvider } from '../privacy/provider.js'
+import type { JsonModelProvider } from '../model/provider.js'
 import {
   parseRuntimeSettingsUpdate,
   type SettingsCapabilities,
@@ -48,6 +53,7 @@ export interface ControlPlaneOptions {
   agentModelCatalog?: () => Promise<DshModelCatalog>
   modelTimeoutMs?: number
   speechTimeoutMs?: number
+  privacyHmacKey?: string
 }
 
 export function createControlPlane(options: ControlPlaneOptions): Server {
@@ -90,6 +96,13 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         return await testSpeechConnection(request, response, options)
       }
 
+      if (
+        request.url === '/v1/settings/rewrite/test' &&
+        request.method === 'POST'
+      ) {
+        return await testRewriteConnection(request, response, options)
+      }
+
       if (request.url === '/v1/settings' && request.method === 'GET') {
         const capabilities = resolveSettingsCapabilities(options)
         if (!capabilities) {
@@ -99,6 +112,7 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
           settings: options.store.getRuntimeSettings(),
           capabilities,
           speech: options.store.getSpeechSettings(),
+          rewrite: options.store.getRewriteSettings(),
         })
       }
 
@@ -108,7 +122,14 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
           return sendJson(response, 503, { error: 'settings_unavailable' })
         }
         const body = await readJson(request)
-        const update = parseRuntimeSettingsUpdate(body, capabilities)
+        const rewrite = parseRewriteConnectionUpdate(body)
+        const rewriteMode =
+          rewrite?.mode ?? options.store.getRewriteConnection().mode
+        const update = parseRuntimeSettingsUpdate(
+          body,
+          capabilities,
+          rewriteMode === 'custom',
+        )
         const speech = parseSpeechConnectionUpdate(body)
         try {
           const settings = options.store.updateRuntimeSettingsAndProvider(
@@ -143,11 +164,28 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
                   clearApiKey: speech.clearApiKey,
                 }
               : undefined,
+            rewrite
+              ? {
+                  mode: rewrite.mode,
+                  protocol: rewrite.protocol,
+                  baseUrl: rewrite.baseUrl,
+                  model: rewrite.model,
+                  ...(rewrite.apiKey
+                    ? {
+                        apiKeyCiphertext: options.modelCredentialVault.encrypt(
+                          rewrite.apiKey,
+                        ),
+                      }
+                    : {}),
+                  clearApiKey: rewrite.clearApiKey,
+                }
+              : undefined,
           )
           return sendJson(response, 200, {
             settings,
             capabilities: resolveSettingsCapabilities(options),
             speech: options.store.getSpeechSettings(),
+            rewrite: options.store.getRewriteSettings(),
           })
         } catch (error) {
           if (error instanceof SettingsRevisionConflictError) {
@@ -313,7 +351,9 @@ function modelProbeConnection(
   )
   const stored = options.store.getModelProviderConnection(update.provider.id)
   const storedApiKey =
-    !update.provider.clearApiKey && stored?.apiKeyCiphertext
+    !update.provider.clearApiKey &&
+    stored?.baseUrl === update.provider.baseUrl &&
+    stored.apiKeyCiphertext
       ? options.modelCredentialVault.decrypt(stored.apiKeyCiphertext)
       : undefined
   const apiKey = update.provider.apiKey ?? storedApiKey
@@ -323,6 +363,106 @@ function modelProbeConnection(
     modelName: update.settings.modelName,
     ...(apiKey ? { apiKey } : {}),
   }
+}
+
+async function testRewriteConnection(
+  request: IncomingMessage,
+  response: ServerResponse,
+  options: ControlPlaneOptions,
+): Promise<void> {
+  if (!options.modelCredentialVault)
+    return sendJson(response, 503, { error: 'settings_unavailable' })
+  const body = await readJson(request)
+  if (
+    !isRecord(body) ||
+    typeof body.text !== 'string' ||
+    !body.text.trim() ||
+    body.text.length > 4000
+  ) {
+    throw new Error('填写不超过 4000 字的测试文本')
+  }
+  const original = body.text.trim()
+  const rewrite = parseRewriteConnectionUpdate(body)
+  if (!rewrite) throw new Error('改写连接缺失')
+  const saved = options.store.getRewriteConnection()
+  let provider: JsonModelProvider
+  if (rewrite.mode === 'custom') {
+    const savedKey =
+      saved.mode === 'custom' &&
+      saved.baseUrl === rewrite.baseUrl &&
+      !rewrite.clearApiKey &&
+      saved.apiKeyCiphertext
+        ? options.modelCredentialVault.decrypt(saved.apiKeyCiphertext)
+        : undefined
+    const apiKey = rewrite.apiKey ?? savedKey
+    const providerOptions = {
+      baseUrl: rewrite.baseUrl,
+      model: rewrite.model,
+      ...(apiKey ? { apiKey } : {}),
+      timeoutMs: options.modelTimeoutMs ?? 15_000,
+    }
+    provider =
+      rewrite.protocol === 'anthropic-messages'
+        ? new AnthropicProvider(providerOptions)
+        : new OpenAiCompatibleProvider(providerOptions)
+  } else {
+    provider = modelProbeProvider(body, options)
+  }
+  const currentPrivacy = options.store.getRuntimeSettings().privacyMode
+  if (currentPrivacy === 'mask' || body.privacyMode === 'mask') {
+    if (!options.privacyHmacKey) throw new Error('隐私保护服务不可用')
+    provider = new PrivacyMaskingProvider(
+      provider,
+      new DeterministicPrivacyMasker({ hmacKey: options.privacyHmacKey }),
+    )
+  }
+  const started = performance.now()
+  try {
+    const rewritten = await new ModelInputRewriter(provider).testRewrite(
+      original,
+    )
+    return sendJson(response, 200, {
+      original,
+      rewritten,
+      changed: rewritten !== original,
+      latencyMs: Math.round(performance.now() - started),
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : ''
+    const status = /(?:returned|返回)\s+(401|403|404|429|5\d\d)\b/.exec(
+      message,
+    )?.[1]
+    const guidance =
+      status === '401' || status === '403'
+        ? '密钥无效或没有模型权限'
+        : status === '404'
+          ? '找不到接口或模型，请检查服务地址和模型 ID'
+          : status === '429'
+            ? '请求过于频繁，请稍后重试或检查额度'
+            : status?.startsWith('5')
+              ? '服务暂时不可用，请稍后重试'
+              : '改写测试失败，请检查地址、模型和网络'
+    return sendJson(response, 400, {
+      error: 'rewrite_test_failed',
+      message: guidance,
+    })
+  }
+}
+
+function modelProbeProvider(
+  value: unknown,
+  options: ControlPlaneOptions,
+): JsonModelProvider {
+  const connection = modelProbeConnection(value, options)
+  const providerOptions = {
+    baseUrl: connection.baseUrl,
+    model: connection.modelName,
+    ...(connection.apiKey ? { apiKey: connection.apiKey } : {}),
+    timeoutMs: options.modelTimeoutMs ?? 15_000,
+  }
+  return connection.protocol === 'anthropic-messages'
+    ? new AnthropicProvider(providerOptions)
+    : new OpenAiCompatibleProvider(providerOptions)
 }
 
 function resolveSettingsCapabilities(

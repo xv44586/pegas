@@ -28,6 +28,138 @@ async function startJsonServer(
 }
 
 describe('control plane', () => {
+  it('tests a draft rewrite connection without saving it or creating an event', async () => {
+    let receivedAuthorization = ''
+    let upstreamStatus = 200
+    const upstream = createServer((request, response) => {
+      receivedAuthorization = request.headers.authorization ?? ''
+      request.resume()
+      response.setHeader('content-type', 'application/json')
+      if (upstreamStatus !== 200) {
+        response.statusCode = upstreamStatus
+        response.end('upstream private diagnostic')
+        return
+      }
+      response.end(
+        JSON.stringify({
+          choices: [{ message: { content: '{"text":"请安排明天的会议。"}' } }],
+        }),
+      )
+    })
+    await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve))
+    const upstreamPort = (upstream.address() as AddressInfo).port
+    const store = new PegasStore(':memory:')
+    store.initializeRuntimeSettings({
+      routerMode: 'rules',
+      modelProvider: 'openai',
+      modelName: 'unused',
+      agentModelMode: 'profile',
+      agentModelProvider: '',
+      agentModelName: '',
+      privacyMode: 'disabled',
+      rewriteMode: 'disabled',
+    })
+    const vault = new ModelCredentialVault(Buffer.alloc(32, 9))
+    const server = createControlPlane({
+      store,
+      modelCredentialVault: vault,
+      settingsCapabilities: settingsCapabilities(loadConfig()),
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    cleanups.push(
+      () => new Promise<void>(resolve => server.close(() => resolve())),
+      () => new Promise<void>(resolve => upstream.close(() => resolve())),
+      () => Promise.resolve(store.close()),
+    )
+    const base = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+    const result = await fetch(`${base}/v1/settings/rewrite/test`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        text: '呃，请安排明天的会议',
+        rewrite: {
+          mode: 'custom',
+          protocol: 'openai-chat',
+          baseUrl: `http://127.0.0.1:${String(upstreamPort)}/v1`,
+          model: 'rewrite-test',
+          apiKey: 'probe-credential',
+          clearApiKey: false,
+        },
+      }),
+    })
+    expect(result.status).toBe(200)
+    expect(await result.json()).toMatchObject({
+      original: '呃，请安排明天的会议',
+      rewritten: '请安排明天的会议。',
+      changed: true,
+    })
+    expect(receivedAuthorization).toBe('Bearer probe-credential')
+    expect(store.getRuntimeSettings().revision).toBe(1)
+    expect(store.listEvents('owner')).toEqual([])
+    upstreamStatus = 401
+    const failed = await fetch(`${base}/v1/settings/rewrite/test`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        text: '请安排会议',
+        rewrite: {
+          mode: 'custom',
+          protocol: 'openai-chat',
+          baseUrl: `http://127.0.0.1:${String(upstreamPort)}/v1`,
+          model: 'rewrite-test',
+          apiKey: 'probe-credential',
+          clearApiKey: false,
+        },
+      }),
+    })
+    expect(failed.status).toBe(400)
+    const failedText = await failed.text()
+    expect(failedText).toContain('密钥无效')
+    expect(failedText).not.toContain('upstream private diagnostic')
+    expect(failedText).not.toContain('probe-credential')
+    upstreamStatus = 200
+    store.updateRuntimeSettingsAndProvider(
+      1,
+      store.getRuntimeSettings(),
+      {
+        id: 'openai',
+        name: 'OpenAI',
+        protocol: 'openai-chat',
+        baseUrl: 'https://api.openai.com/v1',
+        clearApiKey: false,
+      },
+      undefined,
+      {
+        mode: 'custom',
+        protocol: 'openai-chat',
+        baseUrl: `http://127.0.0.1:${String(upstreamPort)}/old`,
+        model: 'saved-model',
+        apiKeyCiphertext: vault.encrypt('saved-credential'),
+        clearApiKey: false,
+      },
+    )
+    const differentTarget = await fetch(`${base}/v1/settings/rewrite/test`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        text: '呃，请安排明天的会议',
+        rewrite: {
+          mode: 'custom',
+          protocol: 'openai-chat',
+          baseUrl: `http://127.0.0.1:${String(upstreamPort)}/v1`,
+          model: 'rewrite-test',
+          clearApiKey: false,
+        },
+      }),
+    })
+    expect(differentTarget.status).toBe(200)
+    expect(receivedAuthorization).toBe('')
+    const settingsResponse = await fetch(`${base}/v1/settings`)
+    const settingsText = await settingsResponse.text()
+    expect(settingsText).toContain('"hasApiKey":true')
+    expect(settingsText).not.toContain('saved-credential')
+  })
+
   it('reads and atomically updates server-authoritative runtime settings', async () => {
     const store = new PegasStore(':memory:')
     store.initializeRuntimeSettings({

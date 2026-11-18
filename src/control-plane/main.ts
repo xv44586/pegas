@@ -44,6 +44,7 @@ const server = createControlPlane({
   settingsCapabilities: capabilities,
   modelCredentialVault,
   modelTimeoutMs: config.modelTimeoutMs,
+  ...(config.privacyHmacKey ? { privacyHmacKey: config.privacyHmacKey } : {}),
   agentModelCatalog: () =>
     loadDshModelCatalog({
       command: config.dshCommand,

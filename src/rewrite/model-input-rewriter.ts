@@ -13,18 +13,24 @@ export class ModelInputRewriter implements InputRewriter {
 
   async rewrite(text: string): Promise<string> {
     try {
-      const value = await this.#provider.generateJson({
-        system: rewriteSystemPrompt,
-        input: text,
-        schema: rewriteSchema,
-      })
-      if (!isRecord(value) || typeof value.text !== 'string') return text
-      const rewritten = value.text.trim()
-      if (!rewritten || rewritten.length > 20_000) return text
-      return rewritten
+      return await this.testRewrite(text)
     } catch {
       return text
     }
+  }
+
+  async testRewrite(text: string): Promise<string> {
+    const value = await this.#provider.generateJson({
+      system: rewriteSystemPrompt,
+      input: text,
+      schema: rewriteSchema,
+    })
+    if (!isRecord(value) || typeof value.text !== 'string')
+      throw new Error('改写模型返回无效结果')
+    const rewritten = value.text.trim()
+    if (!rewritten || rewritten.length > 20_000)
+      throw new Error('改写模型返回无效结果')
+    return rewritten
   }
 }
 
