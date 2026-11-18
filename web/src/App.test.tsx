@@ -75,24 +75,44 @@ describe('Pegas web app', () => {
 
     expect(
       await screen.findByRole('heading', {
-        name: '让 Pegas 按你的方式工作',
+        name: '偏好设置',
         level: 2,
       }),
     ).toBeTruthy()
-    expect(
-      screen.getByRole('heading', { name: '语音输入', level: 3 }),
-    ).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: '语音输入' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '刷新' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '打开工作区' })).toBeNull()
+    expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual([
+      '模型',
+      '任务路由',
+      '语音与输入',
+      '隐私',
+    ])
+    fireEvent.keyDown(screen.getByRole('tab', { name: '模型' }), {
+      key: 'ArrowRight',
+    })
+    expect(screen.getByRole('tab', { name: '任务路由' })).toHaveProperty(
+      'tabIndex',
+      0,
+    )
+    expect(screen.getByRole('radio', { name: /智能归类/ })).toBeTruthy()
+    fireEvent.keyDown(screen.getByRole('tab', { name: '任务路由' }), {
+      key: 'Home',
+    })
     expect(
       screen.getByRole('radio', { name: /OpenAI-compatible/ }),
     ).toHaveProperty('disabled', true)
     fireEvent.change(screen.getByRole('textbox', { name: /对应模型/ }), {
       target: { value: 'gpt-settings-test' },
     })
+    fireEvent.click(screen.getByRole('tab', { name: '语音与输入' }))
+    expect(screen.getByRole('heading', { name: '语音输入' })).toBeTruthy()
     fireEvent.click(screen.getByRole('radio', { name: /轻量校正/ }))
+    fireEvent.click(screen.getByRole('tab', { name: '隐私' }))
     fireEvent.click(screen.getByRole('radio', { name: /开启脱敏/ }))
     fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
 
-    expect(await screen.findByText('已保存 · revision 2')).toBeTruthy()
+    expect(await screen.findByText('设置已保存')).toBeTruthy()
     const put = fetchMock.mock.calls.find(
       ([path, init]) => path === '/v1/settings' && init?.method === 'PUT',
     )
@@ -212,6 +232,10 @@ describe('Pegas web app', () => {
     )
     expect(screen.getByRole('complementary', { name: '工作区' })).toBeTruthy()
     expect(screen.getByRole('heading', { name: '整理发布说明' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '设置' }))
+    expect(screen.queryByRole('complementary', { name: '工作区' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '任务' }))
+    expect(screen.getByRole('complementary', { name: '工作区' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '关闭工作区' }))
     expect(screen.queryByRole('complementary', { name: '工作区' })).toBeNull()
   })

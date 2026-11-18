@@ -102,6 +102,7 @@ export function App() {
   const [sending, setSending] = useState(false)
   const [activeView, setActiveView] = useState<AppView>(viewFromUrl)
   const [workspaceOpen, setWorkspaceOpen] = useState(Boolean(initialTaskId))
+  const workspaceVisible = workspaceOpen && activeView !== 'settings'
   const [selectedTaskId, setSelectedTaskId] = useState(initialTaskId)
   const [attachmentHelpOpen, setAttachmentHelpOpen] = useState(false)
   const feedEnd = useRef<HTMLDivElement>(null)
@@ -283,15 +284,15 @@ export function App() {
   }
 
   return (
-    <div className={`app-shell${workspaceOpen ? ' has-workspace' : ''}`}>
+    <div className={`app-shell${workspaceVisible ? ' has-workspace' : ''}`}>
       <a className="skip-link" href="#page-title">
         跳到主要内容
       </a>
       <aside
         className="identity-rail"
         aria-label="Pegas 导航"
-        aria-hidden={compact && workspaceOpen ? true : undefined}
-        inert={compact && workspaceOpen ? true : undefined}
+        aria-hidden={compact && workspaceVisible ? true : undefined}
+        inert={compact && workspaceVisible ? true : undefined}
       >
         <button
           className="pegas-mark"
@@ -345,8 +346,8 @@ export function App() {
 
       <main
         className="main-column"
-        aria-hidden={compact && workspaceOpen ? true : undefined}
-        inert={compact && workspaceOpen ? true : undefined}
+        aria-hidden={compact && workspaceVisible ? true : undefined}
+        inert={compact && workspaceVisible ? true : undefined}
       >
         <header className="conversation-header page-header">
           <div className="identity-copy">
@@ -372,29 +373,31 @@ export function App() {
               </span>
             </div>
           </div>
-          <div className="header-actions">
-            <button
-              className="icon-button"
-              aria-label="刷新"
-              title="刷新"
-              onClick={() => void loadSnapshot()}
-              disabled={refreshing}
-            >
-              <RotateCw
-                className={refreshing ? 'is-spinning' : ''}
-                aria-hidden="true"
-              />
-            </button>
-            <button
-              className="workspace-toggle"
-              aria-label="打开工作区"
-              aria-expanded={workspaceOpen}
-              onClick={openWorkspace}
-            >
-              <PanelRightOpen aria-hidden="true" />
-              <span>工作区</span>
-            </button>
-          </div>
+          {activeView !== 'settings' && (
+            <div className="header-actions">
+              <button
+                className="icon-button"
+                aria-label="刷新"
+                title="刷新"
+                onClick={() => void loadSnapshot()}
+                disabled={refreshing}
+              >
+                <RotateCw
+                  className={refreshing ? 'is-spinning' : ''}
+                  aria-hidden="true"
+                />
+              </button>
+              <button
+                className="workspace-toggle"
+                aria-label="打开工作区"
+                aria-expanded={workspaceOpen}
+                onClick={openWorkspace}
+              >
+                <PanelRightOpen aria-hidden="true" />
+                <span>工作区</span>
+              </button>
+            </div>
+          )}
         </header>
 
         <div className="notice-stack">
@@ -603,7 +606,7 @@ export function App() {
       </main>
 
       <WorkspacePanel
-        open={workspaceOpen}
+        open={workspaceVisible}
         selectedTask={selectedTask}
         runs={
           selectedTask
@@ -617,7 +620,17 @@ export function App() {
   )
 }
 
+const settingsTabs = [
+  { id: 'model', label: '模型' },
+  { id: 'routing', label: '任务路由' },
+  { id: 'input', label: '语音与输入' },
+  { id: 'privacy', label: '隐私' },
+] as const
+
+type SettingsTab = (typeof settingsTabs)[number]['id']
+
 function SettingsPage({ api }: { api: SettingsClient }) {
+  const [activeTab, setActiveTab] = useState<SettingsTab>('model')
   const [settings, setSettings] = useState<RuntimeSettings>()
   const [capabilities, setCapabilities] = useState<SettingsCapabilities>()
   const [loading, setLoading] = useState(true)
@@ -681,29 +694,10 @@ function SettingsPage({ api }: { api: SettingsClient }) {
       <header className="settings-header">
         <div>
           <p className="page-eyebrow">SYSTEM PREFERENCES</p>
-          <h2 id="runtime-settings-title">让 Pegas 按你的方式工作</h2>
-          <p>模型凭证和权威配置仍保留在服务端，Web 只修改允许公开的偏好。</p>
+          <h2 id="runtime-settings-title">偏好设置</h2>
+          <p>选择模型，调整 Pegas 理解和处理任务的方式。</p>
         </div>
       </header>
-
-      <section
-        className="voice-settings-card"
-        aria-labelledby="voice-settings-title"
-      >
-        <div className="settings-card-icon">
-          <Mic aria-hidden="true" />
-        </div>
-        <div>
-          <h3 id="voice-settings-title">语音输入</h3>
-          <p>在对话输入框中录音，转成可编辑文字后再由你确认发送。</p>
-        </div>
-        <span>
-          {'mediaDevices' in navigator &&
-          typeof navigator.mediaDevices.getUserMedia === 'function'
-            ? '浏览器可用'
-            : '浏览器不支持'}
-        </span>
-      </section>
 
       {loading ? (
         <div className="settings-loading" aria-label="正在读取设置">
@@ -717,133 +711,207 @@ function SettingsPage({ api }: { api: SettingsClient }) {
           aria-labelledby="runtime-settings-title"
           onSubmit={event => void save(event)}
         >
+          <div className="settings-tabs" role="tablist" aria-label="设置分类">
+            {settingsTabs.map((tab, index) => (
+              <button
+                type="button"
+                role="tab"
+                id={`settings-tab-${tab.id}`}
+                key={tab.id}
+                aria-selected={activeTab === tab.id}
+                tabIndex={activeTab === tab.id ? 0 : -1}
+                onClick={() => setActiveTab(tab.id)}
+                onKeyDown={event => {
+                  let next: number
+                  if (event.key === 'ArrowRight')
+                    next = (index + 1) % settingsTabs.length
+                  else if (event.key === 'ArrowLeft')
+                    next =
+                      (index + settingsTabs.length - 1) % settingsTabs.length
+                  else if (event.key === 'Home') next = 0
+                  else if (event.key === 'End') next = settingsTabs.length - 1
+                  else return
+                  event.preventDefault()
+                  const nextTab = settingsTabs[next]
+                  if (!nextTab) return
+                  setActiveTab(nextTab.id)
+                  document.getElementById(`settings-tab-${nextTab.id}`)?.focus()
+                }}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
           <div className="settings-scroll">
-            <fieldset>
-              <legend>任务路由</legend>
-              <p>决定一条新消息是继续已有任务，还是创建新的任务。</p>
-              <SettingChoice
-                name="router-mode"
-                value="model"
-                checked={settings.routerMode === 'model'}
-                title="智能归类"
-                description="由所选模型判断任务归属，不确定时安全地新建任务。"
-                onChange={() => update('routerMode', 'model')}
-              />
-              <SettingChoice
-                name="router-mode"
-                value="rules"
-                checked={settings.routerMode === 'rules'}
-                title="确定性规则"
-                description="只有明确指定任务时才续接，其余消息一律新建任务。"
-                onChange={() => update('routerMode', 'rules')}
-              />
-            </fieldset>
-
-            <fieldset>
-              <legend>模型服务</legend>
-              <p>
-                Provider 的地址与凭证由服务端管理，浏览器只选择已配置的入口。
-              </p>
-              {capabilities.providers.map(provider => (
-                <SettingChoice
-                  key={provider.id}
-                  name="model-provider"
-                  value={provider.id}
-                  checked={settings.modelProvider === provider.id}
-                  title={
-                    provider.id === 'codex-cli'
+            <div
+              role="tabpanel"
+              id="settings-panel-model"
+              aria-labelledby="settings-tab-model"
+              hidden={activeTab !== 'model'}
+            >
+              <fieldset disabled={saving}>
+                <legend>模型服务</legend>
+                <p>
+                  Provider 的地址与凭证由服务端管理，浏览器只选择已配置的入口。
+                </p>
+                {capabilities.providers.map(provider => (
+                  <SettingChoice
+                    key={provider.id}
+                    name="model-provider"
+                    value={provider.id}
+                    checked={settings.modelProvider === provider.id}
+                    title={
+                      provider.id === 'codex-cli'
+                        ? 'Codex 登录态'
+                        : 'OpenAI-compatible'
+                    }
+                    description={
+                      provider.reason ??
+                      (provider.id === 'codex-cli'
+                        ? '复用本机 Codex CLI 登录态。'
+                        : '使用服务端配置的兼容 API。')
+                    }
+                    disabled={!provider.available}
+                    onChange={() => update('modelProvider', provider.id)}
+                  />
+                ))}
+                <label className="settings-text-field" htmlFor="model-name">
+                  <span>对应模型</span>
+                  <input
+                    id="model-name"
+                    name="modelName"
+                    value={settings.modelName}
+                    onChange={event => update('modelName', event.target.value)}
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    maxLength={120}
+                    required
+                  />
+                  <small>
+                    当前 Provider：
+                    {settings.modelProvider === 'codex-cli'
                       ? 'Codex 登录态'
-                      : 'OpenAI-compatible'
-                  }
+                      : 'OpenAI-compatible'}
+                  </small>
+                </label>
+              </fieldset>
+            </div>
+            <div
+              role="tabpanel"
+              id="settings-panel-routing"
+              aria-labelledby="settings-tab-routing"
+              hidden={activeTab !== 'routing'}
+            >
+              <fieldset disabled={saving}>
+                <legend>任务路由</legend>
+                <p>决定一条新消息是继续已有任务，还是创建新的任务。</p>
+                <SettingChoice
+                  name="router-mode"
+                  value="model"
+                  checked={settings.routerMode === 'model'}
+                  title="智能归类"
+                  description="由所选模型判断任务归属，不确定时安全地新建任务。"
+                  onChange={() => update('routerMode', 'model')}
+                />
+                <SettingChoice
+                  name="router-mode"
+                  value="rules"
+                  checked={settings.routerMode === 'rules'}
+                  title="确定性规则"
+                  description="只有明确指定任务时才续接，其余消息一律新建任务。"
+                  onChange={() => update('routerMode', 'rules')}
+                />
+              </fieldset>
+            </div>
+            <div
+              role="tabpanel"
+              id="settings-panel-input"
+              aria-labelledby="settings-tab-input"
+              hidden={activeTab !== 'input'}
+            >
+              <section
+                className="voice-settings-card"
+                aria-labelledby="voice-settings-title"
+              >
+                <div className="settings-card-icon">
+                  <Mic aria-hidden="true" />
+                </div>
+                <div>
+                  <h3 id="voice-settings-title">语音输入</h3>
+                  <p>在对话输入框中录音，转成可编辑文字后再由你确认发送。</p>
+                </div>
+                <span>
+                  {'mediaDevices' in navigator &&
+                  typeof navigator.mediaDevices.getUserMedia === 'function'
+                    ? '浏览器可用'
+                    : '浏览器不支持'}
+                </span>
+              </section>
+
+              <fieldset disabled={saving}>
+                <legend>输入改写</legend>
+                <p>
+                  改写只影响发送给 Router 与 Executor
+                  的执行视图，不覆盖对话原文。
+                </p>
+                <SettingChoice
+                  name="rewrite-mode"
+                  value="light"
+                  checked={settings.rewriteMode === 'light'}
+                  title="轻量校正"
+                  description="修正明显的语音识别错误、口头语和标点，不补充事实或回答问题。"
+                  onChange={() => update('rewriteMode', 'light')}
+                />
+                <SettingChoice
+                  name="rewrite-mode"
+                  value="disabled"
+                  checked={settings.rewriteMode === 'disabled'}
+                  title="保持原文"
+                  description="Router 与 Executor 直接使用用户发送的文字。"
+                  onChange={() => update('rewriteMode', 'disabled')}
+                />
+              </fieldset>
+            </div>
+            <div
+              role="tabpanel"
+              id="settings-panel-privacy"
+              aria-labelledby="settings-tab-privacy"
+              hidden={activeTab !== 'privacy'}
+            >
+              <fieldset disabled={saving}>
+                <legend>模型出站脱敏</legend>
+                <p>
+                  在内容离开 Pegas Worker 前替换高置信度敏感值，返回后再恢复。
+                </p>
+                <SettingChoice
+                  name="privacy-mode"
+                  value="mask"
+                  checked={settings.privacyMode === 'mask'}
+                  title="开启脱敏"
                   description={
-                    provider.reason ??
-                    (provider.id === 'codex-cli'
-                      ? '复用本机 Codex CLI 登录态。'
-                      : '使用服务端配置的兼容 API。')
+                    capabilities.privacyAvailable
+                      ? '保护密钥、密码、邮箱和手机号；原文仍保留在本地权威记录。'
+                      : '服务端尚未配置隐私 HMAC key。'
                   }
-                  disabled={!provider.available}
-                  onChange={() => update('modelProvider', provider.id)}
+                  disabled={!capabilities.privacyAvailable}
+                  onChange={() => update('privacyMode', 'mask')}
                 />
-              ))}
-              <label className="settings-text-field" htmlFor="model-name">
-                <span>对应模型</span>
-                <input
-                  id="model-name"
-                  name="modelName"
-                  value={settings.modelName}
-                  onChange={event => update('modelName', event.target.value)}
-                  autoCapitalize="none"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  maxLength={120}
-                  required
+                <SettingChoice
+                  name="privacy-mode"
+                  value="disabled"
+                  checked={settings.privacyMode === 'disabled'}
+                  title="关闭脱敏"
+                  description="保持原有出站行为。适合完全受控的本地模型链路。"
+                  onChange={() => update('privacyMode', 'disabled')}
                 />
-                <small>
-                  当前 Provider：
-                  {settings.modelProvider === 'codex-cli'
-                    ? 'Codex 登录态'
-                    : 'OpenAI-compatible'}
-                </small>
-              </label>
-            </fieldset>
-
-            <fieldset>
-              <legend>模型出站脱敏</legend>
-              <p>
-                在内容离开 Pegas Worker 前替换高置信度敏感值，返回后再恢复。
-              </p>
-              <SettingChoice
-                name="privacy-mode"
-                value="mask"
-                checked={settings.privacyMode === 'mask'}
-                title="开启脱敏"
-                description={
-                  capabilities.privacyAvailable
-                    ? '保护密钥、密码、邮箱和手机号；原文仍保留在本地权威记录。'
-                    : '服务端尚未配置隐私 HMAC key。'
-                }
-                disabled={!capabilities.privacyAvailable}
-                onChange={() => update('privacyMode', 'mask')}
-              />
-              <SettingChoice
-                name="privacy-mode"
-                value="disabled"
-                checked={settings.privacyMode === 'disabled'}
-                title="关闭脱敏"
-                description="保持原有出站行为。适合完全受控的本地模型链路。"
-                onChange={() => update('privacyMode', 'disabled')}
-              />
-            </fieldset>
-
-            <fieldset>
-              <legend>输入改写</legend>
-              <p>
-                改写只影响发送给 Router 与 Executor 的执行视图，不覆盖对话原文。
-              </p>
-              <SettingChoice
-                name="rewrite-mode"
-                value="light"
-                checked={settings.rewriteMode === 'light'}
-                title="轻量校正"
-                description="修正明显的语音识别错误、口头语和标点，不补充事实或回答问题。"
-                onChange={() => update('rewriteMode', 'light')}
-              />
-              <SettingChoice
-                name="rewrite-mode"
-                value="disabled"
-                checked={settings.rewriteMode === 'disabled'}
-                title="保持原文"
-                description="Router 与 Executor 直接使用用户发送的文字。"
-                onChange={() => update('rewriteMode', 'disabled')}
-              />
-            </fieldset>
+              </fieldset>
+            </div>
           </div>
 
           <footer className="settings-footer">
             <div aria-live="polite" role="status">
-              {saved
-                ? `已保存 · revision ${String(settings.revision)}`
-                : `服务端设置 · revision ${String(settings.revision)}`}
+              {saved ? '设置已保存' : '修改后保存，对后续任务生效'}
             </div>
             <button
               type="submit"
