@@ -15,6 +15,7 @@ export interface WorkChannel {
   title: string
   goal: string
   status: TaskStatus
+  workerIconId: Task['workerIconId']
   statusReason?: string
   createdAt: string
   updatedAt: string
@@ -36,6 +37,7 @@ export function projectWorkChannel(task: Task): WorkChannel {
     title: task.title,
     goal: task.goal,
     status: task.status,
+    workerIconId: task.workerIconId,
     ...(task.statusReason ? { statusReason: task.statusReason } : {}),
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,

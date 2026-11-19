@@ -86,13 +86,42 @@ ${definition.content}
 `
 }
 
+function renderSprite() {
+  const symbols = iconDefinitions
+    .map(
+      definition => `  <symbol id="pegas-agent-${definition.name}" viewBox="0 0 64 64">
+    <rect width="64" height="64" rx="14" fill="var(--pegas-icon-background, #5b6ff5)"/>
+${definition.content
+  .split('\n')
+  .map(line => `  ${line}`)
+  .join('\n')}
+  </symbol>`,
+    )
+    .join('\n')
+
+  return `<svg xmlns="http://www.w3.org/2000/svg">
+${symbols}
+</svg>
+`
+}
+
+function generatedFiles() {
+  return [
+    ...iconDefinitions.map(definition => ({
+      fileName: `pegas-${definition.name}.svg`,
+      content: renderIcon(definition),
+    })),
+    { fileName: 'pegas-agents.svg', content: renderSprite() },
+  ]
+}
+
 async function checkGeneratedIcons() {
   const failures = []
 
-  for (const definition of iconDefinitions) {
-    const fileName = `pegas-${definition.name}.svg`
+  for (const generated of generatedFiles()) {
+    const { fileName } = generated
     const outputPath = path.join(outputDirectory, fileName)
-    const expected = renderIcon(definition)
+    const expected = generated.content
 
     try {
       const actual = await readFile(outputPath, 'utf8')
@@ -121,22 +150,22 @@ async function checkGeneratedIcons() {
   }
 
   console.log(
-    `Agent icon check passed: ${iconDefinitions.length} generated SVG files are current.`,
+    `Agent icon check passed: ${generatedFiles().length} generated SVG files are current.`,
   )
 }
 
 async function generateIcons() {
   await mkdir(outputDirectory, { recursive: true })
   await Promise.all(
-    iconDefinitions.map(definition =>
+    generatedFiles().map(generated =>
       writeFile(
-        path.join(outputDirectory, `pegas-${definition.name}.svg`),
-        renderIcon(definition),
+        path.join(outputDirectory, generated.fileName),
+        generated.content,
       ),
     ),
   )
   console.log(
-    `Generated ${iconDefinitions.length} Agent icons in ${path.relative(repositoryRoot, outputDirectory)}.`,
+    `Generated ${generatedFiles().length} Agent icon files in ${path.relative(repositoryRoot, outputDirectory)}.`,
   )
 }
 

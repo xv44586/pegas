@@ -160,6 +160,7 @@ function task(
     title,
     goal: title,
     status,
+    workerIconId: 'computer',
     mandate: {
       strength: 'explicit',
       policyVersion: 'pegas-mandate-v1',

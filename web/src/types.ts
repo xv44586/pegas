@@ -1,6 +1,8 @@
 export type TaskStatus =
   'backlog' | 'unstarted' | 'started' | 'completed' | 'cancelled'
 
+export type WorkerIconId = 'car' | 'camera' | 'computer' | 'phone'
+
 export interface Task {
   id: string
   userId: string
@@ -8,6 +10,7 @@ export interface Task {
   title: string
   goal: string
   status: TaskStatus
+  workerIconId?: WorkerIconId
   statusReason?: string
   mandate?: {
     strength: 'explicit' | 'inferred'
@@ -27,6 +30,7 @@ export interface Task {
 
 export interface WorkChannel extends Task {
   taskId: string
+  workerIconId: WorkerIconId
   latestActivityAt: string
   endedAt?: string
   endedKind?: 'completed' | 'dropped' | 'stopped'

@@ -616,6 +616,12 @@ describe('Pegas web app', () => {
     const taskRow = await screen.findByRole('button', {
       name: '打开 Channel：整理发布说明',
     })
+    const channelIcon = taskRow.querySelector('.pegas-agent-avatar')
+    expect(channelIcon?.classList.contains('status-started')).toBe(true)
+    expect(channelIcon?.querySelector('use')?.getAttribute('href')).toMatch(
+      /^\/icons\/agents\/pegas-agents\.svg#pegas-agent-(car|camera|computer|phone)$/,
+    )
+    expect(document.querySelector('[href*="whale"]')).toBeNull()
     expect(screen.queryByRole('complementary', { name: '工作区' })).toBeNull()
     fireEvent.click(taskRow)
     expect(screen.getByRole('complementary', { name: '工作区' })).toBeTruthy()

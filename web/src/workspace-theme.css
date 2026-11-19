@@ -36,6 +36,43 @@ body {
   background: var(--canvas);
 }
 
+.pegas-agent-avatar {
+  display: block;
+  inline-size: var(--pegas-avatar-size);
+  block-size: var(--pegas-avatar-size);
+  flex: none;
+  overflow: visible;
+  --pegas-icon-background: #4d6bfe;
+  --pegas-icon-foreground: #ffffff;
+}
+
+.pegas-agent-avatar.status-backlog {
+  --pegas-icon-background: #7c3aed;
+}
+
+.pegas-agent-avatar.status-unstarted {
+  --pegas-icon-background: #b45309;
+}
+
+.pegas-agent-avatar.status-started {
+  --pegas-icon-background: #2563eb;
+}
+
+.pegas-agent-avatar.status-completed {
+  --pegas-icon-background: #15803d;
+}
+
+.pegas-agent-avatar.status-cancelled {
+  --pegas-icon-background: #52525b;
+}
+
+@media (forced-colors: active) {
+  .pegas-agent-avatar {
+    --pegas-icon-background: Highlight;
+    --pegas-icon-foreground: HighlightText;
+  }
+}
+
 ::selection {
   color: #ffffff;
   background: var(--blue);
@@ -388,8 +425,8 @@ a:focus-visible {
   place-items: center;
   border: 0;
   border-radius: 9px;
-  color: #ffffff;
-  background: var(--blue);
+  color: inherit;
+  background: transparent;
   font-size: 0.68rem;
   font-weight: 760;
 }
@@ -651,14 +688,13 @@ a:focus-visible {
   block-size: 76px;
   place-items: center;
   border-radius: 22px;
-  color: #ffffff;
-  background: var(--blue);
+  color: inherit;
+  background: transparent;
 }
 
 .home-profile-mark svg {
-  inline-size: 34px;
-  block-size: 34px;
-  stroke-width: 1.7;
+  inline-size: 56px;
+  block-size: 56px;
 }
 
 .home-profile h2,
@@ -1189,14 +1225,13 @@ a:focus-visible {
   flex: none;
   place-items: center;
   border-radius: 13px;
-  color: #ffffff;
-  background: var(--blue);
+  color: inherit;
+  background: transparent;
 }
 
 .bot-profile-mark svg {
-  inline-size: 22px;
-  block-size: 22px;
-  stroke-width: 1.8;
+  inline-size: 34px;
+  block-size: 34px;
 }
 
 .bot-settings-title h2,
@@ -1482,8 +1517,8 @@ a:focus-visible {
   }
 
   .bot-profile-mark svg {
-    inline-size: 22px;
-    block-size: 22px;
+    inline-size: 34px;
+    block-size: 34px;
   }
 
   .bot-settings-section {
@@ -1938,7 +1973,17 @@ a:focus-visible {
   place-items: center;
   border-radius: 11px;
   color: var(--blue);
-  background: color-mix(in srgb, var(--blue) 10%, var(--paper));
+  background: transparent;
+}
+
+.task-pulse-head > .pegas-agent-avatar {
+  margin-inline-end: 2px;
+}
+
+.task-card-id {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .task-row-copy {

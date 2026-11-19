@@ -1,6 +1,5 @@
 import {
   ArrowUpRight,
-  Bot,
   Check,
   ChevronRight,
   CircleAlert,
@@ -49,8 +48,9 @@ import {
   DsSidebarIcon,
   DsSmileIcon,
   DsWaveIcon,
-  DsWhaleMark,
 } from './DsBotIcons'
+import { PegasAgentIcon } from './PegasAgentIcon'
+import { fallbackWorkerIconId } from './agent-icon-id'
 import { useVoiceDictation } from './useVoiceDictation'
 import type {
   DshModelCatalog,
@@ -472,7 +472,7 @@ export function App() {
             onClick={returnToPegas}
           >
             <span className="task-sidebar-brand-mark">
-              <DsWhaleMark size={24} />
+              <PegasAgentIcon iconId="bot" size={24} />
             </span>
             <strong>Pegas</strong>
           </button>
@@ -531,7 +531,7 @@ export function App() {
             }}
           >
             <span className="task-featured-mark">
-              <DsWhaleMark size={54} />
+              <PegasAgentIcon iconId="bot" size={54} />
               <span className="task-featured-star">
                 <DsMainStarIcon size={20} />
               </span>
@@ -553,7 +553,7 @@ export function App() {
                 onClick={startNewTask}
               >
                 <span className="task-row-mark">
-                  <DsWhaleMark size={34} />
+                  <PegasAgentIcon iconId="bot" size={34} />
                 </span>
                 <span className="task-row-copy">
                   <strong>暂无 Channel</strong>
@@ -566,6 +566,7 @@ export function App() {
                   type="button"
                   className={`task-row${sidebarSelectedTask?.id === task.id ? ' is-active' : ''}`}
                   aria-label={`打开 Channel：${task.title}`}
+                  aria-describedby={`channel-status-${task.id}`}
                   aria-current={
                     sidebarSelectedTask?.id === task.id ? 'page' : undefined
                   }
@@ -573,7 +574,11 @@ export function App() {
                   onClick={() => selectTask(task.id)}
                 >
                   <span className="task-row-mark">
-                    <DsWhaleMark size={34} />
+                    <PegasAgentIcon
+                      iconId={task.workerIconId}
+                      status={task.status}
+                      size={34}
+                    />
                   </span>
                   <span className="task-row-copy">
                     <strong>{task.title}</strong>
@@ -582,6 +587,9 @@ export function App() {
                   {isActiveTask(task.status) && (
                     <span className="task-unread" aria-hidden="true" />
                   )}
+                  <span className="sr-only" id={`channel-status-${task.id}`}>
+                    状态：{statusCopy[task.status]}
+                  </span>
                 </button>
               ))
             )}
@@ -621,9 +629,11 @@ export function App() {
       >
         <header className="conversation-header page-header">
           <div className="identity-copy">
-            <div className="status-orbit" aria-hidden="true">
-              <span />
-            </div>
+            <PegasAgentIcon
+              iconId={sidebarSelectedTask?.workerIconId ?? 'bot'}
+              status={sidebarSelectedTask?.status}
+              size={28}
+            />
             <div>
               <h1 id="page-title" tabIndex={-1}>
                 {activeView === 'conversation'
@@ -697,11 +707,19 @@ export function App() {
                       </div>
                     )
                   }
+                  const messageRun = runForMessage(item.value, snapshot.runs)
                   return (
                     <PegasMessage
                       key={`message-${item.value.id}`}
                       message={item.value}
-                      run={runForMessage(item.value, snapshot.runs)}
+                      run={messageRun}
+                      task={
+                        (messageRun
+                          ? snapshot.channels.find(
+                              channel => channel.id === messageRun.taskId,
+                            )
+                          : undefined) ?? sidebarSelectedTask
+                      }
                     />
                   )
                 })
@@ -1546,7 +1564,7 @@ function SettingsPage({
         tabIndex={mode === 'bot' ? 0 : -1}
         onClick={onOpenBot}
       >
-        <Bot aria-hidden="true" />
+        <PegasAgentIcon iconId="bot" size={18} />
         <span>Pegas</span>
       </button>
       <span className="settings-rule" aria-hidden="true" />
@@ -1666,7 +1684,7 @@ function SettingsPage({
               <div className="settings-main">
                 <header className="settings-dialog-head bot-settings-heading">
                   <span className="bot-profile-mark" aria-hidden="true">
-                    <Bot />
+                    <PegasAgentIcon iconId="bot" size={34} />
                   </span>
                   <span className="bot-settings-title">
                     <h2>Pegas</h2>
@@ -3032,7 +3050,15 @@ function UserMessage({ event }: { event: InboxEvent }) {
   )
 }
 
-function PegasMessage({ message, run }: { message: OutboxMessage; run?: Run }) {
+function PegasMessage({
+  message,
+  run,
+  task,
+}: {
+  message: OutboxMessage
+  run?: Run
+  task?: WorkChannel
+}) {
   const payload = asRecord(message.payload)
   const failed = payload?.type === 'run.failed'
   const result = failed
@@ -3045,7 +3071,11 @@ function PegasMessage({ message, run }: { message: OutboxMessage; run?: Run }) {
   return (
     <article className={`message-row is-pegas${failed ? ' is-error' : ''}`}>
       <div className="message-avatar" aria-hidden="true">
-        P
+        <PegasAgentIcon
+          iconId={task?.workerIconId ?? 'bot'}
+          status={task?.status}
+          size={28}
+        />
       </div>
       <div>
         <MarkdownMessage content={text} />
@@ -3100,6 +3130,11 @@ function TaskPulse({
       aria-label={`查看 Channel：${task.title}`}
     >
       <div className="task-pulse-head">
+        <PegasAgentIcon
+          iconId={task.workerIconId ?? fallbackWorkerIconId(task.id)}
+          status={task.status}
+          size={24}
+        />
         <span className={`status-dot status-${task.status}`} />
         <span>{statusCopy[task.status]}</span>
         <time dateTime={task.updatedAt}>
@@ -3191,7 +3226,7 @@ function TasksPage({
     <section className="tasks-page" aria-labelledby="task-board-title">
       <section className="home-profile" aria-labelledby="home-profile-title">
         <div className="home-profile-mark" aria-hidden="true">
-          <Bot />
+          <PegasAgentIcon iconId="bot" size={36} />
         </div>
         <div>
           <h2 id="home-profile-title">Pegas</h2>
@@ -3279,7 +3314,13 @@ function TasksPage({
                         aria-label={`打开 Channel 现场：${task.title}`}
                       >
                         <span className="task-card-id">
-                          <ListTodo aria-hidden="true" />
+                          <PegasAgentIcon
+                            iconId={
+                              task.workerIconId ?? fallbackWorkerIconId(task.id)
+                            }
+                            status={task.status}
+                            size={24}
+                          />
                           {task.id.slice(0, 8).toUpperCase()}
                           <ArrowUpRight aria-hidden="true" />
                         </span>

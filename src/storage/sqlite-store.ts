@@ -4,6 +4,7 @@ import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
 import { systemClock, type Clock } from '../core/clock.js'
+import { assignWorkerIconId, isWorkerIconId } from '../brand/agent-icon.js'
 import type {
   ClaimedRun,
   ExecutionContext,
@@ -326,6 +327,11 @@ CREATE TABLE task_commands (
 CREATE INDEX task_commands_by_task ON task_commands(task_id, created_at);
 `
 
+const migration11 = `
+ALTER TABLE tasks ADD COLUMN worker_icon_id TEXT
+  CHECK (worker_icon_id IN ('car', 'camera', 'computer', 'phone'));
+`
+
 interface InboxRow {
   id: string
   user_id: string
@@ -349,6 +355,7 @@ interface TaskRow {
   title: string
   goal: string
   status: Task['status']
+  worker_icon_id: string | null
   status_reason: string | null
   mandate_json: string | null
   ended_json: string | null
@@ -466,6 +473,25 @@ export class PegasStore {
     this.#migrate(8, migration8)
     this.#migrate(9, migration9)
     this.#migrate(10, migration10)
+    this.#migrate(11, migration11)
+    this.#backfillWorkerIconIds()
+  }
+
+  #backfillWorkerIconIds(): void {
+    const rows = this.#database
+      .prepare('SELECT id FROM tasks WHERE worker_icon_id IS NULL')
+      .all() as { id: string }[]
+    const update = this.#database.prepare(
+      'UPDATE tasks SET worker_icon_id = ? WHERE id = ? AND worker_icon_id IS NULL',
+    )
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      for (const row of rows) update.run(assignWorkerIconId(row.id), row.id)
+      this.#database.exec('COMMIT')
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
   }
 
   // An earlier UI candidate used v5 for task retries before provider v5
@@ -969,12 +995,13 @@ export class PegasStore {
   createTaskFromEvent(event: InboxEvent, title: string): Task {
     const now = this.#clock.now().toISOString()
     const id = randomUUID()
+    const workerIconId = assignWorkerIconId(id)
     const mandate = createMandate(event, title, 'router')
     this.#database
       .prepare(
         `INSERT OR IGNORE INTO tasks
-          (id, user_id, origin_event_id, title, goal, status, mandate_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 'backlog', ?, ?, ?)`,
+          (id, user_id, origin_event_id, title, goal, status, worker_icon_id, mandate_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 'backlog', ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -982,6 +1009,7 @@ export class PegasStore {
         event.id,
         title,
         title,
+        workerIconId,
         JSON.stringify(mandate),
         now,
         now,
@@ -1014,12 +1042,13 @@ export class PegasStore {
       let task: Task
       if (decision.kind === 'create_task') {
         const taskId = randomUUID()
+        const workerIconId = assignWorkerIconId(taskId)
         const mandate = createMandate(event, decision.goal, 'router')
         this.#database
           .prepare(
             `INSERT INTO tasks
-              (id, user_id, origin_event_id, title, goal, status, mandate_json, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, 'unstarted', ?, ?, ?)`,
+              (id, user_id, origin_event_id, title, goal, status, worker_icon_id, mandate_json, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, 'unstarted', ?, ?, ?, ?)`,
           )
           .run(
             taskId,
@@ -1027,6 +1056,7 @@ export class PegasStore {
             event.id,
             decision.title,
             decision.goal,
+            workerIconId,
             JSON.stringify(mandate),
             now,
             now,
@@ -1753,6 +1783,9 @@ function toModelProviderConnection(
 }
 
 function toTask(row: TaskRow): Task {
+  const workerIconId = row.worker_icon_id ?? assignWorkerIconId(row.id)
+  if (!isWorkerIconId(workerIconId))
+    throw new Error(`Invalid stored worker icon ID: ${workerIconId}`)
   return {
     id: row.id,
     userId: row.user_id,
@@ -1760,6 +1793,7 @@ function toTask(row: TaskRow): Task {
     title: row.title,
     goal: row.goal || row.title,
     status: row.status,
+    workerIconId,
     ...(row.status_reason ? { statusReason: row.status_reason } : {}),
     mandate: JSON.parse(row.mandate_json ?? '{}') as Task['mandate'],
     ...(row.ended_json

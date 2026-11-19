@@ -380,6 +380,7 @@ describe('control plane', () => {
           taskId: ownerTask.id,
           title: 'Owner channel',
           status: 'unstarted',
+          workerIconId: ownerTask.workerIconId,
           latestActivityAt: ownerTask.updatedAt,
         }),
       ],

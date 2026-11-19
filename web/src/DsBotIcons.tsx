@@ -1,10 +1,11 @@
 /*
- * Icon and whale-character geometry reproduced or adapted from DS Bot's
- * Apache-2.0 licensed client. Modified for Pegas React/TypeScript use.
+ * Generic interface icon geometry reproduced or adapted from DS Bot's
+ * Apache-2.0 licensed client. Pegas product and Worker identities live in
+ * PegasAgentIcon.tsx and the generated Pegas icon sprite.
  * See THIRD_PARTY_NOTICES.md.
  */
 
-import { useId, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
 
 interface IconProps {
   size?: number
@@ -182,61 +183,6 @@ export function DsMainStarIcon({ size = 20 }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 20 20" aria-hidden="true">
       <path d="M10 2.4l2.29 5.04 5.51.63-4.09 3.74 1.11 5.42L10 14.5l-4.82 2.73 1.11-5.42L2.2 8.07l5.51-.63z" />
-    </svg>
-  )
-}
-
-/**
- * DS Bot's default whale character. The path, paint, shading, and eye geometry
- * are kept identical to the Apache-2.0 source so Pegas can use the same
- * temporary product character while its own asset set is still pending.
- */
-export function DsWhaleMark({ size = 34 }: IconProps) {
-  const maskId = useId().replaceAll(':', '')
-
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 100 100"
-      fill="none"
-      aria-hidden="true"
-    >
-      <defs>
-        <mask
-          id={maskId}
-          maskUnits="userSpaceOnUse"
-          x="-100"
-          y="-100"
-          width="300"
-          height="300"
-        >
-          <rect x="-100" y="-100" width="300" height="300" fill="white" />
-          <g fill="black">
-            <g transform="translate(72.5 48.4) rotate(-15.8)">
-              <rect x="-4.65" y="-11.5" width="9.3" height="23" rx="4.65" />
-            </g>
-            <g transform="translate(85.6 43.4) rotate(-21.2)">
-              <rect x="-3.5" y="-11.45" width="7" height="22.9" rx="3.5" />
-            </g>
-          </g>
-        </mask>
-      </defs>
-      <g mask={`url(#${maskId})`} fillRule="evenodd">
-        <path
-          d="M65.3 20.9l5.1.1 4.8.9 4.8 1.7 4.3 2.3 3.8 3.1 3 3.4 2.3 3.8 1.6 4.3.9 4.3 0 4.8-.8 4.8-1.4 4.3-2.3 4.3-3.2 4.3-3.4 3.3-4.3 3.1-7.2 3.5-7.6 1.7-7.2.1-9.6-1.6-3.3-1-2.9-1.7-8.8-8.9-6-4.7-3.3-.5-7.7 1.1-4.8-.1-4.7-1.2-1.9-1.2-1-1-.5-1.5.4-1.4 1.1-1.3 1.9-1.3 4.7-1.5 7.7-.6 1.1-.5.7-1 0-1.4-2.8-7.2-1.2-5.3-.1-4.3.4-1.4.9-1.2 1.9-.2 2 1 2.2 2.3 2.2 3.4 3.2 7.6 1.9 9.7.5-.1 1.1-7.2 1.8-4.8 3.2-5.2 3.9-4.3 4.9-3.9 5.6-2.9 5.8-1.9z"
-          fill="#4D6BFE"
-        />
-        <path
-          d="M93.3 55.8l1-.3.1 1.2-2.4 5.3-3.4 4.8-3.8 3.8-4.8 3.4-5.7 2.8-4.8 1.5-4.8.4 20.1-17.4 5.2-3.7z"
-          fill="white"
-        />
-        <path
-          d="M88.6 29.5l2.4 2.9 1.9 2.8 2.4 6.3.5 3.3.1 5.3-1.5 6.6-1.9 4.3-2 3.3-4.8 5.4-5.7 4.3-7.2 3.3-6.2 1.5-6.7.1-3.3-.2-9.6-1.8-3.3-1.5-2.4-1.9-8.6-8.9-5.3-3.9-3.3-.1-2.9.2-3.3.8-5.8 0-4.3-1-2.9-1.9.6-.6 3.8-1.3 10.5-2.5 4.3.9 1.4-.1 2.2-1.7.5-1.4-.3-1.5-1.2-1.4-2.2-1.4-1.2-1.9-.6-12 .4-3.3.5-.5 2.9 3.8 2.4 4.8 1.9 5.7.7 5.8.7 2.8 2.1 2.4 2.7 5.5 3.8 4.3 2.9 2.2 3.3 1 3.4-.4 6.2-3 7.1-4.5 7.3-5.6 6.6-5.9 5.9-6.5 3.7-5.3 1.7-4.2.1-2.9z"
-          fill="black"
-          fillOpacity=".07"
-        />
-      </g>
     </svg>
   )
 }

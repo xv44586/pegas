@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
 
 import type { Clock } from '../src/core/clock.js'
+import { workerIconIds } from '../src/brand/agent-icon.js'
 import { PegasStore } from '../src/storage/sqlite-store.js'
 
 describe('PegasStore', () => {
@@ -219,6 +220,8 @@ describe('PegasStore', () => {
     })
 
     expect(taskB.id).toBe(taskA.id)
+    expect(taskB.workerIconId).toBe(taskA.workerIconId)
+    expect(workerIconIds).toContain(taskA.workerIconId)
     expect(messageB.id).toBe(messageA.id)
     expect(store.listTasks()).toHaveLength(1)
     store.close()
@@ -605,6 +608,11 @@ describe('PegasStore', () => {
         completed: 'completed',
         cancelled: 'cancelled',
       })
+      expect(
+        store
+          .listTasks()
+          .every(task => workerIconIds.includes(task.workerIconId)),
+      ).toBe(true)
       expect(store.listRuns('failed')[0]).toMatchObject({
         status: 'failed',
         lastError: 'Keep this error',
@@ -678,7 +686,7 @@ describe('PegasStore', () => {
           .prepare('SELECT version FROM schema_migrations ORDER BY version')
           .all() as { version: number }[]
         expect(versions.map(row => row.version)).toEqual([
-          1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+          1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
         ])
         expect(
           (
@@ -705,6 +713,11 @@ describe('PegasStore', () => {
           (
             db.prepare('PRAGMA table_info(tasks)').all() as { name: string }[]
           ).some(column => column.name === 'mandate_json'),
+        ).toBe(true)
+        expect(
+          (
+            db.prepare('PRAGMA table_info(tasks)').all() as { name: string }[]
+          ).some(column => column.name === 'worker_icon_id'),
         ).toBe(true)
       } finally {
         db.close()

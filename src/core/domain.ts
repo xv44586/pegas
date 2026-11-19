@@ -1,3 +1,5 @@
+import type { WorkerIconId } from '../brand/agent-icon.js'
+
 type EventStatus = 'pending' | 'processing' | 'processed' | 'failed'
 
 export type TaskStatus =
@@ -73,6 +75,7 @@ export interface Task {
   title: string
   goal: string
   status: TaskStatus
+  workerIconId: WorkerIconId
   statusReason?: string
   mandate: Mandate
   ended?: TaskEnd

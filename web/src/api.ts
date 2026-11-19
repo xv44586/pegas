@@ -13,6 +13,7 @@ import type {
   Task,
   WorkChannel,
 } from './types'
+import { fallbackWorkerIconId, isWorkerIconId } from './agent-icon-id'
 
 export interface VoiceTranscript {
   text: string
@@ -66,7 +67,17 @@ export class PegasApi {
         'channels' in response &&
         Array.isArray(response.channels)
       )
-        return response.channels as WorkChannel[]
+        return response.channels.map(channel => {
+          const candidate = channel as Partial<WorkChannel>
+          if (typeof candidate.id !== 'string')
+            throw new Error('Channel response is missing an ID')
+          return {
+            ...candidate,
+            workerIconId: isWorkerIconId(candidate.workerIconId)
+              ? candidate.workerIconId
+              : fallbackWorkerIconId(candidate.id),
+          } as WorkChannel
+        })
     } catch (error) {
       if (!(error instanceof ApiError) || error.status !== 404) throw error
     }
@@ -80,6 +91,7 @@ export class PegasApi {
     return legacy.tasks.map(task => ({
       ...task,
       taskId: task.id,
+      workerIconId: task.workerIconId ?? fallbackWorkerIconId(task.id),
       latestActivityAt: task.updatedAt,
       ...(task.status === 'completed' || task.status === 'cancelled'
         ? { endedAt: task.updatedAt }
