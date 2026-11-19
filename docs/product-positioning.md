@@ -166,6 +166,8 @@ WorkChannel 是 Task 的用户可见投影和工作记录入口，不是新的�
 
 用户可以进入 Channel 直接和当前 Worker 对话。此时客户端显式携带 Channel/Task ID，不再要求 Router 从全局候选中猜测归属。从 Channel 返回 Pegas 主对话后，新输入恢复自动路由。
 
+完成结束的是当前工作轮次，不是 Channel 历史。completed Channel 在当前授权仍成立且输入属于原目标时可以恢复，并创建新的 Run；用户明确停止或授权撤回后的原 Channel 永久不可恢复，继续工作只能新建带来源关系的 Channel。归档只整理列表，不改变授权或执行状态。
+
 ### WorkerProfile
 
 WorkerProfile 是 Pegas 为一个工作范围保存的执行配置，不是独立对外人格。所有 Worker 默认继承用户配置的全局 Agent 模型；只有被明确修改的字段才形成覆盖。每次 Run 保存有效配置快照，运行中的 session 不因设置变化被静默改写。
@@ -185,14 +187,17 @@ Worker 不能直接私聊或创建另一个 Worker。它只能向 Pegas 提出�
 - 风险等级和授权范围；
 - 与其他任务的父子、依赖、合并或冲突关系。
 
-第一版状态模型保持简单：
+目标状态模型保持简单：
 
 ```text
-Inbox → Planning → Running → Waiting → Completed
-                     ↘ Failed
+Backlog → Unstarted → Started → Completed（可恢复）
+            ▲                         │
+            └── 用户输入 + 授权复核 ──┘
 
-任意未结束状态均可进入 Paused 或 Cancelled
+Started / Completed ── 用户停止或授权撤回 ──→ Cancelled（原 Channel 永久不可恢复）
 ```
+
+等待、暂停、最近失败和依赖等待使用状态原因表达；失败属于 Run，不自动结束 Task。Run、Worker Runtime 和 Executor Session 均可结束或替换，而不删除 WorkChannel。
 
 ### Run
 

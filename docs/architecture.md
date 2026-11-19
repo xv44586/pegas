@@ -166,21 +166,28 @@ Task Control Plane 是 Pegas 的核心，也是 Task 状态的唯一事实来源
 第一版状态：
 
 ```text
-Backlog → Unstarted → Started → Completed
-                         ↘ Cancelled
+Backlog → Unstarted → Started → Completed（软结束）
+            ▲                         │
+            └── 用户输入 + 授权复核 ──┘
+
+Started / Completed ── 用户明确停止或授权撤回 ──→ Cancelled（硬结束）
 ```
 
-Task 只使用这五个工作项状态；等待审阅、暂停与最近执行失败作为原因表达。Run 单独保存 queued、running、waiting、completed、failed、cancelled。执行失败不会结束 Task；重试与租约恢复创建关联旧记录的新 Run，保留错误和恢复点。成功 Run 默认等待审阅，不自动完成 Task。当前尚未提供工作项完成/取消控制入口，状态模型与迁移、幂等和回滚边界见 `docs/task-lifecycle.md`。
+Task 只使用这五个工作项状态；等待审阅、暂停与最近执行失败作为原因表达。`completed` 是可恢复的软结束，`cancelled` 表示用户停止或授权撤回，是原 Task 永久不可恢复的硬结束。Run 单独保存 queued、running、waiting、completed、failed、cancelled；Run 或 Worker Runtime 结束不决定 Task 是否结束。执行失败重试、租约恢复和 completed Task 恢复都创建新 Run，但使用不同命令、原因和幂等键。成功 Run 默认等待审阅，不自动完成 Task；完成必须来自 Control Plane 持久化的完成条件、用户确认或可验证外部事实。`TASK-002` 实现前，完成/停止控制和恢复状态机仍是 Planned，详细边界见 `docs/task-lifecycle.md` 与 `docs/channel-worker-collaboration.md`。
 
 #### WorkChannel 产品投影
 
 Web、移动端和桌面端把 Task 呈现为 WorkChannel。WorkChannel 不是新的权威生命周期，也不等于 DSH session；第一阶段 `channelId` 与 `taskId` 相同，服务端通过兼容投影 API 返回。客户端进入 Channel 后发送的输入显式引用权威 Task，返回 Pegas 主对话后由 Router 恢复自动归属。
+
+已完成 WorkChannel 保留历史并允许同一目标的用户输入申请恢复；取消后的 WorkChannel 永久只读，服务端必须拒绝客户端静默重开或重新授权原 Channel，只能创建带来源关系的新 Channel。恢复事务先复核当前授权和配置，再追加不可变事件并创建新 Run。自动事件、普通 progress 和定时扫描不能单独恢复 ended Task。
 
 WorkChannel 的用户可见时间线由 Conversation Event、路由事实、Run Event、净化后的工具摘要、Artifact 和协作事件组成。隐藏提示词、密钥、原始凭证与未经净化的工具参数不得进入用户可见投影或全文索引。
 
 #### WorkerProfile 与配置继承
 
 WorkerProfile 是 Task/WorkChannel 范围的执行配置。有效配置按“全局 Agent 默认值 + Worker 显式覆盖”计算；没有覆盖的 Worker 随用户的全局默认值变化。每次 Run 保存有效配置快照，已经开始的 Executor Session 不原地更换模型；影响执行的设置从下一 Run 或受控 Session rollover 生效。
+
+Worker Runtime 是可释放的执行资源，不是 WorkerProfile 或 WorkChannel 本身。恢复 completed Channel 时，只有 Executor、模型、工作区、工具权限和协议版本兼容才可以复用旧 Session；否则创建新 Session，并从持久化 Channel 状态恢复。
 
 WorkerProfile 的角色和记忆范围必须服从 Pegas 的统一身份、Policy 与授权边界。它不能拥有绕过 Control Plane 的外部身份或私有 Worker 通信通道。
 

@@ -243,6 +243,7 @@ Borders are quiet and structural. The shell uses hairlines to separate rails; in
 - **Expanded:** 280px panel with fixed Pegas entry, Channels heading/actions, scrollable Channel rows, Outbox, settings and plugin controls.
 - **Collapsed:** 56px rail containing only the expand button, matching the established explicit-collapse contract.
 - **Channel Row:** 54px minimum height, 36px Worker mark, 8px gap/padding, 12px corners, neutral active fill, title, latest visible activity, time and optional origin marker.
+- **Ended Channel:** Completed Channels remain readable and accept an in-scope user follow-up that starts a new Run after server validation. Stopped Channels are permanently read-only and offer “New related Channel” instead of reopening, even after reauthorization.
 - **Outbox Entry:** A quiet navigation row with an attention count; delivery status and read status remain distinct.
 
 ### Buttons
