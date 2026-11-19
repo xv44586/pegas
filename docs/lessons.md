@@ -160,11 +160,11 @@
 - Rule：Feature 开始前必须冻结“用户场景 × UI 状态 × 视口 × 真实依赖 × Candidate 生命周期”的验收矩阵；只有关键单元格都有可复核证据，才能宣告完成。单元测试通过、配置已保存、页面能打开或某个截图相似，都不能单独代表用户闭环可用。
 - Why：DS Bot 前端重构连续经历了壳层重做、设置和工作区补回、工作区定位与收缩态修复、默认 ASR、默认 Magpie、跨 Candidate session 恢复和错误提示布局修复。反复修改不是因为这些问题无法同时发现，而是第一轮没有把完整闭环定义为一个验收对象：我把明确的“复刻”要求当成可解释的设计方向，没有先逐项对照源码与参考截图；自动化主要验证 DOM、状态和局部 CSS，没有在真实布局里检查几何关系；模型和语音先验证了配置值，没有在最终 Candidate 上走真实服务；运行代码所在 worktree 又被误当成 DSH 的稳定 Task workspace；同一界面存在多层主题 CSS，最终级联覆盖没有在所有关键状态下渲染验证。结果是每次只修复用户刚暴露出的那一层，测试也在事后追着缺陷补，而不是在第一轮阻止不完整交付。
 - Feature：QUALITY-001、CONV-002、VOICE-001、SETTINGS-001、EXEC-003
-- Evidence：2026-11-18 至 2026-11-19 的提交序列 `56906db`、`0427a0a`、`1598a76`、`d4747d6`、`1f2ced6`、`d205ccb`、`f2142dd`；用户连续提供的首页、工作区、收缩栏、设置、错误状态、165 模型选择器压缩和 Channels 文案消失截图；随后补入的 `web/src/App.test.tsx`、`test/workspace-theme.test.ts`、`test/dsh-cli-executor.test.ts` 与 `scripts/capture-ui-review.mjs` 回归；首轮 QUALITY-001 CI artifact 名称绑定 PR head、报告正文却绑定 GitHub synthetic merge commit，最终核验发现后增加显式 head checkout 回归。
+- Evidence：2026-11-18 至 2026-11-19 的提交序列 `56906db`、`0427a0a`、`1598a76`、`d4747d6`、`1f2ced6`、`d205ccb`、`f2142dd`；用户连续提供的首页、工作区、收缩栏、设置、错误状态、165 模型选择器压缩和 Channels 文案消失截图；首次修复只覆盖移动侧栏，随后又确认桌面侧栏列表因继承 `align-items: center` 而扩张到约 690px、居中到负坐标；随后补入的 `web/src/App.test.tsx`、`test/workspace-theme.test.ts`、`test/dsh-cli-executor.test.ts` 与 `scripts/capture-ui-review.mjs` 回归；首轮 QUALITY-001 CI artifact 名称绑定 PR head、报告正文却绑定 GitHub synthetic merge commit，最终核验发现后增加显式 head checkout 回归。
 - Seen：2（2026-11-18、2026-11-19）
 - Severity：normal
 - Status：Candidate
-- Enforcement：根据用户明确要求提前实现 QUALITY-001 门禁，但 Lesson 仍按 Seen 次数保持 Candidate：仓库永久保存验收条件和测试能力；CI 显式检出 PR head 并在准确 SHA 上生成短期报告与 UI 截图；UI Review 现在必须打开大模型列表并检查面板宽度/滚动区，同时检查窄侧栏导航子元素边界；关键 `Not tried` 阻断审核；Candidate schema v2 绑定报告哈希与人工 reviewed commit。运行结果不再作为永久 Feature manifest 提交。
+- Enforcement：根据用户明确要求提前实现 QUALITY-001 门禁，但 Lesson 仍按 Seen 次数保持 Candidate：仓库永久保存验收条件和测试能力；CI 显式检出 PR head 并在准确 SHA 上生成短期报告与 UI 截图；UI Review 现在必须打开大模型列表并检查面板宽度/滚动区，同时检查窄侧栏导航子元素边界和整个 Channel 列表是否仍位于 rail 内；关键 `Not tried` 阻断审核；Candidate schema v2 绑定报告哈希与人工 reviewed commit。运行结果不再作为永久 Feature manifest 提交。
 - Owner / next action：补通用 Candidate canary runner；第三个独立日期再次出现同类问题时，按晋升规则将本 Lesson 标记为 Promoted。
 
 <!--

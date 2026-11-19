@@ -69,4 +69,16 @@ describe('workspace layout contracts', () => {
       /@container\s+task-sidebar\s*\(inline-size\s*<\s*260px\)[\s\S]*?\.sidebar-section-nav\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/,
     )
   })
+
+  it('stretches the desktop Channel list inside the sidebar rail', () => {
+    const parityPass = workspaceTheme.slice(
+      workspaceTheme.indexOf('/* CONV-002 DS Bot parity pass'),
+    )
+    expect(parityPass).toMatch(
+      /\.identity-rail\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*stretch;/,
+    )
+    expect(parityPass).toMatch(
+      /\.task-sidebar-list\s*\{[^}]*inline-size:\s*100%;/,
+    )
+  })
 })
