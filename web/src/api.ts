@@ -11,6 +11,7 @@ import type {
   RewriteSettingsDraft,
   Snapshot,
   Task,
+  WorkChannel,
 } from './types'
 
 export interface VoiceTranscript {
@@ -42,18 +43,48 @@ export class PegasApi {
 
   async snapshot(): Promise<Snapshot> {
     const user = encodeURIComponent(this.#userId)
-    const [events, tasks, runs, messages] = await Promise.all([
+    const [events, channels, runs, messages] = await Promise.all([
       this.#get<{ events: InboxEvent[] }>(`/v1/events?userId=${user}`),
-      this.#get<{ tasks: Task[] }>(`/v1/tasks?userId=${user}`),
+      this.#workChannels(user),
       this.#get<{ runs: Run[] }>('/v1/runs'),
       this.#get<{ messages: OutboxMessage[] }>(`/v1/outbox?userId=${user}`),
     ])
     return {
       events: events.events,
-      tasks: tasks.tasks,
+      channels,
       runs: runs.runs,
       messages: messages.messages,
     }
+  }
+
+  async #workChannels(user: string): Promise<WorkChannel[]> {
+    try {
+      const response = await this.#get<unknown>(`/v1/channels?userId=${user}`)
+      if (
+        response &&
+        typeof response === 'object' &&
+        'channels' in response &&
+        Array.isArray(response.channels)
+      )
+        return response.channels as WorkChannel[]
+    } catch (error) {
+      if (!(error instanceof ApiError) || error.status !== 404) throw error
+    }
+
+    // Compatibility with older Control Plane versions during a rolling
+    // upgrade. The fallback can be removed after every supported server
+    // exposes the WorkChannel projection.
+    const legacy = await this.#get<{ tasks: Task[] }>(
+      `/v1/tasks?userId=${user}`,
+    )
+    return legacy.tasks.map(task => ({
+      ...task,
+      taskId: task.id,
+      latestActivityAt: task.updatedAt,
+      ...(task.status === 'completed' || task.status === 'cancelled'
+        ? { endedAt: task.updatedAt }
+        : {}),
+    }))
   }
 
   async sendMessage(text: string, taskId?: string): Promise<void> {

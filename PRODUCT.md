@@ -12,7 +12,7 @@ React + TypeScript，Web 客户端只负责呈现和交互；Pegas 的身份、�
 
 ## Users
 
-当前主要用户是长期使用 Pegas 的单个所有者。他会从电脑或手机随时提出问题、任务和不成熟的想法，希望只通过自然对话推动工作，而不管理 session、worker、模型或执行进程。
+当前主要用户是长期使用 Pegas 的单个所有者。他会从电脑或手机随时提出问题、任务和不成熟的想法，希望只通过自然对话推动工作。Channel、Worker、模型和执行进程可以按需检查或覆盖，但不能成为开始工作的前置维护负担。
 
 ## Product Purpose
 
@@ -20,13 +20,14 @@ Pegas 把随时出现的意图组织成可追踪、可恢复的长期任务，�
 
 ## Positioning
 
-Conversation 是统一入口，Task 是持久的工作生命周期。Pegas 可以在内部创建多个 Run、session 或执行单元，但用户始终面对同一个长期存在的 Pegas。
+Conversation 是统一入口，Task 是服务端持久工作生命周期，WorkChannel 是它的用户可见投影。Pegas 可以在内部创建多个 Run、session 或执行单元，但用户始终面对同一个长期存在的 Pegas；Worker 是范围化工作配置，不是独立顶层人格。
 
 ## Operating Context
 
 - 用户可以在同一条对话流中任意插入不同事项。
-- 默认界面自然展示 Pegas 的回复，以及嵌入对话的计划、进度、等待和结果。
-- 点击任务后才进入任务工作台，查看任务详情、Run、状态、日志和产物。
+- 默认界面自然展示 Pegas 的回复，以及嵌入对话的计划、委派、等待和结果。
+- 用户可以从左侧 Channel 列表或对话事件进入某件工作的完整记录，查看 Run、状态、日志、产物和协作关系并直接纠偏。
+- Outbox 聚合需要确认、阻塞、失败和重要结果，普通 progress 留在 Channel。
 - 长任务可以跨进程、设备和部署继续；手机将是未来长期使用和发起代码修改的重要入口。
 
 ## Capabilities and Constraints
@@ -51,7 +52,7 @@ Conversation 是统一入口，Task 是持久的工作生命周期。Pegas 可�
 
 ## Product Principles
 
-1. 对话是唯一必需的入口。
+1. 对话是唯一必需的入口；Channel、Worker 和 Outbox 是按需控制面。
 2. 混乱的输入必须变成清晰、持久的任务状态。
 3. 默认保持安静，在需要时提供足够深的可检查性。
 4. 进程、设备和版本变化不能中断用户的事情。

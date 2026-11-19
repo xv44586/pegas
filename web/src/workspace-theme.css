@@ -1783,6 +1783,24 @@ a:focus-visible {
   white-space: nowrap;
 }
 
+.channel-list-heading {
+  display: flex;
+  min-block-size: 28px;
+  align-items: center;
+  justify-content: space-between;
+  padding-inline: 8px;
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 14px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.channel-list-heading > span:last-child {
+  font-variant-numeric: tabular-nums;
+}
+
 .task-rows {
   display: flex;
   min-inline-size: 0;
@@ -2542,43 +2560,15 @@ a:focus-visible {
     grid-template-columns: 56px minmax(0, 1fr) min(420px, 45vw);
   }
 
-  .identity-rail {
-    align-items: center;
-    padding-inline: 10px;
-  }
-
-  .task-sidebar-head {
-    flex-direction: column;
-  }
-
-  .task-sidebar-brand strong,
-  .task-sidebar-actions > :not(:last-child),
-  .task-featured-card,
-  .task-row-copy,
-  .task-unread {
-    display: none;
-  }
-
-  .task-sidebar-brand-mark {
-    display: inline-flex;
-  }
-
-  .task-sidebar-list {
-    inline-size: 36px;
-    align-items: center;
-    padding-block-start: 12px;
-  }
-
-  .task-row {
-    inline-size: 36px;
-    min-block-size: 44px;
-    justify-content: center;
-    padding: 4px 0;
-  }
-
-  .task-sidebar-foot {
-    flex-direction: column;
-    padding-inline: 0;
+  .app-shell:not(.sidebar-collapsed) .identity-rail {
+    position: fixed;
+    inset-block: 0;
+    inset-inline-start: 0;
+    z-index: 21;
+    inline-size: min(280px, calc(100vw - 48px));
+    align-items: stretch;
+    padding: 0 12px 6px;
+    box-shadow: 16px 0 40px rgba(20, 20, 20, 0.12);
   }
 }
 

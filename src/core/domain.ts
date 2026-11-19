@@ -1,6 +1,6 @@
 type EventStatus = 'pending' | 'processing' | 'processed' | 'failed'
 
-type TaskStatus =
+export type TaskStatus =
   'backlog' | 'unstarted' | 'started' | 'completed' | 'cancelled'
 
 export interface InboxEvent {

@@ -1,6 +1,6 @@
 ---
 name: Pegas
-description: Pegas's Task-as-Bot conversational workspace with a compact two-rail operating shell.
+description: Pegas's Channel-as-Worker conversational workspace with a compact two-rail operating shell.
 colors:
   pegas-blue: '#4d6bfe'
   pegas-blue-soft: '#eef1ff'
@@ -90,6 +90,12 @@ components:
     rounded: '{rounded.md}'
     padding: '8px'
     height: '54px'
+  collaboration-event:
+    backgroundColor: '{colors.paper}'
+    textColor: '{colors.ink}'
+    typography: '{typography.body}'
+    rounded: '{rounded.card}'
+    padding: '12px'
   message-pegas:
     backgroundColor: '{colors.bubble}'
     textColor: '{colors.ink}'
@@ -130,20 +136,21 @@ components:
 
 ## Overview
 
-**Creative North Star: "The Bot-Shaped Task Desk"**
+**Creative North Star: "The Channel-Shaped Work Desk"**
 
-The current Pegas interface adopts DS Bot as its interaction and visual identity while keeping the Pegas name, service boundary, and domain behavior. This is an implementation contract, not a loose source of inspiration. Its defining model is **Task = Bot**: each durable task is represented as a DS Bot character in the left rail, and selecting that item changes the conversation context rather than opening a disconnected dashboard.
+The Pegas interface keeps the established compact conversation shell while making Pegas the only default identity. Its defining model is **WorkChannel = a durable working context represented by its Worker icon**. Selecting a Channel changes the conversation context without turning the product into a disconnected task dashboard or a roster of independent bots. The service-owned Task remains the authoritative lifecycle behind that projection.
 
-The product should feel like a focused work desk with three stable zones: tasks on the left, conversation in the center, and inspectable output on the right. The right workspace remains collapsed by default so dialogue has priority; settings and plugins temporarily rise above the shell as modal layers. The visual language stays neutral, compact, and operational, with Pegas blue reserved for bot geometry, active signals, progress, and decisive actions.
+The product should feel like a focused work desk with three stable zones: Pegas and Channels on the left, conversation in the center, and inspectable output on the right. The left rail also exposes a quiet Outbox entry for user attention. The right workspace remains collapsed by default so dialogue has priority; settings and plugins temporarily rise above the shell as modal layers. The visual language stays neutral, compact, and operational, with Pegas blue reserved for Worker geometry, active signals, progress, and decisive actions.
 
 **Key Characteristics:**
 
-- Task-as-Bot identity expressed through DS Bot's whale character and icon geometry.
-- 280px expanded task rail and 56px collapsed task rail.
+- WorkChannel identity expressed through Pegas Worker icons whose color communicates state.
+- 280px expanded Channel rail and 56px collapsed rail.
 - Centered conversation flow capped at 960px, with a 48px capsule composer.
 - Right workspace represented by a narrow collapsed tab until inspection is requested.
+- Delegation, handoff and returned results appear as compact system events rather than fake chat messages.
 - Settings, plugin catalog, and plugin detail presented as progressively deeper modal layers.
-- DS Bot interaction and visual identity applied consistently to Pegas-owned tasks, messages, settings, plugins, and workspaces.
+- Pegas interaction and visual identity applied consistently to Channels, messages, settings, plugins, Outbox and workspaces.
 
 ## Colors
 
@@ -151,14 +158,14 @@ The palette is a neutral operating canvas with a single cool Pegas blue used as 
 
 ### Primary
 
-- **Pegas Blue:** Bot marks, active dots, progress, voice/send actions, selected icons, and primary controls.
+- **Pegas Blue:** Worker marks, active dots, progress, voice/send actions, selected icons, and primary controls.
 - **Pegas Blue Soft:** Quiet backing for bot marks, selected configuration rows, plugin marks, and other low-intensity active states.
 
 ### Neutral
 
 - **Core Ink / User Ink:** Primary content and the near-black user-message bubble.
-- **Muted / Faint Ink:** Secondary descriptions, task goals, timestamps, hints, and inactive controls.
-- **Canvas / Paper / Panel:** Main field, raised control surfaces, and the left task rail.
+- **Muted / Faint Ink:** Secondary descriptions, Channel goals, timestamps, hints, and inactive controls.
+- **Canvas / Paper / Panel:** Main field, raised control surfaces, and the left Channel rail.
 - **Conversation Gray:** Pegas message bubbles and quiet summarized content.
 - **Quiet Line / Strong Line:** Structural separators and interactive boundaries.
 
@@ -170,7 +177,7 @@ The palette is a neutral operating canvas with a single cool Pegas blue used as 
 
 ### Named Rules
 
-**The Bot Signal Rule.** Pegas blue belongs to bot geometry, current state, progress, focus, and primary action; it is not a decorative wash.
+**The Worker Signal Rule.** Pegas blue belongs to Worker geometry, current state, progress, focus, and primary action; it is not a decorative wash. State also needs a text label or shape and cannot rely on color alone.
 
 **The Neutral Shell Rule.** Establish hierarchy with canvas, paper, panel, bubble, and line tones before adding color or elevation.
 
@@ -188,8 +195,8 @@ The palette is a neutral operating canvas with a single cool Pegas blue used as 
 
 - **Headline:** Bold 18px text for settings and plugin dialog titles.
 - **Title:** Medium 15px text for the Pegas rail identity and compact contextual headings.
-- **Body:** 14px text on a 24px line for messages, task content, and primary descriptions.
-- **Label:** 13px text on an 18px line for task goals, compact control labels, and subordinate titles.
+- **Body:** 14px text on a 24px line for messages, Channel content, and primary descriptions.
+- **Label:** 13px text on an 18px line for Channel goals, compact control labels, and subordinate titles.
 - **Metadata:** 11px text on a 14px line for timestamps, states, captions, and plugin status.
 
 ### Named Rules
@@ -198,7 +205,7 @@ The palette is a neutral operating canvas with a single cool Pegas blue used as 
 
 ## Layout
 
-The desktop shell is a three-column grid. The left task rail is 280px when expanded, the conversation column consumes remaining space, and the right workspace is represented by a 48px rail containing a vertical 36×112px tab. Opening the workspace replaces that 48px rail with a responsive panel between 320px and 420px wide. An explicitly collapsed task rail is a quiet 56px strip containing only the expand button; expanding it restores task selection and settings/plugin access.
+The desktop shell is a three-column grid. The left Channel rail is 280px when expanded, the conversation column consumes remaining space, and the right workspace is represented by a 48px rail containing a vertical 36×112px tab. Opening the workspace replaces that 48px rail with a responsive panel between 320px and 420px wide. An explicitly collapsed Channel rail is a quiet 56px strip containing only the expand button; expanding it restores Pegas, Channel, Outbox, settings and plugin access.
 
 Conversation content is capped at 960px and aligned within the central column. User and Pegas bubbles generally cap at 80% of the available flow. The composer is capped at 992px, has a 48px minimum height, and sits at the bottom of the conversation without creating a second page frame.
 
@@ -208,7 +215,7 @@ Settings use a centered dialog up to 1100×780px with a 198px category rail, scr
 
 ## Elevation & Depth
 
-Most hierarchy is flat and tonal. The task rail, messages, task cards, and workspace rail use color fields and hairline borders rather than shadow. Elevation is concentrated on the floating context pill, composer, workspace overlay, settings/plugin dialogs, and plugin detail.
+Most hierarchy is flat and tonal. The Channel rail, messages, collaboration events, and workspace rail use color fields and hairline borders rather than shadow. Elevation is concentrated on the floating context pill, composer, workspace overlay, settings/plugin dialogs, and plugin detail.
 
 ### Shadow Vocabulary
 
@@ -223,20 +230,20 @@ Most hierarchy is flat and tonal. The task rail, messages, task cards, and works
 
 ## Shapes
 
-The defining silhouette is DS Bot's Apache-2.0 whale character, reproduced with its original 100×100 geometry, blue body, white paint, soft shading, and cut-out eyes. It appears at 54px in the featured Task=Bot card, 34px in task rows, and 24px in the collapsed brand position. The featured Task also carries DS Bot's main-bot star. Supporting DS Bot icon geometry uses a 20×20 viewBox, 1.6px rounded strokes, round caps, and round joins.
+The defining silhouette is Pegas's fixed main robot mark. WorkChannels use system-assigned Pegas Worker icons; the same icon identifies the Worker across its Channel, settings and usage views, while contextual color communicates current Channel state. Users do not choose internal icon IDs. Supporting controls use a single rounded icon family with consistent view box, stroke, caps and joins.
 
-Controls use 6–12px radii, task and plugin cards use 12–16px, message bubbles and the workspace tab use 18px, dialogs use 18–20px, and the composer uses 24px. True circles are reserved for compact icon actions, unread indicators, and status dots. Full pills are reserved for the page context header and tiny status capsules.
+Controls use 6–12px radii, Channel and plugin cards use 12–16px, message bubbles and the workspace tab use 18px, dialogs use 18–20px, and the composer uses 24px. True circles are reserved for compact icon actions, unread indicators, and status dots. Full pills are reserved for the page context header and tiny status capsules.
 
 Borders are quiet and structural. The shell uses hairlines to separate rails; interactive cards use a single neutral boundary. Do not add ornamental frames or gradient borders. The only gradient currently permitted is the functional edge fade behind the floating mobile workspace tab.
 
 ## Components
 
-### Task Rail
+### Channel Rail
 
-- **Expanded:** 280px panel with brand/actions, featured Task=Bot card, scrollable task rows, and settings/plugin controls.
-- **Collapsed:** 56px icon rail retaining the Pegas task mark, task icons, active state, workspace access, settings, and plugins.
-- **Task Row:** 54px minimum height, 36px bot mark, 8px gap/padding, 12px corners, and a neutral active fill.
-- **Featured Task:** Centered 95×115px card with a 64px mark area and compact status pill.
+- **Expanded:** 280px panel with fixed Pegas entry, Channels heading/actions, scrollable Channel rows, Outbox, settings and plugin controls.
+- **Collapsed:** 56px rail containing only the expand button, matching the established explicit-collapse contract.
+- **Channel Row:** 54px minimum height, 36px Worker mark, 8px gap/padding, 12px corners, neutral active fill, title, latest visible activity, time and optional origin marker.
+- **Outbox Entry:** A quiet navigation row with an attention count; delivery status and read status remain distinct.
 
 ### Buttons
 
@@ -249,8 +256,16 @@ Borders are quiet and structural. The shell uses hairlines to separate rails; in
 
 - **User Message:** Right-aligned near-black 18px bubble with white 14/24 text and metadata below.
 - **Pegas Message:** Left-aligned conversation-gray 18px bubble with no avatar; metadata and contextual actions sit beneath it.
-- **Task Pulse:** Full-flow paper card up to 960px with a quiet border, progress, and workspace affordance.
+- **Channel Pulse:** Full-flow paper card up to 960px with a quiet border, progress, and workspace affordance.
 - **Message Actions:** 24px controls hidden at rest and revealed on hover or keyboard focus.
+
+### Collaboration Events
+
+- **Delegation:** Source and target Worker marks, a one-line reason, target Channel title, status text and a detail action. The source remains responsible and the card later shows the returned result summary.
+- **Handoff:** Uses ownership-transfer copy and does not imply that the source waits for a result.
+- **Context Note:** A compact activity row inside the relevant Channel; it does not appear in the Pegas main conversation by default.
+- **State Update:** The visible card updates in place while immutable server events preserve the full audit trail. Frequent progress changes are not announced as separate live-region messages.
+- **Navigation:** Selecting a card opens its detail in the right workspace; a separately named action enters the target Channel.
 
 ### Conversation Composer
 
@@ -264,7 +279,7 @@ The default state is a 48px right rail with a vertical 36×112px tab. Expanded d
 
 Settings are a centered 1100×780px maximum dialog with a 198px category rail, grouped 12px row cards, independently scrolling details, and a fixed 58px save footer. Below 820px the dialog becomes a full-viewport sheet with horizontal category tabs.
 
-Settings, the plugin catalog, and plugin detail are true keyboard modals: opening moves focus to the DS Bot close control, Tab remains inside the active layer, Escape closes it, the obscured layer is inert, and focus returns to the control that opened it.
+Settings, the plugin catalog, and plugin detail are true keyboard modals: opening moves focus to the close control, Tab remains inside the active layer, Escape closes it, the obscured layer is inert, and focus returns to the control that opened it.
 
 ### Plugins
 
@@ -274,19 +289,22 @@ The plugin catalog uses an 860px modal with a two-column card grid. Plugin cards
 
 ### Do:
 
-- **Do** treat each durable Task as a bot-shaped conversation context, not merely a dashboard row.
-- **Do** preserve the 280px expanded and 56px collapsed task-rail states.
+- **Do** treat each durable WorkChannel as a Worker-shaped conversation context, not merely a dashboard row.
+- **Do** preserve the 280px expanded and 56px explicitly collapsed rail states.
 - **Do** keep the conversation flow at or below 960px and the composer at a 48px minimum height.
 - **Do** keep the right workspace collapsed by default and reveal inspection depth on demand.
-- **Do** use the 20×20, 1.6px rounded DS Bot icon geometry consistently for supporting controls.
+- **Do** keep delegation, handoff and context transfer visually distinct from user and Pegas chat bubbles.
+- **Do** use the Pegas icon family consistently and combine state color with accessible text or shape.
 - **Do** keep settings, plugin catalog, and plugin detail as clearly ordered modal layers.
 - **Do** preserve modal focus trapping, Escape dismissal, inert backgrounds, and trigger-focus restoration at every layer.
 
 ### Don't:
 
-- **Don't** revert mobile navigation to a top bar; the current shell preserves the 56px task rail.
+- **Don't** revert mobile navigation to a top bar; the current shell preserves the 56px Channel rail.
 - **Don't** expose the workspace as a permanent wide panel when the user has not requested inspection.
-- **Don't** replace Task=Bot with a generic card board, chat list, or disconnected task dashboard.
+- **Don't** replace WorkChannel with a generic card board or disconnected task dashboard.
+- **Don't** render Worker-to-Worker collaboration as private chat bubbles or expose raw internal messages as Pegas replies.
+- **Don't** make Worker, model or Channel configuration a prerequisite for speaking to Pegas.
 - **Don't** use Pegas blue as ambient decoration or a broad background field.
-- **Don't** mix unrelated icon families, stroke weights, or sharp-cornered glyph geometry into the DS Bot shell.
+- **Don't** mix unrelated icon families, stroke weights, or sharp-cornered glyph geometry into the Pegas shell.
 - **Don't** let modal detail layers obscure their close action, scroll boundary, or service-owned configuration boundary.

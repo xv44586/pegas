@@ -9,6 +9,7 @@ import {
 } from 'node:http'
 import { extname, resolve, sep } from 'node:path'
 
+import { projectWorkChannel } from '../channel/work-channel.js'
 import type { NewInboxEvent } from '../core/domain.js'
 import type { DshModelCatalog } from '../executor/dsh-model-catalog.js'
 import { AnthropicProvider } from '../model/anthropic-provider.js'
@@ -271,6 +272,17 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         const userId = url.searchParams.get('userId') ?? undefined
         return sendJson(response, 200, {
           tasks: options.store.listTasks(userId),
+        })
+      }
+
+      if (request.url?.startsWith('/v1/channels') && request.method === 'GET') {
+        const url = new URL(request.url, 'http://localhost')
+        const userId = url.searchParams.get('userId')
+        if (!userId) throw new Error('userId is required')
+        return sendJson(response, 200, {
+          channels: options.store
+            .listTasks(userId)
+            .map(task => projectWorkChannel(task)),
         })
       }
 

@@ -8,9 +8,39 @@ import {
   waitFor,
   within,
 } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest'
 
 import { App, featuredModelProviderIds, formatRelativeTime } from './App'
+
+const originalScrollIntoView = Object.getOwnPropertyDescriptor(
+  HTMLElement.prototype,
+  'scrollIntoView',
+)
+
+beforeAll(() => {
+  Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+    configurable: true,
+    value: vi.fn(),
+  })
+})
+
+afterAll(() => {
+  if (originalScrollIntoView)
+    Object.defineProperty(
+      HTMLElement.prototype,
+      'scrollIntoView',
+      originalScrollIntoView,
+    )
+  else Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView')
+})
 
 afterEach(() => {
   cleanup()
@@ -207,9 +237,9 @@ describe('Pegas web app', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     render(<App />)
-    fireEvent.click(screen.getByRole('button', { name: '任务文件夹' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Channel 列表' }))
     expect(
-      await screen.findByRole('heading', { name: '首页', level: 1 }),
+      await screen.findByRole('heading', { name: 'Channels', level: 1 }),
     ).toBeTruthy()
     expect(
       screen.getByRole('heading', { name: 'Pegas', level: 2 }),
@@ -396,9 +426,9 @@ describe('Pegas web app', () => {
     expect(
       screen.getByRole('complementary', { name: 'Pegas 导航' }),
     ).toBeTruthy()
-    expect(screen.getByRole('button', { name: '任务文件夹' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: '搜索任务' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: '新建任务' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Channel 列表' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '搜索 Channel' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '开始新事情' })).toBeTruthy()
     expect(screen.getByRole('button', { name: '收起侧栏' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Pegas 设置' })).toBeTruthy()
     expect(screen.getByRole('button', { name: '插件' })).toBeTruthy()
@@ -549,7 +579,7 @@ describe('Pegas web app', () => {
     render(<App />)
 
     const taskRow = await screen.findByRole('button', {
-      name: '打开任务：整理发布说明',
+      name: '打开 Channel：整理发布说明',
     })
     expect(screen.queryByRole('complementary', { name: '工作区' })).toBeNull()
     fireEvent.click(taskRow)
@@ -617,10 +647,10 @@ describe('Pegas web app', () => {
     )
 
     render(<App />)
-    fireEvent.click(screen.getByRole('button', { name: '任务文件夹' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Channel 列表' }))
 
     expect(
-      await screen.findByRole('heading', { name: '任务看板' }),
+      await screen.findByRole('heading', { name: 'Channels', level: 1 }),
     ).toBeTruthy()
     expect(screen.getByRole('heading', { name: '进行中' })).toBeTruthy()
     expect(screen.getByRole('heading', { name: '已完成' })).toBeTruthy()
@@ -628,28 +658,28 @@ describe('Pegas web app', () => {
     expect(screen.queryByRole('button', { name: '刷新' })).toBeNull()
     expect(screen.getByRole('button', { name: '打开工作区' })).toBeTruthy()
 
-    fireEvent.change(screen.getByRole('textbox', { name: '搜索任务' }), {
+    fireEvent.change(screen.getByRole('textbox', { name: '搜索 Channel' }), {
       target: { value: '发布' },
     })
     expect(
-      screen.queryByRole('button', { name: '打开任务现场：检查测试结果' }),
+      screen.queryByRole('button', { name: '打开 Channel 现场：检查测试结果' }),
     ).toBeNull()
-    fireEvent.change(screen.getByRole('textbox', { name: '搜索任务' }), {
+    fireEvent.change(screen.getByRole('textbox', { name: '搜索 Channel' }), {
       target: { value: '' },
     })
     expect(
-      screen.getByRole('button', { name: '打开任务现场：检查测试结果' }),
+      screen.getByRole('button', { name: '打开 Channel 现场：检查测试结果' }),
     ).toBeTruthy()
 
     fireEvent.click(
-      screen.getByRole('button', { name: '打开任务现场：整理发布说明' }),
+      screen.getByRole('button', { name: '打开 Channel 现场：整理发布说明' }),
     )
     expect(screen.getByRole('complementary', { name: '工作区' })).toBeTruthy()
     expect(screen.getByRole('heading', { name: '整理发布说明' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '设置' }))
     expect(screen.queryByRole('complementary', { name: '工作区' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '关闭设置' }))
-    fireEvent.click(screen.getByRole('button', { name: '任务文件夹' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Channel 列表' }))
     expect(screen.getByRole('complementary', { name: '工作区' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '关闭工作区' }))
     expect(screen.queryByRole('complementary', { name: '工作区' })).toBeNull()
@@ -695,6 +725,69 @@ describe('Pegas web app', () => {
     expect(
       fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST'),
     ).toHaveLength(1)
+  })
+
+  it('uses the WorkChannel projection for scoped chat and returns to Pegas routing', async () => {
+    const channel = {
+      id: 'task-channel-1',
+      taskId: 'task-channel-1',
+      userId: 'owner',
+      originEventId: 'event-channel-1',
+      title: '发布检查',
+      goal: '检查发布候选版本',
+      status: 'started',
+      createdAt: '2026-11-19T08:00:00.000Z',
+      updatedAt: '2026-11-19T08:00:00.000Z',
+      latestActivityAt: '2026-11-19T08:00:00.000Z',
+    }
+    const submitted: Record<string, unknown>[] = []
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path =
+        input instanceof Request
+          ? input.url
+          : input instanceof URL
+            ? input.href
+            : input
+      if (path.startsWith('/v1/events') && init?.method === 'POST') {
+        submitted.push(parseRequestBody(init))
+        return Promise.resolve(Response.json({ inserted: true }))
+      }
+      if (path.startsWith('/v1/channels'))
+        return Promise.resolve(Response.json({ channels: [channel] }))
+      if (path.startsWith('/v1/events'))
+        return Promise.resolve(Response.json({ events: [] }))
+      if (path.startsWith('/v1/runs'))
+        return Promise.resolve(Response.json({ runs: [] }))
+      return Promise.resolve(Response.json({ messages: [] }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+
+    expect(await screen.findByText('Channels')).toBeTruthy()
+    fireEvent.click(
+      screen.getByRole('button', { name: '打开 Channel：发布检查' }),
+    )
+    const input = screen.getByRole('textbox', {
+      name: '告诉 Pegas 你想完成什么',
+    })
+    fireEvent.change(input, { target: { value: '继续检查' } })
+    fireEvent.click(screen.getByRole('button', { name: '发送给 Pegas' }))
+    await waitFor(() => expect(submitted).toHaveLength(1))
+    expect(submitted[0]).toMatchObject({
+      payload: { text: '继续检查', taskId: channel.taskId },
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: '返回 Pegas 主对话' }))
+    fireEvent.change(input, { target: { value: '开始另一件事' } })
+    fireEvent.click(screen.getByRole('button', { name: '发送给 Pegas' }))
+    await waitFor(() => expect(submitted).toHaveLength(2))
+    expect(submitted[1]).toMatchObject({
+      payload: { text: '开始另一件事' },
+    })
+    expect(
+      (submitted[1]?.payload as Record<string, unknown>).taskId,
+    ).toBeUndefined()
   })
 
   it('keeps failed execution history and retries within the same work item', async () => {
@@ -758,9 +851,11 @@ describe('Pegas web app', () => {
       }),
     )
     render(<App />)
-    fireEvent.click(screen.getByRole('button', { name: '任务文件夹' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Channel 列表' }))
     fireEvent.click(
-      await screen.findByRole('button', { name: '打开任务现场：可重试的任务' }),
+      await screen.findByRole('button', {
+        name: '打开 Channel 现场：可重试的任务',
+      }),
     )
     fireEvent.click(screen.getByRole('button', { name: '新建 Run 重试' }))
     expect(await screen.findByText('暂时无法重试')).toBeTruthy()
@@ -770,7 +865,9 @@ describe('Pegas web app', () => {
     expect(screen.getByText('provider timeout')).toBeTruthy()
     expect(screen.queryByRole('button', { name: '新建 Run 重试' })).toBeNull()
     expect(
-      screen.getAllByRole('button', { name: '打开任务现场：可重试的任务' }),
+      screen.getAllByRole('button', {
+        name: '打开 Channel 现场：可重试的任务',
+      }),
     ).toHaveLength(1)
   })
 

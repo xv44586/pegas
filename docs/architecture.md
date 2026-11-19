@@ -93,6 +93,8 @@ Recovery API 第一阶段只提供状态、重启和回滚，不提供任意命�
 
 统一接收 Web、桌面端、移动端和消息渠道的输入，并将它们转换为相同的 Conversation Event。
 
+本节的 Channel 指外部收发渠道，在代码和新接口中使用 `TransportChannel` 或 `ReplyChannel`。用户在 Web 中看到的工作容器称为 `WorkChannel`，是 Task 的产品投影。两者不得共用一个无上下文的领域类型。
+
 职责包括：
 
 - 识别用户与设备；
@@ -169,6 +171,35 @@ Backlog → Unstarted → Started → Completed
 ```
 
 Task 只使用这五个工作项状态；等待审阅、暂停与最近执行失败作为原因表达。Run 单独保存 queued、running、waiting、completed、failed、cancelled。执行失败不会结束 Task；重试与租约恢复创建关联旧记录的新 Run，保留错误和恢复点。成功 Run 默认等待审阅，不自动完成 Task。当前尚未提供工作项完成/取消控制入口，状态模型与迁移、幂等和回滚边界见 `docs/task-lifecycle.md`。
+
+#### WorkChannel 产品投影
+
+Web、移动端和桌面端把 Task 呈现为 WorkChannel。WorkChannel 不是新的权威生命周期，也不等于 DSH session；第一阶段 `channelId` 与 `taskId` 相同，服务端通过兼容投影 API 返回。客户端进入 Channel 后发送的输入显式引用权威 Task，返回 Pegas 主对话后由 Router 恢复自动归属。
+
+WorkChannel 的用户可见时间线由 Conversation Event、路由事实、Run Event、净化后的工具摘要、Artifact 和协作事件组成。隐藏提示词、密钥、原始凭证与未经净化的工具参数不得进入用户可见投影或全文索引。
+
+#### WorkerProfile 与配置继承
+
+WorkerProfile 是 Task/WorkChannel 范围的执行配置。有效配置按“全局 Agent 默认值 + Worker 显式覆盖”计算；没有覆盖的 Worker 随用户的全局默认值变化。每次 Run 保存有效配置快照，已经开始的 Executor Session 不原地更换模型；影响执行的设置从下一 Run 或受控 Session rollover 生效。
+
+WorkerProfile 的角色和记忆范围必须服从 Pegas 的统一身份、Policy 与授权边界。它不能拥有绕过 Control Plane 的外部身份或私有 Worker 通信通道。
+
+#### 委派、交接与结果回传
+
+跨 Task/WorkChannel 协作由 Control Plane 调解：
+
+- **委派**：来源 Task 保持责任，目标 Task 完成后把结构化结果送回来源；
+- **交接**：责任转移给目标 Task，来源保留审计但不再等待继续；
+- **上下文传递**：只发送带来源的事实，不创建 Task、不改变责任或授权；
+- **handback**：执行单元把不属于自身目标的输入退回 Router 重新分配。
+
+Worker 只能提交结构化协作请求。Control Plane 校验来源 Run、授权范围和 Policy，在同一事务中建立关系、写入目标输入并提交唤醒事件。目标完成后以关系 ID 和最终 Report ID 去重，把结果写入来源 Event Inbox；只有重要结果、问题、阻塞、失败或责任变化进入用户 Outbox。完整协议与 Web 合同见 `docs/channel-worker-collaboration.md`。
+
+#### Report 与 Watchdog
+
+正常状态以 Worker 主动提交的结构化 Report 为事实来源，至少区分 `started`、`progress`、`waiting`、`ready`、`blocked` 和 `failed`。Control Plane 原子更新 Run、Task/WorkChannel、ChannelEvent、协作结果投递和必要的 OutboxItem。
+
+外围 Watchdog 只承担恢复：检查 Run lease、Worker heartbeat、超时、未结 effect 和投递重试。lease 过期表示 Worker 失联，不能被解释为成功或目标失败；恢复器创建关联旧 Run 的恢复尝试并使用已保存 session。Supervisor 只监测进程和 Release 健康，不写业务完成状态。
 
 ### 5. Memory
 

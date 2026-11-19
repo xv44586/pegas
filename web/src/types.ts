@@ -13,6 +13,12 @@ export interface Task {
   updatedAt: string
 }
 
+export interface WorkChannel extends Task {
+  taskId: string
+  latestActivityAt: string
+  endedAt?: string
+}
+
 type RunStatus =
   'queued' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled'
 
@@ -56,7 +62,7 @@ export interface Snapshot {
   events: InboxEvent[]
   messages: OutboxMessage[]
   runs: Run[]
-  tasks: Task[]
+  channels: WorkChannel[]
 }
 
 export interface RuntimeSettings {

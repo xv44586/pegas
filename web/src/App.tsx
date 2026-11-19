@@ -122,7 +122,7 @@ const emptySnapshot: Snapshot = {
   events: [],
   messages: [],
   runs: [],
-  tasks: [],
+  channels: [],
 }
 
 const statusCopy: Record<TaskStatus, string> = {
@@ -155,8 +155,11 @@ function viewFromUrl(): AppView {
 
 export function App() {
   const compact = useMediaQuery('(max-width: 820px)')
+  const narrowSidebar = useMediaQuery('(max-width: 1100px)')
   const initialTaskId =
-    new URLSearchParams(window.location.search).get('task') ?? ''
+    new URLSearchParams(window.location.search).get('channel') ??
+    new URLSearchParams(window.location.search).get('task') ??
+    ''
   const [token, setToken] = useState(
     () => sessionStorage.getItem('pegas-token') ?? '',
   )
@@ -167,7 +170,7 @@ export function App() {
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [activeView, setActiveView] = useState<AppView>(viewFromUrl)
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(narrowSidebar)
   const [workspaceOpen, setWorkspaceOpen] = useState(Boolean(initialTaskId))
   const workspaceVisible =
     workspaceOpen &&
@@ -176,6 +179,10 @@ export function App() {
     activeView !== 'plugins'
   const [selectedTaskId, setSelectedTaskId] = useState(initialTaskId)
   const [attachmentHelpOpen, setAttachmentHelpOpen] = useState(false)
+
+  useEffect(() => {
+    if (narrowSidebar) setSidebarCollapsed(true)
+  }, [narrowSidebar])
   const [voiceGateError, setVoiceGateError] = useState('')
   const feedEnd = useRef<HTMLDivElement>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
@@ -211,7 +218,7 @@ export function App() {
       setVoiceGateError('无法确认语音服务状态，请检查连接后重试。')
     }
   }
-  const activeTaskCount = snapshot.tasks.filter(task =>
+  const activeTaskCount = snapshot.channels.filter(task =>
     isActiveTask(task.status),
   ).length
 
@@ -244,7 +251,9 @@ export function App() {
   useEffect(() => {
     const handlePopState = () => {
       const taskId =
-        new URLSearchParams(window.location.search).get('task') ?? ''
+        new URLSearchParams(window.location.search).get('channel') ??
+        new URLSearchParams(window.location.search).get('task') ??
+        ''
       setSelectedTaskId(taskId)
       setWorkspaceOpen(Boolean(taskId))
       setActiveView(viewFromUrl())
@@ -273,13 +282,11 @@ export function App() {
     )
   }, [snapshot.events, snapshot.messages])
 
-  const selectedTask = snapshot.tasks.find(task => task.id === selectedTaskId)
+  const selectedTask = snapshot.channels.find(
+    task => task.id === selectedTaskId,
+  )
   const startingNewTask = selectedTaskId === '__new__'
-  const sidebarSelectedTask = startingNewTask
-    ? undefined
-    : (selectedTask ??
-      snapshot.tasks.find(task => isActiveTask(task.status)) ??
-      snapshot.tasks[0])
+  const sidebarSelectedTask = startingNewTask ? undefined : selectedTask
 
   function startNewTask(): void {
     setActiveView('conversation')
@@ -287,6 +294,7 @@ export function App() {
     setWorkspaceOpen(false)
     const url = new URL(window.location.href)
     url.searchParams.delete('view')
+    url.searchParams.delete('channel')
     url.searchParams.delete('task')
     window.history.pushState({ view: 'conversation' }, '', url)
     usePrompt('')
@@ -299,7 +307,8 @@ export function App() {
     setWorkspaceOpen(true)
     const url = new URL(window.location.href)
     url.searchParams.delete('view')
-    url.searchParams.set('task', taskId)
+    url.searchParams.delete('task')
+    url.searchParams.set('channel', taskId)
     window.history.pushState({ taskId }, '', url)
   }
 
@@ -310,7 +319,8 @@ export function App() {
     setWorkspaceOpen(true)
     const url = new URL(window.location.href)
     url.searchParams.set('view', 'tasks')
-    url.searchParams.set('task', taskId)
+    url.searchParams.delete('task')
+    url.searchParams.set('channel', taskId)
     window.history.pushState({ taskId }, '', url)
   }
 
@@ -318,6 +328,7 @@ export function App() {
     setWorkspaceOpen(false)
     setSelectedTaskId('')
     const url = new URL(window.location.href)
+    url.searchParams.delete('channel')
     url.searchParams.delete('task')
     window.history.replaceState({}, '', url)
     if (compact)
@@ -330,6 +341,18 @@ export function App() {
       document.activeElement instanceof HTMLElement
         ? document.activeElement
         : null
+  }
+
+  function returnToPegas(): void {
+    setActiveView('conversation')
+    setSelectedTaskId('')
+    setWorkspaceOpen(false)
+    const url = new URL(window.location.href)
+    url.searchParams.delete('view')
+    url.searchParams.delete('channel')
+    url.searchParams.delete('task')
+    window.history.pushState({ view: 'conversation' }, '', url)
+    window.requestAnimationFrame(() => composer.current?.focus())
   }
 
   function navigate(view: AppView): void {
@@ -357,7 +380,7 @@ export function App() {
     setSending(true)
     setError('')
     try {
-      await api.sendMessage(text, sidebarSelectedTask?.id)
+      await api.sendMessage(text, sidebarSelectedTask?.taskId)
       setDraft('')
       await loadSnapshot()
       window.setTimeout(
@@ -429,20 +452,20 @@ export function App() {
         <div className="task-sidebar-head">
           <button
             className="task-sidebar-brand"
-            aria-label="返回对话"
+            aria-label="返回 Pegas 主对话"
             hidden={sidebarCollapsed}
-            onClick={() => navigate('conversation')}
+            onClick={returnToPegas}
           >
             <span className="task-sidebar-brand-mark">
               <DsWhaleMark size={24} />
             </span>
             <strong>Pegas</strong>
           </button>
-          <div className="task-sidebar-actions" aria-label="任务工具">
+          <div className="task-sidebar-actions" aria-label="Channel 工具">
             <button
               className="ds-round-button"
-              aria-label="任务文件夹"
-              title="任务文件夹"
+              aria-label="Channel 列表"
+              title="Channel 列表"
               hidden={sidebarCollapsed}
               onClick={() => navigate('tasks')}
             >
@@ -450,8 +473,8 @@ export function App() {
             </button>
             <button
               className="ds-round-button"
-              aria-label="搜索任务"
-              title="搜索任务"
+              aria-label="搜索 Channel"
+              title="搜索 Channel"
               hidden={sidebarCollapsed}
               onClick={() => navigate('tasks')}
             >
@@ -459,8 +482,8 @@ export function App() {
             </button>
             <button
               className="ds-round-button"
-              aria-label="新建任务"
-              title="新建任务"
+              aria-label="开始新事情"
+              title="开始新事情"
               hidden={sidebarCollapsed}
               onClick={startNewTask}
             >
@@ -480,17 +503,13 @@ export function App() {
 
         <nav
           className="task-sidebar-list"
-          aria-label="任务列表"
+          aria-label="Channels"
           hidden={sidebarCollapsed}
         >
           <button
             type="button"
             className="task-featured-card"
-            aria-label={
-              sidebarSelectedTask
-                ? `设置任务：${sidebarSelectedTask.title}`
-                : 'Pegas 设置'
-            }
+            aria-label="Pegas 设置"
             onClick={event => {
               modalTrigger.current = event.currentTarget
               navigate('bot')
@@ -502,36 +521,36 @@ export function App() {
                 <DsMainStarIcon size={20} />
               </span>
             </span>
-            <strong>{sidebarSelectedTask?.title ?? 'Pegas'}</strong>
-            <span>
-              {sidebarSelectedTask
-                ? statusCopy[sidebarSelectedTask.status]
-                : 'Personal agent'}
-            </span>
+            <strong>Pegas</strong>
+            <span>Personal agent</span>
           </button>
 
+          <div className="channel-list-heading">
+            <span>Channels</span>
+            <span>{snapshot.channels.length}</span>
+          </div>
           <div className="task-rows">
-            {snapshot.tasks.length === 0 ? (
+            {snapshot.channels.length === 0 ? (
               <button
                 type="button"
                 className="task-row is-active"
-                aria-label="开始新任务"
+                aria-label="在 Pegas 中开始新事情"
                 onClick={startNewTask}
               >
                 <span className="task-row-mark">
                   <DsWhaleMark size={34} />
                 </span>
                 <span className="task-row-copy">
-                  <strong>新任务</strong>
+                  <strong>暂无 Channel</strong>
                   <small>告诉 Pegas 你想完成什么</small>
                 </span>
               </button>
             ) : (
-              snapshot.tasks.map(task => (
+              snapshot.channels.map(task => (
                 <button
                   type="button"
                   className={`task-row${sidebarSelectedTask?.id === task.id ? ' is-active' : ''}`}
-                  aria-label={`打开任务：${task.title}`}
+                  aria-label={`打开 Channel：${task.title}`}
                   aria-current={
                     sidebarSelectedTask?.id === task.id ? 'page' : undefined
                   }
@@ -595,7 +614,7 @@ export function App() {
                 {activeView === 'conversation'
                   ? (sidebarSelectedTask?.title ?? 'Pegas')
                   : activeView === 'tasks'
-                    ? '首页'
+                    ? 'Channels'
                     : activeView === 'bot'
                       ? 'Pegas 设置'
                       : activeView === 'plugins'
@@ -642,7 +661,7 @@ export function App() {
               ) : (
                 timeline.map(item => {
                   if (item.kind === 'event') {
-                    const task = snapshot.tasks.find(
+                    const task = snapshot.channels.find(
                       candidate => candidate.originEventId === item.value.id,
                     )
                     return (
@@ -818,7 +837,7 @@ export function App() {
           </>
         ) : activeView === 'tasks' ? (
           <TasksPage
-            tasks={snapshot.tasks}
+            tasks={snapshot.channels}
             runs={snapshot.runs}
             onOpen={openTask}
           />
@@ -886,7 +905,7 @@ const pluginCatalog = [
   {
     id: 'dsh',
     name: 'DSH 执行器',
-    description: '承载 Task 的 Agent session、工具与工作区。',
+    description: '承载 Channel 的 Agent session、工具与工作区。',
     status: '由服务端管理',
   },
   {
@@ -2914,7 +2933,7 @@ function EmptyConversation({
         <h2>现在想先推进什么？</h2>
         <p>
           直接说出目标，不必先创建项目或挑选工具。Pegas
-          会组织任务、持续执行，并在真正需要你时回来。
+          会组织这些事情、持续执行，并在真正需要你时回来。
         </p>
       </div>
 
@@ -3020,7 +3039,7 @@ function eventStatusCopy(status: InboxEvent['status']): string {
     case 'processing':
       return '正在分配'
     case 'processed':
-      return '已进入任务'
+      return '已进入 Channel'
     case 'failed':
       return '处理失败'
   }
@@ -3040,7 +3059,7 @@ function TaskPulse({
     <button
       className={`task-pulse status-${task.status}`}
       onClick={onOpen}
-      aria-label={`查看任务：${task.title}`}
+      aria-label={`查看 Channel：${task.title}`}
     >
       <div className="task-pulse-head">
         <span className={`status-dot status-${task.status}`} />
@@ -3138,7 +3157,7 @@ function TasksPage({
         </div>
         <div>
           <h2 id="home-profile-title">Pegas</h2>
-          <p>把你的输入组织成可追踪、可恢复的长期任务。</p>
+          <p>把你的输入组织成可追踪、可恢复的工作 Channel。</p>
         </div>
         <span className="home-profile-status">
           <span aria-hidden="true" /> 在线
@@ -3148,15 +3167,15 @@ function TasksPage({
         <div>
           <h2 id="task-board-title">
             <Columns3 aria-hidden="true" />
-            任务看板
+            Channels
           </h2>
-          <span className="board-total">{tasks.length} 个任务</span>
+          <span className="board-total">{tasks.length} 个 Channel</span>
         </div>
         <label className="task-search">
           <Search aria-hidden="true" />
           <input
-            aria-label="搜索任务"
-            placeholder="搜索任务…"
+            aria-label="搜索 Channel"
+            placeholder="搜索 Channel…"
             value={query}
             onChange={event => setQuery(event.target.value)}
           />
@@ -3177,7 +3196,7 @@ function TasksPage({
         </dl>
       </header>
 
-      <div className="task-board" aria-label="按状态分组的任务">
+      <div className="task-board" aria-label="按状态分组的 Channels">
         {taskColumns.map(column => {
           const columnTasks = visibleTasks.filter(task =>
             column.statuses.includes(task.status),
@@ -3209,7 +3228,7 @@ function TasksPage({
               <div className="task-column-list">
                 {columnTasks.length === 0 ? (
                   <div className="task-column-empty">
-                    <span>{query ? '没有匹配的任务' : '暂无任务'}</span>
+                    <span>{query ? '没有匹配的 Channel' : '暂无 Channel'}</span>
                   </div>
                 ) : (
                   columnTasks.map(task => {
@@ -3219,7 +3238,7 @@ function TasksPage({
                         className="task-board-card"
                         key={task.id}
                         onClick={() => onOpen(task.id)}
-                        aria-label={`打开任务现场：${task.title}`}
+                        aria-label={`打开 Channel 现场：${task.title}`}
                       >
                         <span className="task-card-id">
                           <ListTodo aria-hidden="true" />
@@ -3351,7 +3370,8 @@ function WorkspacePanel({
           </div>
           <h3>结果会在这里打开</h3>
           <p>
-            选择一个任务查看现场；后续生成的文档、图片和侧边对话也会留在这个可关闭的空间里。
+            选择一个 Channel
+            查看现场；后续生成的文档、图片和侧边对话也会留在这个可关闭的空间里。
           </p>
           <div className="workspace-capabilities">
             <span>
@@ -3387,7 +3407,7 @@ function TaskDetail({
       <header className="detail-header">
         <div>
           <span>WORKSPACE</span>
-          <strong>任务现场</strong>
+          <strong>Channel 现场</strong>
         </div>
         <button
           className="panel-close"

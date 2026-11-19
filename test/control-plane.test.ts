@@ -337,6 +337,57 @@ describe('control plane', () => {
     expect(store.listTasks()).toHaveLength(1)
   })
 
+  it('projects tasks as user-scoped work channels and keeps the task API compatible', async () => {
+    const store = new PegasStore(':memory:')
+    const createTask = (userId: string, title: string) => {
+      const event = store.enqueueEvent({
+        userId,
+        source: 'web',
+        type: 'user.message',
+        payload: { text: title },
+      }).event
+      return store.applyRoutingDecision(
+        event,
+        {
+          kind: 'create_task',
+          title,
+          goal: `${title} goal`,
+          input: title,
+          reason: 'test',
+        },
+        'test',
+      ).task
+    }
+    const ownerTask = createTask('owner', 'Owner channel')
+    createTask('other', 'Other channel')
+    const server = createControlPlane({ store })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    cleanups.push(
+      () => new Promise<void>(resolve => server.close(() => resolve())),
+      () => Promise.resolve(store.close()),
+    )
+    const { port } = server.address() as AddressInfo
+    const base = `http://127.0.0.1:${String(port)}`
+
+    const channelsResponse = await fetch(`${base}/v1/channels?userId=owner`)
+    const tasksResponse = await fetch(`${base}/v1/tasks?userId=owner`)
+
+    expect(channelsResponse.status).toBe(200)
+    expect(await channelsResponse.json()).toEqual({
+      channels: [
+        expect.objectContaining({
+          id: ownerTask.id,
+          taskId: ownerTask.id,
+          title: 'Owner channel',
+          status: 'unstarted',
+          latestActivityAt: ownerTask.updatedAt,
+        }),
+      ],
+    })
+    expect(await tasksResponse.json()).toEqual({ tasks: [ownerTask] })
+    expect((await fetch(`${base}/v1/channels`)).status).toBe(400)
+  })
+
   it('accepts authenticated events and deduplicates retries', async () => {
     const store = new PegasStore(':memory:')
     const server = createControlPlane({ store, apiToken: 'secret' })

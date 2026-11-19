@@ -132,6 +132,10 @@ try {
     .waitFor()
   await assertGeometry(mobilePage, 'mobile-home')
   await shot(mobilePage, 'mobile-home.png')
+  await mobilePage.getByRole('button', { name: '展开侧栏' }).click()
+  await mobilePage.getByRole('button', { name: '收起侧栏' }).waitFor()
+  await assertGeometry(mobilePage, 'mobile-sidebar-open')
+  await shot(mobilePage, 'mobile-sidebar-open.png')
   await mobile.close()
   console.log(`UI review captured in ${outputRelative}`)
 } finally {
@@ -202,6 +206,17 @@ async function assertGeometry(page, label) {
     }
     return out
   })
+  if (label === 'sidebar-collapsed' || label === 'mobile-home') {
+    const visibleRailButtons = page.locator('.identity-rail button:visible')
+    const count = await visibleRailButtons.count()
+    if (count !== 1)
+      failures.push(`collapsed sidebar exposes ${String(count)} buttons`)
+    else if (
+      (await visibleRailButtons.first().getAttribute('aria-label')) !==
+      '展开侧栏'
+    )
+      failures.push('collapsed sidebar button does not expand the sidebar')
+  }
   if (failures.length) throw new Error(`${label}: ${failures.join('; ')}`)
 }
 
