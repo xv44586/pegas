@@ -68,6 +68,9 @@ importers:
       knip:
         specifier: ^6.45.1
         version: 6.45.1
+      playwright:
+        specifier: ^1.56.1
+        version: 1.65.1
       prettier:
         specifier: ^3.10.1
         version: 3.10.1
@@ -2584,6 +2587,22 @@ packages:
       }
     engines: { node: '>=12' }
 
+  playwright-core@1.65.1:
+    resolution:
+      {
+        integrity: sha512-hqPpz7blSMPxWVdoeE1yiBSzXsKiVOd2k+kjCvmUywD2GPO2Dd9HfcWnq9NN0GHbNZDFgZ9JfBFr+X5/BLo0qw==,
+      }
+    engines: { node: '>=20' }
+    hasBin: true
+
+  playwright@1.65.1:
+    resolution:
+      {
+        integrity: sha512-vJ1FuoOrNwOKHUIVEvSt3jT1L+wjjDpwhwIstKtfvTh8XIG4FG4bIFuvNdMxi81LGfAhUgUZleVFaOLY4RIUUw==,
+      }
+    engines: { node: '>=20' }
+    hasBin: true
+
   postcss@8.5.33:
     resolution:
       {
@@ -4710,6 +4729,12 @@ snapshots:
   picocolors@1.1.1: {}
 
   picomatch@4.0.7: {}
+
+  playwright-core@1.65.1: {}
+
+  playwright@1.65.1:
+    dependencies:
+      playwright-core: 1.65.1
 
   postcss@8.5.33:
     dependencies:

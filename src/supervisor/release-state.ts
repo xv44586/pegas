@@ -79,8 +79,16 @@ export class ReleaseStateStore {
     return inspection.state
   }
 
-  stage(manifest: CandidateManifest, artifactPath: string): SupervisorState {
-    const candidate = verifyCandidateManifest(manifest, artifactPath).release
+  stage(
+    manifest: CandidateManifest,
+    artifactPath: string,
+    reviewReportPath: string,
+  ): SupervisorState {
+    const candidate = verifyCandidateManifest(
+      manifest,
+      artifactPath,
+      reviewReportPath,
+    ).release
     const current = this.read()
     if (candidate.id === current.active.id) return current
     const next: SupervisorState = {

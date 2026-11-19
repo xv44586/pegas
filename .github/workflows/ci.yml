@@ -14,6 +14,11 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # Pull request workflows otherwise test GitHub's synthetic merge
+          # commit, which cannot be bound to an immutable Pegas Candidate.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: pnpm/action-setup@v4
         with:
           version: 11.25.0
@@ -24,3 +29,45 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - run: pnpm smoke
+      - name: Detect UI changes
+        id: changed
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          if git diff --quiet "origin/${{ github.base_ref }}...HEAD" -- web; then
+            echo "ui=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ui=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Install review browser
+        if: github.event_name == 'pull_request' && steps.changed.outputs.ui == 'true'
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Capture temporary UI review media
+        if: github.event_name == 'pull_request' && steps.changed.outputs.ui == 'true'
+        run: pnpm review:ui -- --changed-from "origin/${{ github.base_ref }}"
+      - name: Generate temporary review evidence
+        if: github.event_name == 'pull_request'
+        env:
+          REVIEW_FEATURE_IDS: ${{ github.event.pull_request.title }}
+          REVIEW_TITLE: ${{ github.event.pull_request.title }}
+        run: >-
+          pnpm review:evidence --
+          --changed-from "origin/${{ github.base_ref }}"
+          --artifacts-dir output/feature-review/media
+          --passed "pnpm check|format, lint, types, dead code, coverage and build passed"
+          --passed "pnpm smoke|isolated end-to-end smoke passed"
+      - name: Add review evidence to the job summary
+        if: always() && github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          if [ -f output/feature-review/summary.md ]; then
+            cat output/feature-review/summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload temporary review evidence
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: feature-review-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+          path: output/feature-review
+          retention-days: 7
+          if-no-files-found: warn

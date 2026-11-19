@@ -21,6 +21,7 @@ Pegas 仍处于早期阶段，因此现在就把边界、测试和可恢复性�
 - Feature Map 的状态、实现入口、测试证据和下一缺口已更新；
 - 架构或运行方式变化时，对应文档同步更新。
 - 已完成 Lesson 检查，并记录新增、更新或“无新 Lesson”。
+- CI 临时审核报告没有关键 `Not tried`，审核记录明确写出 reviewed commit SHA。
 
 ## 本地质量检查
 
@@ -31,6 +32,8 @@ pnpm smoke
 ```
 
 `pnpm check` 依次验证格式、ESLint、TypeScript、无用代码、覆盖率阈值和生产构建。`pnpm test` 可用于快速反馈，但提交前必须运行完整检查。
+
+UI 改动由 CI 在隔离 Pegas 实例中生成短期截图；本地可运行 `pnpm review:ui -- --changed-from origin/main`。`pnpm review:evidence` 把准确 SHA、命令结果和媒体哈希写入 `output/feature-review/`。这些运行产物只供审核和 Candidate stage 使用，不进入主分支；详见 [Feature Review 门禁](docs/feature-review-gate.md)。
 
 覆盖率基线由 `vitest.config.ts` 管理。阈值只能在新增验证后保持或提高；不要通过降低阈值掩盖缺失测试。动态入口导致 Knip 误报时，只添加精确到文件或符号的例外。
 
