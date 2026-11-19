@@ -84,6 +84,9 @@ export interface OutboxMessage {
   payload: unknown
   status: 'pending' | 'sending' | 'sent' | 'failed' | 'unknown'
   createdAt: string
+  updatedAt?: string
+  sentAt?: string
+  readAt?: string
 }
 
 export interface Snapshot {

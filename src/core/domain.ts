@@ -141,6 +141,7 @@ export interface OutboxMessage {
   createdAt: string
   updatedAt: string
   sentAt?: string
+  readAt?: string
 }
 
 export interface ReleaseRef {

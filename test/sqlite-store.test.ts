@@ -227,6 +227,32 @@ describe('PegasStore', () => {
     store.close()
   })
 
+  it('tracks product read state separately from delivery state', () => {
+    const clock = new MutableClock('2026-11-19T09:00:00.000Z')
+    const store = new PegasStore(':memory:', { clock })
+    const message = store.enqueueOutbox({
+      userId: 'owner',
+      channel: 'conversation',
+      dedupeKey: 'attention-one',
+      payload: { type: 'run.failed', error: 'Needs attention' },
+    })
+
+    expect(message.readAt).toBeUndefined()
+    expect(message.status).toBe('pending')
+    const read = store.markOutboxRead(message.id, 'owner')
+    expect(read.readAt).toBe('2026-11-19T09:00:00.000Z')
+    expect(read.status).toBe('pending')
+
+    clock.set('2026-11-19T10:00:00.000Z')
+    expect(store.markOutboxRead(message.id, 'owner').readAt).toBe(
+      '2026-11-19T09:00:00.000Z',
+    )
+    expect(() => store.markOutboxRead(message.id, 'other')).toThrow(
+      'does not exist for user',
+    )
+    store.close()
+  })
+
   it('does not duplicate a run when routing is replayed after a crash', () => {
     const store = new PegasStore(':memory:')
     const { event } = store.enqueueEvent({
@@ -686,7 +712,7 @@ describe('PegasStore', () => {
           .prepare('SELECT version FROM schema_migrations ORDER BY version')
           .all() as { version: number }[]
         expect(versions.map(row => row.version)).toEqual([
-          1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
+          1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
         ])
         expect(
           (
@@ -703,6 +729,13 @@ describe('PegasStore', () => {
               name: string
             }[]
           ).some(column => column.name === 'model_connection_id'),
+        ).toBe(true)
+        expect(
+          (
+            db.prepare('PRAGMA table_info(outbox_messages)').all() as {
+              name: string
+            }[]
+          ).some(column => column.name === 'read_at'),
         ).toBe(true)
         expect(
           (

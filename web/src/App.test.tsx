@@ -831,6 +831,89 @@ describe('Pegas web app', () => {
     ).toBeUndefined()
   })
 
+  it('navigates Outbox from the left rail, keeps read and delivery state separate, and opens the source Channel', async () => {
+    const channel = {
+      id: 'task-outbox-1',
+      taskId: 'task-outbox-1',
+      userId: 'owner',
+      originEventId: 'event-outbox-1',
+      title: '检查发布结果',
+      goal: '确认发布是否完成',
+      status: 'completed',
+      workerIconId: 'computer',
+      createdAt: '2026-11-19T08:00:00.000Z',
+      updatedAt: '2026-11-19T08:05:00.000Z',
+      latestActivityAt: '2026-11-19T08:05:00.000Z',
+      canResume: true,
+      canStop: false,
+    }
+    const message = {
+      id: 'outbox-1',
+      userId: 'owner',
+      taskId: channel.id,
+      payload: {
+        type: 'run.completed',
+        text: '发布检查已经完成。',
+      },
+      status: 'pending',
+      createdAt: '2026-11-19T08:05:00.000Z',
+    }
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path =
+        input instanceof Request
+          ? input.url
+          : input instanceof URL
+            ? input.href
+            : input
+      if (path === '/v1/outbox/outbox-1/read' && init?.method === 'POST')
+        return Promise.resolve(
+          Response.json({
+            message: { ...message, readAt: '2026-11-19T08:06:00.000Z' },
+          }),
+        )
+      if (path.startsWith('/v1/channels'))
+        return Promise.resolve(Response.json({ channels: [channel] }))
+      if (path.startsWith('/v1/events'))
+        return Promise.resolve(Response.json({ events: [] }))
+      if (path.startsWith('/v1/runs'))
+        return Promise.resolve(Response.json({ runs: [] }))
+      if (path.startsWith('/v1/outbox'))
+        return Promise.resolve(Response.json({ messages: [message] }))
+      return Promise.resolve(Response.json({}))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+
+    const outboxNavigation = await screen.findByRole('button', {
+      name: /Outbox/,
+    })
+    expect(within(outboxNavigation).getByText('1')).toBeTruthy()
+    fireEvent.click(outboxNavigation)
+    expect(
+      await screen.findByRole('heading', { name: 'Outbox', level: 1 }),
+    ).toBeTruthy()
+    expect(
+      screen.getByRole('heading', { name: '需要你关注的消息' }),
+    ).toBeTruthy()
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([path, init]) =>
+            path === '/v1/outbox/outbox-1/read' && init?.method === 'POST',
+        ),
+      ).toBe(true),
+    )
+    expect(screen.getByText('等待投递')).toBeTruthy()
+    expect(screen.getAllByText('已读').length).toBeGreaterThan(0)
+
+    fireEvent.click(screen.getByRole('button', { name: '检查发布结果' }))
+    expect(screen.getByRole('complementary', { name: '工作区' })).toBeTruthy()
+    expect(
+      screen.getByRole('heading', { name: '检查发布结果', level: 2 }),
+    ).toBeTruthy()
+  })
+
   it('confirms a permanent stop and makes the stopped channel read-only', async () => {
     let channel = {
       id: 'task-stop-1',

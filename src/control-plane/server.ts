@@ -353,6 +353,27 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         return sendJson(response, 202, { message })
       }
 
+      const readOutboxMatch = request.url?.match(
+        /^\/v1\/outbox\/([^/]+)\/read$/,
+      )
+      if (readOutboxMatch && request.method === 'POST') {
+        const body = await readJson(request)
+        if (
+          !body ||
+          typeof body !== 'object' ||
+          !('userId' in body) ||
+          typeof body.userId !== 'string' ||
+          !body.userId.trim()
+        )
+          throw new Error('userId is required')
+        return sendJson(response, 200, {
+          message: options.store.markOutboxRead(
+            decodeURIComponent(readOutboxMatch[1] ?? ''),
+            body.userId,
+          ),
+        })
+      }
+
       if (request.url?.startsWith('/v1/outbox') && request.method === 'GET') {
         const url = new URL(request.url, 'http://localhost')
         const userId = url.searchParams.get('userId')

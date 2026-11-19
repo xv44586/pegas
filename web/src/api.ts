@@ -190,6 +190,19 @@ export class PegasApi {
     if (!response.ok) await throwResponse(response)
   }
 
+  async markOutboxRead(messageId: string): Promise<OutboxMessage> {
+    const response = await fetch(
+      `/v1/outbox/${encodeURIComponent(messageId)}/read`,
+      {
+        method: 'POST',
+        headers: this.#headers(true),
+        body: JSON.stringify({ userId: this.#userId }),
+      },
+    )
+    if (!response.ok) await throwResponse(response)
+    return ((await response.json()) as { message: OutboxMessage }).message
+  }
+
   async saveSettings(
     settings: RuntimeSettings,
     provider: ModelProviderDraft,

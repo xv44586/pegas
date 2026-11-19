@@ -637,6 +637,44 @@ describe('control plane', () => {
     ])
   })
 
+  it('marks an owned Outbox item read without changing delivery state', async () => {
+    const store = new PegasStore(':memory:')
+    const message = store.enqueueOutbox({
+      userId: 'owner',
+      channel: 'conversation',
+      dedupeKey: 'read-me',
+      payload: { type: 'agent.message', text: 'Review this result.' },
+    })
+    const server = createControlPlane({ store, apiToken: 'secret' })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    cleanups.push(
+      () => new Promise<void>(resolve => server.close(() => resolve())),
+      () => Promise.resolve(store.close()),
+    )
+    const base = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+    const markRead = (userId: string) =>
+      fetch(`${base}/v1/outbox/${message.id}/read`, {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer secret',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ userId }),
+      })
+
+    const response = await markRead('owner')
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as {
+      message: { id: string; status: string; readAt?: string }
+    }
+    expect(body.message).toMatchObject({
+      id: message.id,
+      status: 'pending',
+    })
+    expect(typeof body.message.readAt).toBe('string')
+    expect((await markRead('other')).status).toBe(400)
+  })
+
   it('transcribes a draft without enqueueing it and can accept a direct voice message', async () => {
     const store = new PegasStore(':memory:')
     const transcribe = vi.fn(() =>

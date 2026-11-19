@@ -138,7 +138,8 @@ type TimelineItem =
   | { kind: 'event'; createdAt: string; value: InboxEvent }
   | { kind: 'message'; createdAt: string; value: OutboxMessage }
 
-type AppView = 'conversation' | 'tasks' | 'bot' | 'settings' | 'plugins'
+type AppView =
+  'conversation' | 'tasks' | 'outbox' | 'bot' | 'settings' | 'plugins'
 
 function viewFromUrl(): AppView {
   const parameters = new URLSearchParams(window.location.search)
@@ -146,6 +147,7 @@ function viewFromUrl(): AppView {
   if (
     view === 'conversation' ||
     view === 'tasks' ||
+    view === 'outbox' ||
     view === 'bot' ||
     view === 'settings' ||
     view === 'plugins'
@@ -171,6 +173,9 @@ export function App() {
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [activeView, setActiveView] = useState<AppView>(viewFromUrl)
+  const [selectedOutboxId, setSelectedOutboxId] = useState(
+    () => new URLSearchParams(window.location.search).get('outbox') ?? '',
+  )
   const [sidebarCollapsed, setSidebarCollapsed] = useState(narrowSidebar)
   const [workspaceOpen, setWorkspaceOpen] = useState(Boolean(initialTaskId))
   const workspaceVisible =
@@ -189,6 +194,7 @@ export function App() {
   const composer = useRef<HTMLTextAreaElement>(null)
   const workspaceTrigger = useRef<HTMLElement | null>(null)
   const modalTrigger = useRef<HTMLElement | null>(null)
+  const markingOutboxRead = useRef(new Set<string>())
   const api = useMemo(() => new PegasApi(userId, token), [token])
   const appendTranscript = useCallback((text: string) => {
     setDraft(current => `${current}${current.trim() ? '\n' : ''}${text}`)
@@ -221,6 +227,9 @@ export function App() {
   }
   const activeTaskCount = snapshot.channels.filter(task =>
     isActiveTask(task.status),
+  ).length
+  const unreadOutboxCount = snapshot.messages.filter(
+    message => !message.readAt,
   ).length
 
   const loadSnapshot = useCallback(async () => {
@@ -256,12 +265,39 @@ export function App() {
         new URLSearchParams(window.location.search).get('task') ??
         ''
       setSelectedTaskId(taskId)
+      setSelectedOutboxId(
+        new URLSearchParams(window.location.search).get('outbox') ?? '',
+      )
       setWorkspaceOpen(Boolean(taskId))
       setActiveView(viewFromUrl())
     }
     window.addEventListener('popstate', handlePopState)
     return () => window.removeEventListener('popstate', handlePopState)
   }, [])
+
+  useEffect(() => {
+    if (activeView !== 'outbox' || !selectedOutboxId) return
+    const message = snapshot.messages.find(
+      candidate => candidate.id === selectedOutboxId,
+    )
+    if (!message || message.readAt || markingOutboxRead.current.has(message.id))
+      return
+    markingOutboxRead.current.add(message.id)
+    void api
+      .markOutboxRead(message.id)
+      .then(read => {
+        setSnapshot(current => ({
+          ...current,
+          messages: current.messages.map(candidate =>
+            candidate.id === read.id ? { ...candidate, ...read } : candidate,
+          ),
+        }))
+      })
+      .catch((caught: unknown) => {
+        setError(caught instanceof Error ? caught.message : '无法标记为已读')
+      })
+      .finally(() => markingOutboxRead.current.delete(message.id))
+  }, [activeView, api, selectedOutboxId, snapshot.messages])
 
   const timeline = useMemo<TimelineItem[]>(() => {
     const items: TimelineItem[] = [
@@ -298,6 +334,7 @@ export function App() {
     url.searchParams.delete('view')
     url.searchParams.delete('channel')
     url.searchParams.delete('task')
+    url.searchParams.delete('outbox')
     window.history.pushState({ view: 'conversation' }, '', url)
     usePrompt('')
   }
@@ -311,6 +348,7 @@ export function App() {
     url.searchParams.delete('view')
     url.searchParams.delete('channel')
     url.searchParams.delete('task')
+    url.searchParams.delete('outbox')
     window.history.pushState({ view: 'conversation' }, '', url)
     usePrompt(related ? `继续处理「${related.title}」：` : '')
   }
@@ -323,6 +361,7 @@ export function App() {
     const url = new URL(window.location.href)
     url.searchParams.delete('view')
     url.searchParams.delete('task')
+    url.searchParams.delete('outbox')
     url.searchParams.set('channel', taskId)
     window.history.pushState({ taskId }, '', url)
   }
@@ -335,8 +374,21 @@ export function App() {
     const url = new URL(window.location.href)
     url.searchParams.set('view', 'tasks')
     url.searchParams.delete('task')
+    url.searchParams.delete('outbox')
     url.searchParams.set('channel', taskId)
     window.history.pushState({ taskId }, '', url)
+  }
+
+  function openOutbox(messageId: string): void {
+    setActiveView('outbox')
+    setSelectedOutboxId(messageId)
+    setWorkspaceOpen(false)
+    const url = new URL(window.location.href)
+    url.searchParams.set('view', 'outbox')
+    url.searchParams.set('outbox', messageId)
+    url.searchParams.delete('channel')
+    url.searchParams.delete('task')
+    window.history.pushState({ messageId }, '', url)
   }
 
   function closeWorkspace(): void {
@@ -366,6 +418,7 @@ export function App() {
     url.searchParams.delete('view')
     url.searchParams.delete('channel')
     url.searchParams.delete('task')
+    url.searchParams.delete('outbox')
     window.history.pushState({ view: 'conversation' }, '', url)
     window.requestAnimationFrame(() => composer.current?.focus())
   }
@@ -373,6 +426,16 @@ export function App() {
   function navigate(view: AppView): void {
     setActiveView(view)
     const url = new URL(window.location.href)
+    if (view !== 'outbox') url.searchParams.delete('outbox')
+    if (view === 'outbox' && !selectedOutboxId) {
+      const first = snapshot.messages.toSorted((left, right) =>
+        right.createdAt.localeCompare(left.createdAt),
+      )[0]
+      if (first) {
+        setSelectedOutboxId(first.id)
+        url.searchParams.set('outbox', first.id)
+      }
+    }
     if (view === 'conversation' && !url.searchParams.has('task'))
       url.searchParams.delete('view')
     else url.searchParams.set('view', view)
@@ -518,7 +581,7 @@ export function App() {
 
         <nav
           className="task-sidebar-list"
-          aria-label="Channels"
+          aria-label="工作列表"
           hidden={sidebarCollapsed}
         >
           <button
@@ -540,12 +603,86 @@ export function App() {
             <span>Personal agent</span>
           </button>
 
+          <div className="sidebar-section-nav" aria-label="工作导航">
+            <button
+              type="button"
+              className={activeView === 'outbox' ? '' : 'is-active'}
+              aria-current={activeView === 'outbox' ? undefined : 'page'}
+              onClick={() => navigate('tasks')}
+            >
+              <DsFolderIcon />
+              <span>Channels</span>
+              <span>{snapshot.channels.length}</span>
+            </button>
+            <button
+              type="button"
+              className={activeView === 'outbox' ? 'is-active' : ''}
+              aria-current={activeView === 'outbox' ? 'page' : undefined}
+              onClick={() => navigate('outbox')}
+            >
+              <MessageSquareText aria-hidden="true" />
+              <span>Outbox</span>
+              <span>{unreadOutboxCount}</span>
+            </button>
+          </div>
           <div className="channel-list-heading">
-            <span>Channels</span>
-            <span>{snapshot.channels.length}</span>
+            <span>{activeView === 'outbox' ? '需要关注' : '最近 Channel'}</span>
+            <span>
+              {activeView === 'outbox'
+                ? snapshot.messages.length
+                : snapshot.channels.length}
+            </span>
           </div>
           <div className="task-rows">
-            {snapshot.channels.length === 0 ? (
+            {activeView === 'outbox' ? (
+              snapshot.messages.length === 0 ? (
+                <div className="sidebar-empty">暂无需要关注的消息</div>
+              ) : (
+                snapshot.messages
+                  .toSorted((left, right) =>
+                    right.createdAt.localeCompare(left.createdAt),
+                  )
+                  .map(message => {
+                    const channel = snapshot.channels.find(
+                      candidate => candidate.id === message.taskId,
+                    )
+                    return (
+                      <button
+                        type="button"
+                        className={`task-row outbox-row${selectedOutboxId === message.id ? ' is-active' : ''}`}
+                        aria-label={`查看 Outbox：${outboxTitle(message)}`}
+                        aria-current={
+                          selectedOutboxId === message.id ? 'page' : undefined
+                        }
+                        key={message.id}
+                        onClick={() => openOutbox(message.id)}
+                      >
+                        <span className="task-row-mark">
+                          {channel ? (
+                            <PegasAgentIcon
+                              iconId={channel.workerIconId}
+                              status={channel.status}
+                              size={34}
+                            />
+                          ) : (
+                            <PegasAgentIcon iconId="bot" size={34} />
+                          )}
+                        </span>
+                        <span className="task-row-copy">
+                          <strong>{outboxTitle(message)}</strong>
+                          <small>{outboxSummary(message)}</small>
+                        </span>
+                        {!message.readAt && (
+                          <>
+                            <span className="task-unread" aria-hidden="true" />
+                            <span className="sr-only">未读</span>
+                          </>
+                        )}
+                      </button>
+                    )
+                  })
+              )
+            ) : snapshot.channels.length === 0 ? (
               <button
                 type="button"
                 className="task-row is-active"
@@ -640,21 +777,25 @@ export function App() {
                   ? (sidebarSelectedTask?.title ?? 'Pegas')
                   : activeView === 'tasks'
                     ? 'Channels'
-                    : activeView === 'bot'
-                      ? 'Pegas 设置'
-                      : activeView === 'plugins'
-                        ? '插件'
-                        : '设置'}
+                    : activeView === 'outbox'
+                      ? 'Outbox'
+                      : activeView === 'bot'
+                        ? 'Pegas 设置'
+                        : activeView === 'plugins'
+                          ? '插件'
+                          : '设置'}
               </h1>
               {activeView !== 'settings' &&
                 activeView !== 'bot' &&
                 activeView !== 'plugins' && (
                   <span>
-                    {activeView === 'conversation'
-                      ? error
-                        ? '连接中断'
-                        : '在线，随时可以开始'
-                      : `${String(activeTaskCount)} 件正在推进`}
+                    {activeView === 'outbox'
+                      ? `${String(unreadOutboxCount)} 条未读`
+                      : activeView === 'conversation'
+                        ? error
+                          ? '连接中断'
+                          : '在线，随时可以开始'
+                        : `${String(activeTaskCount)} 件正在推进`}
                   </span>
                 )}
             </div>
@@ -891,6 +1032,14 @@ export function App() {
             tasks={snapshot.channels}
             runs={snapshot.runs}
             onOpen={openTask}
+          />
+        ) : activeView === 'outbox' ? (
+          <OutboxPage
+            channels={snapshot.channels}
+            messages={snapshot.messages}
+            selectedId={selectedOutboxId}
+            onSelect={openOutbox}
+            onOpenChannel={openTask}
           />
         ) : activeView === 'bot' ? (
           <SettingsPage
@@ -3166,6 +3315,170 @@ function TaskPulse({
         </span>
       </div>
     </button>
+  )
+}
+
+function outboxTitle(message: OutboxMessage): string {
+  const payload = asRecord(message.payload)
+  switch (recordString(payload, 'type', '')) {
+    case 'run.completed':
+      return 'Channel 已完成'
+    case 'run.failed':
+      return '执行失败，需要处理'
+    case 'run.acknowledged':
+      return 'Worker 已开始处理'
+    case 'agent.message':
+      return 'Pegas 消息'
+    default:
+      return '工作状态更新'
+  }
+}
+
+function outboxSummary(message: OutboxMessage): string {
+  const payload = asRecord(message.payload)
+  return recordString(
+    payload,
+    'text',
+    recordString(payload, 'error', '打开查看详情'),
+  )
+}
+
+function outboxDeliveryCopy(status: OutboxMessage['status']): string {
+  switch (status) {
+    case 'pending':
+      return '等待投递'
+    case 'sending':
+      return '正在投递'
+    case 'sent':
+      return '已投递'
+    case 'failed':
+      return '投递失败'
+    case 'unknown':
+      return '投递状态未知'
+  }
+}
+
+function OutboxPage({
+  messages,
+  channels,
+  selectedId,
+  onSelect,
+  onOpenChannel,
+}: {
+  messages: OutboxMessage[]
+  channels: WorkChannel[]
+  selectedId: string
+  onSelect: (messageId: string) => void
+  onOpenChannel: (channelId: string) => void
+}) {
+  const sorted = messages.toSorted((left, right) =>
+    right.createdAt.localeCompare(left.createdAt),
+  )
+  const selected =
+    sorted.find(message => message.id === selectedId) ?? sorted[0]
+  const source = selected?.taskId
+    ? channels.find(channel => channel.id === selected.taskId)
+    : undefined
+
+  return (
+    <section className="outbox-page" aria-labelledby="outbox-page-title">
+      <header className="outbox-intro">
+        <div>
+          <h2 id="outbox-page-title">需要你关注的消息</h2>
+          <p>已读状态与外部投递状态分开记录。</p>
+        </div>
+        <span className="outbox-unread-total">
+          {String(messages.filter(message => !message.readAt).length)} 条未读
+        </span>
+      </header>
+
+      {sorted.length === 0 ? (
+        <div className="outbox-empty">
+          <MessageSquareText aria-hidden="true" />
+          <h3>目前没有需要处理的消息</h3>
+          <p>重要结果、失败和等待你决定的事项会出现在这里。</p>
+        </div>
+      ) : (
+        <div className="outbox-layout">
+          <section className="outbox-list" aria-labelledby="outbox-list-title">
+            <h3 id="outbox-list-title">消息列表</h3>
+            <ul role="list">
+              {sorted.map(message => (
+                <li key={message.id}>
+                  <button
+                    type="button"
+                    className={
+                      selected?.id === message.id ? 'is-selected' : undefined
+                    }
+                    aria-current={
+                      selected?.id === message.id ? 'true' : undefined
+                    }
+                    onClick={() => onSelect(message.id)}
+                  >
+                    <span className="outbox-list-title">
+                      {!message.readAt && (
+                        <span
+                          className="outbox-unread-dot"
+                          aria-hidden="true"
+                        />
+                      )}
+                      {outboxTitle(message)}
+                    </span>
+                    <span>{outboxSummary(message)}</span>
+                    <time dateTime={message.createdAt}>
+                      {formatRelativeTime(message.createdAt)}
+                    </time>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+
+          {selected && (
+            <article
+              className="outbox-detail"
+              aria-labelledby="outbox-detail-title"
+            >
+              <header>
+                <span
+                  className={`outbox-read-state${selected.readAt ? '' : ' is-unread'}`}
+                >
+                  {selected.readAt ? '已读' : '未读'}
+                </span>
+                <h3 id="outbox-detail-title">{outboxTitle(selected)}</h3>
+                <time dateTime={selected.createdAt}>
+                  {new Date(selected.createdAt).toLocaleString('zh-CN')}
+                </time>
+              </header>
+              <p className="outbox-detail-copy">{outboxSummary(selected)}</p>
+              <dl>
+                <div>
+                  <dt>产品状态</dt>
+                  <dd>{selected.readAt ? '已读' : '未读'}</dd>
+                </div>
+                <div>
+                  <dt>投递状态</dt>
+                  <dd>{outboxDeliveryCopy(selected.status)}</dd>
+                </div>
+                {source && (
+                  <div>
+                    <dt>来源 Channel</dt>
+                    <dd>
+                      <button
+                        type="button"
+                        onClick={() => onOpenChannel(source.id)}
+                      >
+                        {source.title}
+                      </button>
+                    </dd>
+                  </div>
+                )}
+              </dl>
+            </article>
+          )}
+        </div>
+      )}
+    </section>
   )
 }
 

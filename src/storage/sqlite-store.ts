@@ -332,6 +332,12 @@ ALTER TABLE tasks ADD COLUMN worker_icon_id TEXT
   CHECK (worker_icon_id IN ('car', 'camera', 'computer', 'phone'));
 `
 
+const migration12 = `
+ALTER TABLE outbox_messages ADD COLUMN read_at TEXT;
+CREATE INDEX outbox_messages_by_user_read
+ON outbox_messages (user_id, read_at, created_at DESC);
+`
+
 interface InboxRow {
   id: string
   user_id: string
@@ -398,6 +404,7 @@ interface OutboxRow {
   created_at: string
   updated_at: string | null
   sent_at: string | null
+  read_at: string | null
 }
 
 interface RuntimeSettingsRow {
@@ -475,6 +482,7 @@ export class PegasStore {
     this.#migrate(10, migration10)
     this.#migrate(11, migration11)
     this.#backfillWorkerIconIds()
+    this.#migrate(12, migration12)
   }
 
   #backfillWorkerIconIds(): void {
@@ -1577,6 +1585,20 @@ export class PegasStore {
     return rows.map(row => toOutboxMessage(row as unknown as OutboxRow))
   }
 
+  markOutboxRead(messageId: string, userId: string): OutboxMessage {
+    const now = this.#clock.now().toISOString()
+    const result = this.#database
+      .prepare(
+        `UPDATE outbox_messages
+         SET read_at = COALESCE(read_at, ?), updated_at = ?
+         WHERE id = ? AND user_id = ?`,
+      )
+      .run(now, now, messageId, userId)
+    if (result.changes !== 1)
+      throw new Error(`Outbox message ${messageId} does not exist for user`)
+    return this.#outboxById(messageId)
+  }
+
   claimNextOutbox(
     dispatcherId: string,
     leaseMs = 30_000,
@@ -1858,5 +1880,6 @@ function toOutboxMessage(row: OutboxRow): OutboxMessage {
     createdAt: row.created_at,
     updatedAt: row.updated_at ?? row.created_at,
     ...(row.sent_at ? { sentAt: row.sent_at } : {}),
+    ...(row.read_at ? { readAt: row.read_at } : {}),
   }
 }

@@ -2,7 +2,7 @@
 
 > Feature：`CHANNEL-001`
 >
-> 状态：CHANNEL-001 Usable；其余拆分能力 Planned
+> 状态：CHANNEL-001、NOTIFY-003 Usable；其余拆分能力按 Feature Map 追踪
 >
 > 更新日期：2026-11-19
 
@@ -384,7 +384,7 @@ Outbox 的投递状态与产品已读状态分离；`sent` 不代表用户已经
 | `WORKER-001`   | Worker 继承全局模型并支持显式覆盖、配置快照和受控 Session rollover                      | `CHANNEL-001`, `SETTINGS-001`                                      | Planned  |
 | `COLLAB-001`   | 委派、交接、context note、handback 和结果回送形成持久闭环                               | `CHANNEL-002`, `WORKER-001`, `ROUTE-002`                           | Planned  |
 | `CHANNEL-003`  | 按 ID/对话搜索，并按创建/结束时间和状态排序过滤                                         | `CHANNEL-002`                                                      | Planned  |
-| `NOTIFY-003`   | Web Outbox 提供列表、详情、已读和 Attention 操作                                        | `NOTIFY-001`, `CHANNEL-001`                                        | Planned  |
+| `NOTIFY-003`   | Web Outbox 提供列表、详情、已读和来源 Channel 跳转                                      | `NOTIFY-001`, `CHANNEL-001`                                        | Usable   |
 | `USAGE-001`    | 按 Worker、Channel、Run 记录供应商真实 token、cache、延迟和费用来源                     | `WORKER-001`, `CHANNEL-002`                                        | Planned  |
 | `MEMORY-001`   | 全局、Worker 范围和 Channel 局部记忆可查看、纠正和删除                                  | `WORKER-001`, `CHANNEL-001`                                        | Planned  |
 | `SCHEDULE-001` | Automation 独立保存；Invocation 经 Event Inbox 唤醒当前或新 Channel                     | `CHANNEL-001`, `WORKER-001`                                        | Planned  |
@@ -417,7 +417,7 @@ CHANNEL-001
 ## CHANNEL-001 非目标
 
 - 不实现 WorkerProfile 持久化或模型覆盖。
-- 不实现真实委派、交接、全文搜索、已读 Outbox、用量、记忆或定时任务。
+- 不实现真实委派、交接、全文搜索、用量、记忆或定时任务；已读 Outbox 已由后续 `NOTIFY-003` 独立实现。
 - 不重命名 Task 数据表、Router schema、Run 外键或外部 webhook 字段。
 - 不修改正在进行的品牌图标 Feature，不引入临时图标替代品。
 
