@@ -131,6 +131,18 @@
 - Enforcement：尚未晋升；本轮以 DOM 和 CSS 回归测试覆盖。
 - Owner / next action：后续独立日期复发时补充可视化几何门禁。
 
+### LESSON-20261119-01：发布目录不能成为不可恢复的 Session 身份
+
+- Rule：Executor 恢复必须区分“已开始执行后的失败”和运行时在执行前明确拒绝的 workspace 身份漂移；只有后者可以自动新建 session。
+- Why：Candidate worktree 切换后，历史 DSH session 仍绑定旧路径，新的 Worker 使用当前路径恢复时把运行时路径错误直接展示给用户，导致可用模型看起来不可用。
+- Feature：EXEC-003
+- Evidence：用户提供的对话错误截图；`test/dsh-cli-executor.test.ts` 跨 workspace session 恢复回归。
+- Seen：1（2026-11-19）
+- Severity：normal
+- Status：Observed
+- Enforcement：尚未晋升；本轮以精确错误匹配和回归测试约束，其他失败仍保持不可自动重放。
+- Owner / next action：将 Task workspace 与 Candidate artifact 生命周期彻底解耦，并补真实 Candidate 切换故障演练。
+
 <!--
 ### LESSON-YYYYMMDD-NN：简短标题
 

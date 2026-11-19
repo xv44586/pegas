@@ -164,6 +164,38 @@ console.log(JSON.stringify({
     expect(observedSession).toBe('session-existing')
   })
 
+  it('starts a fresh session when DSH rejects a session from another workspace', async () => {
+    const command = fakeDsh(`
+if (process.argv.includes('--session-id')) {
+  console.error('session "session-old" was recorded in "/old/worktree", not "/current/worktree"')
+  process.exit(1)
+}
+console.log(JSON.stringify({
+  type: 'final',
+  sessionId: 'session-fresh',
+  text: 'continued in the current workspace',
+  reason: { kind: 'completed' }
+}))
+`)
+    const executor = new DshCliExecutor({ command })
+    const observedSessions: string[] = []
+
+    const result = await executor.execute({
+      runId: 'run-migrated-workspace',
+      taskId: 'task-1',
+      prompt: 'continue the work',
+      workingDirectory: process.cwd(),
+      resumeSessionId: 'session-old',
+      onExecutorRef: value => observedSessions.push(value),
+    })
+
+    expect(result).toEqual({
+      executorRef: 'session-fresh',
+      output: 'continued in the current workspace',
+    })
+    expect(observedSessions).toEqual(['session-fresh'])
+  })
+
   it('patches the selected agent model only for a new session', async () => {
     const command = fakeDsh(`
 const fs = require('node:fs')

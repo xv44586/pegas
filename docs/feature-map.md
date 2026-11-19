@@ -2,7 +2,7 @@
 
 > 状态：Living Document
 >
-> 更新日期：2026-11-18
+> 更新日期：2026-11-19
 
 Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查这里和代码，确认能力是否已经存在、权威实现在哪里、还缺什么；功能合入时必须同步更新对应条目。它不代替 Issue 或路线图，而是防止同一能力被不同入口重复实现。
 
@@ -30,7 +30,7 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 | TASK-001     | 五状态工作项与独立 Run，失败重试保留完整执行历史                                   | Usable   | `src/storage/sqlite-store.ts`, `docs/task-lifecycle.md`                                                                              | `test/sqlite-store.test.ts`, `test/control-plane.test.ts`, Web 重试回归                                                        | 完成/取消控制入口、依赖、暂停                |
 | EXEC-001     | DSH headless 执行任务并持久化 session，可继续同一任务                              | Usable   | `src/executor/dsh-cli-executor.ts`                                                                                                   | `test/dsh-cli-executor.test.ts`, `test/processor.test.ts`                                                                      | 进程内 Controller、结构化 Run Event          |
 | EXEC-002     | 真正拥有工具的 Agent 在实质执行前生成一次具体确认                                  | Usable   | DSH Adapter progress event、Worker Outbox                                                                                            | `test/dsh-cli-executor.test.ts`, `test/processor.test.ts`                                                                      | 将更多中间事件写入 Activity，而非聊天流      |
-| EXEC-003     | Worker 失败后按 lease 和已保存 session 恢复                                        | Partial  | `src/storage/sqlite-store.ts`, `src/core/clock.ts`, `src/worker/*`                                                                   | 确定性 lease 边界、DSH timeout/abort/stream fault tests                                                                        | 工具调用前后崩溃点、未知副作用处置           |
+| EXEC-003     | Worker 失败后按 lease 和已保存 session 恢复                                        | Partial  | `src/storage/sqlite-store.ts`, `src/core/clock.ts`, `src/worker/*`, `src/executor/dsh-cli-executor.ts`                               | 确定性 lease 边界、DSH timeout/abort/stream fault 与跨 Candidate worktree session 恢复回归                                     | 工具调用前后崩溃点、未知副作用处置           |
 | NOTIFY-001   | 结果、问题和阻塞经可靠 Outbox 主动送达                                             | Usable   | `src/storage/sqlite-store.ts`, `src/notification/dispatcher.ts`                                                                      | `test/notification.test.ts`                                                                                                    | 消息合并、静默时段、优先级                   |
 | NOTIFY-002   | Webhook 作为首个真实主动通知通道                                                   | Usable   | `src/notification/webhook-channel.ts`                                                                                                | `test/notification.test.ts`, smoke test                                                                                        | Web Push、APNs                               |
 | RECOVERY-001 | 独立 Supervisor 提供状态、重启、候选版本和回滚生命线                               | Partial  | `src/supervisor/*`, `docs/recovery-state.md`                                                                                         | 主备损坏、checksum、degraded API tests、smoke test                                                                             | 真实切换、artifact 校验与故障演练            |

@@ -260,7 +260,7 @@ artifacts(run) → artifact refs
 
 适配层把 DSH session、turn、tool call 和 Agent 状态转换为 Pegas Run Event。Pegas 核心领域不得直接保存或依赖 DSH 内部对象。
 
-第一版 Adapter 使用 DSH headless 的进程边界：每个 Run 读取 NDJSON 事件流，收到 opening session event 后立即持久化 session ID，只有进程退出码为零且 final reason 为 completed 时才完成 Run。Worker 崩溃或租约过期后，新 Worker 使用已保存的 session ID 在同一 workspace 恢复，而不是创建一个无法关联的新 session。
+第一版 Adapter 使用 DSH headless 的进程边界：每个 Run 读取 NDJSON 事件流，收到 opening session event 后立即持久化 session ID，只有进程退出码为零且 final reason 为 completed 时才完成 Run。Worker 崩溃或租约过期后，新 Worker 使用已保存的 session ID 在同一 workspace 恢复，而不是创建一个无法关联的新 session。Candidate 切换后，若 DSH 在执行用户输入前明确拒绝跨 workspace 恢复，Adapter 只针对该确定性错误废弃旧引用并在当前 workspace 新建 session；其他执行错误不得自动重放。
 
 用户消息写入 Inbox 后，HTTP 层只返回协议接收结果，Web 可以把 Inbox 状态显示为消息元数据，但不能生成一条冒充 Pegas 的固定回复。Router 完成归属后也不发送模板化“已开始”消息。真正的 Agent 加载当前工具、权限和工作区后，如果即将进行实质工具调用，应先生成一次具体确认，说明处理对象和预期结果，然后立即继续执行；直接回答则不额外制造确认。普通工具日志留在 Task Activity，只有结果、需要用户决策的问题和无法自行解决的阻塞进入 Conversation。
 
