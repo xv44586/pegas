@@ -22,7 +22,7 @@ Pegas 把随时出现的意图组织成可追踪、可恢复的长期任务，�
 
 Conversation 是统一入口，Task 是服务端持久工作生命周期，WorkChannel 是它的用户可见投影。Pegas 可以在内部创建多个 Run、session 或执行单元，但用户始终面对同一个长期存在的 Pegas；Worker 是范围化工作配置，不是独立顶层人格。
 
-完成只结束当前工作轮次：completed WorkChannel 可以在授权复核后恢复；用户明确停止或授权撤回后，原 WorkChannel 永久不可恢复，继续工作需要新建相关 Channel。Run 和 Worker Runtime 独立结束、替换和回收，不决定 Channel 历史是否存在。
+完成只结束当前工作轮次：completed WorkChannel 保留原 Mandate，经当前 Policy 复核后可以恢复；用户明确停止后，原 WorkChannel 永久不可恢复，继续工作需要重新接单并新建相关 Channel。Run 和 Worker Runtime 独立结束、替换和回收，不决定 Channel 历史是否存在。
 
 ## Operating Context
 

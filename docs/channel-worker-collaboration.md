@@ -60,21 +60,20 @@ WorkChannel 可以复用，但只复用于同一件工作的后续，不得清�
                     ┌────────────────────────────────────┐
                     ▼                                    │
 Backlog → Unstarted → Started → Completed（软结束）──────┘
-                         │
-                         └─ 用户明确停止 / 授权撤回 → Cancelled（硬结束）
+Backlog / Unstarted / Started ── 用户明确停止 → Cancelled（硬结束）
 ```
 
 - `completed` 表示当前工作已经结束，是可恢复的软结束状态。恢复创建新 Run 和新的执行绑定，不修改或复用旧 Run。
-- `cancelled` 表示用户明确停止或授权已经撤回，是不可恢复的硬结束状态。原 Channel 永远保持只读；后续工作必须在新的授权判断下创建新 Channel，并用关系记录它与原 Channel 的来源，不能把原 Task 改回未开始。
+- `cancelled` 只表示用户明确停止，是不可恢复的硬结束状态。原 Channel 永远保持只读；后续工作必须重新接单并创建新 Channel，用关系记录它与原 Channel 的来源，不能把原 Task 改回未开始。
 - `archived` 只属于产品展示和保留策略，不是 Task 执行状态；归档不能撤回授权，也不能改变能否恢复。
 - Run、Worker Runtime 和 Executor Session 与 Channel 分别结束。Run 进入终态后不再写入；Runtime 在无前台 turn、后台任务或交接等待时释放 slot；Session 只保留可选恢复引用。
 - 同一 Channel 可以先后经历多个 Run、Assignment、Runtime 和 Session。历史身份由 Channel ID 和不可变事件维持，不由进程或 Session ID 维持。
-- `completed` 只能由 Control Plane 在满足持久化完成条件、用户确认或可验证的外部事实后写入；Worker 的自由文本声明和 Runtime 正常退出都不能单独完成 Channel。
+- 当前 Run 的 Worker 可以提交结构化 `ready` 或 `dropped` Report。没有未满足完成条件时，`ready` 结束为 completed，`dropped` 结束为 dropped；绑定了审批、Artifact 或外部 Thread 等完成条件时，`ready` 只进入等待，直到 Control Plane 验证条件满足。自由文本和 Runtime 正常退出不能结束 Channel。
 
 #### 谁可以恢复
 
-- 用户在已完成 Channel 内直接发送相关输入，可以申请恢复同一 Channel。
-- 用户从 Pegas 主入口发送输入时，Router 可以在检索到的已完成候选中选择 `resume_task`；未检索到或超出原目标时创建新 Channel。
+- 用户在已完成 Channel 内直接发送输入时，稳定的 Channel/Thread 订阅关系把输入附加给原 Channel；Control Plane 复核原 Mandate 后恢复，无需新建 Router Decision。Worker 负责处理原范围内的输入，超范围输入 hand back 给 Router。
+- 用户从 Pegas 主入口发送输入时仍由 Router 判断创建新 Channel 或 `continue_task`。`continue_task` 只负责附加输入；如果目标已完成，后续恢复由同一 Mandate 状态机完成，而不是让 Router 判断授权。
 - Worker、定时扫描、CI、普通 progress、上下文 note 和其他机器事件不能单独恢复已完成 Channel。
 - 委派中的来源 Channel 在等待目标返回时保持 `started`，并使用 `waiting_on_dependency` 等状态原因，不得提前标记 `completed`。如果结果到达时来源已经 completed 或 cancelled，结果仍写入关系和时间线并按需进入 Outbox，但不能由机器事件静默恢复来源。
 - 已 `cancelled` Channel 中的新输入不能申请恢复；服务端返回结构化拒绝并允许用户把输入复制到“新建相关 Channel”。
@@ -84,12 +83,12 @@ Backlog → Unstarted → Started → Completed（软结束）──────
 Control Plane 在一个事务中完成恢复：
 
 1. 锁定 Task/WorkChannel，校验用户归属和当前状态；
-2. 拒绝 `cancelled`，并给出“新建相关 Channel”路径；重新授权只允许新建 Channel，不能复活原 Channel；
-3. 复核当前 Actor、来源渠道、Policy、原授权范围、WorkerProfile 和外部副作用边界；
-4. 使用输入 Event ID 作为幂等键追加 `channel.resumed`，关联输入并创建一个新 Run；
+2. 拒绝 `cancelled`，并给出“新建相关 Channel”路径；重新接单只允许新建 Channel，不能复活原 Channel；
+3. 用当前 Policy 复核原 Mandate：Source 仍监听原 Thread、Actor/接单依据仍满足原强度、推断规则仍启用且处于 auto 模式、scope 未扩大；
+4. 使用输入 Event ID 作为幂等键追加 `channel.resumed` Input，清除软结束记录并创建一个新 Run；
 5. 保证同一 Channel 同时最多一个会消费输入的 active Run，重复请求返回同一个恢复结果；恢复期间到达的其他输入按 Event ID 有序排队或按既有合并规则处理；
 6. 根据 Session 兼容性决定恢复旧 Session 或创建新 Session；
-7. 提交后再唤醒 Worker，响应丢失后的重试不得创建第二个 Run。
+7. 提交后再启动 Worker effect，响应丢失后的重试不得创建第二个 Run。复核失败时保持 completed，不消费输入，并把输入退回 Router/Eval；不能改写为 cancelled。
 
 Session 兼容性至少比较 Executor 类型、模型、工作区身份、工具/权限集合、WorkerProfile 版本和运行协议版本。任一项不兼容、引用不存在或恢复被执行器明确拒绝时，保留旧引用用于审计，从持久化 Channel 摘要创建新 Session；不能为了“继续上下文”而绕过新权限。
 
@@ -97,9 +96,9 @@ Executor Session 只能在同一 Channel 内作为恢复候选，不能跨 Chann
 
 #### 停止事务与竞态
 
-用户停止必须优先于普通输入和机器结果，并在一个事务中记录 `channel.stopped`、停止 Actor/来源/时间、取消所有未终结 Run、递增执行 generation 并撤回继续执行的授权。事务提交后再向 Worker Runtime 发送取消信号；旧 Worker 即使晚到也会被 generation/fencing token 拒绝写入状态或创建副作用。
+用户停止必须优先于普通输入和机器结果，并在一个事务中记录 `ended: { by: "human", outcome: "stopped", at, reason }`、清空未交付输入并结束所有未终结 Run。事务提交后再执行 Worker Runtime 停止 effect。第一版直接使用当前 Run ID、状态和 worker claim 作为 Assignment fence；旧 Worker 的 Report 因 Channel/Run 已结束而被拒绝，不另造 generation 字段。
 
-停止前已经发生但稍后才观测到的结果可以作为带时间和来源的审计事实保存，并按策略通知用户；它不能覆盖 stopped 状态、生成新的自动输入或恢复 Channel。重复停止使用稳定 command ID 幂等返回同一结果。
+停止后的旧 Worker Report 直接以 ended Task/Run 拒绝，并只记录拒绝日志；不能把它当成新的 Channel 事实。停止前已提交到外部系统、后来由 Source 观测到的结果仍可作为独立 Trigger/审计事实保存并通知用户，但不能覆盖 stopped 状态、生成自动输入或恢复 Channel。重复停止使用稳定 command ID 幂等返回同一结果。
 
 ### WorkerProfile
 
@@ -131,7 +130,6 @@ ChannelEvent 是不可变的用户可见或可检查事实。更正、撤销和�
 - `channel.completed`
 - `channel.resumed`
 - `channel.stopped`
-- `channel.resume_refused`
 - `run.started`
 - `run.progressed`
 - `run.waiting`
@@ -327,20 +325,20 @@ Outbox 的投递状态与产品已读状态分离；`sent` 不代表用户已经
 
 ### 实现前必须关闭的缺口
 
-1. 现有显式 `taskId` 路径会把 completed 和 cancelled 一并变回 `unstarted`，而 retry 路径又拒绝二者；`TASK-002` 必须用单一状态机和独立 `resume_task` 命令消除这个分叉。
+1. 现有显式 `taskId` 路径会把 completed 和 cancelled 一并变回 `unstarted`，而 retry 路径又拒绝二者；`TASK-002` 必须让 `continue_task` 只附加输入，由单一 `wake/resume` 状态机决定 completed 能否恢复并永久拒绝 cancelled。
 2. 当前没有持久 Mandate。第一阶段至少保存恢复依据、Policy/配置版本和停止来源；后续再扩展完整授权对象，不能把“用户拥有 Task”当成永久授权。
 3. 当前 continuation 会直接复用最近的 Executor ref。必须引入可解释的 Session compatibility 结果，并覆盖模型变化、工作区变化、权限收窄和引用丢失。
 4. Router 当前只把活跃 Task 作为模型候选。主入口恢复需要先通过 Channel 搜索/索引召回有限候选，不能把全部历史 Channel 塞进模型上下文。
 5. completed、cancelled、archived 和 deleted 必须分别建模。删除仍需单独的数据保留与协作引用策略，本轮不借生命周期改造顺手实现删除。
-6. 停止与 Worker 最终结果存在竞态。必须复用 Run generation/fencing，把停止、Run 取消和授权撤回原子化，不能只向进程发送一个尽力而为的 SIGTERM。
+6. 停止与 Worker 最终结果存在竞态。必须先原子写 ended/Run 状态，再异步停止 Runtime，并用当前 Run/claim 身份拒绝旧 Worker 的 Report；不能只向进程发送一个尽力而为的 SIGTERM。
 7. 旧数据没有结构化停止来源或 Session 兼容性记录。迁移时历史 `cancelled` 一律保守视为不可恢复；历史 `completed` 可申请恢复，但旧 Executor ref 默认不兼容，除非适配器能用当前配置给出确定性通过。
-8. `/v1/events` 是异步入口。Web 的只读状态只是预防误操作，服务端仍必须权威拒绝竞态输入，并通过 `channel.resume_refused` 或等价投影把原因返回 Channel 时间线。
+8. `/v1/events` 是异步入口。Web 的只读状态只是预防误操作，服务端仍必须权威拒绝竞态输入，并持久化 TriggerDisposition/RoutingDecision 的拒绝原因供 Channel 时间线投影。
 
 ### 实现合同
 
-- 领域命令必须分开：`completeTask`、`resumeTask`、`stopTask` 和 `retryRun` 不共享一个“改状态并创建 Run”的通用入口。每个命令都有独立前置条件、command/event 幂等键和审计事件。
-- `RoutingDecision` 增加独立的 `resume_task`；`continue_task` 只适用于未结束 Task。显式 `taskId` 也必须经过同一状态机，不能成为绕过路径。
-- 第一阶段的恢复授权至少需要一个可持久化 ResumeGrant 快照：Actor/user、来源、目标范围、Policy revision、工作区、允许能力集合和签发时间。完整 Mandate 尚未实现时，不得以 Task owner 字段替代这些事实。
+- 领域命令必须分开：结构化 Report、内部 `wake/resume`、`stopTask` 和 `retryRun` 不共享一个“改状态并创建 Run”的通用入口。每个入口都有独立前置条件、command/event 幂等键和审计事件。
+- `continue_task` 只表示把用户输入附加到已有 Task；显式 `taskId` 也必须经过同一状态机。恢复是 ended Channel 接收合格 human Input 后的领域转换，不是 Router 的授权决定。
+- 第一阶段直接实现 Super Agent 的不可变 Mandate，不新增 Pegas 专属恢复授权对象：`strength`、`policyVersion`、`basis`（Source、接收范围、接单路径、sender、matched rules）、`actor` 和 `scope`。`policyVersion` 只覆盖接单规则、accept mode 和各 Source Policy，不混入模型、并发数等执行设置。结束不删除 Mandate；用户停止标记 withdrawn，复核失败记录 revoked/拒绝恢复。Task owner 不能替代 Mandate。
 - Run 需要保存可比较的 execution-context fingerprint，覆盖 Executor、模型、工作区、工具权限、WorkerProfile/全局设置 revision 和协议版本。`WORKER-001` 可以扩展该快照，但 `TASK-002` 不能依赖运行时临时值猜测兼容性。
 - 服务端投影至少返回 `canResume`、`canStop`、`endedKind` 和结构化拒绝原因；Web 只按投影渲染按钮，不在客户端复制状态机。
 - 停止不是回滚。提交停止事务后不得产生新的自动副作用；停止前已经提交、无法撤销或结果未知的外部副作用必须保留审计并明确显示。
@@ -353,21 +351,21 @@ Outbox 的投递状态与产品已读状态分离；`sent` 不代表用户已经
 
 ### 验证矩阵
 
-| 场景                                 | 预期结果                                     | 测试层级                      |
-| ------------------------------------ | -------------------------------------------- | ----------------------------- |
-| completed Channel 内用户继续         | 原子追加 resume 事件并创建一个新 Run         | Store + Control Plane 集成    |
-| 同一 Event 重复提交                  | 返回同一 Run，不重复恢复                     | Store 幂等回归                |
-| 两个客户端并发恢复                   | 只有一个 active Run；另一输入排队或合并      | SQLite 并发集成               |
-| cancelled Channel 内发送             | 服务端拒绝静默恢复，Web 提供新建相关 Channel | API + Web E2E                 |
-| started/completed 时用户停止         | 原子取消活动 Run 并永久关闭原 Channel        | Store + Control Plane 集成    |
-| 停止命令重复或响应丢失               | 返回同一停止结果，不重复写事件               | Store 幂等回归                |
-| 停止后旧 Worker/工具结果晚到         | fenced；只保留审计事实且不改变状态           | Worker 并发 + smoke           |
-| Policy 或权限已经收窄                | 保持 ended，输入回到 Router/审批并显示原因   | Policy 集成                   |
-| 模型或工作区不兼容                   | 新建 Session，旧引用保留审计                 | Executor Adapter 单元 + smoke |
-| 历史 cancelled/completed 数据迁移    | cancelled 永久关闭；completed 安全新会话恢复 | migration 回归                |
-| 来源等待委派结果                     | 结果唤醒仍 started 的来源                    | 协作集成                      |
-| completed/cancelled 来源收到机器结果 | 只记录和通知，不恢复来源                     | 协作回归                      |
-| Worker 在恢复提交后、启动前崩溃      | 新 Worker 领取同一 queued Run                | lease/restart smoke           |
+| 场景                                 | 预期结果                                        | 测试层级                      |
+| ------------------------------------ | ----------------------------------------------- | ----------------------------- |
+| completed Channel 内用户继续         | 原子追加 resume 事件并创建一个新 Run            | Store + Control Plane 集成    |
+| 同一 Event 重复提交                  | 返回同一 Run，不重复恢复                        | Store 幂等回归                |
+| 两个客户端并发恢复                   | 只有一个 active Run；另一输入排队或合并         | SQLite 并发集成               |
+| cancelled Channel 内发送             | 服务端拒绝静默恢复，Web 提供新建相关 Channel    | API + Web E2E                 |
+| started/completed 时用户停止         | 原子取消活动 Run 并永久关闭原 Channel           | Store + Control Plane 集成    |
+| 停止命令重复或响应丢失               | 返回同一停止结果，不重复写事件                  | Store 幂等回归                |
+| 停止后旧 Worker/工具结果晚到         | fenced；只保留审计事实且不改变状态              | Worker 并发 + smoke           |
+| Policy 或权限已经收窄                | 保持 completed，输入回到 Router/Eval 并显示原因 | Policy 集成                   |
+| 模型或工作区不兼容                   | 新建 Session，旧引用保留审计                    | Executor Adapter 单元 + smoke |
+| 历史 cancelled/completed 数据迁移    | cancelled 永久关闭；completed 安全新会话恢复    | migration 回归                |
+| 来源等待委派结果                     | 结果唤醒仍 started 的来源                       | 协作集成                      |
+| completed/cancelled 来源收到机器结果 | 只记录和通知，不恢复来源                        | 协作回归                      |
+| Worker 在恢复提交后、启动前崩溃      | 新 Worker 领取同一 queued Run                   | lease/restart smoke           |
 
 ### 性能边界
 

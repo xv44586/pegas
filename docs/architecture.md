@@ -170,16 +170,16 @@ Backlog → Unstarted → Started → Completed（软结束）
             ▲                         │
             └── 用户输入 + 授权复核 ──┘
 
-Started / Completed ── 用户明确停止或授权撤回 ──→ Cancelled（硬结束）
+Backlog / Unstarted / Started ── 用户明确停止 ──→ Cancelled（硬结束）
 ```
 
-Task 只使用这五个工作项状态；等待审阅、暂停与最近执行失败作为原因表达。`completed` 是可恢复的软结束，`cancelled` 表示用户停止或授权撤回，是原 Task 永久不可恢复的硬结束。Run 单独保存 queued、running、waiting、completed、failed、cancelled；Run 或 Worker Runtime 结束不决定 Task 是否结束。执行失败重试、租约恢复和 completed Task 恢复都创建新 Run，但使用不同命令、原因和幂等键。成功 Run 默认等待审阅，不自动完成 Task；完成必须来自 Control Plane 持久化的完成条件、用户确认或可验证外部事实。`TASK-002` 实现前，完成/停止控制和恢复状态机仍是 Planned，详细边界见 `docs/task-lifecycle.md` 与 `docs/channel-worker-collaboration.md`。
+Task 只使用这五个工作项状态；等待条件、暂停与最近执行失败作为原因表达。`completed` 是可恢复的软结束，`cancelled` 只表示用户停止，是原 Task 永久不可恢复的硬结束。Run 单独保存 queued、running、waiting、completed、failed、cancelled；Run 或 Worker Runtime 结束不决定 Task 是否结束。当前 Run 的结构化 `ready` Report 在没有未满足完成条件时结束 Task；绑定审批、Artifact 或外部 Thread 时必须等 Control Plane 验证条件。授权复核失败保持 completed 并把输入退回 Router/Eval，不伪装成人工停止。`TASK-002` 实现前，完成/停止控制和恢复状态机仍是 Planned，详细边界见 `docs/task-lifecycle.md` 与 `docs/channel-worker-collaboration.md`。
 
 #### WorkChannel 产品投影
 
 Web、移动端和桌面端把 Task 呈现为 WorkChannel。WorkChannel 不是新的权威生命周期，也不等于 DSH session；第一阶段 `channelId` 与 `taskId` 相同，服务端通过兼容投影 API 返回。客户端进入 Channel 后发送的输入显式引用权威 Task，返回 Pegas 主对话后由 Router 恢复自动归属。
 
-已完成 WorkChannel 保留历史并允许同一目标的用户输入申请恢复；取消后的 WorkChannel 永久只读，服务端必须拒绝客户端静默重开或重新授权原 Channel，只能创建带来源关系的新 Channel。恢复事务先复核当前授权和配置，再追加不可变事件并创建新 Run。自动事件、普通 progress 和定时扫描不能单独恢复 ended Task。
+已完成 WorkChannel 保留历史、Mandate 和 Channel/Thread 订阅。自己 Thread 上的人类输入先附加，再由 Control Plane 复核原 Mandate；通过后恢复并创建新 Run，失败则保持 completed 并把输入退回 Router/Eval。取消后的 WorkChannel 永久只读，只能重新接单创建带来源关系的新 Channel。自动事件、普通 progress 和定时扫描不能单独恢复 ended Task。
 
 WorkChannel 的用户可见时间线由 Conversation Event、路由事实、Run Event、净化后的工具摘要、Artifact 和协作事件组成。隐藏提示词、密钥、原始凭证与未经净化的工具参数不得进入用户可见投影或全文索引。
 
