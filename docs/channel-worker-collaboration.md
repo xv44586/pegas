@@ -376,11 +376,43 @@ Outbox 的投递状态与产品已读状态分离；`sent` 不代表用户已经
 
 ## Feature 拆分与依赖
 
+### CHANNEL-002 第一阶段：隔离时间线投影
+
+本阶段先修复 Channel 读取边界，使现有 Inbox、Run 和 Outbox 事实按权威
+`taskId` 投影，避免 Web 把 Pegas 主对话的全局快照误当成任意 Channel 的历史。
+
+验收条件：
+
+1. 进入或深链到 Channel 后，只显示该 Channel 关联的用户输入、Run 和 Outbox
+   结果；切换 Channel 时不能短暂回退显示上一份全局历史。
+2. 显式发送到 Channel、但 Router 尚未处理的 pending 输入，仍能按 payload 中的
+   `taskId` 出现在该 Channel 时间线。
+3. 服务端先校验 Channel 归属，再返回隔离投影；其他用户得到 404，不能通过 ID
+   枚举时间线。
+4. Pegas 主入口继续使用跨 Channel 的主对话快照；Channel 投影加载失败时显示错误
+   或空态，不能回退到全局事件和消息。
+5. 自动化至少使用两个同用户 Channel 和一个其他用户 Channel，证明正向内容可见、
+   相邻内容不可见，并覆盖 Web 从全局对话切换到 Channel 的反向隔离。
+
+非目标：
+
+- 本阶段不新增完整 ChannelEvent schema，不伪造尚未由 Executor 持久化的工具调用。
+- 不实现跨 Channel 协作卡、全文搜索、游标、数据迁移或历史回填。
+- 不改变 Pegas 主对话的信息降噪策略，也不把 Outbox 投递状态作为 Channel 权威状态。
+
+数据、权限与失败边界：
+
+- 现有 `task_events`、`runs.task_id` 和 `outbox_messages.task_id` 是第一阶段事实来源；
+  pending 显式输入只在 payload 为合法 JSON 且 `taskId` 精确匹配时补入投影。
+- 接口必须同时按 `channelId` 和 `userId` 校验，不能依赖客户端过滤。
+- 本阶段只新增兼容查询索引，不改字段、不重写事实数据；回滚应用代码时索引可以安全
+  保留，也可以随后删除。接口失败不会污染或删除历史，恢复连接后重新拉取即可。
+
 | Feature        | 用户闭环                                                                                | 依赖                                                               | 本轮状态 |
 | -------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | -------- |
 | `CHANNEL-001`  | 服务端 Task 以 WorkChannel 投影供 Web 使用；主入口与 Channel 直接对话边界明确           | `TASK-001`, `CONV-002`                                             | Usable   |
 | `TASK-002`     | completed Channel 可经授权复核恢复；用户停止后原 Channel 永久关闭；Run/Runtime 独立结束 | `TASK-001`, `CHANNEL-001`, `EXEC-003`, `WORKER-001` 的执行快照边界 | Partial  |
-| `CHANNEL-002`  | Channel 时间线显示结构化输入、路由、Run、工具摘要和结果                                 | `CHANNEL-001`, `EXEC-001`                                          | Planned  |
+| `CHANNEL-002`  | Channel 时间线显示结构化输入、路由、Run、工具摘要和结果                                 | `CHANNEL-001`, `EXEC-001`                                          | Partial  |
 | `WORKER-001`   | Worker 继承全局模型并支持显式覆盖、配置快照和受控 Session rollover                      | `CHANNEL-001`, `SETTINGS-001`                                      | Planned  |
 | `COLLAB-001`   | 委派、交接、context note、handback 和结果回送形成持久闭环                               | `CHANNEL-002`, `WORKER-001`, `ROUTE-002`                           | Planned  |
 | `CHANNEL-003`  | 按 ID/对话搜索，并按创建/结束时间和状态排序过滤                                         | `CHANNEL-002`                                                      | Planned  |

@@ -94,6 +94,14 @@ export interface Snapshot {
   messages: OutboxMessage[]
   runs: Run[]
   channels: WorkChannel[]
+  channelTimeline?: ChannelTimeline
+}
+
+export interface ChannelTimeline {
+  channel: WorkChannel
+  events: InboxEvent[]
+  messages: OutboxMessage[]
+  runs: Run[]
 }
 
 export interface ModelUsageRecord {

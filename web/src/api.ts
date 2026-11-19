@@ -1,5 +1,6 @@
 import type {
   InboxEvent,
+  ChannelTimeline,
   DshModelCatalog,
   ModelCatalogItem,
   ModelUsageReport,
@@ -43,19 +44,41 @@ export class PegasApi {
     this.#token = token
   }
 
-  async snapshot(): Promise<Snapshot> {
+  async snapshot(channelId?: string): Promise<Snapshot> {
     const user = encodeURIComponent(this.#userId)
-    const [events, channels, runs, messages] = await Promise.all([
-      this.#get<{ events: InboxEvent[] }>(`/v1/events?userId=${user}`),
-      this.#workChannels(user),
-      this.#get<{ runs: Run[] }>('/v1/runs'),
-      this.#get<{ messages: OutboxMessage[] }>(`/v1/outbox?userId=${user}`),
-    ])
+    const [events, channels, aggregateRuns, messages, rawChannelTimeline] =
+      await Promise.all([
+        this.#get<{ events: InboxEvent[] }>(`/v1/events?userId=${user}`),
+        this.#workChannels(user),
+        channelId
+          ? Promise.resolve(undefined)
+          : this.#get<{ runs: Run[] }>(`/v1/runs?userId=${user}`),
+        this.#get<{ messages: OutboxMessage[] }>(`/v1/outbox?userId=${user}`),
+        channelId
+          ? this.#get<unknown>(
+              `/v1/channels/${encodeURIComponent(channelId)}/timeline?userId=${user}`,
+            )
+          : Promise.resolve(undefined),
+      ])
+    const channelTimeline = isChannelTimeline(rawChannelTimeline, channelId)
+      ? rawChannelTimeline
+      : undefined
+    const compatibilityRuns =
+      channelId && !channelTimeline
+        ? await this.#get<{ runs: Run[] }>(
+            `/v1/runs?userId=${user}&taskId=${encodeURIComponent(channelId)}`,
+          )
+        : undefined
     return {
       events: events.events,
       channels,
-      runs: runs.runs,
+      runs:
+        channelTimeline?.runs ??
+        compatibilityRuns?.runs ??
+        aggregateRuns?.runs ??
+        [],
       messages: messages.messages,
+      ...(channelTimeline ? { channelTimeline } : {}),
     }
   }
 
@@ -315,6 +338,20 @@ export class PegasApi {
       ...(json ? { 'content-type': 'application/json' } : {}),
     }
   }
+}
+
+function isChannelTimeline(
+  value: unknown,
+  channelId?: string,
+): value is ChannelTimeline {
+  if (!value || typeof value !== 'object' || !channelId) return false
+  const candidate = value as Partial<ChannelTimeline>
+  return (
+    candidate.channel?.id === channelId &&
+    Array.isArray(candidate.events) &&
+    Array.isArray(candidate.messages) &&
+    Array.isArray(candidate.runs)
+  )
 }
 
 async function throwResponse(response: Response): Promise<never> {

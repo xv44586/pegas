@@ -278,6 +278,68 @@ describe('PegasStore', () => {
     store.close()
   })
 
+  it('prefers the authoritative task event relation over a conflicting payload taskId', () => {
+    const store = new PegasStore(':memory:')
+    const { event: firstEvent } = store.enqueueEvent({
+      userId: 'owner',
+      type: 'user.message',
+      source: 'web',
+      payload: { text: 'Create first' },
+    })
+    const first = store.applyRoutingDecision(
+      firstEvent,
+      {
+        kind: 'create_task',
+        title: 'First',
+        goal: 'First',
+        input: 'Create first',
+        reason: 'test',
+      },
+      'test-executor',
+    )
+    const { event: secondEvent } = store.enqueueEvent({
+      userId: 'owner',
+      type: 'user.message',
+      source: 'web',
+      payload: { text: 'Create second' },
+    })
+    const second = store.applyRoutingDecision(
+      secondEvent,
+      {
+        kind: 'create_task',
+        title: 'Second',
+        goal: 'Second',
+        input: 'Create second',
+        reason: 'test',
+      },
+      'test-executor',
+    )
+    const { event: conflicting } = store.enqueueEvent({
+      userId: 'owner',
+      type: 'user.message',
+      source: 'web',
+      payload: { text: 'Continue second', taskId: first.task.id },
+    })
+    store.applyRoutingDecision(
+      conflicting,
+      {
+        kind: 'continue_task',
+        taskId: second.task.id,
+        input: 'Continue second',
+        reason: 'authoritative relation wins',
+      },
+      'test-executor',
+    )
+
+    expect(store.listChannelEvents(first.task.id, 'owner')).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: conflicting.id })]),
+    )
+    expect(store.listChannelEvents(second.task.id, 'owner')).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: conflicting.id })]),
+    )
+    store.close()
+  })
+
   it('retries with a new immutable execution record and idempotent lineage', () => {
     const store = new PegasStore(':memory:')
     const { event } = store.enqueueEvent({
@@ -750,6 +812,9 @@ describe('PegasStore', () => {
         lastError: 'Keep this error',
         input: 'Original',
       })
+      expect(store.listChannelEvents('inbox', 'owner')).toEqual([
+        expect.objectContaining({ id: 'inbox', userId: 'owner' }),
+      ])
       expect(() => store.retryRun('completed', 'owner')).toThrow('closed')
       expect(() => store.retryRun('cancelled', 'owner')).toThrow('closed')
       const db = new DatabaseSync(path)
@@ -818,7 +883,7 @@ describe('PegasStore', () => {
           .prepare('SELECT version FROM schema_migrations ORDER BY version')
           .all() as { version: number }[]
         expect(versions.map(row => row.version)).toEqual([
-          1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
+          1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
         ])
         expect(
           (

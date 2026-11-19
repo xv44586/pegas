@@ -371,6 +371,14 @@ CREATE INDEX model_usage_by_task_time
 ON model_usage_records (task_id, observed_at DESC);
 `
 
+const migration14 = `
+CREATE INDEX runs_by_task_time ON runs (task_id, created_at);
+CREATE INDEX outbox_messages_by_user_task_time
+ON outbox_messages (user_id, task_id, created_at);
+CREATE INDEX inbox_events_by_user_status_time
+ON inbox_events (user_id, status, created_at);
+`
+
 interface InboxRow {
   id: string
   user_id: string
@@ -542,6 +550,7 @@ export class PegasStore {
     this.#backfillWorkerIconIds()
     this.#migrate(12, migration12)
     this.#migrate(13, migration13)
+    this.#migrate(14, migration14)
   }
 
   #backfillWorkerIconIds(): void {
@@ -1232,6 +1241,27 @@ export class PegasStore {
     return rows.map(row => toRun(row as unknown as RunRow))
   }
 
+  listRunsForUser(userId: string, taskId?: string): Run[] {
+    const rows = taskId
+      ? this.#database
+          .prepare(
+            `SELECT runs.* FROM runs
+             INNER JOIN tasks ON tasks.id = runs.task_id
+             WHERE tasks.user_id = ? AND runs.task_id = ?
+             ORDER BY runs.created_at ASC, runs.rowid ASC`,
+          )
+          .all(userId, taskId)
+      : this.#database
+          .prepare(
+            `SELECT runs.* FROM runs
+             INNER JOIN tasks ON tasks.id = runs.task_id
+             WHERE tasks.user_id = ?
+             ORDER BY runs.created_at ASC, runs.rowid ASC`,
+          )
+          .all(userId)
+    return rows.map(row => toRun(row as unknown as RunRow))
+  }
+
   listEvents(userId: string): InboxEvent[] {
     const rows = this.#database
       .prepare(
@@ -1239,6 +1269,35 @@ export class PegasStore {
          WHERE user_id = ? ORDER BY created_at ASC`,
       )
       .all(userId)
+    return rows.map(row => toInboxEvent(row as unknown as InboxRow))
+  }
+
+  listChannelEvents(taskId: string, userId: string): InboxEvent[] {
+    const rows = this.#database
+      .prepare(
+        `SELECT * FROM (
+           SELECT inbox_events.*, inbox_events.rowid AS event_rowid FROM task_events
+           INNER JOIN inbox_events ON inbox_events.id = task_events.event_id
+           WHERE task_events.task_id = ? AND inbox_events.user_id = ?
+           UNION
+           SELECT inbox_events.*, inbox_events.rowid AS event_rowid FROM tasks
+           INNER JOIN inbox_events ON inbox_events.id = tasks.origin_event_id
+           WHERE tasks.id = ? AND tasks.user_id = ?
+           UNION
+           SELECT inbox_events.*, inbox_events.rowid AS event_rowid FROM inbox_events
+           WHERE inbox_events.user_id = ?
+             AND inbox_events.type = 'user.message'
+             AND inbox_events.status IN ('pending', 'processing', 'failed')
+             AND json_valid(inbox_events.payload_json)
+             AND json_extract(inbox_events.payload_json, '$.taskId') = ?
+             AND NOT EXISTS (
+               SELECT 1 FROM task_events
+               WHERE task_events.event_id = inbox_events.id
+             )
+         )
+         ORDER BY created_at ASC, event_rowid ASC`,
+      )
+      .all(taskId, userId, taskId, userId, userId, taskId)
     return rows.map(row => toInboxEvent(row as unknown as InboxRow))
   }
 
@@ -1705,13 +1764,21 @@ export class PegasStore {
     return toOutboxMessage(row as unknown as OutboxRow)
   }
 
-  listOutbox(userId: string): OutboxMessage[] {
-    const rows = this.#database
-      .prepare(
-        `SELECT * FROM outbox_messages
-         WHERE user_id = ? ORDER BY created_at ASC`,
-      )
-      .all(userId)
+  listOutbox(userId: string, taskId?: string): OutboxMessage[] {
+    const rows = taskId
+      ? this.#database
+          .prepare(
+            `SELECT * FROM outbox_messages
+             WHERE user_id = ? AND task_id = ?
+             ORDER BY created_at ASC, rowid ASC`,
+          )
+          .all(userId, taskId)
+      : this.#database
+          .prepare(
+            `SELECT * FROM outbox_messages
+             WHERE user_id = ? ORDER BY created_at ASC, rowid ASC`,
+          )
+          .all(userId)
     return rows.map(row => toOutboxMessage(row as unknown as OutboxRow))
   }
 

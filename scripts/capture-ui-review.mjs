@@ -86,6 +86,7 @@ try {
   await page.getByRole('textbox', { name: '告诉 Pegas 你想完成什么' }).waitFor()
   await assertGeometry(page, 'desktop-home')
   await shot(page, 'desktop-home.png')
+  await assertMainConversationContainsSeededChannels(page)
 
   await page.getByRole('button', { name: '打开工作区' }).click()
   await page.getByRole('button', { name: '关闭工作区' }).waitFor()
@@ -95,12 +96,15 @@ try {
   await page.getByRole('button', { name: '关闭工作区' }).click()
 
   await page
-    .getByRole('button', { name: /^打开 Channel：/u })
-    .first()
+    .getByRole('button', {
+      name: /打开 Channel：确认设置.*插件详情.*可达/u,
+    })
     .click()
   await page.getByRole('heading', { name: '模型用量' }).waitFor()
+  await assertChannelTimelineIsolation(page)
   await waitForPanelInViewport(page)
   await assertGeometry(page, 'workspace-usage')
+  await shot(page, 'channel-timeline-isolation.png')
   await shot(page, 'workspace-usage.png')
   await page.getByRole('button', { name: '关闭工作区' }).click()
 
@@ -246,6 +250,36 @@ async function seedConversation(apiPort) {
     await wait(50)
   }
   throw new Error('UI review tasks were not created')
+}
+
+async function assertMainConversationContainsSeededChannels(page) {
+  const feed = page.locator('.conversation-feed')
+  await feed
+    .getByText('复核 Pegas 的首页与工作区布局', { exact: true })
+    .first()
+    .waitFor()
+  await feed
+    .getByText('确认设置和插件详情仍然可达', { exact: true })
+    .first()
+    .waitFor()
+}
+
+async function assertChannelTimelineIsolation(page) {
+  const feed = page.locator('.conversation-feed')
+  await feed
+    .getByText('确认设置和插件详情仍然可达', { exact: true })
+    .first()
+    .waitFor()
+  await feed.getByText(/原样返回了输入.*确认设置和插件详情仍然可达/u).waitFor()
+  if (
+    (await feed
+      .getByText('复核 Pegas 的首页与工作区布局', { exact: true })
+      .count()) !== 0 ||
+    (await feed
+      .getByText(/原样返回了输入.*复核 Pegas 的首页与工作区布局/u)
+      .count()) !== 0
+  )
+    throw new Error('Selected Channel leaked another Channel timeline')
 }
 
 async function mockAgentStatusSnapshot(page) {
