@@ -1012,6 +1012,79 @@ describe('Pegas web app', () => {
     ).toBe(false)
   })
 
+  it('shows speech failures as an inline composer status', async () => {
+    const getUserMedia = vi.fn(() =>
+      Promise.resolve({
+        getTracks: () => [{ stop: vi.fn() }],
+      } as unknown as MediaStream),
+    )
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const path =
+          input instanceof Request
+            ? input.url
+            : input instanceof URL
+              ? input.href
+              : input
+        if (path.startsWith('/v1/voice/transcriptions'))
+          return Promise.resolve(
+            Response.json(
+              {
+                message:
+                  '语音服务暂时不可用，请检查服务地址、模型和密钥后重试。',
+              },
+              { status: 502 },
+            ),
+          )
+        if (path.startsWith('/v1/events'))
+          return Promise.resolve(Response.json({ events: [] }))
+        if (path.startsWith('/v1/tasks'))
+          return Promise.resolve(Response.json({ tasks: [] }))
+        if (path.startsWith('/v1/runs'))
+          return Promise.resolve(Response.json({ runs: [] }))
+        return Promise.resolve(Response.json({ messages: [] }))
+      }),
+    )
+    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } })
+
+    class FailingMediaRecorder {
+      static isTypeSupported(): boolean {
+        return true
+      }
+
+      readonly mimeType = 'audio/webm;codecs=opus'
+      state = 'inactive'
+      ondataavailable: ((event: BlobEvent) => void) | null = null
+      onerror: (() => void) | null = null
+      onstop: (() => void) | null = null
+
+      start(): void {
+        this.state = 'recording'
+      }
+
+      stop(): void {
+        this.state = 'inactive'
+        this.ondataavailable?.({
+          data: new Blob(['recorded-audio'], { type: this.mimeType }),
+        } as BlobEvent)
+        this.onstop?.()
+      }
+    }
+    vi.stubGlobal('MediaRecorder', FailingMediaRecorder)
+
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '开始听写' }))
+    fireEvent.click(await screen.findByRole('button', { name: '停止听写' }))
+
+    const status = await screen.findByRole('status')
+    expect(status.textContent).toBe(
+      '语音服务暂时不可用，请检查服务地址、模型和密钥后重试。',
+    )
+    expect(status.closest('form')?.className).toContain('composer-wrap')
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
   it('shows delivery as message metadata instead of a Pegas reply', async () => {
     vi.stubGlobal(
       'fetch',

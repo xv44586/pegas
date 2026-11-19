@@ -804,7 +804,7 @@ export function App() {
                   </button>
                 </div>
                 {(dictation.error || voiceGateError) && (
-                  <p className="dictation-error" role="alert">
+                  <p className="dictation-error" role="status">
                     {voiceGateError || dictation.error}
                   </p>
                 )}
