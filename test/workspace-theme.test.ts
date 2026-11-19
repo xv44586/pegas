@@ -2,101 +2,67 @@ import { readFileSync } from 'node:fs'
 
 import { describe, expect, it } from 'vitest'
 
-const workspaceTheme = readFileSync(
-  new URL('../web/src/workspace-theme.css', import.meta.url),
+const sealedUi = readFileSync(
+  new URL('../web/src/sealed-ui.css', import.meta.url),
+  'utf8',
+)
+const mainEntry = readFileSync(
+  new URL('../web/src/main.tsx', import.meta.url),
   'utf8',
 )
 
-describe('workspace layout contracts', () => {
-  it('anchors the empty-state header to the workspace panel', () => {
-    expect(workspaceTheme).toMatch(
-      /\.workspace-empty\s*\{\s*position:\s*relative;/,
+describe('sealed UI layout contracts', () => {
+  it('uses the new single style entry and excludes the legacy themes', () => {
+    expect(mainEntry).toContain("import './sealed-ui.css'")
+    expect(mainEntry).not.toContain('workspace-theme.css')
+    expect(mainEntry).not.toContain("'./styles.css'")
+  })
+
+  it('keeps the desktop shell and mobile navigation geometries explicit', () => {
+    expect(sealedUi).toMatch(
+      /\.app-shell\s*\{[^}]*grid-template-columns:\s*286px minmax\(0, 1fr\);[^}]*height:\s*100dvh;/,
     )
-    expect(workspaceTheme).toMatch(
-      /\.workspace-empty\s*>\s*header\s*\{[^}]*inset-inline:\s*0;[^}]*width:\s*100%;/,
+    expect(sealedUi).toMatch(
+      /@media \(max-width: 820px\)[\s\S]*?\.mobile-nav\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*repeat\(6, 1fr\);/,
     )
   })
 
-  it('right-aligns the compact workspace instead of inheriting a left inset', () => {
-    expect(workspaceTheme).toMatch(
-      /@media \(max-width: 820px\)[\s\S]*?\.workspace-panel\s*\{[^}]*inset-inline-start:\s*auto;[^}]*inset-inline-end:\s*0;/,
+  it('implements all four appearance choices with semantic tokens', () => {
+    expect(sealedUi).toMatch(/:root\[data-theme=['"]warm['"]\]/)
+    expect(sealedUi).toMatch(/:root\[data-theme=['"]dark['"]\]/)
+    expect(sealedUi).toMatch(/:root\[data-theme=['"]system['"]\]/)
+    expect(sealedUi).toMatch(/--canvas:\s*#fff;/)
+    expect(sealedUi).toMatch(/background:\s*var\(--canvas\)/)
+  })
+
+  it('keeps dictation errors in composer flow', () => {
+    expect(sealedUi).toMatch(
+      /\.composer-error\s*\{[^}]*margin:\s*0 auto 8px;[^}]*max-width:\s*1120px;/,
+    )
+    expect(sealedUi).not.toMatch(
+      /\.composer-error\s*\{[^}]*position:\s*absolute;/,
     )
   })
 
-  it('keeps dictation errors in the composer flow instead of overlaying messages', () => {
-    expect(workspaceTheme).toMatch(
-      /\.dictation-error\s*\{[^}]*position:\s*static;[^}]*width:\s*100%;[^}]*overflow-wrap:\s*anywhere;/,
+  it('makes detail drawers full height and responsive', () => {
+    expect(sealedUi).toMatch(
+      /\.detail-drawer\s*\{[^}]*height:\s*100dvh;[^}]*width:\s*470px;/,
     )
-    expect(workspaceTheme).not.toMatch(
-      /\.dictation-error\s*\{[^}]*inset-block-end:\s*calc\(100% \+ 6px\)/,
-    )
-  })
-
-  it('keeps Worker identity blue and encodes state with separate badges', () => {
-    expect(workspaceTheme).toMatch(
-      /\.pegas-agent-avatar\s*\{[^}]*--pegas-icon-background:\s*#4d6bfe;/,
-    )
-    expect(workspaceTheme).not.toMatch(
-      /\.pegas-agent-avatar\.status-[\w-]+\s*\{[^}]*--pegas-icon-background:/,
-    )
-    for (const status of [
-      'backlog',
-      'unstarted',
-      'started',
-      'completed',
-      'cancelled',
-    ]) {
-      expect(workspaceTheme).toContain(
-        `.pegas-agent-avatar.status-${status} .pegas-agent-status`,
-      )
-    }
-  })
-
-  it('gives the Router model picker the full field width and its own scroll region', () => {
-    expect(workspaceTheme).toMatch(
-      /\.model-picker-panel\s*\{[^}]*grid-column:\s*1\s*\/\s*-1;[^}]*min-inline-size:\s*0;/,
-    )
-    expect(workspaceTheme).toMatch(
-      /\.model-picker-list\s*\{[^}]*max-block-size:\s*min\([^;]+;[^}]*overflow-y:\s*auto;/,
-    )
-    expect(workspaceTheme).toMatch(
-      /\.model-pagination\s*\{[^}]*display:\s*flex;[^}]*justify-content:\s*space-between;/,
-    )
-    expect(workspaceTheme).toMatch(
-      /\.model-picker-search input\s*\{[^}]*inline-size:\s*100%;[^}]*min-inline-size:\s*0;[^}]*padding-inline-start:\s*38px;/,
+    expect(sealedUi).toMatch(
+      /@media \(max-width: 820px\)[\s\S]*?\.detail-drawer\s*\{[^}]*width:\s*100%;/,
     )
   })
 
-  it('keeps model feedback compact and attached to its controls', () => {
-    expect(workspaceTheme).toMatch(
-      /\.model-feedback\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*16px\s+minmax\(0,\s*1fr\);/,
-    )
-    expect(workspaceTheme).toMatch(
-      /\.model-feedback strong\s*\{[^}]*font-size:\s*12px;[^}]*line-height:\s*16px;/,
-    )
-    expect(workspaceTheme).toMatch(
-      /\.model-feedback span\s*\{[^}]*font-size:\s*11px;[^}]*line-height:\s*16px;/,
-    )
+  it('preserves visible keyboard focus and reduced motion', () => {
+    expect(sealedUi).toContain('button:focus-visible')
+    expect(sealedUi).toContain('@media (prefers-reduced-motion: reduce)')
   })
 
-  it('reflows Channel navigation before its labels collide in a narrow sidebar', () => {
-    expect(workspaceTheme).toMatch(
-      /\.identity-rail\s*\{[^}]*container:\s*task-sidebar\s*\/\s*inline-size;/,
+  it('separates model provider and settings layouts', () => {
+    expect(sealedUi).toMatch(
+      /\.model-service-layout\s*\{[^}]*grid-template-columns:\s*220px minmax\(0, 1fr\);/,
     )
-    expect(workspaceTheme).toMatch(
-      /@container\s+task-sidebar\s*\(inline-size\s*<\s*260px\)[\s\S]*?\.sidebar-section-nav\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/,
-    )
-  })
-
-  it('stretches the desktop Channel list inside the sidebar rail', () => {
-    const parityPass = workspaceTheme.slice(
-      workspaceTheme.indexOf('/* CONV-002 DS Bot parity pass'),
-    )
-    expect(parityPass).toMatch(
-      /\.identity-rail\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*stretch;/,
-    )
-    expect(parityPass).toMatch(
-      /\.task-sidebar-list\s*\{[^}]*inline-size:\s*100%;/,
-    )
+    expect(sealedUi).toContain('.router-settings')
+    expect(sealedUi).toContain('.pegas-settings')
   })
 })

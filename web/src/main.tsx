@@ -3,8 +3,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 
 import { App } from './App'
-import './styles.css'
-import './workspace-theme.css'
+import './sealed-ui.css'
 
 const root = document.querySelector('#root')
 if (!root) throw new Error('Missing #root element')
