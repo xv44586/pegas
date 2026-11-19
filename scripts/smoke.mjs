@@ -137,7 +137,7 @@ async function waitForCompletedRun(apiPort, taskId) {
   const deadline = Date.now() + 5000
   while (Date.now() < deadline) {
     const response = await fetch(
-      `http://127.0.0.1:${apiPort}/v1/runs?taskId=${encodeURIComponent(taskId)}`,
+      `http://127.0.0.1:${apiPort}/v1/runs?userId=smoke-user&taskId=${encodeURIComponent(taskId)}`,
       {
         headers: { authorization: `Bearer ${apiToken}` },
       },

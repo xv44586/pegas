@@ -188,6 +188,8 @@ export function App() {
     activeView !== 'bot' &&
     activeView !== 'plugins'
   const [selectedTaskId, setSelectedTaskId] = useState(initialTaskId)
+  const selectedTaskIdRef = useRef(initialTaskId)
+  selectedTaskIdRef.current = selectedTaskId
   const [attachmentHelpOpen, setAttachmentHelpOpen] = useState(false)
 
   useEffect(() => {
@@ -199,6 +201,7 @@ export function App() {
   const workspaceTrigger = useRef<HTMLElement | null>(null)
   const modalTrigger = useRef<HTMLElement | null>(null)
   const markingOutboxRead = useRef(new Set<string>())
+  const snapshotRequest = useRef(0)
   const api = useMemo(() => new PegasApi(userId, token), [token])
   const loadModelUsage = useCallback(
     (taskId: string) => api.modelUsage(taskId),
@@ -241,24 +244,39 @@ export function App() {
   ).length
 
   const loadSnapshot = useCallback(async () => {
+    const requestId = snapshotRequest.current + 1
+    snapshotRequest.current = requestId
+    const channelId =
+      selectedTaskId && selectedTaskId !== '__new__'
+        ? selectedTaskId
+        : undefined
     try {
-      const next = await api.snapshot()
+      const next = await api.snapshot(channelId)
+      if (requestId !== snapshotRequest.current) return
       setSnapshot(next)
       setUnauthorized(false)
       setError('')
     } catch (caught) {
+      if (requestId !== snapshotRequest.current) return
       if (caught instanceof ApiError && caught.status === 401) {
+        setSnapshot(emptySnapshot)
         setUnauthorized(true)
         setError('')
       } else {
+        if (channelId)
+          setSnapshot(current =>
+            current.channelTimeline?.channel.id === channelId
+              ? { ...current, runs: [], channelTimeline: undefined }
+              : current,
+          )
         setError(
           caught instanceof Error ? caught.message : '暂时无法连接 Pegas',
         )
       }
     } finally {
-      setLoading(false)
+      if (requestId === snapshotRequest.current) setLoading(false)
     }
-  }, [api])
+  }, [api, selectedTaskId])
 
   useEffect(() => {
     void loadSnapshot()
@@ -308,15 +326,30 @@ export function App() {
   }, [activeView, api, selectedOutboxId, snapshot.messages])
 
   const timeline = useMemo<TimelineItem[]>(() => {
+    const channelTimeline =
+      selectedTaskId &&
+      selectedTaskId !== '__new__' &&
+      snapshot.channelTimeline?.channel.id === selectedTaskId
+        ? snapshot.channelTimeline
+        : undefined
+    const channelSelected = Boolean(
+      selectedTaskId && selectedTaskId !== '__new__',
+    )
+    const events = channelSelected
+      ? (channelTimeline?.events ?? [])
+      : snapshot.events
+    const messages = channelSelected
+      ? (channelTimeline?.messages ?? [])
+      : snapshot.messages
     const items: TimelineItem[] = [
-      ...snapshot.events
+      ...events
         .filter(event => event.type === 'user.message')
         .map(value => ({
           kind: 'event' as const,
           createdAt: value.createdAt,
           value,
         })),
-      ...snapshot.messages.map(value => ({
+      ...messages.map(value => ({
         kind: 'message' as const,
         createdAt: value.createdAt,
         value,
@@ -325,7 +358,7 @@ export function App() {
     return items.toSorted((left, right) =>
       left.createdAt.localeCompare(right.createdAt),
     )
-  }, [snapshot.events, snapshot.messages])
+  }, [selectedTaskId, snapshot])
 
   const selectedTask = snapshot.channels.find(
     task => task.id === selectedTaskId,
@@ -465,12 +498,17 @@ export function App() {
   async function submitMessage(): Promise<void> {
     const text = draft.trim()
     if (!text || sending || dictationBusy) return
+    const submittedTaskId = selectedTaskIdRef.current
+    const targetTaskId =
+      submittedTaskId && submittedTaskId !== '__new__'
+        ? submittedTaskId
+        : undefined
     setSending(true)
     setError('')
     try {
-      await api.sendMessage(text, sidebarSelectedTask?.taskId)
+      await api.sendMessage(text, targetTaskId)
       setDraft('')
-      await loadSnapshot()
+      if (selectedTaskIdRef.current === submittedTaskId) await loadSnapshot()
       window.setTimeout(
         () => feedEnd.current?.scrollIntoView({ behavior: 'smooth' }),
         0,

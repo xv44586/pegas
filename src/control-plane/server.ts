@@ -282,6 +282,26 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         })
       }
 
+      const channelTimelineUrl = request.url
+        ? new URL(request.url, 'http://localhost')
+        : undefined
+      const channelTimelineMatch = channelTimelineUrl?.pathname.match(
+        /^\/v1\/channels\/([^/]+)\/timeline$/,
+      )
+      if (channelTimelineMatch && request.method === 'GET') {
+        const userId = channelTimelineUrl?.searchParams.get('userId')
+        if (!userId) throw new Error('userId is required')
+        const taskId = decodeURIComponent(channelTimelineMatch[1] ?? '')
+        const task = options.store.findTask(taskId, userId)
+        if (!task) return sendJson(response, 404, { error: 'not_found' })
+        return sendJson(response, 200, {
+          channel: projectWorkChannel(task),
+          events: options.store.listChannelEvents(taskId, userId),
+          runs: options.store.listRuns(taskId),
+          messages: options.store.listOutbox(userId, taskId),
+        })
+      }
+
       if (request.url?.startsWith('/v1/channels') && request.method === 'GET') {
         const url = new URL(request.url, 'http://localhost')
         const userId = url.searchParams.get('userId')
@@ -353,9 +373,11 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
 
       if (request.url?.startsWith('/v1/runs') && request.method === 'GET') {
         const url = new URL(request.url, 'http://localhost')
+        const userId = url.searchParams.get('userId')
+        if (!userId) throw new Error('userId is required')
         const taskId = url.searchParams.get('taskId') ?? undefined
         return sendJson(response, 200, {
-          runs: options.store.listRuns(taskId),
+          runs: options.store.listRunsForUser(userId, taskId),
         })
       }
 

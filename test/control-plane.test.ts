@@ -389,6 +389,124 @@ describe('control plane', () => {
     expect((await fetch(`${base}/v1/channels`)).status).toBe(400)
   })
 
+  it('returns a server-authoritative timeline isolated to one owned channel', async () => {
+    const store = new PegasStore(':memory:')
+    const createTask = (userId: string, title: string) => {
+      const event = store.enqueueEvent({
+        userId,
+        source: 'web',
+        type: 'user.message',
+        payload: { text: `${title} origin` },
+      }).event
+      return store.applyRoutingDecision(
+        event,
+        {
+          kind: 'create_task',
+          title,
+          goal: `${title} goal`,
+          input: `${title} origin`,
+          reason: 'test',
+        },
+        'test',
+      ).task
+    }
+    const first = createTask('owner', 'First channel')
+    const second = createTask('owner', 'Second channel')
+    const other = createTask('other', 'Other user channel')
+
+    const continuation = store.enqueueEvent({
+      userId: 'owner',
+      source: 'web',
+      type: 'user.message',
+      payload: { text: 'First follow-up', taskId: first.id },
+    }).event
+    store.applyRoutingDecision(
+      continuation,
+      {
+        kind: 'continue_task',
+        taskId: first.id,
+        input: 'First follow-up',
+        reason: 'explicit channel',
+      },
+      'test',
+    )
+    const pending = store.enqueueEvent({
+      userId: 'owner',
+      source: 'web',
+      type: 'user.message',
+      payload: { text: 'First pending', taskId: first.id },
+    }).event
+    store.enqueueOutbox({
+      userId: 'owner',
+      taskId: first.id,
+      channel: 'conversation',
+      dedupeKey: 'first-result',
+      payload: { type: 'run.completed', text: 'First result' },
+    })
+    store.enqueueOutbox({
+      userId: 'owner',
+      taskId: second.id,
+      channel: 'conversation',
+      dedupeKey: 'second-result',
+      payload: { type: 'run.completed', text: 'Second result' },
+    })
+
+    const server = createControlPlane({ store })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    cleanups.push(
+      () => new Promise<void>(resolve => server.close(() => resolve())),
+      () => Promise.resolve(store.close()),
+    )
+    const base = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+
+    const response = await fetch(
+      `${base}/v1/channels/${first.id}/timeline?userId=owner`,
+    )
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as {
+      channel: { id: string }
+      events: { id: string }[]
+      runs: { taskId: string }[]
+      messages: { taskId?: string }[]
+    }
+    expect(body.channel.id).toBe(first.id)
+    expect(body.events.map(event => event.id)).toEqual([
+      first.originEventId,
+      continuation.id,
+      pending.id,
+    ])
+    expect(body.runs).not.toHaveLength(0)
+    expect(body.runs.every(run => run.taskId === first.id)).toBe(true)
+    expect(body.messages).toEqual([
+      expect.objectContaining({ taskId: first.id }),
+    ])
+    expect(JSON.stringify(body)).not.toContain('Second result')
+    expect(JSON.stringify(body)).not.toContain('Other user channel')
+
+    expect(
+      (await fetch(`${base}/v1/channels/${first.id}/timeline?userId=other`))
+        .status,
+    ).toBe(404)
+
+    const ownerRunsResponse = await fetch(`${base}/v1/runs?userId=owner`)
+    expect(ownerRunsResponse.status).toBe(200)
+    const ownerRuns = (await ownerRunsResponse.json()) as {
+      runs: { taskId: string }[]
+    }
+    expect(new Set(ownerRuns.runs.map(run => run.taskId))).toEqual(
+      new Set([first.id, second.id]),
+    )
+    expect(ownerRuns.runs.some(run => run.taskId === other.id)).toBe(false)
+    expect((await fetch(`${base}/v1/runs`)).status).toBe(400)
+    expect(
+      await (
+        await fetch(
+          `${base}/v1/runs?userId=owner&taskId=${encodeURIComponent(other.id)}`,
+        )
+      ).json(),
+    ).toEqual({ runs: [] })
+  })
+
   it('stops a live channel idempotently and exposes permanent lifecycle capabilities', async () => {
     const store = new PegasStore(':memory:')
     const event = store.enqueueEvent({

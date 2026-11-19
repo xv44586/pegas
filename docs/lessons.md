@@ -167,6 +167,18 @@
 - Enforcement：根据用户明确要求提前实现 QUALITY-001 门禁，但 Lesson 仍按 Seen 次数保持 Candidate：仓库永久保存验收条件和测试能力；CI 显式检出 PR head 并在准确 SHA 上生成短期报告与 UI 截图；UI Review 必须打开大模型列表并检查面板宽度/滚动区，同时检查窄侧栏导航子元素边界和整个 Channel 列表是否仍位于 rail 内；`pnpm lint` 阻断后置 column flex 主题规则隐式继承旧 `align-items`；关键 `Not tried` 阻断审核；Candidate schema v2 绑定报告哈希与人工 reviewed commit；完成报告必须区分源码、Candidate、main 与运行实例四层证据，只有运行实例按原始场景复现后才能声称用户问题已修复。运行结果不再作为永久 Feature manifest 提交。
 - Owner / next action：补通用 Candidate canary runner；第三个独立日期再次出现同类问题时，按晋升规则将本 Lesson 标记为 Promoted。
 
+### LESSON-20261119-04：上下文切换必须同时验证写入目标和读取投影
+
+- Rule：任何“进入 Task/Channel/Thread 后继续对话”的功能，必须分别验证写入携带正确目标 ID、读取只返回该目标事实，并使用至少两个同用户容器做反向隔离断言；客户端不得用全局快照模拟局部历史。
+- Why：CHANNEL-001 只验证了向选中 Channel 发送消息时携带 `taskId`，却继续把用户的全部 Inbox 和 Outbox 合并成对话时间线。结果每个 Channel 虽然写入目标正确，读取界面却完全相同；单一 Channel fixture 和正向断言无法发现这种串线。
+- Feature：CHANNEL-002
+- Evidence：用户报告所有 Channel 显示与 Pegas 相同历史；服务端两个同用户 Channel、一个其他用户 Channel 的所有权/负向隔离回归；Web 从全局对话切换到 Channel 后立即移除相邻 Channel 内容的回归；真实 Candidate 在主对话展示两个 Channel、进入其中一个后只保留对应输入和结果的浏览器断言与截图。
+- Seen：1（2026-11-19）
+- Severity：normal
+- Status：Observed
+- Enforcement：尚未晋升为全仓规则；本轮已用服务端权威时间线接口、所有权校验、竞态响应丢弃和双 fixture 负向测试约束 CHANNEL-002。
+- Owner / next action：后续 Thread/协作关系/搜索结果详情开发沿用同一负向隔离矩阵；在三个独立日期复发时晋升为通用门禁。
+
 <!--
 ### LESSON-YYYYMMDD-NN：简短标题
 

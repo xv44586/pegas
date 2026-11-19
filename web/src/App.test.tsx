@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -858,6 +859,377 @@ describe('Pegas web app', () => {
     ).toBeUndefined()
   })
 
+  it('replaces the global conversation with the selected Channel timeline', async () => {
+    const first = {
+      id: 'task-first',
+      taskId: 'task-first',
+      userId: 'owner',
+      originEventId: 'event-first',
+      title: 'First channel',
+      goal: 'First goal',
+      status: 'started',
+      workerIconId: 'computer',
+      createdAt: '2026-11-19T08:00:00.000Z',
+      updatedAt: '2026-11-19T08:03:00.000Z',
+      latestActivityAt: '2026-11-19T08:03:00.000Z',
+      canResume: false,
+      canStop: true,
+    }
+    const second = {
+      ...first,
+      id: 'task-second',
+      taskId: 'task-second',
+      originEventId: 'event-second',
+      title: 'Second channel',
+      goal: 'Second goal',
+    }
+    const globalEvents = [
+      {
+        id: 'event-first',
+        userId: 'owner',
+        type: 'user.message',
+        source: 'web',
+        payload: { text: 'First global input' },
+        status: 'processed',
+        createdAt: '2026-11-19T08:00:00.000Z',
+      },
+      {
+        id: 'event-second',
+        userId: 'owner',
+        type: 'user.message',
+        source: 'web',
+        payload: { text: 'Second global input' },
+        status: 'processed',
+        createdAt: '2026-11-19T08:01:00.000Z',
+      },
+    ]
+    const globalMessages = [
+      {
+        id: 'message-first',
+        userId: 'owner',
+        taskId: first.id,
+        payload: { type: 'run.completed', text: 'First isolated result' },
+        status: 'sent',
+        createdAt: '2026-11-19T08:02:00.000Z',
+      },
+      {
+        id: 'message-second',
+        userId: 'owner',
+        taskId: second.id,
+        payload: { type: 'run.completed', text: 'Second must disappear' },
+        status: 'sent',
+        createdAt: '2026-11-19T08:03:00.000Z',
+      },
+    ]
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const path =
+        input instanceof Request
+          ? input.url
+          : input instanceof URL
+            ? input.href
+            : input
+      if (path.startsWith('/v1/channels/task-first/timeline'))
+        return Promise.resolve(
+          Response.json({
+            channel: first,
+            events: [globalEvents[0]],
+            runs: [],
+            messages: [globalMessages[0]],
+          }),
+        )
+      if (path.startsWith('/v1/channels'))
+        return Promise.resolve(Response.json({ channels: [first, second] }))
+      if (path.startsWith('/v1/events'))
+        return Promise.resolve(Response.json({ events: globalEvents }))
+      if (path.startsWith('/v1/runs'))
+        return Promise.resolve(Response.json({ runs: [] }))
+      return Promise.resolve(Response.json({ messages: globalMessages }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+    expect(await screen.findByText('Second must disappear')).toBeTruthy()
+    fireEvent.click(
+      screen.getByRole('button', { name: '打开 Channel：First channel' }),
+    )
+
+    expect(screen.queryByText('Second must disappear')).toBeNull()
+    expect(await screen.findByText('First isolated result')).toBeTruthy()
+    expect(screen.queryByText('Second global input')).toBeNull()
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/v1/channels/task-first/timeline?userId=owner',
+      expect.any(Object),
+    )
+  })
+
+  it('does not fall back to global history when a Channel timeline fails', async () => {
+    const first = testChannel('task-failure-first', 'Failure first')
+    const second = testChannel('task-failure-second', 'Failure second')
+    const globalMessage = testMessage(
+      'message-failure-second',
+      second.id,
+      'Another Channel must stay hidden',
+    )
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const path = requestPath(input)
+      if (path.startsWith(`/v1/channels/${first.id}/timeline`))
+        return Promise.resolve(
+          Response.json(
+            { message: 'Channel timeline unavailable' },
+            { status: 503 },
+          ),
+        )
+      if (path.startsWith('/v1/channels'))
+        return Promise.resolve(Response.json({ channels: [first, second] }))
+      if (path.startsWith('/v1/events'))
+        return Promise.resolve(Response.json({ events: [] }))
+      if (path.startsWith('/v1/runs'))
+        return Promise.resolve(Response.json({ runs: [] }))
+      return Promise.resolve(Response.json({ messages: [globalMessage] }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+    expect(
+      await screen.findByText('Another Channel must stay hidden'),
+    ).toBeTruthy()
+    fireEvent.click(
+      screen.getByRole('button', { name: '打开 Channel：Failure first' }),
+    )
+
+    const alert = await screen.findByRole('alert')
+    expect(within(alert).getByText('Channel timeline unavailable')).toBeTruthy()
+    expect(screen.queryByText('Another Channel must stay hidden')).toBeNull()
+  })
+
+  it('keeps the direct Channel target when its metadata fails to load', async () => {
+    const channelId = 'task-direct-target'
+    let postedBody: Record<string, unknown> | undefined
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = requestPath(input)
+      if (path === '/v1/events' && init?.method === 'POST') {
+        postedBody = parseRequestBody(init)
+        return Promise.resolve(Response.json({}, { status: 202 }))
+      }
+      if (path.startsWith(`/v1/channels/${channelId}/timeline`))
+        return Promise.resolve(
+          Response.json({ message: 'Channel unavailable' }, { status: 503 }),
+        )
+      if (path.startsWith('/v1/channels'))
+        return Promise.resolve(Response.json({ channels: [] }))
+      if (path.startsWith('/v1/events'))
+        return Promise.resolve(Response.json({ events: [] }))
+      if (path.startsWith('/v1/runs'))
+        return Promise.resolve(Response.json({ runs: [] }))
+      return Promise.resolve(Response.json({ messages: [] }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    window.history.replaceState({}, '', `/?channel=${channelId}`)
+
+    render(<App />)
+    await screen.findByText('Channel unavailable')
+    fireEvent.change(screen.getByLabelText('告诉 Pegas 你想完成什么'), {
+      target: { value: 'Continue this Channel' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '发送给 Pegas' }))
+
+    await waitFor(() =>
+      expect(postedBody).toMatchObject({
+        payload: { text: 'Continue this Channel', taskId: channelId },
+      }),
+    )
+  })
+
+  it('clears a previously loaded Channel timeline when its refresh fails', async () => {
+    const channel = testChannel('task-refresh-failure', 'Refresh failure')
+    const sensitive = testMessage(
+      'message-refresh-failure',
+      channel.id,
+      'Previously loaded private result',
+    )
+    let timelineRequests = 0
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = requestPath(input)
+      if (path === '/v1/events' && init?.method === 'POST')
+        return Promise.resolve(Response.json({}, { status: 202 }))
+      if (path.startsWith(`/v1/channels/${channel.id}/timeline`)) {
+        timelineRequests += 1
+        return timelineRequests === 1
+          ? Promise.resolve(
+              Response.json({
+                channel,
+                events: [],
+                runs: [],
+                messages: [sensitive],
+              }),
+            )
+          : Promise.resolve(
+              Response.json(
+                { message: 'Channel refresh failed' },
+                { status: 503 },
+              ),
+            )
+      }
+      if (path.startsWith('/v1/channels'))
+        return Promise.resolve(Response.json({ channels: [channel] }))
+      if (path.startsWith('/v1/events'))
+        return Promise.resolve(Response.json({ events: [] }))
+      if (path.startsWith('/v1/runs'))
+        return Promise.resolve(Response.json({ runs: [] }))
+      return Promise.resolve(Response.json({ messages: [] }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    window.history.replaceState({}, '', `/?channel=${channel.id}`)
+
+    render(<App />)
+    expect(
+      await screen.findByText('Previously loaded private result'),
+    ).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('告诉 Pegas 你想完成什么'), {
+      target: { value: 'Refresh now' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '发送给 Pegas' }))
+
+    expect(await screen.findByText('Channel refresh failed')).toBeTruthy()
+    expect(screen.queryByText('Previously loaded private result')).toBeNull()
+  })
+
+  it('does not refresh the previous Channel after a delayed send completes', async () => {
+    const first = testChannel('task-send-first', 'Send first')
+    const second = testChannel('task-send-second', 'Send second')
+    const secondMessage = testMessage(
+      'message-send-second',
+      second.id,
+      'Second remains current',
+    )
+    let resolveSend: ((response: Response) => void) | undefined
+    const delayedSend = new Promise<Response>(resolve => {
+      resolveSend = resolve
+    })
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = requestPath(input)
+      if (path === '/v1/events' && init?.method === 'POST') return delayedSend
+      if (path.startsWith(`/v1/channels/${first.id}/timeline`))
+        return Promise.resolve(
+          Response.json({
+            channel: first,
+            events: [],
+            runs: [],
+            messages: [],
+          }),
+        )
+      if (path.startsWith(`/v1/channels/${second.id}/timeline`))
+        return Promise.resolve(
+          Response.json({
+            channel: second,
+            events: [],
+            runs: [],
+            messages: [secondMessage],
+          }),
+        )
+      if (path.startsWith('/v1/channels'))
+        return Promise.resolve(Response.json({ channels: [first, second] }))
+      if (path.startsWith('/v1/events'))
+        return Promise.resolve(Response.json({ events: [] }))
+      if (path.startsWith('/v1/runs'))
+        return Promise.resolve(Response.json({ runs: [] }))
+      return Promise.resolve(Response.json({ messages: [] }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+    await screen.findByText('Channels')
+    fireEvent.click(
+      screen.getByRole('button', { name: '打开 Channel：Send first' }),
+    )
+    await screen.findByPlaceholderText('给 Send first 发消息')
+    fireEvent.change(screen.getByLabelText('告诉 Pegas 你想完成什么'), {
+      target: { value: 'Delayed send' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '发送给 Pegas' }))
+    fireEvent.click(
+      screen.getByRole('button', { name: '打开 Channel：Send second' }),
+    )
+    expect(await screen.findByText('Second remains current')).toBeTruthy()
+
+    await act(async () => {
+      resolveSend?.(Response.json({}, { status: 202 }))
+      await Promise.resolve()
+    })
+    expect(screen.getByText('Second remains current')).toBeTruthy()
+  })
+
+  it('ignores an older Channel snapshot after switching Channels', async () => {
+    const first = testChannel('task-race-first', 'Race first')
+    const second = testChannel('task-race-second', 'Race second')
+    const firstMessage = testMessage(
+      'message-race-first',
+      first.id,
+      'Stale first result',
+    )
+    const secondMessage = testMessage(
+      'message-race-second',
+      second.id,
+      'Current second result',
+    )
+    let resolveFirst: ((response: Response) => void) | undefined
+    const delayedFirst = new Promise<Response>(resolve => {
+      resolveFirst = resolve
+    })
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const path = requestPath(input)
+      if (path.startsWith(`/v1/channels/${first.id}/timeline`))
+        return delayedFirst
+      if (path.startsWith(`/v1/channels/${second.id}/timeline`))
+        return Promise.resolve(
+          Response.json({
+            channel: second,
+            events: [],
+            runs: [],
+            messages: [secondMessage],
+          }),
+        )
+      if (path.startsWith('/v1/channels'))
+        return Promise.resolve(Response.json({ channels: [first, second] }))
+      if (path.startsWith('/v1/events'))
+        return Promise.resolve(Response.json({ events: [] }))
+      if (path.startsWith('/v1/runs'))
+        return Promise.resolve(Response.json({ runs: [] }))
+      return Promise.resolve(Response.json({ messages: [] }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+    await screen.findByText('Channels')
+    fireEvent.click(
+      screen.getByRole('button', { name: '打开 Channel：Race first' }),
+    )
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        `/v1/channels/${first.id}/timeline?userId=owner`,
+        expect.any(Object),
+      ),
+    )
+    fireEvent.click(
+      screen.getByRole('button', { name: '打开 Channel：Race second' }),
+    )
+    expect(await screen.findByText('Current second result')).toBeTruthy()
+
+    await act(async () => {
+      resolveFirst?.(
+        Response.json({
+          channel: first,
+          events: [],
+          runs: [],
+          messages: [firstMessage],
+        }),
+      )
+      await Promise.resolve()
+    })
+    expect(screen.getByText('Current second result')).toBeTruthy()
+    expect(screen.queryByText('Stale first result')).toBeNull()
+  })
+
   it('shows provider-reported token and cache usage in the Channel workspace', async () => {
     vi.stubGlobal(
       'matchMedia',
@@ -1658,6 +2030,43 @@ describe('Pegas web app', () => {
     expect(screen.queryByText('alert("unsafe")')).toBeNull()
   })
 })
+
+function requestPath(input: RequestInfo | URL): string {
+  return input instanceof Request
+    ? input.url
+    : input instanceof URL
+      ? input.href
+      : input
+}
+
+function testChannel(id: string, title: string) {
+  return {
+    id,
+    taskId: id,
+    userId: 'owner',
+    originEventId: `event-${id}`,
+    title,
+    goal: `${title} goal`,
+    status: 'started' as const,
+    workerIconId: 'computer' as const,
+    createdAt: '2026-11-19T08:00:00.000Z',
+    updatedAt: '2026-11-19T08:03:00.000Z',
+    latestActivityAt: '2026-11-19T08:03:00.000Z',
+    canResume: false,
+    canStop: true,
+  }
+}
+
+function testMessage(id: string, taskId: string, text: string) {
+  return {
+    id,
+    userId: 'owner',
+    taskId,
+    payload: { type: 'run.completed', text },
+    status: 'sent' as const,
+    createdAt: '2026-11-19T08:03:00.000Z',
+  }
+}
 
 function parseRequestBody(
   init: RequestInit | undefined,
