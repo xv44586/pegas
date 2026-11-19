@@ -6,12 +6,15 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { ReleaseRef } from '../src/core/domain.js'
+import {
+  createReviewReport,
+  writeReviewReport,
+} from '../src/quality/review-evidence.js'
 import { createCandidateManifest } from '../src/supervisor/candidate-manifest.js'
 import { createRecoveryServer } from '../src/supervisor/recovery-server.js'
 import { ReleaseStateStore } from '../src/supervisor/release-state.js'
 
 const cleanups: (() => Promise<void>)[] = []
-
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup()
 })
@@ -103,7 +106,24 @@ describe('recovery server', () => {
       createdAt: '2026-11-17T01:00:00.000Z',
     }
     const artifactPath = join(directory, 'release-2.tar')
+    const reviewReportPath = join(directory, 'feature-review.json')
     writeFileSync(artifactPath, 'immutable candidate')
+    writeReviewReport(
+      reviewReportPath,
+      createReviewReport({
+        featureIds: ['QUALITY-001'],
+        title: 'Recovery candidate review',
+        acceptanceRefs: ['docs/feature-map.md#quality-001'],
+        baseRef: 'origin/main',
+        headCommit: candidate.commit,
+        changedFiles: ['src/supervisor/recovery-server.ts'],
+        commands: [
+          { command: 'pnpm check', status: 'passed', summary: 'passed' },
+        ],
+        notTried: [],
+        generatedAt: '2026-11-17T01:04:00.000Z',
+      }),
+    )
     state.stage(
       createCandidateManifest(
         {
@@ -124,12 +144,21 @@ describe('recovery server', () => {
               status: 'passed',
               completedAt: '2026-11-17T01:07:00.000Z',
             },
+            review: {
+              approval: {
+                reviewedCommit: candidate.commit,
+                reviewer: 'release-reviewer',
+                reviewedAt: '2026-11-17T01:08:00.000Z',
+              },
+            },
             notTried: [],
           },
         },
         artifactPath,
+        reviewReportPath,
       ),
       artifactPath,
+      reviewReportPath,
     )
     writeFileSync(state.path, '{bad primary')
     writeFileSync(state.backupPath, '{bad backup')

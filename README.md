@@ -23,6 +23,7 @@ Pegas 是一个以自然对话为统一入口的个人智能代理。
 - [系统架构](docs/architecture.md)
 - [MVP 计划](docs/mvp-plan.md)
 - [Feature Map](docs/feature-map.md)
+- [Feature Review 门禁](docs/feature-review-gate.md)
 - [贡献与质量门禁](CONTRIBUTING.md)
 
 ## 本地验证
@@ -35,7 +36,7 @@ pnpm check
 pnpm smoke
 ```
 
-`pnpm check` 包含格式、Lint、类型、无用代码、覆盖率阈值和生产构建检查。所有 Feature 在开发前后都需要同步 [Feature Map](docs/feature-map.md)，以复用既有能力并保持唯一事实来源。
+`pnpm check` 包含格式、Lint、类型、无用代码、覆盖率阈值和生产构建检查。所有 Feature 在开发前后都需要同步 [Feature Map](docs/feature-map.md)，以复用既有能力并保持唯一事实来源。PR 会为准确提交自动生成 7 天有效的审核报告和 UI 截图；运行结果位于 `output/feature-review/`，不会提交到主分支。
 
 启动开发进程：
 

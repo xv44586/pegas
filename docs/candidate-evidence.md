@@ -4,7 +4,7 @@
 >
 > 状态：Scaffold
 >
-> 更新日期：2026-11-17
+> 更新日期：2026-11-19
 
 ## 用户结果
 
@@ -19,20 +19,24 @@ Pegas 只有在 Candidate 的构建产物、Git commit 和验证证据属于同�
 - 已完成且 conclusion 为 `success` 的 CI workflow、run ID、URL 和完成时间；
 - 实际命令和测试数量；
 - 通过的 smoke 命令与完成时间；
+- 临时 Feature Review 报告的文件名、Feature ID、tested commit 与 SHA-256；
+- 人工审核的 reviewed commit、审核人和时间；
 - 明确记录的 `notTried`。
 
-`ReleaseStateStore.stage` 接受 manifest 和本地 artifact 路径，在状态变更前重新计算文件大小与 SHA-256，并确认 tested commit 等于 Release commit。
+`ReleaseStateStore.stage` 接受 Candidate manifest、本地 artifact 路径和临时 Feature Review 报告路径，在状态变更前重新计算两份文件的 SHA-256，并确认 CI tested commit、报告 commit、人工 reviewed commit 与 Release commit 完全一致。
 
 ## 验收条件
 
 1. exact commit、成功 CI、通过 smoke、测试数量和 schema 范围均为必填字段。
 2. manifest 可以原子写入、读取和运行时校验。
 3. commit 不一致、CI failure/cancelled、smoke failure 或 artifact 变化会阻止 stage。
-4. 完整质量门禁和 smoke test 通过。
+4. 临时报告存在关键 `Not tried`、内容不完整或创建 Candidate 后发生变化会阻止 stage。
+5. 完整质量门禁和 smoke test 通过。
+6. stage 成功后临时报告可以按保留期删除；confirm 和 rollback 依赖 Candidate manifest，不依赖媒体继续存在。
 
 ## 非目标、权限与恢复
 
 - 本 Feature 不负责创建 worktree、执行 CI、签名 artifact、解包 Release 或切换进程。
 - CI URL 和 run ID 是审计证据，不作为认证凭证；manifest 不得包含 token、环境变量或测试日志原文。
-- manifest 校验失败时保持当前 active Release 不变。修复方式是重新构建并产生新的 Candidate，不能编辑 hash 或把失败结论改成 success。
+- manifest 校验失败时保持当前 active Release 不变。修复方式是重新运行准确 SHA 的验证和审核并产生新的 Candidate，不能编辑 hash、伪造 reviewed commit 或把失败结论改成 success。
 - 当前 artifact 在 stage 时验证；未来还需要 Release Registry 在解包和启动前再次验证签名或内容清单。

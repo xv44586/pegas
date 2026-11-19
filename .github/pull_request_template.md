@@ -8,6 +8,16 @@
 - 状态变化：
 - 是否检查过重复实现：是 / 否
 
+## Feature Review
+
+- [ ] PR 标题包含 Feature ID（例如 `fix(CONV-002): ...`）
+- [ ] Feature Map 中的验收条件已更新
+- [ ] 已查看 CI 自动生成的短期审核 artifact 和 job summary
+- [ ] UI 改动已查看自动截图；真实依赖改动已查看脱敏 canary
+- [ ] 临时报告中没有关键 `Not tried`
+- [ ] 审核记录明确写出 reviewed commit SHA
+- 本地生成：`pnpm review:evidence -- --changed-from <base-ref> --feature <FEATURE-ID> --passed "pnpm check|..."`
+
 ## 验证
 
 - [ ] 新功能或缺陷修复已有自动化测试
@@ -22,7 +32,7 @@
 - 测试命令与数量：
 - 关键通过场景：
 - 真实环境或手工验证：
-- 未验证项（Not tried）：
+- 未验证项（Not tried；必须说明是否关键）：
 - 已知红灯及 Issue：
 - 回滚方式：
 

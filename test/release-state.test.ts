@@ -5,6 +5,10 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import type { ReleaseRef } from '../src/core/domain.js'
+import {
+  createReviewReport,
+  writeReviewReport,
+} from '../src/quality/review-evidence.js'
 import { createCandidateManifest } from '../src/supervisor/candidate-manifest.js'
 import {
   RecoveryStateUnavailableError,
@@ -12,7 +16,6 @@ import {
 } from '../src/supervisor/release-state.js'
 
 const temporaryDirectories: string[] = []
-
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { recursive: true, force: true })
@@ -32,13 +35,17 @@ describe('ReleaseStateStore', () => {
       phase: 'stable',
     })
     const artifactPath = join(directory, 'release-2.tar')
+    const reviewReportPath = reviewPath(directory, second.commit ?? '')
     writeFileSync(artifactPath, 'immutable candidate')
-    const manifest = candidateManifest(second, artifactPath)
-    expect(state.stage(manifest, artifactPath)).toMatchObject({
-      active: second,
-      previous: first,
-      phase: 'verifying',
-    })
+    const manifest = candidateManifest(second, artifactPath, reviewReportPath)
+    expect(state.stage(manifest, artifactPath, reviewReportPath)).toMatchObject(
+      {
+        active: second,
+        previous: first,
+        phase: 'verifying',
+      },
+    )
+    rmSync(reviewReportPath)
     expect(state.confirm().phase).toBe('stable')
     expect(state.rollback('failed health check')).toMatchObject({
       active: first,
@@ -134,11 +141,12 @@ describe('ReleaseStateStore', () => {
     const second = release('release-2')
     state.ensure(first)
     const artifactPath = join(directory, 'release-2.tar')
+    const reviewReportPath = reviewPath(directory, second.commit ?? '')
     writeFileSync(artifactPath, 'immutable candidate')
-    const manifest = candidateManifest(second, artifactPath)
+    const manifest = candidateManifest(second, artifactPath, reviewReportPath)
     writeFileSync(artifactPath, 'candidate changed after verification')
 
-    expect(() => state.stage(manifest, artifactPath)).toThrow(
+    expect(() => state.stage(manifest, artifactPath, reviewReportPath)).toThrow(
       /artifact size does not match|artifact checksum does not match/,
     )
     expect(state.read()).toMatchObject({ active: first, phase: 'stable' })
@@ -154,7 +162,11 @@ function release(id: string): ReleaseRef {
   }
 }
 
-function candidateManifest(releaseRef: ReleaseRef, artifactPath: string) {
+function candidateManifest(
+  releaseRef: ReleaseRef,
+  artifactPath: string,
+  reviewReportPath: string,
+) {
   if (!releaseRef.commit) throw new Error('Candidate commit is required')
   return createCandidateManifest(
     {
@@ -175,11 +187,19 @@ function candidateManifest(releaseRef: ReleaseRef, artifactPath: string) {
           status: 'passed',
           completedAt: '2026-11-16T00:12:00.000Z',
         },
+        review: {
+          approval: {
+            reviewedCommit: releaseRef.commit,
+            reviewer: 'release-reviewer',
+            reviewedAt: '2026-11-16T00:14:00.000Z',
+          },
+        },
         notTried: [],
       },
       createdAt: '2026-11-16T00:15:00.000Z',
     },
     artifactPath,
+    reviewReportPath,
   )
 }
 
@@ -189,6 +209,32 @@ function stageCandidate(
   directory: string,
 ) {
   const artifactPath = join(directory, `${releaseRef.id}.tar`)
+  const reviewReportPath = reviewPath(directory, releaseRef.commit ?? '')
   writeFileSync(artifactPath, `immutable candidate ${releaseRef.id}`)
-  return state.stage(candidateManifest(releaseRef, artifactPath), artifactPath)
+  return state.stage(
+    candidateManifest(releaseRef, artifactPath, reviewReportPath),
+    artifactPath,
+    reviewReportPath,
+  )
+}
+
+function reviewPath(directory: string, commit: string): string {
+  const path = join(directory, `feature-review-${commit.slice(0, 7)}.json`)
+  writeReviewReport(
+    path,
+    createReviewReport({
+      featureIds: ['QUALITY-001'],
+      title: 'Candidate review',
+      acceptanceRefs: ['docs/feature-map.md#quality-001'],
+      baseRef: 'origin/main',
+      headCommit: commit,
+      changedFiles: ['src/supervisor/candidate-manifest.ts'],
+      commands: [
+        { command: 'pnpm check', status: 'passed', summary: 'passed' },
+      ],
+      notTried: [],
+      generatedAt: '2026-11-16T00:13:00.000Z',
+    }),
+  )
+  return path
 }

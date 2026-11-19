@@ -10,9 +10,14 @@ import {
 import { basename, dirname } from 'node:path'
 
 import type { ReleaseRef } from '../core/domain.js'
+import {
+  createReviewReportEvidence,
+  verifyReviewReportEvidence,
+  type ReviewReportEvidence,
+} from '../quality/review-evidence.js'
 
 export interface CandidateManifest {
-  schemaVersion: 1
+  schemaVersion: 2
   release: ReleaseRef & { commit: string }
   artifact: {
     file: string
@@ -41,6 +46,14 @@ export interface CandidateManifest {
       status: 'passed'
       completedAt: string
     }
+    review: {
+      report: ReviewReportEvidence
+      approval: {
+        reviewedCommit: string
+        reviewer: string
+        reviewedAt: string
+      }
+    }
     notTried: string[]
   }
   createdAt: string
@@ -49,18 +62,21 @@ export interface CandidateManifest {
 export interface CandidateManifestInput {
   release: ReleaseRef & { commit: string }
   compatibility: CandidateManifest['compatibility']
-  verification: CandidateManifest['verification']
+  verification: Omit<CandidateManifest['verification'], 'review'> & {
+    review: Omit<CandidateManifest['verification']['review'], 'report'>
+  }
   createdAt?: string
 }
 
 export function createCandidateManifest(
   input: CandidateManifestInput,
   artifactPath: string,
+  reviewReportPath: string,
 ): CandidateManifest {
   const artifact = statSync(artifactPath)
   if (!artifact.isFile()) throw new Error('Candidate artifact must be a file')
   return parseCandidateManifest({
-    schemaVersion: 1,
+    schemaVersion: 2,
     release: input.release,
     artifact: {
       file: basename(artifactPath),
@@ -68,7 +84,13 @@ export function createCandidateManifest(
       sizeBytes: artifact.size,
     },
     compatibility: input.compatibility,
-    verification: input.verification,
+    verification: {
+      ...input.verification,
+      review: {
+        report: createReviewReportEvidence(reviewReportPath),
+        approval: input.verification.review.approval,
+      },
+    },
     createdAt: input.createdAt ?? new Date().toISOString(),
   })
 }
@@ -104,6 +126,7 @@ export function readCandidateManifest(path: string): CandidateManifest {
 export function verifyCandidateManifest(
   value: unknown,
   artifactPath: string,
+  reviewReportPath: string,
 ): CandidateManifest {
   const manifest = parseCandidateManifest(value)
   if (basename(artifactPath) !== manifest.artifact.file) {
@@ -117,11 +140,15 @@ export function verifyCandidateManifest(
   if (hashFile(artifactPath) !== manifest.artifact.sha256) {
     throw new Error('Candidate artifact checksum does not match the manifest')
   }
+  verifyReviewReportEvidence(
+    manifest.verification.review.report,
+    reviewReportPath,
+  )
   return manifest
 }
 
 function parseCandidateManifest(value: unknown): CandidateManifest {
-  if (!isRecord(value) || value.schemaVersion !== 1) {
+  if (!isRecord(value) || value.schemaVersion !== 2) {
     throw new Error('Candidate manifest schema version is unsupported')
   }
   if (!isRelease(value.release) || typeof value.release.commit !== 'string') {
@@ -141,6 +168,14 @@ function parseCandidateManifest(value: unknown): CandidateManifest {
   }
   if (value.verification.testedCommit !== value.release.commit) {
     throw new Error('Candidate tested commit does not match the release commit')
+  }
+  if (value.verification.review.report.testedCommit !== value.release.commit) {
+    throw new Error('Candidate review report commit does not match')
+  }
+  if (
+    value.verification.review.approval.reviewedCommit !== value.release.commit
+  ) {
+    throw new Error('Candidate reviewed commit does not match')
   }
   if (!isTimestamp(value.createdAt)) {
     throw new Error('Candidate manifest creation time is invalid')
@@ -222,9 +257,31 @@ function isVerification(
   ) {
     return false
   }
+  if (!isReview(value.review)) return false
   return (
     Array.isArray(value.notTried) &&
     value.notTried.every(item => nonempty(item))
+  )
+}
+
+function isReview(
+  value: unknown,
+): value is CandidateManifest['verification']['review'] {
+  return (
+    isRecord(value) &&
+    isRecord(value.report) &&
+    nonempty(value.report.file) &&
+    typeof value.report.sha256 === 'string' &&
+    sha256Pattern.test(value.report.sha256) &&
+    Array.isArray(value.report.featureIds) &&
+    value.report.featureIds.length > 0 &&
+    value.report.featureIds.every(featureId => nonempty(featureId)) &&
+    commitPattern.test(stringValue(value.report.testedCommit)) &&
+    value.report.status === 'ready-for-review' &&
+    isRecord(value.approval) &&
+    commitPattern.test(stringValue(value.approval.reviewedCommit)) &&
+    nonempty(value.approval.reviewer) &&
+    isTimestamp(value.approval.reviewedAt)
   )
 }
 
