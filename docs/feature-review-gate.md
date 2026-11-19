@@ -35,6 +35,22 @@ Pegas 把可重复的测试能力和验收契约永久保留在仓库中，但�
 5. Web 改动没有截图、外部服务代码改动没有脱敏 canary，都会自动产生关键 `Not tried`，报告状态为 `incomplete` 并让 CI 失败。
 6. 审核记录必须写明 reviewed commit SHA；之后有新 push 时必须重新运行和审核。
 
+## 证据层级与完成声明
+
+四种证据回答不同问题，不得相互替代：
+
+1. `pnpm check` 和单元/集成测试只证明当前源码满足已编码合同。
+2. PR CI、UI Review 和 Candidate 报告证明准确 PR head 在隔离环境中通过。
+3. 合并记录只证明该 commit 已进入 main，不证明运行进程已经切换。
+4. `/readyz`、实际静态资源与新浏览器页面中的原始用户场景，才证明正在服务的 main 可用。
+
+完成报告必须明确列出已经验证到哪一层。用户报告的是运行中界面时，不能凭 Candidate 截图宣称问题已修复；合并并重启后还必须：
+
+- 检查 `/readyz`，确认进程健康且实际静态资源来自合并后的构建；
+- 用新页面按原始视口、展开/收缩状态和代表性长内容重现问题；有未保存状态的旧页面不得直接刷新作为验证手段；
+- 对布局缺陷记录目标组件及其关键子元素边界，不能只验证页面能打开或某个移动视口正常；
+- 发现运行实例与 Candidate 不一致时，把状态报告为未完成并继续定位，不先归因于缓存。
+
 本地生成示例：
 
 ```sh
@@ -77,4 +93,4 @@ stage 完成后临时报告可以删除；Candidate manifest 已保留必要摘�
 
 ## 仍需加固
 
-当前 UI collector 覆盖 Pegas 的通用壳层状态；具体 Feature 的特殊页面状态仍应通过相应 Playwright 测试永久编码。外部服务路径已经在缺少 canary 时阻断，但通用 Candidate canary runner 仍需随 SelfChange 执行器一起完成。
+当前 UI collector 覆盖 Pegas 的通用壳层状态，CSS cascade lint 会阻断主题覆盖切换为 column flex 时遗漏 `align-items` 重置；具体 Feature 的特殊页面状态仍应通过相应 Playwright 测试永久编码。外部服务路径已经在缺少 canary 时阻断，但通用 Candidate canary runner 仍需随 SelfChange 执行器一起完成，合并后运行实例验证也仍是发布阶段责任。
