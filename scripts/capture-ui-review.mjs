@@ -378,6 +378,19 @@ async function assertGeometry(page, label) {
           )
       }
     }
+    const sidebarRail = globalThis.document.querySelector('.identity-rail')
+    const sidebarList = globalThis.document.querySelector('.task-sidebar-list')
+    if (sidebarRail && sidebarList) {
+      const railRect = sidebarRail.getBoundingClientRect()
+      const listRect = sidebarList.getBoundingClientRect()
+      if (
+        listRect.left < railRect.left - 1 ||
+        listRect.right > railRect.right + 1
+      )
+        out.push(
+          `sidebar list crosses its rail ${String(Math.round(listRect.left))}..${String(Math.round(listRect.right))} outside ${String(Math.round(railRect.left))}..${String(Math.round(railRect.right))}`,
+        )
+    }
     return out
   })
   if (label === 'sidebar-collapsed' || label === 'mobile-home') {
