@@ -83,6 +83,7 @@ try {
   })
   const page = await context.newPage()
   page.setDefaultTimeout(10_000)
+  await mockModelDiscovery(page)
   await page.goto(`http://127.0.0.1:${String(port)}/`)
   await page.getByRole('textbox', { name: '告诉 Pegas 你想完成什么' }).waitFor()
   await assertGeometry(page, 'desktop-home')
@@ -121,6 +122,11 @@ try {
   await page.getByRole('button', { name: '关闭设置' }).waitFor()
   await assertGeometry(page, 'settings')
   await shot(page, 'settings.png')
+  await page.getByRole('button', { name: '获取模型列表' }).click()
+  await page.getByRole('button', { name: '选择模型', exact: true }).waitFor()
+  await assertGeometry(page, 'settings-model-picker')
+  await shot(page, 'settings-model-picker.png')
+  await page.getByRole('button', { name: '选择模型', exact: true }).click()
   await page.getByRole('button', { name: '关闭设置' }).click()
 
   await page.getByRole('button', { name: '插件', exact: true }).click()
@@ -266,6 +272,21 @@ async function mockAgentStatusSnapshot(page) {
   })
 }
 
+async function mockModelDiscovery(page) {
+  await page.route('**/v1/settings/models/discover', route =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        models: Array.from({ length: 165 }, (_, index) => ({
+          id: `review/model-${String(index).padStart(3, '0')}`,
+          name: `Review model ${String(index + 1)}`,
+        })),
+      }),
+    }),
+  )
+}
+
 async function assertAgentStatusBadges(page) {
   const result = await page
     .locator('.task-row .pegas-agent-avatar')
@@ -324,6 +345,38 @@ async function assertGeometry(page, label) {
         out.push(
           `${element.className} has clipped horizontal content ${String(element.scrollWidth)}>${String(element.clientWidth)} rect=${String(Math.round(element.getBoundingClientRect().width))} display=${globalThis.getComputedStyle(element).display}`,
         )
+    }
+    const modelPicker = globalThis.document.querySelector('.model-picker-panel')
+    if (modelPicker) {
+      const parent = modelPicker.parentElement
+      const pickerRect = modelPicker.getBoundingClientRect()
+      const parentRect = parent?.getBoundingClientRect()
+      if (parentRect && pickerRect.width < parentRect.width * 0.75)
+        out.push(
+          `model picker collapsed to ${String(Math.round(pickerRect.width))} inside ${String(Math.round(parentRect.width))}`,
+        )
+      const list = modelPicker.querySelector('.model-picker-list')
+      if (
+        list &&
+        list.scrollHeight > list.clientHeight &&
+        list.clientHeight <= 0
+      )
+        out.push('model picker list has no usable scroll viewport')
+    }
+    for (const button of globalThis.document.querySelectorAll(
+      '.sidebar-section-nav button',
+    )) {
+      const buttonRect = button.getBoundingClientRect()
+      for (const child of button.children) {
+        const rect = child.getBoundingClientRect()
+        if (
+          rect.left < buttonRect.left - 1 ||
+          rect.right > buttonRect.right + 1
+        )
+          out.push(
+            `sidebar navigation content crosses its button ${String(Math.round(rect.left))}..${String(Math.round(rect.right))} outside ${String(Math.round(buttonRect.left))}..${String(Math.round(buttonRect.right))}`,
+          )
+      }
     }
     return out
   })

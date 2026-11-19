@@ -51,4 +51,22 @@ describe('workspace layout contracts', () => {
       )
     }
   })
+
+  it('gives the Router model picker the full field width and its own scroll region', () => {
+    expect(workspaceTheme).toMatch(
+      /\.model-picker-panel\s*\{[^}]*grid-column:\s*1\s*\/\s*-1;[^}]*min-inline-size:\s*0;/,
+    )
+    expect(workspaceTheme).toMatch(
+      /\.model-picker-list\s*\{[^}]*max-block-size:\s*min\([^;]+;[^}]*overflow-y:\s*auto;/,
+    )
+  })
+
+  it('reflows Channel navigation before its labels collide in a narrow sidebar', () => {
+    expect(workspaceTheme).toMatch(
+      /\.identity-rail\s*\{[^}]*container:\s*task-sidebar\s*\/\s*inline-size;/,
+    )
+    expect(workspaceTheme).toMatch(
+      /@container\s+task-sidebar\s*\(inline-size\s*<\s*260px\)[\s\S]*?\.sidebar-section-nav\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/,
+    )
+  })
 })
