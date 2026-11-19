@@ -59,6 +59,21 @@ describe('workspace layout contracts', () => {
     expect(workspaceTheme).toMatch(
       /\.model-picker-list\s*\{[^}]*max-block-size:\s*min\([^;]+;[^}]*overflow-y:\s*auto;/,
     )
+    expect(workspaceTheme).toMatch(
+      /\.model-pagination\s*\{[^}]*display:\s*flex;[^}]*justify-content:\s*space-between;/,
+    )
+  })
+
+  it('keeps model feedback compact and attached to its controls', () => {
+    expect(workspaceTheme).toMatch(
+      /\.model-feedback\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*16px\s+minmax\(0,\s*1fr\);/,
+    )
+    expect(workspaceTheme).toMatch(
+      /\.model-feedback strong\s*\{[^}]*font-size:\s*12px;[^}]*line-height:\s*16px;/,
+    )
+    expect(workspaceTheme).toMatch(
+      /\.model-feedback span\s*\{[^}]*font-size:\s*11px;[^}]*line-height:\s*16px;/,
+    )
   })
 
   it('reflows Channel navigation before its labels collide in a narrow sidebar', () => {

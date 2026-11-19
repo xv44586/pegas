@@ -82,6 +82,8 @@ export const featuredModelProviderIds: readonly ModelProviderId[] = [
   'custom',
 ]
 
+const MODEL_PAGE_SIZE = 20
+
 const userId = 'owner'
 interface SettingsClient {
   settings(): Promise<SettingsResponse>
@@ -1415,6 +1417,7 @@ function SettingsPage({
   const [savedSpeech, setSavedSpeech] = useState<SettingsResponse['speech']>()
   const [routerModels, setRouterModels] = useState<ModelCatalogItem[]>([])
   const [modelSearch, setModelSearch] = useState('')
+  const [modelPage, setModelPage] = useState(1)
   const [modelPickerOpen, setModelPickerOpen] = useState(false)
   const [modelFeedback, setModelFeedback] = useState<ModelFeedback>()
   const modelSearchRef = useRef<HTMLInputElement>(null)
@@ -1570,6 +1573,7 @@ function SettingsPage({
     setModelAction(undefined)
     setRouterModels([])
     setModelSearch('')
+    setModelPage(1)
     setModelPickerOpen(false)
     setModelFeedback(undefined)
   }
@@ -1613,6 +1617,14 @@ function SettingsPage({
       if (requestId !== modelRequestRef.current) return
       setRouterModels(models)
       setModelSearch('')
+      const selectedIndex = models.findIndex(
+        model => model.id === settings.modelName.trim(),
+      )
+      setModelPage(
+        selectedIndex >= 0
+          ? Math.floor(selectedIndex / MODEL_PAGE_SIZE) + 1
+          : 1,
+      )
       setModelPickerOpen(models.length > 0)
       setModelFeedback(
         models.length > 0
@@ -1666,7 +1678,16 @@ function SettingsPage({
       .toLocaleLowerCase()
       .includes(modelSearch.trim().toLocaleLowerCase()),
   )
-  const shownModels = filteredModels.slice(0, 50)
+  const modelPageCount = Math.max(
+    1,
+    Math.ceil(filteredModels.length / MODEL_PAGE_SIZE),
+  )
+  const currentModelPage = Math.min(modelPage, modelPageCount)
+  const modelPageStart = (currentModelPage - 1) * MODEL_PAGE_SIZE
+  const shownModels = filteredModels.slice(
+    modelPageStart,
+    modelPageStart + MODEL_PAGE_SIZE,
+  )
   const modelNotListed =
     routerModels.length > 0 &&
     !routerModels.some(model => model.id === settings?.modelName.trim())
@@ -1705,7 +1726,7 @@ function SettingsPage({
           ? '已配置'
           : '待保存'
   const settingsTabs = [
-    ['models', '模型与供应商'],
+    ['models', '模型服务'],
     ['routing', '任务路由'],
     ['rewrite', '语音与输入'],
     ['privacy', '隐私'],
@@ -1972,94 +1993,384 @@ function SettingsPage({
                     >
                       <header>
                         <h2 id="models-title">模型服务</h2>
-                        <p>选择供应商并配置 Pegas Router 使用的模型连接。</p>
+                        <p>
+                          配置 Router 用于消息归类和输入处理的模型。Worker
+                          执行模型请在“Pegas”页设置。
+                        </p>
                       </header>
 
-                      <div className="settings-group provider-picker">
-                        <span className="provider-picker-label">
-                          常用供应商
-                        </span>
-                        <div
-                          className="provider-grid"
-                          role="group"
-                          aria-label="常用供应商"
+                      <div className="model-service-stack">
+                        <section
+                          className="settings-subsection router-model-section"
+                          aria-labelledby="router-model-heading"
                         >
-                          {featuredProviders?.map(provider => (
-                            <ProviderOption
-                              key={provider.id}
-                              provider={provider}
-                              checked={settings.modelProvider === provider.id}
-                              onChange={() => selectProvider(provider.id)}
-                            />
-                          ))}
-                        </div>
-                        <details
-                          className="provider-more"
-                          open={additionalProviders?.some(
-                            provider => provider.id === settings.modelProvider,
-                          )}
-                        >
-                          <summary>更多供应商</summary>
-                          <div
-                            className="provider-grid"
-                            role="group"
-                            aria-label="更多供应商"
-                          >
-                            {additionalProviders?.map(provider => (
-                              <ProviderOption
-                                key={provider.id}
-                                provider={provider}
-                                checked={settings.modelProvider === provider.id}
-                                onChange={() => selectProvider(provider.id)}
+                          <header className="settings-subsection-head">
+                            <div>
+                              <h3 id="router-model-heading">Router 模型</h3>
+                              <p>选择连接和模型；只影响下一次 Router 调用。</p>
+                            </div>
+                            <span>执行模型在 Pegas 页</span>
+                          </header>
+
+                          <fieldset className="provider-picker model-provider-picker">
+                            <legend className="provider-picker-label">
+                              模型供应商
+                            </legend>
+                            <div
+                              className="provider-grid"
+                              role="group"
+                              aria-label="常用供应商"
+                            >
+                              {featuredProviders?.map(provider => (
+                                <ProviderOption
+                                  key={provider.id}
+                                  provider={provider}
+                                  checked={
+                                    settings.modelProvider === provider.id
+                                  }
+                                  onChange={() => selectProvider(provider.id)}
+                                />
+                              ))}
+                            </div>
+                            <details
+                              className="provider-more"
+                              open={additionalProviders?.some(
+                                provider =>
+                                  provider.id === settings.modelProvider,
+                              )}
+                            >
+                              <summary>更多供应商</summary>
+                              <div
+                                className="provider-grid"
+                                role="group"
+                                aria-label="更多供应商"
+                              >
+                                {additionalProviders?.map(provider => (
+                                  <ProviderOption
+                                    key={provider.id}
+                                    provider={provider}
+                                    checked={
+                                      settings.modelProvider === provider.id
+                                    }
+                                    onChange={() => selectProvider(provider.id)}
+                                  />
+                                ))}
+                              </div>
+                            </details>
+                            <p className="provider-description">
+                              {selectedProvider.description}
+                            </p>
+                          </fieldset>
+
+                          <div className="router-model-fields">
+                            <label htmlFor="model-name">模型 ID</label>
+                            <div className="model-input-row">
+                              <input
+                                id="model-name"
+                                name="modelName"
+                                value={settings.modelName}
+                                onChange={event =>
+                                  changeModelName(event.target.value)
+                                }
+                                aria-describedby="model-guidance"
+                                autoCapitalize="none"
+                                autoCorrect="off"
+                                spellCheck={false}
+                                maxLength={160}
+                                required
                               />
-                            ))}
+                              {routerModels.length > 0 && (
+                                <button
+                                  type="button"
+                                  className="model-picker-toggle"
+                                  aria-expanded={modelPickerOpen}
+                                  aria-controls="router-model-picker"
+                                  onClick={() => {
+                                    setModelPickerOpen(open => !open)
+                                    if (!modelPickerOpen)
+                                      window.requestAnimationFrame(() =>
+                                        modelSearchRef.current?.focus(),
+                                      )
+                                  }}
+                                >
+                                  选择模型
+                                  <ChevronRight aria-hidden="true" />
+                                </button>
+                              )}
+                            </div>
+                            {routerModels.length > 0 && (
+                              <div
+                                id="router-model-picker"
+                                className="model-picker-panel"
+                                hidden={!modelPickerOpen}
+                              >
+                                <div className="model-picker-head">
+                                  <strong>
+                                    {String(routerModels.length)} 个可选模型
+                                  </strong>
+                                  <span>选中后填入模型 ID</span>
+                                </div>
+                                <label htmlFor="router-model-search">
+                                  搜索已获取模型
+                                </label>
+                                <div className="model-picker-search">
+                                  <Search aria-hidden="true" />
+                                  <input
+                                    ref={modelSearchRef}
+                                    id="router-model-search"
+                                    name="modelSearch"
+                                    type="search"
+                                    value={modelSearch}
+                                    onChange={event => {
+                                      setModelSearch(event.target.value)
+                                      setModelPage(1)
+                                    }}
+                                    onKeyDown={event => {
+                                      if (event.key === 'Enter')
+                                        event.preventDefault()
+                                      if (event.key === 'Escape') {
+                                        event.preventDefault()
+                                        setModelPickerOpen(false)
+                                      }
+                                    }}
+                                    placeholder="按名称或 ID 查找"
+                                    autoCapitalize="none"
+                                    autoCorrect="off"
+                                    spellCheck={false}
+                                  />
+                                </div>
+                                <ul
+                                  className="model-picker-list"
+                                  aria-label="可选模型"
+                                >
+                                  {shownModels.map(model => (
+                                    <li key={model.id}>
+                                      <button
+                                        type="button"
+                                        className={
+                                          settings.modelName === model.id
+                                            ? 'is-selected'
+                                            : undefined
+                                        }
+                                        aria-label={`选择模型 ${model.id}`}
+                                        onClick={() => {
+                                          changeModelName(model.id)
+                                          setModelPickerOpen(false)
+                                          setModelSearch('')
+                                          setModelPage(1)
+                                        }}
+                                      >
+                                        <span>{model.name}</span>
+                                        {model.name !== model.id && (
+                                          <code>{model.id}</code>
+                                        )}
+                                        {settings.modelName === model.id && (
+                                          <Check aria-hidden="true" />
+                                        )}
+                                      </button>
+                                    </li>
+                                  ))}
+                                  {filteredModels.length === 0 && (
+                                    <li className="model-picker-empty">
+                                      没有匹配的模型。可直接填写模型 ID。
+                                    </li>
+                                  )}
+                                </ul>
+                                {filteredModels.length > 0 && (
+                                  <nav
+                                    className="model-pagination"
+                                    aria-label="模型列表分页"
+                                  >
+                                    <p aria-live="polite">
+                                      第 {String(modelPageStart + 1)}–
+                                      {String(
+                                        Math.min(
+                                          modelPageStart + MODEL_PAGE_SIZE,
+                                          filteredModels.length,
+                                        ),
+                                      )}{' '}
+                                      项，共 {String(filteredModels.length)} 项
+                                    </p>
+                                    <div>
+                                      <button
+                                        type="button"
+                                        disabled={currentModelPage === 1}
+                                        onClick={() =>
+                                          setModelPage(page =>
+                                            Math.max(1, page - 1),
+                                          )
+                                        }
+                                      >
+                                        上一页
+                                      </button>
+                                      <span aria-current="page">
+                                        {String(currentModelPage)} /{' '}
+                                        {String(modelPageCount)}
+                                      </span>
+                                      <button
+                                        type="button"
+                                        disabled={
+                                          currentModelPage === modelPageCount
+                                        }
+                                        onClick={() =>
+                                          setModelPage(page =>
+                                            Math.min(modelPageCount, page + 1),
+                                          )
+                                        }
+                                      >
+                                        下一页
+                                      </button>
+                                    </div>
+                                  </nav>
+                                )}
+                              </div>
+                            )}
+                            <div className="model-actions">
+                              <button
+                                type="button"
+                                onClick={() => void discoverModels()}
+                                disabled={Boolean(modelAction)}
+                              >
+                                {modelAction === 'discovering'
+                                  ? '正在获取…'
+                                  : routerModels.length > 0
+                                    ? '刷新模型列表'
+                                    : '获取模型列表'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void testSelectedModel()}
+                                disabled={
+                                  Boolean(modelAction) ||
+                                  !settings.modelName.trim()
+                                }
+                              >
+                                {modelAction === 'testing'
+                                  ? '正在测试…'
+                                  : '测试连接'}
+                              </button>
+                            </div>
+                            <p
+                              id="model-guidance"
+                              className="model-action-status"
+                            >
+                              可手动填写模型 ID，也可获取目录后搜索选择。
+                            </p>
+                            {modelNotListed && (
+                              <p className="model-mismatch">
+                                当前模型不在刚获取的目录中。可选择目录模型，或继续测试手填值。
+                              </p>
+                            )}
+                            {modelFeedback && (
+                              <div
+                                className={`model-feedback is-${modelFeedback.kind}`}
+                                role="status"
+                                aria-live="polite"
+                              >
+                                {modelFeedback.kind === 'success' ? (
+                                  <CircleCheck aria-hidden="true" />
+                                ) : modelFeedback.kind === 'error' ? (
+                                  <CircleAlert aria-hidden="true" />
+                                ) : (
+                                  <Circle aria-hidden="true" />
+                                )}
+                                <div>
+                                  <strong>{modelFeedback.title}</strong>
+                                  <span>{modelFeedback.description}</span>
+                                </div>
+                              </div>
+                            )}
                           </div>
-                        </details>
-                        <p className="provider-description">
-                          {selectedProvider.description}
-                        </p>
-                      </div>
+                        </section>
 
-                      <div className="provider-status" role="status">
-                        <span
-                          className={
-                            selectedProvider.available ? 'is-ready' : ''
-                          }
-                        />
-                        <strong>{selectedProvider.name}</strong>
-                        <small>
-                          {selectedProvider.available
-                            ? '连接信息已就绪'
-                            : (selectedProvider.reason ?? '需要完成连接配置')}
-                        </small>
-                      </div>
+                        <section
+                          className="settings-subsection provider-connection-section"
+                          aria-labelledby="provider-connection-heading"
+                        >
+                          <header className="settings-subsection-head">
+                            <div>
+                              <h3 id="provider-connection-heading">
+                                供应商连接
+                              </h3>
+                              <p>管理当前供应商的地址和服务端密钥。</p>
+                            </div>
+                            <div className="provider-status">
+                              <span
+                                className={
+                                  selectedProvider.available ? 'is-ready' : ''
+                                }
+                              />
+                              <strong>{selectedProvider.name}</strong>
+                              <small>
+                                {selectedProvider.available
+                                  ? '已就绪'
+                                  : (selectedProvider.reason ?? '待配置')}
+                              </small>
+                            </div>
+                          </header>
 
-                      <div className="settings-group provider-fields">
-                        {customProvider && (
-                          <>
-                            <label htmlFor="provider-name">连接名称</label>
+                          <div className="provider-fields">
+                            {customProvider && (
+                              <>
+                                <label htmlFor="provider-name">连接名称</label>
+                                <input
+                                  id="provider-name"
+                                  name="providerName"
+                                  value={providerDraft.name}
+                                  onChange={event => {
+                                    resetModelLookup()
+                                    setSaved(false)
+                                    setProviderDraft(current =>
+                                      current
+                                        ? {
+                                            ...current,
+                                            name: event.target.value,
+                                          }
+                                        : current,
+                                    )
+                                  }}
+                                  maxLength={60}
+                                  required
+                                  onInput={() => setDirty(true)}
+                                />
+                                <label htmlFor="provider-protocol">
+                                  接口协议
+                                </label>
+                                <select
+                                  id="provider-protocol"
+                                  name="providerProtocol"
+                                  value={providerDraft.protocol}
+                                  onChange={event => {
+                                    resetModelLookup()
+                                    setDirty(true)
+                                    setSaved(false)
+                                    setProviderDraft(current =>
+                                      current
+                                        ? {
+                                            ...current,
+                                            protocol: event.target
+                                              .value as ModelProviderDraft['protocol'],
+                                          }
+                                        : current,
+                                    )
+                                  }}
+                                >
+                                  <option value="openai-chat">
+                                    OpenAI Chat Completions
+                                  </option>
+                                  <option value="anthropic-messages">
+                                    Anthropic Messages
+                                  </option>
+                                </select>
+                              </>
+                            )}
+                            <label htmlFor="provider-base-url">Base URL</label>
                             <input
-                              id="provider-name"
-                              name="providerName"
-                              value={providerDraft.name}
-                              onChange={event => {
-                                resetModelLookup()
-                                setSaved(false)
-                                setProviderDraft(current =>
-                                  current
-                                    ? { ...current, name: event.target.value }
-                                    : current,
-                                )
-                              }}
-                              maxLength={60}
-                              required
-                              onInput={() => setDirty(true)}
-                            />
-                            <label htmlFor="provider-protocol">接口协议</label>
-                            <select
-                              id="provider-protocol"
-                              name="providerProtocol"
-                              value={providerDraft.protocol}
+                              id="provider-base-url"
+                              name="providerBaseUrl"
+                              type="url"
+                              value={providerDraft.baseUrl}
+                              readOnly={!customProvider}
                               onChange={event => {
                                 resetModelLookup()
                                 setDirty(true)
@@ -2068,346 +2379,80 @@ function SettingsPage({
                                   current
                                     ? {
                                         ...current,
-                                        protocol: event.target
-                                          .value as ModelProviderDraft['protocol'],
+                                        baseUrl: event.target.value,
                                       }
                                     : current,
                                 )
                               }}
-                            >
-                              <option value="openai-chat">
-                                OpenAI Chat Completions
-                              </option>
-                              <option value="anthropic-messages">
-                                Anthropic Messages
-                              </option>
-                            </select>
-                          </>
-                        )}
-                        <label htmlFor="provider-base-url">Base URL</label>
-                        <input
-                          id="provider-base-url"
-                          name="providerBaseUrl"
-                          type="url"
-                          value={providerDraft.baseUrl}
-                          readOnly={!customProvider}
-                          onChange={event => {
-                            resetModelLookup()
-                            setDirty(true)
-                            setSaved(false)
-                            setProviderDraft(current =>
-                              current
-                                ? { ...current, baseUrl: event.target.value }
-                                : current,
-                            )
-                          }}
-                          autoCapitalize="none"
-                          autoCorrect="off"
-                          spellCheck={false}
-                          required
-                        />
-                        <label htmlFor="provider-api-key">API key</label>
-                        <div className="provider-secret-field">
-                          <KeyRound aria-hidden="true" />
-                          <input
-                            id="provider-api-key"
-                            name="providerApiKey"
-                            type="password"
-                            value={providerDraft.apiKey}
-                            placeholder={
-                              selectedProvider.hasApiKey &&
-                              !providerDraft.clearApiKey
-                                ? '已保存；留空保持不变'
-                                : selectedProvider.requiresApiKey
-                                  ? '输入 API key'
-                                  : '可选'
-                            }
-                            onChange={event => {
-                              resetModelLookup()
-                              setDirty(true)
-                              setSaved(false)
-                              setProviderDraft(current =>
-                                current
-                                  ? {
-                                      ...current,
-                                      apiKey: event.target.value,
-                                      clearApiKey: false,
-                                    }
-                                  : current,
-                              )
-                            }}
-                            autoComplete="new-password"
-                            autoCapitalize="none"
-                            autoCorrect="off"
-                            spellCheck={false}
-                          />
-                        </div>
-                        {selectedProvider.hasApiKey && (
-                          <button
-                            className="clear-provider-key"
-                            type="button"
-                            aria-pressed={providerDraft.clearApiKey}
-                            onClick={() => {
-                              resetModelLookup()
-                              setDirty(true)
-                              setSaved(false)
-                              setProviderDraft(current =>
-                                current
-                                  ? {
-                                      ...current,
-                                      apiKey: '',
-                                      clearApiKey: !current.clearApiKey,
-                                    }
-                                  : current,
-                              )
-                            }}
-                          >
-                            {providerDraft.clearApiKey
-                              ? '保留已保存密钥'
-                              : '清除已保存密钥'}
-                          </button>
-                        )}
-                        <label htmlFor="model-name">
-                          Router / 输入处理模型
-                        </label>
-                        <div className="model-input-row">
-                          <input
-                            id="model-name"
-                            name="modelName"
-                            value={settings.modelName}
-                            onChange={event =>
-                              changeModelName(event.target.value)
-                            }
-                            aria-describedby="model-guidance"
-                            autoCapitalize="none"
-                            autoCorrect="off"
-                            spellCheck={false}
-                            maxLength={160}
-                            required
-                          />
-                          {routerModels.length > 0 && (
-                            <button
-                              type="button"
-                              className="model-picker-toggle"
-                              aria-expanded={modelPickerOpen}
-                              aria-controls="router-model-picker"
-                              onClick={() => {
-                                setModelPickerOpen(open => !open)
-                                if (!modelPickerOpen)
-                                  window.requestAnimationFrame(() =>
-                                    modelSearchRef.current?.focus(),
-                                  )
-                              }}
-                            >
-                              选择模型
-                              <ChevronRight aria-hidden="true" />
-                            </button>
-                          )}
-                        </div>
-                        {routerModels.length > 0 && (
-                          <div
-                            id="router-model-picker"
-                            className="model-picker-panel"
-                            hidden={!modelPickerOpen}
-                          >
-                            <div className="model-picker-head">
-                              <strong>
-                                {String(routerModels.length)} 个可选模型
-                              </strong>
-                              <span>选中后填入上方模型 ID</span>
-                            </div>
-                            <label htmlFor="router-model-search">
-                              搜索已获取模型
-                            </label>
-                            <div className="model-picker-search">
-                              <Search aria-hidden="true" />
-                              <input
-                                ref={modelSearchRef}
-                                id="router-model-search"
-                                name="modelSearch"
-                                type="search"
-                                value={modelSearch}
-                                onChange={event =>
-                                  setModelSearch(event.target.value)
-                                }
-                                onKeyDown={event => {
-                                  if (event.key === 'Enter')
-                                    event.preventDefault()
-                                  if (event.key === 'Escape') {
-                                    event.preventDefault()
-                                    setModelPickerOpen(false)
-                                  }
-                                }}
-                                placeholder="按名称或 ID 查找"
-                                autoCapitalize="none"
-                                autoCorrect="off"
-                                spellCheck={false}
-                              />
-                            </div>
-                            <div
-                              className="model-picker-list"
-                              role="group"
-                              aria-label="可选模型"
-                            >
-                              {shownModels.map(model => (
-                                <button
-                                  type="button"
-                                  key={model.id}
-                                  className={
-                                    settings.modelName === model.id
-                                      ? 'is-selected'
-                                      : undefined
-                                  }
-                                  aria-label={`选择模型 ${model.id}`}
-                                  onClick={() => {
-                                    changeModelName(model.id)
-                                    setModelPickerOpen(false)
-                                    setModelSearch('')
-                                  }}
-                                >
-                                  <span>{model.name}</span>
-                                  {model.name !== model.id && (
-                                    <code>{model.id}</code>
-                                  )}
-                                  {settings.modelName === model.id && (
-                                    <Check aria-hidden="true" />
-                                  )}
-                                </button>
-                              ))}
-                              {filteredModels.length === 0 && (
-                                <p>没有匹配的模型。可直接在上方填写模型 ID。</p>
-                              )}
-                            </div>
-                            {filteredModels.length > shownModels.length && (
-                              <p className="model-picker-more">
-                                当前显示前 50 个结果，输入关键词可查找其余模型。
-                              </p>
-                            )}
-                          </div>
-                        )}
-                        <div className="model-actions">
-                          <button
-                            type="button"
-                            onClick={() => void discoverModels()}
-                            disabled={Boolean(modelAction)}
-                          >
-                            {modelAction === 'discovering'
-                              ? '正在获取…'
-                              : routerModels.length > 0
-                                ? '刷新模型列表'
-                                : '获取模型列表'}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => void testSelectedModel()}
-                            disabled={
-                              Boolean(modelAction) || !settings.modelName.trim()
-                            }
-                          >
-                            {modelAction === 'testing'
-                              ? '正在测试…'
-                              : '测试连接'}
-                          </button>
-                        </div>
-                        <p id="model-guidance" className="model-action-status">
-                          可手动填写模型 ID；获取列表后也可搜索选择。
-                        </p>
-                        {modelNotListed && (
-                          <p className="model-mismatch">
-                            当前模型不在刚获取的列表中。请选择列表中的模型，或继续测试手填值。
-                          </p>
-                        )}
-                        {modelFeedback && (
-                          <div
-                            className={`model-feedback is-${modelFeedback.kind}`}
-                            role="status"
-                            aria-live="polite"
-                          >
-                            {modelFeedback.kind === 'success' ? (
-                              <CircleCheck aria-hidden="true" />
-                            ) : modelFeedback.kind === 'error' ? (
-                              <CircleAlert aria-hidden="true" />
-                            ) : (
-                              <Circle aria-hidden="true" />
-                            )}
-                            <div>
-                              <strong>{modelFeedback.title}</strong>
-                              <span>{modelFeedback.description}</span>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-
-                      <fieldset className="settings-choice-group agent-model-group">
-                        <legend>Agent 执行模型</legend>
-                        <SettingChoice
-                          name="agent-model-mode"
-                          value="profile"
-                          checked={settings.agentModelMode === 'profile'}
-                          title="跟随 DSH profile"
-                          description={
-                            agentCatalog
-                              ? `当前默认 ${agentCatalog.defaultProvider} / ${agentCatalog.defaultModel}`
-                              : '由运行环境的 DSH profile 决定。'
-                          }
-                          onChange={() => update('agentModelMode', 'profile')}
-                        />
-                        <SettingChoice
-                          name="agent-model-mode"
-                          value="override"
-                          checked={settings.agentModelMode === 'override'}
-                          title="覆盖新 Agent session"
-                          description="只影响新建 session；恢复中的 Task 继续沿用原模型。"
-                          onChange={() => update('agentModelMode', 'override')}
-                        />
-                        {settings.agentModelMode === 'override' && (
-                          <div className="agent-model-field">
-                            <label htmlFor="agent-model-name">
-                              DSH provider 与模型
-                            </label>
-                            <input
-                              id="agent-model-name"
-                              list="agent-model-options"
-                              value={
-                                settings.agentModelProvider
-                                  ? `${settings.agentModelProvider}::${settings.agentModelName}`
-                                  : settings.agentModelName
-                              }
-                              onChange={event => {
-                                const value = event.target.value
-                                const separator = value.indexOf('::')
-                                update(
-                                  'agentModelProvider',
-                                  separator >= 0
-                                    ? value.slice(0, separator)
-                                    : '',
-                                )
-                                update(
-                                  'agentModelName',
-                                  separator >= 0
-                                    ? value.slice(separator + 2)
-                                    : value,
-                                )
-                              }}
-                              placeholder="provider::model"
                               autoCapitalize="none"
                               autoCorrect="off"
                               spellCheck={false}
                               required
                             />
-                            <datalist id="agent-model-options">
-                              {agentCatalog?.models.map(model => (
-                                <option
-                                  key={`${model.provider}:${model.id}`}
-                                  value={`${model.provider}::${model.id}`}
-                                >
-                                  {model.name}
-                                </option>
-                              ))}
-                            </datalist>
+                            <label htmlFor="provider-api-key">API key</label>
+                            <div className="provider-secret-field">
+                              <KeyRound aria-hidden="true" />
+                              <input
+                                id="provider-api-key"
+                                name="providerApiKey"
+                                type="password"
+                                value={providerDraft.apiKey}
+                                placeholder={
+                                  selectedProvider.hasApiKey &&
+                                  !providerDraft.clearApiKey
+                                    ? '已保存；留空保持不变'
+                                    : selectedProvider.requiresApiKey
+                                      ? '输入 API key'
+                                      : '可选'
+                                }
+                                onChange={event => {
+                                  resetModelLookup()
+                                  setDirty(true)
+                                  setSaved(false)
+                                  setProviderDraft(current =>
+                                    current
+                                      ? {
+                                          ...current,
+                                          apiKey: event.target.value,
+                                          clearApiKey: false,
+                                        }
+                                      : current,
+                                  )
+                                }}
+                                autoComplete="new-password"
+                                autoCapitalize="none"
+                                autoCorrect="off"
+                                spellCheck={false}
+                              />
+                            </div>
+                            {selectedProvider.hasApiKey && (
+                              <button
+                                className="clear-provider-key"
+                                type="button"
+                                aria-pressed={providerDraft.clearApiKey}
+                                onClick={() => {
+                                  resetModelLookup()
+                                  setDirty(true)
+                                  setSaved(false)
+                                  setProviderDraft(current =>
+                                    current
+                                      ? {
+                                          ...current,
+                                          apiKey: '',
+                                          clearApiKey: !current.clearApiKey,
+                                        }
+                                      : current,
+                                  )
+                                }}
+                              >
+                                {providerDraft.clearApiKey
+                                  ? '保留已保存密钥'
+                                  : '清除已保存密钥'}
+                              </button>
+                            )}
                           </div>
-                        )}
-                      </fieldset>
+                        </section>
+                      </div>
                     </section>
                   )}
 

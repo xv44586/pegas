@@ -284,7 +284,7 @@ describe('Pegas web app', () => {
       await screen.findByRole('heading', { name: 'Pegas 设置', level: 1 }),
     ).toBeTruthy()
     expect(screen.getByRole('heading', { name: 'Agent 模型' })).toBeTruthy()
-    fireEvent.click(screen.getByRole('tab', { name: '模型与供应商' }))
+    fireEvent.click(screen.getByRole('tab', { name: '模型服务' }))
 
     expect(
       await screen.findByRole('heading', { name: '设置', level: 1 }),
@@ -308,7 +308,7 @@ describe('Pegas web app', () => {
     expect(screen.queryByText(/Codex/)).toBeNull()
     expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual([
       'Pegas',
-      '模型与供应商',
+      '模型服务',
       '任务路由',
       '语音与输入',
       '隐私',
@@ -322,7 +322,10 @@ describe('Pegas web app', () => {
     expect(
       screen.getByText('密钥加密保存在服务端，不会显示原文。'),
     ).toBeTruthy()
-    fireEvent.click(screen.getByRole('tab', { name: '模型与供应商' }))
+    fireEvent.click(screen.getByRole('tab', { name: '模型服务' }))
+    expect(
+      screen.queryByRole('radio', { name: /覆盖新 Agent session/ }),
+    ).toBeNull()
     fireEvent.click(screen.getByRole('radio', { name: /自定义/ }))
     fireEvent.change(screen.getByLabelText('连接名称'), {
       target: { value: '公司模型网关' },
@@ -330,14 +333,14 @@ describe('Pegas web app', () => {
     fireEvent.change(screen.getByLabelText('Base URL'), {
       target: { value: 'https://models.example.com/v1' },
     })
-    fireEvent.change(screen.getByLabelText('Router / 输入处理模型'), {
+    fireEvent.change(screen.getByLabelText('模型 ID'), {
       target: { value: 'gpt-settings-test' },
     })
     fireEvent.change(screen.getByLabelText('API key'), {
       target: { value: 'secret-for-test' },
     })
     fireEvent.click(screen.getByRole('tab', { name: '任务路由' }))
-    fireEvent.click(screen.getByRole('tab', { name: '模型与供应商' }))
+    fireEvent.click(screen.getByRole('tab', { name: '模型服务' }))
     expect(screen.getByLabelText<HTMLInputElement>('连接名称').value).toBe(
       '公司模型网关',
     )
@@ -345,7 +348,29 @@ describe('Pegas web app', () => {
       'secret-for-test',
     )
     fireEvent.click(screen.getByRole('button', { name: '获取模型列表' }))
-    expect(await screen.findByText('已获取 165 个模型')).toBeTruthy()
+    const discoveryFeedback = await screen.findByText('已获取 165 个模型')
+    expect(discoveryFeedback.closest('.model-feedback')).toBeTruthy()
+    expect(screen.getByText('第 1–20 项，共 165 项')).toBeTruthy()
+    expect(
+      screen.getByRole('button', { name: '选择模型 gpt-settings-test' }),
+    ).toBeTruthy()
+    expect(
+      screen.queryByRole('button', { name: '选择模型 company/fast' }),
+    ).toBeNull()
+    for (let page = 1; page < 9; page += 1) {
+      fireEvent.click(screen.getByRole('button', { name: '下一页' }))
+    }
+    expect(screen.getByText('第 161–165 项，共 165 项')).toBeTruthy()
+    expect(
+      screen.getByRole('button', { name: '选择模型 company/fast' }),
+    ).toBeTruthy()
+    fireEvent.change(
+      screen.getByRole('searchbox', { name: '搜索已获取模型' }),
+      {
+        target: { value: 'model-1' },
+      },
+    )
+    expect(screen.getByText(/第 1–20 项，共 \d+ 项/)).toBeTruthy()
     fireEvent.change(
       screen.getByRole('searchbox', { name: '搜索已获取模型' }),
       {
@@ -355,20 +380,22 @@ describe('Pegas web app', () => {
     fireEvent.click(
       screen.getByRole('button', { name: '选择模型 company/fast' }),
     )
-    expect(
-      screen.getByLabelText<HTMLInputElement>('Router / 输入处理模型').value,
-    ).toBe('company/fast')
+    expect(screen.getByLabelText<HTMLInputElement>('模型 ID').value).toBe(
+      'company/fast',
+    )
     fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
     expect(await screen.findByText('模型连接正常')).toBeTruthy()
-    fireEvent.change(screen.getByLabelText('Router / 输入处理模型'), {
+    fireEvent.change(screen.getByLabelText('模型 ID'), {
       target: { value: 'gpt-5-mini' },
     })
     fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
     expect(await screen.findByText('找不到这个模型')).toBeTruthy()
     expect(screen.queryByText(/magpie knows no model/)).toBeNull()
-    fireEvent.change(screen.getByLabelText('Router / 输入处理模型'), {
+    fireEvent.change(screen.getByLabelText('模型 ID'), {
       target: { value: 'company/fast' },
     })
+    fireEvent.click(screen.getByRole('tab', { name: 'Pegas' }))
+    expect(screen.getByRole('heading', { name: 'Agent 模型' })).toBeTruthy()
     fireEvent.click(screen.getByRole('radio', { name: /覆盖新 Agent session/ }))
     fireEvent.change(screen.getByLabelText('DSH provider 与模型'), {
       target: { value: 'magpie::agent-fast' },

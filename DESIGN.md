@@ -280,6 +280,8 @@ The default state is a 48px right rail with a vertical 36×112px tab. Expanded d
 
 Settings are a centered 1100×780px maximum dialog with a 198px category rail, grouped 12px row cards, independently scrolling details, and a fixed 58px save footer. Below 820px the dialog becomes a full-viewport sheet with horizontal category tabs.
 
+The **Model Service** category owns only the Router model and its provider connection. Worker/Agent execution-model defaults live only on the **Pegas** category, so the same choice is never presented in two settings locations. A discovered model catalog is searchable and paginated at 20 results per page, keeps the selected model visible, exposes its result range and page count, and places compact fetch/test feedback beside the model controls instead of rendering a separate notification card.
+
 Settings, the plugin catalog, and plugin detail are true keyboard modals: opening moves focus to the close control, Tab remains inside the active layer, Escape closes it, the obscured layer is inert, and focus returns to the control that opened it.
 
 ### Plugins
