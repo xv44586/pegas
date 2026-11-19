@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -186,13 +187,42 @@ describe('Pegas web app', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     render(<App />)
-    fireEvent.click(screen.getByRole('button', { name: '设置' }))
+    fireEvent.click(screen.getByRole('button', { name: '任务文件夹' }))
+    expect(
+      await screen.findByRole('heading', { name: '首页', level: 1 }),
+    ).toBeTruthy()
+    expect(
+      screen.getByRole('heading', { name: 'Pegas', level: 2 }),
+    ).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Pegas 设置' }))
+    expect(
+      await screen.findByRole('heading', { name: 'Pegas 设置', level: 1 }),
+    ).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Agent 模型' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('tab', { name: '模型与供应商' }))
 
     expect(
       await screen.findByRole('heading', { name: '设置', level: 1 }),
     ).toBeTruthy()
+    const settingsDialog = await screen.findByRole('dialog', {
+      name: '设置选项',
+    })
+    const settingsClose = within(settingsDialog).getByRole('button', {
+      name: '关闭设置',
+    })
+    await waitFor(() => expect(document.activeElement).toBe(settingsClose))
+    expect(
+      document.querySelector('.identity-rail')?.hasAttribute('inert'),
+    ).toBe(true)
+    const settingsLast = within(settingsDialog).getByRole('button', {
+      name: '保存更改',
+    })
+    settingsLast.focus()
+    fireEvent.keyDown(window, { key: 'Tab' })
+    expect(document.activeElement).toBe(settingsClose)
     expect(screen.queryByText(/Codex/)).toBeNull()
     expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual([
+      'Pegas',
       '模型与供应商',
       '任务路由',
       '语音与输入',
@@ -308,7 +338,63 @@ describe('Pegas web app', () => {
     })
   })
 
-  it('presents conversation as the primary entry', async () => {
+  it('presents the DS Bot task shell as the primary entry', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path =
+        input instanceof Request
+          ? input.url
+          : input instanceof URL
+            ? input.href
+            : input
+      if (path.startsWith('/v1/events') && init?.method === 'POST')
+        return Promise.resolve(new Response(null))
+      if (path.startsWith('/v1/events'))
+        return Promise.resolve(Response.json({ events: [] }))
+      if (path.startsWith('/v1/tasks'))
+        return Promise.resolve(Response.json({ tasks: [] }))
+      if (path.startsWith('/v1/runs'))
+        return Promise.resolve(Response.json({ runs: [] }))
+      return Promise.resolve(Response.json({ messages: [] }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+
+    expect(
+      await screen.findByRole('heading', { name: 'Pegas', level: 1 }),
+    ).toBeTruthy()
+    expect(
+      screen.getByRole('complementary', { name: 'Pegas 导航' }),
+    ).toBeTruthy()
+    expect(screen.getByRole('button', { name: '任务文件夹' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '搜索任务' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '新建任务' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '收起侧栏' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Pegas 设置' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '插件' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '打开工作区' })).toBeTruthy()
+    expect(screen.getByLabelText('告诉 Pegas 你想完成什么')).toBeTruthy()
+    expect(screen.getByRole('button', { name: '开始听写' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '开始语音输入' })).toBeTruthy()
+    expect(screen.queryByRole('complementary', { name: '工作区' })).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: '收起侧栏' }))
+    const collapsedNavigation = screen.getByRole('complementary', {
+      name: 'Pegas 导航',
+    })
+    expect(within(collapsedNavigation).getAllByRole('button')).toHaveLength(1)
+    expect(
+      within(collapsedNavigation).getByRole('button', { name: '展开侧栏' }),
+    ).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: /研究并比较/ }))
+    expect(screen.getByLabelText('告诉 Pegas 你想完成什么')).toHaveProperty(
+      'value',
+      '帮我研究并比较下面这个问题，最后给我一个建议：',
+    )
+  })
+
+  it('anchors the empty workspace header inside the opened panel', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn((input: RequestInfo | URL) => {
@@ -329,22 +415,133 @@ describe('Pegas web app', () => {
     )
 
     render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '打开工作区' }))
 
-    expect(
-      await screen.findByRole('heading', { name: '现在想先推进什么？' }),
-    ).toBeTruthy()
-    expect(screen.getByRole('heading', { name: '对话', level: 1 })).toBeTruthy()
-    expect(screen.getByLabelText('告诉 Pegas 你想完成什么')).toBeTruthy()
-    expect(
-      screen.getByText('高风险动作会先确认', { exact: false }),
-    ).toBeTruthy()
-    expect(screen.queryByRole('complementary', { name: '工作区' })).toBeNull()
+    const workspace = screen.getByRole('complementary', { name: '工作区' })
+    expect(workspace.querySelector('.workspace-empty > header')).not.toBeNull()
+  })
 
-    fireEvent.click(screen.getByRole('button', { name: /研究并比较/ }))
-    expect(screen.getByLabelText('告诉 Pegas 你想完成什么')).toHaveProperty(
-      'value',
-      '帮我研究并比较下面这个问题，最后给我一个建议：',
+  it('traps plugin detail focus, closes with Escape, and restores the trigger', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path =
+        input instanceof Request
+          ? input.url
+          : input instanceof URL
+            ? input.href
+            : input
+      if (path.startsWith('/v1/events') && init?.method === 'POST')
+        return Promise.resolve(new Response(null))
+      if (path.startsWith('/v1/events'))
+        return Promise.resolve(Response.json({ events: [] }))
+      if (path.startsWith('/v1/tasks'))
+        return Promise.resolve(Response.json({ tasks: [] }))
+      if (path.startsWith('/v1/runs'))
+        return Promise.resolve(Response.json({ runs: [] }))
+      return Promise.resolve(Response.json({ messages: [] }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+
+    const pluginLauncher = await screen.findByRole('button', { name: '插件' })
+    fireEvent.click(pluginLauncher)
+    const pluginDialog = screen.getByRole('dialog', { name: '插件' })
+    const pluginClose = within(pluginDialog).getByRole('button', {
+      name: '关闭插件',
+    })
+    await waitFor(() => expect(document.activeElement).toBe(pluginClose))
+    const trigger = within(pluginDialog).getByRole('button', {
+      name: '查看插件：语音输入',
+    })
+    const lastPlugin = within(pluginDialog).getByRole('button', {
+      name: '查看插件：消息渠道',
+    })
+    lastPlugin.focus()
+    fireEvent.keyDown(window, { key: 'Tab' })
+    expect(document.activeElement).toBe(pluginClose)
+    fireEvent.click(trigger)
+
+    const dialog = screen.getByRole('dialog', { name: '语音输入' })
+    const close = within(dialog).getByRole('button', {
+      name: '关闭插件详情',
+    })
+    await waitFor(() => expect(document.activeElement).toBe(close))
+    expect(
+      document.querySelector('.plugin-dialog')?.hasAttribute('inert'),
+    ).toBe(true)
+    expect(close.querySelector('svg')?.getAttribute('viewBox')).toBe(
+      '0 0 20 20',
     )
+
+    fireEvent.keyDown(window, { key: 'Tab' })
+    expect(document.activeElement).toBe(close)
+    fireEvent.keyDown(window, { key: 'Escape' })
+
+    expect(dialog.isConnected).toBe(false)
+    await waitFor(() => expect(document.activeElement).toBe(trigger))
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(pluginDialog.isConnected).toBe(false)
+    await waitFor(() => expect(document.activeElement).toBe(pluginLauncher))
+  })
+
+  it('maps server Tasks to DS Bot-style task rows and keeps workspace collapsed', async () => {
+    const tasks = [
+      {
+        id: 'task-one',
+        userId: 'owner',
+        originEventId: 'event-one',
+        title: '整理发布说明',
+        goal: '生成一份可审阅的发布说明',
+        status: 'started' as const,
+        createdAt: '2026-11-18T08:00:00.000Z',
+        updatedAt: '2026-11-18T09:00:00.000Z',
+      },
+    ]
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path =
+        input instanceof Request
+          ? input.url
+          : input instanceof URL
+            ? input.href
+            : input
+      if (path.startsWith('/v1/events') && init?.method === 'POST')
+        return Promise.resolve(new Response(null))
+      if (path.startsWith('/v1/events'))
+        return Promise.resolve(Response.json({ events: [] }))
+      if (path.startsWith('/v1/tasks'))
+        return Promise.resolve(Response.json({ tasks }))
+      if (path.startsWith('/v1/runs'))
+        return Promise.resolve(Response.json({ runs: [] }))
+      return Promise.resolve(Response.json({ messages: [] }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+
+    const taskRow = await screen.findByRole('button', {
+      name: '打开任务：整理发布说明',
+    })
+    expect(screen.queryByRole('complementary', { name: '工作区' })).toBeNull()
+    fireEvent.click(taskRow)
+    expect(screen.getByRole('complementary', { name: '工作区' })).toBeTruthy()
+    expect(
+      screen.getByRole('heading', { name: '整理发布说明', level: 2 }),
+    ).toBeTruthy()
+    expect(screen.getByLabelText('告诉 Pegas 你想完成什么')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('告诉 Pegas 你想完成什么'), {
+      target: { value: '继续这个任务' },
+    })
+    fireEvent.keyDown(screen.getByLabelText('告诉 Pegas 你想完成什么'), {
+      key: 'Enter',
+    })
+    await waitFor(() => {
+      const sent = fetchMock.mock.calls.find(
+        ([path, init]) => path === '/v1/events' && init?.method === 'POST',
+      )
+      expect(parseRequestBody(sent?.[1])).toMatchObject({
+        payload: { text: '继续这个任务', taskId: 'task-one' },
+      })
+    })
   })
 
   it('shows tasks as a board and opens the selected task in the workspace', async () => {
@@ -390,7 +587,7 @@ describe('Pegas web app', () => {
     )
 
     render(<App />)
-    fireEvent.click(screen.getByRole('button', { name: /任务/ }))
+    fireEvent.click(screen.getByRole('button', { name: '任务文件夹' }))
 
     expect(
       await screen.findByRole('heading', { name: '任务看板' }),
@@ -399,7 +596,7 @@ describe('Pegas web app', () => {
     expect(screen.getByRole('heading', { name: '已完成' })).toBeTruthy()
     expect(screen.getByRole('heading', { name: '已取消' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: '刷新' })).toBeNull()
-    expect(screen.queryByRole('button', { name: '打开工作区' })).toBeNull()
+    expect(screen.getByRole('button', { name: '打开工作区' })).toBeTruthy()
 
     fireEvent.change(screen.getByRole('textbox', { name: '搜索任务' }), {
       target: { value: '发布' },
@@ -421,7 +618,8 @@ describe('Pegas web app', () => {
     expect(screen.getByRole('heading', { name: '整理发布说明' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '设置' }))
     expect(screen.queryByRole('complementary', { name: '工作区' })).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: '任务' }))
+    fireEvent.click(screen.getByRole('button', { name: '关闭设置' }))
+    fireEvent.click(screen.getByRole('button', { name: '任务文件夹' }))
     expect(screen.getByRole('complementary', { name: '工作区' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '关闭工作区' }))
     expect(screen.queryByRole('complementary', { name: '工作区' })).toBeNull()
@@ -530,7 +728,7 @@ describe('Pegas web app', () => {
       }),
     )
     render(<App />)
-    fireEvent.click(screen.getByRole('button', { name: '任务' }))
+    fireEvent.click(screen.getByRole('button', { name: '任务文件夹' }))
     fireEvent.click(
       await screen.findByRole('button', { name: '打开任务现场：可重试的任务' }),
     )

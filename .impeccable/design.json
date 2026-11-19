@@ -1,159 +1,461 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-16T16:08:47Z",
+  "generatedAt": "2026-11-18T14:30:00Z",
   "title": "Design System: Pegas",
   "extensions": {
     "colorMeta": {
-      "ink": { "role": "neutral", "displayName": "Working Ink", "canonical": "#172033", "tonalRamp": ["oklch(15% 0.012 260)", "oklch(26% 0.016 260)", "oklch(38% 0.02 260)", "oklch(52% 0.022 260)", "oklch(66% 0.018 260)", "oklch(78% 0.014 260)", "oklch(88% 0.008 260)", "oklch(95% 0.004 260)"] },
-      "muted": { "role": "neutral", "displayName": "Quiet Text", "canonical": "#667085", "tonalRamp": ["oklch(15% 0.012 260)", "oklch(26% 0.016 260)", "oklch(38% 0.02 260)", "oklch(52% 0.022 260)", "oklch(66% 0.018 260)", "oklch(78% 0.014 260)", "oklch(88% 0.008 260)", "oklch(95% 0.004 260)"] },
-      "faint": { "role": "neutral", "displayName": "Faint Text", "canonical": "#59667e", "tonalRamp": ["oklch(15% 0.012 260)", "oklch(26% 0.016 260)", "oklch(38% 0.02 260)", "oklch(52% 0.022 260)", "oklch(66% 0.018 260)", "oklch(78% 0.014 260)", "oklch(88% 0.008 260)", "oklch(95% 0.004 260)"] },
-      "line": { "role": "neutral", "displayName": "Fine Rule", "canonical": "#d7deea", "tonalRamp": ["oklch(15% 0.012 260)", "oklch(26% 0.016 260)", "oklch(38% 0.02 260)", "oklch(52% 0.022 260)", "oklch(66% 0.018 260)", "oklch(78% 0.014 260)", "oklch(88% 0.008 260)", "oklch(95% 0.004 260)"] },
-      "line-strong": { "role": "neutral", "displayName": "Strong Rule", "canonical": "#c7d0df", "tonalRamp": ["oklch(15% 0.012 260)", "oklch(26% 0.016 260)", "oklch(38% 0.02 260)", "oklch(52% 0.022 260)", "oklch(66% 0.018 260)", "oklch(78% 0.014 260)", "oklch(88% 0.008 260)", "oklch(95% 0.004 260)"] },
-      "canvas": { "role": "neutral", "displayName": "Cool Canvas", "canonical": "#f8f9fc", "tonalRamp": ["oklch(15% 0.012 260)", "oklch(26% 0.016 260)", "oklch(38% 0.02 260)", "oklch(52% 0.022 260)", "oklch(66% 0.018 260)", "oklch(78% 0.014 260)", "oklch(88% 0.008 260)", "oklch(95% 0.004 260)"] },
-      "paper": { "role": "neutral", "displayName": "Clean Paper", "canonical": "#ffffff", "tonalRamp": ["oklch(15% 0 0)", "oklch(26% 0 0)", "oklch(38% 0 0)", "oklch(52% 0 0)", "oklch(66% 0 0)", "oklch(78% 0 0)", "oklch(88% 0 0)", "oklch(95% 0 0)"] },
-      "panel": { "role": "neutral", "displayName": "Workbench Panel", "canonical": "#eef2f7", "tonalRamp": ["oklch(15% 0.012 260)", "oklch(26% 0.016 260)", "oklch(38% 0.02 260)", "oklch(52% 0.022 260)", "oklch(66% 0.018 260)", "oklch(78% 0.014 260)", "oklch(88% 0.008 260)", "oklch(95% 0.004 260)"] },
-      "blue": { "role": "primary", "displayName": "Relay Cobalt", "canonical": "#2457d6", "tonalRamp": ["oklch(15% 0.04 260)", "oklch(25% 0.09 260)", "oklch(38% 0.15 260)", "oklch(52% 0.2 260)", "oklch(64% 0.16 260)", "oklch(76% 0.1 260)", "oklch(87% 0.05 260)", "oklch(95% 0.02 260)"] },
-      "blue-dark": { "role": "primary", "displayName": "Deep Cobalt", "canonical": "#1a2b58", "tonalRamp": ["oklch(15% 0.04 260)", "oklch(25% 0.09 260)", "oklch(38% 0.15 260)", "oklch(52% 0.2 260)", "oklch(64% 0.16 260)", "oklch(76% 0.1 260)", "oklch(87% 0.05 260)", "oklch(95% 0.02 260)"] },
-      "blue-soft": { "role": "primary", "displayName": "Cobalt Wash", "canonical": "#e7edff", "tonalRamp": ["oklch(15% 0.04 260)", "oklch(25% 0.09 260)", "oklch(38% 0.15 260)", "oklch(52% 0.2 260)", "oklch(64% 0.16 260)", "oklch(76% 0.1 260)", "oklch(87% 0.05 260)", "oklch(95% 0.02 260)"] },
-      "green": { "role": "secondary", "displayName": "Completion Green", "canonical": "#19865c", "tonalRamp": ["oklch(15% 0.035 155)", "oklch(25% 0.07 155)", "oklch(38% 0.11 155)", "oklch(52% 0.14 155)", "oklch(64% 0.12 155)", "oklch(76% 0.08 155)", "oklch(87% 0.04 155)", "oklch(95% 0.015 155)"] },
-      "green-soft": { "role": "secondary", "displayName": "Completion Wash", "canonical": "#e2f4eb", "tonalRamp": ["oklch(15% 0.035 155)", "oklch(25% 0.07 155)", "oklch(38% 0.11 155)", "oklch(52% 0.14 155)", "oklch(64% 0.12 155)", "oklch(76% 0.08 155)", "oklch(87% 0.04 155)", "oklch(95% 0.015 155)"] },
-      "amber": { "role": "secondary", "displayName": "Attention Amber", "canonical": "#a76208", "tonalRamp": ["oklch(15% 0.035 70)", "oklch(25% 0.07 70)", "oklch(38% 0.11 70)", "oklch(52% 0.14 70)", "oklch(64% 0.12 70)", "oklch(76% 0.08 70)", "oklch(87% 0.04 70)", "oklch(95% 0.015 70)"] },
-      "amber-soft": { "role": "secondary", "displayName": "Attention Wash", "canonical": "#fff0d5", "tonalRamp": ["oklch(15% 0.035 70)", "oklch(25% 0.07 70)", "oklch(38% 0.11 70)", "oklch(52% 0.14 70)", "oklch(64% 0.12 70)", "oklch(76% 0.08 70)", "oklch(87% 0.04 70)", "oklch(95% 0.015 70)"] },
-      "red": { "role": "secondary", "displayName": "Recovery Red", "canonical": "#c33c4a", "tonalRamp": ["oklch(15% 0.035 20)", "oklch(25% 0.08 20)", "oklch(38% 0.13 20)", "oklch(52% 0.17 20)", "oklch(64% 0.14 20)", "oklch(76% 0.09 20)", "oklch(87% 0.045 20)", "oklch(95% 0.018 20)"] },
-      "red-soft": { "role": "secondary", "displayName": "Recovery Wash", "canonical": "#fae7e9", "tonalRamp": ["oklch(15% 0.035 20)", "oklch(25% 0.08 20)", "oklch(38% 0.13 20)", "oklch(52% 0.17 20)", "oklch(64% 0.14 20)", "oklch(76% 0.09 20)", "oklch(87% 0.045 20)", "oklch(95% 0.018 20)"] }
+      "pegas-blue": {
+        "role": "primary",
+        "displayName": "Pegas Blue",
+        "canonical": "#4d6bfe",
+        "tonalRamp": [
+          "#07164f",
+          "#102577",
+          "#1d3aa6",
+          "#3152d8",
+          "#4d6bfe",
+          "#7e92ff",
+          "#b6c1ff",
+          "#eef1ff"
+        ]
+      },
+      "pegas-blue-soft": {
+        "role": "primary",
+        "displayName": "Pegas Blue Soft",
+        "canonical": "#eef1ff",
+        "tonalRamp": [
+          "#11183b",
+          "#222d61",
+          "#3a4b8a",
+          "#6173b6",
+          "#8e9dd5",
+          "#b5c0e8",
+          "#d7def5",
+          "#eef1ff"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Core Ink",
+        "canonical": "#141414",
+        "tonalRamp": [
+          "#141414",
+          "#292929",
+          "#414141",
+          "#5f5f5f",
+          "#858585",
+          "#ababab",
+          "#d2d2d2",
+          "#f2f2f2"
+        ]
+      },
+      "user-ink": {
+        "role": "neutral",
+        "displayName": "User Ink",
+        "canonical": "#070707",
+        "tonalRamp": [
+          "#070707",
+          "#1d1d1d",
+          "#373737",
+          "#555555",
+          "#7b7b7b",
+          "#a2a2a2",
+          "#cecece",
+          "#f2f2f2"
+        ]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Muted Ink",
+        "canonical": "rgba(20, 20, 20, 0.62)",
+        "tonalRamp": [
+          "#141414",
+          "#292929",
+          "#414141",
+          "#5f5f5f",
+          "#858585",
+          "#ababab",
+          "#d2d2d2",
+          "#f2f2f2"
+        ]
+      },
+      "faint": {
+        "role": "neutral",
+        "displayName": "Faint Ink",
+        "canonical": "#666666",
+        "tonalRamp": [
+          "#1d1d1d",
+          "#353535",
+          "#4d4d4d",
+          "#666666",
+          "#858585",
+          "#a8a8a8",
+          "#cecece",
+          "#f2f2f2"
+        ]
+      },
+      "canvas": {
+        "role": "neutral",
+        "displayName": "Canvas White",
+        "canonical": "#fcfcfc",
+        "tonalRamp": [
+          "#202020",
+          "#3b3b3b",
+          "#595959",
+          "#7d7d7d",
+          "#a3a3a3",
+          "#c8c8c8",
+          "#e8e8e8",
+          "#fcfcfc"
+        ]
+      },
+      "paper": {
+        "role": "neutral",
+        "displayName": "Paper White",
+        "canonical": "#ffffff",
+        "tonalRamp": [
+          "#202020",
+          "#3d3d3d",
+          "#5d5d5d",
+          "#808080",
+          "#a6a6a6",
+          "#cccccc",
+          "#ededed",
+          "#ffffff"
+        ]
+      },
+      "panel": {
+        "role": "neutral",
+        "displayName": "Panel Mist",
+        "canonical": "#f7f7f7",
+        "tonalRamp": [
+          "#1f1f1f",
+          "#393939",
+          "#555555",
+          "#777777",
+          "#9b9b9b",
+          "#c0c0c0",
+          "#dfdfdf",
+          "#f7f7f7"
+        ]
+      },
+      "bubble": {
+        "role": "neutral",
+        "displayName": "Conversation Gray",
+        "canonical": "#eeeeee",
+        "tonalRamp": [
+          "#1e1e1e",
+          "#373737",
+          "#525252",
+          "#727272",
+          "#949494",
+          "#b7b7b7",
+          "#d6d6d6",
+          "#eeeeee"
+        ]
+      },
+      "line": {
+        "role": "neutral",
+        "displayName": "Quiet Line",
+        "canonical": "rgba(20, 20, 20, 0.08)",
+        "tonalRamp": [
+          "#141414",
+          "#2c2c2c",
+          "#474747",
+          "#676767",
+          "#8b8b8b",
+          "#b0b0b0",
+          "#d4d4d4",
+          "#f3f3f3"
+        ]
+      },
+      "line-strong": {
+        "role": "neutral",
+        "displayName": "Strong Line",
+        "canonical": "rgba(20, 20, 20, 0.15)",
+        "tonalRamp": [
+          "#141414",
+          "#2c2c2c",
+          "#474747",
+          "#676767",
+          "#8b8b8b",
+          "#b0b0b0",
+          "#d4d4d4",
+          "#f3f3f3"
+        ]
+      },
+      "positive": {
+        "role": "secondary",
+        "displayName": "Positive Green",
+        "canonical": "#177a52",
+        "tonalRamp": [
+          "#062b1c",
+          "#0a432b",
+          "#0f5d3d",
+          "#177a52",
+          "#2b9b6d",
+          "#65ba91",
+          "#a6dcc2",
+          "#e7f5ee"
+        ]
+      },
+      "caution": {
+        "role": "secondary",
+        "displayName": "Caution Amber",
+        "canonical": "#94610a",
+        "tonalRamp": [
+          "#321d02",
+          "#4d2f03",
+          "#6c4405",
+          "#94610a",
+          "#bd8422",
+          "#dca94f",
+          "#efd099",
+          "#fff3dc"
+        ]
+      },
+      "critical": {
+        "role": "secondary",
+        "displayName": "Critical Red",
+        "canonical": "#b5293b",
+        "tonalRamp": [
+          "#3d0710",
+          "#5d0d19",
+          "#841827",
+          "#b5293b",
+          "#d84e5f",
+          "#e9828f",
+          "#f4b6be",
+          "#fce9ec"
+        ]
+      },
+      "on-accent": {
+        "role": "neutral",
+        "displayName": "On Accent White",
+        "canonical": "#ffffff",
+        "tonalRamp": [
+          "#202020",
+          "#3d3d3d",
+          "#5d5d5d",
+          "#808080",
+          "#a6a6a6",
+          "#cccccc",
+          "#ededed",
+          "#ffffff"
+        ]
+      }
     },
     "typographyMeta": {
-      "display": { "displayName": "Display", "purpose": "Brief empty-state headings only." },
-      "headline": { "displayName": "Headline", "purpose": "Panel and task-detail titles." },
-      "title": { "displayName": "Title", "purpose": "Task-pulse and high-signal row titles." },
-      "body": { "displayName": "Body", "purpose": "Conversation copy and primary reading text." },
-      "compact-body": { "displayName": "Compact Body", "purpose": "Task explanations, forms, and workbench detail." },
-      "label": { "displayName": "Label", "purpose": "Status, metadata, task actions, and compact controls." }
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Settings and plugin dialog titles."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Rail identity and compact contextual headings."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Messages, task content, and primary descriptions."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Task goals, controls, and subordinate titles."
+      },
+      "metadata": {
+        "displayName": "Metadata",
+        "purpose": "Timestamps, states, captions, and plugin status."
+      }
     },
     "shadows": [
-      { "name": "composer-ambient", "value": "0 10px 28px rgba(31, 47, 82, 0.1)", "purpose": "Separates the docked composer from the scrolling feed." },
-      { "name": "composer-focus", "value": "0 10px 30px rgba(31, 47, 82, 0.13)", "purpose": "Adds definition while the composer contains focus." },
-      { "name": "pulse-hover", "value": "0 10px 24px rgba(35, 54, 95, 0.1)", "purpose": "Pairs with the task pulse's one-pixel hover lift." },
-      { "name": "mobile-workbench", "value": "-14px 0 40px rgba(27, 43, 81, 0.12)", "purpose": "Clarifies the mobile task panel's entrance direction." }
+      {
+        "name": "floating-chrome-primary",
+        "value": "0 8px 28px -6px rgba(0, 0, 0, 0.08)",
+        "purpose": "Primary ambient separation for context pill and composer."
+      },
+      {
+        "name": "floating-chrome-secondary",
+        "value": "0 2px 6px -1px rgba(0, 0, 0, 0.04)",
+        "purpose": "Close contact shadow paired with the primary floating shadow."
+      },
+      {
+        "name": "workspace-overlay",
+        "value": "-18px 0 48px rgba(20, 20, 20, 0.12)",
+        "purpose": "Right-edge workspace overlay at 820px and below."
+      },
+      {
+        "name": "modal-dialog",
+        "value": "0 24px 70px rgba(20, 20, 20, 0.22)",
+        "purpose": "Settings and plugin catalog modal separation."
+      },
+      {
+        "name": "detail-dialog",
+        "value": "0 24px 70px rgba(20, 20, 20, 0.24)",
+        "purpose": "Plugin detail above the catalog layer."
+      }
     ],
     "motion": [
-      { "name": "state-lift", "value": "180ms ease-out", "purpose": "Task-pulse border, shadow, and one-pixel hover transitions." },
-      { "name": "panel-enter", "value": "220ms cubic-bezier(0.22, 1, 0.36, 1)", "purpose": "Right-to-left entry for the mobile task workbench." },
-      { "name": "activity-spin", "value": "700ms linear infinite", "purpose": "Refresh and send activity indicators." },
-      { "name": "skeleton-pulse", "value": "1.4s ease-in-out infinite alternate", "purpose": "Low-contrast conversation loading feedback." },
-      { "name": "reduced-motion", "value": "0.01ms", "purpose": "Collapses transitions and animations when reduced motion is preferred." }
+      {
+        "name": "control-state",
+        "value": "120ms ease",
+        "purpose": "Round-button hover and press feedback."
+      },
+      {
+        "name": "message-actions",
+        "value": "opacity 120ms ease",
+        "purpose": "Reveal contextual message actions on hover or focus."
+      },
+      {
+        "name": "panel-enter",
+        "value": "360ms cubic-bezier(0.22, 1, 0.36, 1)",
+        "purpose": "Workspace panel entrance where the inherited panel animation applies."
+      },
+      {
+        "name": "reduced-motion",
+        "value": "0.01ms",
+        "purpose": "Effective animation and transition duration under prefers-reduced-motion."
+      }
     ],
     "breakpoints": [
-      { "name": "desktop-tight", "value": "1080px" },
-      { "name": "compact", "value": "820px" },
-      { "name": "mobile-narrow", "value": "520px" }
-    ]
+      { "name": "compact-task-shell", "value": "1100px" },
+      { "name": "settings-sheet", "value": "820px" },
+      { "name": "narrow-task-shell", "value": "680px" },
+      { "name": "narrow-settings-content", "value": "560px" }
+    ],
+    "iconGeometry": {
+      "supporting": {
+        "viewBox": "0 0 20 20",
+        "strokeWidth": "1.6",
+        "lineCap": "round",
+        "lineJoin": "round"
+      },
+      "taskMark": {
+        "viewBox": "0 0 100 100",
+        "shape": "DS Bot whale",
+        "rowSize": "34px",
+        "featuredSize": "54px",
+        "collapsedBrandSize": "24px"
+      }
+    }
   },
   "components": [
     {
-      "name": "Rail Navigation Button",
+      "name": "DS Bot Whale Mark",
+      "kind": "custom",
+      "description": "DS Bot's Apache-2.0 whale character, used as the Task=Bot silhouette in the featured card, task rows, and collapsed brand.",
+      "html": "<span class=\"ds-task-mark\"><svg viewBox=\"0 0 40 40\" aria-hidden=\"true\"><path d=\"M8 9.5c0-2 1.6-3.5 3.5-3.5h14C29.1 6 32 8.9 32 12.5v11c0 3.6-2.9 6.5-6.5 6.5H15l-7 5v-25.5Z\" fill=\"currentColor\"/><path d=\"M14 15h12M14 21h8\" stroke=\"white\" stroke-width=\"2.4\" stroke-linecap=\"round\"/></svg></span>",
+      "css": ".ds-task-mark { display:grid; width:36px; height:36px; place-items:center; border-radius:11px; color:var(--blue,#4d6bfe); background:color-mix(in srgb,var(--blue,#4d6bfe) 10%,var(--paper,#fff)); } .ds-task-mark svg { width:34px; height:34px; }"
+    },
+    {
+      "name": "Task Rail Row",
       "kind": "nav",
-      "refersTo": "navigation-rail-button",
-      "description": "A compact icon control for the deep-cobalt desktop identity rail.",
-      "html": "<button class=\"ds-rail-button ds-is-active\" aria-label=\"Conversation\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg></button>",
-      "css": ".ds-rail-button { display:grid; place-items:center; width:42px; height:42px; padding:0; border:0; border-radius:11px; color:#aebce2; background:transparent; cursor:pointer; transition:color 180ms ease-out, background 180ms ease-out; } .ds-rail-button svg { width:20px; height:20px; } .ds-rail-button:hover, .ds-rail-button.ds-is-active { color:#fff; background:rgba(255,255,255,.1); } .ds-rail-button:focus-visible { outline:3px solid rgba(124,161,255,.46); outline-offset:2px; }"
+      "refersTo": "task-row",
+      "description": "Bot-shaped durable task context with title, goal, unread signal, and neutral active state.",
+      "html": "<button class=\"ds-task-row ds-is-active\"><span class=\"ds-row-mark\"><svg viewBox=\"0 0 40 40\" aria-hidden=\"true\"><path d=\"M8 9.5c0-2 1.6-3.5 3.5-3.5h14C29.1 6 32 8.9 32 12.5v11c0 3.6-2.9 6.5-6.5 6.5H15l-7 5v-25.5Z\" fill=\"currentColor\"/><path d=\"M14 15h12M14 21h8\" stroke=\"white\" stroke-width=\"2.4\" stroke-linecap=\"round\"/></svg></span><span class=\"ds-row-copy\"><strong>Release notes</strong><small>Prepare and verify the publishable draft</small></span><i aria-hidden=\"true\"></i></button>",
+      "css": ".ds-task-row { display:flex; width:100%; min-height:54px; align-items:center; gap:8px; padding:8px; border:0; border-radius:12px; color:var(--ink,#141414); background:transparent; text-align:left; cursor:pointer; } .ds-task-row:hover { background:rgba(119,119,119,.09); } .ds-task-row.ds-is-active { background:rgba(119,119,119,.17); } .ds-task-row:focus-visible { outline:3px solid color-mix(in srgb,var(--blue,#4d6bfe) 46%,transparent); outline-offset:2px; } .ds-row-mark { display:grid; width:36px; height:36px; flex:none; place-items:center; border-radius:11px; color:var(--blue,#4d6bfe); background:color-mix(in srgb,var(--blue,#4d6bfe) 10%,var(--paper,#fff)); } .ds-row-mark svg { width:34px; height:34px; } .ds-row-copy { display:flex; min-width:0; flex:1; flex-direction:column; } .ds-row-copy strong,.ds-row-copy small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .ds-row-copy strong { font:500 14px/20px 'Inter Variable',Inter,sans-serif; } .ds-row-copy small { color:rgba(20,20,20,.62); font:400 13px/18px 'Inter Variable',Inter,sans-serif; } .ds-task-row i { width:8px; height:8px; border-radius:50%; background:var(--blue,#4d6bfe); }"
     },
     {
-      "name": "Mobile Task Button",
+      "name": "Round Utility Button",
       "kind": "button",
-      "refersTo": "button-task",
-      "description": "The labeled mobile entry into the on-demand task workbench.",
-      "html": "<button class=\"ds-task-button\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\"/></svg><span>任务</span></button>",
-      "css": ".ds-task-button { display:inline-flex; min-height:42px; align-items:center; gap:8px; padding:0 13px; border:0; border-radius:10px; color:#fff; background:var(--blue-dark,#1a2b58); font:650 .84rem/1 Inter,system-ui,sans-serif; cursor:pointer; transition:background 180ms ease-out; } .ds-task-button svg { width:17px; height:17px; } .ds-task-button:hover { background:#253d76; } .ds-task-button:active { background:#142042; } .ds-task-button:focus-visible { outline:3px solid rgba(36,87,214,.28); outline-offset:2px; }"
+      "description": "Shared 20×20 DS Bot icon geometry inside a restrained circular shell.",
+      "html": "<button class=\"ds-round\" aria-label=\"New task\"><svg viewBox=\"0 0 20 20\" aria-hidden=\"true\"><path d=\"M10 3.5v13M3.5 10h13\"/></svg></button>",
+      "css": ".ds-round { display:grid; width:36px; height:36px; padding:0; place-items:center; border:1px solid rgba(20,20,20,.08); border-radius:50%; color:var(--ink,#141414); background:var(--canvas,#fcfcfc); cursor:pointer; transition:background-color 120ms ease,transform 120ms ease; } .ds-round svg { width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; } .ds-round:hover { background:rgba(119,119,119,.09); } .ds-round:focus-visible { outline:3px solid color-mix(in srgb,var(--blue,#4d6bfe) 46%,transparent); outline-offset:2px; } .ds-round:active { transform:scale(.94); }"
     },
     {
-      "name": "Send Button",
-      "kind": "button",
-      "refersTo": "button-send",
-      "description": "The single cobalt action inside the conversation composer.",
-      "html": "<button class=\"ds-send-button\" aria-label=\"发送给 Pegas\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"m22 2-7 20-4-9-9-4Z\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/><path d=\"M22 2 11 13\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"/></svg></button>",
-      "css": ".ds-send-button { display:grid; place-items:center; width:36px; height:36px; padding:0; border:0; border-radius:10px; color:#fff; background:var(--blue,#2457d6); cursor:pointer; transition:background 180ms ease-out; } .ds-send-button svg { width:17px; height:17px; } .ds-send-button:hover { background:#1948bc; } .ds-send-button:active { background:#153d9f; } .ds-send-button:focus-visible { outline:3px solid rgba(36,87,214,.28); outline-offset:2px; } .ds-send-button:disabled { color:#9aa6bd; background:#e4e8ef; cursor:not-allowed; }"
+      "name": "Pegas Message",
+      "kind": "card",
+      "refersTo": "message-pegas",
+      "description": "Avatar-free Pegas response bubble with metadata and contextual actions below.",
+      "html": "<article class=\"ds-pegas-message\"><div>I've organized this into a durable task and started the first step.</div><footer><span>21:07</span><button aria-label=\"Reply\">↩</button></footer></article>",
+      "css": ".ds-pegas-message { max-width:760px; color:var(--ink,#141414); font:400 14px/24px 'Inter Variable',Inter,sans-serif; } .ds-pegas-message>div { padding:7px 12px; border-radius:18px; background:var(--bubble,#eeeeee); } .ds-pegas-message footer { display:flex; min-height:22px; align-items:center; gap:8px; color:rgba(20,20,20,.36); font-size:11px; line-height:14px; } .ds-pegas-message button { margin-left:auto; border:0; border-radius:6px; color:rgba(20,20,20,.62); background:transparent; opacity:0; } .ds-pegas-message:hover button,.ds-pegas-message:focus-within button { opacity:1; } .ds-pegas-message button:hover { color:var(--ink,#141414); background:rgba(119,119,119,.09); } .ds-pegas-message button:focus-visible { outline:3px solid color-mix(in srgb,var(--blue,#4d6bfe) 46%,transparent); outline-offset:2px; opacity:1; }"
     },
     {
       "name": "Conversation Composer",
       "kind": "input",
       "refersTo": "composer",
-      "description": "The docked, paper-white natural-language entry point for all work.",
-      "html": "<div class=\"ds-composer\"><textarea aria-label=\"告诉 Pegas 你想完成什么\" placeholder=\"提出一个问题、任务，或者刚想到的点子…\"></textarea><div class=\"ds-composer-footer\"><span>Enter 发送 · Shift + Enter 换行</span><button aria-label=\"发送\">↗</button></div></div>",
-      "css": ".ds-composer { width:min(100%,760px); padding:12px 12px 10px 16px; border:1px solid #bfc9d9; border-radius:16px; color:var(--ink,#172033); background:var(--paper,#fff); box-shadow:0 10px 28px rgba(31,47,82,.1); font-family:Inter,system-ui,sans-serif; transition:border-color 180ms ease-out, box-shadow 180ms ease-out; } .ds-composer:focus-within { border-color:#7894d9; box-shadow:0 10px 30px rgba(31,47,82,.13); } .ds-composer textarea { width:100%; min-height:50px; max-height:132px; padding:1px 2px 8px; resize:none; border:0; outline:0; color:inherit; caret-color:var(--blue,#2457d6); background:transparent; font:400 .91rem/1.55 Inter,system-ui,sans-serif; } .ds-composer textarea::placeholder { color:#59667e; } .ds-composer-footer { display:flex; align-items:center; justify-content:space-between; } .ds-composer-footer span { color:#59667e; font-size:.68rem; } .ds-composer-footer button { width:36px; height:36px; border:0; border-radius:10px; color:#fff; background:var(--blue,#2457d6); cursor:pointer; } .ds-composer-footer button:hover { background:#1948bc; } .ds-composer-footer button:focus-visible { outline:3px solid rgba(36,87,214,.28); outline-offset:2px; }"
+      "description": "48px capsule with attachment on the left and voice/send actions on the right.",
+      "html": "<form class=\"ds-composer\"><button class=\"ds-composer-utility\" aria-label=\"Attach\">+</button><textarea aria-label=\"Message\" placeholder=\"Message this task\"></textarea><button class=\"ds-composer-primary\" aria-label=\"Voice\">•••</button></form>",
+      "css": ".ds-composer { display:flex; width:min(992px,100%); min-height:48px; align-items:center; gap:8px; padding:8px 12px; border:1px solid rgba(20,20,20,.15); border-radius:24px; background:var(--paper,#fff); box-shadow:0 8px 28px -6px rgba(0,0,0,.08),0 2px 6px -1px rgba(0,0,0,.04); } .ds-composer:hover,.ds-composer:focus-within { border-color:rgba(20,20,20,.3); } .ds-composer textarea { min-width:0; min-height:24px; flex:1; padding:0; border:0; outline:0; resize:none; color:var(--ink,#141414); background:transparent; font:400 14px/24px 'Inter Variable',Inter,sans-serif; } .ds-composer button { display:grid; width:28px; height:28px; padding:0; place-items:center; border:0; border-radius:50%; cursor:pointer; } .ds-composer-utility { color:rgba(20,20,20,.62); background:rgba(20,20,20,.05); box-shadow:inset 0 0 0 .5px rgba(20,20,20,.08); } .ds-composer-primary { color:#fff; background:var(--blue,#4d6bfe); } .ds-composer button:hover { opacity:.9; } .ds-composer button:focus-visible { outline:3px solid color-mix(in srgb,var(--blue,#4d6bfe) 46%,transparent); outline-offset:2px; }"
     },
     {
-      "name": "Task Pulse",
+      "name": "Collapsed Workspace Tab",
       "kind": "custom",
-      "refersTo": "task-pulse",
-      "description": "The signature conversation-embedded bridge from a message into durable task state.",
-      "html": "<button class=\"ds-task-pulse\"><span class=\"ds-status\"><i></i>等你确认 <time>9分钟前</time></span><strong>给 Pegas 增加一个可以安全更新自己的发布流程</strong><small>本轮执行已结束，等待你的反馈。</small><span class=\"ds-stage\"><i></i><i></i><i></i><i></i></span><span class=\"ds-pulse-foot\"><span>1 次执行</span><b>查看详情 ›</b></span></button>",
-      "css": ".ds-task-pulse { position:relative; display:block; width:min(100%,680px); padding:17px 18px 15px; border:1px solid var(--line-strong,#c7d0df); border-radius:14px; color:var(--ink,#172033); background:var(--paper,#fff); text-align:left; font-family:Inter,system-ui,sans-serif; cursor:pointer; transition:border-color 180ms ease-out, box-shadow 180ms ease-out, transform 180ms ease-out; } .ds-task-pulse::before { position:absolute; top:17px; bottom:17px; left:0; width:1px; background:var(--amber,#a76208); content:''; } .ds-task-pulse:hover { border-color:#9fafd0; box-shadow:0 10px 24px rgba(35,54,95,.1); transform:translateY(-1px); } .ds-task-pulse:active { transform:translateY(0); } .ds-task-pulse:focus-visible { outline:3px solid rgba(36,87,214,.28); outline-offset:2px; } .ds-status { display:flex; align-items:center; gap:7px; color:var(--muted,#667085); font-size:.72rem; font-weight:650; } .ds-status i { width:8px; height:8px; border-radius:50%; background:var(--amber,#a76208); } .ds-status time { margin-left:auto; font-weight:480; } .ds-task-pulse strong, .ds-task-pulse small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .ds-task-pulse strong { margin-top:12px; font-size:.94rem; letter-spacing:-.012em; } .ds-task-pulse small { margin-top:6px; color:var(--muted,#667085); font-size:.78rem; line-height:1.5; } .ds-stage { display:grid; grid-template-columns:repeat(4,1fr); gap:5px; margin-top:16px; } .ds-stage i { height:3px; border-radius:3px; background:var(--blue,#2457d6); } .ds-pulse-foot { display:flex; justify-content:space-between; margin-top:11px; color:#59667e; font-size:.7rem; } .ds-pulse-foot b { color:#4767ae; font-weight:620; }"
+      "refersTo": "workspace-tab",
+      "description": "Default right-rail affordance that keeps inspection available without consuming conversation width.",
+      "html": "<button class=\"ds-workspace-tab\" aria-label=\"Open workspace\"><svg viewBox=\"0 0 20 20\" aria-hidden=\"true\"><rect x=\"3\" y=\"4\" width=\"14\" height=\"12\" rx=\"2.5\"/><path d=\"M12 4v12\"/></svg><span>Workspace</span></button>",
+      "css": ".ds-workspace-tab { display:flex; width:36px; min-width:36px; height:112px; min-height:112px; align-items:center; justify-content:center; gap:8px; padding:10px 0; border:1px solid rgba(20,20,20,.08); border-radius:18px; color:rgba(20,20,20,.62); background:var(--paper,#fff); writing-mode:vertical-rl; cursor:pointer; } .ds-workspace-tab svg { width:16px; height:16px; flex:none; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; } .ds-workspace-tab:hover { color:var(--ink,#141414); background:var(--panel,#f7f7f7); } .ds-workspace-tab:focus-visible { outline:3px solid color-mix(in srgb,var(--blue,#4d6bfe) 46%,transparent); outline-offset:2px; }"
     },
     {
-      "name": "Waiting Status Label",
-      "kind": "chip",
-      "refersTo": "status-label-waiting",
-      "description": "A compact plain-language state marker with semantic color carried by the dot.",
-      "html": "<span class=\"ds-status-label\"><i></i>等你确认</span>",
-      "css": ".ds-status-label { display:inline-flex; width:fit-content; align-items:center; gap:7px; padding:5px 8px; border-radius:8px; color:#4d5a73; background:#e4e9f1; font:660 .68rem/1 Inter,system-ui,sans-serif; } .ds-status-label i { width:8px; height:8px; border-radius:50%; background:var(--amber,#a76208); }"
-    },
-    {
-      "name": "Task Filter",
-      "kind": "chip",
-      "refersTo": "task-filter-active",
-      "description": "The two-state segmented control used to switch active and completed work.",
-      "html": "<div class=\"ds-task-filters\" role=\"group\" aria-label=\"筛选任务\"><button class=\"ds-is-active\">进行中</button><button>已结束</button></div>",
-      "css": ".ds-task-filters { display:grid; grid-template-columns:1fr 1fr; gap:4px; width:300px; padding:4px; border:1px solid #d2d9e4; border-radius:11px; background:#e4e8ef; } .ds-task-filters button { min-height:36px; border:0; border-radius:8px; color:var(--muted,#667085); background:transparent; font:620 .77rem/1 Inter,system-ui,sans-serif; cursor:pointer; } .ds-task-filters button:hover { color:var(--ink,#172033); } .ds-task-filters button.ds-is-active { color:var(--ink,#172033); background:#fff; box-shadow:0 2px 6px rgba(28,43,76,.08); } .ds-task-filters button:focus-visible { outline:3px solid rgba(36,87,214,.28); outline-offset:2px; }"
-    },
-    {
-      "name": "Task List Item",
+      "name": "Settings Group",
       "kind": "card",
-      "refersTo": "task-list-item",
-      "description": "A borderless workbench row that reveals its paper surface only on interaction.",
-      "html": "<button class=\"ds-task-list-item\"><i></i><span><strong>安全更新发布流程</strong><small>执行中 · 刚刚</small></span><b>›</b></button>",
-      "css": ".ds-task-list-item { display:grid; grid-template-columns:auto minmax(0,1fr) auto; width:100%; min-height:70px; align-items:center; gap:11px; padding:12px; border:0; border-radius:12px; color:var(--ink,#172033); background:transparent; text-align:left; font-family:Inter,system-ui,sans-serif; cursor:pointer; transition:background 180ms ease-out; } .ds-task-list-item:hover { background:rgba(255,255,255,.78); } .ds-task-list-item:focus-visible { outline:3px solid rgba(36,87,214,.28); outline-offset:2px; } .ds-task-list-item > i { width:8px; height:8px; border-radius:50%; background:var(--blue,#2457d6); } .ds-task-list-item span { min-width:0; } .ds-task-list-item strong, .ds-task-list-item small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .ds-task-list-item strong { font-size:.82rem; font-weight:650; } .ds-task-list-item small { margin-top:5px; color:var(--muted,#667085); font-size:.69rem; } .ds-task-list-item b { color:#8d98aa; font-size:1.2rem; font-weight:400; }"
+      "description": "Grouped configuration rows inside the settings modal, with blue-soft selected state.",
+      "html": "<section class=\"ds-settings-group\"><button class=\"ds-setting ds-is-selected\"><span>Use saved profile</span><small>Selected</small></button><button class=\"ds-setting\"><span>Start a new session</span><small>Optional</small></button></section>",
+      "css": ".ds-settings-group { overflow:hidden; border:1px solid rgba(20,20,20,.15); border-radius:12px; background:var(--paper,#fff); box-shadow:0 1px 2px rgba(20,20,20,.04); } .ds-setting { display:flex; width:100%; min-height:48px; align-items:center; justify-content:space-between; gap:16px; padding:12px 16px; border:0; border-bottom:1px solid rgba(20,20,20,.08); color:var(--ink,#141414); background:transparent; font:500 13px/18px 'Inter Variable',Inter,sans-serif; cursor:pointer; } .ds-setting:last-child { border-bottom:0; } .ds-setting small { color:rgba(20,20,20,.62); font-weight:400; } .ds-setting:hover { background:rgba(119,119,119,.09); } .ds-setting.ds-is-selected { background:var(--blue-soft,#eef1ff); } .ds-setting:focus-visible { outline:3px solid color-mix(in srgb,var(--blue,#4d6bfe) 46%,transparent); outline-offset:-3px; }"
     },
     {
-      "name": "Run Record",
+      "name": "Plugin Card",
       "kind": "card",
-      "refersTo": "run-record",
-      "description": "A compact execution record used only inside the expanded task workbench.",
-      "html": "<article class=\"ds-run-record\"><header><strong>Run 1</strong><span>已完成</span></header><dl><div><dt>执行器</dt><dd>echo-test</dd></div><div><dt>尝试</dt><dd>1</dd></div><div><dt>更新</dt><dd>23:56</dd></div></dl></article>",
-      "css": ".ds-run-record { width:300px; padding:13px 14px; border:1px solid #d0d7e2; border-radius:11px; color:var(--ink,#172033); background:rgba(255,255,255,.62); font-family:Inter,system-ui,sans-serif; } .ds-run-record header { display:flex; align-items:center; justify-content:space-between; } .ds-run-record strong { font-size:.76rem; } .ds-run-record header span { padding:4px 7px; border-radius:7px; color:#176a4c; background:var(--green-soft,#e2f4eb); font-size:.64rem; font-weight:650; } .ds-run-record dl { display:grid; gap:7px; margin:12px 0 0; } .ds-run-record dl div { display:flex; justify-content:space-between; gap:12px; font-size:.68rem; } .ds-run-record dt { color:var(--muted,#667085); } .ds-run-record dd { margin:0; color:#465167; font-variant-numeric:tabular-nums; text-align:right; }"
+      "description": "Catalog card with DS Bot plug geometry, concise description, and service-owned status.",
+      "html": "<button class=\"ds-plugin-card\"><span class=\"ds-plugin-mark\"><svg viewBox=\"0 0 20 20\" aria-hidden=\"true\"><path d=\"M7 3v4M13 3v4M5 7h10v2.5a5 5 0 0 1-10 0zM10 14.5V17\"/></svg></span><span><strong>Executor</strong><small>Runs the task session, tools, and workspace.</small></span><em>Server managed</em></button>",
+      "css": ".ds-plugin-card { display:grid; min-height:100px; grid-template-columns:42px minmax(0,1fr); align-items:start; gap:12px; padding:16px; border:1px solid rgba(20,20,20,.08); border-radius:14px; color:var(--ink,#141414); background:var(--paper,#fff); text-align:left; cursor:pointer; } .ds-plugin-card:hover { border-color:rgba(20,20,20,.15); background:var(--panel,#f7f7f7); } .ds-plugin-card:focus-visible { outline:3px solid color-mix(in srgb,var(--blue,#4d6bfe) 46%,transparent); outline-offset:2px; } .ds-plugin-mark { display:grid; width:42px; height:42px; place-items:center; border-radius:13px; color:var(--blue,#4d6bfe); background:var(--blue-soft,#eef1ff); } .ds-plugin-mark svg { width:20px; height:20px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; } .ds-plugin-card strong,.ds-plugin-card small { display:block; } .ds-plugin-card strong { font:600 14px/20px 'Inter Variable',Inter,sans-serif; } .ds-plugin-card small { margin-top:5px; color:rgba(20,20,20,.62); font:400 12px/18px 'Inter Variable',Inter,sans-serif; } .ds-plugin-card em { grid-column:2; color:#666; font:normal 11px/14px 'Inter Variable',Inter,sans-serif; }"
+    },
+    {
+      "name": "Plugin Detail Boundary",
+      "kind": "custom",
+      "description": "Second-layer detail block that makes the server-owned configuration boundary explicit.",
+      "html": "<section class=\"ds-plugin-boundary\"><strong>Configuration boundary</strong><p>Connection status and credentials are managed by the Pegas service.</p></section>",
+      "css": ".ds-plugin-boundary { padding:14px; border-radius:12px; color:var(--ink,#141414); background:var(--panel,#f7f7f7); font-family:'Inter Variable',Inter,sans-serif; } .ds-plugin-boundary strong { font-size:14px; line-height:20px; } .ds-plugin-boundary p { margin:6px 0 0; color:rgba(20,20,20,.62); font-size:12px; line-height:1.6; }"
     }
   ],
   "narrative": {
-    "northStar": "The Quiet Relay",
-    "overview": "Pegas is a calm handoff from intent to durable action. Cool paper surfaces and ink-dark text keep the conversation primary; cobalt appears only where the interface is carrying work forward, while compact status signals make long-running activity legible without turning the product into a dashboard.\n\nThe system pairs a task-pulse conversation entry with an on-demand personal control center. Work grows naturally out of a message, stays visible in the conversation, and reveals its runs, timing, output, and errors only when the user asks for depth. Precision comes from thin rules, measured density, consistent curved geometry, and restrained motion—not decoration.",
+    "northStar": "The Bot-Shaped Task Desk",
+    "overview": "The current Pegas interface adopts DS Bot as its interaction and visual identity while keeping the Pegas name, service boundary, and domain behavior. This is an implementation contract, not a loose source of inspiration. Its defining model is Task = Bot: each durable task is represented as a DS Bot character in the left rail, and selecting that item changes the conversation context rather than opening a disconnected dashboard.\n\nThe product should feel like a focused work desk with three stable zones: tasks on the left, conversation in the center, and inspectable output on the right. The right workspace remains collapsed by default so dialogue has priority; settings and plugins temporarily rise above the shell as modal layers. The visual language stays neutral, compact, and operational, with Pegas blue reserved for bot geometry, active signals, progress, and decisive actions.",
     "keyCharacteristics": [
-      "Conversation-first hierarchy with task state embedded in the flow.",
-      "Cool, quiet paper layers anchored by deep ink and restrained cobalt.",
-      "Progressive disclosure from task pulse to a focused task workbench.",
-      "Compact, plain-language status cues with semantic color support.",
-      "Responsive continuity: the same information model becomes a full-screen task detail on mobile."
+      "Task-as-Bot identity expressed through DS Bot's whale character and icon geometry.",
+      "280px expanded task rail and 56px collapsed task rail.",
+      "Centered conversation flow capped at 960px, with a 48px capsule composer.",
+      "Right workspace represented by a narrow collapsed tab until inspection is requested.",
+      "Settings, plugin catalog, and plugin detail presented as progressively deeper modal layers.",
+      "DS Bot interaction and visual identity applied consistently to Pegas-owned tasks, messages, settings, plugins, and workspaces."
     ],
     "rules": [
-      { "name": "The One Execution Voice Rule", "body": "Cobalt marks actions and active execution; do not introduce another brand accent for equivalent emphasis.", "section": "colors" },
-      { "name": "The Semantic Restraint Rule", "body": "Green, amber, and red communicate state only; they never become decorative surface colors.", "section": "colors" },
-      { "name": "The One Voice Rule", "body": "Keep all interface language in the Inter family; hierarchy comes from weight, scale, spacing, and placement.", "section": "typography" },
-      { "name": "The Human First Rule", "body": "User-facing task and status language stays plain; runtime vocabulary belongs inside the expanded task workbench.", "section": "typography" },
-      { "name": "The Conversation Continuity Rule", "body": "A task begins in the conversation and opens into more detail without asking the user to choose a project or management mode first.", "section": "layout" },
-      { "name": "The Flat Until Active Rule", "body": "Resting surfaces rely on tone and border; elevation appears only for focus, hover, or panel transition.", "section": "elevation" }
+      {
+        "name": "The Bot Signal Rule",
+        "body": "Pegas blue belongs to bot geometry, current state, progress, focus, and primary action; it is not a decorative wash.",
+        "section": "colors"
+      },
+      {
+        "name": "The Neutral Shell Rule",
+        "body": "Establish hierarchy with canvas, paper, panel, bubble, and line tones before adding color or elevation.",
+        "section": "colors"
+      },
+      {
+        "name": "The Message Rhythm Rule",
+        "body": "Dialogue owns the roomiest line height; rail and modal chrome must remain visually quieter than the message content.",
+        "section": "typography"
+      },
+      {
+        "name": "The Inspect-on-Demand Rule",
+        "body": "Keep conversation flat and dominant; elevation appears only when a control, workspace, or configuration layer temporarily moves above it.",
+        "section": "elevation"
+      }
     ],
     "dos": [
-      "Do keep the conversation and composer visually dominant on first view.",
-      "Do express task progress as a compact pulse in the conversation before revealing runs and metadata.",
-      "Do use cobalt selectively for active execution, actions, focus, and progress.",
-      "Do preserve the same task information hierarchy across desktop and mobile.",
-      "Do pair every semantic color with plain-language status copy."
+      "Do treat each durable Task as a bot-shaped conversation context, not merely a dashboard row.",
+      "Do preserve the 280px expanded and 56px collapsed task-rail states.",
+      "Do keep the conversation flow at or below 960px and the composer at a 48px minimum height.",
+      "Do keep the right workspace collapsed by default and reveal inspection depth on demand.",
+      "Do use the 20×20, 1.6px rounded DS Bot icon geometry consistently for supporting controls.",
+      "Do keep settings, plugin catalog, and plugin detail as clearly ordered modal layers.",
+      "Do preserve modal focus trapping, Escape dismissal, inert backgrounds, and trigger-focus restoration at every layer."
     ],
     "donts": [
-      "Don't make users enter a project, task manager, or runtime view before they can speak naturally.",
-      "Don't turn the default view into a dense dashboard of counts, logs, or system controls.",
-      "Don't use glow, glass, decorative gradients, or saturated color fields.",
-      "Don't expose sessions, workers, or model selection in the conversation-first layer.",
-      "Don't add shadows to resting surfaces when a cool tonal layer or fine rule can define structure."
+      "Don't revert mobile navigation to a top bar; the current shell preserves the 56px task rail.",
+      "Don't expose the workspace as a permanent wide panel when the user has not requested inspection.",
+      "Don't replace Task=Bot with a generic card board, chat list, or disconnected task dashboard.",
+      "Don't use Pegas blue as ambient decoration or a broad background field.",
+      "Don't mix unrelated icon families, stroke weights, or sharp-cornered glyph geometry into the DS Bot shell.",
+      "Don't let modal detail layers obscure their close action, scroll boundary, or service-owned configuration boundary."
     ]
   }
 }
