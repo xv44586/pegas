@@ -49,8 +49,6 @@ const environment = {
   PEGAS_DATA_DIR: dataDirectory,
   PEGAS_EVENT_POLL_MS: '25',
   PEGAS_EXECUTOR: 'echo',
-  PEGAS_ROUTER: 'rules',
-  PEGAS_MODEL_NAME: 'magpie/auto',
   PEGAS_SPEECH_PROVIDER: 'disabled',
   PEGAS_PUSH_MODE: 'disabled',
 }
@@ -121,6 +119,7 @@ try {
   await page.getByRole('button', { name: '设置', exact: true }).click()
   await page.getByRole('button', { name: '关闭设置' }).waitFor()
   await page.getByRole('heading', { name: '模型服务' }).waitFor()
+  await assertDefaultRouterSettings(page)
   await assertGeometry(page, 'settings')
   await shot(page, 'settings.png')
   await page.getByRole('button', { name: '获取模型列表' }).click()
@@ -186,6 +185,9 @@ try {
   await mobilePage.getByRole('button', { name: '关闭设置' }).waitFor()
   await mobilePage.getByRole('heading', { name: '模型服务' }).waitFor()
   await mobilePage.getByRole('button', { name: '获取模型列表' }).click()
+  await mobilePage.getByRole('searchbox', { name: '搜索已获取模型' }).waitFor()
+  await assertGeometry(mobilePage, 'mobile-settings-model-picker')
+  await shot(mobilePage, 'mobile-settings-model-picker.png')
   await mobilePage
     .getByRole('navigation', { name: '模型列表分页' })
     .scrollIntoViewIfNeeded()
@@ -234,7 +236,7 @@ async function seedConversation(apiPort) {
     if (response.status !== 202)
       throw new Error(`Unable to seed UI review (${String(response.status)})`)
   }
-  const deadline = Date.now() + 5000
+  const deadline = Date.now() + 25_000
   while (Date.now() < deadline) {
     const response = await fetch(
       `http://127.0.0.1:${String(apiPort)}/v1/tasks?userId=owner`,
@@ -296,12 +298,27 @@ async function mockModelDiscovery(page) {
       contentType: 'application/json',
       body: JSON.stringify({
         models: Array.from({ length: 165 }, (_, index) => ({
-          id: `review/model-${String(index).padStart(3, '0')}`,
-          name: `Review model ${String(index + 1)}`,
+          id:
+            index === 0
+              ? 'discovery-api/deepseek-v4.1-flash-1017'
+              : `review/model-${String(index).padStart(3, '0')}`,
+          name:
+            index === 0
+              ? 'DeepSeek V4.1 Flash 1017'
+              : `Review model ${String(index + 1)}`,
         })),
       }),
     }),
   )
+}
+
+async function assertDefaultRouterSettings(page) {
+  const magpie = page.getByRole('radio', { name: 'Magpie', exact: true })
+  if (!(await magpie.isChecked()))
+    throw new Error('Fresh settings did not default to Magpie')
+  const modelName = await page.getByLabel('模型 ID').inputValue()
+  if (modelName !== 'discovery-api/deepseek-v4.1-flash-1017')
+    throw new Error(`Fresh Router model defaulted to ${modelName}`)
 }
 
 async function assertAgentStatusBadges(page) {
@@ -379,6 +396,25 @@ async function assertGeometry(page, label) {
         list.clientHeight <= 0
       )
         out.push('model picker list has no usable scroll viewport')
+      const search = modelPicker.querySelector('.model-picker-search')
+      const searchInput = search?.querySelector('input')
+      const searchIcon = search?.querySelector('svg')
+      if (search && searchInput) {
+        const searchRect = search.getBoundingClientRect()
+        const inputRect = searchInput.getBoundingClientRect()
+        if (inputRect.width < searchRect.width - 1)
+          out.push(
+            `model search collapsed to ${String(Math.round(inputRect.width))} inside ${String(Math.round(searchRect.width))}`,
+          )
+        if (searchIcon) {
+          const iconRect = searchIcon.getBoundingClientRect()
+          const padding = Number.parseFloat(
+            globalThis.getComputedStyle(searchInput).paddingInlineStart,
+          )
+          if (padding < iconRect.right - inputRect.left + 6)
+            out.push('model search text overlaps its icon')
+        }
+      }
     }
     for (const button of globalThis.document.querySelectorAll(
       '.sidebar-section-nav button',

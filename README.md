@@ -67,7 +67,7 @@ Web 开发服务器默认位于 `http://127.0.0.1:4319`，并将 API 请求代�
 
 Worker 默认通过 DSH headless 执行 Run。自动化测试使用显式的 `PEGAS_EXECUTOR=echo`，不会调用模型；生产或人工验证不能使用该测试执行器。
 
-Router 默认使用确定性规则，不假设机器安装或登录了某个模型客户端。需要模型辅助归类时，可在 Web 设置页选择常见供应商、自托管服务或自定义兼容入口，并由 Pegas 保存连接：
+Router 默认通过 Magpie 模型判断未指定 Channel 的输入应新建任务还是续接已有任务；显式 Channel/Task 引用仍按确定性路径处理，模型不可用或输出无效时安全降级为新建任务。可在 Web 设置页选择其他供应商、自托管服务或自定义兼容入口，并由 Pegas 保存连接：
 
 ```bash
 PEGAS_ROUTER=model
@@ -75,9 +75,9 @@ PEGAS_MODEL_PROVIDER=magpie
 PEGAS_MODEL_BASE_URL=http://127.0.0.1:3425/v1
 ```
 
-新实例默认连接本机 Magpie `http://127.0.0.1:3425/v1`，首次启动从 `/models` 选择第一个可用模型。设置页同时内置 OpenAI、Anthropic、Gemini、DeepSeek、xAI、Kimi、GLM、MiniMax、通义千问、OpenRouter、Groq、Mistral、SiliconFlow、Ollama 和 LM Studio，并支持 OpenAI Chat Completions 或 Anthropic Messages 协议的自定义连接。Gemini 收纳在“更多供应商”中。模型不可用或输出无效时，Router 会安全降级为创建独立 Task。
+新实例默认连接本机 Magpie `http://127.0.0.1:3425/v1`，优先使用已通过真实连接探测的 `discovery-api/deepseek-v4.1-flash-1017`；实时目录没有该模型时才回退到第一个可用模型。设置页同时内置 OpenAI、Anthropic、Gemini、DeepSeek、xAI、Kimi、GLM、MiniMax、通义千问、OpenRouter、Groq、Mistral、SiliconFlow、Ollama 和 LM Studio，并支持 OpenAI Chat Completions 或 Anthropic Messages 协议的自定义连接。Gemini 收纳在“更多供应商”中。模型不可用或输出无效时，Router 会安全降级为创建独立 Task。
 
-这里的 Provider 只负责 Router 等轻量控制面判断。DSH 执行任务时使用的模型、凭证和 Provider 仍由 DSH profile 自己管理，两者不会共享隐式 session 或配置。
+这里的 Provider 只负责 Router 控制面归属判断；默认模型用于提高新建、续接和拆分判断的可靠性，不代表 Router 执行任务内容。DSH 执行任务时使用的模型、凭证和 Provider 仍由 DSH profile 自己管理，两者不会共享隐式 session 或配置。
 
 首次启动后，Router 模式、Provider、对应模型名、脱敏和输入改写由 Web 设置页统一管理，
 并保存在服务端 SQLite 中。以上环境变量只用于初始化第一版默认值；用户保存过设置后，

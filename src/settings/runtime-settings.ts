@@ -1,4 +1,5 @@
 import type { PegasConfig } from '../core/config.js'
+import { defaultMagpieRouterModel } from '../core/model-defaults.js'
 import {
   modelProviderPreset,
   modelProviderPresets,
@@ -107,8 +108,14 @@ export function settingsCapabilities(
         category: preset.category,
         protocol: connection?.protocol ?? preset.protocol,
         baseUrl,
-        defaultModel: preset.defaultModel,
-        description: preset.description,
+        defaultModel:
+          preset.id === 'magpie'
+            ? defaultMagpieRouterModel
+            : preset.defaultModel,
+        description:
+          preset.id === 'magpie'
+            ? '本机 Magpie 模型网关，默认使用指定的 Router 模型。'
+            : preset.description,
         requiresApiKey: preset.requiresApiKey,
         hasApiKey,
         available,

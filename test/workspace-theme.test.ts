@@ -62,6 +62,9 @@ describe('workspace layout contracts', () => {
     expect(workspaceTheme).toMatch(
       /\.model-pagination\s*\{[^}]*display:\s*flex;[^}]*justify-content:\s*space-between;/,
     )
+    expect(workspaceTheme).toMatch(
+      /\.model-picker-search input\s*\{[^}]*inline-size:\s*100%;[^}]*min-inline-size:\s*0;[^}]*padding-inline-start:\s*38px;/,
+    )
   })
 
   it('keeps model feedback compact and attached to its controls', () => {
