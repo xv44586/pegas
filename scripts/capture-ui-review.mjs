@@ -120,12 +120,18 @@ try {
 
   await page.getByRole('button', { name: '设置', exact: true }).click()
   await page.getByRole('button', { name: '关闭设置' }).waitFor()
+  await page.getByRole('heading', { name: '模型服务' }).waitFor()
   await assertGeometry(page, 'settings')
   await shot(page, 'settings.png')
   await page.getByRole('button', { name: '获取模型列表' }).click()
   await page.getByRole('button', { name: '选择模型', exact: true }).waitFor()
   await assertGeometry(page, 'settings-model-picker')
   await shot(page, 'settings-model-picker.png')
+  await page
+    .getByRole('navigation', { name: '模型列表分页' })
+    .scrollIntoViewIfNeeded()
+  await assertGeometry(page, 'settings-model-pagination')
+  await shot(page, 'settings-model-pagination.png')
   await page.getByRole('button', { name: '选择模型', exact: true }).click()
   await page.getByRole('button', { name: '关闭设置' }).click()
 
@@ -160,6 +166,7 @@ try {
     deviceScaleFactor: 1,
   })
   const mobilePage = await mobile.newPage()
+  await mockModelDiscovery(mobilePage)
   await mobilePage.goto(`http://127.0.0.1:${String(port)}/`)
   await mobilePage
     .getByRole('textbox', { name: '告诉 Pegas 你想完成什么' })
@@ -175,6 +182,16 @@ try {
   await mobilePage.getByRole('button', { name: '收起侧栏' }).waitFor()
   await assertGeometry(mobilePage, 'mobile-sidebar-open')
   await shot(mobilePage, 'mobile-sidebar-open.png')
+  await mobilePage.getByRole('button', { name: '设置', exact: true }).click()
+  await mobilePage.getByRole('button', { name: '关闭设置' }).waitFor()
+  await mobilePage.getByRole('heading', { name: '模型服务' }).waitFor()
+  await mobilePage.getByRole('button', { name: '获取模型列表' }).click()
+  await mobilePage
+    .getByRole('navigation', { name: '模型列表分页' })
+    .scrollIntoViewIfNeeded()
+  await assertGeometry(mobilePage, 'mobile-settings-model-pagination')
+  await shot(mobilePage, 'mobile-settings-model-pagination.png')
+  await mobilePage.getByRole('button', { name: '关闭设置' }).click()
   await mobilePage
     .getByRole('button', { name: /^打开 Channel：/u })
     .first()
