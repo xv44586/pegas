@@ -5,6 +5,7 @@ import {
   type ModelProviderId,
 } from '../model/provider-catalog.js'
 import { initialSpeechConnection } from '../speech/speech-settings.js'
+import { defaultMagpieRouterModel } from './model-defaults.js'
 
 export interface PegasConfig {
   apiHost: string
@@ -49,7 +50,7 @@ export function loadConfig(
   const dataDir = resolve(environment.PEGAS_DATA_DIR ?? './data')
   const apiHost = environment.PEGAS_API_HOST ?? '127.0.0.1'
   const apiToken = environment.PEGAS_API_TOKEN
-  const routerMode = environment.PEGAS_ROUTER === 'model' ? 'model' : 'rules'
+  const routerMode = environment.PEGAS_ROUTER === 'rules' ? 'rules' : 'model'
   const rawModelProvider = environment.PEGAS_MODEL_PROVIDER ?? 'magpie'
   const modelProvider = legacyModelProvider(rawModelProvider)
   const modelBaseUrl = environment.PEGAS_MODEL_BASE_URL
@@ -138,7 +139,10 @@ export function loadConfig(
       ? { modelApiKey: environment.PEGAS_MODEL_API_KEY }
       : {}),
     modelName:
-      modelName ?? modelProviderPreset(modelProvider)?.defaultModel ?? '',
+      modelName ??
+      (modelProvider === 'magpie'
+        ? defaultMagpieRouterModel
+        : (modelProviderPreset(modelProvider)?.defaultModel ?? '')),
     modelCredentialKeyPath: resolve(dataDir, 'model-credentials.key'),
     modelTimeoutMs: parsePositiveInteger(
       environment.PEGAS_MODEL_TIMEOUT_MS,

@@ -24,7 +24,7 @@ describe('runtime settings validation', () => {
       id: 'magpie',
       name: 'Magpie',
       baseUrl: 'http://127.0.0.1:3425/v1',
-      defaultModel: 'group/free-small-models',
+      defaultModel: 'discovery-api/deepseek-v4.1-flash-1017',
       requiresApiKey: false,
       available: true,
     })

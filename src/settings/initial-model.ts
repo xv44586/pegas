@@ -34,7 +34,11 @@ export async function resolveInitialModelName(
       ...(config.modelApiKey ? { apiKey: config.modelApiKey } : {}),
       timeoutMs: 2_000,
     })
-    return models[0]?.id ?? config.modelName
+    return (
+      models.find(model => model.id === config.modelName)?.id ??
+      models[0]?.id ??
+      config.modelName
+    )
   } catch {
     return config.modelName
   }

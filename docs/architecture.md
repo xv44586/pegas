@@ -140,9 +140,9 @@ Router 只负责确定一条新输入属于哪个 Task 或控制对象，例如�
 
 Router 不直接回答任务内容，不判断某个工具是否存在，也不因为自己看不到 Executor 的工具而向用户索要安装或配置。工具能力、权限是否足够以及任务本身是否需要澄清，只能由加载了真实运行环境的 Agent 判断。Router 只有在“输入究竟属于哪个 Task”无法可靠确定时，才可以提出归属澄清。
 
-Router 可以使用模型进行归属判断，但结果必须写入结构化数据。已有 Task 的执行单元也可以把不属于自身目标的消息退回 Router 重新分配。
+Router 默认使用模型进行归属判断，但结果必须写入结构化数据。已有 Task 的执行单元也可以把不属于自身目标的消息退回 Router 重新分配。
 
-第一版提供两级策略：显式 `taskId` 和无候选任务时使用确定性规则；存在多个活跃候选 Task 时可启用 Model Router。模型只返回 `create_task` 或引用候选 ID 的 `continue_task` 结构，输出无法解析、引用越权或 Provider 不可用时自动退回确定性新建策略，不能阻塞 Durable Inbox。
+第一版提供两级策略：显式 `taskId` 始终按确定性路径续接；未指定 Task 的输入默认交给 Model Router，在受限候选集中判断 `create_task` 或引用候选 ID 的 `continue_task`。默认连接 Magpie 的指定 Router 模型；输出无法解析、引用越权或 Provider 不可用时自动退回确定性新建策略，不能阻塞 Durable Inbox。
 
 Pegas 的 Model Provider 是小型控制面边界，不依赖本机 Agent 客户端或其登录态。第一版提供常见厂商、聚合网关、本地模型服务和自定义连接目录，通过 OpenAI Chat Completions 或 Anthropic Messages 协议完成结构化判断。Provider API key 由服务端实例密钥加密保存，读取接口只暴露是否已配置；它不承载工具调用和长期执行。DSH Runtime 的凭证和 Provider 仍保持在 DSH profile 内；Pegas 只读取 profile 暴露的模型目录，并可通过临时 patch 为新 session 选择默认 Agent 模型，不复制 DSH 凭证，也不改变恢复中 session 的模型。
 
