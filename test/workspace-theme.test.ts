@@ -22,4 +22,13 @@ describe('workspace layout contracts', () => {
       /@media \(max-width: 820px\)[\s\S]*?\.workspace-panel\s*\{[^}]*inset-inline-start:\s*auto;[^}]*inset-inline-end:\s*0;/,
     )
   })
+
+  it('keeps dictation errors in the composer flow instead of overlaying messages', () => {
+    expect(workspaceTheme).toMatch(
+      /\.dictation-error\s*\{[^}]*position:\s*static;[^}]*width:\s*100%;[^}]*overflow-wrap:\s*anywhere;/,
+    )
+    expect(workspaceTheme).not.toMatch(
+      /\.dictation-error\s*\{[^}]*inset-block-end:\s*calc\(100% \+ 6px\)/,
+    )
+  })
 })

@@ -143,6 +143,18 @@
 - Enforcement：尚未晋升；本轮以精确错误匹配和回归测试约束，其他失败仍保持不可自动重放。
 - Owner / next action：将 Task workspace 与 Candidate artifact 生命周期彻底解耦，并补真实 Candidate 切换故障演练。
 
+### LESSON-20261119-02：错误反馈不能覆盖用户正在阅读的内容
+
+- Rule：输入器异步错误必须在输入器内部占据正常布局空间，并通过礼貌 live region 宣告；不得绝对定位到消息流上方。
+- Why：语音服务不可达时，错误文案覆盖了上一条消息的时间和输入器边缘，用户既看不清错误归属也无法稳定操作输入框。
+- Feature：VOICE-001
+- Evidence：用户提供的语音失败截图；`web/src/App.test.tsx` 的 inline status 回归和 `test/workspace-theme.test.ts` 的非覆盖布局合同。
+- Seen：1（2026-11-19）
+- Severity：normal
+- Status：Observed
+- Enforcement：尚未晋升；本轮以语义和 CSS 回归覆盖。
+- Owner / next action：后续独立日期复发时补充浏览器几何截图门禁。
+
 <!--
 ### LESSON-YYYYMMDD-NN：简短标题
 

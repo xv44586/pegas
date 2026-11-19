@@ -2165,6 +2165,7 @@ a:focus-visible {
   min-inline-size: 0;
   min-block-size: 48px;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   margin-inline: auto;
   padding: 8px 12px;
@@ -2279,9 +2280,12 @@ a:focus-visible {
 }
 
 .dictation-error {
-  position: absolute;
-  inset-block-end: calc(100% + 6px);
-  inset-inline-start: 4px;
+  position: static;
+  width: 100%;
+  flex: 0 0 100%;
+  margin: -2px 0 2px;
+  padding-inline: 42px 44px;
+  overflow-wrap: anywhere;
 }
 
 .attachment-help {
