@@ -4,12 +4,14 @@
   "private": true,
   "type": "module",
   "description": "A conversation-first personal agent with durable tasks and recoverable execution.",
+  "main": "dist/desktop/main.js",
   "packageManager": "pnpm@11.25.0",
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
   },
   "scripts": {
-    "build": "pnpm build:server && pnpm build:web",
+    "build": "pnpm build:server && pnpm build:web && pnpm build:desktop",
+    "build:desktop": "tsc -p desktop/tsconfig.json",
     "build:server": "tsc -p tsconfig.build.json",
     "build:web": "vite build --config web/vite.config.ts",
     "check": "pnpm format:check && pnpm icons:check && pnpm lint && pnpm typecheck && pnpm deadcode && pnpm test:coverage && pnpm build",
@@ -17,6 +19,7 @@
     "dev": "tsx src/control-plane/main.ts",
     "dev:web": "vite --config web/vite.config.ts",
     "dev:worker": "tsx src/worker/main.ts",
+    "desktop:run": "pnpm build && electron .",
     "dev:notification": "tsx src/notification/main.ts",
     "dev:supervisor": "tsx src/supervisor/main.ts",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"web/**/*.{ts,tsx,css,html,json}\" \"scripts/**/*.{mjs,ts}\" \"docs/**/*.md\" \"*.{json,mjs,ts,yml,yaml}\" \"README.md\" \"AGENTS.md\" \"CONTRIBUTING.md\" \".github/**/*.{md,yml}\"",
@@ -28,13 +31,16 @@
     "review:evidence": "tsx scripts/generate-review-evidence.ts",
     "review:ui": "node scripts/capture-ui-review.mjs",
     "smoke": "node scripts/smoke.mjs",
+    "smoke:desktop": "pnpm build && node scripts/smoke-desktop.mjs",
+    "smoke:desktop:packaged": "PEGAS_DESKTOP_EXECUTABLE=releases/desktop/mac-arm64/Pegas.app/Contents/MacOS/Pegas node scripts/smoke-desktop.mjs",
+    "package:mac": "pnpm build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dir",
     "start": "node dist/control-plane/main.js",
     "start:supervisor": "node dist/supervisor/main.js",
     "start:notification": "node dist/notification/main.js",
     "start:worker": "node dist/worker/main.js",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "typecheck": "tsc --noEmit && tsc -p web/tsconfig.json --noEmit && tsc -p web/tsconfig.node.json --noEmit"
+    "typecheck": "tsc --noEmit && tsc -p web/tsconfig.json --noEmit && tsc -p web/tsconfig.node.json --noEmit && tsc -p desktop/tsconfig.json --noEmit"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -44,6 +50,8 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.3.0",
     "@vitest/coverage-v8": "^5.1.0",
+    "electron": "^39.8.10",
+    "electron-builder": "^26.18.0",
     "eslint": "^10.15.0",
     "eslint-config-prettier": "^10.1.8",
     "globals": "^17.14.0",
@@ -66,5 +74,27 @@
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
     "yaml": "^2.9.1"
+  },
+  "build": {
+    "appId": "ai.pegas.desktop",
+    "productName": "Pegas",
+    "asarUnpack": [
+      "dist/**/*",
+      "node_modules/yaml/**/*"
+    ],
+    "directories": {
+      "output": "releases/desktop"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "desktop/Pegas.icns",
+      "target": [
+        "dir"
+      ]
+    }
   }
 }

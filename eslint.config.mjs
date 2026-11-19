@@ -54,5 +54,15 @@ export default tseslint.config(
       },
     },
   },
+  {
+    files: ['src/desktop/**/*.ts'],
+    languageOptions: {
+      parserOptions: {
+        project: './desktop/tsconfig.json',
+        projectService: false,
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+  },
   prettier,
 )
