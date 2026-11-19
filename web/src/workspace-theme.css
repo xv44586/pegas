@@ -37,7 +37,8 @@ body {
 }
 
 .pegas-agent-avatar {
-  display: block;
+  position: relative;
+  display: inline-block;
   inline-size: var(--pegas-avatar-size);
   block-size: var(--pegas-avatar-size);
   flex: none;
@@ -46,30 +47,114 @@ body {
   --pegas-icon-foreground: #ffffff;
 }
 
-.pegas-agent-avatar.status-backlog {
-  --pegas-icon-background: #7c3aed;
+.pegas-agent-glyph {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
 }
 
-.pegas-agent-avatar.status-unstarted {
-  --pegas-icon-background: #b45309;
+.pegas-agent-status {
+  position: absolute;
+  inset-inline-end: -2px;
+  inset-block-end: -2px;
+  display: grid;
+  inline-size: clamp(9px, calc(var(--pegas-avatar-size) * 0.36), 13px);
+  block-size: clamp(9px, calc(var(--pegas-avatar-size) * 0.36), 13px);
+  place-items: center;
+  border: 1.5px solid var(--paper);
+  border-radius: 50%;
+  color: #52525b;
+  background: var(--paper);
+  box-sizing: border-box;
 }
 
-.pegas-agent-avatar.status-started {
-  --pegas-icon-background: #2563eb;
+.pegas-agent-avatar.status-backlog .pegas-agent-status::before {
+  inline-size: 2px;
+  block-size: 2px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow:
+    -3px 0 currentColor,
+    3px 0 currentColor;
+  content: '';
 }
 
-.pegas-agent-avatar.status-completed {
-  --pegas-icon-background: #15803d;
+.pegas-agent-avatar.status-unstarted .pegas-agent-status::before {
+  position: absolute;
+  inset: 1px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  content: '';
 }
 
-.pegas-agent-avatar.status-cancelled {
-  --pegas-icon-background: #52525b;
+.pegas-agent-avatar.status-unstarted .pegas-agent-status::after {
+  inline-size: 1px;
+  block-size: 3px;
+  border-block-end: 1px solid currentColor;
+  background: currentColor;
+  content: '';
+  transform: translate(1px, -1px);
+}
+
+.pegas-agent-avatar.status-started .pegas-agent-status {
+  color: var(--paper);
+  background: var(--blue);
+}
+
+.pegas-agent-avatar.status-started .pegas-agent-status::before {
+  inline-size: 3px;
+  block-size: 3px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  content: '';
+}
+
+.pegas-agent-avatar.status-completed .pegas-agent-status::before {
+  inline-size: 6px;
+  block-size: 3px;
+  border-block-end: 1.5px solid currentColor;
+  border-inline-start: 1.5px solid currentColor;
+  content: '';
+  transform: translateY(-1px) rotate(-45deg);
+}
+
+.pegas-agent-avatar.status-cancelled .pegas-agent-status {
+  color: var(--red);
+}
+
+.pegas-agent-avatar.status-cancelled .pegas-agent-status::before,
+.pegas-agent-avatar.status-cancelled .pegas-agent-status::after {
+  position: absolute;
+  inline-size: 6px;
+  block-size: 1.5px;
+  border-radius: 1px;
+  background: currentColor;
+  content: '';
+}
+
+.pegas-agent-avatar.status-cancelled .pegas-agent-status::before {
+  transform: rotate(45deg);
+}
+
+.pegas-agent-avatar.status-cancelled .pegas-agent-status::after {
+  transform: rotate(-45deg);
 }
 
 @media (forced-colors: active) {
   .pegas-agent-avatar {
     --pegas-icon-background: Highlight;
     --pegas-icon-foreground: HighlightText;
+  }
+
+  .pegas-agent-status {
+    border-color: Canvas;
+    color: CanvasText;
+    background: Canvas;
+  }
+
+  .pegas-agent-avatar.status-started .pegas-agent-status {
+    color: HighlightText;
+    background: Highlight;
   }
 }
 

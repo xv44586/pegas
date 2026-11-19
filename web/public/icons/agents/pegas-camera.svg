@@ -3,7 +3,7 @@
   <desc id="pegas-camera-desc">A minimal white camera symbol on a blue rounded square.</desc>
   <style>
     .pegas-agent-icon {
-      --pegas-icon-background: #5b6ff5;
+      --pegas-icon-background: #4d6bfe;
       --pegas-icon-foreground: #ffffff;
     }
   </style>

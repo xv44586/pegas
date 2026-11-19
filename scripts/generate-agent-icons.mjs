@@ -76,7 +76,7 @@ function renderIcon(definition) {
   <desc id="${descriptionId}">${definition.description}</desc>
   <style>
     .pegas-agent-icon {
-      --pegas-icon-background: #5b6ff5;
+      --pegas-icon-background: #4d6bfe;
       --pegas-icon-foreground: #ffffff;
     }
   </style>
@@ -90,7 +90,7 @@ function renderSprite() {
   const symbols = iconDefinitions
     .map(
       definition => `  <symbol id="pegas-agent-${definition.name}" viewBox="0 0 64 64">
-    <rect width="64" height="64" rx="14" fill="var(--pegas-icon-background, #5b6ff5)"/>
+    <rect width="64" height="64" rx="14" fill="var(--pegas-icon-background, #4d6bfe)"/>
 ${definition.content
   .split('\n')
   .map(line => `  ${line}`)

@@ -729,9 +729,6 @@ export function App() {
                     <strong>{task.title}</strong>
                     <small>{task.goal}</small>
                   </span>
-                  {isActiveTask(task.status) && (
-                    <span className="task-unread" aria-hidden="true" />
-                  )}
                   <span className="sr-only" id={`channel-status-${task.id}`}>
                     状态：{statusCopy[task.status]}
                   </span>

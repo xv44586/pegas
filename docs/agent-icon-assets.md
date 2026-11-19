@@ -9,15 +9,15 @@
 
 Pegas 使用自己的图标系统替代 DS Bot 鲸鱼形象。主入口固定为 Pegas
 机器人；每个新 Channel 由服务端自动分配并持久化一个 Worker 图标，用户不能指定或修改
-`workerIconId`。Worker 图标随 Channel 五种状态改变背景色，形状保持稳定。
+`workerIconId`。Worker 图标本体始终使用 Pegas 蓝；Channel 状态由独立的小徽记、文字和既有进度元素表达，不再改变 Worker 身份色。
 
 ## 验收条件
 
 1. Pegas 主入口、主页、设置和消息身份始终使用 `bot`，Channel 不使用第三方角色形象。
 2. 新 Channel 只从 `car`、`camera`、`computer`、`phone` 中由系统确定性分配；分配结果写入 Task，扩展图标库不会重排旧 Channel。
-3. `backlog`、`unstarted`、`started`、`completed`、`cancelled` 分别使用紫、琥珀、蓝、绿、灰背景；状态同时有文字，不只依赖颜色。
-4. 图标通过同源 SVG sprite 的 `<use>` 复用，并通过 `--pegas-icon-background` 与 `--pegas-icon-foreground` 接收状态主题。
-5. 已命名按钮内的图标为装饰图像；独立信息图像由调用方提供可访问名称。所有状态色与白色前景至少满足 3:1 图形对比度。
+3. `backlog`、`unstarted`、`started`、`completed`、`cancelled` 分别使用三点、时钟、靶心、对勾和叉形徽记；状态同时有文字，不只依赖颜色。
+4. 图标通过同源 SVG sprite 的 `<use>` 复用，并通过固定的 `--pegas-icon-background` 与 `--pegas-icon-foreground` 接收品牌主题；状态徽记由 Web 组件独立渲染。
+5. 已命名按钮内的图标为装饰图像；独立信息图像由调用方提供可访问名称。状态徽记在 Forced Colors 下使用系统色，并始终有形状或文字作为非颜色线索。
 6. 生成脚本是 SVG 几何和 sprite 的唯一事实来源；`pnpm icons:check` 阻止产物漂移。
 
 ## 非目标
@@ -56,7 +56,7 @@ pnpm icons:check
 1. 在生成器 `iconDefinitions` 增加唯一名称、可访问名称、描述和几何；
 2. 把 Worker 类型加入 `src/brand/agent-icon.ts` 和 Web 类型/注册表；
 3. 运行 `pnpm icons:generate`；
-4. 增加分配、迁移、小尺寸与状态色测试。
+4. 增加分配、迁移、小尺寸与状态徽记测试。
 
 旧 Task 已经保存 `worker_icon_id`，因此扩大分配池只影响此后创建的 Channel。
 
@@ -71,8 +71,8 @@ pnpm icons:check
 ## 验证证据
 
 - `pnpm icons:check`：五个独立 SVG 和一个 sprite 与生成器完全一致。
-- 自动化覆盖确定性分配、非法第三方 ID、历史数据回填、API 投影、旧服务兼容和 UI 状态类。
-- 浏览器截图覆盖 Pegas 固定机器人、Channel 多形状、五状态配色和收缩侧栏。
+- 自动化覆盖确定性分配、非法第三方 ID、历史数据回填、API 投影、旧服务兼容、固定蓝色身份与 UI 状态徽记。
+- 浏览器截图覆盖 Pegas 固定机器人、Channel 多形状、五状态徽记和收缩侧栏。
 - 完整门禁：`pnpm check`, `pnpm smoke`。
 
 ## 剩余风险与下一缺口

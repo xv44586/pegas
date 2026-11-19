@@ -31,16 +31,28 @@ export function PegasAgentIcon({
     : ({ 'aria-hidden': true } as const)
 
   return (
-    <svg
+    <span
       {...accessibility}
       className={classes}
-      focusable="false"
-      viewBox="0 0 64 64"
-      width={size}
-      height={size}
       style={{ '--pegas-avatar-size': `${String(size)}px` } as CSSProperties}
     >
-      <use href={`/icons/agents/pegas-agents.svg#pegas-agent-${iconId}`} />
-    </svg>
+      <svg
+        aria-hidden="true"
+        className="pegas-agent-glyph"
+        focusable="false"
+        viewBox="0 0 64 64"
+        width={size}
+        height={size}
+      >
+        <use href={`/icons/agents/pegas-agents.svg#pegas-agent-${iconId}`} />
+      </svg>
+      {status && (
+        <span
+          aria-hidden="true"
+          className="pegas-agent-status"
+          data-status={status}
+        />
+      )}
+    </span>
   )
 }

@@ -134,6 +134,17 @@ try {
   await page.getByRole('button', { name: '关闭插件详情' }).waitFor()
   await assertGeometry(page, 'plugin-detail')
   await shot(page, 'plugin-detail.png')
+
+  const statusPage = await context.newPage()
+  await mockAgentStatusSnapshot(statusPage)
+  await statusPage.goto(`http://127.0.0.1:${String(port)}/`)
+  await statusPage
+    .getByRole('button', { name: /打开 Channel：/u })
+    .first()
+    .waitFor()
+  await assertAgentStatusBadges(statusPage)
+  await assertGeometry(statusPage, 'agent-status-badges')
+  await shot(statusPage, 'agent-status-badges.png')
   await context.close()
 
   const mobile = await browser.newContext({
@@ -210,6 +221,76 @@ async function seedConversation(apiPort) {
     await wait(50)
   }
   throw new Error('UI review tasks were not created')
+}
+
+async function mockAgentStatusSnapshot(page) {
+  const statuses = [
+    ['backlog', '待分配', 'car'],
+    ['unstarted', '未开始', 'camera'],
+    ['started', '进行中', 'computer'],
+    ['completed', '已完成', 'phone'],
+    ['cancelled', '已停止', 'car'],
+  ]
+  const channels = statuses.map(([status, title, workerIconId], index) => ({
+    id: `status-${status}`,
+    taskId: `status-${status}`,
+    userId: 'owner',
+    originEventId: `event-${status}`,
+    title,
+    goal: '状态由徽记形状和文字共同表达',
+    status,
+    workerIconId,
+    createdAt: `2026-11-19T0${String(index + 1)}:00:00.000Z`,
+    updatedAt: `2026-11-19T0${String(index + 1)}:05:00.000Z`,
+    latestActivityAt: `2026-11-19T0${String(index + 1)}:05:00.000Z`,
+    canResume: status === 'completed',
+    canStop: ['backlog', 'unstarted', 'started'].includes(status),
+  }))
+  await page.route('**/v1/**', route => {
+    const path = new URL(route.request().url()).pathname
+    const body =
+      path === '/v1/channels'
+        ? { channels }
+        : path === '/v1/events'
+          ? { events: [] }
+          : path === '/v1/runs'
+            ? { runs: [] }
+            : path === '/v1/outbox'
+              ? { messages: [] }
+              : {}
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(body),
+    })
+  })
+}
+
+async function assertAgentStatusBadges(page) {
+  const result = await page
+    .locator('.task-row .pegas-agent-avatar')
+    .evaluateAll(avatars => ({
+      backgrounds: avatars.map(avatar =>
+        globalThis
+          .getComputedStyle(avatar)
+          .getPropertyValue('--pegas-icon-background')
+          .trim(),
+      ),
+      statuses: avatars
+        .map(avatar =>
+          avatar
+            .querySelector('.pegas-agent-status')
+            ?.getAttribute('data-status'),
+        )
+        .filter(Boolean),
+    }))
+  if (result.backgrounds.some(background => background !== '#4d6bfe'))
+    throw new Error(
+      `Worker identity color drifted: ${result.backgrounds.join(', ')}`,
+    )
+  const expected = ['backlog', 'unstarted', 'started', 'completed', 'cancelled']
+  if (expected.some(status => !result.statuses.includes(status)))
+    throw new Error(`Missing status badge: ${result.statuses.join(', ')}`)
 }
 
 async function assertGeometry(page, label) {

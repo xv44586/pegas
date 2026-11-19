@@ -31,4 +31,24 @@ describe('workspace layout contracts', () => {
       /\.dictation-error\s*\{[^}]*inset-block-end:\s*calc\(100% \+ 6px\)/,
     )
   })
+
+  it('keeps Worker identity blue and encodes state with separate badges', () => {
+    expect(workspaceTheme).toMatch(
+      /\.pegas-agent-avatar\s*\{[^}]*--pegas-icon-background:\s*#4d6bfe;/,
+    )
+    expect(workspaceTheme).not.toMatch(
+      /\.pegas-agent-avatar\.status-[\w-]+\s*\{[^}]*--pegas-icon-background:/,
+    )
+    for (const status of [
+      'backlog',
+      'unstarted',
+      'started',
+      'completed',
+      'cancelled',
+    ]) {
+      expect(workspaceTheme).toContain(
+        `.pegas-agent-avatar.status-${status} .pegas-agent-status`,
+      )
+    }
+  })
 })

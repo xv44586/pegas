@@ -144,7 +144,7 @@ The product should feel like a focused work desk with three stable zones: Pegas 
 
 **Key Characteristics:**
 
-- WorkChannel identity expressed through Pegas Worker icons whose color communicates state.
+- WorkChannel identity expressed through fixed-blue Pegas Worker icons; a separate shape badge and status text communicate state.
 - 280px expanded Channel rail and 56px collapsed rail.
 - Centered conversation flow capped at 960px, with a 48px capsule composer.
 - Right workspace represented by a narrow collapsed tab until inspection is requested.
@@ -177,7 +177,7 @@ The palette is a neutral operating canvas with a single cool Pegas blue used as 
 
 ### Named Rules
 
-**The Worker Signal Rule.** Pegas blue belongs to Worker geometry, current state, progress, focus, and primary action; it is not a decorative wash. State also needs a text label or shape and cannot rely on color alone.
+**The Worker Signal Rule.** Pegas blue belongs to Worker geometry, active progress, focus, and primary action; it is not a decorative wash. Worker identity never changes color with lifecycle state. State uses a separate shape badge plus text and cannot rely on color alone.
 
 **The Neutral Shell Rule.** Establish hierarchy with canvas, paper, panel, bubble, and line tones before adding color or elevation.
 
@@ -230,7 +230,7 @@ Most hierarchy is flat and tonal. The Channel rail, messages, collaboration even
 
 ## Shapes
 
-The defining silhouette is Pegas's fixed main robot mark. WorkChannels use system-assigned Pegas Worker icons; the same icon identifies the Worker across its Channel, settings and usage views, while contextual color communicates current Channel state. Users do not choose internal icon IDs. Supporting controls use a single rounded icon family with consistent view box, stroke, caps and joins.
+The defining silhouette is Pegas's fixed main robot mark. WorkChannels use system-assigned Pegas Worker icons; the same fixed-blue icon identifies the Worker across its Channel, settings and usage views. A compact lower-corner badge distinguishes backlog, unstarted, started, completed and cancelled with dots, clock, target, check and cross shapes. Users do not choose internal icon IDs. Supporting controls use a single rounded icon family with consistent view box, stroke, caps and joins.
 
 Controls use 6–12px radii, Channel and plugin cards use 12–16px, message bubbles and the workspace tab use 18px, dialogs use 18–20px, and the composer uses 24px. True circles are reserved for compact icon actions, unread indicators, and status dots. Full pills are reserved for the page context header and tiny status capsules.
 
