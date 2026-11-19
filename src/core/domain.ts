@@ -110,6 +110,67 @@ export interface ClaimedRun {
   task: Task
 }
 
+export interface ModelTokenUsage {
+  inputTokens: number
+  outputTokens: number
+  totalTokens?: number
+  cacheReadTokens?: number
+  cacheWriteTokens?: number
+  reasoningTokens?: number
+}
+
+export interface ModelUsageSample {
+  tokens: ModelTokenUsage
+  source: 'provider_reported'
+  reportedSteps: number
+  unreportedSteps: number
+  costUsd?: number
+  costSource?: 'provider_reported'
+}
+
+export interface ModelUsageRecord {
+  runId: string
+  taskId: string
+  userId: string
+  workerIconId: WorkerIconId
+  executor: string
+  modelRef?: string
+  completeness: 'complete' | 'partial' | 'unavailable'
+  tokenSource?: 'provider_reported'
+  inputTokens?: number
+  outputTokens?: number
+  totalTokens?: number
+  cacheReadTokens?: number
+  cacheWriteTokens?: number
+  reasoningTokens?: number
+  reportedSteps: number
+  unreportedSteps: number
+  durationMs?: number
+  latencySource?: 'pegas_observed'
+  costUsd?: number
+  costSource?: 'provider_reported'
+  observedAt: string
+}
+
+interface ModelUsageSummary {
+  records: number
+  completeRecords: number
+  partialRecords: number
+  unavailableRecords: number
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens?: number
+  cacheWriteTokens?: number
+  reasoningTokens?: number
+  durationMs: number
+  costUsd?: number
+}
+
+export interface ModelUsageReport {
+  summary: ModelUsageSummary
+  records: ModelUsageRecord[]
+}
+
 export type RoutingDecision =
   | {
       kind: 'create_task'

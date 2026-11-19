@@ -57,6 +57,8 @@ import type {
   ModelCatalogItem,
   ModelProviderDraft,
   ModelProviderId,
+  ModelUsageRecord,
+  ModelUsageReport,
   InboxEvent,
   OutboxMessage,
   Run,
@@ -196,6 +198,10 @@ export function App() {
   const modalTrigger = useRef<HTMLElement | null>(null)
   const markingOutboxRead = useRef(new Set<string>())
   const api = useMemo(() => new PegasApi(userId, token), [token])
+  const loadModelUsage = useCallback(
+    (taskId: string) => api.modelUsage(taskId),
+    [api],
+  )
   const appendTranscript = useCallback((text: string) => {
     setDraft(current => `${current}${current.trim() ? '\n' : ''}${text}`)
     window.requestAnimationFrame(() => composer.current?.focus())
@@ -355,6 +361,7 @@ export function App() {
 
   function selectTask(taskId: string): void {
     rememberWorkspaceTrigger()
+    if (narrowSidebar) setSidebarCollapsed(true)
     setActiveView('conversation')
     setSelectedTaskId(taskId)
     setWorkspaceOpen(true)
@@ -368,6 +375,7 @@ export function App() {
 
   function openTask(taskId: string): void {
     rememberWorkspaceTrigger()
+    if (narrowSidebar) setSidebarCollapsed(true)
     setActiveView('tasks')
     setSelectedTaskId(taskId)
     setWorkspaceOpen(true)
@@ -1083,6 +1091,7 @@ export function App() {
         )}
 
       <WorkspacePanel
+        loadUsage={loadModelUsage}
         onRetry={async runId => {
           await api.retryRun(runId)
           await loadSnapshot()
@@ -3676,6 +3685,7 @@ function TasksPage({
 }
 
 function WorkspacePanel({
+  loadUsage,
   onRetry,
   onStop,
   onNewRelated,
@@ -3685,6 +3695,7 @@ function WorkspacePanel({
   onClose,
   compact,
 }: {
+  loadUsage: (taskId: string) => Promise<ModelUsageReport>
   onRetry: (runId: string) => Promise<void>
   onStop: (taskId: string) => Promise<void>
   onNewRelated: () => void
@@ -3740,6 +3751,7 @@ function WorkspacePanel({
       {selectedTask ? (
         <TaskDetail
           key={selectedTask.id}
+          loadUsage={loadUsage}
           task={selectedTask}
           runs={runs}
           onClose={onClose}
@@ -3786,6 +3798,7 @@ function WorkspacePanel({
 }
 
 function TaskDetail({
+  loadUsage,
   onRetry,
   onStop,
   onNewRelated,
@@ -3793,6 +3806,7 @@ function TaskDetail({
   runs,
   onClose,
 }: {
+  loadUsage: (taskId: string) => Promise<ModelUsageReport>
   onRetry: (runId: string) => Promise<void>
   onStop: (taskId: string) => Promise<void>
   onNewRelated: () => void
@@ -3805,8 +3819,35 @@ function TaskDetail({
   const [retryError, setRetryError] = useState('')
   const [stopping, setStopping] = useState(false)
   const [stopError, setStopError] = useState('')
+  const [usage, setUsage] = useState<ModelUsageReport>()
+  const [usageLoading, setUsageLoading] = useState(true)
+  const [usageError, setUsageError] = useState('')
+  const [usageRevision, setUsageRevision] = useState(0)
   const stopDialog = useRef<HTMLDialogElement>(null)
   const steps = taskSteps(task.status)
+
+  useEffect(() => {
+    let active = true
+    setUsageLoading(true)
+    setUsageError('')
+    void loadUsage(task.id)
+      .then(report => {
+        if (active) setUsage(report)
+      })
+      .catch((caught: unknown) => {
+        if (!active) return
+        setUsageError(
+          caught instanceof Error ? caught.message : '模型用量加载失败',
+        )
+      })
+      .finally(() => {
+        if (active) setUsageLoading(false)
+      })
+    return () => {
+      active = false
+    }
+  }, [loadUsage, task.id, usageRevision])
+
   return (
     <div className="task-detail">
       <header className="detail-header">
@@ -3849,6 +3890,13 @@ function TaskDetail({
             ))}
           </ol>
         </section>
+
+        <ModelUsageSection
+          report={usage}
+          loading={usageLoading}
+          error={usageError}
+          onRetry={() => setUsageRevision(revision => revision + 1)}
+        />
 
         <section className="detail-section">
           <h3>执行记录</h3>
@@ -4012,6 +4060,205 @@ function TaskDetail({
       </div>
     </div>
   )
+}
+
+function ModelUsageSection({
+  report,
+  loading,
+  error,
+  onRetry,
+}: {
+  report?: ModelUsageReport
+  loading: boolean
+  error: string
+  onRetry: () => void
+}) {
+  const records = report?.records ?? []
+  const summary = report?.summary
+  const tokenRecords = records.filter(
+    record =>
+      record.inputTokens !== undefined || record.outputTokens !== undefined,
+  )
+  const aggregateCacheHit = cacheHitRate(tokenRecords)
+
+  return (
+    <section className="detail-section model-usage-section">
+      <div className="section-heading-row">
+        <h3>模型用量</h3>
+        {!loading && !error && records.length > 0 && (
+          <span>{usageCoverageLabel(records)}</span>
+        )}
+      </div>
+      {loading ? (
+        <p className="detail-empty" role="status">
+          正在读取模型用量…
+        </p>
+      ) : error ? (
+        <div className="usage-error" role="alert">
+          <p>{error}</p>
+          <button type="button" onClick={onRetry}>
+            重试
+          </button>
+        </div>
+      ) : records.length === 0 ? (
+        <p className="detail-empty">
+          还没有已完成的 Run。执行完成后会在这里显示供应商回报的用量。
+        </p>
+      ) : (
+        <>
+          <dl className="usage-summary">
+            <div>
+              <dt>输入</dt>
+              <dd>
+                {tokenRecords.length > 0
+                  ? formatTokens(summary?.inputTokens)
+                  : '未回报'}
+              </dd>
+            </div>
+            <div>
+              <dt>输出</dt>
+              <dd>
+                {tokenRecords.length > 0
+                  ? formatTokens(summary?.outputTokens)
+                  : '未回报'}
+              </dd>
+            </div>
+            <div>
+              <dt>缓存读取</dt>
+              <dd>{formatTokens(summary?.cacheReadTokens)}</dd>
+            </div>
+            <div>
+              <dt>缓存命中</dt>
+              <dd>{formatPercentage(aggregateCacheHit)}</dd>
+            </div>
+            <div>
+              <dt>执行耗时</dt>
+              <dd>{formatDurationMs(summary?.durationMs)}</dd>
+            </div>
+            <div>
+              <dt>费用</dt>
+              <dd>{formatCost(summary?.costUsd)}</dd>
+            </div>
+          </dl>
+          <p className="usage-source-note">
+            Token 来自供应商回报；耗时由 Pegas 观测。缺失数据不会估算。
+          </p>
+          <div className="usage-table-wrap" tabIndex={0}>
+            <table>
+              <caption>按 Run 查看模型用量</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Run</th>
+                  <th scope="col">模型</th>
+                  <th scope="col">输入</th>
+                  <th scope="col">输出</th>
+                  <th scope="col">缓存读取</th>
+                  <th scope="col">命中率</th>
+                  <th scope="col">耗时</th>
+                  <th scope="col">费用</th>
+                </tr>
+              </thead>
+              <tbody>
+                {records.map(record => (
+                  <tr key={record.runId}>
+                    <th scope="row" title={record.runId}>
+                      {record.runId.slice(0, 8)}
+                      <small>{usageCompletenessLabel(record)}</small>
+                    </th>
+                    <td title={record.modelRef ?? record.executor}>
+                      {record.modelRef ?? record.executor}
+                    </td>
+                    <td>{formatTokens(record.inputTokens)}</td>
+                    <td>{formatTokens(record.outputTokens)}</td>
+                    <td>{formatTokens(record.cacheReadTokens)}</td>
+                    <td>{formatPercentage(cacheHitRate([record]))}</td>
+                    <td>{formatDurationMs(record.durationMs)}</td>
+                    <td>{formatCost(record.costUsd)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </section>
+  )
+}
+
+function cacheHitRate(records: ModelUsageRecord[]): number | undefined {
+  if (
+    records.length === 0 ||
+    records.some(
+      record =>
+        record.completeness !== 'complete' ||
+        record.inputTokens === undefined ||
+        record.cacheReadTokens === undefined ||
+        record.cacheWriteTokens === undefined,
+    )
+  )
+    return undefined
+  const cacheRead = records.reduce(
+    (total, record) => total + (record.cacheReadTokens ?? 0),
+    0,
+  )
+  const denominator = records.reduce(
+    (total, record) =>
+      total +
+      (record.inputTokens ?? 0) +
+      (record.cacheReadTokens ?? 0) +
+      (record.cacheWriteTokens ?? 0),
+    0,
+  )
+  return denominator > 0 ? cacheRead / denominator : undefined
+}
+
+function usageCoverageLabel(records: ModelUsageRecord[]): string {
+  const partial = records.filter(
+    record => record.completeness === 'partial',
+  ).length
+  const unavailable = records.filter(
+    record => record.completeness === 'unavailable',
+  ).length
+  if (unavailable > 0) return `${String(unavailable)} 个 Run 未回报`
+  if (partial > 0) return `${String(partial)} 个 Run 部分回报`
+  return '全部回报'
+}
+
+function usageCompletenessLabel(record: ModelUsageRecord): string {
+  if (record.completeness === 'partial') return '部分回报'
+  if (record.completeness === 'unavailable') return '执行器未回报'
+  return '完整回报'
+}
+
+function formatTokens(value?: number): string {
+  return value === undefined
+    ? '未提供'
+    : new Intl.NumberFormat('zh-CN').format(value)
+}
+
+function formatPercentage(value?: number): string {
+  return value === undefined
+    ? '未提供'
+    : new Intl.NumberFormat('zh-CN', {
+        style: 'percent',
+        maximumFractionDigits: 1,
+      }).format(value)
+}
+
+function formatDurationMs(value?: number): string {
+  if (value === undefined) return '未提供'
+  if (value < 1000) return `${String(value)} ms`
+  return `${new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 }).format(value / 1000)} s`
+}
+
+function formatCost(value?: number): string {
+  return value === undefined
+    ? '供应商未提供'
+    : new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: 'USD',
+        maximumFractionDigits: 6,
+      }).format(value)
 }
 
 function payloadText(payload: unknown, fallback: string): string {

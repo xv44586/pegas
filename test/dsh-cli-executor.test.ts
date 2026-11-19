@@ -42,7 +42,11 @@ console.log(JSON.stringify({
       },
     })
 
-    expect(result).toEqual({ executorRef: 'session-test', output: 'finished' })
+    expect(result).toMatchObject({
+      executorRef: 'session-test',
+      output: 'finished',
+    })
+    expect(result.durationMs).toBeGreaterThanOrEqual(0)
     expect(observedSession).toBe('session-test')
   })
 
@@ -100,6 +104,100 @@ console.log(JSON.stringify({
     })
 
     expect(acknowledgements).toEqual([])
+  })
+
+  it('sums only provider-reported DSH step usage and preserves incomplete steps', async () => {
+    const command = fakeDsh(`
+console.log(JSON.stringify({ type: 'session', sessionId: 'session-usage' }))
+console.log(JSON.stringify({
+  type: 'status',
+  phase: 'step_end',
+  usage: {
+    inputTokens: 120,
+    outputTokens: 30,
+    totalTokens: 200,
+    cacheReadTokens: 40,
+    cacheWriteTokens: 10,
+    reasoningTokens: 8
+  }
+}))
+console.log(JSON.stringify({
+  type: 'status',
+  phase: 'step_end',
+  usage: {
+    inputTokens: 80,
+    outputTokens: 20,
+    totalTokens: 110,
+    cacheReadTokens: 10,
+    cacheWriteTokens: 0,
+    reasoningTokens: 4
+  }
+}))
+console.log(JSON.stringify({ type: 'status', phase: 'step_end' }))
+console.log(JSON.stringify({
+  type: 'final',
+  sessionId: 'session-usage',
+  text: 'finished',
+  reason: { kind: 'completed' }
+}))
+`)
+    const executor = new DshCliExecutor({ command })
+
+    const result = await executor.execute({
+      runId: 'run-usage',
+      taskId: 'task-1',
+      prompt: 'measure the work',
+      workingDirectory: process.cwd(),
+    })
+
+    expect(result.usage).toEqual({
+      source: 'provider_reported',
+      reportedSteps: 2,
+      unreportedSteps: 1,
+      tokens: {
+        inputTokens: 200,
+        outputTokens: 50,
+        totalTokens: 310,
+        cacheReadTokens: 50,
+        cacheWriteTokens: 10,
+        reasoningTokens: 12,
+      },
+    })
+    expect(result.durationMs).toBeGreaterThanOrEqual(0)
+  })
+
+  it('omits optional token buckets when any reported step omits them', async () => {
+    const command = fakeDsh(`
+console.log(JSON.stringify({
+  type: 'status',
+  phase: 'step_end',
+  usage: { inputTokens: 10, outputTokens: 2, cacheReadTokens: 5 }
+}))
+console.log(JSON.stringify({
+  type: 'status',
+  phase: 'step_end',
+  usage: { inputTokens: 20, outputTokens: 3 }
+}))
+console.log(JSON.stringify({
+  type: 'final',
+  sessionId: 'session-usage-optional',
+  text: 'finished',
+  reason: { kind: 'completed' }
+}))
+`)
+    const executor = new DshCliExecutor({ command })
+
+    const result = await executor.execute({
+      runId: 'run-usage-optional',
+      taskId: 'task-1',
+      prompt: 'measure the work',
+      workingDirectory: process.cwd(),
+    })
+
+    expect(result.usage?.tokens).toEqual({
+      inputTokens: 30,
+      outputTokens: 5,
+    })
   })
 
   it('preserves a session id when DSH exits unsuccessfully', async () => {
@@ -189,7 +287,7 @@ console.log(JSON.stringify({
       onExecutorRef: value => observedSessions.push(value),
     })
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       executorRef: 'session-fresh',
       output: 'continued in the current workspace',
     })

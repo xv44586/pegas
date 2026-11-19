@@ -9,12 +9,15 @@ import type {
   ClaimedRun,
   ExecutionContext,
   InboxEvent,
+  ModelUsageRecord,
+  ModelUsageReport,
   NewInboxEvent,
   OutboxMessage,
   RoutingDecision,
   Run,
   Task,
 } from '../core/domain.js'
+import type { ExecutorResult } from '../executor/executor.js'
 import {
   createMandate,
   revalidateMandate,
@@ -338,6 +341,36 @@ CREATE INDEX outbox_messages_by_user_read
 ON outbox_messages (user_id, read_at, created_at DESC);
 `
 
+const migration13 = `
+CREATE TABLE model_usage_records (
+  run_id TEXT PRIMARY KEY REFERENCES runs(id),
+  task_id TEXT NOT NULL REFERENCES tasks(id),
+  user_id TEXT NOT NULL,
+  executor TEXT NOT NULL,
+  model_ref TEXT,
+  completeness TEXT NOT NULL CHECK (completeness IN ('complete', 'partial', 'unavailable')),
+  token_source TEXT CHECK (token_source IN ('provider_reported')),
+  input_tokens INTEGER CHECK (input_tokens >= 0),
+  output_tokens INTEGER CHECK (output_tokens >= 0),
+  total_tokens INTEGER CHECK (total_tokens >= 0),
+  cache_read_tokens INTEGER CHECK (cache_read_tokens >= 0),
+  cache_write_tokens INTEGER CHECK (cache_write_tokens >= 0),
+  reasoning_tokens INTEGER CHECK (reasoning_tokens >= 0),
+  reported_steps INTEGER NOT NULL CHECK (reported_steps >= 0),
+  unreported_steps INTEGER NOT NULL CHECK (unreported_steps >= 0),
+  duration_ms INTEGER CHECK (duration_ms >= 0),
+  latency_source TEXT CHECK (latency_source IN ('pegas_observed')),
+  cost_usd REAL CHECK (cost_usd >= 0),
+  cost_source TEXT CHECK (cost_source IN ('provider_reported')),
+  observed_at TEXT NOT NULL
+);
+
+CREATE INDEX model_usage_by_user_time
+ON model_usage_records (user_id, observed_at DESC);
+CREATE INDEX model_usage_by_task_time
+ON model_usage_records (task_id, observed_at DESC);
+`
+
 interface InboxRow {
   id: string
   user_id: string
@@ -405,6 +438,31 @@ interface OutboxRow {
   updated_at: string | null
   sent_at: string | null
   read_at: string | null
+}
+
+interface ModelUsageRow {
+  run_id: string
+  task_id: string
+  user_id: string
+  worker_icon_id: string | null
+  executor: string
+  model_ref: string | null
+  completeness: ModelUsageRecord['completeness'] | null
+  token_source: ModelUsageRecord['tokenSource'] | null
+  input_tokens: number | null
+  output_tokens: number | null
+  total_tokens: number | null
+  cache_read_tokens: number | null
+  cache_write_tokens: number | null
+  reasoning_tokens: number | null
+  reported_steps: number | null
+  unreported_steps: number | null
+  duration_ms: number | null
+  latency_source: ModelUsageRecord['latencySource'] | null
+  cost_usd: number | null
+  cost_source: ModelUsageRecord['costSource'] | null
+  observed_at: string | null
+  run_updated_at: string
 }
 
 interface RuntimeSettingsRow {
@@ -483,6 +541,7 @@ export class PegasStore {
     this.#migrate(11, migration11)
     this.#backfillWorkerIconIds()
     this.#migrate(12, migration12)
+    this.#migrate(13, migration13)
   }
 
   #backfillWorkerIconIds(): void {
@@ -1291,11 +1350,7 @@ export class PegasStore {
       throw new Error(`Worker ${workerId} does not own run ${runId}`)
   }
 
-  completeRun(
-    runId: string,
-    workerId: string,
-    result: { executorRef: string; output: string },
-  ): void {
+  completeRun(runId: string, workerId: string, result: ExecutorResult): void {
     const now = this.#clock.now().toISOString()
     this.#database.exec('BEGIN IMMEDIATE')
     try {
@@ -1321,6 +1376,43 @@ export class PegasStore {
            WHERE id = ?`,
         )
         .run(result.executorRef, JSON.stringify(result.output), now, runId)
+      const usage = result.usage
+      this.#database
+        .prepare(
+          `INSERT INTO model_usage_records
+            (run_id, task_id, user_id, executor, model_ref, completeness,
+             token_source, input_tokens, output_tokens, total_tokens,
+             cache_read_tokens, cache_write_tokens, reasoning_tokens,
+             reported_steps, unreported_steps, duration_ms, latency_source,
+             cost_usd, cost_source, observed_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          run.id,
+          task.id,
+          task.userId,
+          run.executor,
+          run.executionContext.model ?? null,
+          usage
+            ? usage.unreportedSteps > 0
+              ? 'partial'
+              : 'complete'
+            : 'unavailable',
+          usage?.source ?? null,
+          usage?.tokens.inputTokens ?? null,
+          usage?.tokens.outputTokens ?? null,
+          usage?.tokens.totalTokens ?? null,
+          usage?.tokens.cacheReadTokens ?? null,
+          usage?.tokens.cacheWriteTokens ?? null,
+          usage?.tokens.reasoningTokens ?? null,
+          usage?.reportedSteps ?? 0,
+          usage?.unreportedSteps ?? 0,
+          result.durationMs ?? null,
+          result.durationMs === undefined ? null : 'pegas_observed',
+          usage?.costUsd ?? null,
+          usage?.costSource ?? null,
+          now,
+        )
       this.#database
         .prepare(
           `UPDATE tasks
@@ -1357,6 +1449,44 @@ export class PegasStore {
       this.#database.exec('ROLLBACK')
       throw error
     }
+  }
+
+  listModelUsage(userId: string, taskId?: string): ModelUsageReport {
+    const rows = this.#database
+      .prepare(
+        `SELECT
+           runs.id AS run_id,
+           runs.task_id,
+           tasks.user_id,
+           tasks.worker_icon_id,
+           runs.executor,
+           model_usage_records.model_ref,
+           model_usage_records.completeness,
+           model_usage_records.token_source,
+           model_usage_records.input_tokens,
+           model_usage_records.output_tokens,
+           model_usage_records.total_tokens,
+           model_usage_records.cache_read_tokens,
+           model_usage_records.cache_write_tokens,
+           model_usage_records.reasoning_tokens,
+           model_usage_records.reported_steps,
+           model_usage_records.unreported_steps,
+           model_usage_records.duration_ms,
+           model_usage_records.latency_source,
+           model_usage_records.cost_usd,
+           model_usage_records.cost_source,
+           model_usage_records.observed_at,
+           runs.updated_at AS run_updated_at
+         FROM runs
+         JOIN tasks ON tasks.id = runs.task_id
+         LEFT JOIN model_usage_records ON model_usage_records.run_id = runs.id
+         WHERE tasks.user_id = ? AND runs.status = 'completed'
+           AND (? IS NULL OR runs.task_id = ?)
+         ORDER BY runs.updated_at DESC, runs.id DESC`,
+      )
+      .all(userId, taskId ?? null, taskId ?? null) as unknown as ModelUsageRow[]
+    const records = rows.map(toModelUsageRecord)
+    return { summary: summarizeModelUsage(records), records }
   }
 
   failRun(runId: string, workerId: string, error: string): void {
@@ -1849,6 +1979,88 @@ function toRun(row: RunRow): Run {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
+}
+
+function toModelUsageRecord(row: ModelUsageRow): ModelUsageRecord {
+  const workerIconId = row.worker_icon_id ?? assignWorkerIconId(row.task_id)
+  if (!isWorkerIconId(workerIconId))
+    throw new Error(`Invalid stored worker icon ID: ${workerIconId}`)
+  const completeness = row.completeness ?? 'unavailable'
+  return {
+    runId: row.run_id,
+    taskId: row.task_id,
+    userId: row.user_id,
+    workerIconId,
+    executor: row.executor,
+    ...(row.model_ref ? { modelRef: row.model_ref } : {}),
+    completeness,
+    ...(row.token_source ? { tokenSource: row.token_source } : {}),
+    ...(row.input_tokens === null ? {} : { inputTokens: row.input_tokens }),
+    ...(row.output_tokens === null ? {} : { outputTokens: row.output_tokens }),
+    ...(row.total_tokens === null ? {} : { totalTokens: row.total_tokens }),
+    ...(row.cache_read_tokens === null
+      ? {}
+      : { cacheReadTokens: row.cache_read_tokens }),
+    ...(row.cache_write_tokens === null
+      ? {}
+      : { cacheWriteTokens: row.cache_write_tokens }),
+    ...(row.reasoning_tokens === null
+      ? {}
+      : { reasoningTokens: row.reasoning_tokens }),
+    reportedSteps: row.reported_steps ?? 0,
+    unreportedSteps: row.unreported_steps ?? 0,
+    ...(row.duration_ms === null ? {} : { durationMs: row.duration_ms }),
+    ...(row.latency_source ? { latencySource: row.latency_source } : {}),
+    ...(row.cost_usd === null ? {} : { costUsd: row.cost_usd }),
+    ...(row.cost_source ? { costSource: row.cost_source } : {}),
+    observedAt: row.observed_at ?? row.run_updated_at,
+  }
+}
+
+function summarizeModelUsage(
+  records: ModelUsageRecord[],
+): ModelUsageReport['summary'] {
+  const summary: ModelUsageReport['summary'] = {
+    records: records.length,
+    completeRecords: records.filter(
+      record => record.completeness === 'complete',
+    ).length,
+    partialRecords: records.filter(record => record.completeness === 'partial')
+      .length,
+    unavailableRecords: records.filter(
+      record => record.completeness === 'unavailable',
+    ).length,
+    inputTokens: records.reduce(
+      (total, record) => total + (record.inputTokens ?? 0),
+      0,
+    ),
+    outputTokens: records.reduce(
+      (total, record) => total + (record.outputTokens ?? 0),
+      0,
+    ),
+    durationMs: records.reduce(
+      (total, record) => total + (record.durationMs ?? 0),
+      0,
+    ),
+  }
+  addKnownUsageTotal(summary, records, 'cacheReadTokens')
+  addKnownUsageTotal(summary, records, 'cacheWriteTokens')
+  addKnownUsageTotal(summary, records, 'reasoningTokens')
+  addKnownUsageTotal(summary, records, 'costUsd')
+  return summary
+}
+
+function addKnownUsageTotal(
+  summary: ModelUsageReport['summary'],
+  records: ModelUsageRecord[],
+  key: 'cacheReadTokens' | 'cacheWriteTokens' | 'reasoningTokens' | 'costUsd',
+): void {
+  const known = records.flatMap(record => {
+    const value = record[key]
+    return value === undefined ? [] : [value]
+  })
+  if (known.length > 0)
+    summary[key] = known.reduce((total, value) => total + value, 0)
 }
 
 function parseExecutionContext(value: string): ExecutionContext {

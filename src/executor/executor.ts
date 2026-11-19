@@ -1,3 +1,5 @@
+import type { ModelUsageSample } from '../core/domain.js'
+
 export interface ExecutorInput {
   runId: string
   taskId: string
@@ -17,6 +19,8 @@ interface ExecutorProgressEvent {
 export interface ExecutorResult {
   executorRef: string
   output: string
+  usage?: ModelUsageSample
+  durationMs?: number
 }
 
 export interface RunExecutor {

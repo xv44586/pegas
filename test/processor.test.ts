@@ -158,6 +158,53 @@ describe('event and run processing', () => {
     store.close()
   })
 
+  it('persists executor usage when a claimed Run completes', async () => {
+    const store = new PegasStore(':memory:')
+    const executor = new UsageReportingExecutor()
+    store.enqueueEvent({
+      userId: 'user-1',
+      type: 'user.message',
+      source: 'web',
+      payload: { text: 'Measure the model Run' },
+    })
+    await processNextEvent(
+      store,
+      new RoutingEventHandler(new RuleBasedTaskRouter(), executor.name),
+      'worker-1',
+    )
+    const claimed = store.claimNextRun('worker-1')
+    if (!claimed) throw new Error('Expected a claimed run')
+
+    await executeClaimedRun(
+      store,
+      executor,
+      claimed,
+      'worker-1',
+      process.cwd(),
+      new AbortController().signal,
+    )
+
+    expect(store.listModelUsage('user-1', claimed.task.id)).toMatchObject({
+      summary: {
+        records: 1,
+        inputTokens: 42,
+        outputTokens: 9,
+        durationMs: 640,
+      },
+      records: [
+        {
+          runId: claimed.run.id,
+          completeness: 'complete',
+          tokenSource: 'provider_reported',
+          inputTokens: 42,
+          outputTokens: 9,
+          durationMs: 640,
+        },
+      ],
+    })
+    store.close()
+  })
+
   it('leaves the run recoverable when the replaceable worker runtime stops', async () => {
     const store = new PegasStore(':memory:')
     store.enqueueEvent({
@@ -221,6 +268,24 @@ class AbortAwareExecutor implements RunExecutor {
         () => reject(new Error('executor aborted')),
         { once: true },
       )
+    })
+  }
+}
+
+class UsageReportingExecutor implements RunExecutor {
+  readonly name = 'usage-reporting-test'
+
+  execute(): Promise<ExecutorResult> {
+    return Promise.resolve({
+      executorRef: 'session-usage',
+      output: 'Measured',
+      durationMs: 640,
+      usage: {
+        source: 'provider_reported',
+        reportedSteps: 1,
+        unreportedSteps: 0,
+        tokens: { inputTokens: 42, outputTokens: 9 },
+      },
     })
   }
 }

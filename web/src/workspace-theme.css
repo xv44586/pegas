@@ -1611,6 +1611,157 @@ a:focus-visible {
   }
 }
 
+.section-heading-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-block-end: 16px;
+}
+
+.section-heading-row h3 {
+  margin: 0;
+}
+
+.section-heading-row > span {
+  color: var(--muted);
+  font-size: 0.66rem;
+  text-align: end;
+}
+
+.usage-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--line);
+}
+
+.usage-summary > div {
+  min-inline-size: 0;
+  padding: 11px 12px;
+  background: var(--paper);
+}
+
+.usage-summary dt,
+.usage-summary dd {
+  margin: 0;
+}
+
+.usage-summary dt {
+  color: var(--muted);
+  font-size: 0.64rem;
+}
+
+.usage-summary dd {
+  margin-block-start: 4px;
+  overflow-wrap: anywhere;
+  font-size: 0.76rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+
+.usage-source-note {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 0.65rem;
+  line-height: 1.55;
+}
+
+.usage-table-wrap {
+  max-inline-size: 100%;
+  margin-block-start: 16px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper);
+  scrollbar-width: thin;
+}
+
+.usage-table-wrap:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+
+.usage-table-wrap table {
+  inline-size: 100%;
+  min-inline-size: 720px;
+  border-collapse: collapse;
+  font-size: 0.66rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-table-wrap caption {
+  padding: 10px 12px;
+  color: var(--muted);
+  font-weight: 650;
+  text-align: start;
+}
+
+.usage-table-wrap th,
+.usage-table-wrap td {
+  padding: 9px 10px;
+  border-block-start: 1px solid var(--line);
+  text-align: end;
+  white-space: nowrap;
+}
+
+.usage-table-wrap thead th {
+  color: var(--muted);
+  background: var(--panel);
+  font-weight: 650;
+}
+
+.usage-table-wrap th:first-child,
+.usage-table-wrap td:nth-child(2) {
+  max-inline-size: 180px;
+  overflow: hidden;
+  text-align: start;
+  text-overflow: ellipsis;
+}
+
+.usage-table-wrap tbody th {
+  font-weight: 650;
+}
+
+.usage-table-wrap tbody th small {
+  display: block;
+  margin-block-start: 3px;
+  color: var(--muted);
+  font-size: 0.58rem;
+  font-weight: 500;
+}
+
+.usage-error {
+  padding: 12px;
+  border: 1px solid #e8c9cd;
+  border-radius: 12px;
+  color: #84333e;
+  background: #fff7f8;
+}
+
+.usage-error p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 0.7rem;
+  line-height: 1.5;
+}
+
+.usage-error button {
+  margin-block-start: 10px;
+  min-block-size: 34px;
+  padding-inline: 12px;
+  border: 1px solid #dfb6bc;
+  border-radius: 9px;
+  color: inherit;
+  background: var(--paper);
+  font: inherit;
+  font-weight: 650;
+}
+
 .channel-stopped-banner {
   display: flex;
   align-items: center;

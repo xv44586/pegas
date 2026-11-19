@@ -90,8 +90,19 @@ try {
 
   await page.getByRole('button', { name: '打开工作区' }).click()
   await page.getByRole('button', { name: '关闭工作区' }).waitFor()
+  await waitForPanelInViewport(page)
   await assertGeometry(page, 'workspace-open')
   await shot(page, 'workspace-open.png')
+  await page.getByRole('button', { name: '关闭工作区' }).click()
+
+  await page
+    .getByRole('button', { name: /^打开 Channel：/u })
+    .first()
+    .click()
+  await page.getByRole('heading', { name: '模型用量' }).waitFor()
+  await waitForPanelInViewport(page)
+  await assertGeometry(page, 'workspace-usage')
+  await shot(page, 'workspace-usage.png')
   await page.getByRole('button', { name: '关闭工作区' }).click()
 
   await page.getByRole('button', { name: /Outbox/u }).click()
@@ -147,6 +158,14 @@ try {
   await mobilePage.getByRole('button', { name: '收起侧栏' }).waitFor()
   await assertGeometry(mobilePage, 'mobile-sidebar-open')
   await shot(mobilePage, 'mobile-sidebar-open.png')
+  await mobilePage
+    .getByRole('button', { name: /^打开 Channel：/u })
+    .first()
+    .click()
+  await mobilePage.getByRole('heading', { name: '模型用量' }).waitFor()
+  await waitForPanelInViewport(mobilePage)
+  await assertGeometry(mobilePage, 'mobile-workspace-usage')
+  await shot(mobilePage, 'mobile-workspace-usage.png')
   await mobile.close()
   console.log(`UI review captured in ${outputRelative}`)
 } finally {
@@ -213,7 +232,17 @@ async function assertGeometry(page, label) {
       const rect = element.getBoundingClientRect()
       if (!rect.width || !rect.height) continue
       if (rect.left < -1 || rect.right > globalThis.innerWidth + 1)
-        out.push(`${element.className} crosses viewport`)
+        out.push(
+          `${element.className} crosses viewport ${String(Math.round(rect.left))}..${String(Math.round(rect.right))} of ${String(globalThis.innerWidth)}`,
+        )
+    }
+    for (const element of globalThis.document.querySelectorAll(
+      '.detail-title, .usage-summary, .usage-source-note, .section-heading-row',
+    )) {
+      if (element.scrollWidth > element.clientWidth + 1)
+        out.push(
+          `${element.className} has clipped horizontal content ${String(element.scrollWidth)}>${String(element.clientWidth)} rect=${String(Math.round(element.getBoundingClientRect().width))} display=${globalThis.getComputedStyle(element).display}`,
+        )
     }
     return out
   })
@@ -229,6 +258,20 @@ async function assertGeometry(page, label) {
       failures.push('collapsed sidebar button does not expand the sidebar')
   }
   if (failures.length) throw new Error(`${label}: ${failures.join('; ')}`)
+}
+
+async function waitForPanelInViewport(page) {
+  await page.waitForFunction(() => {
+    const panel = globalThis.document.querySelector('.workspace-panel')
+    if (!panel) return false
+    const rect = panel.getBoundingClientRect()
+    const minimumExpectedWidth = Math.min(320, globalThis.innerWidth - 56)
+    return (
+      rect.width >= minimumExpectedWidth &&
+      rect.left >= -1 &&
+      rect.right <= globalThis.innerWidth + 1
+    )
+  })
 }
 
 async function shot(page, name) {

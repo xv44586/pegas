@@ -831,6 +831,150 @@ describe('Pegas web app', () => {
     ).toBeUndefined()
   })
 
+  it('shows provider-reported token and cache usage in the Channel workspace', async () => {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn((query: string) => ({
+        matches: query === '(max-width: 1100px)',
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    )
+    const channel = {
+      id: 'task-usage-1',
+      taskId: 'task-usage-1',
+      userId: 'owner',
+      originEventId: 'event-usage-1',
+      title: '整理模型用量',
+      goal: '查看这个 Channel 的真实模型消耗',
+      status: 'completed',
+      workerIconId: 'computer',
+      createdAt: '2026-11-19T08:00:00.000Z',
+      updatedAt: '2026-11-19T08:05:00.000Z',
+      latestActivityAt: '2026-11-19T08:05:00.000Z',
+      canResume: true,
+      canStop: false,
+    }
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const path =
+        input instanceof Request
+          ? input.url
+          : input instanceof URL
+            ? input.href
+            : input
+      if (path.startsWith('/v1/channels'))
+        return Promise.resolve(Response.json({ channels: [channel] }))
+      if (path.startsWith('/v1/events'))
+        return Promise.resolve(Response.json({ events: [] }))
+      if (path.startsWith('/v1/runs'))
+        return Promise.resolve(Response.json({ runs: [] }))
+      if (path.startsWith('/v1/outbox'))
+        return Promise.resolve(Response.json({ messages: [] }))
+      if (path.startsWith('/v1/usage'))
+        return Promise.resolve(
+          Response.json({
+            summary: {
+              records: 3,
+              completeRecords: 1,
+              partialRecords: 1,
+              unavailableRecords: 1,
+              inputTokens: 105,
+              outputTokens: 21,
+              cacheReadTokens: 80,
+              cacheWriteTokens: 20,
+              durationMs: 1250,
+            },
+            records: [
+              {
+                runId: 'run-reported-1234',
+                taskId: channel.id,
+                userId: 'owner',
+                workerIconId: 'computer',
+                executor: 'dsh-headless',
+                modelRef:
+                  'magpie/a-very-long-model-name-that-must-not-overflow',
+                completeness: 'complete',
+                tokenSource: 'provider_reported',
+                inputTokens: 100,
+                outputTokens: 20,
+                cacheReadTokens: 80,
+                cacheWriteTokens: 20,
+                reportedSteps: 1,
+                unreportedSteps: 0,
+                durationMs: 1250,
+                latencySource: 'pegas_observed',
+                observedAt: '2026-11-19T08:05:00.000Z',
+              },
+              {
+                runId: 'run-partial',
+                taskId: channel.id,
+                userId: 'owner',
+                workerIconId: 'computer',
+                executor: 'dsh-headless',
+                modelRef: 'magpie/partial-model',
+                completeness: 'partial',
+                tokenSource: 'provider_reported',
+                inputTokens: 5,
+                outputTokens: 1,
+                reportedSteps: 1,
+                unreportedSteps: 1,
+                observedAt: '2026-11-19T08:04:30.000Z',
+              },
+              {
+                runId: 'run-unavailable',
+                taskId: channel.id,
+                userId: 'owner',
+                workerIconId: 'computer',
+                executor: 'legacy-executor',
+                completeness: 'unavailable',
+                reportedSteps: 0,
+                unreportedSteps: 0,
+                observedAt: '2026-11-19T08:04:00.000Z',
+              },
+            ],
+          }),
+        )
+      return Promise.resolve(Response.json({}))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '展开侧栏' }))
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: '打开 Channel：整理模型用量',
+      }),
+    )
+
+    expect(await screen.findByText('1 个 Run 未回报')).toBeTruthy()
+    const collapsedNavigation = screen.getByRole('complementary', {
+      name: 'Pegas 导航',
+    })
+    expect(within(collapsedNavigation).getAllByRole('button')).toHaveLength(1)
+    expect(
+      within(collapsedNavigation).getByRole('button', { name: '展开侧栏' }),
+    ).toBeTruthy()
+    const usageTable = screen.getByRole('table', {
+      name: '按 Run 查看模型用量',
+    })
+    expect(within(usageTable).getByText('100')).toBeTruthy()
+    expect(within(usageTable).getByText('40%')).toBeTruthy()
+    expect(within(usageTable).getByText('部分回报')).toBeTruthy()
+    expect(within(usageTable).getByText('执行器未回报')).toBeTruthy()
+    expect(
+      within(usageTable).getAllByText('供应商未提供').length,
+    ).toBeGreaterThan(0)
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/v1/usage?userId=owner&taskId=task-usage-1',
+      expect.any(Object),
+    )
+  })
+
   it('navigates Outbox from the left rail, keeps read and delivery state separate, and opens the source Channel', async () => {
     const channel = {
       id: 'task-outbox-1',

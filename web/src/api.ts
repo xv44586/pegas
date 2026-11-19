@@ -2,6 +2,7 @@ import type {
   InboxEvent,
   DshModelCatalog,
   ModelCatalogItem,
+  ModelUsageReport,
   OutboxMessage,
   Run,
   ModelProviderDraft,
@@ -201,6 +202,12 @@ export class PegasApi {
     )
     if (!response.ok) await throwResponse(response)
     return ((await response.json()) as { message: OutboxMessage }).message
+  }
+
+  modelUsage(taskId?: string): Promise<ModelUsageReport> {
+    const params = new URLSearchParams({ userId: this.#userId })
+    if (taskId) params.set('taskId', taskId)
+    return this.#get<ModelUsageReport>(`/v1/usage?${params.toString()}`)
   }
 
   async saveSettings(

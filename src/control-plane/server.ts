@@ -293,6 +293,18 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         })
       }
 
+      if (request.url?.startsWith('/v1/usage') && request.method === 'GET') {
+        const url = new URL(request.url, 'http://localhost')
+        const userId = url.searchParams.get('userId')
+        if (!userId) throw new Error('userId is required')
+        const taskId = url.searchParams.get('taskId') ?? undefined
+        return sendJson(
+          response,
+          200,
+          options.store.listModelUsage(userId, taskId),
+        )
+      }
+
       const stopChannelMatch = request.url?.match(
         /^\/v1\/channels\/([^/]+)\/stop$/,
       )

@@ -675,6 +675,89 @@ describe('control plane', () => {
     expect((await markRead('other')).status).toBe(400)
   })
 
+  it('returns model usage only for the requested owner and Channel', async () => {
+    const store = new PegasStore(':memory:')
+    const createCompletedRun = (
+      userId: string,
+      eventId: string,
+      workerId: string,
+    ) => {
+      const event = store.enqueueEvent({
+        id: eventId,
+        userId,
+        source: 'web',
+        type: 'user.message',
+        payload: { text: 'Measure this work' },
+      }).event
+      const created = store.applyRoutingDecision(
+        event,
+        {
+          kind: 'create_task',
+          title: 'Measured work',
+          goal: 'Measure this work',
+          input: 'Measure this work',
+          reason: 'usage API test',
+        },
+        'dsh-headless',
+        {
+          executor: 'dsh-headless',
+          model: `magpie/${userId}`,
+          workspace: `/workspace/${userId}`,
+        },
+      )
+      expect(store.claimNextRun(workerId)?.run.id).toBe(created.run.id)
+      store.completeRun(created.run.id, workerId, {
+        executorRef: `session-${userId}`,
+        output: 'Done',
+        durationMs: 800,
+        usage: {
+          source: 'provider_reported',
+          reportedSteps: 1,
+          unreportedSteps: 0,
+          tokens: { inputTokens: 30, outputTokens: 7 },
+        },
+      })
+      return created
+    }
+    const owner = createCompletedRun('owner', 'usage-api-owner', 'worker-owner')
+    const other = createCompletedRun('other', 'usage-api-other', 'worker-other')
+    const server = createControlPlane({ store })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    cleanups.push(
+      () => new Promise<void>(resolve => server.close(() => resolve())),
+      () => Promise.resolve(store.close()),
+    )
+    const { port } = server.address() as AddressInfo
+    const baseUrl = `http://127.0.0.1:${String(port)}`
+
+    const owned = await fetch(
+      `${baseUrl}/v1/usage?userId=owner&taskId=${encodeURIComponent(owner.task.id)}`,
+    )
+    expect(owned.status).toBe(200)
+    expect(await owned.json()).toMatchObject({
+      summary: { records: 1, completeRecords: 1 },
+      records: [
+        {
+          runId: owner.run.id,
+          userId: 'owner',
+          inputTokens: 30,
+          outputTokens: 7,
+          durationMs: 800,
+        },
+      ],
+    })
+
+    const crossOwner = await fetch(
+      `${baseUrl}/v1/usage?userId=owner&taskId=${encodeURIComponent(other.task.id)}`,
+    )
+    expect(await crossOwner.json()).toMatchObject({
+      summary: { records: 0 },
+      records: [],
+    })
+    const missingOwner = await fetch(`${baseUrl}/v1/usage`)
+    expect(missingOwner.status).toBe(400)
+  })
+
   it('transcribes a draft without enqueueing it and can accept a direct voice message', async () => {
     const store = new PegasStore(':memory:')
     const transcribe = vi.fn(() =>

@@ -96,6 +96,49 @@ export interface Snapshot {
   channels: WorkChannel[]
 }
 
+export interface ModelUsageRecord {
+  runId: string
+  taskId: string
+  userId: string
+  workerIconId: WorkerIconId
+  executor: string
+  modelRef?: string
+  completeness: 'complete' | 'partial' | 'unavailable'
+  tokenSource?: 'provider_reported'
+  inputTokens?: number
+  outputTokens?: number
+  totalTokens?: number
+  cacheReadTokens?: number
+  cacheWriteTokens?: number
+  reasoningTokens?: number
+  reportedSteps: number
+  unreportedSteps: number
+  durationMs?: number
+  latencySource?: 'pegas_observed'
+  costUsd?: number
+  costSource?: 'provider_reported'
+  observedAt: string
+}
+
+interface ModelUsageSummary {
+  records: number
+  completeRecords: number
+  partialRecords: number
+  unavailableRecords: number
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens?: number
+  cacheWriteTokens?: number
+  reasoningTokens?: number
+  durationMs: number
+  costUsd?: number
+}
+
+export interface ModelUsageReport {
+  summary: ModelUsageSummary
+  records: ModelUsageRecord[]
+}
+
 export interface RuntimeSettings {
   revision: number
   routerMode: 'model' | 'rules'

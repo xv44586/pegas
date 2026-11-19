@@ -452,6 +452,112 @@ describe('PegasStore', () => {
     store.close()
   })
 
+  it('records provider-reported model usage and isolates reports by owner and Channel', () => {
+    const store = new PegasStore(':memory:')
+    const createRun = (userId: string, eventId: string, model: string) => {
+      const event = store.enqueueEvent({
+        id: eventId,
+        userId,
+        source: 'web',
+        type: 'user.message',
+        payload: { text: `Work for ${userId}` },
+      }).event
+      return store.applyRoutingDecision(
+        event,
+        {
+          kind: 'create_task',
+          title: `Channel for ${userId}`,
+          goal: `Work for ${userId}`,
+          input: `Work for ${userId}`,
+          reason: 'usage test',
+        },
+        'dsh-headless',
+        {
+          executor: 'dsh-headless',
+          workspace: `/workspace/${userId}`,
+          model,
+        },
+      )
+    }
+
+    const owner = createRun('owner', 'usage-owner', 'magpie/model-a')
+    expect(store.claimNextRun('worker-owner')?.run.id).toBe(owner.run.id)
+    store.completeRun(owner.run.id, 'worker-owner', {
+      executorRef: 'session-owner',
+      output: 'Owner result',
+      durationMs: 1234,
+      usage: {
+        source: 'provider_reported',
+        reportedSteps: 2,
+        unreportedSteps: 1,
+        tokens: {
+          inputTokens: 100,
+          outputTokens: 20,
+          totalTokens: 210,
+          cacheReadTokens: 80,
+          cacheWriteTokens: 10,
+          reasoningTokens: 5,
+        },
+      },
+    })
+
+    const other = createRun('other', 'usage-other', 'magpie/model-b')
+    expect(store.claimNextRun('worker-other')?.run.id).toBe(other.run.id)
+    store.completeRun(other.run.id, 'worker-other', {
+      executorRef: 'session-other',
+      output: 'Other result',
+    })
+
+    const ownerReport = store.listModelUsage('owner', owner.task.id)
+    expect(ownerReport.records).toHaveLength(1)
+    expect(ownerReport.records[0]).toMatchObject({
+      runId: owner.run.id,
+      taskId: owner.task.id,
+      userId: 'owner',
+      executor: 'dsh-headless',
+      modelRef: 'magpie/model-a',
+      completeness: 'partial',
+      tokenSource: 'provider_reported',
+      inputTokens: 100,
+      outputTokens: 20,
+      totalTokens: 210,
+      cacheReadTokens: 80,
+      cacheWriteTokens: 10,
+      reasoningTokens: 5,
+      reportedSteps: 2,
+      unreportedSteps: 1,
+      durationMs: 1234,
+      latencySource: 'pegas_observed',
+    })
+    expect(ownerReport.summary).toEqual({
+      records: 1,
+      completeRecords: 0,
+      partialRecords: 1,
+      unavailableRecords: 0,
+      inputTokens: 100,
+      outputTokens: 20,
+      cacheReadTokens: 80,
+      cacheWriteTokens: 10,
+      reasoningTokens: 5,
+      durationMs: 1234,
+    })
+    expect(store.listModelUsage('owner', other.task.id).records).toEqual([])
+    expect(store.listModelUsage('other').records[0]).toMatchObject({
+      runId: other.run.id,
+      userId: 'other',
+      completeness: 'unavailable',
+      reportedSteps: 0,
+      unreportedSteps: 0,
+    })
+    expect(store.listModelUsage('other').summary).toMatchObject({
+      records: 1,
+      unavailableRecords: 1,
+      inputTokens: 0,
+      outputTokens: 0,
+    })
+    store.close()
+  })
+
   it('keeps the task active until every queued continuation run is terminal', () => {
     const store = new PegasStore(':memory:')
     const nextEvent = (id: string) =>
@@ -712,7 +818,7 @@ describe('PegasStore', () => {
           .prepare('SELECT version FROM schema_migrations ORDER BY version')
           .all() as { version: number }[]
         expect(versions.map(row => row.version)).toEqual([
-          1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+          1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
         ])
         expect(
           (
@@ -752,6 +858,22 @@ describe('PegasStore', () => {
             db.prepare('PRAGMA table_info(tasks)').all() as { name: string }[]
           ).some(column => column.name === 'worker_icon_id'),
         ).toBe(true)
+        expect(
+          (
+            db.prepare('PRAGMA table_info(model_usage_records)').all() as {
+              name: string
+            }[]
+          ).map(column => column.name),
+        ).toEqual(
+          expect.arrayContaining([
+            'run_id',
+            'model_ref',
+            'completeness',
+            'cache_read_tokens',
+            'duration_ms',
+            'cost_usd',
+          ]),
+        )
       } finally {
         db.close()
       }

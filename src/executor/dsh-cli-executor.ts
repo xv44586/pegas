@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 
+import type { ModelTokenUsage } from '../core/domain.js'
 import type { ExecutorInput, ExecutorResult, RunExecutor } from './executor.js'
 
 export interface DshCliExecutorOptions {
@@ -43,6 +44,12 @@ interface DshTextEvent {
 
 interface DshToolCallEvent {
   type: 'tool_call'
+}
+
+interface DshStatusEvent {
+  type: 'status'
+  phase: string
+  usage?: ModelTokenUsage
 }
 
 interface DshOtherEvent {
@@ -94,6 +101,7 @@ export class DshCliExecutor implements RunExecutor {
   }
 
   async #executeOnce(input: ExecutorInput): Promise<ExecutorResult> {
+    const startedAt = performance.now()
     const patch =
       !input.resumeSessionId && this.#agentModel
         ? createAgentModelPatch(this.#agentModel)
@@ -146,6 +154,9 @@ export class DshCliExecutor implements RunExecutor {
     let streamError: string | undefined
     let pendingAssistantText: string[] = []
     let acknowledgementEmitted = false
+    let usage: ModelTokenUsage | undefined
+    let reportedSteps = 0
+    let unreportedSteps = 0
     const stderrChunks: Buffer[] = []
     let stderrBytes = 0
 
@@ -191,6 +202,14 @@ export class DshCliExecutor implements RunExecutor {
             acknowledgementEmitted = true
           }
         }
+        if (event.type === 'status' && event.phase === 'step_end') {
+          if (event.usage) {
+            usage = usage ? addTokenUsage(usage, event.usage) : event.usage
+            reportedSteps += 1
+          } else {
+            unreportedSteps += 1
+          }
+        }
         if (event.type === 'error')
           streamError = event.message ?? 'Unknown DSH error'
       } catch (error) {
@@ -232,6 +251,17 @@ export class DshCliExecutor implements RunExecutor {
     return {
       executorRef: finalEvent.sessionId,
       output: finalEvent.text,
+      ...(usage
+        ? {
+            usage: {
+              tokens: usage,
+              source: 'provider_reported' as const,
+              reportedSteps,
+              unreportedSteps,
+            },
+          }
+        : {}),
+      durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
     }
   }
 }
@@ -282,6 +312,7 @@ function parseDshEvent(
   | DshErrorEvent
   | DshTextEvent
   | DshToolCallEvent
+  | DshStatusEvent
   | DshOtherEvent {
   const parsed = JSON.parse(line) as unknown
   if (!isRecord(parsed) || typeof parsed.type !== 'string') {
@@ -314,7 +345,76 @@ function parseDshEvent(
     return { type: 'text', text: parsed.text }
   }
   if (parsed.type === 'tool_call') return { type: 'tool_call' }
+  if (parsed.type === 'status' && typeof parsed.phase === 'string') {
+    return {
+      type: 'status',
+      phase: parsed.phase,
+      ...(parsed.usage === undefined
+        ? {}
+        : { usage: parseTokenUsage(parsed.usage) }),
+    }
+  }
   return { type: 'other' }
+}
+
+function parseTokenUsage(value: unknown): ModelTokenUsage {
+  if (!isRecord(value)) throw new Error('DSH emitted invalid model usage')
+  const inputTokens = usageInteger(value.inputTokens)
+  const outputTokens = usageInteger(value.outputTokens)
+  if (inputTokens === undefined || outputTokens === undefined)
+    throw new Error('DSH emitted invalid model usage')
+  return {
+    inputTokens,
+    outputTokens,
+    ...optionalUsageInteger(value, 'totalTokens'),
+    ...optionalUsageInteger(value, 'cacheReadTokens'),
+    ...optionalUsageInteger(value, 'cacheWriteTokens'),
+    ...optionalUsageInteger(value, 'reasoningTokens'),
+  }
+}
+
+function usageInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : undefined
+}
+
+function optionalUsageInteger(
+  value: Record<string, unknown>,
+  key:
+    'totalTokens' | 'cacheReadTokens' | 'cacheWriteTokens' | 'reasoningTokens',
+): Partial<ModelTokenUsage> {
+  if (!(key in value)) return {}
+  const parsed = usageInteger(value[key])
+  if (parsed === undefined) throw new Error('DSH emitted invalid model usage')
+  return { [key]: parsed }
+}
+
+function addTokenUsage(
+  current: ModelTokenUsage,
+  next: ModelTokenUsage,
+): ModelTokenUsage {
+  return {
+    inputTokens: current.inputTokens + next.inputTokens,
+    outputTokens: current.outputTokens + next.outputTokens,
+    ...sumOptionalUsage(current, next, 'totalTokens'),
+    ...sumOptionalUsage(current, next, 'cacheReadTokens'),
+    ...sumOptionalUsage(current, next, 'cacheWriteTokens'),
+    ...sumOptionalUsage(current, next, 'reasoningTokens'),
+  }
+}
+
+function sumOptionalUsage(
+  current: ModelTokenUsage,
+  next: ModelTokenUsage,
+  key:
+    'totalTokens' | 'cacheReadTokens' | 'cacheWriteTokens' | 'reasoningTokens',
+): Partial<ModelTokenUsage> {
+  const left = current[key]
+  const right = next[key]
+  return left === undefined || right === undefined
+    ? {}
+    : { [key]: left + right }
 }
 
 function isCompletedReason(value: unknown): boolean {
