@@ -70,13 +70,11 @@ Router 默认使用确定性规则，不假设机器安装或登录了某个模�
 
 ```bash
 PEGAS_ROUTER=model
-PEGAS_MODEL_PROVIDER=openai
-PEGAS_MODEL_BASE_URL=https://api.openai.com/v1
-PEGAS_MODEL_API_KEY=replace-me
-PEGAS_MODEL_NAME=gpt-5-mini
+PEGAS_MODEL_PROVIDER=magpie
+PEGAS_MODEL_BASE_URL=http://127.0.0.1:3425/v1
 ```
 
-设置页内置 OpenAI、Anthropic、Gemini、DeepSeek、xAI、Kimi、GLM、MiniMax、通义千问、OpenRouter、Groq、Mistral、SiliconFlow、Ollama 和 LM Studio，并支持 OpenAI Chat Completions 或 Anthropic Messages 协议的自定义连接。模型不可用或输出无效时，Router 会安全降级为创建独立 Task。
+新实例默认连接本机 Magpie `http://127.0.0.1:3425/v1`，首次启动从 `/models` 选择第一个可用模型。设置页同时内置 OpenAI、Anthropic、Gemini、DeepSeek、xAI、Kimi、GLM、MiniMax、通义千问、OpenRouter、Groq、Mistral、SiliconFlow、Ollama 和 LM Studio，并支持 OpenAI Chat Completions 或 Anthropic Messages 协议的自定义连接。Gemini 收纳在“更多供应商”中。模型不可用或输出无效时，Router 会安全降级为创建独立 Task。
 
 这里的 Provider 只负责 Router 等轻量控制面判断。DSH 执行任务时使用的模型、凭证和 Provider 仍由 DSH profile 自己管理，两者不会共享隐式 session 或配置。
 

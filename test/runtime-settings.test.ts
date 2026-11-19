@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest'
 import {
   assertRuntimeSettingsAvailable,
   parseRuntimeSettingsUpdate,
+  settingsCapabilities,
 } from '../src/settings/runtime-settings.js'
+import { loadConfig } from '../src/core/config.js'
 
 const defaults = {
   routerMode: 'model' as const,
@@ -17,6 +19,17 @@ const defaults = {
 }
 
 describe('runtime settings validation', () => {
+  it('offers ready-to-use Magpie as the first provider', () => {
+    expect(settingsCapabilities(loadConfig({})).providers[0]).toMatchObject({
+      id: 'magpie',
+      name: 'Magpie',
+      baseUrl: 'http://127.0.0.1:3425/v1',
+      defaultModel: 'group/free-small-models',
+      requiresApiKey: false,
+      available: true,
+    })
+  })
+
   it('rejects unavailable providers and privacy before persistence', () => {
     const capabilities = {
       providers: [

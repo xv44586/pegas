@@ -70,6 +70,15 @@ import type {
   TaskStatus,
 } from './types'
 
+export const featuredModelProviderIds: readonly ModelProviderId[] = [
+  'magpie',
+  'openai',
+  'anthropic',
+  'deepseek',
+  'ollama',
+  'custom',
+]
+
 const userId = 'owner'
 interface SettingsClient {
   settings(): Promise<SettingsResponse>
@@ -1435,19 +1444,11 @@ function SettingsPage({
     provider => provider.id === settings?.modelProvider,
   )
   const customProvider = settings?.modelProvider === 'custom'
-  const featuredProviderIds: readonly ModelProviderId[] = [
-    'openai',
-    'anthropic',
-    'google',
-    'deepseek',
-    'ollama',
-    'custom',
-  ]
   const featuredProviders = capabilities?.providers.filter(provider =>
-    featuredProviderIds.includes(provider.id),
+    featuredModelProviderIds.includes(provider.id),
   )
   const additionalProviders = capabilities?.providers.filter(
-    provider => !featuredProviderIds.includes(provider.id),
+    provider => !featuredModelProviderIds.includes(provider.id),
   )
   const canSave = Boolean(
     settings?.modelName.trim() &&

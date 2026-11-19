@@ -10,7 +10,7 @@ import {
 } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { App, formatRelativeTime } from './App'
+import { App, featuredModelProviderIds, formatRelativeTime } from './App'
 
 afterEach(() => {
   cleanup()
@@ -21,6 +21,18 @@ afterEach(() => {
 })
 
 describe('Pegas web app', () => {
+  it('keeps Magpie first and Gemini behind the more-providers disclosure', () => {
+    expect(featuredModelProviderIds).toEqual([
+      'magpie',
+      'openai',
+      'anthropic',
+      'deepseek',
+      'ollama',
+      'custom',
+    ])
+    expect(featuredModelProviderIds).not.toContain('google')
+  })
+
   it('centralizes model, privacy, and rewriting choices in server settings', async () => {
     const settings = {
       revision: 1,

@@ -50,7 +50,7 @@ export function loadConfig(
   const apiHost = environment.PEGAS_API_HOST ?? '127.0.0.1'
   const apiToken = environment.PEGAS_API_TOKEN
   const routerMode = environment.PEGAS_ROUTER === 'model' ? 'model' : 'rules'
-  const rawModelProvider = environment.PEGAS_MODEL_PROVIDER ?? 'openai'
+  const rawModelProvider = environment.PEGAS_MODEL_PROVIDER ?? 'magpie'
   const modelProvider = legacyModelProvider(rawModelProvider)
   const modelBaseUrl = environment.PEGAS_MODEL_BASE_URL
   const modelName = environment.PEGAS_MODEL_NAME
