@@ -6,6 +6,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { systemClock, type Clock } from '../core/clock.js'
 import type {
   ClaimedRun,
+  ExecutionContext,
   InboxEvent,
   NewInboxEvent,
   OutboxMessage,
@@ -13,6 +14,11 @@ import type {
   Run,
   Task,
 } from '../core/domain.js'
+import {
+  createMandate,
+  revalidateMandate,
+  sameExecutionContext,
+} from '../task/task-lifecycle.js'
 import type {
   ModelProviderConnection,
   ModelProviderConnectionSummary,
@@ -276,6 +282,50 @@ CREATE TABLE rewrite_connections (
 );
 `
 
+const migration10 = `
+ALTER TABLE tasks ADD COLUMN mandate_json TEXT;
+ALTER TABLE tasks ADD COLUMN ended_json TEXT;
+ALTER TABLE runs ADD COLUMN execution_context_json TEXT;
+
+UPDATE tasks
+SET mandate_json = json_object(
+  'strength', 'explicit',
+  'policyVersion', 'pegas-mandate-v1',
+  'basis', json_object(
+    'source', COALESCE((SELECT source FROM inbox_events WHERE id = tasks.origin_event_id), 'legacy'),
+    'scope', json_object('conversation', user_id),
+    'via', 'router',
+    'sender', user_id
+  ),
+  'actor', json_object(
+    'source', COALESCE((SELECT source FROM inbox_events WHERE id = tasks.origin_event_id), 'legacy'),
+    'id', user_id
+  ),
+  'scope', goal
+)
+WHERE mandate_json IS NULL;
+
+UPDATE tasks
+SET ended_json = CASE status
+  WHEN 'completed' THEN json_object('at', updated_at, 'by', 'executor', 'outcome', 'completed')
+  WHEN 'cancelled' THEN json_object('at', updated_at, 'by', 'human', 'outcome', 'stopped', 'reason', COALESCE(status_reason, 'legacy_stop'))
+  ELSE NULL
+END;
+
+UPDATE runs
+SET execution_context_json = json_object('executor', executor)
+WHERE execution_context_json IS NULL;
+
+CREATE TABLE task_commands (
+  command_id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES tasks(id),
+  kind TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX task_commands_by_task ON task_commands(task_id, created_at);
+`
+
 interface InboxRow {
   id: string
   user_id: string
@@ -300,6 +350,8 @@ interface TaskRow {
   goal: string
   status: Task['status']
   status_reason: string | null
+  mandate_json: string | null
+  ended_json: string | null
   created_at: string
   updated_at: string
 }
@@ -318,6 +370,7 @@ interface RunRow {
   claimed_by: string | null
   lease_until: string | null
   last_error: string | null
+  execution_context_json: string | null
   created_at: string
   updated_at: string
 }
@@ -412,6 +465,7 @@ export class PegasStore {
     this.#migrate(7, migration7)
     this.#migrate(8, migration8)
     this.#migrate(9, migration9)
+    this.#migrate(10, migration10)
   }
 
   // An earlier UI candidate used v5 for task retries before provider v5
@@ -915,13 +969,23 @@ export class PegasStore {
   createTaskFromEvent(event: InboxEvent, title: string): Task {
     const now = this.#clock.now().toISOString()
     const id = randomUUID()
+    const mandate = createMandate(event, title, 'router')
     this.#database
       .prepare(
         `INSERT OR IGNORE INTO tasks
-          (id, user_id, origin_event_id, title, goal, status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 'backlog', ?, ?)`,
+          (id, user_id, origin_event_id, title, goal, status, mandate_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 'backlog', ?, ?, ?)`,
       )
-      .run(id, event.userId, event.id, title, title, now, now)
+      .run(
+        id,
+        event.userId,
+        event.id,
+        title,
+        title,
+        JSON.stringify(mandate),
+        now,
+        now,
+      )
     const row = this.#database
       .prepare('SELECT * FROM tasks WHERE origin_event_id = ?')
       .get(event.id)
@@ -933,6 +997,7 @@ export class PegasStore {
     event: InboxEvent,
     decision: RoutingDecision,
     executor: string,
+    executionContext: ExecutionContext = { executor },
   ): { task: Task; run: Run } {
     this.#database.exec('BEGIN IMMEDIATE')
     try {
@@ -949,11 +1014,12 @@ export class PegasStore {
       let task: Task
       if (decision.kind === 'create_task') {
         const taskId = randomUUID()
+        const mandate = createMandate(event, decision.goal, 'router')
         this.#database
           .prepare(
             `INSERT INTO tasks
-              (id, user_id, origin_event_id, title, goal, status, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, 'unstarted', ?, ?)`,
+              (id, user_id, origin_event_id, title, goal, status, mandate_json, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, 'unstarted', ?, ?, ?)`,
           )
           .run(
             taskId,
@@ -961,6 +1027,7 @@ export class PegasStore {
             event.id,
             decision.title,
             decision.goal,
+            JSON.stringify(mandate),
             now,
             now,
           )
@@ -969,7 +1036,17 @@ export class PegasStore {
         task = this.#taskById(decision.taskId)
         if (task.userId !== event.userId)
           throw new Error('Task belongs to another user')
+        if (task.status === 'cancelled')
+          throw new Error('Task was stopped by the user')
+        if (
+          task.status === 'completed' &&
+          !revalidateMandate(task.mandate, event)
+        )
+          throw new Error('Task mandate no longer authorizes resume')
       }
+
+      const resumed =
+        decision.kind === 'continue_task' && task.status === 'completed'
 
       this.#database
         .prepare(
@@ -979,7 +1056,11 @@ export class PegasStore {
         .run(
           event.id,
           task.id,
-          decision.kind === 'create_task' ? 'origin' : 'continuation',
+          decision.kind === 'create_task'
+            ? 'origin'
+            : resumed
+              ? 'resumed'
+              : 'continuation',
           now,
         )
       this.#database
@@ -991,35 +1072,45 @@ export class PegasStore {
 
       const previous = this.#database
         .prepare(
-          `SELECT executor_ref FROM runs
+          `SELECT executor_ref, execution_context_json FROM runs
            WHERE task_id = ? AND executor_ref IS NOT NULL
            ORDER BY updated_at DESC LIMIT 1`,
         )
-        .get(task.id) as { executor_ref: string } | undefined
+        .get(task.id) as
+        | { executor_ref: string; execution_context_json: string | null }
+        | undefined
+      const compatible =
+        previous?.execution_context_json &&
+        sameExecutionContext(
+          parseExecutionContext(previous.execution_context_json),
+          executionContext,
+        )
       const runId = randomUUID()
       this.#database
         .prepare(
           `INSERT INTO runs
             (id, task_id, origin_event_id, executor, resume_from_ref, status,
-             input_json, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?)`,
+             input_json, execution_context_json, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`,
         )
         .run(
           runId,
           task.id,
           event.id,
           executor,
-          previous?.executor_ref ?? null,
+          compatible ? previous.executor_ref : null,
           JSON.stringify(decision.input),
+          JSON.stringify(executionContext),
           now,
           now,
         )
       this.#database
         .prepare(
-          `UPDATE tasks SET status = CASE WHEN status = 'started' THEN 'started' ELSE 'unstarted' END, status_reason = NULL, updated_at = ?
+          `UPDATE tasks SET status = CASE WHEN status = 'started' THEN 'started' ELSE 'unstarted' END,
+           status_reason = ?, ended_json = NULL, updated_at = ?
            WHERE id = ?`,
         )
-        .run(now, task.id)
+        .run(resumed ? 'resumed' : null, now, task.id)
 
       const run = this.#runById(runId)
       task = this.#taskById(task.id)
@@ -1065,6 +1156,13 @@ export class PegasStore {
           .prepare('SELECT * FROM tasks ORDER BY updated_at DESC')
           .all()
     return rows.map(row => toTask(row as unknown as TaskRow))
+  }
+
+  findTask(taskId: string, userId: string): Task | undefined {
+    const row = this.#database
+      .prepare('SELECT * FROM tasks WHERE id = ? AND user_id = ?')
+      .get(taskId, userId) as unknown as TaskRow | undefined
+    return row ? toTask(row) : undefined
   }
 
   claimNextRun(workerId: string, leaseMs = 30_000): ClaimedRun | undefined {
@@ -1168,6 +1266,15 @@ export class PegasStore {
         throw new Error(`Worker ${workerId} does not own run ${runId}`)
       }
       const task = this.#taskById(run.taskId)
+      const hasPendingWork = Boolean(
+        this.#database
+          .prepare(
+            `SELECT 1 FROM runs
+             WHERE task_id = ? AND id <> ? AND status IN ('queued','running','waiting')
+             LIMIT 1`,
+          )
+          .get(task.id, runId),
+      )
       this.#database
         .prepare(
           `UPDATE runs
@@ -1179,10 +1286,22 @@ export class PegasStore {
       this.#database
         .prepare(
           `UPDATE tasks
-           SET status = 'started', status_reason = 'awaiting_user_review', updated_at = ?
+           SET status = ?, status_reason = NULL,
+               ended_json = ?, updated_at = ?
            WHERE id = ?`,
         )
-        .run(now, task.id)
+        .run(
+          hasPendingWork ? 'started' : 'completed',
+          hasPendingWork
+            ? null
+            : JSON.stringify({
+                at: now,
+                by: 'executor',
+                outcome: 'completed',
+              }),
+          now,
+          task.id,
+        )
       this.enqueueOutbox({
         userId: task.userId,
         taskId: task.id,
@@ -1284,13 +1403,90 @@ export class PegasStore {
     }
   }
 
+  stopTask(
+    taskId: string,
+    userId: string,
+    commandId: string,
+    reason?: string,
+  ): Task {
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const task = this.#taskById(taskId)
+      if (task.userId !== userId)
+        throw new Error('Task belongs to another user')
+      const existing = this.#database
+        .prepare('SELECT task_id, kind FROM task_commands WHERE command_id = ?')
+        .get(commandId) as { task_id: string; kind: string } | undefined
+      if (existing) {
+        if (existing.task_id !== taskId || existing.kind !== 'stop')
+          throw new Error('Command ID is already used')
+        this.#database.exec('COMMIT')
+        return task
+      }
+      if (task.status === 'cancelled') {
+        this.#database
+          .prepare(
+            `INSERT INTO task_commands (command_id, task_id, kind, created_at)
+             VALUES (?, ?, 'stop', ?)`,
+          )
+          .run(commandId, taskId, this.#clock.now().toISOString())
+        this.#database.exec('COMMIT')
+        return task
+      }
+      if (task.status === 'completed') throw new Error('Task already ended')
+      const now = this.#clock.now().toISOString()
+      const ended = {
+        at: now,
+        by: 'human' as const,
+        outcome: 'stopped' as const,
+        ...(reason ? { reason } : {}),
+      }
+      this.#database
+        .prepare(
+          `UPDATE tasks SET status = 'cancelled', status_reason = ?, ended_json = ?, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(reason ?? 'stopped_by_user', JSON.stringify(ended), now, taskId)
+      this.#database
+        .prepare(
+          `UPDATE runs SET status = 'cancelled', claimed_by = NULL, lease_until = NULL,
+           last_error = 'stopped_by_user', updated_at = ?
+           WHERE task_id = ? AND status IN ('queued','running','waiting')`,
+        )
+        .run(now, taskId)
+      this.#database
+        .prepare(
+          `INSERT INTO task_commands (command_id, task_id, kind, created_at)
+           VALUES (?, ?, 'stop', ?)`,
+        )
+        .run(commandId, taskId, now)
+      const stopped = this.#taskById(taskId)
+      this.#database.exec('COMMIT')
+      return stopped
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  ownsRun(runId: string, workerId: string): boolean {
+    return Boolean(
+      this.#database
+        .prepare(
+          `SELECT 1 FROM runs WHERE id = ? AND status = 'running' AND claimed_by = ?`,
+        )
+        .get(runId, workerId),
+    )
+  }
+
   #createRetry(row: RunRow, now: string): Run {
     const id = randomUUID()
     this.#database
       .prepare(
         `INSERT INTO runs
-      (id, task_id, executor, resume_from_ref, retry_of_run_id, status, input_json, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?)`,
+      (id, task_id, executor, resume_from_ref, retry_of_run_id, status, input_json,
+       execution_context_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -1299,6 +1495,8 @@ export class PegasStore {
         row.executor_ref ?? row.resume_from_ref,
         row.id,
         row.input_json,
+        row.execution_context_json ??
+          JSON.stringify({ executor: row.executor }),
         now,
         now,
       )
@@ -1563,6 +1761,10 @@ function toTask(row: TaskRow): Task {
     goal: row.goal || row.title,
     status: row.status,
     ...(row.status_reason ? { statusReason: row.status_reason } : {}),
+    mandate: JSON.parse(row.mandate_json ?? '{}') as Task['mandate'],
+    ...(row.ended_json
+      ? { ended: JSON.parse(row.ended_json) as NonNullable<Task['ended']> }
+      : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -1576,6 +1778,9 @@ function toRun(row: RunRow): Run {
     executor: row.executor,
     ...(row.executor_ref ? { executorRef: row.executor_ref } : {}),
     ...(row.resume_from_ref ? { resumeFromRef: row.resume_from_ref } : {}),
+    executionContext: parseExecutionContext(
+      row.execution_context_json ?? JSON.stringify({ executor: row.executor }),
+    ),
     status: row.status,
     input: JSON.parse(row.input_json) as string,
     ...(row.output_json
@@ -1588,6 +1793,18 @@ function toRun(row: RunRow): Run {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
+}
+
+function parseExecutionContext(value: string): ExecutionContext {
+  const parsed: unknown = JSON.parse(value)
+  if (
+    !parsed ||
+    typeof parsed !== 'object' ||
+    !('executor' in parsed) ||
+    typeof parsed.executor !== 'string'
+  )
+    throw new Error('Invalid persisted execution context')
+  return parsed as ExecutionContext
 }
 
 function toOutboxMessage(row: OutboxRow): OutboxMessage {

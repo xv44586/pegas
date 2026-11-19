@@ -3,6 +3,44 @@ type EventStatus = 'pending' | 'processing' | 'processed' | 'failed'
 export type TaskStatus =
   'backlog' | 'unstarted' | 'started' | 'completed' | 'cancelled'
 
+interface ActorRef {
+  source: string
+  id: string
+}
+
+interface MandateBasis {
+  source: string
+  scope: Record<string, unknown>
+  via: 'direct' | 'router'
+  sender?: string
+  rules?: string[]
+}
+
+export interface Mandate {
+  strength: 'explicit' | 'inferred'
+  policyVersion: string
+  basis: MandateBasis
+  actor: ActorRef
+  scope: string
+}
+
+export interface TaskEnd {
+  at: string
+  by: 'executor' | 'human'
+  outcome: 'completed' | 'dropped' | 'stopped'
+  reason?: string
+}
+
+export interface ExecutionContext {
+  executor: string
+  workspace?: string
+  model?: string
+  permissions?: string
+  protocol?: string
+  settingsRevision?: number
+  workerProfile?: string
+}
+
 export interface InboxEvent {
   id: string
   userId: string
@@ -36,6 +74,8 @@ export interface Task {
   goal: string
   status: TaskStatus
   statusReason?: string
+  mandate: Mandate
+  ended?: TaskEnd
   createdAt: string
   updatedAt: string
 }
@@ -50,6 +90,7 @@ export interface Run {
   executor: string
   executorRef?: string
   resumeFromRef?: string
+  executionContext: ExecutionContext
   status: RunStatus
   input: string
   output?: string

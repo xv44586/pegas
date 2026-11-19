@@ -1576,6 +1576,105 @@ a:focus-visible {
   }
 }
 
+.channel-stopped-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-block-end: 8px;
+  padding: 10px 14px;
+  border: 1px solid #e2d8c8;
+  border-radius: 14px;
+  color: #66533a;
+  background: #fffaf1;
+  font-size: 0.75rem;
+}
+
+.detail-section .workspace-text-action {
+  inline-size: auto;
+  min-inline-size: max-content;
+  padding-inline: 10px;
+  white-space: nowrap;
+}
+
+.channel-stopped-banner button {
+  min-block-size: 36px;
+  padding-inline: 12px;
+  border-radius: 10px;
+  color: var(--ink);
+  background: var(--paper);
+  font: inherit;
+  font-weight: 620;
+}
+
+.stop-channel-dialog {
+  inline-size: min(420px, calc(100vw - 32px));
+  max-inline-size: 100%;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  color: var(--ink);
+  background: var(--paper);
+  box-shadow: 0 24px 80px rgba(18, 18, 18, 0.2);
+}
+
+.stop-channel-dialog:modal {
+  overscroll-behavior: contain;
+}
+
+.stop-channel-dialog::backdrop {
+  overflow: hidden;
+  background: rgba(20, 20, 20, 0.3);
+  overscroll-behavior: contain;
+}
+
+.stop-channel-dialog h2 {
+  margin: 0;
+  font-size: 1.08rem;
+}
+
+.stop-channel-dialog p {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.65;
+}
+
+.stop-channel-dialog p[role='alert'] {
+  color: #a83939;
+}
+
+.stop-channel-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-block-start: 22px;
+}
+
+.stop-channel-actions button {
+  min-block-size: 42px;
+  padding-inline: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--ink);
+  background: var(--paper);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.stop-channel-actions .is-destructive {
+  border-color: #b23a3a;
+  color: #fff;
+  background: #b23a3a;
+}
+
+.stop-channel-actions button:focus-visible,
+.channel-stopped-banner button:focus-visible {
+  outline: 3px solid var(--blue);
+  outline-offset: 3px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

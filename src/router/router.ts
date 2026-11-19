@@ -77,7 +77,7 @@ export class ModelTaskRouter implements TaskRouter {
     if (payload.taskId) return this.#fallback.route(event, tasks)
 
     const candidates = tasks
-      .filter(task => !['completed', 'cancelled'].includes(task.status))
+      .filter(task => task.status !== 'cancelled')
       .slice(0, this.#maximumCandidateTasks)
 
     try {

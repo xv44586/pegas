@@ -45,6 +45,27 @@ describe('ModelTaskRouter', () => {
     expect(provider.calls).toBe(1)
   })
 
+  it('lets the model recall a completed task but never a stopped task', async () => {
+    const provider = new CapturingProvider({
+      kind: 'continue_task',
+      taskId: 'task-completed',
+      reason: 'The user is continuing completed work.',
+    })
+    const router = new ModelTaskRouter({ provider })
+
+    const decision = await router.route(message('Add one more check'), [
+      task('task-completed', 'Completed task', 'completed'),
+      task('task-stopped', 'Stopped task', 'cancelled'),
+    ])
+
+    expect(decision).toMatchObject({
+      kind: 'continue_task',
+      taskId: 'task-completed',
+    })
+    expect(provider.input).toContain('task-completed')
+    expect(provider.input).not.toContain('task-stopped')
+  })
+
   it('falls back to a new task when the model selects an unknown task', async () => {
     const provider = new StubProvider({
       kind: 'continue_task',
@@ -96,6 +117,21 @@ class StubProvider implements JsonModelProvider {
   }
 }
 
+class CapturingProvider implements JsonModelProvider {
+  readonly name = 'capturing-stub'
+  input = ''
+  readonly #answer: unknown
+
+  constructor(answer: unknown) {
+    this.#answer = answer
+  }
+
+  generateJson(request: { input: string }): Promise<unknown> {
+    this.input = request.input
+    return Promise.resolve(this.#answer)
+  }
+}
+
 function message(
   text: string,
   extra: Record<string, unknown> = {},
@@ -112,14 +148,29 @@ function message(
   }
 }
 
-function task(id: string, title: string): Task {
+function task(
+  id: string,
+  title: string,
+  status: Task['status'] = 'started',
+): Task {
   return {
     id,
     userId: 'user-1',
     originEventId: 'origin-1',
     title,
     goal: title,
-    status: 'started',
+    status,
+    mandate: {
+      strength: 'explicit',
+      policyVersion: 'pegas-mandate-v1',
+      basis: {
+        source: 'web',
+        scope: { conversation: 'user-1' },
+        via: 'router',
+      },
+      actor: { source: 'web', id: 'user-1' },
+      scope: title,
+    },
     createdAt: '2026-11-17T00:00:00.000Z',
     updatedAt: '2026-11-17T00:00:00.000Z',
   }

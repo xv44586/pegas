@@ -9,6 +9,18 @@ export interface Task {
   goal: string
   status: TaskStatus
   statusReason?: string
+  mandate?: {
+    strength: 'explicit' | 'inferred'
+    policyVersion: string
+    actor: { source: string; id: string }
+    scope: string
+  }
+  ended?: {
+    at: string
+    by: 'executor' | 'human'
+    outcome: 'completed' | 'dropped' | 'stopped'
+    reason?: string
+  }
   createdAt: string
   updatedAt: string
 }
@@ -17,6 +29,9 @@ export interface WorkChannel extends Task {
   taskId: string
   latestActivityAt: string
   endedAt?: string
+  endedKind?: 'completed' | 'dropped' | 'stopped'
+  canResume: boolean
+  canStop: boolean
 }
 
 type RunStatus =
@@ -29,6 +44,15 @@ export interface Run {
   executor: string
   executorRef?: string
   resumeFromRef?: string
+  executionContext?: {
+    executor: string
+    workspace?: string
+    model?: string
+    permissions?: string
+    protocol?: string
+    settingsRevision?: number
+    workerProfile?: string
+  }
   status: RunStatus
   input: string
   output?: string

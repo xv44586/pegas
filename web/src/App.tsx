@@ -68,6 +68,7 @@ import type {
   Snapshot,
   Task,
   TaskStatus,
+  WorkChannel,
 } from './types'
 
 export const featuredModelProviderIds: readonly ModelProviderId[] = [
@@ -285,6 +286,7 @@ export function App() {
   const selectedTask = snapshot.channels.find(
     task => task.id === selectedTaskId,
   )
+  const channelStopped = selectedTask?.status === 'cancelled'
   const startingNewTask = selectedTaskId === '__new__'
   const sidebarSelectedTask = startingNewTask ? undefined : selectedTask
 
@@ -298,6 +300,19 @@ export function App() {
     url.searchParams.delete('task')
     window.history.pushState({ view: 'conversation' }, '', url)
     usePrompt('')
+  }
+
+  function startRelatedTask(): void {
+    const related = selectedTask
+    setActiveView('conversation')
+    setSelectedTaskId('__new__')
+    setWorkspaceOpen(false)
+    const url = new URL(window.location.href)
+    url.searchParams.delete('view')
+    url.searchParams.delete('channel')
+    url.searchParams.delete('task')
+    window.history.pushState({ view: 'conversation' }, '', url)
+    usePrompt(related ? `继续处理「${related.title}」：` : '')
   }
 
   function selectTask(taskId: string): void {
@@ -695,6 +710,14 @@ export function App() {
             </section>
 
             <div className="composer-dock">
+              {channelStopped && (
+                <div className="channel-stopped-banner" role="status">
+                  <span>这个 Channel 已由你停止，不能恢复。</span>
+                  <button type="button" onClick={startRelatedTask}>
+                    新建相关 Channel
+                  </button>
+                </div>
+              )}
               {attachmentHelpOpen && (
                 <div className="attachment-help" role="status">
                   <FileOutput aria-hidden="true" />
@@ -727,7 +750,7 @@ export function App() {
                   title="添加附件"
                   aria-expanded={attachmentHelpOpen}
                   onClick={() => setAttachmentHelpOpen(open => !open)}
-                  disabled={sending || unauthorized}
+                  disabled={sending || unauthorized || channelStopped}
                 >
                   <DsPlusIcon />
                 </button>
@@ -737,11 +760,15 @@ export function App() {
                   value={draft}
                   onChange={event => setDraft(event.target.value)}
                   onKeyDown={handleComposerKeyDown}
-                  placeholder={`给 ${sidebarSelectedTask?.title ?? 'Pegas'} 发消息`}
+                  placeholder={
+                    channelStopped
+                      ? '这个 Channel 已停止'
+                      : `给 ${sidebarSelectedTask?.title ?? 'Pegas'} 发消息`
+                  }
                   rows={1}
                   name="message"
                   aria-describedby="composer-hint"
-                  disabled={sending || unauthorized}
+                  disabled={sending || unauthorized || channelStopped}
                 />
                 <span className="composer-status" id="composer-hint">
                   {dictation.state === 'requesting' && '正在请求麦克风…'}
@@ -771,6 +798,7 @@ export function App() {
                       disabled={
                         sending ||
                         unauthorized ||
+                        channelStopped ||
                         dictation.state === 'requesting' ||
                         dictation.state === 'transcribing'
                       }
@@ -801,6 +829,7 @@ export function App() {
                     disabled={
                       sending ||
                       unauthorized ||
+                      channelStopped ||
                       dictation.state === 'requesting' ||
                       dictation.state === 'transcribing'
                     }
@@ -812,7 +841,11 @@ export function App() {
                     className="send-button"
                     aria-label={sending ? '正在发送' : '发送给 Pegas'}
                     disabled={
-                      !draft.trim() || sending || unauthorized || dictationBusy
+                      !draft.trim() ||
+                      sending ||
+                      unauthorized ||
+                      channelStopped ||
+                      dictationBusy
                     }
                   >
                     {sending ? (
@@ -887,6 +920,11 @@ export function App() {
           await api.retryRun(runId)
           await loadSnapshot()
         }}
+        onStop={async taskId => {
+          await api.stopChannel(taskId, '用户在工作区停止 Channel')
+          await loadSnapshot()
+        }}
+        onNewRelated={startRelatedTask}
         open={workspaceVisible}
         selectedTask={selectedTask}
         runs={
@@ -3285,6 +3323,8 @@ function TasksPage({
 
 function WorkspacePanel({
   onRetry,
+  onStop,
+  onNewRelated,
   open,
   selectedTask,
   runs,
@@ -3292,8 +3332,10 @@ function WorkspacePanel({
   compact,
 }: {
   onRetry: (runId: string) => Promise<void>
+  onStop: (taskId: string) => Promise<void>
+  onNewRelated: () => void
   open: boolean
-  selectedTask?: Task
+  selectedTask?: WorkChannel
   runs: Run[]
   onClose: () => void
   compact: boolean
@@ -3348,6 +3390,8 @@ function WorkspacePanel({
           runs={runs}
           onClose={onClose}
           onRetry={onRetry}
+          onStop={onStop}
+          onNewRelated={onNewRelated}
         />
       ) : (
         <div className="workspace-empty">
@@ -3389,18 +3433,25 @@ function WorkspacePanel({
 
 function TaskDetail({
   onRetry,
+  onStop,
+  onNewRelated,
   task,
   runs,
   onClose,
 }: {
   onRetry: (runId: string) => Promise<void>
-  task: Task
+  onStop: (taskId: string) => Promise<void>
+  onNewRelated: () => void
+  task: WorkChannel
   runs: Run[]
   onClose: () => void
 }) {
   const latestRun = runs.at(-1)
   const [retrying, setRetrying] = useState(false)
   const [retryError, setRetryError] = useState('')
+  const [stopping, setStopping] = useState(false)
+  const [stopError, setStopError] = useState('')
+  const stopDialog = useRef<HTMLDialogElement>(null)
   const steps = taskSteps(task.status)
   return (
     <div className="task-detail">
@@ -3447,9 +3498,70 @@ function TaskDetail({
 
         <section className="detail-section">
           <h3>执行记录</h3>
+          {task.canStop && (
+            <button
+              type="button"
+              className="workspace-toggle workspace-text-action"
+              disabled={stopping}
+              onClick={() => stopDialog.current?.showModal()}
+            >
+              停止 Channel
+            </button>
+          )}
+          {task.status === 'cancelled' && (
+            <button
+              className="workspace-toggle workspace-text-action"
+              onClick={onNewRelated}
+            >
+              新建相关 Channel
+            </button>
+          )}
+          <dialog
+            ref={stopDialog}
+            className="stop-channel-dialog"
+            aria-labelledby={`stop-channel-title-${task.id}`}
+          >
+            <h2 id={`stop-channel-title-${task.id}`}>永久停止 Channel？</h2>
+            <p>
+              停止后，这个 Channel 和未完成的 Run
+              将永久关闭，不能恢复。要继续相同工作，需要新建相关 Channel。
+            </p>
+            {stopError && <p role="alert">{stopError}</p>}
+            <form method="dialog" className="stop-channel-actions">
+              <button
+                type="submit"
+                value="cancel"
+                autoFocus
+                ref={element => element?.setAttribute('autofocus', '')}
+                disabled={stopping}
+                onClick={() => stopDialog.current?.close('cancel')}
+              >
+                保留 Channel
+              </button>
+              <button
+                type="button"
+                className="is-destructive"
+                disabled={stopping}
+                onClick={() => {
+                  setStopping(true)
+                  setStopError('')
+                  void onStop(task.id)
+                    .then(() => stopDialog.current?.close('stopped'))
+                    .catch((caught: unknown) => {
+                      setStopError(
+                        caught instanceof Error ? caught.message : '停止失败',
+                      )
+                    })
+                    .finally(() => setStopping(false))
+                }}
+              >
+                {stopping ? '正在停止…' : '永久停止'}
+              </button>
+            </form>
+          </dialog>
           {latestRun?.status === 'failed' && isActiveTask(task.status) && (
             <button
-              className="workspace-toggle"
+              className="workspace-toggle workspace-text-action"
               disabled={retrying}
               onClick={() => {
                 setRetrying(true)
@@ -3496,7 +3608,11 @@ function TaskDetail({
                     </div>
                   </dl>
                   {run.lastError && (
-                    <p className="run-error">{run.lastError}</p>
+                    <p className="run-error">
+                      {run.lastError === 'stopped_by_user'
+                        ? '用户已停止这个 Channel'
+                        : run.lastError}
+                    </p>
                   )}
                   {run.retryOfRunId && (
                     <p className="detail-empty">

@@ -1,12 +1,12 @@
 # Task 与执行重试
 
-Feature：`TASK-001`（现有五状态与失败重试）和 `TASK-002`（Planned，完成后恢复与用户停止）。`TASK-001` 验收保持不变：Task 只使用 backlog、unstarted、started、completed、cancelled 五个状态；Run 失败不结束目标；每次失败重试创建新 Run，保留旧 Run及 `retryOfRunId`；重复重试同一 Run 返回同一个后继；租约恢复同样新建 Run；终态 Task 不允许调用“失败重试”；旧 Worker 不能提交新 Run 的结果。
+Feature：`TASK-001`（现有五状态与失败重试）和 `TASK-002`（Partial，完成后恢复与用户停止的第一版闭环）。`TASK-001` 验收保持不变：Task 只使用 backlog、unstarted、started、completed、cancelled 五个状态；Run 失败不结束目标；每次失败重试创建新 Run，保留旧 Run及 `retryOfRunId`；重复重试同一 Run 返回同一个后继；租约恢复同样新建 Run；终态 Task 不允许调用“失败重试”；旧 Worker 不能提交新 Run 的结果。
 
 非目标：不增加定时重试策略或完整审批产品。当前 Run 的结构化 `ready` Report 在没有未满足完成条件时结束 Task；存在审批、Artifact 或外部 Thread 等条件时保持 started/awaiting condition，直到 Control Plane 验证条件满足。
 
 边界：服务端为状态权威；重试接口沿用现有单用户 API token，并校验 userId 与 Task 归属。原输入、执行器和已保存 session 用于恢复，不新增权限。对执行产生的外部副作用不承诺 exactly-once；沿用已保存 session 的恢复边界。
 
-迁移：schema v7 将 inbox→backlog、planning→unstarted、running/waiting/paused/failed→started，保留等待/暂停/失败的原因。历史 Run 不改写。v5 和 v6 分别属于 Provider 连接与 Agent 模型覆盖。早期 Task-only v5 候选库在启动时识别并修正迁移编号，然后应用 Provider 迁移。运行前应备份数据库；回滚需同时恢复旧版数据库备份与应用，不能让旧 Worker 与新库混跑。
+迁移：schema v7 将 inbox→backlog、planning→unstarted、running/waiting/paused/failed→started，保留等待/暂停/失败的原因。v10 为 Task 回填不可变 `mandate_json` 和结构化 `ended_json`，为 Run 回填保守的 `execution_context_json`，并增加停止命令幂等表；历史 cancelled 一律按人工停止迁移，历史 completed 保留可恢复结束记录。v5 和 v6 分别属于 Provider 连接与 Agent 模型覆盖。早期 Task-only v5 候选库在启动时识别并修正迁移编号，然后应用 Provider 迁移。运行前应备份数据库；回滚需同时恢复旧版数据库备份与应用，不能让旧 Worker 与新库混跑。
 
 恢复：事务提交前失败不产生后继；提交后响应丢失可重发。一个 Run 最多一个重试后继；任务存在 queued/running Run 时拒绝额外重试。租约到期时旧 Run 标为 failed（lease_expired），新 Run 从保存的 session 恢复。失败 Run 的错误与输出保留用于诊断。
 
@@ -53,6 +53,14 @@ Mandate 在接单时创建且内容不可变。executor 完成不撤销它；用
 
 ## 验证与剩余缺口
 
-自动化覆盖旧 v4 数据库八种状态升级、早期 Task-only v5 与 Provider 迁移兼容、错误记录保留、迁移重复启动、重试链与输入/session 保留、重复请求幂等、越权/终态/非最新 Run 拒绝、同 Task 执行串行化、租约过期旧 Worker fencing，以及 Web 重试失败后恢复与历史展示。完整门禁为 `pnpm check` 与 `pnpm smoke`。
+自动化覆盖旧 v4 数据库八种状态升级、早期 Task-only v5 与 Provider 迁移兼容、schema v10 的 Mandate/ended/执行快照回填、错误记录保留、迁移重复启动、重试链与输入/session 保留、重复请求幂等、越权/终态/非最新 Run 拒绝、同 Task 执行串行化、租约过期旧 Worker fencing，以及 Web 重试失败后恢复与历史展示。`TASK-002` 新增 completed 恢复、同 Event 幂等、执行上下文不兼容时换 Session、连续输入不提前结束 Channel、重复停止不改写 ended、停止后旧 Worker 结果拒绝、Worker Runtime 退出后保留 Run、停止后 API 拒绝和 Web 永久停止确认/只读回归。完整门禁为 `pnpm check` 与 `pnpm smoke`。
 
-工作项完成/取消控制、completed 恢复命令、停止来源、授权复核、Session compatibility 和并发恢复门禁仍由 `TASK-002` 实现。当前显式 continuation 与失败重试对终态的处理不一致，`TASK-002` 必须先写回归测试再修复；在此之前不能宣称 completed/cancelled 生命周期可用。审批/自动重试调度仍未实现。实际外部工具副作用、跨机器旧 Worker 存活和真实模型恢复尚未做故障演练，不能视为 exactly-once 保证。
+第一版的权威边界如下：
+
+- 当前 Web 单用户 Source 使用显式 Mandate，按 actor、输入类型和 policy version 复核；completed 复核通过后清除 ended 并创建新 Run，cancelled 在入口与事务状态机两层永久拒绝。
+- Run 保存 Executor、模型、工作区、权限、协议和设置 revision；只有快照完全一致才复用 Executor Session。历史 Run 的保守快照不会被新 Worker 配置误判为兼容。
+- 用户停止以 command ID 幂等，在一个事务内写 human/stopped ended 并取消未终结 Run。旧 Worker 必须仍拥有 running Run 才能写 session、进度或最终结果。
+- Worker Runtime 正常退出不会把 Run 误判为业务失败；Run 保留到 lease 到期，由替代 Runtime 走既有恢复链。停止后的 Executor 通过租约心跳观察 fencing 并中止。
+- Web 使用服务端 `canStop` 投影，永久停止由原生模态确认；停止后输入、附件和语音入口只读，并提供“新建相关 Channel”。
+
+仍未完成的硬化项是多 Source Policy 撤销后把输入释放给 Router/Eval 的完整 disposition、`dropped` 与外部完成条件、进程内即时 Runtime Controller、停止前未知外部副作用的结构化审计，以及跨机器真实模型 Session 故障演练。因此 `TASK-002` 保持 Partial，不承诺 exactly-once。

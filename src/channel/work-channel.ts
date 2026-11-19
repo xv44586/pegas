@@ -1,4 +1,4 @@
-import type { Task, TaskStatus } from '../core/domain.js'
+import type { Task, TaskEnd, TaskStatus } from '../core/domain.js'
 
 /**
  * User-facing projection of the authoritative Task lifecycle.
@@ -20,6 +20,10 @@ export interface WorkChannel {
   updatedAt: string
   latestActivityAt: string
   endedAt?: string
+  ended?: TaskEnd
+  endedKind?: TaskEnd['outcome']
+  canResume: boolean
+  canStop: boolean
 }
 
 export function projectWorkChannel(task: Task): WorkChannel {
@@ -36,6 +40,9 @@ export function projectWorkChannel(task: Task): WorkChannel {
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
     latestActivityAt: task.updatedAt,
-    ...(ended ? { endedAt: task.updatedAt } : {}),
+    ...(ended ? { endedAt: task.ended?.at ?? task.updatedAt } : {}),
+    ...(task.ended ? { ended: task.ended, endedKind: task.ended.outcome } : {}),
+    canResume: task.status === 'completed',
+    canStop: ['backlog', 'unstarted', 'started'].includes(task.status),
   }
 }

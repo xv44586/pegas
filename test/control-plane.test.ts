@@ -388,6 +388,82 @@ describe('control plane', () => {
     expect((await fetch(`${base}/v1/channels`)).status).toBe(400)
   })
 
+  it('stops a live channel idempotently and exposes permanent lifecycle capabilities', async () => {
+    const store = new PegasStore(':memory:')
+    const event = store.enqueueEvent({
+      userId: 'owner',
+      source: 'web',
+      type: 'user.message',
+      payload: { text: 'Long task' },
+    }).event
+    const task = store.applyRoutingDecision(
+      event,
+      {
+        kind: 'create_task',
+        title: 'Long task',
+        goal: 'Long task',
+        input: 'Long task',
+        reason: 'test',
+      },
+      'test',
+    ).task
+    const server = createControlPlane({ store, apiToken: 'secret' })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    cleanups.push(
+      () => new Promise<void>(resolve => server.close(() => resolve())),
+      () => Promise.resolve(store.close()),
+    )
+    const base = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+    const stop = () =>
+      fetch(`${base}/v1/channels/${task.id}/stop`, {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer secret',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          userId: 'owner',
+          commandId: 'stop-one',
+          reason: 'No longer needed',
+        }),
+      })
+    const first = await stop()
+    const second = await stop()
+    expect(first.status).toBe(200)
+    expect(await second.json()).toEqual(await first.json())
+    const channels = await fetch(`${base}/v1/channels?userId=owner`, {
+      headers: { authorization: 'Bearer secret' },
+    })
+    expect(await channels.json()).toMatchObject({
+      channels: [
+        {
+          id: task.id,
+          status: 'cancelled',
+          canResume: false,
+          canStop: false,
+          endedKind: 'stopped',
+          ended: { by: 'human', outcome: 'stopped' },
+        },
+      ],
+    })
+
+    const rejected = await fetch(`${base}/v1/events`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer secret',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        userId: 'owner',
+        type: 'user.message',
+        source: 'web',
+        payload: { text: 'Continue anyway', taskId: task.id },
+      }),
+    })
+    expect(rejected.status).toBe(400)
+    expect(await rejected.text()).toMatch(/stopped/i)
+  })
+
   it('accepts authenticated events and deduplicates retries', async () => {
     const store = new PegasStore(':memory:')
     const server = createControlPlane({ store, apiToken: 'secret' })

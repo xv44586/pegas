@@ -379,7 +379,7 @@ Outbox 的投递状态与产品已读状态分离；`sent` 不代表用户已经
 | Feature        | 用户闭环                                                                                | 依赖                                                               | 本轮状态 |
 | -------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | -------- |
 | `CHANNEL-001`  | 服务端 Task 以 WorkChannel 投影供 Web 使用；主入口与 Channel 直接对话边界明确           | `TASK-001`, `CONV-002`                                             | Usable   |
-| `TASK-002`     | completed Channel 可经授权复核恢复；用户停止后原 Channel 永久关闭；Run/Runtime 独立结束 | `TASK-001`, `CHANNEL-001`, `EXEC-003`, `WORKER-001` 的执行快照边界 | Planned  |
+| `TASK-002`     | completed Channel 可经授权复核恢复；用户停止后原 Channel 永久关闭；Run/Runtime 独立结束 | `TASK-001`, `CHANNEL-001`, `EXEC-003`, `WORKER-001` 的执行快照边界 | Partial  |
 | `CHANNEL-002`  | Channel 时间线显示结构化输入、路由、Run、工具摘要和结果                                 | `CHANNEL-001`, `EXEC-001`                                          | Planned  |
 | `WORKER-001`   | Worker 继承全局模型并支持显式覆盖、配置快照和受控 Session rollover                      | `CHANNEL-001`, `SETTINGS-001`                                      | Planned  |
 | `COLLAB-001`   | 委派、交接、context note、handback 和结果回送形成持久闭环                               | `CHANNEL-002`, `WORKER-001`, `ROUTE-002`                           | Planned  |

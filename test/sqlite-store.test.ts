@@ -308,10 +308,205 @@ describe('PegasStore', () => {
       output: 'Ready for review',
     })
     expect(store.listTasks()[0]).toMatchObject({
-      status: 'started',
-      statusReason: 'awaiting_user_review',
+      status: 'completed',
+      ended: { by: 'executor', outcome: 'completed' },
     })
     expect(store.listRuns()).toHaveLength(3)
+    store.close()
+  })
+
+  it('resumes completed work under its mandate and permanently rejects stopped work', () => {
+    const store = new PegasStore(':memory:')
+    const event = (id: string, text: string) =>
+      store.enqueueEvent({
+        id,
+        userId: 'owner',
+        source: 'web',
+        type: 'user.message',
+        payload: { text },
+      }).event
+    const initial = store.applyRoutingDecision(
+      event('event-initial', 'Build it'),
+      {
+        kind: 'create_task',
+        title: 'Build it',
+        goal: 'Build it',
+        input: 'Build it',
+        reason: 'test',
+      },
+      'test-executor',
+      { executor: 'test-executor', workspace: '/workspace', model: 'model-a' },
+    )
+    store.claimNextRun('worker-1')
+    store.completeRun(initial.run.id, 'worker-1', {
+      executorRef: 'session-1',
+      output: 'Done',
+    })
+    expect(store.listTasks()[0]).toMatchObject({
+      status: 'completed',
+      mandate: {
+        strength: 'explicit',
+        policyVersion: 'pegas-mandate-v1',
+        actor: { source: 'web', id: 'owner' },
+        scope: 'Build it',
+      },
+      ended: { by: 'executor', outcome: 'completed' },
+    })
+
+    const resumed = store.applyRoutingDecision(
+      event('event-resume', 'Add recovery'),
+      {
+        kind: 'continue_task',
+        taskId: initial.task.id,
+        input: 'Add recovery',
+        reason: 'test',
+      },
+      'test-executor',
+      { executor: 'test-executor', workspace: '/workspace', model: 'model-a' },
+    )
+    expect(resumed.task).toMatchObject({ status: 'unstarted' })
+    expect(resumed.task.ended).toBeUndefined()
+    expect(resumed.run).toMatchObject({
+      status: 'queued',
+      resumeFromRef: 'session-1',
+      executionContext: {
+        executor: 'test-executor',
+        workspace: '/workspace',
+        model: 'model-a',
+      },
+    })
+
+    const claimed = store.claimNextRun('worker-2')
+    expect(claimed?.run.id).toBe(resumed.run.id)
+    const stopped = store.stopTask(
+      initial.task.id,
+      'owner',
+      'stop-command-1',
+      'User stopped the channel',
+    )
+    expect(stopped).toMatchObject({
+      status: 'cancelled',
+      ended: {
+        by: 'human',
+        outcome: 'stopped',
+        reason: 'User stopped the channel',
+      },
+    })
+    expect(store.stopTask(initial.task.id, 'owner', 'stop-command-1')).toEqual(
+      stopped,
+    )
+    expect(store.stopTask(initial.task.id, 'owner', 'stop-command-2')).toEqual(
+      stopped,
+    )
+    expect(store.listRuns(initial.task.id).at(-1)).toMatchObject({
+      status: 'cancelled',
+    })
+    expect(() =>
+      store.completeRun(resumed.run.id, 'worker-2', {
+        executorRef: 'session-stale',
+        output: 'stale result',
+      }),
+    ).toThrow(/does not own/)
+    expect(() =>
+      store.applyRoutingDecision(
+        event('event-after-stop', 'Continue anyway'),
+        {
+          kind: 'continue_task',
+          taskId: initial.task.id,
+          input: 'Continue anyway',
+          reason: 'test',
+        },
+        'test-executor',
+      ),
+    ).toThrow(/stopped/)
+    expect(store.listRuns(initial.task.id)).toHaveLength(2)
+    store.close()
+  })
+
+  it('keeps the task active until every queued continuation run is terminal', () => {
+    const store = new PegasStore(':memory:')
+    const nextEvent = (id: string) =>
+      store.enqueueEvent({
+        id,
+        userId: 'owner',
+        source: 'web',
+        type: 'user.message',
+        payload: { text: id },
+      }).event
+    const first = store.applyRoutingDecision(
+      nextEvent('first'),
+      {
+        kind: 'create_task',
+        title: 'Ordered work',
+        goal: 'Ordered work',
+        input: 'first',
+        reason: 'test',
+      },
+      'test-executor',
+    )
+    const claimedFirst = store.claimNextRun('worker')
+    expect(claimedFirst?.run.id).toBe(first.run.id)
+    const second = store.applyRoutingDecision(
+      nextEvent('second'),
+      {
+        kind: 'continue_task',
+        taskId: first.task.id,
+        input: 'second',
+        reason: 'test',
+      },
+      'test-executor',
+    )
+
+    store.completeRun(first.run.id, 'worker', {
+      executorRef: 'session-one',
+      output: 'first done',
+    })
+
+    expect(store.listTasks('owner')[0]).toMatchObject({ status: 'started' })
+    expect(store.listTasks('owner')[0]?.ended).toBeUndefined()
+    expect(store.claimNextRun('worker')?.run.id).toBe(second.run.id)
+    store.close()
+  })
+
+  it('starts a fresh executor session when the execution context changed', () => {
+    const store = new PegasStore(':memory:')
+    const nextEvent = (id: string) =>
+      store.enqueueEvent({
+        id,
+        userId: 'owner',
+        source: 'web',
+        type: 'user.message',
+        payload: { text: id },
+      }).event
+    const initial = store.applyRoutingDecision(
+      nextEvent('one'),
+      {
+        kind: 'create_task',
+        title: 'Context',
+        goal: 'Context',
+        input: 'one',
+        reason: 'test',
+      },
+      'dsh-cli',
+      { executor: 'dsh-cli', workspace: '/one', model: 'model-a' },
+    )
+    store.claimNextRun('worker')
+    store.completeRun(initial.run.id, 'worker', {
+      executorRef: 'session-one',
+      output: 'done',
+    })
+    const continuation = store.applyRoutingDecision(
+      nextEvent('two'),
+      {
+        kind: 'continue_task',
+        taskId: initial.task.id,
+        input: 'two',
+        reason: 'test',
+      },
+      'dsh-cli',
+      { executor: 'dsh-cli', workspace: '/two', model: 'model-a' },
+    )
+    expect(continuation.run.resumeFromRef).toBeUndefined()
     store.close()
   })
 
@@ -483,7 +678,7 @@ describe('PegasStore', () => {
           .prepare('SELECT version FROM schema_migrations ORDER BY version')
           .all() as { version: number }[]
         expect(versions.map(row => row.version)).toEqual([
-          1, 2, 3, 4, 5, 6, 7, 8, 9,
+          1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
         ])
         expect(
           (
@@ -505,6 +700,11 @@ describe('PegasStore', () => {
           (
             db.prepare('PRAGMA table_info(runs)').all() as { name: string }[]
           ).some(column => column.name === 'retry_of_run_id'),
+        ).toBe(true)
+        expect(
+          (
+            db.prepare('PRAGMA table_info(tasks)').all() as { name: string }[]
+          ).some(column => column.name === 'mandate_json'),
         ).toBe(true)
       } finally {
         db.close()

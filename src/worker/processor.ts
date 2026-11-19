@@ -1,4 +1,8 @@
-import type { ClaimedRun, InboxEvent } from '../core/domain.js'
+import type {
+  ClaimedRun,
+  ExecutionContext,
+  InboxEvent,
+} from '../core/domain.js'
 import type { RunExecutor } from '../executor/executor.js'
 import type { TaskRouter } from '../router/router.js'
 import type { PegasStore } from '../storage/sqlite-store.js'
@@ -10,10 +14,18 @@ export interface EventHandler {
 export class RoutingEventHandler implements EventHandler {
   readonly #router: TaskRouter
   readonly #executorName: string
+  readonly #executionContext: () => ExecutionContext
 
-  constructor(router: TaskRouter, executorName: string) {
+  constructor(
+    router: TaskRouter,
+    executorName: string,
+    executionContext: () => ExecutionContext = () => ({
+      executor: executorName,
+    }),
+  ) {
     this.#router = router
     this.#executorName = executorName
+    this.#executionContext = executionContext
   }
 
   async handle(event: InboxEvent, store: PegasStore): Promise<void> {
@@ -22,7 +34,12 @@ export class RoutingEventHandler implements EventHandler {
       store.listTasks(event.userId),
     )
     if (!decision) return
-    store.applyRoutingDecision(event, decision, this.#executorName)
+    store.applyRoutingDecision(
+      event,
+      decision,
+      this.#executorName,
+      this.#executionContext(),
+    )
   }
 }
 
@@ -52,11 +69,16 @@ export async function executeClaimedRun(
   workingDirectory: string,
   signal: AbortSignal,
 ): Promise<void> {
+  const runAbort = new AbortController()
+  const abortRun = () => runAbort.abort(signal.reason)
+  if (signal.aborted) abortRun()
+  else signal.addEventListener('abort', abortRun, { once: true })
   const leaseHeartbeat = setInterval(() => {
     try {
       store.renewRunLease(claimed.run.id, workerId)
     } catch (error) {
       console.error(`Failed to renew run ${claimed.run.id} lease`, error)
+      runAbort.abort(error)
     }
   }, 10_000)
   leaseHeartbeat.unref()
@@ -78,6 +100,7 @@ export async function executeClaimedRun(
         store.recordExecutorRef(claimed.run.id, workerId, executorRef)
       },
       onProgress: event => {
+        if (!store.ownsRun(claimed.run.id, workerId)) return
         store.enqueueOutbox({
           userId: claimed.task.userId,
           taskId: claimed.task.id,
@@ -91,15 +114,22 @@ export async function executeClaimedRun(
           },
         })
       },
-      signal,
+      signal: runAbort.signal,
     })
   } catch (error) {
     clearInterval(leaseHeartbeat)
+    signal.removeEventListener('abort', abortRun)
+    // A Worker Runtime is replaceable. Preserve its durable Run and lease so
+    // another runtime can recover it through the existing lease-expiry path.
+    if (signal.aborted) return
+    if (!store.ownsRun(claimed.run.id, workerId)) return
     const message = error instanceof Error ? error.message : String(error)
     store.failRun(claimed.run.id, workerId, message)
     return
   }
 
   clearInterval(leaseHeartbeat)
+  signal.removeEventListener('abort', abortRun)
+  if (!store.ownsRun(claimed.run.id, workerId)) return
   store.completeRun(claimed.run.id, workerId, result)
 }

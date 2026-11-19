@@ -68,7 +68,24 @@ const executor = new SettingsAwareExecutor(
   createExecutor,
 )
 const router = new SettingsAwareTaskRouter(store, createRouter)
-const eventHandler = new RoutingEventHandler(router, executor.name)
+const eventHandler = new RoutingEventHandler(router, executor.name, () => {
+  const settings = store.getRuntimeSettings()
+  return {
+    executor: executor.name,
+    workspace: config.workspaceRoot,
+    model:
+      settings.agentModelMode === 'override'
+        ? `${settings.agentModelProvider}/${settings.agentModelName}`
+        : 'profile',
+    permissions: JSON.stringify({
+      mode: 'workspace-write',
+      additionalDirectories: config.dshAdditionalDirectories,
+      privacyMode: settings.privacyMode,
+    }),
+    protocol: 'dsh-headless-v1',
+    settingsRevision: settings.revision,
+  }
+})
 const lifecycle = { stopping: false }
 const shutdown = new AbortController()
 const activeRuns = new Set<Promise<void>>()

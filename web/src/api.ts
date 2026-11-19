@@ -84,6 +84,13 @@ export class PegasApi {
       ...(task.status === 'completed' || task.status === 'cancelled'
         ? { endedAt: task.updatedAt }
         : {}),
+      ...(task.status === 'completed'
+        ? { endedKind: 'completed' as const }
+        : task.status === 'cancelled'
+          ? { endedKind: 'stopped' as const }
+          : {}),
+      canResume: task.status === 'completed',
+      canStop: ['backlog', 'unstarted', 'started'].includes(task.status),
     }))
   }
 
@@ -150,6 +157,22 @@ export class PegasApi {
         method: 'POST',
         headers: this.#headers(true),
         body: JSON.stringify({ userId: this.#userId }),
+      },
+    )
+    if (!response.ok) await throwResponse(response)
+  }
+
+  async stopChannel(channelId: string, reason?: string): Promise<void> {
+    const response = await fetch(
+      `/v1/channels/${encodeURIComponent(channelId)}/stop`,
+      {
+        method: 'POST',
+        headers: this.#headers(true),
+        body: JSON.stringify({
+          userId: this.#userId,
+          commandId: crypto.randomUUID(),
+          ...(reason ? { reason } : {}),
+        }),
       },
     )
     if (!response.ok) await throwResponse(response)

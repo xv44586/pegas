@@ -62,7 +62,7 @@ describe('event and run processing', () => {
     ])
     expect(completedRuns[0]?.executorRef).toMatch(/^echo-/)
     expect(store.listTasks('user-1')).toMatchObject([
-      { status: 'started', statusReason: 'awaiting_user_review' },
+      { status: 'completed', ended: { outcome: 'completed' } },
     ])
     store.close()
   })
@@ -157,6 +157,42 @@ describe('event and run processing', () => {
     ])
     store.close()
   })
+
+  it('leaves the run recoverable when the replaceable worker runtime stops', async () => {
+    const store = new PegasStore(':memory:')
+    store.enqueueEvent({
+      userId: 'user-1',
+      type: 'user.message',
+      source: 'web',
+      payload: { text: 'Survive a worker restart' },
+    })
+    const executor = new AbortAwareExecutor()
+    await processNextEvent(
+      store,
+      new RoutingEventHandler(new RuleBasedTaskRouter(), executor.name),
+      'worker-1',
+    )
+    const claimed = store.claimNextRun('worker-1')
+    if (!claimed) throw new Error('Expected a claimed run')
+    const shutdown = new AbortController()
+
+    const execution = executeClaimedRun(
+      store,
+      executor,
+      claimed,
+      'worker-1',
+      process.cwd(),
+      shutdown.signal,
+    )
+    shutdown.abort(new Error('worker runtime stopped'))
+    await execution
+
+    expect(store.listRuns()).toMatchObject([
+      { id: claimed.run.id, status: 'running', claimedBy: 'worker-1' },
+    ])
+    expect(store.listTasks('user-1')).toMatchObject([{ status: 'started' }])
+    store.close()
+  })
 })
 
 class AcknowledgingExecutor implements RunExecutor {
@@ -171,6 +207,20 @@ class AcknowledgingExecutor implements RunExecutor {
     return Promise.resolve({
       executorRef: 'session-ack',
       output: 'Review complete',
+    })
+  }
+}
+
+class AbortAwareExecutor implements RunExecutor {
+  readonly name = 'abort-aware-test'
+
+  execute(input: ExecutorInput): Promise<ExecutorResult> {
+    return new Promise((_, reject) => {
+      input.signal?.addEventListener(
+        'abort',
+        () => reject(new Error('executor aborted')),
+        { once: true },
+      )
     })
   }
 }

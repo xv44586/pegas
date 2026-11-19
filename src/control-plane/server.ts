@@ -254,6 +254,13 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
       if (request.url === '/v1/events' && request.method === 'POST') {
         const body = await readJson(request)
         const input = parseNewInboxEvent(body)
+        const taskId = explicitTaskId(input)
+        if (taskId) {
+          const task = options.store.findTask(taskId, input.userId)
+          if (!task) throw new Error(`Task ${taskId} does not exist for user`)
+          if (task.status === 'cancelled')
+            throw new Error('Task was stopped by the user')
+        }
         const result = options.store.enqueueEvent(input)
         return sendJson(response, result.inserted ? 202 : 200, result)
       }
@@ -283,6 +290,33 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
           channels: options.store
             .listTasks(userId)
             .map(task => projectWorkChannel(task)),
+        })
+      }
+
+      const stopChannelMatch = request.url?.match(
+        /^\/v1\/channels\/([^/]+)\/stop$/,
+      )
+      if (stopChannelMatch && request.method === 'POST') {
+        const body = await readJson(request)
+        if (!body || typeof body !== 'object')
+          throw new Error('request body is required')
+        const userId = 'userId' in body ? body.userId : undefined
+        const commandId = 'commandId' in body ? body.commandId : undefined
+        const reason = 'reason' in body ? body.reason : undefined
+        if (typeof userId !== 'string' || !userId.trim())
+          throw new Error('userId is required')
+        if (typeof commandId !== 'string' || !commandId.trim())
+          throw new Error('commandId is required')
+        if (reason !== undefined && typeof reason !== 'string')
+          throw new Error('reason must be a string')
+        const task = options.store.stopTask(
+          decodeURIComponent(stopChannelMatch[1] ?? ''),
+          userId,
+          commandId,
+          reason,
+        )
+        return sendJson(response, 200, {
+          channel: projectWorkChannel(task),
         })
       }
 
@@ -334,6 +368,18 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
       return sendJson(response, 400, { error: 'bad_request', message })
     }
   })
+}
+
+function explicitTaskId(input: NewInboxEvent): string | undefined {
+  if (
+    input.type !== 'user.message' ||
+    !input.payload ||
+    typeof input.payload !== 'object' ||
+    !('taskId' in input.payload)
+  )
+    return undefined
+  const taskId = input.payload.taskId
+  return typeof taskId === 'string' && taskId.trim() ? taskId : undefined
 }
 
 function modelProbeConnection(

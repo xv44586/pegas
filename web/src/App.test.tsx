@@ -24,11 +24,32 @@ const originalScrollIntoView = Object.getOwnPropertyDescriptor(
   HTMLElement.prototype,
   'scrollIntoView',
 )
+const originalShowModal = Object.getOwnPropertyDescriptor(
+  HTMLDialogElement.prototype,
+  'showModal',
+)
+const originalDialogClose = Object.getOwnPropertyDescriptor(
+  HTMLDialogElement.prototype,
+  'close',
+)
 
 beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
     configurable: true,
     value: vi.fn(),
+  })
+  Object.defineProperty(HTMLDialogElement.prototype, 'showModal', {
+    configurable: true,
+    value(this: HTMLDialogElement) {
+      this.setAttribute('open', '')
+    },
+  })
+  Object.defineProperty(HTMLDialogElement.prototype, 'close', {
+    configurable: true,
+    value(this: HTMLDialogElement) {
+      this.removeAttribute('open')
+      this.dispatchEvent(new Event('close'))
+    },
   })
 })
 
@@ -40,6 +61,20 @@ afterAll(() => {
       originalScrollIntoView,
     )
   else Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView')
+  if (originalShowModal)
+    Object.defineProperty(
+      HTMLDialogElement.prototype,
+      'showModal',
+      originalShowModal,
+    )
+  else Reflect.deleteProperty(HTMLDialogElement.prototype, 'showModal')
+  if (originalDialogClose)
+    Object.defineProperty(
+      HTMLDialogElement.prototype,
+      'close',
+      originalDialogClose,
+    )
+  else Reflect.deleteProperty(HTMLDialogElement.prototype, 'close')
 })
 
 afterEach(() => {
@@ -788,6 +823,79 @@ describe('Pegas web app', () => {
     expect(
       (submitted[1]?.payload as Record<string, unknown>).taskId,
     ).toBeUndefined()
+  })
+
+  it('confirms a permanent stop and makes the stopped channel read-only', async () => {
+    let channel = {
+      id: 'task-stop-1',
+      taskId: 'task-stop-1',
+      userId: 'owner',
+      originEventId: 'event-stop-1',
+      title: '停止测试',
+      goal: '验证永久停止',
+      status: 'started',
+      canResume: false,
+      canStop: true,
+      createdAt: '2026-11-19T08:00:00.000Z',
+      updatedAt: '2026-11-19T08:00:00.000Z',
+      latestActivityAt: '2026-11-19T08:00:00.000Z',
+    }
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path =
+        input instanceof Request
+          ? input.url
+          : input instanceof URL
+            ? input.href
+            : input
+      if (path.endsWith('/stop') && init?.method === 'POST') {
+        expect(parseRequestBody(init)).toMatchObject({
+          userId: 'owner',
+          reason: '用户在工作区停止 Channel',
+        })
+        channel = {
+          ...channel,
+          status: 'cancelled',
+          canStop: false,
+          updatedAt: '2026-11-19T08:01:00.000Z',
+          latestActivityAt: '2026-11-19T08:01:00.000Z',
+        }
+        return Promise.resolve(Response.json({ channel }))
+      }
+      if (path.startsWith('/v1/channels'))
+        return Promise.resolve(Response.json({ channels: [channel] }))
+      if (path.startsWith('/v1/events'))
+        return Promise.resolve(Response.json({ events: [] }))
+      if (path.startsWith('/v1/runs'))
+        return Promise.resolve(Response.json({ runs: [] }))
+      return Promise.resolve(Response.json({ messages: [] }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+    fireEvent.click(
+      await screen.findByRole('button', { name: '打开 Channel：停止测试' }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '停止 Channel' }))
+
+    const dialog = screen.getByRole('dialog', {
+      name: '永久停止 Channel？',
+    })
+    expect(
+      within(dialog)
+        .getByRole('button', { name: '保留 Channel' })
+        .hasAttribute('autofocus'),
+    ).toBe(true)
+    fireEvent.click(within(dialog).getByRole('button', { name: '永久停止' }))
+
+    expect(
+      await screen.findByText('这个 Channel 已由你停止，不能恢复。'),
+    ).toBeTruthy()
+    expect(
+      screen.getByRole('textbox', { name: '告诉 Pegas 你想完成什么' }),
+    ).toHaveProperty('disabled', true)
+    expect(
+      screen.getAllByRole('button', { name: '新建相关 Channel' }),
+    ).toHaveLength(2)
   })
 
   it('keeps failed execution history and retries within the same work item', async () => {
