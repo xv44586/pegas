@@ -4,6 +4,7 @@ import {
   modelProviderPreset,
   type ModelProviderId,
 } from '../model/provider-catalog.js'
+import { initialSpeechConnection } from '../speech/speech-settings.js'
 
 export interface PegasConfig {
   apiHost: string
@@ -56,8 +57,10 @@ export function loadConfig(
   const privacyMode = environment.PEGAS_PRIVACY_MODE ?? 'disabled'
   const privacyHmacKey = environment.PEGAS_PRIVACY_HMAC_KEY
   const rewriteMode = environment.PEGAS_REWRITE_MODE ?? 'disabled'
-  const speechProvider = environment.PEGAS_SPEECH_PROVIDER ?? 'disabled'
-  const speechBaseUrl = environment.PEGAS_SPEECH_BASE_URL
+  const speechProvider =
+    environment.PEGAS_SPEECH_PROVIDER ?? initialSpeechConnection.provider
+  const speechBaseUrl =
+    environment.PEGAS_SPEECH_BASE_URL ?? initialSpeechConnection.baseUrl
   const pushMode =
     environment.PEGAS_PUSH_MODE === 'webhook' ? 'webhook' : 'disabled'
   const pushWebhookUrl = environment.PEGAS_PUSH_WEBHOOK_URL
@@ -150,7 +153,8 @@ export function loadConfig(
     ...(environment.PEGAS_SPEECH_API_KEY
       ? { speechApiKey: environment.PEGAS_SPEECH_API_KEY }
       : {}),
-    speechModel: environment.PEGAS_SPEECH_MODEL ?? 'Qwen/Qwen3-ASR-0.6B',
+    speechModel:
+      environment.PEGAS_SPEECH_MODEL ?? initialSpeechConnection.model,
     speechTimeoutMs: parsePositiveInteger(
       environment.PEGAS_SPEECH_TIMEOUT_MS,
       120_000,
