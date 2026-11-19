@@ -76,6 +76,24 @@ export class DshCliExecutor implements RunExecutor {
   }
 
   async execute(input: ExecutorInput): Promise<ExecutorResult> {
+    try {
+      return await this.#executeOnce(input)
+    } catch (error) {
+      if (
+        input.resumeSessionId &&
+        error instanceof DshExecutionError &&
+        error.sessionId === input.resumeSessionId &&
+        isWorkspaceSessionMismatch(error.message)
+      ) {
+        const freshInput = { ...input }
+        delete freshInput.resumeSessionId
+        return this.#executeOnce(freshInput)
+      }
+      throw error
+    }
+  }
+
+  async #executeOnce(input: ExecutorInput): Promise<ExecutorResult> {
     const patch =
       !input.resumeSessionId && this.#agentModel
         ? createAgentModelPatch(this.#agentModel)
@@ -216,6 +234,12 @@ export class DshCliExecutor implements RunExecutor {
       output: finalEvent.text,
     }
   }
+}
+
+function isWorkspaceSessionMismatch(message: string): boolean {
+  return /^session "[^"]+" was recorded in "[^"]+", not "[^"]+"$/.test(
+    message.trim(),
+  )
 }
 
 function createAgentModelPatch(model: { provider: string; model: string }): {
