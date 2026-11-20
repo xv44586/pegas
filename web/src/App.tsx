@@ -77,15 +77,26 @@ export function App() {
     const requestId = snapshotRequestRef.current + 1
     snapshotRequestRef.current = requestId
     try {
-      const [snapshot, usage] = await Promise.all([
+      const [snapshotResult, usageResult] = await Promise.allSettled([
         api.snapshot(),
-        api.modelUsage().catch(() => undefined),
+        api.modelUsage(),
       ])
       if (requestId !== snapshotRequestRef.current) return
+      if (snapshotResult.status === 'rejected') throw snapshotResult.reason
+      const usageError =
+        usageResult.status === 'rejected'
+          ? usageResult.reason instanceof Error
+            ? usageResult.reason.message
+            : '无法读取模型用量。'
+          : ''
       setData(current => ({
         ...current,
-        snapshot,
-        ...(usage ? { usage } : {}),
+        snapshot: snapshotResult.value,
+        usage:
+          usageResult.status === 'fulfilled'
+            ? usageResult.value
+            : current.usage,
+        usageError,
       }))
       setSnapshotLoaded(true)
       setError('')
@@ -110,13 +121,19 @@ export function App() {
       ...current,
       ...(settings.status === 'fulfilled' ? { settings: settings.value } : {}),
     }))
-    setConfigurationError(
+    const failures = [
       settings.status === 'rejected'
         ? settings.reason instanceof Error
           ? settings.reason.message
           : '无法读取设置。'
         : '',
-    )
+      catalog.status === 'rejected'
+        ? catalog.reason instanceof Error
+          ? catalog.reason.message
+          : '无法读取执行模型目录。'
+        : '',
+    ].filter(Boolean)
+    setConfigurationError(failures.join('；'))
     if (catalog.status === 'fulfilled') setAgentModels(catalog.value)
   }, [api])
 
@@ -129,6 +146,7 @@ export function App() {
 
   useEffect(() => {
     const listener = (event: KeyboardEvent) => {
+      if (setupOpen) return
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault()
         rememberFocus()
@@ -141,7 +159,7 @@ export function App() {
     }
     window.addEventListener('keydown', listener)
     return () => window.removeEventListener('keydown', listener)
-  }, [])
+  }, [setupOpen])
 
   function rememberFocus() {
     if (document.activeElement instanceof HTMLElement)
@@ -158,11 +176,26 @@ export function App() {
     if (view.kind === 'runtime')
       return { ...view, run: data.snapshot.runs.at(-1) ?? view.run }
     if (view.kind !== 'task') return view
+    const snapshotChannel = data.snapshot.channels.find(
+      item => item.id === view.channel.id,
+    )
     const channel =
-      data.snapshot.channels.find(item => item.id === view.channel.id) ??
-      view.channel
-    const runs =
-      view.runs ?? data.snapshot.runs.filter(item => item.taskId === channel.id)
+      snapshotChannel &&
+      Date.parse(snapshotChannel.updatedAt) > Date.parse(view.channel.updatedAt)
+        ? snapshotChannel
+        : view.channel
+    const runsById = new Map(view.runs?.map(run => [run.id, run]) ?? [])
+    for (const snapshotRun of data.snapshot.runs.filter(
+      item => item.taskId === channel.id,
+    )) {
+      const current = runsById.get(snapshotRun.id)
+      if (
+        !current ||
+        Date.parse(snapshotRun.updatedAt) > Date.parse(current.updatedAt)
+      )
+        runsById.set(snapshotRun.id, snapshotRun)
+    }
+    const runs = [...runsById.values()]
     const run = latestRunForTask(runs, channel.id) ?? view.run
     const records =
       data.usage?.records.filter(record => record.runId === run?.id) ?? []
@@ -343,6 +376,7 @@ export function App() {
   }
 
   async function openAttentionMessage(message: OutboxMessage) {
+    rememberFocus()
     const url = new URL(window.location.href)
     url.searchParams.set('view', 'outbox')
     url.searchParams.set('outbox', message.id)
@@ -519,6 +553,7 @@ export function App() {
               api.discoverModels(provider, model, draft)
             }
             onOpenDrawer={openDrawer}
+            onReloadUsage={() => void loadSnapshot()}
             onThemeChange={setTheme}
             onSave={saveSettings}
             onTestModel={(provider, model, draft) =>
@@ -534,6 +569,7 @@ export function App() {
             systemDark={systemDark}
             theme={theme}
             usage={data.usage}
+            usageError={data.usageError}
           />
         )}
       </AppShell>
@@ -543,13 +579,11 @@ export function App() {
           onClose={closeSearch}
           onOpen={channel => {
             setSearchOpen(false)
-            setDrawer(
-              enrichDrawer({
-                kind: 'task',
-                channel,
-                run: latestRunForTask(data.snapshot.runs, channel.id),
-              }),
-            )
+            openDrawer({
+              kind: 'task',
+              channel,
+              run: latestRunForTask(data.snapshot.runs, channel.id),
+            })
           }}
         />
       )}
@@ -571,11 +605,11 @@ export function App() {
           }}
           onRetry={async run => {
             await api.retryRun(run.id)
-            await loadSnapshot()
+            await Promise.all([loadSnapshot(), loadTaskDrawer(run.taskId)])
           }}
           onStop={async channel => {
             await api.stopChannel(channel.id, 'Stopped from the Pegas UI')
-            await loadSnapshot()
+            await Promise.all([loadSnapshot(), loadTaskDrawer(channel.id)])
           }}
           view={resolvedDrawer}
         />

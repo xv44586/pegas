@@ -17,6 +17,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { Run } from '../types'
 import {
   formatRelativeTime,
+  runStatusLabel,
   statusLabel,
   textFromPayload,
   type DrawerView,
@@ -243,7 +244,7 @@ function TaskDetail({
           </li>
           {runHistory.length ? (
             runHistory.map((historyRun, index) => {
-              const historyState = statusLabel(channel, historyRun)
+              const historyState = runStatusLabel(historyRun)
               return (
                 <li
                   className={runProgressClass(historyState)}

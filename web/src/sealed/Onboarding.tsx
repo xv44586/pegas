@@ -8,7 +8,7 @@ import {
   ShieldCheck,
   Sparkles,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import type { SettingsResponse } from '../types'
 import { PegasMark } from './PegasMark'
@@ -23,6 +23,36 @@ export function Onboarding({
   onContinueSettings: () => void
 }) {
   const [step, setStep] = useState(0)
+  const dialogRef = useRef<HTMLElement>(null)
+  const primaryActionRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    const previousFocus =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : undefined
+    primaryActionRef.current?.focus()
+    const containFocus = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab') return
+      const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
+        'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+      )
+      if (!focusable?.length) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last?.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first?.focus()
+      }
+    }
+    document.addEventListener('keydown', containFocus)
+    return () => {
+      document.removeEventListener('keydown', containFocus)
+      if (previousFocus?.isConnected) previousFocus.focus()
+    }
+  }, [])
   const steps = [
     {
       title: '欢迎使用 Pegas',
@@ -51,7 +81,9 @@ export function Onboarding({
     <div className="onboarding-backdrop">
       <section
         aria-labelledby="setup-title"
+        aria-modal="true"
         className="onboarding-dialog"
+        ref={dialogRef}
         role="dialog"
       >
         <header>
@@ -162,6 +194,7 @@ export function Onboarding({
                 ? onComplete()
                 : setStep(currentStep => currentStep + 1)
             }
+            ref={primaryActionRef}
             type="button"
           >
             {step === steps.length - 1 ? '进入 Pegas' : '继续'}{' '}

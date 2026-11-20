@@ -1291,6 +1291,18 @@ kbd {
   margin: 12px 0;
   padding: 10px 12px;
 }
+.usage-load-error {
+  justify-content: space-between;
+}
+.usage-load-error > span {
+  align-items: center;
+  display: flex;
+  min-inline-size: 0;
+  gap: 8px;
+}
+.usage-load-error > button {
+  flex: none;
+}
 .settings-tabs {
   border-bottom: 1px solid var(--line);
   display: flex;

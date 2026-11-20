@@ -57,6 +57,7 @@ export interface AppData {
   snapshot: Snapshot
   settings?: SettingsResponse
   usage?: ModelUsageReport
+  usageError?: string
 }
 
 export const emptySnapshot: Snapshot = {
@@ -161,10 +162,23 @@ export function formatRelativeTime(value: string): string {
 }
 
 export function statusLabel(channel: WorkChannel, run?: Run): string {
-  if (run?.status === 'failed') return '失败'
-  if (run?.status === 'waiting') return '等待中'
-  if (run?.status === 'running' || run?.status === 'queued') return '进行中'
-  if (channel.status === 'completed') return '已完成'
   if (channel.status === 'cancelled') return '已归档'
-  return '等待中'
+  if (channel.status === 'completed') return '已完成'
+  return run ? runStatusLabel(run) : '等待中'
+}
+
+export function runStatusLabel(run: Run): string {
+  switch (run.status) {
+    case 'failed':
+      return '失败'
+    case 'waiting':
+      return '等待中'
+    case 'running':
+    case 'queued':
+      return '进行中'
+    case 'completed':
+      return '已完成'
+    case 'cancelled':
+      return '已归档'
+  }
 }

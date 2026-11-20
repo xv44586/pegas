@@ -3,6 +3,7 @@ import {
   Bot,
   Box,
   ChevronRight,
+  CircleAlert,
   CircleHelp,
   Database,
   Layers3,
@@ -63,6 +64,7 @@ interface SettingsPageProps {
   initialSection?: SettingsSection
   response?: SettingsResponse
   usage?: ModelUsageReport
+  usageError?: string
   agentModels?: DshModelCatalog
   onSave: (
     settings: RuntimeSettings,
@@ -71,6 +73,7 @@ interface SettingsPageProps {
     rewrite?: RewriteSettingsDraft,
   ) => Promise<void>
   onOpenDrawer: (drawer: DrawerView) => void
+  onReloadUsage: () => void
   onBack: () => void
   onDiscoverModels: (
     provider: RuntimeSettings['modelProvider'],
@@ -109,9 +112,11 @@ export function SettingsPage({
   initialSection = 'pegas',
   response,
   usage,
+  usageError,
   agentModels,
   onSave,
   onOpenDrawer,
+  onReloadUsage,
   onBack,
   onDiscoverModels,
   onTestModel,
@@ -300,7 +305,13 @@ export function SettingsPage({
                 />
               )}
               {section === 'notifications' && <NotificationSettings />}
-              {section === 'usage' && <UsageSettings usage={usage} />}
+              {section === 'usage' && (
+                <UsageSettings
+                  error={usageError}
+                  onRetry={onReloadUsage}
+                  usage={usage}
+                />
+              )}
               {section === 'recovery' && <RecoverySettings />}
               {section === 'about' && <AboutSettings />}
             </>
@@ -502,9 +513,11 @@ function PegasSettings({
     ? draft.agentModelProvider
     : (agentModels?.defaultProvider ?? '')
   const selectedModelValue =
-    selectedProvider && selectedModel
-      ? `${selectedProvider}::${selectedModel}`
-      : ''
+    draft.agentModelMode === 'profile'
+      ? 'profile'
+      : selectedProvider && selectedModel
+        ? `${selectedProvider}::${selectedModel}`
+        : ''
   return (
     <div className="settings-pane pegas-settings">
       <div className="pegas-settings-title">
@@ -586,6 +599,15 @@ function PegasSettings({
             <select
               value={selectedModelValue}
               onChange={event => {
+                if (event.target.value === 'profile') {
+                  onChange({
+                    ...draft,
+                    agentModelMode: 'profile',
+                    agentModelProvider: '',
+                    agentModelName: '',
+                  })
+                  return
+                }
                 const model = models.find(
                   item => `${item.provider}::${item.id}` === event.target.value,
                 )
@@ -598,6 +620,9 @@ function PegasSettings({
                 })
               }}
             >
+              <option value="profile">
+                隔离环境默认模型（Pegas 专属 profile）
+              </option>
               {models.length ? (
                 models.map(model => (
                   <option
@@ -1652,7 +1677,15 @@ function NotificationSettings() {
   )
 }
 
-function UsageSettings({ usage }: { usage?: ModelUsageReport }) {
+function UsageSettings({
+  usage,
+  error,
+  onRetry,
+}: {
+  usage?: ModelUsageReport
+  error?: string
+  onRetry: () => void
+}) {
   const summary = usage?.summary
   const total = (summary?.inputTokens ?? 0) + (summary?.outputTokens ?? 0)
   return (
@@ -1661,65 +1694,87 @@ function UsageSettings({ usage }: { usage?: ModelUsageReport }) {
         title="模型用量"
         description="按模型、事情和 Run 查看供应商真实上报的消耗。"
       />
-      <div className="usage-metrics">
-        <article>
-          <small>总 Token</small>
-          <strong>{total.toLocaleString('zh-CN')}</strong>
-          <span>输入 + 输出</span>
-        </article>
-        <article>
-          <small>缓存读取</small>
-          <strong>
-            {(summary?.cacheReadTokens ?? 0).toLocaleString('zh-CN')}
-          </strong>
-          <span>供应商上报</span>
-        </article>
-        <article>
-          <small>运行时长</small>
-          <strong>
-            {String(Math.round((summary?.durationMs ?? 0) / 1000))}s
-          </strong>
-          <span>Pegas 观测</span>
-        </article>
-        <article>
-          <small>费用</small>
-          <strong>
-            {summary?.costUsd === undefined
-              ? '—'
-              : `$${summary.costUsd.toFixed(3)}`}
-          </strong>
+      {error && (
+        <div className="info-banner usage-load-error" role="alert">
           <span>
-            {summary?.costUsd === undefined ? '未提供价格' : '供应商上报'}
+            <CircleAlert size={16} />
+            {error}
+            {usage ? '；以下为上次成功读取的数据。' : ''}
           </span>
-        </article>
-      </div>
-      <div className="usage-table">
-        <div>
-          <b>模型 / Run</b>
-          <b>输入</b>
-          <b>输出</b>
-          <b>缓存</b>
-          <b>时长</b>
+          <button className="secondary-button" onClick={onRetry} type="button">
+            重新读取
+          </button>
         </div>
-        {usage?.records.map(record => (
-          <div key={record.runId}>
-            <span>
-              {record.modelRef ?? record.executor}
-              <small>{record.runId}</small>
-            </span>
-            <span>{record.inputTokens?.toLocaleString('zh-CN') ?? '—'}</span>
-            <span>{record.outputTokens?.toLocaleString('zh-CN') ?? '—'}</span>
-            <span>
-              {record.cacheReadTokens?.toLocaleString('zh-CN') ?? '—'}
-            </span>
-            <span>
-              {record.durationMs
-                ? `${String(Math.round(record.durationMs / 1000))}s`
-                : '—'}
-            </span>
+      )}
+      {!usage ? (
+        <div className="settings-empty">尚未取得用量数据。</div>
+      ) : (
+        <>
+          <div className="usage-metrics">
+            <article>
+              <small>总 Token</small>
+              <strong>{total.toLocaleString('zh-CN')}</strong>
+              <span>输入 + 输出</span>
+            </article>
+            <article>
+              <small>缓存读取</small>
+              <strong>
+                {(summary?.cacheReadTokens ?? 0).toLocaleString('zh-CN')}
+              </strong>
+              <span>供应商上报</span>
+            </article>
+            <article>
+              <small>运行时长</small>
+              <strong>
+                {String(Math.round((summary?.durationMs ?? 0) / 1000))}s
+              </strong>
+              <span>Pegas 观测</span>
+            </article>
+            <article>
+              <small>费用</small>
+              <strong>
+                {summary?.costUsd === undefined
+                  ? '—'
+                  : `$${summary.costUsd.toFixed(3)}`}
+              </strong>
+              <span>
+                {summary?.costUsd === undefined ? '未提供价格' : '供应商上报'}
+              </span>
+            </article>
           </div>
-        ))}
-      </div>
+          <div className="usage-table">
+            <div>
+              <b>模型 / Run</b>
+              <b>输入</b>
+              <b>输出</b>
+              <b>缓存</b>
+              <b>时长</b>
+            </div>
+            {usage.records.map(record => (
+              <div key={record.runId}>
+                <span>
+                  {record.modelRef ?? record.executor}
+                  <small>{record.runId}</small>
+                </span>
+                <span>
+                  {record.inputTokens?.toLocaleString('zh-CN') ?? '—'}
+                </span>
+                <span>
+                  {record.outputTokens?.toLocaleString('zh-CN') ?? '—'}
+                </span>
+                <span>
+                  {record.cacheReadTokens?.toLocaleString('zh-CN') ?? '—'}
+                </span>
+                <span>
+                  {record.durationMs
+                    ? `${String(Math.round(record.durationMs / 1000))}s`
+                    : '—'}
+                </span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   )
 }

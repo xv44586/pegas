@@ -327,6 +327,8 @@ describe('sealed Pegas UI', () => {
     installFetch()
     render(<App />)
     expect(await screen.findByText('欢迎使用 Pegas')).toBeTruthy()
+    fireEvent.keyDown(window, { key: 'k', metaKey: true })
+    expect(screen.queryByRole('dialog', { name: '全局搜索' })).toBeNull()
   })
 
   it('renders the white-first conversation shell and current work', async () => {
@@ -352,7 +354,22 @@ describe('sealed Pegas UI', () => {
   })
 
   it('opens command search with the keyboard and selects a result', async () => {
-    installFetch()
+    installFetch(path =>
+      path.startsWith('/v1/channels/task-1/timeline?')
+        ? Response.json({
+            channel,
+            events: [
+              {
+                ...snapshot.events[0],
+                id: 'search-scoped-event',
+                payload: { text: '搜索入口的 Channel 时间线' },
+              },
+            ],
+            messages: [],
+            runs: snapshot.runs,
+          })
+        : undefined,
+    )
     render(<App />)
     await screen.findByText('你的私人智能工作伙伴')
     fireEvent.keyDown(window, { key: 'k', metaKey: true })
@@ -371,6 +388,7 @@ describe('sealed Pegas UI', () => {
       within(dialog).getByRole('button', { name: /安全自更新流程/ }),
     )
     expect(screen.getByLabelText('工作详情')).toBeTruthy()
+    expect(await screen.findByText('搜索入口的 Channel 时间线')).toBeTruthy()
   })
 
   it('restores focus after closing global search', async () => {
@@ -1083,6 +1101,25 @@ describe('sealed Pegas UI', () => {
     expect(onComplete).toHaveBeenCalledOnce()
   })
 
+  it('presents onboarding as a modal and traps focus inside it', () => {
+    render(
+      <Onboarding
+        onComplete={vi.fn()}
+        onContinueSettings={vi.fn()}
+        response={settingsResponse}
+      />,
+    )
+    const dialog = screen.getByRole('dialog', { name: '欢迎使用 Pegas' })
+    expect(dialog.getAttribute('aria-modal')).toBe('true')
+    const later = screen.getByRole('button', { name: '稍后设置' })
+    const next = screen.getByRole('button', { name: /^继续/ })
+    expect(document.activeElement).toBe(next)
+    fireEvent.keyDown(document, { key: 'Tab' })
+    expect(document.activeElement).toBe(later)
+    fireEvent.keyDown(document, { key: 'Tab', shiftKey: true })
+    expect(document.activeElement).toBe(next)
+  })
+
   it('marks onboarding complete when continuing into settings', async () => {
     localStorage.removeItem('pegas-setup-complete')
     installFetch()
@@ -1163,6 +1200,23 @@ describe('sealed Pegas UI', () => {
       '暂时无法创建重试',
     )
     expect(screen.getByText('原始失败')).toBeTruthy()
+  })
+
+  it('honors an archived Channel over a previously failed Run', () => {
+    render(
+      <DetailDrawer
+        onChange={vi.fn()}
+        onClose={vi.fn()}
+        onRetry={vi.fn()}
+        view={{
+          kind: 'task',
+          channel: { ...channel, status: 'cancelled', canStop: false },
+          run: { ...run, status: 'failed', lastError: '旧失败' },
+        }}
+      />,
+    )
+    expect(screen.getByText('这件事已归档')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '重试' })).toBeNull()
   })
 
   it('presents the detail drawer as a modal and traps keyboard focus', () => {
@@ -1296,6 +1350,95 @@ describe('sealed Pegas UI', () => {
     expect(
       await screen.findByText('设置你的个人执行伙伴如何工作和与你沟通。'),
     ).toBeTruthy()
+  })
+
+  it('surfaces usage and agent catalog failures without inventing zero usage', async () => {
+    let usageRequests = 0
+    installFetch(path => {
+      if (path.startsWith('/v1/usage?')) {
+        usageRequests += 1
+        return Response.json({ message: 'usage offline' }, { status: 503 })
+      }
+      if (path === '/v1/settings/agent-models')
+        return Response.json({ message: 'catalog offline' }, { status: 503 })
+      return undefined
+    })
+    render(<App />)
+    expect(await screen.findByText(/catalog offline/)).toBeTruthy()
+    fireEvent.click(
+      within(screen.getByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /模型用量/ }))
+    expect(await screen.findByText('usage offline')).toBeTruthy()
+    expect(screen.queryByText('总 Token')).toBeNull()
+    expect(screen.getByText(/尚未取得用量数据/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '重新读取' }))
+    await waitFor(() => expect(usageRequests).toBeGreaterThan(1))
+  })
+
+  it('restores profile-managed execution after a model override', async () => {
+    const fetchMock = installFetch()
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.change(screen.getByLabelText('模型'), {
+      target: { value: 'profile' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([path, init]) => {
+          if (path !== '/v1/settings' || init?.method !== 'PUT') return false
+          const body = JSON.parse(
+            typeof init.body === 'string' ? init.body : '{}',
+          ) as {
+            agentModelMode?: string
+            agentModelProvider?: string
+            agentModelName?: string
+          }
+          return (
+            body.agentModelMode === 'profile' &&
+            body.agentModelProvider === '' &&
+            body.agentModelName === ''
+          )
+        }),
+      ).toBe(true),
+    )
+  })
+
+  it('restores focus to the attention action after closing its detail', async () => {
+    const sourceMessage = snapshot.messages[0]
+    if (!sourceMessage) throw new Error('Expected an outbox message fixture')
+    const attentionMessage = {
+      ...sourceMessage,
+      payload: { type: 'run.failed', error: '需要人工处理' },
+    }
+    installSnapshotFetch({ ...snapshot, messages: [attentionMessage] }, path =>
+      path.endsWith('/read')
+        ? Response.json({
+            message: {
+              ...attentionMessage,
+              readAt: '2026-11-19T09:00:00.000Z',
+            },
+          })
+        : undefined,
+    )
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    const action = screen.getByRole('button', { name: '查看原因' })
+    action.focus()
+    fireEvent.click(action)
+    fireEvent.click(await screen.findByRole('button', { name: '关闭详情' }))
+    await waitFor(() => expect(document.activeElement).toBe(action))
   })
 
   it('reopens an attention detail when browser history returns to its URL', async () => {
@@ -1551,6 +1694,57 @@ describe('sealed Pegas UI', () => {
     expect(within(drawer).getByText(/Run 1/)).toBeTruthy()
     expect(within(drawer).getByText(/Run 2/)).toBeTruthy()
     expect(within(drawer).getByText('provider timeout')).toBeTruthy()
+  })
+
+  it('refreshes the open drawer with the Run created by retry', async () => {
+    const failedRun: Run = {
+      ...run,
+      id: 'run-failed',
+      status: 'failed',
+      lastError: 'provider timeout',
+      updatedAt: '2026-11-19T08:01:00.000Z',
+    }
+    const retryRun: Run = {
+      ...run,
+      id: 'run-retry',
+      status: 'queued',
+      retryOfRunId: failedRun.id,
+      createdAt: '2026-11-19T08:03:00.000Z',
+      updatedAt: '2026-11-19T08:03:00.000Z',
+    }
+    let retried = false
+    installSnapshotFetch({ ...snapshot, runs: [failedRun] }, (path, init) => {
+      if (
+        path === `/v1/runs/${failedRun.id}/retry` &&
+        init?.method === 'POST'
+      ) {
+        retried = true
+        return Response.json({ run: retryRun })
+      }
+      if (path.startsWith('/v1/runs?'))
+        return Response.json({
+          runs: retried ? [failedRun, retryRun] : [failedRun],
+        })
+      if (path.startsWith('/v1/channels/task-1/timeline?'))
+        return Response.json({
+          channel,
+          events: snapshot.events,
+          messages: snapshot.messages,
+          runs: retried ? [failedRun, retryRun] : [failedRun],
+        })
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /所有事情/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /安全自更新流程/ }))
+    fireEvent.click(await screen.findByRole('button', { name: '重试' }))
+    const drawer = await screen.findByLabelText('工作详情')
+    expect(await within(drawer).findByText(/Run 2 · run-retr/)).toBeTruthy()
+    expect(within(drawer).queryByRole('button', { name: '重试' })).toBeNull()
   })
 
   it('uses provider-compatible models for routing and custom probes', async () => {
