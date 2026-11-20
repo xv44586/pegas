@@ -34,11 +34,16 @@ import {
 import { PegasStore } from '../storage/sqlite-store.js'
 import {
   executeClaimedRun,
+  localControlPlaneBaseUrl,
   processNextEvent,
   RoutingEventHandler,
 } from './processor.js'
 
 const config = loadConfig()
+const controlPlaneBaseUrl = localControlPlaneBaseUrl(
+  config.apiHost,
+  config.apiPort,
+)
 const store = new PegasStore(config.databasePath)
 const modelCredentialVault = loadModelCredentialVault(
   config.modelCredentialKeyPath,
@@ -110,6 +115,7 @@ while (!lifecycle.stopping) {
       workerId,
       config.workspaceRoot,
       shutdown.signal,
+      controlPlaneBaseUrl,
     )
       .catch((error: unknown) => {
         console.error(`Run ${claimed.run.id} persistence failed`, error)

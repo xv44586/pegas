@@ -2324,6 +2324,67 @@ kbd {
 .approval-card dd {
   margin: 0;
 }
+.approval-result {
+  background: var(--surface-subtle);
+  border-radius: 10px;
+  color: var(--muted);
+  margin: 12px 0 0;
+  overflow-wrap: anywhere;
+  padding: 10px 12px;
+  white-space: pre-wrap;
+}
+.approval-options {
+  border: 0;
+  margin: 0;
+  min-inline-size: 0;
+  padding: 0;
+}
+.approval-options legend {
+  font-weight: 700;
+  padding: 0;
+}
+.approval-option {
+  align-items: flex-start;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  cursor: pointer;
+  display: flex;
+  gap: 12px;
+  margin-top: 10px;
+  padding: 13px 14px;
+}
+.approval-option:has(input:checked) {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
+}
+.approval-option input {
+  flex: 0 0 auto;
+  margin-top: 3px;
+}
+.approval-option span {
+  display: grid;
+  gap: 3px;
+}
+.approval-option small,
+.approval-rationale span {
+  color: var(--muted);
+}
+.approval-rationale {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+.approval-rationale textarea {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--text);
+  font: inherit;
+  min-height: 88px;
+  padding: 11px 12px;
+  resize: vertical;
+  width: 100%;
+}
 .drawer-actions {
   display: flex;
   gap: 8px;

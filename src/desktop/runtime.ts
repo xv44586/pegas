@@ -5,6 +5,7 @@ import type { ChildProcess } from 'node:child_process'
 export interface DesktopServiceOptions {
   port: number
   dataDir: string
+  apiToken: string
   testMode?: boolean
   environment?: NodeJS.ProcessEnv
 }
@@ -88,6 +89,7 @@ export function signalDesktopChild(
 export function desktopServiceEnvironment({
   port,
   dataDir,
+  apiToken,
   testMode = false,
   environment = process.env,
 }: DesktopServiceOptions): NodeJS.ProcessEnv {
@@ -96,6 +98,7 @@ export function desktopServiceEnvironment({
     ELECTRON_RUN_AS_NODE: '1',
     PEGAS_API_HOST: '127.0.0.1',
     PEGAS_API_PORT: String(port),
+    PEGAS_API_TOKEN: apiToken,
     PEGAS_DATA_DIR: dataDir,
     PEGAS_PUSH_MODE: 'disabled',
     ...(testMode
@@ -106,6 +109,16 @@ export function desktopServiceEnvironment({
         }
       : {}),
   }
+}
+
+export function desktopRequestHeaders(
+  requestUrl: string,
+  trustedUrl: string,
+  apiToken: string,
+  headers: Record<string, string>,
+): Record<string, string> {
+  if (!isTrustedAppUrl(requestUrl, trustedUrl)) return headers
+  return { ...headers, Authorization: `Bearer ${apiToken}` }
 }
 
 export function isTrustedAppUrl(candidate: string, appUrl: string): boolean {

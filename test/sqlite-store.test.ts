@@ -868,6 +868,21 @@ describe('PegasStore', () => {
           "INSERT INTO tasks (id,user_id,origin_event_id,title,goal,status,created_at,updated_at) VALUES ('task','owner','event','Goal','Goal','started','2026-11-18','2026-11-18')",
         )
         .run()
+      legacy
+        .prepare(
+          "INSERT INTO actions (id,task_id,run_id,kind,risk,idempotency_key,status,request_json,created_at,updated_at) VALUES ('legacy-action','task',NULL,'legacy','high','legacy-key','pending','{}','2026-11-18','2026-11-18')",
+        )
+        .run()
+      legacy
+        .prepare(
+          "INSERT INTO actions (id,task_id,run_id,kind,risk,idempotency_key,status,request_json,created_at,updated_at) VALUES ('other-legacy-action','task',NULL,'legacy','high','legacy:legacy-action','pending','{}','2026-11-18','2026-11-18')",
+        )
+        .run()
+      legacy
+        .prepare(
+          "INSERT INTO approvals (id,task_id,action_id,status,prompt_json,created_at) VALUES ('legacy-approval','task','legacy-action','pending','{}','2026-11-18')",
+        )
+        .run()
     } finally {
       legacy.close()
     }
@@ -883,7 +898,7 @@ describe('PegasStore', () => {
           .prepare('SELECT version FROM schema_migrations ORDER BY version')
           .all() as { version: number }[]
         expect(versions.map(row => row.version)).toEqual([
-          1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+          1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
         ])
         expect(
           (
@@ -918,6 +933,104 @@ describe('PegasStore', () => {
             }[]
           ).some(column => column.name === 'model_connection_id'),
         ).toBe(true)
+        expect(
+          (
+            db
+              .prepare(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('approval_decisions', 'action_outcomes') ORDER BY name",
+              )
+              .all() as { name: string }[]
+          ).map(row => row.name),
+        ).toEqual(['action_outcomes', 'approval_decisions'])
+        expect(
+          (
+            db.prepare('PRAGMA table_info(actions)').all() as {
+              name: string
+            }[]
+          ).map(column => column.name),
+        ).toEqual(
+          expect.arrayContaining([
+            'resume_run_id',
+            'recovery_point_json',
+            'request_claim_hash',
+            'request_fingerprint',
+            'protocol_version',
+          ]),
+        )
+        expect(
+          (
+            db.prepare('PRAGMA table_info(approvals)').all() as {
+              name: string
+            }[]
+          ).map(column => column.name),
+        ).toEqual(expect.arrayContaining(['user_id', 'protocol_version']))
+        expect(
+          (
+            db
+              .prepare(
+                "SELECT user_id FROM approvals WHERE id = 'legacy-approval'",
+              )
+              .get() as { user_id: string } | undefined
+          )?.user_id,
+        ).toBe('owner')
+        expect(
+          (
+            db.prepare("PRAGMA index_list('approvals')").all() as {
+              name: string
+            }[]
+          ).map(index => index.name),
+        ).toEqual(
+          expect.arrayContaining([
+            'approvals_by_user_time',
+            'approvals_by_user_status_time',
+          ]),
+        )
+        const legacyApproval = db
+          .prepare(
+            "SELECT status, response_json, resolved_at, protocol_version FROM approvals WHERE id = 'legacy-approval'",
+          )
+          .get() as
+          | {
+              status: string
+              response_json: string | null
+              resolved_at: string | null
+              protocol_version: number
+            }
+          | undefined
+        expect(legacyApproval).toMatchObject({
+          status: 'pending',
+          response_json: null,
+          resolved_at: null,
+          protocol_version: 0,
+        })
+        const legacyAction = db
+          .prepare(
+            "SELECT status, idempotency_key, result_json, protocol_version FROM actions WHERE id = 'legacy-action'",
+          )
+          .get() as
+          | {
+              status: string
+              idempotency_key: string
+              result_json: string | null
+              protocol_version: number
+            }
+          | undefined
+        expect(legacyAction).toMatchObject({
+          status: 'pending',
+          idempotency_key: 'legacy-key',
+          result_json: null,
+          protocol_version: 0,
+        })
+        expect(
+          (
+            db.prepare("PRAGMA index_list('actions')").all() as {
+              name: string
+              unique: number
+              partial: number
+            }[]
+          ).find(index => index.name === 'actions_v1_idempotency_key'),
+        ).toMatchObject({ unique: 1, partial: 1 })
+        expect(upgraded.getApproval('legacy-approval', 'owner')).toBeUndefined()
         expect(
           (
             db.prepare('PRAGMA table_info(outbox_messages)').all() as {
@@ -976,12 +1089,58 @@ describe('PegasStore', () => {
       } finally {
         db.close()
       }
+
+      const event = upgraded.enqueueEvent({
+        userId: 'owner',
+        type: 'user.message',
+        source: 'migration-test',
+        payload: { text: 'Create a v1 Action.' },
+      }).event
+      const claimedEvent = upgraded.claimNextEvent('migration-event-worker')
+      if (claimedEvent?.id !== event.id)
+        throw new Error('Expected migration Event claim')
+      const applied = upgraded.applyRoutingDecision(
+        claimedEvent,
+        {
+          kind: 'create_task',
+          title: 'Create a v1 Action',
+          goal: 'Create a v1 Action',
+          input: 'Create a v1 Action',
+          reason: 'migration idempotency isolation test',
+        },
+        'echo',
+      )
+      upgraded.completeEvent(event.id, 'migration-event-worker')
+      const claimedRun = upgraded.claimNextRun('migration-run-worker')
+      if (claimedRun?.task.id !== applied.task.id)
+        throw new Error('Expected migration Run claim')
+      expect(
+        upgraded.requestApproval(claimedRun.run.id, claimedRun.claimToken, {
+          kind: 'publish.release',
+          risk: 'high',
+          idempotencyKey: 'legacy-key',
+          request: { release: 'v1' },
+          recoveryPoint: { step: 'before_publish' },
+          approval: {
+            summary: 'Publish release',
+            impact: 'Makes the release public',
+            recommendedOptionId: 'reject',
+            options: [
+              { id: 'approve', label: 'Publish', kind: 'approve' },
+              { id: 'reject', label: 'Do not publish', kind: 'reject' },
+            ],
+          },
+        }),
+      ).toMatchObject({
+        action: { idempotencyKey: 'legacy-key', status: 'awaiting_approval' },
+        approval: { status: 'pending' },
+      })
     } finally {
       upgraded.close()
     }
     const reopened = new PegasStore(path)
     try {
-      expect(reopened.listTasks()).toHaveLength(1)
+      expect(reopened.listTasks()).toHaveLength(2)
     } finally {
       reopened.close()
       rmSync(directory, { recursive: true, force: true })

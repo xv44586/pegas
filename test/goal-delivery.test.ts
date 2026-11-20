@@ -2,6 +2,7 @@ import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { createControlPlane } from '../src/control-plane/server.js'
+import type { ActionRequestDraft } from '../src/approval/approval.js'
 import type { GoalContractDraft } from '../src/goal/goal-delivery.js'
 import {
   parseEvidenceClaimDraft,
@@ -18,6 +19,419 @@ afterEach(async () => {
 })
 
 describe('GOAL-001 delivery contracts', () => {
+  it('cancels a pending Approval when a newer Goal revision supersedes its Run', () => {
+    const store = new PegasStore(':memory:')
+    const seeded = seedRun(store)
+    store.createGoalContract(
+      seeded.taskId,
+      'owner',
+      'goal-before-approval',
+      goalDraft(seeded.eventId, 'First outcome'),
+    )
+    const claimed = store.claimNextRun('worker-approval')
+    if (!claimed) throw new Error('Expected claimed Run')
+    const requested = store.requestApproval(
+      claimed.run.id,
+      claimed.claimToken,
+      {
+        kind: 'publish.release',
+        risk: 'high',
+        idempotencyKey: 'goal-revision-approval',
+        request: { release: 'v1' },
+        recoveryPoint: { step: 'before_publish' },
+        approval: {
+          summary: 'Publish release',
+          impact: 'Makes the release public',
+          recommendedOptionId: 'reject',
+          options: [
+            { id: 'approve', label: 'Publish', kind: 'approve' },
+            { id: 'reject', label: 'Do not publish', kind: 'reject' },
+          ],
+        },
+      },
+    )
+
+    store.createGoalContract(
+      seeded.taskId,
+      'owner',
+      'goal-after-approval',
+      goalDraft(seeded.eventId, 'Revised outcome'),
+    )
+
+    expect(store.getApproval(requested.approval.id, 'owner')).toMatchObject({
+      status: 'cancelled',
+    })
+    expect(store.getAction(requested.action.id, 'owner')).toMatchObject({
+      status: 'rejected',
+      result: { reason: 'superseded_by_goal_revision' },
+    })
+    expect(() =>
+      store.decideApproval(requested.approval.id, 'owner', {
+        commandId: 'stale-goal-decision',
+        optionId: 'approve',
+      }),
+    ).toThrow(/already been decided/)
+    expect(store.listOutbox('owner').at(-1)?.payload).toMatchObject({
+      type: 'approval.resolved',
+      approvalId: requested.approval.id,
+      decision: 'cancelled',
+    })
+    expect(store.listRuns(seeded.taskId)).toHaveLength(2)
+    store.close()
+  })
+
+  it('projects a succeeded Action outcome into the Goal Review Pack', () => {
+    const store = new PegasStore(':memory:')
+    const seeded = seedRun(store)
+    const goal = store.createGoalContract(
+      seeded.taskId,
+      'owner',
+      'goal-with-action',
+      goalDraft(seeded.eventId),
+    )
+    const claimed = store.claimNextRun('worker-action')
+    if (!claimed) throw new Error('Expected claimed Run')
+    const requested = store.requestApproval(
+      claimed.run.id,
+      claimed.claimToken,
+      {
+        kind: 'publish.release',
+        risk: 'high',
+        idempotencyKey: 'goal-action-outcome',
+        request: { release: 'v1' },
+        recoveryPoint: { step: 'before_publish' },
+        approval: {
+          summary: 'Publish release',
+          impact: 'Makes the release public',
+          recommendedOptionId: 'approve',
+          options: [
+            { id: 'approve', label: 'Publish', kind: 'approve' },
+            { id: 'reject', label: 'Do not publish', kind: 'reject' },
+          ],
+        },
+      },
+    )
+    store.decideApproval(requested.approval.id, 'owner', {
+      commandId: 'approve-goal-action',
+      optionId: 'approve',
+    })
+    const resumed = store.claimNextRun('worker-action-resumed')
+    if (!resumed) throw new Error('Expected resumed Run')
+    store.recordActionOutcome(requested.action.id, resumed.claimToken, {
+      commandId: 'goal-action-succeeded',
+      status: 'succeeded',
+      result: { release: 'published' },
+    })
+    store.completeRun(resumed.run.id, 'worker-action-resumed', {
+      executorRef: 'session-action',
+      output: 'Published and verified.',
+    })
+    const evidence = store.createEvidenceRef(
+      resumed.run.id,
+      'owner',
+      'goal-action-evidence',
+      observationEvidence(goal.revision, 'passed'),
+    )
+    const result = store.submitWorkerReport(
+      resumed.run.id,
+      'owner',
+      'worker-action-resumed',
+      {
+        goalRevision: goal.revision,
+        reportSequence: 0,
+        status: 'ready',
+        evidenceRefIds: [evidence.id],
+        summary: 'Published and verified.',
+        limitations: [],
+        remainingRisks: [],
+      },
+    )
+
+    expect(result.completed).toBe(true)
+    expect(result.reviewPack?.sideEffects).toEqual([
+      {
+        actionId: requested.action.id,
+        kind: 'publish.release',
+        status: 'succeeded',
+        result: { release: 'published' },
+      },
+    ])
+    store.close()
+  })
+
+  it.each(['ready', 'failed', 'waiting', 'blocked'] as const)(
+    'requires an authorized Action outcome before a %s Worker Report',
+    status => {
+      const store = new PegasStore(':memory:')
+      const seeded = seedRun(store)
+      const goal = store.createGoalContract(
+        seeded.taskId,
+        'owner',
+        `goal-before-${status}-report`,
+        goalDraft(seeded.eventId),
+      )
+      const claimed = store.claimNextRun(`worker-before-${status}`)
+      if (!claimed) throw new Error('Expected claimed Run')
+      const requested = store.requestApproval(
+        claimed.run.id,
+        claimed.claimToken,
+        approvalActionDraft(`action-before-${status}-report`),
+      )
+      store.decideApproval(requested.approval.id, 'owner', {
+        commandId: `approve-before-${status}-report`,
+        optionId: 'approve',
+      })
+      const resumed = store.claimNextRun(`worker-${status}-report`)
+      if (!resumed) throw new Error('Expected resumed Run')
+
+      expect(() =>
+        store.submitWorkerReport(
+          resumed.run.id,
+          'owner',
+          `worker-${status}-report`,
+          {
+            goalRevision: goal.revision,
+            reportSequence: 0,
+            status,
+            evidenceRefIds: [],
+            summary: `Attempted ${status} before recording the Action outcome.`,
+            limitations: [],
+            remainingRisks: [],
+          },
+        ),
+      ).toThrow(/outcome must be recorded/)
+      expect(store.getAction(requested.action.id, 'owner')).toMatchObject({
+        status: 'authorized',
+      })
+      expect(store.listRuns(seeded.taskId).at(-1)).toMatchObject({
+        status: 'running',
+        claimedBy: `worker-${status}-report`,
+      })
+      expect(
+        store.recordActionOutcome(requested.action.id, resumed.claimToken, {
+          commandId: `outcome-after-${status}-report`,
+          status: 'succeeded',
+          result: { recovered: true },
+        }),
+      ).toMatchObject({ status: 'succeeded' })
+      store.close()
+    },
+  )
+
+  it('projects Action outcomes from earlier Runs into the latest Review Pack', () => {
+    const store = new PegasStore(':memory:')
+    const seeded = seedRun(store)
+    const goal = store.createGoalContract(
+      seeded.taskId,
+      'owner',
+      'goal-action-history',
+      goalDraft(seeded.eventId),
+    )
+    const first = store.claimNextRun('worker-action-first')
+    if (!first) throw new Error('Expected first claimed Run')
+    const requested = store.requestApproval(
+      first.run.id,
+      first.claimToken,
+      approvalActionDraft('goal-action-history'),
+    )
+    store.decideApproval(requested.approval.id, 'owner', {
+      commandId: 'approve-action-history',
+      optionId: 'approve',
+    })
+    const resumed = store.claimNextRun('worker-action-resumed')
+    if (!resumed) throw new Error('Expected resumed Run')
+    store.recordActionOutcome(requested.action.id, resumed.claimToken, {
+      commandId: 'action-history-succeeded',
+      status: 'succeeded',
+      result: { release: 'published' },
+    })
+    store.completeRun(resumed.run.id, 'worker-action-resumed', {
+      executorRef: 'session-action-history',
+      output: 'Published; continuing with verification.',
+    })
+
+    const continuationEvent = store.enqueueEvent({
+      userId: 'owner',
+      type: 'message.received',
+      source: 'web',
+      payload: { text: 'Finish verification.' },
+    }).event
+    const continuation = store.applyRoutingDecision(
+      continuationEvent,
+      {
+        kind: 'continue_task',
+        taskId: seeded.taskId,
+        input: 'Finish verification.',
+        reason: 'test Review Pack Action history',
+      },
+      'test-executor',
+    )
+    expect(store.claimNextRun('worker-verification')?.run.id).toBe(
+      continuation.run.id,
+    )
+    store.completeRun(continuation.run.id, 'worker-verification', {
+      executorRef: 'session-verification',
+      output: 'Verification passed.',
+    })
+    const evidence = store.createEvidenceRef(
+      continuation.run.id,
+      'owner',
+      'action-history-evidence',
+      observationEvidence(goal.revision, 'passed'),
+    )
+    const result = store.submitWorkerReport(
+      continuation.run.id,
+      'owner',
+      'worker-verification',
+      {
+        goalRevision: goal.revision,
+        reportSequence: 1,
+        status: 'ready',
+        evidenceRefIds: [evidence.id],
+        summary: 'Verification completed after publication.',
+        limitations: [],
+        remainingRisks: [],
+      },
+    )
+
+    expect(result.completed).toBe(true)
+    expect(result.reviewPack?.sideEffects).toContainEqual({
+      actionId: requested.action.id,
+      kind: requested.action.kind,
+      status: 'succeeded',
+      result: { release: 'published' },
+    })
+    store.close()
+  })
+
+  it('never claims an approved successor revoked by a newer Goal revision', () => {
+    const store = new PegasStore(':memory:')
+    const seeded = seedRun(store)
+    store.createGoalContract(
+      seeded.taskId,
+      'owner',
+      'goal-before-approved-successor',
+      goalDraft(seeded.eventId, 'First outcome'),
+    )
+    const claimed = store.claimNextRun('worker-before-revision')
+    if (!claimed) throw new Error('Expected claimed Run')
+    const requested = store.requestApproval(
+      claimed.run.id,
+      claimed.claimToken,
+      approvalActionDraft('approved-successor-revision'),
+    )
+    store.decideApproval(requested.approval.id, 'owner', {
+      commandId: 'approve-before-goal-revision',
+      optionId: 'approve',
+    })
+    const oldSuccessor = store.listRuns(seeded.taskId).at(-1)
+    expect(oldSuccessor).toMatchObject({ status: 'queued' })
+
+    store.createGoalContract(
+      seeded.taskId,
+      'owner',
+      'goal-after-approved-successor',
+      goalDraft(seeded.eventId, 'Revised outcome'),
+    )
+
+    expect(store.getAction(requested.action.id, 'owner')).toMatchObject({
+      status: 'rejected',
+      result: { reason: 'superseded_by_goal_revision_before_execution' },
+    })
+    expect(
+      store.listRuns(seeded.taskId).find(run => run.id === oldSuccessor?.id),
+    ).toMatchObject({ status: 'cancelled' })
+    const claimedRevision = store.claimNextRun('worker-after-revision')
+    expect(claimedRevision?.run.id).not.toBe(oldSuccessor?.id)
+    expect(claimedRevision?.run.goalRevision).toBe(2)
+    store.close()
+  })
+
+  it('does not let a Goal revision bypass unknown Action reconciliation', () => {
+    const store = new PegasStore(':memory:')
+    const seeded = seedRun(store)
+    store.createGoalContract(
+      seeded.taskId,
+      'owner',
+      'goal-before-unknown-action',
+      goalDraft(seeded.eventId, 'First outcome'),
+    )
+    const claimed = store.claimNextRun('worker-before-unknown')
+    if (!claimed) throw new Error('Expected claimed Run')
+    const requested = store.requestApproval(
+      claimed.run.id,
+      claimed.claimToken,
+      approvalActionDraft('unknown-goal-revision'),
+    )
+    store.decideApproval(requested.approval.id, 'owner', {
+      commandId: 'approve-before-unknown-goal-revision',
+      optionId: 'approve',
+    })
+    const resumed = store.claimNextRun('worker-unknown-action')
+    if (!resumed) throw new Error('Expected resumed Run')
+    store.recordActionOutcome(requested.action.id, resumed.claimToken, {
+      commandId: 'unknown-before-goal-revision',
+      status: 'unknown',
+      result: { providerRequestId: 'request-unknown' },
+    })
+
+    expect(() =>
+      store.createGoalContract(
+        seeded.taskId,
+        'owner',
+        'goal-after-unknown-action',
+        goalDraft(seeded.eventId, 'Unsafe revised outcome'),
+      ),
+    ).toThrow(/unknown Action outcome is reconciled/)
+    expect(store.listRuns(seeded.taskId)).toHaveLength(2)
+    store.close()
+  })
+
+  it('rejects a Goal revision while a failed Action awaits reconciliation', () => {
+    const store = new PegasStore(':memory:')
+    const seeded = seedRun(store)
+    store.createGoalContract(
+      seeded.taskId,
+      'owner',
+      'goal-before-failed-action',
+      goalDraft(seeded.eventId, 'First outcome'),
+    )
+    const claimed = store.claimNextRun('worker-before-failed')
+    if (!claimed) throw new Error('Expected claimed Run')
+    const requested = store.requestApproval(
+      claimed.run.id,
+      claimed.claimToken,
+      approvalActionDraft('failed-goal-revision'),
+    )
+    store.decideApproval(requested.approval.id, 'owner', {
+      commandId: 'approve-before-failed-goal-revision',
+      optionId: 'approve',
+    })
+    const resumed = store.claimNextRun('worker-failed-action')
+    if (!resumed) throw new Error('Expected resumed Run')
+    store.recordActionOutcome(requested.action.id, resumed.claimToken, {
+      commandId: 'failed-before-goal-revision',
+      status: 'failed',
+      result: { providerError: 'rejected' },
+    })
+    store.completeRun(resumed.run.id, 'worker-failed-action', {
+      executorRef: 'session-failed-action',
+      output: 'The external action failed.',
+    })
+
+    expect(() =>
+      store.createGoalContract(
+        seeded.taskId,
+        'owner',
+        'goal-after-failed-action',
+        goalDraft(seeded.eventId, 'Unsafe revised outcome'),
+      ),
+    ).toThrow(/failed Action outcome is reconciled/)
+    expect(store.listRuns(seeded.taskId)).toHaveLength(2)
+    expect(store.claimNextRun('worker-after-failed')).toBeUndefined()
+    store.close()
+  })
+
   it('validates criterion-to-evidence-plan references and immutable evidence', () => {
     expect(() =>
       parseGoalContractDraft({
@@ -1243,6 +1657,25 @@ function seedRun(store: PegasStore): {
     eventId: event.id,
     taskId: created.task.id,
     runId: created.run.id,
+  }
+}
+
+function approvalActionDraft(idempotencyKey: string): ActionRequestDraft {
+  return {
+    kind: 'publish.release',
+    risk: 'high',
+    idempotencyKey,
+    request: { release: 'v1' },
+    recoveryPoint: { step: 'before_publish' },
+    approval: {
+      summary: 'Publish release',
+      impact: 'Makes the release public',
+      recommendedOptionId: 'approve',
+      options: [
+        { id: 'approve', label: 'Publish', kind: 'approve' },
+        { id: 'reject', label: 'Do not publish', kind: 'reject' },
+      ],
+    },
   }
 }
 

@@ -5,6 +5,7 @@ import type { ChildProcess } from 'node:child_process'
 
 import {
   availableLoopbackPort,
+  desktopRequestHeaders,
   desktopServiceEnvironment,
   desktopServiceRoot,
   isLoopbackAppUrl,
@@ -28,6 +29,7 @@ describe('desktop runtime', () => {
     const environment = desktopServiceEnvironment({
       port: 41234,
       dataDir: '/tmp/pegas-desktop-test',
+      apiToken: 'desktop-instance-token',
       testMode: true,
       environment: { PATH: '/usr/bin' },
     })
@@ -36,9 +38,33 @@ describe('desktop runtime', () => {
       ELECTRON_RUN_AS_NODE: '1',
       PEGAS_API_HOST: '127.0.0.1',
       PEGAS_API_PORT: '41234',
+      PEGAS_API_TOKEN: 'desktop-instance-token',
       PEGAS_DATA_DIR: '/tmp/pegas-desktop-test',
       PEGAS_EXECUTOR: 'echo',
     })
+  })
+
+  it('authenticates only requests to the trusted desktop service origin', () => {
+    const headers = { Accept: 'application/json' }
+    expect(
+      desktopRequestHeaders(
+        'http://127.0.0.1:41234/v1/approvals',
+        'http://127.0.0.1:41234',
+        'desktop-instance-token',
+        headers,
+      ),
+    ).toEqual({
+      Accept: 'application/json',
+      Authorization: 'Bearer desktop-instance-token',
+    })
+    expect(
+      desktopRequestHeaders(
+        'https://example.com/v1/approvals',
+        'http://127.0.0.1:41234',
+        'desktop-instance-token',
+        headers,
+      ),
+    ).toBe(headers)
   })
 
   it('uses the unpacked service directory in packaged applications', () => {

@@ -704,14 +704,14 @@ function PegasSettings({
           </div>
           <div className="compact-field-row">
             <span>开始工作前</span>
-            <select defaultValue="确认服务尚未接入" disabled>
-              <option>确认服务尚未接入</option>
+            <select defaultValue="高风险动作始终确认" disabled>
+              <option>高风险动作始终确认</option>
             </select>
           </div>
           <h3>工作规则</h3>
           <div className="rule-list">
             {[
-              '重要外部操作确认规则（尚未接入）',
+              '高风险外部操作必须确认（系统规则）',
               '产品设计优先给出具体界面方案',
               '发布前先说明回滚路径',
             ].map(rule => (
@@ -745,8 +745,8 @@ function PegasSettings({
         <div className="setting-section">
           <h3>自主程度</h3>
           <p className="setting-copy">
-            Approval
-            服务尚未建立服务端事实来源；当前界面不能保证外部发布、付款、删除或权限变更会被自动拦截。
+            高风险与关键风险 Action 由服务端强制进入持久
+            Approval；自定义风险阈值尚未开放。
           </p>
           <input
             aria-label="自主程度"

@@ -5,6 +5,10 @@ export interface ExecutorInput {
   taskId: string
   prompt: string
   workingDirectory: string
+  actionCapability?: {
+    baseUrl: string
+    claimToken: string
+  }
   resumeSessionId?: string
   onExecutorRef?(executorRef: string): void
   onProgress?(event: ExecutorProgressEvent): void
