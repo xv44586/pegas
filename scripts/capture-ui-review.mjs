@@ -232,6 +232,19 @@ try {
   await darkPage.goto(`http://127.0.0.1:${String(port)}/`)
   await darkPage.getByRole('textbox', { name: '给 Pegas 发消息' }).waitFor()
   await capture(darkPage, 'desktop-dark.png', 'desktop-dark')
+  await darkPage
+    .getByLabel('主导航')
+    .getByRole('button', { name: '设置', exact: true })
+    .click()
+  await darkPage
+    .getByLabel('设置分类')
+    .getByRole('button', { name: '事情归类' })
+    .click()
+  await capture(
+    darkPage,
+    'desktop-dark-settings-router.png',
+    'desktop-dark-settings-router',
+  )
   await dark.close()
 
   for (const theme of ['warm', 'system']) {
@@ -257,6 +270,7 @@ try {
     colorScheme: 'light',
     reducedMotion: 'reduce',
     deviceScaleFactor: 1,
+    hasTouch: true,
   })
   const mobilePage = await mobile.newPage()
   await mobilePage.goto(`http://127.0.0.1:${String(port)}/`)
@@ -289,6 +303,15 @@ try {
     .getByRole('heading', { name: 'Pegas', exact: true })
     .waitFor()
   await capture(mobilePage, 'mobile-settings.png', 'mobile-settings')
+  await mobilePage
+    .getByLabel('设置分类')
+    .getByRole('button', { name: '事情归类', exact: true })
+    .click()
+  await capture(
+    mobilePage,
+    'mobile-settings-router.png',
+    'mobile-settings-router',
+  )
   await mobilePage
     .getByLabel('设置分类')
     .getByRole('button', { name: '语音与输入', exact: true })
@@ -416,6 +439,63 @@ async function assertGeometry(page, label) {
       if (element.scrollWidth > element.clientWidth + 1)
         out.push(
           `${element.className} clips horizontally ${String(element.scrollWidth)}>${String(element.clientWidth)}`,
+        )
+    }
+    const settingsContent =
+      globalThis.document.querySelector('.settings-content')
+    const scrollRegion = globalThis.document.querySelector(
+      '.settings-scroll-region',
+    )
+    const settingsFooter = globalThis.document.querySelector('.settings-footer')
+    if (settingsContent && scrollRegion && settingsFooter) {
+      if (settingsFooter.parentElement !== settingsContent)
+        out.push('settings footer is not a direct child of settings content')
+      if (scrollRegion.contains(settingsFooter))
+        out.push('settings footer is inside the scrolling region')
+      const scrollRect = scrollRegion.getBoundingClientRect()
+      const footerRect = settingsFooter.getBoundingClientRect()
+      if (Math.abs(scrollRect.bottom - footerRect.top) > 2)
+        out.push(
+          `settings layers do not meet ${String(Math.round(scrollRect.bottom))}..${String(Math.round(footerRect.top))}`,
+        )
+    }
+    for (const element of globalThis.document.querySelectorAll('select')) {
+      const rect = element.getBoundingClientRect()
+      if (!rect.width || !rect.height) continue
+      const style = globalThis.getComputedStyle(element)
+      if (style.appearance !== 'none')
+        out.push(`select keeps native appearance (${style.appearance})`)
+      if (rect.height < 40)
+        out.push(`select is too short (${String(Math.round(rect.height))})`)
+      if (Number.parseFloat(style.paddingRight) < 32)
+        out.push(`select chevron padding is too small (${style.paddingRight})`)
+    }
+    for (const row of globalThis.document.querySelectorAll('.test-row')) {
+      const button = row.querySelector('button')
+      const input = row.querySelector('input')
+      if (!button || !input) continue
+      const buttonRect = button.getBoundingClientRect()
+      const inputRect = input.getBoundingClientRect()
+      if (buttonRect.width < 72)
+        out.push(`test button is too narrow (${String(buttonRect.width)})`)
+      if (button.scrollWidth > button.clientWidth + 1)
+        out.push('test button text wraps or clips')
+      if (inputRect.width <= buttonRect.width)
+        out.push('test input does not receive the flexible row width')
+    }
+    for (const label of globalThis.document.querySelectorAll(
+      '.radio-row label',
+    )) {
+      if (label.scrollWidth > label.clientWidth + 1)
+        out.push('radio label wraps or clips')
+    }
+    for (const toggle of globalThis.document.querySelectorAll(
+      ".switch-row input[type='checkbox']",
+    )) {
+      const rect = toggle.getBoundingClientRect()
+      if (Math.abs(rect.width - 40) > 1 || Math.abs(rect.height - 22) > 1)
+        out.push(
+          `switch track changed size (${String(Math.round(rect.width))}x${String(Math.round(rect.height))})`,
         )
     }
     return out

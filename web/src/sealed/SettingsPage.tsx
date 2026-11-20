@@ -208,80 +208,82 @@ export function SettingsPage({
         })}
       </aside>
       <section className="settings-content">
-        {!draft || !response ? (
-          <div className="settings-loading">正在读取设置…</div>
-        ) : (
-          <>
-            {section === 'pegas' && (
-              <PegasSettings
-                agentModels={agentModels}
-                draft={draft}
-                onChange={setDraft}
-                onOpenDrawer={onOpenDrawer}
-              />
-            )}
-            {section === 'models' && (
-              <ModelServices
-                draft={draft}
-                onDiscoverModels={onDiscoverModels}
-                onOpenRouter={() => setSection('router')}
-                onTestModel={onTestModel}
-                providerDraft={providerDraft}
-                response={response}
-                selected={modelServiceProvider}
-                setSelected={setModelServiceProvider}
-                setProviderDraft={setProviderDraft}
-              />
-            )}
-            {section === 'router' && (
-              <RouterSettings
-                draft={draft}
-                response={response}
-                onChange={next => {
-                  if (next.modelProvider !== draft.modelProvider) {
-                    const provider = response.capabilities.providers.find(
-                      item => item.id === next.modelProvider,
-                    )
-                    if (provider)
-                      setProviderDraft({
-                        name: provider.name,
-                        protocol: provider.protocol,
-                        baseUrl: provider.baseUrl,
-                        apiKey: '',
-                        clearApiKey: false,
-                      })
-                  }
-                  setDraft(next)
-                }}
-              />
-            )}
-            {section === 'voice' &&
-              speechDraft &&
-              rewriteDraft &&
-              providerDraft && (
-                <VoiceSettings
+        <div className="settings-scroll-region">
+          {!draft || !response ? (
+            <div className="settings-loading">正在读取设置…</div>
+          ) : (
+            <>
+              {section === 'pegas' && (
+                <PegasSettings
+                  agentModels={agentModels}
                   draft={draft}
                   onChange={setDraft}
-                  onSpeechChange={setSpeechDraft}
-                  onRewriteChange={setRewriteDraft}
-                  onTestRewrite={onTestRewrite}
-                  onTestSpeech={onTestSpeech}
-                  providerDraft={providerDraft}
-                  rewriteDraft={rewriteDraft}
-                  speechDraft={speechDraft}
+                  onOpenDrawer={onOpenDrawer}
                 />
               )}
-            {section === 'connections' && <ConnectionsSettings />}
-            {section === 'memory' && <MemorySettings />}
-            {section === 'privacy' && (
-              <PrivacySettings draft={draft} onChange={setDraft} />
-            )}
-            {section === 'notifications' && <NotificationSettings />}
-            {section === 'usage' && <UsageSettings usage={usage} />}
-            {section === 'recovery' && <RecoverySettings />}
-            {section === 'about' && <AboutSettings />}
-          </>
-        )}
+              {section === 'models' && (
+                <ModelServices
+                  draft={draft}
+                  onDiscoverModels={onDiscoverModels}
+                  onOpenRouter={() => setSection('router')}
+                  onTestModel={onTestModel}
+                  providerDraft={providerDraft}
+                  response={response}
+                  selected={modelServiceProvider}
+                  setSelected={setModelServiceProvider}
+                  setProviderDraft={setProviderDraft}
+                />
+              )}
+              {section === 'router' && (
+                <RouterSettings
+                  draft={draft}
+                  response={response}
+                  onChange={next => {
+                    if (next.modelProvider !== draft.modelProvider) {
+                      const provider = response.capabilities.providers.find(
+                        item => item.id === next.modelProvider,
+                      )
+                      if (provider)
+                        setProviderDraft({
+                          name: provider.name,
+                          protocol: provider.protocol,
+                          baseUrl: provider.baseUrl,
+                          apiKey: '',
+                          clearApiKey: false,
+                        })
+                    }
+                    setDraft(next)
+                  }}
+                />
+              )}
+              {section === 'voice' &&
+                speechDraft &&
+                rewriteDraft &&
+                providerDraft && (
+                  <VoiceSettings
+                    draft={draft}
+                    onChange={setDraft}
+                    onSpeechChange={setSpeechDraft}
+                    onRewriteChange={setRewriteDraft}
+                    onTestRewrite={onTestRewrite}
+                    onTestSpeech={onTestSpeech}
+                    providerDraft={providerDraft}
+                    rewriteDraft={rewriteDraft}
+                    speechDraft={speechDraft}
+                  />
+                )}
+              {section === 'connections' && <ConnectionsSettings />}
+              {section === 'memory' && <MemorySettings />}
+              {section === 'privacy' && (
+                <PrivacySettings draft={draft} onChange={setDraft} />
+              )}
+              {section === 'notifications' && <NotificationSettings />}
+              {section === 'usage' && <UsageSettings usage={usage} />}
+              {section === 'recovery' && <RecoverySettings />}
+              {section === 'about' && <AboutSettings />}
+            </>
+          )}
+        </div>
         {draft &&
           providerDraft &&
           ['pegas', 'models', 'router', 'voice', 'privacy'].includes(section) &&
@@ -968,6 +970,7 @@ function RouterSettings({
       <div className="compact-field-row">
         <span>归类模型</span>
         <select
+          aria-label="归类模型服务"
           value={draft.modelProvider}
           onChange={event =>
             onChange({

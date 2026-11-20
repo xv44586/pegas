@@ -433,6 +433,31 @@ describe('sealed Pegas UI', () => {
     )
   })
 
+  it('keeps settings actions outside the scroll region and uses native styled selects', async () => {
+    installFetch()
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+
+    const save = await screen.findByRole('button', { name: '保存更改' })
+    const footer = save.closest('footer')
+    expect(footer?.classList.contains('settings-footer')).toBe(true)
+    const scrollRegion = footer?.previousElementSibling
+    expect(scrollRegion?.classList.contains('settings-scroll-region')).toBe(
+      true,
+    )
+    expect(scrollRegion?.contains(footer ?? null)).toBe(false)
+
+    fireEvent.click(screen.getByRole('button', { name: /事情归类/ }))
+    const routerProvider = screen.getByLabelText('归类模型服务')
+    expect(routerProvider.tagName).toBe('SELECT')
+    fireEvent.click(screen.getByRole('button', { name: /语音与输入/ }))
+    expect(screen.getByLabelText('语音服务').tagName).toBe('SELECT')
+  })
+
   it('opens the isolated pegas runtime from Pegas settings', async () => {
     installFetch()
     render(<App />)
