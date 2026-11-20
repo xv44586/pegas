@@ -1,11 +1,11 @@
 # Pegas MVP 计划
 
 > 状态：In Progress
-> 更新日期：2026-11-17
+> 更新日期：2026-11-20
 
 ## MVP 验证目标
 
-一个用户只通过单一对话入口连续提出多个事项，Pegas 能够正确分流、持久执行、跨重启恢复，并在需要时通过手机完成确认。Pegas 修改自身时，失败不能同时破坏唯一的恢复入口。
+一个用户只通过单一对话入口连续提出多个事项，即使最初意图尚不完整，Pegas 也能正确分流、共同形成可验收目标、持久执行、跨重启恢复，并通过 evidence 而不是处理日志交付结果。需要判断时用户可以通过手机完成确认；Pegas 修改自身时，失败不能同时破坏唯一的恢复入口。
 
 ## 已建立的工程地基
 
@@ -39,10 +39,14 @@
 - [ ] 单用户认证和移动端设备登录；
 - [ ] 同一用户的 Router lease / fencing；
 - [ ] 新建、补充、纠正和取消 Task 的完整路由；
+- [ ] 从自由文本或语音形成带 revision 的 Goal Contract，只追问会改变结果、权限、成本或风险的关键未知项；
 - [ ] Task 与 Run 完整状态迁移；
+- [ ] success criteria、EvidenceRef 与 Control Plane 完成门禁；
 - [x] 第一版 DSH headless Executor Adapter；
 - [x] Run 与 DSH session 映射及租约过期恢复；
 - [x] Outbox dispatcher 与一个真实投递渠道；
+- [ ] Outbox Review Pack：按完成条件聚合结果 evidence、限制、风险、回滚和审计入口；
+- [ ] 图片、视频、UI 和排版变化的最终视觉 evidence 预览；
 - [x] Activity/Task 只读视图；
 - [ ] 结构化日志、指标和错误追踪。
 
@@ -91,3 +95,7 @@
 5. Pegas 在隔离环境修改自身，候选版本通过后接管服务；
 6. 候选版本无法启动时，Supervisor 自动回滚且 Recovery API 始终可用；
 7. 数据备份能够在空环境中恢复并继续处理未完成 Task。
+8. 用户只给出模糊愿望或失败样例时，Executor 形成可纠正的 Goal Contract；Router 不越界回答业务问题或判断工具能力。
+9. Worker 声称 `ready` 但缺少当前 Goal revision 的必需 evidence 时，Task 不完成；补齐证据后生成按 criterion 组织的 Review Pack。
+10. 视觉结果发生变化时，Outbox 可以预览绑定最终 Artifact revision 的截图、关键帧或页面渲染；旧 revision、错误视口或敏感未脱敏证据被拒绝。
+11. 用户从 Review Pack 可以判断目标是否达成，并能按需进入 Channel 查看代码与处理过程；默认 Outbox 不被执行日志淹没。
