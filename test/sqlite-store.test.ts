@@ -898,8 +898,96 @@ describe('PegasStore', () => {
           .prepare('SELECT version FROM schema_migrations ORDER BY version')
           .all() as { version: number }[]
         expect(versions.map(row => row.version)).toEqual([
-          1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+          1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
         ])
+        expect(
+          (
+            db
+              .prepare(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('worker_profiles', 'worker_profile_commands') ORDER BY name",
+              )
+              .all() as { name: string }[]
+          ).map(row => row.name),
+        ).toEqual(['worker_profile_commands', 'worker_profiles'])
+        expect(
+          db
+            .prepare(
+              "SELECT task_id, revision, model_mode FROM worker_profiles WHERE task_id = 'task'",
+            )
+            .get(),
+        ).toMatchObject({
+          task_id: 'task',
+          revision: 1,
+          model_mode: 'inherit',
+        })
+        expect(
+          (
+            db.prepare('PRAGMA table_info(runs)').all() as { name: string }[]
+          ).map(column => column.name),
+        ).toEqual(
+          expect.arrayContaining([
+            'execution_contract_version',
+            'claimed_contract_version',
+          ]),
+        )
+        db.prepare(
+          "INSERT INTO inbox_events (id,user_id,type,source,payload_json,status,created_at) VALUES ('mixed-writer-event','owner','user.message','old-worker','{}','processed','2026-11-20')",
+        ).run()
+        db.prepare(
+          "INSERT INTO tasks (id,user_id,origin_event_id,title,goal,status,created_at,updated_at) VALUES ('mixed-writer-task','owner','mixed-writer-event','Mixed writer','Mixed writer','completed','2026-11-20','2026-11-20')",
+        ).run()
+        expect(
+          db
+            .prepare(
+              "SELECT task_id, revision FROM worker_profiles WHERE task_id = 'mixed-writer-task'",
+            )
+            .get(),
+        ).toMatchObject({ task_id: 'mixed-writer-task', revision: 1 })
+        db.prepare(
+          "DELETE FROM worker_profiles WHERE task_id = 'mixed-writer-task'",
+        ).run()
+        db.prepare("DELETE FROM tasks WHERE id = 'mixed-writer-task'").run()
+        db.prepare(
+          "DELETE FROM inbox_events WHERE id = 'mixed-writer-event'",
+        ).run()
+
+        db.prepare(
+          "INSERT INTO runs (id,task_id,executor,status,execution_contract_version,created_at,updated_at) VALUES ('future-run','task','dsh-headless','queued',2,'2026-11-20','2026-11-20')",
+        ).run()
+        expect(() =>
+          db
+            .prepare(
+              "UPDATE runs SET status = 'running', claimed_by = 'old-worker' WHERE id = 'future-run'",
+            )
+            .run(),
+        ).toThrow(/unsupported execution contract/)
+        db.prepare(
+          "UPDATE runs SET status = 'running', claimed_by = 'new-worker', claimed_contract_version = 2 WHERE id = 'future-run'",
+        ).run()
+        db.prepare(
+          "UPDATE runs SET status = 'waiting', lease_until = '2026-11-19' WHERE id = 'future-run'",
+        ).run()
+        expect(() =>
+          db
+            .prepare(
+              "UPDATE runs SET claimed_by = 'old-report-worker' WHERE id = 'future-run'",
+            )
+            .run(),
+        ).toThrow(/unsupported execution contract handoff/)
+        db.prepare(
+          "UPDATE runs SET claimed_by = NULL, claimed_contract_version = NULL WHERE id = 'future-run'",
+        ).run()
+        db.prepare(
+          "UPDATE runs SET claimed_by = 'new-report-worker', claimed_contract_version = 2 WHERE id = 'future-run'",
+        ).run()
+        expect(() =>
+          db
+            .prepare(
+              "INSERT INTO runs (id,task_id,retry_of_run_id,executor,status,created_at,updated_at) VALUES ('downgraded-retry','task','future-run','dsh-headless','queued','2026-11-20','2026-11-20')",
+            )
+            .run(),
+        ).toThrow(/execution contract downgrade/)
+        db.prepare("DELETE FROM runs WHERE id = 'future-run'").run()
         expect(
           (
             db

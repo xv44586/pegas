@@ -66,6 +66,14 @@ import {
   type RewriteConnection,
   type RewriteSettingsSummary,
 } from '../rewrite/rewrite-settings.js'
+import {
+  effectiveWorkerProfile,
+  workerExecutionContext,
+  workerProfileFingerprint,
+  type EffectiveWorkerProfile,
+  type WorkerProfile,
+  type WorkerProfileUpdate,
+} from '../worker/worker-profile.js'
 
 const schema = `
 PRAGMA journal_mode = WAL;
@@ -173,6 +181,7 @@ CREATE TABLE IF NOT EXISTS outbox_messages (
 
 const schemaInitializationAttempts = 3
 const schemaRetryDelayMs = 100
+const workerProfileCommandRetention = 256
 
 const migration2 = `
 ALTER TABLE tasks ADD COLUMN goal TEXT NOT NULL DEFAULT '';
@@ -625,6 +634,87 @@ CREATE TABLE action_outcomes (
 );
 `
 
+const migration17 = `
+ALTER TABLE runs ADD COLUMN execution_contract_version INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE runs ADD COLUMN claimed_contract_version INTEGER;
+
+CREATE TABLE worker_profiles (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL UNIQUE REFERENCES tasks(id),
+  revision INTEGER NOT NULL CHECK (revision > 0),
+  model_mode TEXT NOT NULL CHECK (model_mode IN ('inherit','override')),
+  model_provider TEXT,
+  model_name TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  CHECK (
+    (model_mode = 'inherit' AND model_provider IS NULL AND model_name IS NULL)
+    OR
+    (model_mode = 'override' AND model_provider IS NOT NULL AND model_name IS NOT NULL)
+  )
+);
+
+INSERT INTO worker_profiles
+  (id, task_id, revision, model_mode, created_at, updated_at)
+SELECT 'worker-profile:' || id, id, 1, 'inherit', created_at, updated_at
+FROM tasks;
+
+CREATE TABLE worker_profile_commands (
+  command_id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES tasks(id),
+  fingerprint TEXT NOT NULL,
+  response_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX worker_profile_commands_by_task_time
+ON worker_profile_commands (task_id, created_at DESC);
+
+CREATE TRIGGER worker_profiles_after_task_insert
+AFTER INSERT ON tasks
+BEGIN
+  INSERT OR IGNORE INTO worker_profiles
+    (id, task_id, revision, model_mode, created_at, updated_at)
+  VALUES ('worker-profile:' || NEW.id, NEW.id, 1, 'inherit', NEW.created_at, NEW.updated_at);
+END;
+
+CREATE TRIGGER runs_execution_contract_claim_guard
+BEFORE UPDATE OF status ON runs
+WHEN NEW.status = 'running'
+  AND NEW.execution_contract_version > COALESCE(NEW.claimed_contract_version, 1)
+BEGIN
+  SELECT RAISE(ABORT, 'unsupported execution contract');
+END;
+
+CREATE TRIGGER runs_execution_contract_handoff_guard
+BEFORE UPDATE OF claimed_by ON runs
+WHEN NEW.execution_contract_version > 1
+  AND OLD.claimed_by IS NOT NULL
+  AND NEW.claimed_by IS NOT NULL
+  AND OLD.claimed_by <> NEW.claimed_by
+BEGIN
+  SELECT RAISE(ABORT, 'unsupported execution contract handoff');
+END;
+
+CREATE TRIGGER runs_clear_claimed_contract
+AFTER UPDATE OF claimed_by ON runs
+WHEN NEW.claimed_by IS NULL AND NEW.claimed_contract_version IS NOT NULL
+BEGIN
+  UPDATE runs SET claimed_contract_version = NULL WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER runs_retry_contract_downgrade_guard
+BEFORE INSERT ON runs
+WHEN NEW.retry_of_run_id IS NOT NULL
+  AND NEW.execution_contract_version < COALESCE(
+    (SELECT execution_contract_version FROM runs WHERE id = NEW.retry_of_run_id),
+    NEW.execution_contract_version
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'execution contract downgrade');
+END;
+`
+
 interface InboxRow {
   id: string
   user_id: string
@@ -673,6 +763,8 @@ interface RunRow {
   lease_until: string | null
   last_error: string | null
   execution_context_json: string | null
+  execution_contract_version: number
+  claimed_contract_version: number | null
   created_at: string
   updated_at: string
 }
@@ -891,6 +983,17 @@ interface RuntimeSettingsRow {
   updated_at: string
 }
 
+interface WorkerProfileRow {
+  id: string
+  task_id: string
+  revision: number
+  model_mode: WorkerProfile['modelMode']
+  model_provider: string | null
+  model_name: string | null
+  created_at: string
+  updated_at: string
+}
+
 interface ModelProviderConnectionRow {
   id: string
   name: string
@@ -920,6 +1023,18 @@ export interface RewriteConnectionWrite extends RewriteConnection {
 export class SettingsRevisionConflictError extends Error {
   constructor() {
     super('设置已在其他设备更新，请刷新后重试')
+  }
+}
+
+export class WorkerProfileRevisionConflictError extends Error {
+  constructor() {
+    super('事情执行设置已在其他设备更新，请刷新后重试')
+  }
+}
+
+export class WorkerProfileReadOnlyError extends Error {
+  constructor() {
+    super('Stopped Task execution settings are read-only')
   }
 }
 
@@ -970,6 +1085,7 @@ export class PegasStore {
     this.#migrate(14, migration14)
     this.#migrate(15, migration15)
     this.#migrate(16, migration16)
+    this.#migrate(17, migration17)
   }
 
   #backfillWorkerIconIds(): void {
@@ -1092,6 +1208,136 @@ export class PegasStore {
       .get() as unknown as RuntimeSettingsRow | undefined
     if (!row) throw new Error('Runtime settings have not been initialized')
     return toRuntimeSettings(row)
+  }
+
+  getWorkerProfile(taskId: string, userId: string): WorkerProfile {
+    const task = this.#taskById(taskId)
+    if (task.userId !== userId) throw new Error('Task belongs to another user')
+    return this.#workerProfileByTaskId(taskId)
+  }
+
+  getEffectiveWorkerProfile(
+    taskId: string,
+    userId: string,
+  ): EffectiveWorkerProfile {
+    return effectiveWorkerProfile(
+      this.getWorkerProfile(taskId, userId),
+      this.getRuntimeSettings(),
+    )
+  }
+
+  resolveWorkerExecutionContext(
+    taskId: string,
+    userId: string,
+    base: Omit<
+      ExecutionContext,
+      | 'model'
+      | 'settingsRevision'
+      | 'workerProfile'
+      | 'workerProfileRevision'
+      | 'workerProfileSource'
+    >,
+  ): ExecutionContext {
+    const settings = this.getRuntimeSettings()
+    return workerExecutionContext(
+      effectiveWorkerProfile(this.getWorkerProfile(taskId, userId), settings),
+      base,
+      settings.revision,
+    )
+  }
+
+  updateWorkerProfile(
+    taskId: string,
+    userId: string,
+    update: WorkerProfileUpdate,
+  ): WorkerProfile {
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const task = this.#taskById(taskId)
+      if (task.userId !== userId)
+        throw new Error('Task belongs to another user')
+      const fingerprint = workerProfileFingerprint(update)
+      const replay = this.#workerProfileCommandReplay(update.commandId)
+      if (replay) {
+        if (replay.task_id !== taskId || replay.fingerprint !== fingerprint)
+          throw new Error('Worker Profile command ID is already used')
+        const response = JSON.parse(replay.response_json) as WorkerProfile
+        this.#database.exec('COMMIT')
+        return response
+      }
+      if (task.status === 'cancelled') throw new WorkerProfileReadOnlyError()
+      const current = this.#workerProfileByTaskId(taskId)
+      if (current.revision !== update.expectedRevision)
+        throw new WorkerProfileRevisionConflictError()
+      const unchanged =
+        current.modelMode === update.modelMode &&
+        current.modelProvider === update.modelProvider &&
+        current.modelName === update.modelName
+      const now = this.#clock.now().toISOString()
+      if (!unchanged) {
+        this.#database
+          .prepare(
+            `UPDATE worker_profiles
+             SET revision = revision + 1, model_mode = ?, model_provider = ?,
+                 model_name = ?, updated_at = ?
+             WHERE task_id = ? AND revision = ?`,
+          )
+          .run(
+            update.modelMode,
+            update.modelProvider ?? null,
+            update.modelName ?? null,
+            now,
+            taskId,
+            update.expectedRevision,
+          )
+      }
+      const profile = this.#workerProfileByTaskId(taskId)
+      this.#database
+        .prepare(
+          `INSERT INTO worker_profile_commands
+            (command_id, task_id, fingerprint, response_json, created_at)
+           VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run(
+          update.commandId,
+          taskId,
+          fingerprint,
+          JSON.stringify(profile),
+          now,
+        )
+      this.#database
+        .prepare(
+          `DELETE FROM worker_profile_commands
+           WHERE task_id = ? AND rowid NOT IN (
+             SELECT rowid FROM worker_profile_commands
+             WHERE task_id = ?
+             ORDER BY created_at DESC, rowid DESC LIMIT ?
+           )`,
+        )
+        .run(taskId, taskId, workerProfileCommandRetention)
+      this.#database.exec('COMMIT')
+      return profile
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  replayWorkerProfileUpdate(
+    taskId: string,
+    userId: string,
+    update: WorkerProfileUpdate,
+  ): WorkerProfile | undefined {
+    const task = this.#taskById(taskId)
+    if (task.userId !== userId) throw new Error('Task belongs to another user')
+    const replay = this.#workerProfileCommandReplay(update.commandId)
+    if (!replay) return undefined
+    if (
+      replay.task_id !== taskId ||
+      replay.fingerprint !== workerProfileFingerprint(update)
+    )
+      throw new Error('Worker Profile command ID is already used')
+    return JSON.parse(replay.response_json) as WorkerProfile
   }
 
   initializeSpeechConnection(connection: SpeechConnection): void {
@@ -1588,16 +1834,19 @@ export class PegasStore {
       )
     const row = this.#database
       .prepare('SELECT * FROM tasks WHERE origin_event_id = ?')
-      .get(event.id)
+      .get(event.id) as unknown as TaskRow | undefined
     if (!row) throw new Error(`Failed to create task for event ${event.id}`)
-    return toTask(row as unknown as TaskRow)
+    this.#ensureWorkerProfile(row.id, row.created_at)
+    return toTask(row)
   }
 
   applyRoutingDecision(
     event: InboxEvent,
     decision: RoutingDecision,
     executor: string,
-    executionContext: ExecutionContext = { executor },
+    executionContext: ExecutionContext | ((task: Task) => ExecutionContext) = {
+      executor,
+    },
   ): { task: Task; run: Run } {
     this.#database.exec('BEGIN IMMEDIATE')
     try {
@@ -1633,6 +1882,7 @@ export class PegasStore {
             now,
             now,
           )
+        this.#ensureWorkerProfile(taskId, now)
         task = this.#taskById(taskId)
       } else {
         task = this.#taskById(decision.taskId)
@@ -1649,6 +1899,15 @@ export class PegasStore {
 
       const resumed =
         decision.kind === 'continue_task' && task.status === 'completed'
+      const resolvedExecutionContext =
+        typeof executionContext === 'function'
+          ? executionContext(task)
+          : executionContext
+      const executionContractVersion =
+        resolvedExecutionContext.protocol === 'dsh-headless-v1' &&
+        resolvedExecutionContext.workerProfile
+          ? 2
+          : 1
       const blockingAction = this.#database
         .prepare(
           `SELECT status FROM actions
@@ -1691,7 +1950,7 @@ export class PegasStore {
         .prepare(
           `SELECT executor_ref, execution_context_json FROM runs
            WHERE task_id = ? AND executor_ref IS NOT NULL
-           ORDER BY updated_at DESC LIMIT 1`,
+           ORDER BY updated_at DESC, rowid DESC LIMIT 1`,
         )
         .get(task.id) as
         | { executor_ref: string; execution_context_json: string | null }
@@ -1700,7 +1959,7 @@ export class PegasStore {
         previous?.execution_context_json &&
         sameExecutionContext(
           parseExecutionContext(previous.execution_context_json),
-          executionContext,
+          resolvedExecutionContext,
         )
       const goalRevision = (
         this.#database
@@ -1714,8 +1973,8 @@ export class PegasStore {
         .prepare(
           `INSERT INTO runs
             (id, task_id, origin_event_id, executor, resume_from_ref, goal_revision, status,
-             input_json, execution_context_json, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`,
+             input_json, execution_context_json, execution_contract_version, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
         )
         .run(
           runId,
@@ -1725,7 +1984,8 @@ export class PegasStore {
           compatible ? previous.executor_ref : null,
           goalRevision,
           JSON.stringify(decision.input),
-          JSON.stringify(executionContext),
+          JSON.stringify(resolvedExecutionContext),
+          executionContractVersion,
           now,
           now,
         )
@@ -2058,8 +2318,8 @@ export class PegasStore {
               `INSERT INTO runs
                 (id, task_id, executor, resume_from_ref, retry_of_run_id,
                  goal_revision, status, input_json, execution_context_json,
-                 created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`,
+                 execution_contract_version, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
             )
             .run(
               randomUUID(),
@@ -2070,6 +2330,7 @@ export class PegasStore {
               revisionRow.revision,
               JSON.stringify(draft.desiredOutcome),
               latestRun.execution_context_json,
+              latestRun.execution_contract_version,
               createdAt,
               createdAt,
             )
@@ -3526,8 +3787,8 @@ export class PegasStore {
           `INSERT INTO runs
               (id, task_id, retry_of_run_id, executor, resume_from_ref,
                goal_revision, status, input_json, execution_context_json,
-               created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`,
+               execution_contract_version, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
         )
         .run(
           successorId,
@@ -3538,6 +3799,7 @@ export class PegasStore {
           original.goalRevision ?? null,
           JSON.stringify(JSON.stringify(decisionContext)),
           JSON.stringify(original.executionContext),
+          original.executionContractVersion,
           now,
           now,
         )
@@ -3706,6 +3968,7 @@ export class PegasStore {
         .prepare(
           `SELECT * FROM runs
            WHERE task_id IN (SELECT id FROM tasks WHERE status NOT IN ('completed','cancelled'))
+           AND execution_contract_version <= 2
            AND ((status = 'queued' AND NOT EXISTS (
              SELECT 1 FROM runs AS active WHERE active.task_id = runs.task_id AND active.status = 'running'
            ) AND NOT EXISTS (
@@ -3837,8 +4100,15 @@ export class PegasStore {
       if (phase === 'report') {
         this.#database
           .prepare(
+            `UPDATE runs SET claimed_by = NULL, lease_until = NULL,
+             claim_token_hash = NULL, updated_at = ? WHERE id = ?`,
+          )
+          .run(now.toISOString(), row.id)
+        this.#database
+          .prepare(
             `UPDATE runs SET claimed_by = ?, lease_until = ?,
-             claim_token_hash = ?, updated_at = ? WHERE id = ?`,
+             claim_token_hash = ?, claimed_contract_version = 2,
+             updated_at = ? WHERE id = ?`,
           )
           .run(workerId, leaseUntil, claimTokenHash, now.toISOString(), row.id)
       } else {
@@ -3846,7 +4116,8 @@ export class PegasStore {
           .prepare(
             `UPDATE runs
              SET status = 'running', claimed_by = ?, lease_until = ?,
-                 claim_token_hash = ?, attempts = attempts + 1, updated_at = ?
+                 claim_token_hash = ?, claimed_contract_version = 2,
+                 attempts = attempts + 1, updated_at = ?
              WHERE id = ?`,
           )
           .run(workerId, leaseUntil, claimTokenHash, now.toISOString(), row.id)
@@ -4549,8 +4820,8 @@ export class PegasStore {
       .prepare(
         `INSERT INTO runs
       (id, task_id, executor, resume_from_ref, retry_of_run_id, goal_revision, status, input_json,
-       execution_context_json, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`,
+       execution_context_json, execution_contract_version, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -4562,6 +4833,7 @@ export class PegasStore {
         row.input_json,
         row.execution_context_json ??
           JSON.stringify({ executor: row.executor }),
+        row.execution_contract_version,
         now,
         now,
       )
@@ -4868,6 +5140,39 @@ export class PegasStore {
     return toTask(row as unknown as TaskRow)
   }
 
+  #ensureWorkerProfile(taskId: string, timestamp: string): void {
+    this.#database
+      .prepare(
+        `INSERT OR IGNORE INTO worker_profiles
+          (id, task_id, revision, model_mode, created_at, updated_at)
+         VALUES (?, ?, 1, 'inherit', ?, ?)`,
+      )
+      .run(`worker-profile:${taskId}`, taskId, timestamp, timestamp)
+  }
+
+  #workerProfileCommandReplay(
+    commandId: string,
+  ):
+    | { task_id: string; fingerprint: string; response_json: string }
+    | undefined {
+    return this.#database
+      .prepare(
+        `SELECT task_id, fingerprint, response_json
+         FROM worker_profile_commands WHERE command_id = ?`,
+      )
+      .get(commandId) as
+      | { task_id: string; fingerprint: string; response_json: string }
+      | undefined
+  }
+
+  #workerProfileByTaskId(taskId: string): WorkerProfile {
+    const row = this.#database
+      .prepare('SELECT * FROM worker_profiles WHERE task_id = ?')
+      .get(taskId) as unknown as WorkerProfileRow | undefined
+    if (!row) throw new Error(`Task ${taskId} has no Worker Profile`)
+    return toWorkerProfile(row)
+  }
+
   #runById(runId: string): Run {
     const row = this.#database
       .prepare('SELECT * FROM runs WHERE id = ?')
@@ -4951,6 +5256,19 @@ function toRuntimeSettings(row: RuntimeSettingsRow): RuntimeSettings {
   }
 }
 
+function toWorkerProfile(row: WorkerProfileRow): WorkerProfile {
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    revision: row.revision,
+    modelMode: row.model_mode,
+    ...(row.model_provider ? { modelProvider: row.model_provider } : {}),
+    ...(row.model_name ? { modelName: row.model_name } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
 function toModelProviderConnection(
   row: ModelProviderConnectionRow,
 ): ModelProviderConnection {
@@ -5003,6 +5321,7 @@ function toRun(row: RunRow): Run {
     executionContext: parseExecutionContext(
       row.execution_context_json ?? JSON.stringify({ executor: row.executor }),
     ),
+    executionContractVersion: row.execution_contract_version,
     status: row.status,
     input: JSON.parse(row.input_json) as string,
     ...(row.output_json

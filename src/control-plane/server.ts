@@ -51,8 +51,14 @@ import type {
 import {
   RunClaimError,
   SettingsRevisionConflictError,
+  WorkerProfileReadOnlyError,
+  WorkerProfileRevisionConflictError,
   type PegasStore,
 } from '../storage/sqlite-store.js'
+import {
+  effectiveWorkerProfile,
+  parseWorkerProfileUpdate,
+} from '../worker/worker-profile.js'
 
 const maximumBodyBytes = 1024 * 1024
 const defaultPageLimit = 50
@@ -68,12 +74,17 @@ export interface ControlPlaneOptions {
   settingsCapabilities?: SettingsCapabilities | (() => SettingsCapabilities)
   modelCredentialVault?: ModelCredentialVault
   agentModelCatalog?: () => Promise<DshModelCatalog>
+  agentModelCatalogTtlMs?: number
   modelTimeoutMs?: number
   speechTimeoutMs?: number
   privacyHmacKey?: string
 }
 
 export function createControlPlane(options: ControlPlaneOptions): Server {
+  const loadAgentModelCatalog = cachedAgentModelCatalog(
+    options.agentModelCatalog,
+    options.agentModelCatalogTtlMs,
+  )
   return createServer(async (request, response) => {
     try {
       if (request.url === '/healthz' && request.method === 'GET') {
@@ -264,10 +275,16 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         request.url === '/v1/settings/agent-models' &&
         request.method === 'GET'
       ) {
-        if (!options.agentModelCatalog) {
+        if (!loadAgentModelCatalog) {
           return sendJson(response, 503, { error: 'agent_models_unavailable' })
         }
-        return sendJson(response, 200, await options.agentModelCatalog())
+        try {
+          return sendJson(response, 200, await loadAgentModelCatalog())
+        } catch {
+          return sendJson(response, 503, {
+            error: 'agent_models_unavailable',
+          })
+        }
       }
 
       if (request.url === '/v1/events' && request.method === 'POST') {
@@ -294,6 +311,103 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
       }
 
       const taskResourceUrl = new URL(request.url ?? '/', 'http://localhost')
+      const workerProfileMatch = /^\/v1\/tasks\/([^/]+)\/worker-profile$/.exec(
+        taskResourceUrl.pathname,
+      )
+      if (workerProfileMatch && request.method === 'GET') {
+        const taskId = decodeURIComponent(workerProfileMatch[1] ?? '')
+        const userId = requiredQuery(taskResourceUrl, 'userId')
+        if (!options.store.findTask(taskId, userId))
+          return sendJson(response, 404, { error: 'not_found' })
+        const profile = options.store.getWorkerProfile(taskId, userId)
+        return sendJson(response, 200, {
+          profile,
+          effective: effectiveWorkerProfile(
+            profile,
+            options.store.getRuntimeSettings(),
+          ),
+        })
+      }
+      if (workerProfileMatch && request.method === 'PUT') {
+        const taskId = decodeURIComponent(workerProfileMatch[1] ?? '')
+        const body = await readJson(request)
+        if (!isRecord(body)) throw new Error('Request body must be an object')
+        const userId = requiredString(body.userId, 'userId')
+        const task = options.store.findTask(taskId, userId)
+        if (!task) return sendJson(response, 404, { error: 'not_found' })
+        try {
+          const update = parseWorkerProfileUpdate(body)
+          const replay = options.store.replayWorkerProfileUpdate(
+            taskId,
+            userId,
+            update,
+          )
+          if (replay) {
+            return sendJson(response, 200, {
+              profile: replay,
+              effective: effectiveWorkerProfile(
+                replay,
+                options.store.getRuntimeSettings(),
+              ),
+            })
+          }
+          if (task.status === 'cancelled') {
+            return sendJson(response, 409, {
+              error: 'worker_profile_read_only',
+            })
+          }
+          if (update.modelMode === 'override') {
+            if (!loadAgentModelCatalog) {
+              return sendJson(response, 503, {
+                error: 'agent_models_unavailable',
+              })
+            }
+            let catalog: DshModelCatalog
+            try {
+              catalog = await loadAgentModelCatalog()
+            } catch {
+              return sendJson(response, 503, {
+                error: 'agent_models_unavailable',
+              })
+            }
+            const available = catalog.models.some(
+              model =>
+                model.provider === update.modelProvider &&
+                model.id === update.modelName,
+            )
+            if (!available) {
+              return sendJson(response, 422, {
+                error: 'worker_model_unavailable',
+              })
+            }
+          }
+          const profile = options.store.updateWorkerProfile(
+            taskId,
+            userId,
+            update,
+          )
+          return sendJson(response, 200, {
+            profile,
+            effective: effectiveWorkerProfile(
+              profile,
+              options.store.getRuntimeSettings(),
+            ),
+          })
+        } catch (error) {
+          if (error instanceof WorkerProfileRevisionConflictError) {
+            return sendJson(response, 409, {
+              error: 'worker_profile_conflict',
+              message: error.message,
+            })
+          }
+          if (error instanceof WorkerProfileReadOnlyError) {
+            return sendJson(response, 409, {
+              error: 'worker_profile_read_only',
+            })
+          }
+          throw error
+        }
+      }
       const taskGoalMatch = /^\/v1\/tasks\/([^/]+)\/goals$/.exec(
         taskResourceUrl.pathname,
       )
@@ -788,6 +902,29 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
       return sendJson(response, 400, { error: 'bad_request', message })
     }
   })
+}
+
+function cachedAgentModelCatalog(
+  load: ControlPlaneOptions['agentModelCatalog'],
+  ttlMs = 5_000,
+): (() => Promise<DshModelCatalog>) | undefined {
+  if (!load) return undefined
+  let cached: { value: DshModelCatalog; expiresAt: number } | undefined
+  let inFlight: Promise<DshModelCatalog> | undefined
+  return async () => {
+    const now = Date.now()
+    if (cached && cached.expiresAt > now) return cached.value
+    if (inFlight) return inFlight
+    inFlight = load()
+      .then(value => {
+        cached = { value, expiresAt: Date.now() + Math.max(0, ttlMs) }
+        return value
+      })
+      .finally(() => {
+        inFlight = undefined
+      })
+    return inFlight
+  }
 }
 
 function explicitTaskId(input: NewInboxEvent): string | undefined {

@@ -102,12 +102,12 @@ Executor Session 只能在同一 Channel 内作为恢复候选，不能跨 Chann
 
 ### WorkerProfile
 
-WorkerProfile 保存 Channel 的工作角色与可选覆盖。所有 Worker 默认继承用户开始时配置的 Pegas 全局 Agent 模型，不为每个 Worker 复制一份默认配置。
+WorkerProfile 保存一件事情的内部执行配置。所有事情默认继承用户开始时配置的 Pegas 全局 Agent 模型，不为每件事情复制一份默认配置。
 
 ```text
 effective configuration
   = Pegas global defaults
-  + WorkerProfile explicit overrides
+  + task-scoped explicit settings
 ```
 
 规则：
@@ -117,6 +117,64 @@ effective configuration
 - 每次 Run 保存有效配置快照；历史 Run 不因之后修改默认值或覆盖而变化。
 - 运行中 Executor Session 不原地更换模型。影响执行的配置变化从下一 Run 或受控 Session rollover 生效。
 - 工作人设是范围化执行角色，不是独立对外人格。
+
+产品文案统一称为“事情级执行设置”。第一阶段 `WorkerProfile` 只是服务端内部对象，按权威 Task 唯一持久化；WorkChannel 不增加第二层配置，界面也不显示内部 profile ID。所有者通过 `GET /v1/tasks/:taskId/worker-profile?userId=…` 读取原始与有效配置，通过 `PUT /v1/tasks/:taskId/worker-profile` 携带 command ID 和 expected revision 更新继承或模型覆盖。覆盖模型的 Provider ID 与模型 ID 必须精确匹配当前隔离 DSH profile 的模型目录；Provider 凭证仍留在 DSH，不进入 profile 或 API 响应。
+
+schema v17 会为既有 Task 回填 revision 1 的继承配置，并用 Task insert trigger 覆盖回滚期间旧应用写入的新 Task。新生产 DSH Run 在路由事务内解析有效配置，保存结构化模型引用、WorkerProfile ID/revision/来源、DSH profile、workspace、权限集合和协议，并标记执行契约 v2。数据库阻止旧 Worker claim v2 Run、在报告恢复阶段直接接管 v2 Run，或把它的 retry 降级为 v1；新版 Worker 在启动 Executor 前严格验证快照。后续全局设置或事情级设置变化只影响新 Run。第一阶段 Web 仅以“来源 · 版本”展示事情级执行设置，事情级编辑器、角色与工具权限覆盖仍属于 `WORKER-001` 后续缺口。
+
+#### API 合同
+
+读取：
+
+```http
+GET /v1/tasks/task-123/worker-profile?userId=owner
+```
+
+```json
+{
+  "profile": {
+    "revision": 2,
+    "modelMode": "override",
+    "modelProvider": "discovery-api",
+    "modelName": "deepseek-v4.1-flash-1017"
+  },
+  "effective": {
+    "source": "task",
+    "modelMode": "override",
+    "modelProvider": "discovery-api",
+    "modelName": "deepseek-v4.1-flash-1017",
+    "modelRef": "discovery-api/deepseek-v4.1-flash-1017"
+  }
+}
+```
+
+更新：
+
+```http
+PUT /v1/tasks/task-123/worker-profile
+Content-Type: application/json
+```
+
+```json
+{
+  "userId": "owner",
+  "commandId": "profile-command-123",
+  "expectedRevision": 2,
+  "modelMode": "inherit"
+}
+```
+
+| 状态 | `error`                    | 含义                                                       |
+| ---- | -------------------------- | ---------------------------------------------------------- |
+| 200  | —                          | 读取、更新或仍在保留窗口内的相同命令重放成功               |
+| 400  | `bad_request`              | 请求结构、长度、枚举或 revision 无效                       |
+| 404  | `not_found`                | Task 不存在或不属于调用用户；两种情况故意返回相同响应      |
+| 409  | `worker_profile_conflict`  | `expectedRevision` 已过期                                  |
+| 409  | `worker_profile_read_only` | 事情已停止，新的设置命令被拒绝；已成功命令仍可重放         |
+| 422  | `worker_model_unavailable` | 覆盖模型不在当前隔离 DSH profile 的目录                    |
+| 503  | `agent_models_unavailable` | DSH 模型目录未配置或临时读取失败；新增模型覆盖 fail closed |
+
+模型目录使用 5 秒有界缓存并合并并发读取；失败不缓存。每个 Task 只保留最近 256 条 command 响应用于重放，避免无限增长。命令重放先于 Task 可写状态和模型目录检查，因此网络响应丢失后的同一请求不会因事情后来停止或目录临时失败而改变结果。
 
 ### ChannelEvent
 
@@ -413,7 +471,7 @@ Outbox 的投递状态与产品已读状态分离；`sent` 不代表用户已经
 | `CHANNEL-001`  | 服务端 Task 以 WorkChannel 投影供 Web 使用；主入口与 Channel 直接对话边界明确           | `TASK-001`, `CONV-002`                                             | Usable   |
 | `TASK-002`     | completed Channel 可经授权复核恢复；用户停止后原 Channel 永久关闭；Run/Runtime 独立结束 | `TASK-001`, `CHANNEL-001`, `EXEC-003`, `WORKER-001` 的执行快照边界 | Partial  |
 | `CHANNEL-002`  | Channel 时间线显示结构化输入、路由、Run、工具摘要和结果                                 | `CHANNEL-001`, `EXEC-001`                                          | Partial  |
-| `WORKER-001`   | Worker 继承全局模型并支持显式覆盖、配置快照和受控 Session rollover                      | `CHANNEL-001`, `SETTINGS-001`                                      | Planned  |
+| `WORKER-001`   | 事情继承全局模型并支持显式覆盖、配置快照和受控 Session rollover                         | `CHANNEL-001`, `SETTINGS-001`                                      | Partial  |
 | `COLLAB-001`   | 委派、交接、context note、handback 和结果回送形成持久闭环                               | `CHANNEL-002`, `WORKER-001`, `ROUTE-002`                           | Planned  |
 | `CHANNEL-003`  | 按 ID/对话搜索，并按创建/结束时间和状态排序过滤                                         | `CHANNEL-002`                                                      | Planned  |
 | `NOTIFY-003`   | Web Outbox 提供列表、详情、已读和来源 Channel 跳转                                      | `NOTIFY-001`, `CHANNEL-001`                                        | Usable   |

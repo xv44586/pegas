@@ -2,6 +2,7 @@ import type {
   ClaimedRun,
   ExecutionContext,
   InboxEvent,
+  Task,
 } from '../core/domain.js'
 import type { RunExecutor } from '../executor/executor.js'
 import type { TaskRouter } from '../router/router.js'
@@ -9,6 +10,7 @@ import {
   TaskActionBlockedError,
   type PegasStore,
 } from '../storage/sqlite-store.js'
+import { runExecutionWorkspace } from './run-execution-snapshot.js'
 
 export interface EventHandler {
   handle(event: InboxEvent, store: PegasStore): Promise<void>
@@ -28,12 +30,12 @@ export function localControlPlaneBaseUrl(host: string, port: number): string {
 export class RoutingEventHandler implements EventHandler {
   readonly #router: TaskRouter
   readonly #executorName: string
-  readonly #executionContext: () => ExecutionContext
+  readonly #executionContext: (task: Task) => ExecutionContext
 
   constructor(
     router: TaskRouter,
     executorName: string,
-    executionContext: () => ExecutionContext = () => ({
+    executionContext: (task: Task) => ExecutionContext = () => ({
       executor: executorName,
     }),
   ) {
@@ -52,11 +54,8 @@ export class RoutingEventHandler implements EventHandler {
       store.listTasks(event.userId),
     )
     if (!decision) return
-    store.applyRoutingDecision(
-      event,
-      decision,
-      this.#executorName,
-      this.#executionContext(),
+    store.applyRoutingDecision(event, decision, this.#executorName, task =>
+      this.#executionContext(task),
     )
   }
 }
@@ -139,7 +138,9 @@ export async function executeClaimedRun(
       runId: claimed.run.id,
       taskId: claimed.task.id,
       prompt: claimed.run.input,
-      workingDirectory,
+      workingDirectory: runExecutionWorkspace(claimed.run, workingDirectory),
+      executionContext: claimed.run.executionContext,
+      executionContractVersion: claimed.run.executionContractVersion,
       actionCapability: {
         baseUrl: controlPlaneBaseUrl,
         claimToken: claimed.claimToken,
