@@ -161,10 +161,13 @@ export function App() {
     const channel =
       data.snapshot.channels.find(item => item.id === view.channel.id) ??
       view.channel
-    const run = latestRunForTask(data.snapshot.runs, channel.id) ?? view.run
+    const runs =
+      view.runs ?? data.snapshot.runs.filter(item => item.taskId === channel.id)
+    const run = latestRunForTask(runs, channel.id) ?? view.run
     const records =
       data.usage?.records.filter(record => record.runId === run?.id) ?? []
-    if (!records.length) return { ...view, channel, run, usage: undefined }
+    if (!records.length)
+      return { ...view, channel, run, runs, usage: undefined }
     const sum = (key: 'totalTokens' | 'durationMs' | 'costUsd') => {
       const values = records
         .map(record => record[key])
@@ -177,6 +180,7 @@ export function App() {
       ...view,
       channel,
       run,
+      runs,
       usage: {
         totalTokens: sum('totalTokens'),
         durationMs: sum('durationMs'),
@@ -187,6 +191,34 @@ export function App() {
   function openDrawer(view: DrawerView) {
     rememberFocus()
     setDrawer(enrichDrawer(view))
+    if (view.kind === 'task') void loadTaskDrawer(view.channel.id)
+  }
+  async function loadTaskDrawer(channelId: string) {
+    try {
+      const scoped = await api.snapshot(channelId)
+      const timeline = scoped.channelTimeline
+      setDrawer(current => {
+        if (current?.kind !== 'task' || current.channel.id !== channelId)
+          return current
+        const runs = timeline?.runs ?? scoped.runs
+        return enrichDrawer({
+          ...current,
+          channel: timeline?.channel ?? current.channel,
+          run: latestRunForTask(runs, channelId) ?? current.run,
+          runs,
+          ...(timeline ? { timeline } : {}),
+          timelineError: undefined,
+        })
+      })
+    } catch (caught) {
+      const message =
+        caught instanceof Error ? caught.message : '无法读取 Channel 时间线。'
+      setDrawer(current =>
+        current?.kind === 'task' && current.channel.id === channelId
+          ? { ...current, timelineError: message }
+          : current,
+      )
+    }
   }
   function closeDrawer() {
     setDrawer(undefined)
@@ -320,7 +352,16 @@ export function App() {
       `${url.pathname}${url.search}${url.hash}`,
     )
     restoreAttentionDrawer(message)
-    await markRead(message)
+    try {
+      await markRead(message)
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 401)
+        setUnauthorized(true)
+      else
+        setError(
+          caught instanceof Error ? caught.message : '标记已读失败，请重试。',
+        )
+    }
   }
 
   function restoreAttentionDrawer(message: OutboxMessage) {
@@ -338,6 +379,7 @@ export function App() {
         run: latestRunForTask(data.snapshot.runs, channel.id),
       }),
     )
+    void loadTaskDrawer(channel.id)
   }
 
   useEffect(() => {

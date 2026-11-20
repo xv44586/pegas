@@ -150,6 +150,15 @@ function installFetch(
       return Promise.resolve(Response.json({ events: snapshot.events }))
     if (path.startsWith('/v1/channels?'))
       return Promise.resolve(Response.json({ channels: snapshot.channels }))
+    if (path.startsWith('/v1/channels/task-1/timeline?'))
+      return Promise.resolve(
+        Response.json({
+          channel,
+          events: snapshot.events,
+          messages: snapshot.messages,
+          runs: snapshot.runs,
+        }),
+      )
     if (path.startsWith('/v1/runs?'))
       return Promise.resolve(Response.json({ runs: snapshot.runs }))
     if (path.startsWith('/v1/outbox?'))
@@ -280,6 +289,17 @@ function installSnapshotFetch(
       return Response.json({ events: nextSnapshot.events })
     if (path.startsWith('/v1/channels?'))
       return Response.json({ channels: nextSnapshot.channels })
+    if (path.startsWith('/v1/channels/') && path.includes('/timeline?')) {
+      const scopedChannel = nextSnapshot.channels[0]
+      if (!scopedChannel)
+        return Response.json({ message: 'Channel missing' }, { status: 404 })
+      return Response.json({
+        channel: scopedChannel,
+        events: nextSnapshot.events,
+        messages: nextSnapshot.messages,
+        runs: nextSnapshot.runs,
+      })
+    }
     if (path.startsWith('/v1/runs?'))
       return Response.json({ runs: nextSnapshot.runs })
     if (path.startsWith('/v1/outbox?'))
@@ -744,7 +764,7 @@ describe('sealed Pegas UI', () => {
         name: /已完成 · 安全自更新流程/,
       }),
     )
-    expect(screen.getByText(/Run · run-newe/)).toBeTruthy()
+    expect(screen.getByText(/Run 1 · run-newe/)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '继续追问' }))
     expect(screen.getByText(/继续事情：/)).toBeTruthy()
 
@@ -1369,5 +1389,229 @@ describe('sealed Pegas UI', () => {
     const privacy = screen.getByLabelText('启用遮罩')
     expect(privacy).toHaveProperty('disabled', true)
     expect(screen.getByText(/服务端尚未配置隐私 HMAC key/)).toBeTruthy()
+  })
+
+  it('loads and renders the selected Channel timeline in the detail drawer', async () => {
+    installFetch(path => {
+      if (!path.startsWith('/v1/channels/task-1/timeline?')) return undefined
+      return Response.json({
+        channel,
+        events: [
+          {
+            ...snapshot.events[0],
+            id: 'scoped-event',
+            payload: { text: '只属于当前 Channel 的输入' },
+          },
+        ],
+        messages: [],
+        runs: snapshot.runs,
+      })
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /所有事情/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /安全自更新流程/ }))
+    expect(await screen.findByText('只属于当前 Channel 的输入')).toBeTruthy()
+  })
+
+  it('surfaces a scoped Channel timeline failure in the detail drawer', async () => {
+    installFetch(path =>
+      path.startsWith('/v1/channels/task-1/timeline?')
+        ? Response.json({ message: '时间线暂时不可用' }, { status: 503 })
+        : undefined,
+    )
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /所有事情/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /安全自更新流程/ }))
+    expect(await screen.findByText('时间线暂时不可用')).toBeTruthy()
+  })
+
+  it('continues running work in the same Channel', async () => {
+    const fetchMock = installFetch()
+    render(<App />)
+    fireEvent.click(
+      await screen.findByRole('button', { name: /进行中 · 安全自更新流程/ }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '继续追问' }))
+    expect(await screen.findByText(/继续事情：/)).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('给 Pegas 发消息'), {
+      target: { value: '补充当前事情' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([path, init]) => {
+          if (path !== '/v1/events' || init?.method !== 'POST') return false
+          const body = JSON.parse(
+            typeof init.body === 'string' ? init.body : '{}',
+          ) as { payload?: { taskId?: string } }
+          return body.payload?.taskId === channel.id
+        }),
+      ).toBe(true),
+    )
+  })
+
+  it('keeps read but unresolved attention available and reports read failures', async () => {
+    const sourceMessage = snapshot.messages[0]
+    if (!sourceMessage) throw new Error('Expected an outbox message fixture')
+    installSnapshotFetch(
+      {
+        ...snapshot,
+        messages: [
+          {
+            ...sourceMessage,
+            payload: { type: 'run.failed', error: '需要处理的失败' },
+          },
+        ],
+      },
+      path =>
+        path.endsWith('/read')
+          ? Response.json({ message: '无法标记已读' }, { status: 503 })
+          : undefined,
+    )
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '查看原因' }))
+    expect(await screen.findByText('无法标记已读')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '关闭详情' }))
+    expect(screen.getByText('需要处理的失败')).toBeTruthy()
+    expect(screen.getByText(/未读 · 来自/)).toBeTruthy()
+  })
+
+  it('keeps unresolved attention available after it is marked read', async () => {
+    const sourceMessage = snapshot.messages[0]
+    if (!sourceMessage) throw new Error('Expected an outbox message fixture')
+    const attentionMessage = {
+      ...sourceMessage,
+      payload: { type: 'run.failed', error: '已读但仍需处理' },
+    }
+    installSnapshotFetch({ ...snapshot, messages: [attentionMessage] }, path =>
+      path.endsWith('/read')
+        ? Response.json({
+            message: {
+              ...attentionMessage,
+              readAt: '2026-11-19T09:00:00.000Z',
+            },
+          })
+        : undefined,
+    )
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '查看原因' }))
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '关闭详情' })).toBeTruthy(),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '关闭详情' }))
+    expect(screen.getByText('已读但仍需处理')).toBeTruthy()
+    expect(screen.getByText(/已读 · 来自/)).toBeTruthy()
+  })
+
+  it('renders every Run attempt and its failure diagnostic', async () => {
+    const failedRun: Run = {
+      ...run,
+      id: 'run-failed',
+      status: 'failed',
+      lastError: 'provider timeout',
+      createdAt: '2026-11-19T08:00:00.000Z',
+      updatedAt: '2026-11-19T08:01:00.000Z',
+    }
+    const retryRun: Run = {
+      ...run,
+      id: 'run-retry',
+      status: 'queued',
+      retryOfRunId: failedRun.id,
+      createdAt: '2026-11-19T08:02:00.000Z',
+      updatedAt: '2026-11-19T08:02:00.000Z',
+    }
+    installSnapshotFetch({ ...snapshot, runs: [failedRun, retryRun] })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /所有事情/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('tab', { name: '等待中' }))
+    fireEvent.click(screen.getByRole('button', { name: /安全自更新流程/ }))
+    const drawer = await screen.findByLabelText('工作详情')
+    expect(within(drawer).getByText(/Run 1/)).toBeTruthy()
+    expect(within(drawer).getByText(/Run 2/)).toBeTruthy()
+    expect(within(drawer).getByText('provider timeout')).toBeTruthy()
+  })
+
+  it('uses provider-compatible models for routing and custom probes', async () => {
+    const customSettings: SettingsResponse = {
+      ...settingsResponse,
+      settings: {
+        ...settingsResponse.settings,
+        modelProvider: 'custom',
+        modelName: 'configured-custom-model',
+      },
+      capabilities: {
+        ...settingsResponse.capabilities,
+        providers: [
+          ...settingsResponse.capabilities.providers,
+          {
+            id: 'custom',
+            name: '自定义',
+            category: 'custom',
+            protocol: 'openai-chat',
+            baseUrl: 'https://models.example/v1',
+            defaultModel: '',
+            description: '自定义服务',
+            requiresApiKey: false,
+            hasApiKey: false,
+            available: true,
+          },
+        ],
+      },
+    }
+    const fetchMock = installFetch((path, init) => {
+      if (path === '/v1/settings') return Response.json(customSettings)
+      if (path === '/v1/settings/models/test' && init?.method === 'POST')
+        return Response.json({ ok: true, latencyMs: 12 })
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /模型服务/ }))
+    fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([path, init]) => {
+          if (path !== '/v1/settings/models/test') return false
+          const body = JSON.parse(
+            typeof init?.body === 'string' ? init.body : '{}',
+          ) as { modelName?: string }
+          return body.modelName === 'configured-custom-model'
+        }),
+      ).toBe(true),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /事情归类/ }))
+    fireEvent.change(screen.getByLabelText('归类模型服务'), {
+      target: { value: 'anthropic' },
+    })
+    expect(screen.getByLabelText('归类模型名称')).toHaveProperty(
+      'value',
+      'claude-sonnet-4-5',
+    )
   })
 })

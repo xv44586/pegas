@@ -758,10 +758,8 @@ export function AttentionPage({
   const [filter, setFilter] = useState<'all' | 'approval' | 'input' | 'failed'>(
     'all',
   )
-  const unread = snapshot.messages.filter(
-    message => !message.readAt && isAttentionMessage(message),
-  )
-  const visible = unread.filter(message => {
+  const attentionMessages = snapshot.messages.filter(isAttentionMessage)
+  const visible = attentionMessages.filter(message => {
     if (filter === 'all') return true
     return attentionKind(message) === filter
   })
@@ -779,7 +777,7 @@ export function AttentionPage({
           role="tab"
           type="button"
         >
-          全部 {unread.length}
+          全部 {attentionMessages.length}
         </button>
         <button
           aria-selected={filter === 'approval'}
@@ -824,7 +822,8 @@ export function AttentionPage({
                     {textFromPayload(message.payload) || 'Pegas 有一项更新'}
                   </strong>
                   <small>
-                    来自：{channel?.title ?? 'Pegas'} ·{' '}
+                    {message.readAt ? '已读' : '未读'} · 来自：
+                    {channel?.title ?? 'Pegas'} ·{' '}
                     {formatRelativeTime(message.createdAt)}
                   </small>
                 </div>

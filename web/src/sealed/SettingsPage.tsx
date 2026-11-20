@@ -751,7 +751,9 @@ function ModelServices({
     try {
       const result = await onDiscoverModels(
         active.id,
-        active.defaultModel,
+        active.id === draft.modelProvider
+          ? draft.modelName
+          : active.defaultModel,
         active.id === draft.modelProvider && providerDraft
           ? providerDraft
           : activeProviderDraft,
@@ -772,7 +774,9 @@ function ModelServices({
     try {
       const result = await onTestModel(
         active.id,
-        active.defaultModel,
+        active.id === draft.modelProvider
+          ? draft.modelName
+          : active.defaultModel,
         active.id === draft.modelProvider && providerDraft
           ? providerDraft
           : activeProviderDraft,
@@ -1112,13 +1116,18 @@ function RouterSettings({
         <select
           aria-label="归类模型服务"
           value={draft.modelProvider}
-          onChange={event =>
+          onChange={event => {
+            const modelProvider = event.target
+              .value as RuntimeSettings['modelProvider']
+            const provider = response.capabilities.providers.find(
+              item => item.id === modelProvider,
+            )
             onChange({
               ...draft,
-              modelProvider: event.target
-                .value as RuntimeSettings['modelProvider'],
+              modelProvider,
+              modelName: provider?.defaultModel ?? '',
             })
-          }
+          }}
         >
           {response.capabilities.providers.map(provider => (
             <option key={provider.id} value={provider.id}>

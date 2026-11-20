@@ -454,6 +454,30 @@ a {
   font-size: 12px;
   text-align: right;
 }
+
+.drawer-timeline {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.drawer-timeline li {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.drawer-timeline p {
+  margin: 5px 0;
+  white-space: pre-wrap;
+}
+
+.drawer-timeline small {
+  color: var(--text-muted);
+}
 .message-row.is-pegas .message-content {
   max-width: 82%;
 }

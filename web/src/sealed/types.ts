@@ -1,4 +1,5 @@
 import type {
+  ChannelTimeline,
   ModelUsageReport,
   OutboxMessage,
   Run,
@@ -31,6 +32,9 @@ export type DrawerView =
       kind: 'task'
       channel: WorkChannel
       run?: Run
+      runs?: Run[]
+      timeline?: ChannelTimeline
+      timelineError?: string
       usage?: {
         totalTokens?: number
         durationMs?: number

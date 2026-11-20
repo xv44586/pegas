@@ -8,7 +8,6 @@ import {
   HardDrive,
   Image as ImageIcon,
   LockKeyhole,
-  PauseCircle,
   Play,
   RotateCw,
   X,
@@ -16,7 +15,12 @@ import {
 import { useEffect, useRef, useState } from 'react'
 
 import type { Run } from '../types'
-import { formatRelativeTime, statusLabel, type DrawerView } from './types'
+import {
+  formatRelativeTime,
+  statusLabel,
+  textFromPayload,
+  type DrawerView,
+} from './types'
 
 export function DetailDrawer({
   view,
@@ -97,6 +101,9 @@ export function DetailDrawer({
             onRetry={onRetry}
             onStop={onStop}
             run={view.run}
+            runs={view.runs}
+            timeline={view.timeline}
+            timelineError={view.timelineError}
             usage={view.usage}
           />
         )}
@@ -124,6 +131,9 @@ function drawerTitle(view: DrawerView): string {
 function TaskDetail({
   channel,
   run,
+  runs,
+  timeline,
+  timelineError,
   usage,
   onRetry,
   onContinue,
@@ -131,6 +141,9 @@ function TaskDetail({
 }: {
   channel: Extract<DrawerView, { kind: 'task' }>['channel']
   run?: Run
+  runs?: Run[]
+  timeline?: Extract<DrawerView, { kind: 'task' }>['timeline']
+  timelineError?: string
   usage?: Extract<DrawerView, { kind: 'task' }>['usage']
   onRetry: (run: Run) => Promise<void>
   onContinue?: (
@@ -141,6 +154,25 @@ function TaskDetail({
   ) => Promise<void>
 }) {
   const state = statusLabel(channel, run)
+  const runHistory = (runs ?? (run ? [run] : [])).toSorted(
+    (left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt),
+  )
+  const timelineItems = [
+    ...(timeline?.events.map(event => ({
+      id: `event-${event.id}`,
+      at: event.createdAt,
+      role: '你',
+      text: textFromPayload(event.payload),
+    })) ?? []),
+    ...(timeline?.messages.map(message => ({
+      id: `message-${message.id}`,
+      at: message.createdAt,
+      role: 'Pegas',
+      text: textFromPayload(message.payload),
+    })) ?? []),
+  ]
+    .filter(item => item.text)
+    .toSorted((left, right) => Date.parse(left.at) - Date.parse(right.at))
   const [confirmingStop, setConfirmingStop] = useState(false)
   const [stopping, setStopping] = useState(false)
   const [stopError, setStopError] = useState('')
@@ -209,16 +241,32 @@ function TaskDetail({
               <small>{formatRelativeTime(channel.createdAt)}</small>
             </span>
           </li>
-          {run ? (
-            <li className={runProgressClass(state)}>
-              {runProgressIcon(state)}
-              <span>
-                <strong>Run · {run.id.slice(0, 8)}</strong>
-                <small>
-                  {state} · {formatRelativeTime(run.updatedAt)}
-                </small>
-              </span>
-            </li>
+          {runHistory.length ? (
+            runHistory.map((historyRun, index) => {
+              const historyState = statusLabel(channel, historyRun)
+              return (
+                <li
+                  className={runProgressClass(historyState)}
+                  key={historyRun.id}
+                >
+                  {runProgressIcon(historyState)}
+                  <span>
+                    <strong>
+                      {runHistory.length === 1
+                        ? `Run · ${historyRun.id.slice(0, 8)}`
+                        : `Run ${String(index + 1)} · ${historyRun.id.slice(0, 8)}`}
+                    </strong>
+                    <small>
+                      {historyState} ·{' '}
+                      {formatRelativeTime(historyRun.updatedAt)}
+                    </small>
+                    {runHistory.length > 1 && historyRun.lastError && (
+                      <small>{historyRun.lastError}</small>
+                    )}
+                  </span>
+                </li>
+              )
+            })
           ) : (
             <li>
               <Clock3 size={14} />
@@ -229,6 +277,26 @@ function TaskDetail({
             </li>
           )}
         </ol>
+      </section>
+      <section className="detail-section">
+        <h3>Channel 时间线</h3>
+        {timelineError ? (
+          <p className="settings-error" role="alert">
+            {timelineError}
+          </p>
+        ) : timelineItems.length ? (
+          <ol className="drawer-timeline">
+            {timelineItems.map(item => (
+              <li key={item.id}>
+                <strong>{item.role}</strong>
+                <p>{item.text}</p>
+                <small>{formatRelativeTime(item.at)}</small>
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <p className="drawer-footnote">正在读取这件事的完整时间线。</p>
+        )}
       </section>
       {usage && (
         <section className="detail-section metadata-list">
@@ -285,9 +353,9 @@ function TaskDetail({
         </section>
       )}
       <footer className="drawer-footer">
-        {state === '失败' && run ? (
+        {state === '失败' && run && (
           <button
-            className="primary-button"
+            className="secondary-button"
             disabled={retrying}
             onClick={() => void retryRun()}
             type="button"
@@ -295,44 +363,17 @@ function TaskDetail({
             <RotateCw size={16} />
             {retrying ? '正在重试…' : '重试'}
           </button>
-        ) : state === '进行中' ? (
-          <>
-            {channel.canStop && onStop && (
-              <button
-                className="danger-button"
-                onClick={() => setConfirmingStop(true)}
-                type="button"
-              >
-                停止事情
-              </button>
-            )}
-            <button
-              className="secondary-button"
-              disabled
-              title="服务端暂停 API 尚未提供"
-              type="button"
-            >
-              <PauseCircle size={16} />
-              暂停
-            </button>
-            <button
-              className="primary-button"
-              disabled
-              title="服务端纠正 API 尚未提供"
-              type="button"
-            >
-              纠正方向
-            </button>
-          </>
-        ) : state === '已完成' ? (
+        )}
+        {channel.status !== 'cancelled' && onContinue && (
           <button
             className="primary-button"
-            onClick={() => onContinue?.(channel)}
+            onClick={() => onContinue(channel)}
             type="button"
           >
             继续追问
           </button>
-        ) : channel.canStop && onStop ? (
+        )}
+        {channel.canStop && onStop && (
           <button
             className="danger-button"
             onClick={() => setConfirmingStop(true)}
@@ -340,7 +381,8 @@ function TaskDetail({
           >
             停止事情
           </button>
-        ) : (
+        )}
+        {channel.status === 'cancelled' && (
           <span className="drawer-footnote">等待服务端返回下一步条件。</span>
         )}
       </footer>
