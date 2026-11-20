@@ -17,6 +17,7 @@ import { AppShell, GlobalSearch } from './sealed/Shell'
 import { type ReviewFixture, UiReviewHarness } from './sealed/UiReviewHarness'
 import {
   emptySnapshot,
+  latestRunForTask,
   type AppData,
   type AppPage,
   type DrawerView,
@@ -47,8 +48,9 @@ export function App() {
   const api = useMemo(() => new PegasApi(userId, token), [token])
   const [data, setData] = useState<AppData>({ snapshot: emptySnapshot })
   const [agentModels, setAgentModels] = useState<DshModelCatalog>()
-  const [page, setPage] = useState<AppPage>('conversation')
+  const [page, setPage] = useState<AppPage>(() => pageFromLocation())
   const [drawer, setDrawer] = useState<DrawerView>()
+  const [continuationTaskId, setContinuationTaskId] = useState<string>()
   const [searchOpen, setSearchOpen] = useState(false)
   const [theme, setTheme] = useState<ThemeChoice>(() => readTheme())
   const [systemDark, setSystemDark] = useState(() => systemPrefersDark())
@@ -56,9 +58,12 @@ export function App() {
   const [error, setError] = useState('')
   const [unauthorized, setUnauthorized] = useState(false)
   const [setupOpen, setSetupOpen] = useState(
-    () => new URLSearchParams(window.location.search).get('setup') === '1',
+    () =>
+      new URLSearchParams(window.location.search).get('setup') === '1' ||
+      localStorage.getItem('pegas-setup-complete') !== 'true',
   )
   const returnFocusRef = useRef<HTMLElement | null>(null)
+  const restoredOutboxRef = useRef(false)
 
   const loadSnapshot = useCallback(async () => {
     try {
@@ -126,12 +131,15 @@ export function App() {
   }
   function enrichDrawer(view: DrawerView): DrawerView {
     if (view.kind === 'runtime')
-      return { ...view, run: view.run ?? data.snapshot.runs[0] }
+      return { ...view, run: data.snapshot.runs.at(-1) ?? view.run }
     if (view.kind !== 'task') return view
+    const channel =
+      data.snapshot.channels.find(item => item.id === view.channel.id) ??
+      view.channel
+    const run = latestRunForTask(data.snapshot.runs, channel.id) ?? view.run
     const records =
-      data.usage?.records.filter(record => record.taskId === view.channel.id) ??
-      []
-    if (!records.length) return view
+      data.usage?.records.filter(record => record.runId === run?.id) ?? []
+    if (!records.length) return { ...view, channel, run, usage: undefined }
     const sum = (key: 'totalTokens' | 'durationMs' | 'costUsd') => {
       const values = records
         .map(record => record[key])
@@ -142,6 +150,8 @@ export function App() {
     }
     return {
       ...view,
+      channel,
+      run,
       usage: {
         totalTokens: sum('totalTokens'),
         durationMs: sum('durationMs'),
@@ -164,6 +174,23 @@ export function App() {
   function closeSearch() {
     setSearchOpen(false)
     restoreFocus()
+  }
+
+  function navigate(nextPage: AppPage) {
+    setPage(nextPage)
+    const url = new URL(window.location.href)
+    if (nextPage === 'conversation') url.searchParams.delete('view')
+    else
+      url.searchParams.set(
+        'view',
+        nextPage === 'attention' ? 'outbox' : nextPage,
+      )
+    if (nextPage !== 'attention') url.searchParams.delete('outbox')
+    window.history.replaceState(
+      {},
+      '',
+      `${url.pathname}${url.search}${url.hash}`,
+    )
   }
 
   useEffect(() => {
@@ -248,6 +275,44 @@ export function App() {
     }))
   }
 
+  async function openAttentionMessage(message: OutboxMessage) {
+    const url = new URL(window.location.href)
+    url.searchParams.set('view', 'outbox')
+    url.searchParams.set('outbox', message.id)
+    window.history.replaceState(
+      {},
+      '',
+      `${url.pathname}${url.search}${url.hash}`,
+    )
+    const channel = data.snapshot.channels.find(
+      item => item.id === message.taskId,
+    )
+    if (channel)
+      openDrawer({
+        kind: 'task',
+        channel,
+        run: latestRunForTask(data.snapshot.runs, channel.id),
+      })
+    await markRead(message)
+  }
+
+  useEffect(() => {
+    if (restoredOutboxRef.current || loading) return
+    const messageId = new URLSearchParams(window.location.search).get('outbox')
+    if (!messageId) {
+      restoredOutboxRef.current = true
+      return
+    }
+    const message = data.snapshot.messages.find(item => item.id === messageId)
+    if (!message) {
+      restoredOutboxRef.current = true
+      return
+    }
+    restoredOutboxRef.current = true
+    setPage('attention')
+    void openAttentionMessage(message)
+  }, [data.snapshot.messages, loading])
+
   if (unauthorized)
     return (
       <AccessGate
@@ -285,17 +350,21 @@ export function App() {
         model.provider.toLocaleLowerCase() ===
         selectedAgentProvider?.toLocaleLowerCase(),
     ) ?? []
+  const continuationChannel = continuationTaskId
+    ? data.snapshot.channels.find(channel => channel.id === continuationTaskId)
+    : undefined
+  const resolvedDrawer = drawer ? enrichDrawer(drawer) : undefined
 
   return (
     <>
       <AppShell
         channels={data.snapshot.channels}
-        onNavigate={setPage}
+        onNavigate={navigate}
         onOpenChannel={channel =>
           openDrawer({
             kind: 'task',
             channel,
-            run: data.snapshot.runs.find(run => run.taskId === channel.id),
+            run: latestRunForTask(data.snapshot.runs, channel.id),
           })
         }
         page={page}
@@ -315,8 +384,10 @@ export function App() {
           <ConversationPage
             actions={actions}
             api={api}
+            continuationChannel={continuationChannel}
             modelProvider={selectedAgentProvider}
             models={availableAgentModels}
+            onClearContinuation={() => setContinuationTaskId(undefined)}
             onSelectModel={selectAgentModel}
             onSent={loadSnapshot}
             selectedModelId={selectedAgentModelId}
@@ -329,7 +400,7 @@ export function App() {
         {page === 'attention' && (
           <AttentionPage
             actions={actions}
-            onRead={markRead}
+            onOpen={openAttentionMessage}
             snapshot={data.snapshot}
           />
         )}
@@ -338,7 +409,7 @@ export function App() {
         {page === 'settings' && (
           <SettingsPage
             agentModels={agentModels}
-            onBack={() => setPage('conversation')}
+            onBack={() => navigate('conversation')}
             onDiscoverModels={(provider, model, draft) =>
               api.discoverModels(provider, model, draft)
             }
@@ -371,18 +442,20 @@ export function App() {
               enrichDrawer({
                 kind: 'task',
                 channel,
-                run: data.snapshot.runs.find(run => run.taskId === channel.id),
+                run: latestRunForTask(data.snapshot.runs, channel.id),
               }),
             )
           }}
         />
       )}
-      {drawer && (
+      {resolvedDrawer && (
         <DetailDrawer
-          onChange={view => setDrawer(enrichDrawer(view))}
+          onChange={setDrawer}
           onClose={closeDrawer}
-          onContinue={() => {
+          onContinue={channel => {
+            setContinuationTaskId(channel.id)
             setDrawer(undefined)
+            navigate('conversation')
             window.setTimeout(() =>
               document
                 .querySelector<HTMLTextAreaElement>(
@@ -395,7 +468,11 @@ export function App() {
             await api.retryRun(run.id)
             await loadSnapshot()
           }}
-          view={drawer}
+          onStop={async channel => {
+            await api.stopChannel(channel.id, 'Stopped from the Pegas UI')
+            await loadSnapshot()
+          }}
+          view={resolvedDrawer}
         />
       )}
       {setupOpen && (
@@ -403,7 +480,7 @@ export function App() {
           response={data.settings}
           onContinueSettings={() => {
             setSetupOpen(false)
-            setPage('settings')
+            navigate('settings')
           }}
           onComplete={() => {
             setSetupOpen(false)
@@ -413,6 +490,20 @@ export function App() {
       )}
     </>
   )
+}
+
+function pageFromLocation(): AppPage {
+  const view = new URLSearchParams(window.location.search).get('view')
+  if (view === 'outbox') return 'attention'
+  if (
+    view === 'work' ||
+    view === 'attention' ||
+    view === 'automation' ||
+    view === 'memory' ||
+    view === 'settings'
+  )
+    return view
+  return 'conversation'
 }
 
 function AccessGate({ onToken }: { onToken: (token: string) => void }) {

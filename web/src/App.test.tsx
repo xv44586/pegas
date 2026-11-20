@@ -238,7 +238,11 @@ function installFetch(
           },
         })
       })
-    if (path.includes('/read') || path.includes('/retry'))
+    if (
+      path.includes('/read') ||
+      path.includes('/retry') ||
+      path.includes('/stop')
+    )
       return Promise.resolve(
         Response.json(
           path.includes('/read')
@@ -259,8 +263,28 @@ function installFetch(
   return fetchMock
 }
 
+function installSnapshotFetch(
+  nextSnapshot: Snapshot,
+  custom?: (path: string, init?: RequestInit) => Response | undefined,
+) {
+  return installFetch((path, init) => {
+    const overridden = custom?.(path, init)
+    if (overridden) return overridden
+    if (path.startsWith('/v1/events?'))
+      return Response.json({ events: nextSnapshot.events })
+    if (path.startsWith('/v1/channels?'))
+      return Response.json({ channels: nextSnapshot.channels })
+    if (path.startsWith('/v1/runs?'))
+      return Response.json({ runs: nextSnapshot.runs })
+    if (path.startsWith('/v1/outbox?'))
+      return Response.json({ messages: nextSnapshot.messages })
+    return undefined
+  })
+}
+
 beforeEach(() => {
   localStorage.clear()
+  localStorage.setItem('pegas-setup-complete', 'true')
   sessionStorage.clear()
   window.history.replaceState({}, '', '/')
 })
@@ -272,6 +296,13 @@ afterEach(() => {
 })
 
 describe('sealed Pegas UI', () => {
+  it('opens onboarding until first-run setup is completed', async () => {
+    localStorage.removeItem('pegas-setup-complete')
+    installFetch()
+    render(<App />)
+    expect(await screen.findByText('欢迎使用 Pegas')).toBeTruthy()
+  })
+
   it('renders the white-first conversation shell and current work', async () => {
     installFetch()
     render(<App />)
@@ -524,6 +555,44 @@ describe('sealed Pegas UI', () => {
     expect(screen.getByText(/未返回的字段不会推断/)).toBeTruthy()
   })
 
+  it('keeps provider identity when two providers expose the same model id', async () => {
+    const fetchMock = installFetch(path => {
+      if (path === '/v1/settings/agent-models')
+        return Response.json({
+          defaultProvider: 'Magpie',
+          defaultModel: 'shared-model',
+          models: [
+            { provider: 'Magpie', id: 'shared-model', name: '共享模型' },
+            { provider: 'Other', id: 'shared-model', name: '共享模型' },
+          ],
+        })
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    const modelSelect = await screen.findByLabelText('模型')
+    fireEvent.change(modelSelect, { target: { value: 'Other::shared-model' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([path, init]) => {
+          if (path !== '/v1/settings' || init?.method !== 'PUT') return false
+          const body = JSON.parse(
+            typeof init.body === 'string' ? init.body : '{}',
+          ) as { agentModelProvider?: string; agentModelName?: string }
+          return (
+            body.agentModelProvider === 'Other' &&
+            body.agentModelName === 'shared-model'
+          )
+        }),
+      ).toBe(true),
+    )
+  })
+
   it('sends a message and preserves the live API behavior', async () => {
     const fetchMock = installFetch()
     render(<App />)
@@ -538,6 +607,180 @@ describe('sealed Pegas UI', () => {
     )
   })
 
+  it('continues a completed task with the newest run and scopes the next message', async () => {
+    const completedChannel: WorkChannel = {
+      ...channel,
+      status: 'completed',
+      canResume: true,
+      canStop: false,
+      endedAt: '2026-11-19T08:10:00.000Z',
+      endedKind: 'completed',
+    }
+    const oldRun: Run = {
+      ...run,
+      id: 'run-old',
+      status: 'failed',
+      updatedAt: '2026-11-19T08:01:00.000Z',
+    }
+    const latestRun: Run = {
+      ...run,
+      id: 'run-newest',
+      status: 'completed',
+      updatedAt: '2026-11-19T08:10:00.000Z',
+    }
+    const fetchMock = installSnapshotFetch({
+      ...snapshot,
+      channels: [completedChannel],
+      runs: [latestRun, oldRun],
+    })
+    render(<App />)
+
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: /已完成 · 安全自更新流程/,
+      }),
+    )
+    expect(screen.getByText(/Run · run-newe/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '继续追问' }))
+    expect(screen.getByText(/继续事情：/)).toBeTruthy()
+
+    const composer = screen.getByLabelText('给 Pegas 发消息')
+    fireEvent.change(composer, { target: { value: '继续补充验收证据' } })
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([path, init]) => {
+          if (path !== '/v1/events' || init?.method !== 'POST') return false
+          const body = JSON.parse(
+            typeof init.body === 'string' ? init.body : '{}',
+          ) as { payload?: { taskId?: string } }
+          return body.payload?.taskId === channel.id
+        }),
+      ).toBe(true),
+    )
+  })
+
+  it('shows usage for the displayed run instead of summing task retries', async () => {
+    const oldRun = { ...run, id: 'run-old', status: 'failed' as const }
+    const latestRun = {
+      ...run,
+      id: 'run-latest',
+      updatedAt: '2026-11-19T08:10:00.000Z',
+    }
+    installSnapshotFetch({ ...snapshot, runs: [oldRun, latestRun] }, path => {
+      if (!path.startsWith('/v1/usage?')) return undefined
+      return Response.json({
+        summary: {
+          records: 2,
+          completeRecords: 2,
+          partialRecords: 0,
+          unavailableRecords: 0,
+        },
+        records: [
+          {
+            runId: oldRun.id,
+            taskId: channel.id,
+            userId: 'owner',
+            workerIconId: 'computer',
+            executor: 'dsh',
+            completeness: 'complete',
+            totalTokens: 900,
+            reportedSteps: 1,
+            unreportedSteps: 0,
+            observedAt: oldRun.updatedAt,
+          },
+          {
+            runId: latestRun.id,
+            taskId: channel.id,
+            userId: 'owner',
+            workerIconId: 'computer',
+            executor: 'dsh',
+            completeness: 'complete',
+            totalTokens: 50,
+            reportedSteps: 1,
+            unreportedSteps: 0,
+            observedAt: latestRun.updatedAt,
+          },
+        ],
+      })
+    })
+    render(<App />)
+    fireEvent.click(
+      await screen.findByRole('button', { name: /进行中 · 安全自更新流程/ }),
+    )
+    const drawer = screen.getByLabelText('工作详情')
+    expect(within(drawer).getByText('50')).toBeTruthy()
+    expect(within(drawer).queryByText('950')).toBeNull()
+  })
+
+  it('renders the full conversation history instead of truncating older messages', async () => {
+    const sourceEvent = snapshot.events[0]
+    if (!sourceEvent) throw new Error('Expected a conversation fixture event')
+    const events = Array.from({ length: 8 }, (_, index) => ({
+      ...sourceEvent,
+      id: `event-${String(index)}`,
+      payload: { text: `历史消息 ${String(index + 1)}` },
+      createdAt: `2026-11-19T07:0${String(index)}:00.000Z`,
+    }))
+    installSnapshotFetch({ ...snapshot, events })
+    render(<App />)
+    expect(await screen.findByText('历史消息 1')).toBeTruthy()
+    expect(screen.getByText('历史消息 8')).toBeTruthy()
+  })
+
+  it('shows waiting work only in the waiting filter', async () => {
+    installSnapshotFetch({
+      ...snapshot,
+      runs: [{ ...run, status: 'waiting' }],
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /所有事情/,
+      }),
+    )
+    const list = screen.getByLabelText('事情列表')
+    expect(within(list).queryByText(channel.title)).toBeNull()
+    fireEvent.click(screen.getByRole('tab', { name: '等待中' }))
+    expect(within(list).getByText(channel.title)).toBeTruthy()
+  })
+
+  it('classifies attention items from structured payload facts only', async () => {
+    const sourceMessage = snapshot.messages[0]
+    if (!sourceMessage) throw new Error('Expected an outbox fixture message')
+    installSnapshotFetch({
+      ...snapshot,
+      messages: [
+        {
+          ...sourceMessage,
+          status: 'failed',
+          payload: { type: 'agent.message', text: '传输失败但不是执行失败' },
+        },
+      ],
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    expect(screen.getByRole('button', { name: '打开事情' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '稍后处理' })).toBeNull()
+    fireEvent.click(screen.getByRole('tab', { name: '失败' }))
+    expect(screen.queryByText('传输失败但不是执行失败')).toBeNull()
+  })
+
+  it('restores a URL-backed attention detail and preserves its address', async () => {
+    window.history.replaceState({}, '', '/?view=outbox&outbox=message-1')
+    installFetch()
+    render(<App />)
+    expect(
+      await screen.findByRole('heading', { name: '待你处理' }),
+    ).toBeTruthy()
+    expect(await screen.findByLabelText('工作详情')).toBeTruthy()
+    expect(window.location.search).toContain('outbox=message-1')
+  })
+
   it('uses a semantic composer and does not submit during IME composition', async () => {
     const fetchMock = installFetch()
     render(<App />)
@@ -550,7 +793,9 @@ describe('sealed Pegas UI', () => {
     const modelButton = await screen.findByRole('button', {
       name: /选择执行模型/,
     })
-    expect(modelButton.textContent).toContain('deepseek-v4.1-flash')
+    await waitFor(() =>
+      expect(modelButton.textContent).toContain('deepseek-v4.1-flash'),
+    )
     fireEvent.click(modelButton)
     expect(await screen.findByRole('dialog', { name: '选择模型' })).toBeTruthy()
     expect(screen.getByRole('option', { name: /GPT-6.1 Sol/ })).toBeTruthy()
@@ -664,6 +909,25 @@ describe('sealed Pegas UI', () => {
       )
     },
   )
+
+  it('requires explicit confirmation before permanently stopping work', async () => {
+    const onStop = vi.fn(() => Promise.resolve())
+    render(
+      <DetailDrawer
+        onChange={vi.fn()}
+        onClose={vi.fn()}
+        onRetry={vi.fn()}
+        onStop={onStop}
+        view={{ kind: 'task', channel, run }}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: '停止事情' }))
+    expect(screen.getByText('确定停止这件事？')).toBeTruthy()
+    expect(screen.getByText(/停止后无法继续当前运行/)).toBeTruthy()
+    expect(onStop).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: '确认停止' }))
+    await waitFor(() => expect(onStop).toHaveBeenCalledWith(channel))
+  })
 
   it('does not infer collaboration facts from free-form status text', () => {
     render(

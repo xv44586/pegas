@@ -13,7 +13,7 @@ import {
   RotateCw,
   X,
 } from 'lucide-react'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import type { Run } from '../types'
 import { formatRelativeTime, statusLabel, type DrawerView } from './types'
@@ -23,12 +23,18 @@ export function DetailDrawer({
   onClose,
   onRetry,
   onContinue,
+  onStop,
 }: {
   view: DrawerView
   onClose: () => void
   onChange: (view: DrawerView) => void
   onRetry: (run: Run) => Promise<void>
-  onContinue?: () => void
+  onContinue?: (
+    channel: Extract<DrawerView, { kind: 'task' }>['channel'],
+  ) => void
+  onStop?: (
+    channel: Extract<DrawerView, { kind: 'task' }>['channel'],
+  ) => Promise<void>
 }) {
   const closeRef = useRef<HTMLButtonElement>(null)
   useEffect(() => closeRef.current?.focus(), [])
@@ -60,6 +66,7 @@ export function DetailDrawer({
             channel={view.channel}
             onContinue={onContinue}
             onRetry={onRetry}
+            onStop={onStop}
             run={view.run}
             usage={view.usage}
           />
@@ -91,14 +98,40 @@ function TaskDetail({
   usage,
   onRetry,
   onContinue,
+  onStop,
 }: {
   channel: Extract<DrawerView, { kind: 'task' }>['channel']
   run?: Run
   usage?: Extract<DrawerView, { kind: 'task' }>['usage']
   onRetry: (run: Run) => Promise<void>
-  onContinue?: () => void
+  onContinue?: (
+    channel: Extract<DrawerView, { kind: 'task' }>['channel'],
+  ) => void
+  onStop?: (
+    channel: Extract<DrawerView, { kind: 'task' }>['channel'],
+  ) => Promise<void>
 }) {
   const state = statusLabel(channel, run)
+  const [confirmingStop, setConfirmingStop] = useState(false)
+  const [stopping, setStopping] = useState(false)
+  const [stopError, setStopError] = useState('')
+
+  async function stopChannel() {
+    if (!onStop || stopping) return
+    setStopping(true)
+    setStopError('')
+    try {
+      await onStop(channel)
+      setConfirmingStop(false)
+    } catch (caught) {
+      setStopError(
+        caught instanceof Error ? caught.message : '停止失败，请稍后重试。',
+      )
+    } finally {
+      setStopping(false)
+    }
+  }
+
   return (
     <div className="drawer-body">
       <section className={`state-hero state-${state}`}>
@@ -172,6 +205,38 @@ function TaskDetail({
           />
         </dl>
       </section>
+      {confirmingStop && (
+        <section
+          aria-labelledby="stop-confirmation-title"
+          className="stop-confirmation"
+          role="alertdialog"
+        >
+          <header>
+            <AlertTriangle size={18} />
+            <strong id="stop-confirmation-title">确定停止这件事？</strong>
+          </header>
+          <p>停止后无法继续当前运行；历史记录会保留，你仍可重新发起事情。</p>
+          {stopError && <small role="alert">{stopError}</small>}
+          <div className="drawer-actions">
+            <button
+              className="secondary-button"
+              disabled={stopping}
+              onClick={() => setConfirmingStop(false)}
+              type="button"
+            >
+              取消
+            </button>
+            <button
+              className="danger-button"
+              disabled={stopping}
+              onClick={() => void stopChannel()}
+              type="button"
+            >
+              {stopping ? '正在停止…' : '确认停止'}
+            </button>
+          </div>
+        </section>
+      )}
       <footer className="drawer-footer">
         {state === '失败' && run ? (
           <button
@@ -184,6 +249,15 @@ function TaskDetail({
           </button>
         ) : state === '进行中' ? (
           <>
+            {channel.canStop && onStop && (
+              <button
+                className="danger-button"
+                onClick={() => setConfirmingStop(true)}
+                type="button"
+              >
+                停止事情
+              </button>
+            )}
             <button
               className="secondary-button"
               disabled
@@ -203,8 +277,20 @@ function TaskDetail({
             </button>
           </>
         ) : state === '已完成' ? (
-          <button className="primary-button" onClick={onContinue} type="button">
+          <button
+            className="primary-button"
+            onClick={() => onContinue?.(channel)}
+            type="button"
+          >
             继续追问
+          </button>
+        ) : channel.canStop && onStop ? (
+          <button
+            className="danger-button"
+            onClick={() => setConfirmingStop(true)}
+            type="button"
+          >
+            停止事情
           </button>
         ) : (
           <span className="drawer-footnote">等待服务端返回下一步条件。</span>

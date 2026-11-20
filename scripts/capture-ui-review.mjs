@@ -80,6 +80,9 @@ try {
     reducedMotion: 'reduce',
     deviceScaleFactor: 1,
   })
+  await desktop.addInitScript(() =>
+    localStorage.setItem('pegas-setup-complete', 'true'),
+  )
   const page = await desktop.newPage()
   page.setDefaultTimeout(12_000)
   await page.goto(`http://127.0.0.1:${String(port)}/`)
@@ -256,6 +259,9 @@ try {
     reducedMotion: 'reduce',
     deviceScaleFactor: 1,
   })
+  await dark.addInitScript(() =>
+    localStorage.setItem('pegas-setup-complete', 'true'),
+  )
   const darkPage = await dark.newPage()
   await darkPage.addInitScript(() =>
     localStorage.setItem('pegas-theme', 'dark'),
@@ -285,6 +291,9 @@ try {
       reducedMotion: 'reduce',
       deviceScaleFactor: 1,
     })
+    await themed.addInitScript(() =>
+      localStorage.setItem('pegas-setup-complete', 'true'),
+    )
     const themedPage = await themed.newPage()
     await themedPage.addInitScript(
       value => localStorage.setItem('pegas-theme', value),
@@ -303,6 +312,9 @@ try {
     deviceScaleFactor: 1,
     hasTouch: true,
   })
+  await mobile.addInitScript(() =>
+    localStorage.setItem('pegas-setup-complete', 'true'),
+  )
   const mobilePage = await mobile.newPage()
   await mobilePage.goto(`http://127.0.0.1:${String(port)}/`)
   const mobileComposer = mobilePage.getByRole('textbox', {

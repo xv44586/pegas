@@ -493,6 +493,10 @@ function PegasSettings({
   const selectedProvider = draft.agentModelProvider.trim()
     ? draft.agentModelProvider
     : (agentModels?.defaultProvider ?? '')
+  const selectedModelValue =
+    selectedProvider && selectedModel
+      ? `${selectedProvider}::${selectedModel}`
+      : ''
   return (
     <div className="settings-pane pegas-settings">
       <div className="pegas-settings-title">
@@ -572,23 +576,25 @@ function PegasSettings({
           <label className="field-label">
             模型
             <select
-              value={selectedModel}
-              onChange={event =>
+              value={selectedModelValue}
+              onChange={event => {
+                const model = models.find(
+                  item => `${item.provider}::${item.id}` === event.target.value,
+                )
+                if (!model) return
                 onChange({
                   ...draft,
                   agentModelMode: 'override',
-                  agentModelProvider:
-                    models.find(item => item.id === event.target.value)
-                      ?.provider ?? draft.agentModelProvider,
-                  agentModelName: event.target.value,
+                  agentModelProvider: model.provider,
+                  agentModelName: model.id,
                 })
-              }
+              }}
             >
               {models.length ? (
                 models.map(model => (
                   <option
                     key={`${model.provider}/${model.id}`}
-                    value={model.id}
+                    value={`${model.provider}::${model.id}`}
                   >
                     {model.name}
                   </option>

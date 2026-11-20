@@ -13,6 +13,7 @@ import {
   ShieldCheck,
   Sparkles,
   Volume2,
+  X,
   Zap,
 } from 'lucide-react'
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
@@ -24,6 +25,8 @@ import { useVoiceDictation } from '../useVoiceDictation'
 import { EmptyCapability, PageToolbar } from './Shell'
 import {
   formatRelativeTime,
+  latestRunForTask,
+  payloadType,
   statusLabel,
   textFromPayload,
   type DrawerView,
@@ -304,6 +307,8 @@ export function ConversationPage({
   modelProvider,
   selectedModelId,
   onSelectModel,
+  continuationChannel,
+  onClearContinuation,
 }: {
   api: PegasApi
   snapshot: Snapshot
@@ -313,6 +318,8 @@ export function ConversationPage({
   modelProvider?: string
   selectedModelId?: string
   onSelectModel: (model: DshModelCatalogItem) => Promise<void>
+  continuationChannel?: Snapshot['channels'][number]
+  onClearContinuation: () => void
 }) {
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
@@ -340,7 +347,6 @@ export function ConversationPage({
     return [...user, ...pegas]
       .filter(message => message.text)
       .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
-      .slice(-6)
   }, [snapshot.events, snapshot.messages])
   useEffect(() => {
     const area = scrollRef.current
@@ -353,7 +359,7 @@ export function ConversationPage({
   })
   const latestChannel = snapshot.channels[0]
   const latestRun = latestChannel
-    ? snapshot.runs.find(run => run.taskId === latestChannel.id)
+    ? latestRunForTask(snapshot.runs, latestChannel.id)
     : undefined
 
   async function send() {
@@ -362,8 +368,9 @@ export function ConversationPage({
     setSending(true)
     setError('')
     try {
-      await api.sendMessage(text)
+      await api.sendMessage(text, continuationChannel?.id)
       setDraft('')
+      onClearContinuation()
       await onSent()
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '发送失败，请重试。')
@@ -433,9 +440,7 @@ export function ConversationPage({
                           actions.onOpenDrawer({
                             kind: 'task',
                             channel,
-                            run: snapshot.runs.find(
-                              run => run.taskId === channel.id,
-                            ),
+                            run: latestRunForTask(snapshot.runs, channel.id),
                           })
                       }}
                       type="button"
@@ -487,6 +492,20 @@ export function ConversationPage({
         {dictation.error && (
           <div className="composer-error" role="alert">
             {dictation.error}
+          </div>
+        )}
+        {continuationChannel && (
+          <div className="composer-context" role="status">
+            <span>
+              继续事情：<strong>{continuationChannel.title}</strong>
+            </span>
+            <button
+              aria-label="取消继续当前事情"
+              onClick={onClearContinuation}
+              type="button"
+            >
+              <X size={15} />
+            </button>
           </div>
         )}
         <form
@@ -588,10 +607,10 @@ export function WorkPage({
       return false
     if (filter === 'completed') return channel.status === 'completed'
     if (filter === 'archived') return channel.status === 'cancelled'
-    const run = snapshot.runs.find(item => item.taskId === channel.id)
+    const run = latestRunForTask(snapshot.runs, channel.id)
     if (filter === 'waiting')
       return !run || run.status === 'waiting' || run.status === 'queued'
-    return channel.status === 'started' || run?.status === 'running'
+    return run?.status === 'running'
   })
   return (
     <div className="standard-page">
@@ -641,7 +660,7 @@ export function WorkPage({
       <section className="work-list" aria-label="事情列表">
         {visible.length ? (
           visible.map(channel => {
-            const run = snapshot.runs.find(item => item.taskId === channel.id)
+            const run = latestRunForTask(snapshot.runs, channel.id)
             const state = statusLabel(channel, run)
             return (
               <button
@@ -678,25 +697,41 @@ export function WorkPage({
   )
 }
 
+type AttentionKind = 'approval' | 'input' | 'failed' | 'update'
+
+function attentionKind(message: OutboxMessage): AttentionKind {
+  switch (payloadType(message.payload)) {
+    case 'run.failed':
+      return 'failed'
+    case 'approval.required':
+    case 'approval.requested':
+      return 'approval'
+    case 'input.required':
+    case 'input.requested':
+      return 'input'
+    default:
+      return 'update'
+  }
+}
+
 function attentionAction(message: OutboxMessage): {
   label: string
   icon: typeof Check
 } {
-  const text = textFromPayload(message.payload).toLowerCase()
-  if (message.status === 'failed' || text.includes('失败'))
-    return { label: '查看原因', icon: RotateCw }
-  if (text.includes('确认')) return { label: '查看内容', icon: ShieldCheck }
+  const kind = attentionKind(message)
+  if (kind === 'failed') return { label: '查看原因', icon: RotateCw }
+  if (kind === 'approval') return { label: '查看内容', icon: ShieldCheck }
   return { label: '打开事情', icon: ArrowRight }
 }
 
 export function AttentionPage({
   snapshot,
   actions,
-  onRead,
+  onOpen,
 }: {
   snapshot: Snapshot
   actions: PageActions
-  onRead: (message: OutboxMessage) => Promise<void>
+  onOpen: (message: OutboxMessage) => Promise<void>
 }) {
   const [filter, setFilter] = useState<'all' | 'approval' | 'input' | 'failed'>(
     'all',
@@ -704,11 +739,7 @@ export function AttentionPage({
   const unread = snapshot.messages.filter(message => !message.readAt)
   const visible = unread.filter(message => {
     if (filter === 'all') return true
-    const text = textFromPayload(message.payload).toLowerCase()
-    if (filter === 'failed')
-      return message.status === 'failed' || text.includes('失败')
-    if (filter === 'approval') return text.includes('确认')
-    return text.includes('补充') || text.includes('提供')
+    return attentionKind(message) === filter
   })
   return (
     <div className="standard-page">
@@ -775,27 +806,12 @@ export function AttentionPage({
                 </div>
                 <button
                   onClick={() => {
-                    void onRead(message)
-                    if (channel)
-                      actions.onOpenDrawer({
-                        kind: 'task',
-                        channel,
-                        run: snapshot.runs.find(
-                          run => run.taskId === channel.id,
-                        ),
-                      })
+                    void onOpen(message)
                   }}
                   type="button"
                 >
                   <Icon size={15} />
                   {action.label}
-                </button>
-                <button
-                  className="later-action"
-                  onClick={() => void onRead(message)}
-                  type="button"
-                >
-                  稍后处理
                 </button>
               </article>
             )

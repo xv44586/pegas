@@ -89,6 +89,25 @@ export function textFromPayload(payload: unknown): string {
   return ''
 }
 
+export function payloadType(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== 'object') return undefined
+  const type = (payload as Record<string, unknown>).type
+  return typeof type === 'string' ? type : undefined
+}
+
+export function latestRunForTask(
+  runs: readonly Run[],
+  taskId: string,
+): Run | undefined {
+  let latest: Run | undefined
+  for (const run of runs) {
+    if (run.taskId !== taskId) continue
+    if (!latest || Date.parse(run.updatedAt) >= Date.parse(latest.updatedAt))
+      latest = run
+  }
+  return latest
+}
+
 export function formatRelativeTime(value: string): string {
   const timestamp = Date.parse(value)
   if (Number.isNaN(timestamp)) return '刚刚'

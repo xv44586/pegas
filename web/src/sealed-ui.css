@@ -518,6 +518,38 @@ a {
   background: linear-gradient(180deg, transparent, var(--canvas) 26%);
   padding: 28px 42px 28px;
 }
+.composer-context {
+  align-items: center;
+  background: var(--accent-softer);
+  border: 1px solid color-mix(in srgb, var(--accent) 16%, var(--line));
+  border-radius: 12px;
+  color: var(--ink-soft);
+  display: flex;
+  font-size: 13px;
+  gap: 12px;
+  justify-content: space-between;
+  margin: 0 auto 8px;
+  max-width: 1040px;
+  min-height: 38px;
+  padding: 6px 8px 6px 13px;
+}
+.composer-context strong {
+  color: var(--ink);
+}
+.composer-context button {
+  align-items: center;
+  background: transparent;
+  border-radius: 8px;
+  color: var(--muted);
+  display: flex;
+  height: 28px;
+  justify-content: center;
+  width: 28px;
+}
+.composer-context button:hover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--ink);
+}
 .composer {
   background: var(--surface-raised);
   border: 1px solid var(--line);
@@ -2236,6 +2268,29 @@ kbd {
 }
 .failure-card small {
   color: var(--muted);
+}
+.stop-confirmation {
+  background: var(--critical-soft);
+  border: 1px solid color-mix(in srgb, var(--critical) 24%, transparent);
+  border-radius: 12px;
+  margin-top: 14px;
+  padding: 15px;
+}
+.stop-confirmation header {
+  align-items: center;
+  color: var(--critical);
+  display: flex;
+  gap: 8px;
+}
+.stop-confirmation p {
+  color: var(--ink-soft);
+  line-height: 1.55;
+  margin-bottom: 0;
+}
+.stop-confirmation > small {
+  color: var(--critical);
+  display: block;
+  margin-top: 8px;
 }
 .collaboration-card {
   align-items: flex-start;
