@@ -10,12 +10,21 @@ const mainEntry = readFileSync(
   new URL('../web/src/main.tsx', import.meta.url),
   'utf8',
 )
+const uiReviewScript = readFileSync(
+  new URL('../scripts/capture-ui-review.mjs', import.meta.url),
+  'utf8',
+)
 
 describe('sealed UI layout contracts', () => {
   it('uses the new single style entry and excludes the legacy themes', () => {
     expect(mainEntry).toContain("import './sealed-ui.css'")
     expect(mainEntry).not.toContain('workspace-theme.css')
     expect(mainEntry).not.toContain("'./styles.css'")
+  })
+
+  it('keeps UI review independent from a developer DSH installation', () => {
+    expect(uiReviewScript).toContain('PEGAS_DSH_COMMAND')
+    expect(uiReviewScript).toContain('ui-review-dsh')
   })
 
   it('keeps the desktop shell and mobile navigation geometries explicit', () => {

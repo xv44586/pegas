@@ -1,5 +1,11 @@
 import { execFileSync, spawn } from 'node:child_process'
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs'
+import {
+  chmodSync,
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { relative, resolve, sep } from 'node:path'
@@ -40,12 +46,32 @@ rmSync(outputDirectory, { recursive: true, force: true })
 mkdirSync(outputDirectory, { recursive: true })
 
 const dataDirectory = mkdtempSync(resolve(tmpdir(), 'pegas-ui-review-'))
+const dshFixture = resolve(dataDirectory, 'ui-review-dsh')
+writeFileSync(
+  dshFixture,
+  `#!/usr/bin/env node
+process.stdout.write(\`- id: agent-default-model
+  config:
+    provider: fixture
+    model: deepseek-v4.1-flash
+- id: llm-pi-ai
+  config:
+    providers:
+      fixture:
+        models:
+          - id: deepseek-v4.1-flash
+            name: DeepSeek V4.1 Flash
+\`)
+`,
+)
+chmodSync(dshFixture, 0o755)
 const port = await availablePort()
 const environment = {
   ...process.env,
   PEGAS_API_HOST: '127.0.0.1',
   PEGAS_API_PORT: String(port),
   PEGAS_DATA_DIR: dataDirectory,
+  PEGAS_DSH_COMMAND: dshFixture,
   PEGAS_EVENT_POLL_MS: '25',
   PEGAS_EXECUTOR: 'echo',
   PEGAS_SPEECH_PROVIDER: 'disabled',
