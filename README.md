@@ -53,6 +53,17 @@ pnpm dev:worker
 pnpm dev:web
 ```
 
+macOS Electron 客户端直接复用同一套封板 Web UI、Control Plane 与 Worker：
+
+```bash
+pnpm desktop:run
+pnpm smoke:desktop
+pnpm package:mac
+pnpm smoke:desktop:packaged
+```
+
+本地 `.app` Candidate 输出到 `releases/desktop/mac-arm64/Pegas.app`。当前包用于本机 MVP 验收，尚未进行 Developer ID 签名与 Apple 公证；架构、安全边界和回滚方式见 [macOS 客户端文档](docs/macos-desktop.md)。
+
 如需让 Agent 主动投递消息，再配置 Webhook 并启动 Dispatcher：
 
 ```bash
