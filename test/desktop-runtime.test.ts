@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
+import { readFileSync } from 'node:fs'
 import type { ChildProcess } from 'node:child_process'
 
 import {
@@ -13,7 +14,16 @@ import {
   waitForControlPlane,
 } from '../src/desktop/runtime.js'
 
+const desktopSmoke = readFileSync(
+  new URL('../scripts/smoke-desktop.mjs', import.meta.url),
+  'utf8',
+)
+
 describe('desktop runtime', () => {
+  it('clears first-run setup before exercising the composer', () => {
+    expect(desktopSmoke).toContain("name: '稍后设置'")
+  })
+
   it('builds an isolated loopback service environment', () => {
     const environment = desktopServiceEnvironment({
       port: 41234,

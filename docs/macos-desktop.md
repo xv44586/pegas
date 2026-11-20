@@ -35,10 +35,10 @@ Electron main
 
 ## 验证证据
 
-- 9 个桌面运行时自动化测试覆盖隔离环境、可信回环 origin、回环端口、就绪等待、ASAR 服务路径、优雅退出、SIGKILL 升级、macOS 进程组信号和异常 leader 的残留执行器清理。
+- 10 个桌面运行时自动化测试覆盖隔离环境、可信回环 origin、回环端口、就绪等待、ASAR 服务路径、优雅退出、SIGKILL 升级、macOS 进程组信号、异常 leader 的残留执行器清理，以及首次设置遮罩下的 smoke 恢复路径。
 - 开发态与打包态 Electron smoke 均通过 UI 提交 Task 并等待 Worker 完成 Run；随后终止 Worker，确认产品页立即撤下且不再接受输入，并在故障页出现后立刻退出，断言 Control Plane 与 Worker 进程组均已消失。
 - 两类 Electron smoke 同时验证窗口标题、无控制台错误，以及 `contextIsolation: true`、`sandbox: true`、`nodeIntegration: false`。
-- `pnpm check` 通过 30 个测试文件、168 个测试；独立 `pnpm smoke` 通过真实 Task→Run 闭环。
+- `pnpm check` 通过 30 个测试文件、248 个测试；独立 `pnpm smoke` 通过真实 Task→Run 闭环。
 - 主界面和服务失败截图分别保存为 `output/feature-review/media/desktop-electron-macos.png` 与 `output/feature-review/media/desktop-electron-service-failure.png`，均不提交到仓库。
 
 ## 失败与回滚

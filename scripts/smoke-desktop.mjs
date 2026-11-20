@@ -30,6 +30,9 @@ try {
     if (message.type() === 'error') consoleErrors.push(message.text())
   })
   try {
+    await window.waitForLoadState('domcontentloaded')
+    const skipSetup = window.getByRole('button', { name: '稍后设置' })
+    if (await skipSetup.isVisible()) await skipSetup.click()
     await window.getByRole('textbox', { name: '给 Pegas 发消息' }).waitFor()
   } catch (error) {
     await window.screenshot({
