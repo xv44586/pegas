@@ -52,23 +52,26 @@ Web / App / macOS / Messaging
                 │
                 ▼
        Pegas Task Control Plane
-     ┌──────────┼────────────┬───────────┐
-     ▼          ▼            ▼           ▼
-  Memory     Scheduler   Evidence &    Outbox
-                         Artifacts
-     │          │            │           │
-     └──────────┴────────────┴───────────┘
+          ┌─────┼─────┐
+          ▼     ▼     ▼
+       Memory Scheduler Outbox
+          │     │     ▲
+          └─────┴─────┘
+                │
                 ▼
         Policy & Approval Engine
                 │
                 ▼
           Executor Adapter
-                │
+                │ writes EvidenceRef / Artifact
                 ▼
-              DSH
-                │
-                ▼
-    Local / Sandbox / Remote Worker
+              DSH ────────────────┐
+                │                 ▼
+                ▼       Evidence & Artifact Store
+    Local / Sandbox / Remote Worker       ▲
+                                          │
+       Control Plane validates evidence ──┘
+       and projects Review Pack to Outbox
 
 Independent Recovery Plane
   Supervisor ── Health Check ── Release Registry
@@ -221,7 +224,9 @@ Worker 只能提交结构化协作请求。Control Plane 校验来源 Run、授�
 
 #### Report 与 Watchdog
 
-正常状态以 Worker 主动提交的结构化 Report 为事实来源，至少区分 `started`、`progress`、`waiting`、`ready`、`blocked` 和 `failed`。`ready` Report 可以引用 EvidenceRef，但不能自证 evidence 充分。Control Plane 验证引用、计算 criterion 状态并生成 Review Pack，再原子更新 Run、Task/WorkChannel、ChannelEvent、协作结果投递和必要的 OutboxItem。
+当前正常状态以 Worker 主动提交的结构化 Report 为事实来源，至少区分 `started`、`progress`、`waiting`、`ready`、`blocked` 和 `failed`；当前 `ready` 流程尚未实施 GOAL-001 的 evidence 完成门禁。
+
+GOAL-001 目标流程中，`ready` Report 可以引用 EvidenceRef，但不能自证 evidence 充分。Control Plane 先做引用结构校验，再按 evidence kind、trust class 与 criterion evidence plan 执行语义验证；高风险结果需要确定性验证器、独立证明或用户接受。验证通过后，Control Plane 计算 criterion 状态并生成 Review Pack，再原子更新 Run、Task/WorkChannel、ChannelEvent、协作结果投递和必要的 OutboxItem。
 
 外围 Watchdog 只承担恢复：检查 Run lease、Worker heartbeat、超时、未结 effect 和投递重试。lease 过期表示 Worker 失联，不能被解释为成功或目标失败；恢复器创建关联旧 Run 的恢复尝试并使用已保存 session。Supervisor 只监测进程和 Release 健康，不写业务完成状态。
 
@@ -470,7 +475,7 @@ Pending → Sending → Sent
                   ↘ Unknown
 ```
 
-相同 Action ID 不应产生两个独立发送任务。Task 完成、Review Pack 持久化和对应 OutboxItem 创建应共享一个权威提交边界；通知发送失败可以独立重试，但不能删除 evidence、重复完成 Task 或把投递成功解释为用户验收。
+相同 Action ID 不应产生两个独立发送任务。GOAL-001 的 Report、evidence capture、Review Pack 和 OutboxItem 还必须按权威合同定义的 Task/Run/Goal revision、来源 revision/hash、渠道与接收者语义键建立唯一约束。Task 完成、Review Pack 持久化和对应 OutboxItem 创建应共享一个权威提交边界；通知发送失败可以独立重试，但不能删除 evidence、重复完成 Task 或把投递成功解释为用户验收。
 
 ## 自我修改与发布
 

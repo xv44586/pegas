@@ -48,7 +48,7 @@
 - 多份 evidence 按 criterion 聚合去重，一份 Task 结果默认形成一份 Review Pack，不为每个过程事件制造通知；
 - 完整 Artifact、来源 Channel 和 Execution Trace 通过按需入口下钻，Web 不复制服务端事实，也不从消息正文判断完成；
 - 产品已读、通知投递、用户接受和 evidence 有效性分别保存，任何一项都不能推断其他项；
-- evidence 预览继承用户、Task、Artifact 和敏感信息权限，无法安全展示时只提供脱敏摘要和受控引用。
+- evidence 预览继承用户、Task、Artifact 和敏感信息权限；服务端在 dispatch 时按接收者、渠道可信度和 sensitivity 生成渠道专属投影。站外渠道只提供脱敏摘要或认证短期引用，不嵌入无法在撤权后收回的 evidence 内容。
 
 权威产品与数据合同见 `docs/goal-contract-and-evidence.md`。GOAL-001 实现时需要在独立 Feature worktree 中扩展存储、API、Web 和自动化证据，并保持 `NOTIFY-003` 的已读/投递语义兼容。
 

@@ -59,6 +59,10 @@ GoalContract
   desiredOutcome
   beneficiaries[]
   successCriteria[]
+    criterionId
+    observableStatement
+    required
+    evidencePlanRef
   nonGoals[]
   constraints[]
   contextSources[]
@@ -83,7 +87,7 @@ GoalContract
   createdAt
 ```
 
-`successCriteria` 必须描述可观察结果，不能只写“完成实现”“处理成功”或“Agent 认为可以结束”。`evidencePlan` 为每个条件声明期望的证据类型、验证环境、最低覆盖和用户呈现方式。
+`successCriteria` 必须为每个条件提供 Goal 内稳定的 `criterionId`、可观察结果、`required` 策略和 `evidencePlanRef`，不能只写“完成实现”“处理成功”或“Agent 认为可以结束”。同一条件的文字澄清保留 ID；条件被拆分、合并或语义替换时使用新 ID，并在 revision 中记录旧 ID 的 superseded 关系。`evidencePlan` 为每个条件声明期望的证据类型、验证环境、最低覆盖、验证方式和用户呈现方式。
 
 合同修订通过新 revision 和事件表达，不能覆盖用户原始输入。目标或权限范围扩大时，Control Plane 必须重新检查 Policy、成本、风险和既有 Mandate 是否仍足够。Mandate 仍是不可变的接单授权依据；Goal Contract 是可版本化的目标与验收理解，两者不能合并。
 
@@ -108,8 +112,25 @@ EvidenceRef
   goalRevision
   criterionId
   kind
-  artifactRef | externalRef | observationRef
+  artifactRef | observationRef
+  externalRef                 # 仅用于导航，不作为事实快照
+  producerIdentity
+  captureMechanism
+  trustClass
   artifactRevision | contentHash
+  observationSnapshot
+    observedValue
+    sourceObjectId
+    sourceVersion | etag
+    issuerIdentity
+    observedAt
+    snapshotHash
+  verification
+    method
+    verifierIdentity
+    verifierVersion
+    result
+    verifiedAt
   capturedAt
   environment
   presentation
@@ -126,6 +147,10 @@ EvidenceRef
 - **充分但克制**：足够支持判断，不把日志洪流伪装成透明度；
 - **安全**：遵守可见范围和脱敏策略，不为证明完成而扩大数据暴露。
 
+Control Plane 对 EvidenceRef 的结构校验只证明引用完整，不能证明 criterion 已满足。每种 `kind` 必须在 evidence plan 中指定语义验证方法和允许的 trust class；高风险 criterion 使用确定性验证器、独立主体签名或用户明确接受，不能让执行该动作的 Worker 同时成为唯一验证者。验证器的身份、版本和结果随 evidence 持久化。
+
+外部对象可能变化或消失，因此 `externalRef` 只作为导航。支持验收的事实必须保存不可变 `observationSnapshot`，包含观察值、外部对象 ID、可获得的版本/ETag、签发者、观察时间和内容哈希；无法形成可复核快照时明确标记 limitation。
+
 Agent 总结、自由文本 `ready`、单独的退出码和“已执行”过程不能独立满足 success criterion。无法获得充分证据时，该条件必须是 `unverified`、`partial` 或 `failed`，不能由模型补写成成功。
 
 ### Review Pack
@@ -133,12 +158,17 @@ Agent 总结、自由文本 `ready`、单独的退出码和“已执行”过程
 ```text
 ReviewPack
   id
+  revision
+  supersedesReviewPackId
   taskId
   goalRevision
+  basisEventIds[]
+  projectionAsOf
   finalOutcome
   criteria[]
     criterionId
-    status          satisfied | partial | unverified | failed
+    completionStatus   satisfied | partial | unverified | failed
+    currentValidity    valid | warning | invalid | unknown
     evidenceRefs[]
     explanation
     limitations[]
@@ -149,7 +179,7 @@ ReviewPack
   createdAt
 ```
 
-Review Pack 以 success criteria 为顺序，不按执行时间罗列动作。它是由服务端事实生成的交付投影，不是新的完成事实来源。Control Plane 在允许 Task 完成前检查当前 Goal revision 所需的 evidence references；Review Pack 只呈现这一判断和证据。
+Review Pack 以 success criteria 为顺序，不按执行时间罗列动作。它是由服务端事实生成的交付投影，不是新的完成事实来源。Control Plane 在允许 Task 完成前检查当前 Goal revision 所需的 evidence references；Review Pack 只呈现这一判断和证据。完成时的 `completionStatus` 是不可变快照；后续有效性变化通过 append-only validity event 产生新 Review Pack revision，并以 `currentValidity` 呈现，不能改写当时的完成判定。
 
 ## 常见 Goal 的证据
 
@@ -192,6 +222,8 @@ GOAL-001 扩展后的 Outbox 默认呈现：
 
 Outbox 的产品已读、外部投递状态、用户是否接受结果、evidence 是否有效是四个不同事实，不能相互推断。Review Pack 持久化成功后，即使通知暂时投递失败，完成事实和证据也不会丢失；Dispatcher 可以继续重试。
 
+服务端为每种投递渠道生成独立 delivery projection，并在 dispatch 时再次校验接收者、渠道可信度、sensitivity 和当前授权。站内可信界面可以按权限预览；Webhook、推送和消息平台默认只发送脱敏摘要或需要认证且短期有效的引用，不嵌入 canonical evidence bytes。外部投递内容一旦离开 Pegas 不能依赖后续撤权回收，因此高敏 evidence 不得进入不可控渠道。
+
 ## 数据、权限与隐私边界
 
 - Goal Contract、EvidenceRef、Review Pack 与完成判断以服务端为权威；客户端只做呈现和交互适配。
@@ -209,7 +241,8 @@ Outbox 的产品已读、外部投递状态、用户是否接受结果、evidenc
 - Review Pack 必须在 Task 完成和 OutboxItem 创建的同一权威提交边界内引用已持久化 evidence；响应丢失后用稳定 ID 去重。
 - Outbox 投递失败不删除 Review Pack，也不把 Task 改回运行中；用户可从 Channel 访问同一结果，Dispatcher 继续按既有策略重试。
 - 外部副作用无法确认时明确显示 `unknown` 和恢复建议，不能用截图、日志或模型推断伪造成功。
-- Evidence Artifact 损坏或过期时保留元数据与失效原因，并把受影响 criterion 降为不可验证；重新捕获产生新 EvidenceRef，不原地替换历史。
+- Evidence Artifact 损坏、撤权或过期时追加 validity event，不改写历史 EvidenceRef 和完成时的 Review Pack 快照。Control Plane 生成新的 Review Pack revision，为受影响 criterion 更新 `currentValidity`，并按 Policy 决定重开 Task、请求重新验证或仅发出 attention；重新捕获产生新 EvidenceRef，不原地替换历史。
+- 完成流水线使用语义幂等键和唯一约束：Report 以 `(taskId, runId, reportSequence)`，evidence capture 以 `(taskId, goalRevision, criterionId, sourceArtifactRevisionOrSnapshotHash, captureKind)`，Review Pack 以 `(taskId, goalRevision, basisEventSetHash)`，OutboxItem 以 `(reviewPackId, channel, recipientProjection)` 去重。调用方丢失响应后必须查询或返回同一记录，不能生成新的完成链。
 
 ## 验收条件
 
