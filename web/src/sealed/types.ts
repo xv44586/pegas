@@ -84,7 +84,14 @@ export function textFromPayload(payload: unknown): string {
   if (typeof payload === 'string') return payload
   if (!payload || typeof payload !== 'object') return ''
   const value = payload as Record<string, unknown>
-  for (const key of ['text', 'message', 'content', 'summary', 'output']) {
+  for (const key of [
+    'text',
+    'message',
+    'content',
+    'summary',
+    'output',
+    'error',
+  ]) {
     if (typeof value[key] === 'string') return value[key]
   }
   return ''

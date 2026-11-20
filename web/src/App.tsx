@@ -61,6 +61,7 @@ export function App() {
   const [systemDark, setSystemDark] = useState(() => systemPrefersDark())
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [configurationError, setConfigurationError] = useState('')
   const [unauthorized, setUnauthorized] = useState(false)
   const [snapshotLoaded, setSnapshotLoaded] = useState(false)
   const [setupOpen, setSetupOpen] = useState(
@@ -109,6 +110,13 @@ export function App() {
       ...current,
       ...(settings.status === 'fulfilled' ? { settings: settings.value } : {}),
     }))
+    setConfigurationError(
+      settings.status === 'rejected'
+        ? settings.reason instanceof Error
+          ? settings.reason.message
+          : '无法读取设置。'
+        : '',
+    )
     if (catalog.status === 'fulfilled') setAgentModels(catalog.value)
   }, [api])
 
@@ -209,11 +217,16 @@ export function App() {
   useEffect(() => {
     const restorePage = () => {
       setPage(pageFromLocation())
-      setDrawer(undefined)
+      const messageId = new URLSearchParams(window.location.search).get(
+        'outbox',
+      )
+      const message = data.snapshot.messages.find(item => item.id === messageId)
+      if (message) restoreAttentionDrawer(message)
+      else setDrawer(undefined)
     }
     window.addEventListener('popstate', restorePage)
     return () => window.removeEventListener('popstate', restorePage)
-  }, [])
+  }, [data.snapshot.channels, data.snapshot.messages, data.snapshot.runs])
 
   useEffect(() => {
     if (typeof window.matchMedia !== 'function') return
@@ -306,16 +319,25 @@ export function App() {
       '',
       `${url.pathname}${url.search}${url.hash}`,
     )
+    restoreAttentionDrawer(message)
+    await markRead(message)
+  }
+
+  function restoreAttentionDrawer(message: OutboxMessage) {
     const channel = data.snapshot.channels.find(
       item => item.id === message.taskId,
     )
-    if (channel)
-      openDrawer({
+    if (!channel) {
+      setDrawer(undefined)
+      return
+    }
+    setDrawer(
+      enrichDrawer({
         kind: 'task',
         channel,
         run: latestRunForTask(data.snapshot.runs, channel.id),
-      })
-    await markRead(message)
+      }),
+    )
   }
 
   useEffect(() => {
@@ -396,10 +418,16 @@ export function App() {
         unreadCount={unreadCount}
       >
         {loading && <div className="top-progress" aria-label="正在加载" />}
-        {error && (
+        {(error || configurationError) && (
           <div className="connection-banner" role="alert">
-            <span>{error}</span>
-            <button onClick={() => void loadSnapshot()} type="button">
+            <span>{error || configurationError}</span>
+            <button
+              onClick={() => {
+                void loadSnapshot()
+                void loadConfiguration()
+              }}
+              type="button"
+            >
               <RotateCw size={15} />
               重新连接
             </button>

@@ -344,6 +344,7 @@ export function ConversationPage({
         role: 'user' as const,
         text: textFromPayload(event.payload),
         at: event.createdAt,
+        status: event.status,
       }))
     const pegas = snapshot.messages.map(message => ({
       id: message.id,
@@ -418,6 +419,11 @@ export function ConversationPage({
                         : message.text
                     }
                   />
+                  {message.role === 'user' && (
+                    <small className="message-delivery">
+                      {deliveryStatusLabel(message.status)}
+                    </small>
+                  )}
                   {message.text.length > 520 && (
                     <button
                       className="inline-link"
@@ -625,8 +631,15 @@ export function WorkPage({
     if (filter === 'completed') return channel.status === 'completed'
     if (filter === 'archived') return channel.status === 'cancelled'
     const run = latestRunForTask(snapshot.runs, channel.id)
+    if (
+      filter === 'waiting' &&
+      (channel.status === 'completed' || channel.status === 'cancelled')
+    )
+      return false
     if (filter === 'waiting')
       return !run || run.status === 'waiting' || run.status === 'queued'
+    if (channel.status === 'completed' || channel.status === 'cancelled')
+      return false
     return run?.status === 'running' || run?.status === 'failed'
   })
   return (
@@ -712,6 +725,15 @@ export function WorkPage({
       </section>
     </div>
   )
+}
+
+function deliveryStatusLabel(
+  status: Snapshot['events'][number]['status'],
+): string {
+  if (status === 'pending') return '已送达'
+  if (status === 'processing') return '正在分配'
+  if (status === 'failed') return '处理失败'
+  return '已进入事情'
 }
 
 function attentionAction(message: OutboxMessage): {

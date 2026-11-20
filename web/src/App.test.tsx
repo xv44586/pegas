@@ -1210,4 +1210,164 @@ describe('sealed Pegas UI', () => {
     expect(formatRelativeTime('invalid')).toBe('刚刚')
     expect(typeof formatRelativeTime('2026-11-19T08:00:00.000Z')).toBe('string')
   })
+
+  it('keeps inbox delivery state as metadata on user messages', async () => {
+    const sourceEvent = snapshot.events[0]
+    if (!sourceEvent) throw new Error('Expected an inbox event fixture')
+    installSnapshotFetch({
+      ...snapshot,
+      events: [{ ...sourceEvent, status: 'processing' }],
+    })
+    render(<App />)
+    expect(await screen.findByText('正在分配')).toBeTruthy()
+    expect(screen.getByText('帮我设计一个安全的自更新流程。')).toBeTruthy()
+  })
+
+  it('shows the server failure reason and keeps archived work out of waiting', async () => {
+    const sourceMessage = snapshot.messages[0]
+    if (!sourceMessage) throw new Error('Expected an outbox message fixture')
+    installSnapshotFetch({
+      ...snapshot,
+      channels: [{ ...channel, status: 'cancelled', canStop: false }],
+      runs: [],
+      messages: [
+        {
+          ...sourceMessage,
+          payload: { type: 'run.failed', error: '上游模型超时' },
+        },
+      ],
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    expect(screen.getByText('上游模型超时')).toBeTruthy()
+    fireEvent.click(
+      within(screen.getByLabelText('主导航')).getByRole('button', {
+        name: /所有事情/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('tab', { name: '等待中' }))
+    expect(screen.queryByText(channel.title)).toBeNull()
+    fireEvent.click(screen.getByRole('tab', { name: '已归档' }))
+    expect(screen.getByText(channel.title)).toBeTruthy()
+  })
+
+  it('retries a failed settings load from the reconnect action', async () => {
+    let settingsRequests = 0
+    installFetch(path => {
+      if (path !== '/v1/settings') return undefined
+      settingsRequests += 1
+      return settingsRequests === 1
+        ? Response.json({ message: 'settings offline' }, { status: 503 })
+        : Response.json(settingsResponse)
+    })
+    render(<App />)
+    expect(await screen.findByText(/settings offline/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '重新连接' }))
+    await waitFor(() => expect(settingsRequests).toBeGreaterThan(1))
+    fireEvent.click(
+      within(screen.getByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    expect(
+      await screen.findByText('设置你的个人执行伙伴如何工作和与你沟通。'),
+    ).toBeTruthy()
+  })
+
+  it('reopens an attention detail when browser history returns to its URL', async () => {
+    const sourceMessage = snapshot.messages[0]
+    if (!sourceMessage) throw new Error('Expected an outbox message fixture')
+    installSnapshotFetch({
+      ...snapshot,
+      messages: [
+        {
+          ...sourceMessage,
+          payload: { type: 'run.failed', error: '执行失败' },
+        },
+      ],
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '查看原因' }))
+    expect(await screen.findByLabelText('工作详情')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '关闭详情' }))
+    fireEvent.click(
+      within(screen.getByLabelText('主导航')).getByRole('button', {
+        name: /所有事情/,
+      }),
+    )
+    window.history.back()
+    expect(await screen.findByLabelText('工作详情')).toBeTruthy()
+    expect(window.location.search).toContain('outbox=message-1')
+  })
+
+  it('preserves advanced provider, rewrite credential, and privacy controls', async () => {
+    const customSettings: SettingsResponse = {
+      ...settingsResponse,
+      settings: {
+        ...settingsResponse.settings,
+        modelProvider: 'custom',
+        privacyMode: 'disabled',
+      },
+      capabilities: {
+        privacyAvailable: false,
+        providers: [
+          ...settingsResponse.capabilities.providers,
+          {
+            id: 'custom',
+            name: '自定义',
+            category: 'custom',
+            protocol: 'openai-chat',
+            baseUrl: 'https://models.example/v1',
+            defaultModel: 'custom-model',
+            description: '自定义服务',
+            requiresApiKey: false,
+            hasApiKey: true,
+            available: true,
+          },
+        ],
+      },
+      rewrite: {
+        mode: 'custom',
+        protocol: 'openai-chat',
+        baseUrl: 'https://rewrite.example/v1',
+        model: 'rewrite-model',
+        hasApiKey: true,
+      },
+    }
+    installFetch(path =>
+      path === '/v1/settings' ? Response.json(customSettings) : undefined,
+    )
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /模型服务/ }))
+    const providerProtocol = screen.getByLabelText('接口协议')
+    expect(providerProtocol.tagName).toBe('SELECT')
+    fireEvent.change(providerProtocol, {
+      target: { value: 'anthropic-messages' },
+    })
+    expect(providerProtocol).toHaveProperty('value', 'anthropic-messages')
+
+    fireEvent.click(screen.getByRole('button', { name: /语音与输入/ }))
+    const rewriteProtocol = screen.getByLabelText('改写接口协议')
+    expect(rewriteProtocol.tagName).toBe('SELECT')
+    expect(screen.getByLabelText('清除改写服务 API Key')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: /隐私/ }))
+    const privacy = screen.getByLabelText('启用遮罩')
+    expect(privacy).toHaveProperty('disabled', true)
+    expect(screen.getByText(/服务端尚未配置隐私 HMAC key/)).toBeTruthy()
+  })
 })

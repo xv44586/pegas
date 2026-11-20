@@ -446,6 +446,14 @@ a {
   color: var(--canvas);
   padding: 12px 18px;
 }
+
+.message-delivery {
+  display: block;
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: right;
+}
 .message-row.is-pegas .message-content {
   max-width: 82%;
 }

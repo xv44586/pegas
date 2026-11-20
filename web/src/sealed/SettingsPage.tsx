@@ -293,7 +293,11 @@ export function SettingsPage({
               {section === 'connections' && <ConnectionsSettings />}
               {section === 'memory' && <MemorySettings />}
               {section === 'privacy' && (
-                <PrivacySettings draft={draft} onChange={setDraft} />
+                <PrivacySettings
+                  available={response.capabilities.privacyAvailable}
+                  draft={draft}
+                  onChange={setDraft}
+                />
               )}
               {section === 'notifications' && <NotificationSettings />}
               {section === 'usage' && <UsageSettings usage={usage} />}
@@ -893,6 +897,28 @@ function ModelServices({
             </dl>
             {active.id === draft.modelProvider && providerDraft ? (
               <div className="provider-edit-fields">
+                {active.id === 'custom' && (
+                  <label className="field-label">
+                    接口协议
+                    <select
+                      onChange={event =>
+                        setProviderDraft({
+                          ...providerDraft,
+                          protocol: event.target
+                            .value as ModelProviderDraft['protocol'],
+                        })
+                      }
+                      value={providerDraft.protocol}
+                    >
+                      <option value="openai-chat">
+                        OpenAI Chat Completions
+                      </option>
+                      <option value="anthropic-messages">
+                        Anthropic Messages
+                      </option>
+                    </select>
+                  </label>
+                )}
                 <label className="field-label">
                   服务地址
                   <input
@@ -1381,6 +1407,24 @@ function VoiceSettings({
             {rewriteDraft.mode === 'custom' && (
               <div className="provider-edit-fields">
                 <label className="field-label">
+                  改写接口协议
+                  <select
+                    onChange={event =>
+                      onRewriteChange({
+                        ...rewriteDraft,
+                        protocol: event.target
+                          .value as RewriteSettingsDraft['protocol'],
+                      })
+                    }
+                    value={rewriteDraft.protocol}
+                  >
+                    <option value="openai-chat">OpenAI Chat Completions</option>
+                    <option value="anthropic-messages">
+                      Anthropic Messages
+                    </option>
+                  </select>
+                </label>
+                <label className="field-label">
                   服务地址
                   <input
                     onChange={event =>
@@ -1422,6 +1466,23 @@ function VoiceSettings({
                     value={rewriteDraft.apiKey}
                   />
                 </label>
+                {rewriteDraft.hasApiKey && (
+                  <label className="switch-row">
+                    清除改写服务 API Key
+                    <input
+                      aria-label="清除改写服务 API Key"
+                      checked={rewriteDraft.clearApiKey}
+                      onChange={event =>
+                        onRewriteChange({
+                          ...rewriteDraft,
+                          clearApiKey: event.target.checked,
+                          apiKey: '',
+                        })
+                      }
+                      type="checkbox"
+                    />
+                  </label>
+                )}
               </div>
             )}
             <label className="field-label">
@@ -1509,9 +1570,11 @@ function MemorySettings() {
   )
 }
 function PrivacySettings({
+  available,
   draft,
   onChange,
 }: {
+  available: boolean
   draft: RuntimeSettings
   onChange: (settings: RuntimeSettings) => void
 }) {
@@ -1532,7 +1595,9 @@ function PrivacySettings({
         <label className="switch-row">
           启用遮罩
           <input
+            aria-label="启用遮罩"
             checked={draft.privacyMode === 'mask'}
+            disabled={!available}
             onChange={event =>
               onChange({
                 ...draft,
@@ -1542,6 +1607,11 @@ function PrivacySettings({
             type="checkbox"
           />
         </label>
+        {!available && (
+          <p className="settings-help">
+            服务端尚未配置隐私 HMAC key，暂时无法启用遮罩。
+          </p>
+        )}
       </div>
       <div className="info-banner">
         <LockKeyhole size={16} />
