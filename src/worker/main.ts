@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { loadConfig } from '../core/config.js'
 import { DshCliExecutor } from '../executor/dsh-cli-executor.js'
 import { EchoExecutor } from '../executor/echo-executor.js'
-import type { RunExecutor } from '../executor/executor.js'
+import type { ExecutorInput, RunExecutor } from '../executor/executor.js'
 import { loadModelCredentialVault } from '../model/model-credential-vault.js'
 import {
   createConfiguredModelProvider,
@@ -38,6 +38,10 @@ import {
   processNextEvent,
   RoutingEventHandler,
 } from './processor.js'
+import {
+  decodeDshExecutionSnapshot,
+  dshExecutorOptionsFromSnapshot,
+} from './run-execution-snapshot.js'
 
 const config = loadConfig()
 const controlPlaneBaseUrl = localControlPlaneBaseUrl(
@@ -73,23 +77,20 @@ const executor = new SettingsAwareExecutor(
   createExecutor,
 )
 const router = new SettingsAwareTaskRouter(store, createRouter)
-const eventHandler = new RoutingEventHandler(router, executor.name, () => {
+const eventHandler = new RoutingEventHandler(router, executor.name, task => {
   const settings = store.getRuntimeSettings()
-  return {
+  return store.resolveWorkerExecutionContext(task.id, task.userId, {
     executor: executor.name,
+    executorProfile: config.dshProfile,
     workspace: config.workspaceRoot,
-    model:
-      settings.agentModelMode === 'override'
-        ? `${settings.agentModelProvider}/${settings.agentModelName}`
-        : 'profile',
     permissions: JSON.stringify({
       mode: 'workspace-write',
+      approvalPolicy: 'never',
       additionalDirectories: config.dshAdditionalDirectories,
       privacyMode: settings.privacyMode,
     }),
-    protocol: 'dsh-headless-v1',
-    settingsRevision: settings.revision,
-  }
+    protocol: config.executorMode === 'echo' ? 'echo-v1' : 'dsh-headless-v1',
+  })
 })
 const lifecycle = { stopping: false }
 const shutdown = new AbortController()
@@ -170,25 +171,31 @@ function createRouter(settings: RuntimeSettings): TaskRouter {
   return new RewritingTaskRouter(baseRouter, new ModelInputRewriter(provider))
 }
 
-function createExecutor(settings: RuntimeSettings): RunExecutor {
-  const runtimeExecutor =
-    config.executorMode === 'echo'
-      ? baseExecutor
-      : new DshCliExecutor({
-          command: config.dshCommand,
-          profile: config.dshProfile,
-          additionalDirectories: config.dshAdditionalDirectories,
-          timeoutMs: config.dshTimeoutMs,
-          ...(settings.agentModelMode === 'override'
-            ? {
-                agentModel: {
-                  provider: settings.agentModelProvider,
-                  model: settings.agentModelName,
-                },
-              }
-            : {}),
-        })
-  if (settings.privacyMode === 'disabled') return runtimeExecutor
+function createExecutor(
+  settings: RuntimeSettings,
+  input?: ExecutorInput,
+): RunExecutor {
+  const defaults = {
+    executorProfile: config.dshProfile,
+    workspace: config.workspaceRoot,
+    permissionMode: 'workspace-write',
+    approvalPolicy: 'never' as const,
+    additionalDirectories: config.dshAdditionalDirectories,
+    privacyMode: settings.privacyMode,
+  }
+  let privacyMode = settings.privacyMode
+  let runtimeExecutor = baseExecutor
+  if (config.executorMode !== 'echo') {
+    const snapshot = decodeDshExecutionSnapshot(input ?? {}, defaults)
+    privacyMode = snapshot.privacyMode
+    runtimeExecutor = new DshCliExecutor(
+      dshExecutorOptionsFromSnapshot(snapshot, {
+        command: config.dshCommand,
+        timeoutMs: config.dshTimeoutMs,
+      }),
+    )
+  }
+  if (privacyMode === 'disabled') return runtimeExecutor
   return new PrivacyMaskingExecutor(runtimeExecutor, createPrivacyMasker())
 }
 

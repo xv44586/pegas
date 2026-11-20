@@ -79,9 +79,16 @@ try {
   const task = await waitForTask(port)
   if (task.title !== 'Verify the durable task loop')
     throw new Error('Task title did not round-trip')
+  await verifyWorkerProfile(port, task.id)
   const run = await waitForCompletedRun(port, task.id)
   if (run.output !== 'Verify the durable task loop')
     throw new Error('Run output did not round-trip')
+  if (
+    run.executionContext?.workerProfile !== `worker-profile:${task.id}` ||
+    run.executionContext?.workerProfileRevision !== 1 ||
+    run.executionContext?.workerProfileSource !== 'global'
+  )
+    throw new Error('Run did not preserve its effective execution profile')
   const message = await waitForSentOutbox(port)
   if (message.payload?.type !== 'run.completed')
     throw new Error('Completion was not persisted to the outbox')
@@ -148,6 +155,25 @@ async function waitForCompletedRun(apiPort, taskId) {
     await wait(50)
   }
   throw new Error('Worker did not complete a run')
+}
+
+async function verifyWorkerProfile(apiPort, taskId) {
+  const response = await fetch(
+    `http://127.0.0.1:${apiPort}/v1/tasks/${encodeURIComponent(taskId)}/worker-profile?userId=smoke-user`,
+    {
+      headers: { authorization: `Bearer ${apiToken}` },
+    },
+  )
+  if (!response.ok)
+    throw new Error(`Worker Profile API returned ${response.status}`)
+  const body = await response.json()
+  if (
+    body.profile?.taskId !== taskId ||
+    body.profile?.revision !== 1 ||
+    body.profile?.modelMode !== 'inherit' ||
+    body.effective?.source !== 'global'
+  )
+    throw new Error('Worker Profile API did not return inherited settings')
 }
 
 async function waitForSentOutbox(apiPort) {

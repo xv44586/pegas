@@ -1,10 +1,12 @@
-import type { ModelUsageSample } from '../core/domain.js'
+import type { ExecutionContext, ModelUsageSample } from '../core/domain.js'
 
 export interface ExecutorInput {
   runId: string
   taskId: string
   prompt: string
   workingDirectory: string
+  executionContext?: ExecutionContext
+  executionContractVersion?: number
   actionCapability?: {
     baseUrl: string
     claimToken: string

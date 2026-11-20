@@ -35,12 +35,18 @@ export interface TaskEnd {
 
 export interface ExecutionContext {
   executor: string
+  executorProfile?: string
   workspace?: string
   model?: string
+  modelMode?: 'profile' | 'override'
+  modelProvider?: string
+  modelName?: string
   permissions?: string
   protocol?: string
   settingsRevision?: number
   workerProfile?: string
+  workerProfileRevision?: number
+  workerProfileSource?: 'global' | 'task'
 }
 
 export interface InboxEvent {
@@ -95,6 +101,7 @@ export interface Run {
   resumeFromRef?: string
   goalRevision?: number
   executionContext: ExecutionContext
+  executionContractVersion: number
   status: RunStatus
   input: string
   output?: string

@@ -25,6 +25,7 @@ describe('settings-aware Worker boundaries', () => {
     store.initializeRuntimeSettings(defaults)
     const seenRouterModels: string[] = []
     const seenExecutorModels: string[] = []
+    const seenRunModels: (string | undefined)[] = []
     const router = new SettingsAwareTaskRouter(store, settings => {
       seenRouterModels.push(settings.modelName)
       return passthroughRouter
@@ -32,8 +33,9 @@ describe('settings-aware Worker boundaries', () => {
     const executor = new SettingsAwareExecutor(
       store,
       'settings-test',
-      settings => {
+      (settings, input) => {
         seenExecutorModels.push(settings.modelName)
+        seenRunModels.push(input.executionContext?.model)
         return echoExecutor
       },
     )
@@ -43,6 +45,10 @@ describe('settings-aware Worker boundaries', () => {
       taskId: 'task-1',
       prompt: 'hello',
       workingDirectory: '/workspace',
+      executionContext: {
+        executor: 'settings-test',
+        model: 'provider/snapshot-model',
+      },
       signal: new AbortController().signal,
     }
 
@@ -54,6 +60,10 @@ describe('settings-aware Worker boundaries', () => {
 
     expect(seenRouterModels).toEqual(['model-one', 'model-two'])
     expect(seenExecutorModels).toEqual(['model-one', 'model-two'])
+    expect(seenRunModels).toEqual([
+      'provider/snapshot-model',
+      'provider/snapshot-model',
+    ])
     expect(executor.name).toBe('settings-test')
     store.close()
   })

@@ -45,7 +45,14 @@ describe('event and run processing', () => {
     })
     await processNextEvent(
       store,
-      new RoutingEventHandler(new RuleBasedTaskRouter(), executor.name),
+      new RoutingEventHandler(new RuleBasedTaskRouter(), executor.name, () => ({
+        executor: executor.name,
+        executorProfile: 'isolated-profile',
+        workspace: '/snapshot-workspace',
+        model: 'provider/snapshot-model',
+        permissions: JSON.stringify({ mode: 'workspace-write' }),
+        protocol: 'test-v1',
+      })),
       'worker-capability',
     )
     const claimed = store.claimNextRun('worker-capability')
@@ -64,11 +71,72 @@ describe('event and run processing', () => {
     expect(executor.input).toMatchObject({
       runId: claimed.run.id,
       taskId: claimed.task.id,
+      workingDirectory: '/snapshot-workspace',
+      executionContext: claimed.run.executionContext,
       actionCapability: {
         baseUrl: 'http://127.0.0.1:4317',
         claimToken: claimed.claimToken,
       },
     })
+    store.close()
+  })
+
+  it('fails a malformed v2 snapshot before invoking the Executor', async () => {
+    const store = new PegasStore(':memory:')
+    const executor = new CapabilityCapturingExecutor()
+    const event = store.enqueueEvent({
+      userId: 'user-1',
+      type: 'user.message',
+      source: 'web',
+      payload: { text: 'Run with the persisted permissions' },
+    }).event
+    const claimedEvent = store.claimNextEvent('router-v2')
+    if (!claimedEvent) throw new Error('Expected event claim')
+    store.applyRoutingDecision(
+      claimedEvent,
+      {
+        kind: 'create_task',
+        title: 'Strict snapshot',
+        goal: 'Use only persisted permissions',
+        input: 'Run with the persisted permissions',
+        reason: 'test',
+      },
+      executor.name,
+      task => ({
+        executor: 'dsh-headless',
+        executorProfile: 'isolated-profile',
+        workspace: '/snapshot-workspace',
+        model: 'profile',
+        modelMode: 'profile',
+        permissions: '{malformed',
+        protocol: 'dsh-headless-v1',
+        settingsRevision: 1,
+        workerProfile: `worker-profile:${task.id}`,
+        workerProfileRevision: 1,
+        workerProfileSource: 'global',
+      }),
+    )
+    store.completeEvent(event.id, 'router-v2')
+    const claimed = store.claimNextRun('worker-v2')
+    if (!claimed) throw new Error('Expected a claimed Run')
+
+    await executeClaimedRun(
+      store,
+      executor,
+      claimed,
+      'worker-v2',
+      process.cwd(),
+      new AbortController().signal,
+      'http://127.0.0.1:4317',
+    )
+
+    expect(executor.input).toBeUndefined()
+    expect(store.listRuns(claimed.task.id)).toMatchObject([
+      {
+        status: 'failed',
+        lastError: 'Run execution contract v2 permissions are malformed',
+      },
+    ])
     store.close()
   })
 

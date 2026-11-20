@@ -50,7 +50,9 @@ const run: Run = {
   executionContext: {
     executor: 'dsh',
     model: 'deepseek-v4.1-flash',
-    workerProfile: 'pegas',
+    workerProfile: 'worker-profile:task-1',
+    workerProfileRevision: 2,
+    workerProfileSource: 'task',
   },
   createdAt: '2026-11-19T08:00:00.000Z',
   updatedAt: '2026-11-19T08:02:00.000Z',
@@ -805,7 +807,8 @@ describe('sealed Pegas UI', () => {
     fireEvent.click(await screen.findByRole('button', { name: '查看运行时' }))
     expect(screen.getByRole('heading', { name: '执行环境详情' })).toBeTruthy()
     expect(screen.getAllByText('dsh')).toHaveLength(2)
-    expect(screen.getByText('pegas')).toBeTruthy()
+    expect(screen.getByText('这件事情 · 版本 2')).toBeTruthy()
+    expect(screen.queryByText('worker-profile:task-1')).toBeNull()
     expect(screen.getByText(/未返回的字段不会推断/)).toBeTruthy()
   })
 
@@ -2115,6 +2118,21 @@ describe('sealed Pegas UI', () => {
       )
     },
   )
+
+  it('labels the server-authoritative execution snapshot in user language', () => {
+    render(
+      <DetailDrawer
+        onChange={vi.fn()}
+        onClose={vi.fn()}
+        onRetry={vi.fn()}
+        view={{ kind: 'runtime', run }}
+      />,
+    )
+    expect(screen.getByText('事情级执行设置')).toBeTruthy()
+    expect(screen.getByText('这件事情 · 版本 2')).toBeTruthy()
+    expect(screen.queryByText('worker-profile:task-1')).toBeNull()
+    expect(screen.queryByText('Worker Profile')).toBeNull()
+  })
 
   it('requires explicit confirmation before permanently stopping work', async () => {
     const onStop = vi.fn(() => Promise.resolve())

@@ -389,6 +389,282 @@ describe('control plane', () => {
     expect((await fetch(`${base}/v1/channels`)).status).toBe(400)
   })
 
+  it('reads and updates owner-scoped execution settings with conflict-safe replay', async () => {
+    const store = new PegasStore(':memory:')
+    store.initializeRuntimeSettings({
+      routerMode: 'rules',
+      modelProvider: 'magpie',
+      modelName: 'router-model',
+      agentModelMode: 'override',
+      agentModelProvider: 'discovery-api',
+      agentModelName: 'deepseek-v4.1-flash-1017',
+      privacyMode: 'disabled',
+      rewriteMode: 'disabled',
+    })
+    const event = store.enqueueEvent({
+      userId: 'owner',
+      source: 'web',
+      type: 'user.message',
+      payload: { text: 'Create task' },
+    }).event
+    const task = store.createTaskFromEvent(event, 'Execution settings')
+    let catalogCalls = 0
+    let catalogFails = false
+    const server = createControlPlane({
+      store,
+      agentModelCatalogTtlMs: 0,
+      agentModelCatalog: () => {
+        catalogCalls += 1
+        if (catalogFails) return Promise.reject(new Error('private DSH error'))
+        return Promise.resolve({
+          defaultProvider: 'discovery-api',
+          defaultModel: 'deepseek-v4.1-flash-1017',
+          models: [
+            {
+              provider: 'custom-provider',
+              id: 'task-model',
+              name: 'Task model',
+            },
+          ],
+        })
+      },
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    cleanups.push(
+      () => new Promise<void>(resolve => server.close(() => resolve())),
+      () => Promise.resolve(store.close()),
+    )
+    const { port } = server.address() as AddressInfo
+    const base = `http://127.0.0.1:${String(port)}`
+    const resource = `${base}/v1/tasks/${encodeURIComponent(task.id)}/worker-profile`
+
+    const initial = await fetch(`${resource}?userId=owner`)
+    expect(initial.status).toBe(200)
+    expect(await initial.json()).toMatchObject({
+      profile: { revision: 1, modelMode: 'inherit' },
+      effective: {
+        source: 'global',
+        modelRef: 'discovery-api/deepseek-v4.1-flash-1017',
+      },
+    })
+    expect((await fetch(`${resource}?userId=other`)).status).toBe(404)
+    expect(
+      (await fetch(`${base}/v1/tasks/missing-task/worker-profile?userId=owner`))
+        .status,
+    ).toBe(404)
+
+    const update = {
+      userId: 'owner',
+      commandId: 'execution-settings-command-1',
+      expectedRevision: 1,
+      modelMode: 'override',
+      modelProvider: 'custom-provider',
+      modelName: 'task-model',
+    }
+    const updated = await fetch(resource, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(update),
+    })
+    expect(updated.status).toBe(200)
+    expect(await updated.json()).toMatchObject({
+      profile: {
+        revision: 2,
+        modelMode: 'override',
+        modelProvider: 'custom-provider',
+        modelName: 'task-model',
+      },
+      effective: { source: 'task', modelRef: 'custom-provider/task-model' },
+    })
+
+    const replay = await fetch(resource, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(update),
+    })
+    expect(replay.status).toBe(200)
+    expect(await replay.json()).toMatchObject({ profile: { revision: 2 } })
+
+    const otherOwner = await fetch(resource, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...update, userId: 'other' }),
+    })
+    const missing = await fetch(
+      `${base}/v1/tasks/missing-task/worker-profile`,
+      {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(update),
+      },
+    )
+    expect(otherOwner.status).toBe(404)
+    expect(await otherOwner.json()).toEqual({ error: 'not_found' })
+    expect(missing.status).toBe(404)
+    expect(await missing.json()).toEqual({ error: 'not_found' })
+
+    const stale = await fetch(resource, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ...update,
+        commandId: 'stale-execution-settings-command',
+      }),
+    })
+    expect(stale.status).toBe(409)
+    expect(await stale.json()).toMatchObject({
+      error: 'worker_profile_conflict',
+    })
+
+    const unavailable = await fetch(resource, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ...update,
+        commandId: 'unavailable-model-command',
+        expectedRevision: 2,
+        modelName: 'unknown-model',
+      }),
+    })
+    expect(unavailable.status).toBe(422)
+    expect(await unavailable.json()).toEqual({
+      error: 'worker_model_unavailable',
+    })
+    expect(store.getWorkerProfile(task.id, 'owner')).toMatchObject({
+      revision: 2,
+      modelName: 'task-model',
+    })
+
+    const providerCaseVariant = await fetch(resource, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ...update,
+        commandId: 'provider-case-variant-command',
+        expectedRevision: 2,
+        modelProvider: 'CUSTOM-PROVIDER',
+      }),
+    })
+    expect(providerCaseVariant.status).toBe(422)
+    expect(await providerCaseVariant.json()).toEqual({
+      error: 'worker_model_unavailable',
+    })
+    expect(store.getWorkerProfile(task.id, 'owner')).toMatchObject({
+      revision: 2,
+      modelProvider: 'custom-provider',
+    })
+
+    store.stopTask(task.id, 'owner', 'stop-after-profile-update')
+    catalogFails = true
+    const callsBeforeReplay = catalogCalls
+    const replayAfterStop = await fetch(resource, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(update),
+    })
+    expect(replayAfterStop.status).toBe(200)
+    expect(catalogCalls).toBe(callsBeforeReplay)
+
+    const changedAfterStop = await fetch(resource, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ...update,
+        commandId: 'changed-after-stop',
+        expectedRevision: 2,
+        modelName: 'task-model-2',
+      }),
+    })
+    expect(changedAfterStop.status).toBe(409)
+    expect(await changedAfterStop.json()).toEqual({
+      error: 'worker_profile_read_only',
+    })
+    expect(catalogCalls).toBe(callsBeforeReplay)
+  })
+
+  it('fails closed when the isolated Agent model catalog is unavailable', async () => {
+    const store = new PegasStore(':memory:')
+    store.initializeRuntimeSettings({
+      routerMode: 'rules',
+      modelProvider: 'magpie',
+      modelName: 'router-model',
+      agentModelMode: 'profile',
+      agentModelProvider: '',
+      agentModelName: '',
+      privacyMode: 'disabled',
+      rewriteMode: 'disabled',
+    })
+    const task = store.createTaskFromEvent(
+      store.enqueueEvent({
+        userId: 'owner',
+        source: 'web',
+        type: 'user.message',
+        payload: { text: 'Create task' },
+      }).event,
+      'Execution settings',
+    )
+    const server = createControlPlane({ store })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    cleanups.push(
+      () => new Promise<void>(resolve => server.close(() => resolve())),
+      () => Promise.resolve(store.close()),
+    )
+    const base = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+    const response = await fetch(
+      `${base}/v1/tasks/${encodeURIComponent(task.id)}/worker-profile`,
+      {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          userId: 'owner',
+          commandId: 'catalog-unavailable',
+          expectedRevision: 1,
+          modelMode: 'override',
+          modelProvider: 'provider',
+          modelName: 'model',
+        }),
+      },
+    )
+    expect(response.status).toBe(503)
+    expect(await response.json()).toEqual({
+      error: 'agent_models_unavailable',
+    })
+    expect(store.getWorkerProfile(task.id, 'owner').revision).toBe(1)
+
+    const throwingServer = createControlPlane({
+      store,
+      agentModelCatalog: () =>
+        Promise.reject(new Error('private catalog diagnostic')),
+    })
+    await new Promise<void>(resolve =>
+      throwingServer.listen(0, '127.0.0.1', resolve),
+    )
+    cleanups.push(
+      () => new Promise<void>(resolve => throwingServer.close(() => resolve())),
+    )
+    const throwingBase = `http://127.0.0.1:${String((throwingServer.address() as AddressInfo).port)}`
+    const throwingResponse = await fetch(
+      `${throwingBase}/v1/tasks/${encodeURIComponent(task.id)}/worker-profile`,
+      {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          userId: 'owner',
+          commandId: 'catalog-throws',
+          expectedRevision: 1,
+          modelMode: 'override',
+          modelProvider: 'provider',
+          modelName: 'model',
+        }),
+      },
+    )
+    expect(throwingResponse.status).toBe(503)
+    expect(await throwingResponse.json()).toEqual({
+      error: 'agent_models_unavailable',
+    })
+    expect(store.getWorkerProfile(task.id, 'owner').revision).toBe(1)
+  })
+
   it('returns a server-authoritative timeline isolated to one owned channel', async () => {
     const store = new PegasStore(':memory:')
     const createTask = (userId: string, title: string) => {
@@ -721,6 +997,61 @@ describe('control plane', () => {
       defaultProvider: 'magpie',
       defaultModel: 'agent-default',
     })
+  })
+
+  it('shares an in-flight Agent model catalog load and retries failures', async () => {
+    const store = new PegasStore(':memory:')
+    let calls = 0
+    let resolveFirst:
+      | ((catalog: {
+          defaultProvider: string
+          defaultModel: string
+          models: { provider: string; id: string; name: string }[]
+        }) => void)
+      | undefined
+    const first = new Promise<{
+      defaultProvider: string
+      defaultModel: string
+      models: { provider: string; id: string; name: string }[]
+    }>(resolve => {
+      resolveFirst = resolve
+    })
+    let failNext = false
+    const catalog = {
+      defaultProvider: 'isolated',
+      defaultModel: 'model',
+      models: [{ provider: 'isolated', id: 'model', name: 'Model' }],
+    }
+    const server = createControlPlane({
+      store,
+      agentModelCatalogTtlMs: 0,
+      agentModelCatalog: () => {
+        calls += 1
+        if (calls === 1) return first
+        if (failNext) {
+          failNext = false
+          return Promise.reject(new Error('temporary catalog failure'))
+        }
+        return Promise.resolve(catalog)
+      },
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    cleanups.push(
+      () => new Promise<void>(resolve => server.close(() => resolve())),
+      () => Promise.resolve(store.close()),
+    )
+    const url = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}/v1/settings/agent-models`
+    const pending = [fetch(url), fetch(url)]
+    await vi.waitFor(() => expect(calls).toBe(1))
+    resolveFirst?.(catalog)
+    const concurrent = await Promise.all(pending)
+    expect(concurrent.map(response => response.status)).toEqual([200, 200])
+    expect(calls).toBe(1)
+
+    failNext = true
+    expect((await fetch(url)).status).toBe(503)
+    expect((await fetch(url)).status).toBe(200)
+    expect(calls).toBe(3)
   })
 
   it('accepts authenticated proactive agent messages', async () => {

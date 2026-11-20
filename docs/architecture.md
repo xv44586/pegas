@@ -213,7 +213,11 @@ WorkChannel 同时是 Execution Trace 的按需审计入口。代码 diff、工�
 
 #### WorkerProfile 与配置继承
 
-WorkerProfile 是 Task/WorkChannel 范围的执行配置。有效配置按“全局 Agent 默认值 + Worker 显式覆盖”计算；没有覆盖的 Worker 随用户的全局默认值变化。每次 Run 保存有效配置快照，已经开始的 Executor Session 不原地更换模型；影响执行的设置从下一 Run 或受控 Session rollover 生效。
+WorkerProfile 是 Task 范围的内部执行配置。有效配置按“Pegas 全局 Agent 默认值 + 事情级显式设置”计算；没有单独设置的事情随用户的全局默认值变化。每次 Run 保存有效配置快照，已经开始的 Executor Session 不原地更换模型；影响执行的设置从下一 Run 或受控 Session rollover 生效。
+
+产品界面把这项能力称为“事情级执行设置”，不要求用户理解 Channel 或 WorkerProfile，也不展示内部 profile ID。第一阶段服务端以 Task 为唯一归属，通过 `GET/PUT /v1/tasks/:taskId/worker-profile` 读取和更新模型继承方式；WorkChannel 只是同一 Task 的详情投影，不能形成另一套覆盖层。每个生产 DSH Run 原子保存结构化模型引用、WorkerProfile revision、DSH profile、workspace、权限和协议，并标记执行契约 v2；Worker 领取后必须严格解码该快照，缺字段、未知枚举或损坏 JSON 均在启动 Executor 前失败，不能重新解释此刻的全局设置或退回更宽权限。
+
+schema v17 以数据库 claim fence 阻止旧 Worker 领取执行契约 v2，也阻止旧 Worker 在报告恢复阶段直接接管 v2 Run，并拒绝把 v2 Run 的 retry 降级成 v1。回滚到旧应用可以继续读取既有 Task；迁移触发器会为旧应用新建的 Task 自动补 WorkerProfile，但旧应用不能执行 v2 Run。运维回滚必须先恢复兼容 Worker，或明确取消/排空 v2 Run，不能把“旧代码忽略新列”当作安全兼容。事情级更新命令只保留每个 Task 最近 256 条重放记录，以限制唯一 no-op command 的持久增长；超出窗口的旧 command ID 不再承诺历史响应重放。
 
 Worker Runtime 是可释放的执行资源，不是 WorkerProfile 或 WorkChannel 本身。恢复 completed Channel 时，只有 Executor、模型、工作区、工具权限和协议版本兼容才可以复用旧 Session；否则创建新 Session，并从持久化 Channel 状态恢复。
 

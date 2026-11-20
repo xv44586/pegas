@@ -530,6 +530,7 @@ function TaskDetail({
         <dl>
           <Meta label="Executor" value={run?.executor} />
           <Meta label="模型" value={run?.executionContext?.model} />
+          <ExecutionProfileMeta run={run} />
           <Meta label="工作区" value={run?.executionContext?.workspace} />
           <Meta
             label="更新"
@@ -616,6 +617,19 @@ function Meta({ label, value }: { label: string; value?: string }) {
     </div>
   )
 }
+function ExecutionProfileMeta({ run }: { run?: Run }) {
+  const source = workerProfileSourceLabel(
+    run?.executionContext?.workerProfileSource,
+  )
+  const revision = run?.executionContext?.workerProfileRevision
+  const value = [
+    source,
+    revision === undefined ? undefined : `版本 ${String(revision)}`,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+  return <Meta label="事情级执行设置" value={value || undefined} />
+}
 function formatNumber(value?: number) {
   return value === undefined
     ? undefined
@@ -628,6 +642,11 @@ function formatDuration(value?: number) {
 }
 function formatCost(value?: number) {
   return value === undefined ? undefined : `$${value.toFixed(4)}`
+}
+function workerProfileSourceLabel(source?: 'global' | 'task') {
+  if (source === 'global') return 'Pegas 全局设置'
+  if (source === 'task') return '这件事情'
+  return undefined
 }
 function stateIcon(state: string) {
   if (state === '已完成') return <CheckCircle2 size={24} />
@@ -678,10 +697,7 @@ function RuntimeDetail({ run }: { run?: Run }) {
       <section className="metadata-list">
         <dl>
           <Meta label="Executor" value={run?.executor} />
-          <Meta
-            label="Worker Profile"
-            value={run?.executionContext?.workerProfile}
-          />
+          <ExecutionProfileMeta run={run} />
           <Meta label="模型" value={run?.executionContext?.model} />
           <Meta label="工作区" value={run?.executionContext?.workspace} />
           <Meta label="Executor Ref" value={run?.executorRef} />

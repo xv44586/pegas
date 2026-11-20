@@ -32,12 +32,15 @@ export class SettingsAwareTaskRouter implements TaskRouter {
 export class SettingsAwareExecutor implements RunExecutor {
   readonly name: string
   readonly #store: PegasStore
-  readonly #resolve: (settings: RuntimeSettings) => RunExecutor
+  readonly #resolve: (
+    settings: RuntimeSettings,
+    input: ExecutorInput,
+  ) => RunExecutor
 
   constructor(
     store: PegasStore,
     name: string,
-    resolve: (settings: RuntimeSettings) => RunExecutor,
+    resolve: (settings: RuntimeSettings, input: ExecutorInput) => RunExecutor,
   ) {
     this.#store = store
     this.name = name
@@ -46,6 +49,6 @@ export class SettingsAwareExecutor implements RunExecutor {
 
   execute(input: ExecutorInput): Promise<ExecutorResult> {
     const settings = this.#store.getRuntimeSettings()
-    return this.#resolve(settings).execute(input)
+    return this.#resolve(settings, input).execute(input)
   }
 }

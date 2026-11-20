@@ -43,6 +43,8 @@ function taskView(status: Run['status']): DrawerView {
       executor: 'review-fixture',
       model: 'deepseek-v4.1-flash',
       workerProfile: 'pegas',
+      workerProfileRevision: 2,
+      workerProfileSource: 'task',
       workspace: '/review/isolated-workspace',
     },
     createdAt: '2026-11-20T00:01:00.000Z',
