@@ -12,6 +12,12 @@ import { extname, resolve, sep } from 'node:path'
 import { projectWorkChannel } from '../channel/work-channel.js'
 import type { NewInboxEvent } from '../core/domain.js'
 import type { DshModelCatalog } from '../executor/dsh-model-catalog.js'
+import {
+  parseArtifactDraft,
+  parseEvidenceClaimDraft,
+  parseGoalContractDraft,
+  parseWorkerReportDraft,
+} from '../goal/goal-delivery.js'
 import { AnthropicProvider } from '../model/anthropic-provider.js'
 import {
   discoverModelCatalog,
@@ -36,11 +42,14 @@ import type {
   SpeechTranscript,
 } from '../speech/provider.js'
 import {
+  RunClaimError,
   SettingsRevisionConflictError,
   type PegasStore,
 } from '../storage/sqlite-store.js'
 
 const maximumBodyBytes = 1024 * 1024
+const defaultPageLimit = 50
+const maximumPageLimit = 200
 const defaultMaximumAudioBytes = 25 * 1024 * 1024
 
 export interface ControlPlaneOptions {
@@ -72,7 +81,10 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
 
       if (await tryServeWeb(request, response, options.webRoot)) return
 
-      if (!isAuthorized(request, options.apiToken)) {
+      if (
+        !isRunReportWrite(request) &&
+        !isAuthorized(request, options.apiToken)
+      ) {
         return sendJson(response, 401, { error: 'unauthorized' })
       }
 
@@ -274,6 +286,166 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         })
       }
 
+      const taskResourceUrl = new URL(request.url ?? '/', 'http://localhost')
+      const taskGoalMatch = /^\/v1\/tasks\/([^/]+)\/goals$/.exec(
+        taskResourceUrl.pathname,
+      )
+      if (taskGoalMatch && request.method === 'GET') {
+        const userId = requiredQuery(taskResourceUrl, 'userId')
+        const taskId = decodeURIComponent(taskGoalMatch[1] ?? '')
+        const page = pageRequest(taskResourceUrl)
+        const contracts = options.store.pageGoalContracts(
+          taskId,
+          userId,
+          page.limit,
+          page.cursor,
+        )
+        return sendJson(response, 200, {
+          contracts: contracts.items,
+          current: options.store.currentGoalContract(taskId, userId),
+          ...(contracts.nextCursor ? { nextCursor: contracts.nextCursor } : {}),
+        })
+      }
+      if (taskGoalMatch && request.method === 'POST') {
+        const body = await readJson(request)
+        if (!isRecord(body)) throw new Error('Request body must be an object')
+        const contract = options.store.createGoalContract(
+          decodeURIComponent(taskGoalMatch[1] ?? ''),
+          requiredString(body.userId, 'userId'),
+          requiredString(body.commandId, 'commandId'),
+          parseGoalContractDraft(body.goal),
+        )
+        return sendJson(response, 201, { contract })
+      }
+
+      const taskArtifactMatch = /^\/v1\/tasks\/([^/]+)\/artifacts$/.exec(
+        taskResourceUrl.pathname,
+      )
+      if (taskArtifactMatch && request.method === 'GET') {
+        const userId = requiredQuery(taskResourceUrl, 'userId')
+        const page = pageRequest(taskResourceUrl)
+        const artifacts = options.store.pageArtifacts(
+          decodeURIComponent(taskArtifactMatch[1] ?? ''),
+          userId,
+          page.limit,
+          page.cursor,
+        )
+        return sendJson(response, 200, {
+          artifacts: artifacts.items,
+          ...(artifacts.nextCursor ? { nextCursor: artifacts.nextCursor } : {}),
+        })
+      }
+      if (taskArtifactMatch && request.method === 'POST') {
+        const body = await readJson(request)
+        if (!isRecord(body)) throw new Error('Request body must be an object')
+        const artifact = options.store.createArtifact(
+          decodeURIComponent(taskArtifactMatch[1] ?? ''),
+          requiredString(body.userId, 'userId'),
+          requiredString(body.commandId, 'commandId'),
+          parseArtifactDraft(body.artifact),
+        )
+        return sendJson(response, 201, { artifact })
+      }
+
+      const taskEvidenceMatch = /^\/v1\/tasks\/([^/]+)\/evidence$/.exec(
+        taskResourceUrl.pathname,
+      )
+      if (taskEvidenceMatch && request.method === 'GET') {
+        const userId = requiredQuery(taskResourceUrl, 'userId')
+        const page = pageRequest(taskResourceUrl)
+        const revision = taskResourceUrl.searchParams.get('goalRevision')
+        const parsedRevision = revision ? Number(revision) : undefined
+        if (
+          parsedRevision !== undefined &&
+          (!Number.isSafeInteger(parsedRevision) || parsedRevision <= 0)
+        )
+          throw new Error('goalRevision must be a positive integer')
+        const evidence = options.store.pageEvidenceRefs(
+          decodeURIComponent(taskEvidenceMatch[1] ?? ''),
+          userId,
+          page.limit,
+          page.cursor,
+          parsedRevision,
+        )
+        return sendJson(response, 200, {
+          evidence: evidence.items,
+          ...(evidence.nextCursor ? { nextCursor: evidence.nextCursor } : {}),
+        })
+      }
+
+      const taskReviewMatch = /^\/v1\/tasks\/([^/]+)\/review-packs$/.exec(
+        taskResourceUrl.pathname,
+      )
+      if (taskReviewMatch && request.method === 'GET') {
+        const userId = requiredQuery(taskResourceUrl, 'userId')
+        const page = pageRequest(taskResourceUrl)
+        const taskId = decodeURIComponent(taskReviewMatch[1] ?? '')
+        const reviewPacks = options.store.pageReviewPacks(
+          taskId,
+          userId,
+          page.limit,
+          page.cursor,
+        )
+        const currentGoal = options.store.currentGoalContract(taskId, userId)
+        const current = currentGoal
+          ? options.store.currentReviewPack(
+              taskId,
+              userId,
+              currentGoal.revision,
+            )
+          : undefined
+        return sendJson(response, 200, {
+          reviewPacks: reviewPacks.items,
+          current,
+          ...(reviewPacks.nextCursor
+            ? { nextCursor: reviewPacks.nextCursor }
+            : {}),
+        })
+      }
+
+      const taskDeliveryMatch = /^\/v1\/tasks\/([^/]+)\/delivery$/.exec(
+        taskResourceUrl.pathname,
+      )
+      if (taskDeliveryMatch && request.method === 'GET') {
+        const userId = requiredQuery(taskResourceUrl, 'userId')
+        const taskId = decodeURIComponent(taskDeliveryMatch[1] ?? '')
+        const current = options.store.currentGoalContract(taskId, userId)
+        const currentRun = options.store.listRunsForUser(userId, taskId).at(-1)
+        const currentReviewPack = current
+          ? options.store.currentReviewPack(taskId, userId, current.revision)
+          : undefined
+        const reviewEvidenceIds = currentReviewPack?.criteria.flatMap(
+          criterion => criterion.evidenceRefs,
+        )
+        const evidencePage = options.store.pageEvidenceRefs(
+          taskId,
+          userId,
+          defaultPageLimit,
+          undefined,
+          current?.revision,
+          currentRun?.id,
+        )
+        const evidence = reviewEvidenceIds
+          ? options.store.evidenceByIds(taskId, userId, reviewEvidenceIds)
+          : evidencePage.items
+        const artifacts = options.store.artifactsByIds(
+          taskId,
+          userId,
+          evidence.flatMap(item => (item.artifactId ? [item.artifactId] : [])),
+        )
+        return sendJson(response, 200, {
+          goal: current,
+          artifacts,
+          evidence,
+          reviewPack: currentReviewPack,
+          continuation: {
+            ...(!currentReviewPack && evidencePage.nextCursor
+              ? { evidence: evidencePage.nextCursor }
+              : {}),
+          },
+        })
+      }
+
       if (request.url?.startsWith('/v1/tasks') && request.method === 'GET') {
         const url = new URL(request.url, 'http://localhost')
         const userId = url.searchParams.get('userId') ?? undefined
@@ -371,6 +543,71 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         })
       }
 
+      const runEvidenceMatch = /^\/v1\/runs\/([^/]+)\/evidence$/.exec(
+        taskResourceUrl.pathname,
+      )
+      if (runEvidenceMatch && request.method === 'POST') {
+        const body = await readJson(request)
+        if (!isRecord(body)) throw new Error('Request body must be an object')
+        const userId = requiredString(body.userId, 'userId')
+        if (body.confirmedForCapture !== true)
+          throw new Error(
+            'confirmedForCapture must be true to record an unverified user claim',
+          )
+        const claim = parseEvidenceClaimDraft(body.evidence)
+        const evidence = options.store.createEvidenceRef(
+          decodeURIComponent(runEvidenceMatch[1] ?? ''),
+          userId,
+          requiredString(body.commandId, 'commandId'),
+          {
+            ...claim,
+            trustClass: 'user',
+            verification: {
+              method: 'unverified-client-claim',
+              verifierIdentity: `client:${userId}`,
+              verifierVersion: 'v1',
+              result: 'pending',
+            },
+          },
+        )
+        return sendJson(response, 201, { evidence })
+      }
+
+      const runReportMatch = /^\/v1\/runs\/([^/]+)\/reports$/.exec(
+        taskResourceUrl.pathname,
+      )
+      if (runReportMatch && request.method === 'GET') {
+        const userId = requiredQuery(taskResourceUrl, 'userId')
+        const page = pageRequest(taskResourceUrl)
+        const reports = options.store.pageWorkerReports(
+          decodeURIComponent(runReportMatch[1] ?? ''),
+          userId,
+          page.limit,
+          page.cursor,
+        )
+        return sendJson(response, 200, {
+          reports: reports.items,
+          ...(reports.nextCursor ? { nextCursor: reports.nextCursor } : {}),
+        })
+      }
+      if (runReportMatch && request.method === 'POST') {
+        const claimToken = runClaimToken(request)
+        if (!claimToken)
+          return sendJson(response, 403, { error: 'run_claim_required' })
+        const body = await readJson(request)
+        if (!isRecord(body)) throw new Error('Request body must be an object')
+        return sendJson(
+          response,
+          200,
+          options.store.submitWorkerReport(
+            decodeURIComponent(runReportMatch[1] ?? ''),
+            undefined,
+            { claimToken },
+            parseWorkerReportDraft(body.report),
+          ),
+        )
+      }
+
       if (request.url?.startsWith('/v1/runs') && request.method === 'GET') {
         const url = new URL(request.url, 'http://localhost')
         const userId = url.searchParams.get('userId')
@@ -419,6 +656,11 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
 
       return sendJson(response, 404, { error: 'not_found' })
     } catch (error) {
+      if (error instanceof RunClaimError)
+        return sendJson(response, 403, {
+          error: 'run_claim_invalid',
+          message: error.message,
+        })
       const message = error instanceof Error ? error.message : 'Unknown error'
       return sendJson(response, 400, { error: 'bad_request', message })
     }
@@ -886,6 +1128,20 @@ function isAuthorized(
   )
 }
 
+function isRunReportWrite(request: IncomingMessage): boolean {
+  if (request.method !== 'POST' || !request.url) return false
+  const pathname = new URL(request.url, 'http://localhost').pathname
+  return /^\/v1\/runs\/[^/]+\/reports$/.test(pathname)
+}
+
+function runClaimToken(request: IncomingMessage): string | undefined {
+  const value = request.headers['x-pegas-run-claim-token']
+  const actual = Array.isArray(value) ? value[0] : value
+  const trimmed = actual?.trim()
+  if (!trimmed) return undefined
+  return trimmed
+}
+
 async function readJson(request: IncomingMessage): Promise<unknown> {
   const raw = (await readBytes(request, maximumBodyBytes)).toString('utf8')
   if (!raw) throw new Error('Request body is required')
@@ -921,6 +1177,17 @@ function requiredQuery(url: URL, name: string): string {
 function optionalQuery(url: URL, name: string): string | undefined {
   const value = url.searchParams.get(name)?.trim()
   return value === '' ? undefined : value
+}
+
+function pageRequest(url: URL): { limit: number; cursor?: string } {
+  const rawLimit = optionalQuery(url, 'limit')
+  const limit = rawLimit ? Number(rawLimit) : defaultPageLimit
+  if (!Number.isSafeInteger(limit) || limit <= 0 || limit > maximumPageLimit)
+    throw new Error(
+      `limit must be an integer between 1 and ${String(maximumPageLimit)}`,
+    )
+  const cursor = optionalQuery(url, 'cursor')
+  return { limit, ...(cursor ? { cursor } : {}) }
 }
 
 function audioExtension(contentType: string): string {

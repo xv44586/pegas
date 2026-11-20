@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   DshCliExecutor,
   DshExecutionError,
+  executorEnvironment,
 } from '../src/executor/dsh-cli-executor.js'
 
 const temporaryDirectories: string[] = []
@@ -18,6 +19,21 @@ afterEach(() => {
 })
 
 describe('DshCliExecutor', () => {
+  it('does not expose Pegas control-plane credentials to the Executor process', () => {
+    expect(
+      executorEnvironment({
+        PATH: '/usr/bin',
+        DSH_API_KEY: 'executor-owned',
+        PEGAS_API_TOKEN: 'control-plane',
+        PEGAS_RECOVERY_TOKEN: 'recovery',
+        PEGAS_PUSH_WEBHOOK_TOKEN: 'webhook',
+        PEGAS_PRIVACY_HMAC_KEY: 'privacy',
+        PEGAS_MODEL_API_KEY: 'model',
+        PEGAS_SPEECH_API_KEY: 'speech',
+      }),
+    ).toEqual({ PATH: '/usr/bin', DSH_API_KEY: 'executor-owned' })
+  })
+
   it('accepts only a completed final event and captures the session id', async () => {
     const command = fakeDsh(`
 console.log(JSON.stringify({ type: 'session', sessionId: 'session-test' }))

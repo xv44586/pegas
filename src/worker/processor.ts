@@ -69,6 +69,33 @@ export async function executeClaimedRun(
   workingDirectory: string,
   signal: AbortSignal,
 ): Promise<void> {
+  if (claimed.phase === 'report') {
+    const goalRevision = claimed.run.goalRevision
+    if (goalRevision === undefined) return
+    const reports = store.listWorkerReports(claimed.run.id, claimed.task.userId)
+    const reportSequence =
+      reports.reduce(
+        (maximum, report) => Math.max(maximum, report.reportSequence),
+        -1,
+      ) + 1
+    const evidenceRefIds = store
+      .listEvidenceRefs(claimed.task.id, claimed.task.userId, goalRevision)
+      .filter(evidence => evidence.runId === claimed.run.id)
+      .map(evidence => evidence.id)
+    store.submitWorkerReport(claimed.run.id, claimed.task.userId, workerId, {
+      goalRevision,
+      reportSequence,
+      status: 'ready',
+      evidenceRefIds,
+      summary: claimed.run.output ?? 'Evidence review resumed.',
+      limitations: [],
+      remainingRisks:
+        evidenceRefIds.length === 0
+          ? ['Required evidence has not been captured yet.']
+          : [],
+    })
+    return
+  }
   const runAbort = new AbortController()
   const abortRun = () => runAbort.abort(signal.reason)
   if (signal.aborted) abortRun()
@@ -132,4 +159,35 @@ export async function executeClaimedRun(
   signal.removeEventListener('abort', abortRun)
   if (!store.ownsRun(claimed.run.id, workerId)) return
   store.completeRun(claimed.run.id, workerId, result)
+  const persistedRun = store
+    .listRuns(claimed.task.id)
+    .find(run => run.id === claimed.run.id)
+  if (persistedRun?.goalRevision !== undefined) {
+    const evidenceRefIds = store
+      .listEvidenceRefs(
+        claimed.task.id,
+        claimed.task.userId,
+        persistedRun.goalRevision,
+      )
+      .filter(evidence => evidence.runId === claimed.run.id)
+      .map(evidence => evidence.id)
+    store.submitWorkerReport(claimed.run.id, claimed.task.userId, workerId, {
+      goalRevision: persistedRun.goalRevision,
+      reportSequence: 0,
+      status: 'ready',
+      evidenceRefIds,
+      summary: result.output,
+      limitations:
+        evidenceRefIds.length === 0
+          ? ['No structured evidence references were produced.']
+          : [],
+      remainingRisks: [
+        ...(evidenceRefIds.length === 0
+          ? [
+              'The Goal remains open until required evidence is captured and verified.',
+            ]
+          : []),
+      ],
+    })
+  }
 }

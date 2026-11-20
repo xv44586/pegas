@@ -883,7 +883,24 @@ describe('PegasStore', () => {
           .prepare('SELECT version FROM schema_migrations ORDER BY version')
           .all() as { version: number }[]
         expect(versions.map(row => row.version)).toEqual([
-          1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
+          1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+        ])
+        expect(
+          (
+            db
+              .prepare(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('goal_contracts', 'task_artifacts', 'evidence_refs', 'evidence_commands', 'evidence_verification_events', 'worker_reports', 'review_packs') ORDER BY name",
+              )
+              .all() as { name: string }[]
+          ).map(row => row.name),
+        ).toEqual([
+          'evidence_commands',
+          'evidence_refs',
+          'evidence_verification_events',
+          'goal_contracts',
+          'review_packs',
+          'task_artifacts',
+          'worker_reports',
         ])
         expect(
           (
@@ -912,6 +929,23 @@ describe('PegasStore', () => {
           (
             db.prepare('PRAGMA table_info(runs)').all() as { name: string }[]
           ).some(column => column.name === 'retry_of_run_id'),
+        ).toBe(true)
+        expect(
+          (
+            db.prepare('PRAGMA table_info(runs)').all() as { name: string }[]
+          ).some(column => column.name === 'goal_revision'),
+        ).toBe(true)
+        expect(
+          (
+            db.prepare('PRAGMA table_info(runs)').all() as { name: string }[]
+          ).some(column => column.name === 'claim_token_hash'),
+        ).toBe(true)
+        expect(
+          (
+            db.prepare('PRAGMA table_info(worker_reports)').all() as {
+              name: string
+            }[]
+          ).some(column => column.name === 'claim_token_hash'),
         ).toBe(true)
         expect(
           (
