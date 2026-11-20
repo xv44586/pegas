@@ -197,18 +197,47 @@ function installFetch(
               id: 'deepseek-v4.1-flash',
               name: 'deepseek-v4.1-flash',
             },
+            {
+              provider: 'Magpie',
+              id: 'gpt-6.1-sol',
+              name: 'GPT-6.1 Sol',
+            },
+            {
+              provider: 'Other',
+              id: 'other-model',
+              name: 'Other model',
+            },
           ],
         }),
       )
     if (path === '/v1/events' && init?.method === 'POST')
       return Promise.resolve(Response.json({ ok: true }))
     if (path === '/v1/settings' && init?.method === 'PUT')
-      return Promise.resolve(
-        Response.json({
+      return Promise.resolve().then(() => {
+        const update = JSON.parse(
+          typeof init.body === 'string' ? init.body : '{}',
+        ) as {
+          agentModelMode?: 'profile' | 'override'
+          agentModelProvider?: string
+          agentModelName?: string
+        }
+        return Response.json({
           ...settingsResponse,
-          settings: { ...settingsResponse.settings, revision: 2 },
-        }),
-      )
+          settings: {
+            ...settingsResponse.settings,
+            revision: 2,
+            ...(update.agentModelMode
+              ? { agentModelMode: update.agentModelMode }
+              : {}),
+            ...(update.agentModelProvider
+              ? { agentModelProvider: update.agentModelProvider }
+              : {}),
+            ...(update.agentModelName
+              ? { agentModelName: update.agentModelName }
+              : {}),
+          },
+        })
+      })
     if (path.includes('/read') || path.includes('/retry'))
       return Promise.resolve(
         Response.json(
@@ -506,6 +535,65 @@ describe('sealed Pegas UI', () => {
         '/v1/events',
         expect.objectContaining({ method: 'POST' }),
       ),
+    )
+  })
+
+  it('uses a semantic composer and does not submit during IME composition', async () => {
+    const fetchMock = installFetch()
+    render(<App />)
+    const composer = await screen.findByLabelText('给 Pegas 发消息')
+    const form = composer.closest('form')
+    expect(form?.getAttribute('aria-label')).toBe('发送消息')
+    expect(
+      screen.getByRole('button', { name: '发送' }).getAttribute('type'),
+    ).toBe('submit')
+    const modelButton = await screen.findByRole('button', {
+      name: /选择执行模型/,
+    })
+    expect(modelButton.textContent).toContain('deepseek-v4.1-flash')
+    fireEvent.click(modelButton)
+    expect(await screen.findByRole('dialog', { name: '选择模型' })).toBeTruthy()
+    expect(screen.getByRole('option', { name: /GPT-6.1 Sol/ })).toBeTruthy()
+    expect(screen.queryByRole('option', { name: /Other model/ })).toBeNull()
+    fireEvent.click(screen.getByRole('option', { name: /GPT-6.1 Sol/ }))
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([path, init]) => {
+          if (path !== '/v1/settings' || init?.method !== 'PUT') return false
+          const body = JSON.parse(
+            typeof init.body === 'string' ? init.body : '{}',
+          ) as {
+            agentModelProvider?: string
+            agentModelName?: string
+          }
+          return (
+            body.agentModelProvider === 'Magpie' &&
+            body.agentModelName === 'gpt-6.1-sol'
+          )
+        }),
+      ).toBe(true),
+    )
+    expect(screen.queryByRole('dialog', { name: '选择模型' })).toBeNull()
+    await waitFor(() =>
+      expect(modelButton.textContent).toContain('GPT-6.1 Sol'),
+    )
+    fireEvent.change(composer, { target: { value: '中文输入尚未完成' } })
+    fireEvent.keyDown(composer, {
+      isComposing: true,
+      key: 'Enter',
+    })
+    expect(
+      fetchMock.mock.calls.some(
+        ([path, init]) => path === '/v1/events' && init?.method === 'POST',
+      ),
+    ).toBe(false)
+    fireEvent.keyDown(composer, { key: 'Enter' })
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([path, init]) => path === '/v1/events' && init?.method === 'POST',
+        ),
+      ).toBe(true),
     )
   })
 

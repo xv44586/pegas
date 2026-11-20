@@ -245,7 +245,7 @@ export interface ModelCatalogItem {
   name: string
 }
 
-interface DshModelCatalogItem {
+export interface DshModelCatalogItem {
   provider: string
   id: string
   name: string

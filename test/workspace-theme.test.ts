@@ -37,7 +37,7 @@ describe('sealed UI layout contracts', () => {
 
   it('keeps dictation errors in composer flow', () => {
     expect(sealedUi).toMatch(
-      /\.composer-error\s*\{[^}]*margin:\s*0 auto 8px;[^}]*max-width:\s*1120px;/,
+      /\.composer-error\s*\{[^}]*margin:\s*0 auto 8px;[^}]*max-width:\s*1040px;/,
     )
     expect(sealedUi).not.toMatch(
       /\.composer-error\s*\{[^}]*position:\s*absolute;/,

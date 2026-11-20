@@ -24,6 +24,7 @@ import {
 } from './sealed/types'
 import type {
   DshModelCatalog,
+  DshModelCatalogItem,
   ModelProviderDraft,
   OutboxMessage,
   RuntimeSettings,
@@ -209,6 +210,31 @@ export function App() {
     setData(current => ({ ...current, settings: response }))
   }
 
+  async function selectAgentModel(model: DshModelCatalogItem) {
+    const response = data.settings
+    if (!response) throw new Error('模型设置仍在加载，请稍后重试。')
+    const routerProvider = response.capabilities.providers.find(
+      provider => provider.id === response.settings.modelProvider,
+    )
+    if (!routerProvider) throw new Error('当前 Router 接入点不可用。')
+    const settings = await api.saveSettings(
+      {
+        ...response.settings,
+        agentModelMode: 'override',
+        agentModelProvider: model.provider,
+        agentModelName: model.id,
+      },
+      {
+        name: routerProvider.name,
+        protocol: routerProvider.protocol,
+        baseUrl: routerProvider.baseUrl,
+        apiKey: '',
+        clearApiKey: false,
+      },
+    )
+    setData(current => ({ ...current, settings }))
+  }
+
   async function markRead(message: OutboxMessage) {
     const updated = await api.markOutboxRead(message.id)
     setData(current => ({
@@ -245,6 +271,20 @@ export function App() {
   const unreadCount = data.snapshot.messages.filter(
     message => !message.readAt,
   ).length
+  const selectedAgentProvider =
+    data.settings?.settings.agentModelMode === 'override'
+      ? data.settings.settings.agentModelProvider
+      : agentModels?.defaultProvider
+  const selectedAgentModelId =
+    data.settings?.settings.agentModelMode === 'override'
+      ? data.settings.settings.agentModelName
+      : agentModels?.defaultModel
+  const availableAgentModels =
+    agentModels?.models.filter(
+      model =>
+        model.provider.toLocaleLowerCase() ===
+        selectedAgentProvider?.toLocaleLowerCase(),
+    ) ?? []
 
   return (
     <>
@@ -275,7 +315,11 @@ export function App() {
           <ConversationPage
             actions={actions}
             api={api}
+            modelProvider={selectedAgentProvider}
+            models={availableAgentModels}
+            onSelectModel={selectAgentModel}
             onSent={loadSnapshot}
+            selectedModelId={selectedAgentModelId}
             snapshot={data.snapshot}
           />
         )}

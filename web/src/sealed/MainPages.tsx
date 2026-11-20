@@ -1,25 +1,25 @@
 import {
+  ArrowUp,
   ArrowRight,
   Check,
   ChevronDown,
   CircleAlert,
   FileText,
   Mic,
-  Paperclip,
   PauseCircle,
+  Plus,
   RotateCw,
   Search,
-  Send,
   ShieldCheck,
   Sparkles,
   Volume2,
   Zap,
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 
 import type { PegasApi } from '../api'
 import { MarkdownMessage } from '../MarkdownMessage'
-import type { OutboxMessage, Snapshot } from '../types'
+import type { DshModelCatalogItem, OutboxMessage, Snapshot } from '../types'
 import { useVoiceDictation } from '../useVoiceDictation'
 import { EmptyCapability, PageToolbar } from './Shell'
 import {
@@ -65,16 +65,254 @@ function PageHeader({
   )
 }
 
+function ComposerModelPicker({
+  models,
+  provider,
+  selectedModelId,
+  onSelect,
+}: {
+  models: DshModelCatalogItem[]
+  provider?: string
+  selectedModelId?: string
+  onSelect: (model: DshModelCatalogItem) => Promise<void>
+}) {
+  const pickerId = useId()
+  const pickerTitleId = useId()
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [savingId, setSavingId] = useState('')
+  const [error, setError] = useState('')
+  const [displayModelId, setDisplayModelId] = useState(selectedModelId)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const pickerRef = useRef<HTMLDivElement>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
+  const selected = models.find(model => model.id === displayModelId)
+  const filteredModels = useMemo(() => {
+    const normalized = query.trim().toLocaleLowerCase()
+    if (!normalized) {
+      const current = models.find(model => model.id === displayModelId)
+      return current
+        ? [current, ...models.filter(model => model.id !== displayModelId)]
+        : models
+    }
+    return models.filter(model =>
+      `${model.name} ${model.id}`.toLocaleLowerCase().includes(normalized),
+    )
+  }, [displayModelId, models, query])
+
+  useEffect(() => setDisplayModelId(selectedModelId), [selectedModelId])
+
+  function closePicker(restoreFocus = true) {
+    setOpen(false)
+    setQuery('')
+    setError('')
+    if (restoreFocus) window.setTimeout(() => triggerRef.current?.focus(), 0)
+  }
+
+  useEffect(() => {
+    if (!open) return
+    window.setTimeout(() => searchRef.current?.focus(), 0)
+    const dismiss = (event: PointerEvent) => {
+      const target = event.target
+      if (!(target instanceof Node)) return
+      if (
+        pickerRef.current?.contains(target) ||
+        triggerRef.current?.contains(target)
+      )
+        return
+      closePicker(false)
+    }
+    document.addEventListener('pointerdown', dismiss)
+    return () => document.removeEventListener('pointerdown', dismiss)
+  }, [open])
+
+  function focusOption(index: number) {
+    const options = Array.from(
+      pickerRef.current?.querySelectorAll<HTMLElement>('[role="option"]') ?? [],
+    )
+    if (!options.length) return
+    options[Math.max(0, Math.min(index, options.length - 1))]?.focus()
+  }
+
+  async function selectModel(model: DshModelCatalogItem) {
+    if (savingId || model.id === displayModelId) {
+      closePicker()
+      return
+    }
+    setSavingId(model.id)
+    setError('')
+    try {
+      await onSelect(model)
+      setDisplayModelId(model.id)
+      closePicker()
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : '模型切换失败，请重试。',
+      )
+    } finally {
+      setSavingId('')
+    }
+  }
+
+  return (
+    <div className="composer-model-control">
+      <button
+        aria-controls={pickerId}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        aria-label={`选择执行模型，当前 ${selected?.name ?? '未选择'}`}
+        className="composer-model-button"
+        disabled={!models.length}
+        onClick={() => {
+          if (open) closePicker(false)
+          else setOpen(true)
+        }}
+        ref={triggerRef}
+        title={selected?.name ?? '服务端未提供可用模型'}
+        type="button"
+      >
+        <span>{selected?.name ?? '执行模型'}</span>
+        <ChevronDown size={16} />
+      </button>
+      {open && (
+        <div
+          aria-labelledby={pickerTitleId}
+          className="composer-model-picker"
+          id={pickerId}
+          onKeyDown={event => {
+            if (event.key === 'Escape') {
+              event.preventDefault()
+              closePicker()
+              return
+            }
+            const target = event.target
+            const options = Array.from(
+              pickerRef.current?.querySelectorAll<HTMLElement>(
+                '[role="option"]',
+              ) ?? [],
+            )
+            if (event.key === 'ArrowDown' && target === searchRef.current) {
+              event.preventDefault()
+              focusOption(
+                Math.max(
+                  0,
+                  filteredModels.findIndex(
+                    model => model.id === displayModelId,
+                  ),
+                ),
+              )
+              return
+            }
+            if (!(target instanceof HTMLElement)) return
+            const currentIndex = options.indexOf(target)
+            if (currentIndex < 0) return
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+              event.preventDefault()
+              const step = event.key === 'ArrowDown' ? 1 : -1
+              focusOption(
+                (currentIndex + step + options.length) % options.length,
+              )
+            } else if (event.key === 'Home' || event.key === 'End') {
+              event.preventDefault()
+              focusOption(event.key === 'Home' ? 0 : options.length - 1)
+            } else if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault()
+              target.click()
+            }
+          }}
+          ref={pickerRef}
+          role="dialog"
+        >
+          <header>
+            <div>
+              <h2 id={pickerTitleId}>选择模型</h2>
+              <p>{provider ? `${provider} 接入点` : '当前接入点'}</p>
+            </div>
+            <span>{models.length} 个可用</span>
+          </header>
+          <label className="composer-model-search">
+            <Search size={16} />
+            <span className="visually-hidden">搜索模型</span>
+            <input
+              autoComplete="off"
+              onChange={event => setQuery(event.target.value)}
+              placeholder="搜索模型"
+              ref={searchRef}
+              spellCheck={false}
+              type="search"
+              value={query}
+            />
+          </label>
+          <div
+            aria-label="可用模型"
+            className="composer-model-list"
+            role="listbox"
+          >
+            {filteredModels.length ? (
+              filteredModels.map((model, index) => {
+                const isSelected = model.id === displayModelId
+                const isSaving = savingId === model.id
+                return (
+                  <div
+                    aria-disabled={Boolean(savingId)}
+                    aria-selected={isSelected}
+                    className="composer-model-option"
+                    data-model-id={model.id}
+                    key={`${model.provider}/${model.id}`}
+                    onClick={() => {
+                      if (!savingId) void selectModel(model)
+                    }}
+                    role="option"
+                    tabIndex={
+                      isSelected || (!displayModelId && index === 0) ? 0 : -1
+                    }
+                  >
+                    <span>
+                      <strong>{model.name}</strong>
+                      {model.id !== model.name && <small>{model.id}</small>}
+                    </span>
+                    {isSaving ? (
+                      <RotateCw className="is-spinning" size={17} />
+                    ) : (
+                      isSelected && <Check size={18} />
+                    )}
+                  </div>
+                )
+              })
+            ) : (
+              <p className="composer-model-empty">没有匹配的模型</p>
+            )}
+          </div>
+          {error && (
+            <p className="composer-model-error" role="alert">
+              {error}
+            </p>
+          )}
+          <footer>模型变更只作用于新建执行会话</footer>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function ConversationPage({
   api,
   snapshot,
   actions,
   onSent,
+  models,
+  modelProvider,
+  selectedModelId,
+  onSelectModel,
 }: {
   api: PegasApi
   snapshot: Snapshot
   actions: PageActions
   onSent: () => Promise<void>
+  models: DshModelCatalogItem[]
+  modelProvider?: string
+  selectedModelId?: string
+  onSelectModel: (model: DshModelCatalogItem) => Promise<void>
 }) {
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
@@ -251,56 +489,79 @@ export function ConversationPage({
             {dictation.error}
           </div>
         )}
-        <div className="composer">
-          <button
-            aria-label="添加附件"
-            disabled
-            title="服务端 Artifact API 尚未提供"
-            type="button"
-          >
-            <Paperclip size={21} />
-          </button>
-          <button
-            aria-label={
-              dictation.state === 'recording' ? '停止录音' : '语音输入'
-            }
-            className={dictation.state === 'recording' ? 'is-recording' : ''}
-            onClick={dictation.toggle}
-            type="button"
-          >
-            <Mic size={21} />
-          </button>
+        <form
+          aria-label="发送消息"
+          className="composer"
+          onSubmit={event => {
+            event.preventDefault()
+            void send()
+          }}
+        >
+          <label className="visually-hidden" htmlFor="pegas-message">
+            给 Pegas 发消息
+          </label>
           <textarea
-            aria-label="给 Pegas 发消息"
+            enterKeyHint="send"
+            id="pegas-message"
+            name="message"
             onChange={event => setDraft(event.target.value)}
             onKeyDown={event => {
-              if (
-                event.key === 'Enter' &&
-                !event.shiftKey &&
-                !event.nativeEvent.isComposing
-              ) {
+              if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault()
-                void send()
+                if (event.nativeEvent.isComposing) return
+                event.currentTarget.form?.requestSubmit()
               }
             }}
             placeholder={
               dictation.state === 'recording'
                 ? `正在听 · ${String(dictation.elapsedSeconds)} 秒`
-                : '告诉 Pegas 你想做什么…'
+                : '和 Pegas 一起工作'
             }
             rows={1}
             value={draft}
           />
-          <button
-            aria-label="发送"
-            className="send-button"
-            disabled={!draft.trim() || sending}
-            onClick={() => void send()}
-            type="button"
-          >
-            <Send size={20} />
-          </button>
-        </div>
+          <div className="composer-toolbar">
+            <div className="composer-tools" aria-label="输入工具">
+              <button
+                aria-label="添加附件"
+                className="composer-add-button"
+                disabled
+                title="附件能力将在 Artifact API 接入后启用"
+                type="button"
+              >
+                <Plus size={22} />
+              </button>
+            </div>
+            <div className="composer-actions">
+              <ComposerModelPicker
+                models={models}
+                onSelect={onSelectModel}
+                provider={modelProvider}
+                selectedModelId={selectedModelId}
+              />
+              <button
+                aria-label={
+                  dictation.state === 'recording' ? '停止录音' : '语音输入'
+                }
+                className={
+                  dictation.state === 'recording' ? 'is-recording' : ''
+                }
+                onClick={dictation.toggle}
+                type="button"
+              >
+                <Mic size={20} />
+              </button>
+              <button
+                aria-label="发送"
+                className="send-button"
+                disabled={!draft.trim() || sending}
+                type="submit"
+              >
+                <ArrowUp size={20} />
+              </button>
+            </div>
+          </div>
+        </form>
       </div>
     </div>
   )

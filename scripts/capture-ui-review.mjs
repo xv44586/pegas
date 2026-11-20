@@ -83,8 +83,28 @@ try {
   const page = await desktop.newPage()
   page.setDefaultTimeout(12_000)
   await page.goto(`http://127.0.0.1:${String(port)}/`)
-  await page.getByRole('textbox', { name: '给 Pegas 发消息' }).waitFor()
+  const composerInput = page.getByRole('textbox', { name: '给 Pegas 发消息' })
+  await composerInput.waitFor()
   await capture(page, 'desktop-conversation.png', 'desktop-conversation')
+  await composerInput.focus()
+  await capture(page, 'desktop-composer-focus.png', 'desktop-composer-focus')
+  await page.getByRole('button', { name: /选择执行模型/ }).click()
+  await page.getByRole('dialog', { name: '选择模型' }).waitFor()
+  await capture(
+    page,
+    'desktop-composer-model-picker.png',
+    'desktop-composer-model-picker',
+  )
+  await page.keyboard.press('Escape')
+  await composerInput.fill(
+    '请帮我整理下周的重点工作。\n先列出计划，再标记需要我确认的事项。',
+  )
+  await capture(
+    page,
+    'desktop-composer-multiline.png',
+    'desktop-composer-multiline',
+  )
+  await composerInput.fill('')
 
   await page
     .getByLabel('主导航')
@@ -285,8 +305,25 @@ try {
   })
   const mobilePage = await mobile.newPage()
   await mobilePage.goto(`http://127.0.0.1:${String(port)}/`)
-  await mobilePage.getByRole('textbox', { name: '给 Pegas 发消息' }).waitFor()
+  const mobileComposer = mobilePage.getByRole('textbox', {
+    name: '给 Pegas 发消息',
+  })
+  await mobileComposer.waitFor()
   await capture(mobilePage, 'mobile-conversation.png', 'mobile-conversation')
+  await mobileComposer.focus()
+  await capture(
+    mobilePage,
+    'mobile-composer-focus.png',
+    'mobile-composer-focus',
+  )
+  await mobilePage.getByRole('button', { name: /选择执行模型/ }).click()
+  await mobilePage.getByRole('dialog', { name: '选择模型' }).waitFor()
+  await capture(
+    mobilePage,
+    'mobile-composer-model-picker.png',
+    'mobile-composer-model-picker',
+  )
+  await mobilePage.keyboard.press('Escape')
   await mobilePage
     .getByLabel('移动端主导航')
     .getByRole('button', { name: '所有事情' })
@@ -517,6 +554,50 @@ async function assertGeometry(page, label) {
         out.push(
           `switch track changed size (${String(Math.round(rect.width))}x${String(Math.round(rect.height))})`,
         )
+    }
+    const composer = globalThis.document.querySelector('.composer')
+    const composerInput = composer?.querySelector('textarea')
+    const sendButton = composer?.querySelector('.send-button')
+    if (composer && composerInput && sendButton) {
+      const composerStyle = globalThis.getComputedStyle(composer)
+      const inputStyle = globalThis.getComputedStyle(composerInput)
+      const sendRect = sendButton.getBoundingClientRect()
+      if (Number.parseFloat(composerStyle.borderRadius) > 26)
+        out.push(`composer is too pill-shaped (${composerStyle.borderRadius})`)
+      if (inputStyle.fieldSizing !== 'content')
+        out.push(
+          `composer textarea does not auto-size (${inputStyle.fieldSizing})`,
+        )
+      if (sendRect.width < 38 || sendRect.height < 38)
+        out.push(
+          `composer send target is too small (${String(Math.round(sendRect.width))}x${String(Math.round(sendRect.height))})`,
+        )
+      if (globalThis.document.activeElement === composerInput) {
+        if (
+          inputStyle.outlineStyle !== 'none' &&
+          Number.parseFloat(inputStyle.outlineWidth) > 0
+        )
+          out.push('composer textarea draws its own inner focus rectangle')
+        if (composerStyle.boxShadow === 'none')
+          out.push('focused composer has no visible outer focus treatment')
+      }
+    }
+    const modelPicker = globalThis.document.querySelector(
+      '.composer-model-picker',
+    )
+    if (modelPicker) {
+      const rect = modelPicker.getBoundingClientRect()
+      if (
+        rect.left < -1 ||
+        rect.right > globalThis.innerWidth + 1 ||
+        rect.top < -1 ||
+        rect.bottom > globalThis.innerHeight + 1
+      )
+        out.push(
+          `model picker escapes viewport (${String(Math.round(rect.left))}, ${String(Math.round(rect.top))}, ${String(Math.round(rect.right))}, ${String(Math.round(rect.bottom))})`,
+        )
+      if (!modelPicker.querySelector('[role="option"]'))
+        out.push('model picker has no selectable options')
     }
     return out
   })
