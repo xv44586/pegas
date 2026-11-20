@@ -68,7 +68,7 @@ Backlog / Unstarted / Started ── 用户明确停止 → Cancelled（硬结�
 - `archived` 只属于产品展示和保留策略，不是 Task 执行状态；归档不能撤回授权，也不能改变能否恢复。
 - Run、Worker Runtime 和 Executor Session 与 Channel 分别结束。Run 进入终态后不再写入；Runtime 在无前台 turn、后台任务或交接等待时释放 slot；Session 只保留可选恢复引用。
 - 同一 Channel 可以先后经历多个 Run、Assignment、Runtime 和 Session。历史身份由 Channel ID 和不可变事件维持，不由进程或 Session ID 维持。
-- 当前 Run 的 Worker 可以提交结构化 `ready` 或 `dropped` Report。没有未满足完成条件时，`ready` 结束为 completed，`dropped` 结束为 dropped；绑定了审批、Artifact 或外部 Thread 等完成条件时，`ready` 只进入等待，直到 Control Plane 验证条件满足。自由文本和 Runtime 正常退出不能结束 Channel。
+- 当前 Run 的 Worker 可以提交结构化 `ready` 或 `dropped` Report。现有完成条件没有未满足项时，`ready` 结束为 completed，`dropped` 结束为 dropped；绑定了审批、Artifact 或外部 Thread 等完成条件时，`ready` 只进入等待，直到 Control Plane 验证条件满足。自由文本和 Runtime 正常退出不能结束 Channel。Planned 的 `GOAL-001` 会进一步要求 `ready` 引用当前 Goal revision 的 EvidenceRef，并由 Control Plane 逐项生成 Review Pack；该设计不扩大 Router 或 Worker 的完成判定权，见 `docs/goal-contract-and-evidence.md`。
 
 #### 谁可以恢复
 

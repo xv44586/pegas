@@ -1,18 +1,19 @@
 # Pegas 系统架构
 
-> 状态：Draft 0.3
-> 更新日期：2026-11-17
+> 状态：Draft 0.4
+> 更新日期：2026-11-20
 
 ## 架构决策
 
 第一阶段采用以下方向：
 
-> DSH-first、Task-first、单一人格、内部多执行单元、执行后端可替换、恢复平面独立。
+> DSH-first、Task-first、evidence-first delivery、单一人格、内部多执行单元、执行后端可替换、恢复平面独立。
 
 具体含义：
 
 - **DSH-first**：使用 DSH 承载模型、Agent session、工具、技能、调度和执行能力。
 - **Task-first**：Pegas 自己维护用户目标和任务生命周期，不能用聊天 session 代替 Task。
+- **Evidence-first delivery**：用户默认审查与完成条件对应的 evidence；代码、工具调用和处理过程属于按需下钻的执行记录，不能替代完成证据。
 - **单一人格**：用户默认只和 Pegas 对话，内部 worker、sub-agent 和 session 不成为用户必须理解的概念。
 - **内部多执行单元**：Pegas 可以为不同 Task 创建独立 Run，并按需并行或委派。
 - **执行后端可替换**：DSH 是第一种 Run Executor，不进入 Pegas 核心领域模型。
@@ -32,6 +33,8 @@
 8. 权限和审批由代码执行的策略控制，而不是只依赖模型遵守提示词。
 9. Pegas 修改自身后可以通过候选版本验证安全接管，失败时自动回滚。
 10. 即使 Control Plane 无法启动，用户仍有独立的状态查询、重启和回滚通道。
+11. 用户可以从不完整意图开始，由真实 Executor 帮助形成版本化目标、上下文边界和完成条件。
+12. Task 完成必须有绑定当前 Goal 与最终 Artifact/外部状态的证据，不能只依赖模型声明、进程退出或执行日志。
 
 ## 系统分层
 
@@ -49,22 +52,26 @@ Web / App / macOS / Messaging
                 │
                 ▼
        Pegas Task Control Plane
-     ┌──────────┼───────────┐
-     ▼          ▼           ▼
-  Memory     Scheduler     Outbox
-     │          │           │
-     └──────────┼───────────┘
+          ┌─────┼─────┐
+          ▼     ▼     ▼
+       Memory Scheduler Outbox
+          │     │     ▲
+          └─────┴─────┘
+                │
                 ▼
         Policy & Approval Engine
                 │
                 ▼
           Executor Adapter
-                │
+                │ writes EvidenceRef / Artifact
                 ▼
-              DSH
-                │
-                ▼
-    Local / Sandbox / Remote Worker
+              DSH ────────────────┐
+                │                 ▼
+                ▼       Evidence & Artifact Store
+    Local / Sandbox / Remote Worker       ▲
+                                          │
+       Control Plane validates evidence ──┘
+       and projects Review Pack to Outbox
 
 Independent Recovery Plane
   Supervisor ── Health Check ── Release Registry
@@ -162,12 +169,13 @@ Task Control Plane 是 Pegas 的核心，也是 Task 状态的唯一事实来源
 
 - Task 创建、合并、拆分和关联；
 - 状态迁移；
-- 完成条件与约束；
+- Goal Contract revision、完成条件与约束；
 - Run 创建、恢复、替换和终止；
 - Task 间依赖；
 - Trigger 唤醒；
 - Approval 等待；
 - Artifact 归属；
+- EvidenceRef 校验与 Review Pack 投影；
 - 进度与完成事件；
 - 用户纠偏和取消。
 
@@ -181,7 +189,17 @@ Backlog → Unstarted → Started → Completed（软结束）
 Backlog / Unstarted / Started ── 用户明确停止 ──→ Cancelled（硬结束）
 ```
 
-Task 只使用这五个工作项状态；等待条件、暂停与最近执行失败作为原因表达。`completed` 是可恢复的软结束，`cancelled` 只表示用户停止，是原 Task 永久不可恢复的硬结束。Run 单独保存 queued、running、waiting、completed、failed、cancelled；Run 或 Worker Runtime 结束不决定 Task 是否结束。当前 Run 的结构化 `ready` Report 在没有未满足完成条件时结束 Task；绑定审批、Artifact 或外部 Thread 时必须等 Control Plane 验证条件。授权复核失败保持 completed 并把输入退回 Router/Eval，不伪装成人工停止。`TASK-002` 实现前，完成/停止控制和恢复状态机仍是 Planned，详细边界见 `docs/task-lifecycle.md` 与 `docs/channel-worker-collaboration.md`。
+Task 只使用这五个工作项状态；等待条件、暂停与最近执行失败作为原因表达。`completed` 是可恢复的软结束，`cancelled` 只表示用户停止，是原 Task 永久不可恢复的硬结束。Run 单独保存 queued、running、waiting、completed、failed、cancelled；Run 或 Worker Runtime 结束不决定 Task 是否结束。当前 Run 的结构化 `ready` Report 只是 Worker 的完成主张；绑定审批、Artifact、EvidenceRef 或外部 Thread 时，Control Plane 必须验证当前 Goal revision 的条件全部满足后才能结束 Task。自由文本、进程退出、退出码和 Agent 自我总结都不能独立完成 Task。授权复核失败保持 completed 并把输入退回 Router/Eval，不伪装成人工停止。`TASK-002` 的恢复状态机保持现有边界；Goal Contract、EvidenceRef 与 Review Pack 属于 Planned 的 `GOAL-001`，详细合同见 `docs/goal-contract-and-evidence.md`。
+
+#### Goal Contract 与完成门禁
+
+Goal Contract 是 Task 的版本化目标与验收合同，至少包含 desired outcome、success criteria、non-goals、来源、假设、未知项、前置条件、权限边界、evidence plan 与失败恢复。它不指定具体 Executor、模型或工具。用户输入、Executor 推断和未验证假设必须可区分；修订保存来源事件，不能覆盖原始意图。
+
+Mandate 与 Goal Contract 保持分离：Mandate 是接单时不可变的授权依据；Goal Contract 可以随着共同理解演进。目标、成本、数据范围、外部副作用或触发频率扩大时，Control Plane 必须重新检查 Policy 与 Mandate，必要时创建 Approval。
+
+Worker 可以生成目标简报并请求用户纠正，但 Router 不参与业务澄清。即时问答和明确的低风险任务可以隐式形成最小 Goal Contract；缺失信息会实质改变结果、权限或风险时，Executor 必须先澄清或缩小范围。
+
+完成门禁以 success criterion 为单位。每项只接受绑定当前 Task、Run、Goal revision、Artifact revision 或外部对象的 EvidenceRef。状态至少区分 `satisfied`、`partial`、`unverified` 和 `failed`。必需条件为 partial/unverified/failed 时，Task 保持 started/awaiting condition；不能由模型补写为成功。
 
 #### WorkChannel 产品投影
 
@@ -190,6 +208,8 @@ Web、移动端和桌面端把 Task 呈现为 WorkChannel。WorkChannel 不是�
 已完成 WorkChannel 保留历史、Mandate 和 Channel/Thread 订阅。自己 Thread 上的人类输入先附加，再由 Control Plane 复核原 Mandate；通过后恢复并创建新 Run，失败则保持 completed 并把输入退回 Router/Eval。取消后的 WorkChannel 永久只读，只能重新接单创建带来源关系的新 Channel。自动事件、普通 progress 和定时扫描不能单独恢复 ended Task。
 
 WorkChannel 的用户可见时间线由 Conversation Event、路由事实、Run Event、净化后的工具摘要、Artifact 和协作事件组成。隐藏提示词、密钥、原始凭证与未经净化的工具参数不得进入用户可见投影或全文索引。
+
+WorkChannel 同时是 Execution Trace 的按需审计入口。代码 diff、工具调用、过程日志、重试和恢复事实保留在时间线中，但默认 Task 交付通过 Review Pack 呈现 Delivery Evidence，不能把完整过程复制到 Outbox。
 
 #### WorkerProfile 与配置继承
 
@@ -212,7 +232,9 @@ Worker 只能提交结构化协作请求。Control Plane 校验来源 Run、授�
 
 #### Report 与 Watchdog
 
-正常状态以 Worker 主动提交的结构化 Report 为事实来源，至少区分 `started`、`progress`、`waiting`、`ready`、`blocked` 和 `failed`。Control Plane 原子更新 Run、Task/WorkChannel、ChannelEvent、协作结果投递和必要的 OutboxItem。
+当前正常状态以 Worker 主动提交的结构化 Report 为事实来源，至少区分 `started`、`progress`、`waiting`、`ready`、`blocked` 和 `failed`；当前 `ready` 流程尚未实施 GOAL-001 的 evidence 完成门禁。
+
+GOAL-001 目标流程中，`ready` Report 可以引用 EvidenceRef，但不能自证 evidence 充分。Control Plane 先做引用结构校验，再按 evidence kind、trust class 与 criterion evidence plan 执行语义验证；高风险结果需要确定性验证器、独立证明或用户接受。验证通过后，Control Plane 计算 criterion 状态并生成 Review Pack，再原子更新 Run、Task/WorkChannel、ChannelEvent、协作结果投递和必要的 OutboxItem。
 
 外围 Watchdog 只承担恢复：检查 Run lease、Worker heartbeat、超时、未结 effect 和投递重试。lease 过期表示 Worker 失联，不能被解释为成功或目标失败；恢复器创建关联旧 Run 的恢复尝试并使用已保存 session。Supervisor 只监测进程和 Release 健康，不写业务完成状态。
 
@@ -277,6 +299,8 @@ Notification 根据 Task 事件决定是否以及在哪里联系用户。
 
 普通运行日志留在 Activity 中，不主动打扰用户。
 
+Task 结果通知优先携带 Review Pack 摘要和可预览 evidence；代码、工具调用与过程日志只通过 Channel/Run 审计链接按需进入。多张截图、关键帧、测试与外部确认按 success criterion 聚合去重，不能各自产生通知噪声。产品已读、外部投递状态、用户接受结果和 evidence 有效性是四个独立事实。
+
 Notification 从持久 Outbox 领取待投递消息，处理重试、顺序、合并、静默时段、目标渠道和未知投递结果。Control Plane 提交任务状态与待发消息后即可释放当前 Run，不依赖客户端保持在线。
 
 第一版 Dispatcher 使用独立进程和 SQLite lease。每次投递增加尝试次数，失败后指数退避，超过上限进入 Failed；Webhooks 同时携带稳定 delivery ID 与 idempotency key，使接收端可以消除网络重试造成的重复通知。Supervisor 在启用推送时一并守护 Dispatcher。Webhook 是首个真实通道，后续 Web Push、APNs 或消息平台适配器复用同一接口。
@@ -328,6 +352,10 @@ Conversation 中的一条不可变事实记录。
 
 用户想完成的一件事情，拥有目标、完成条件、约束、状态、关系和长期生命周期。
 
+### Goal Contract
+
+Task 的版本化目标与验收合同。它记录用户期望的结果、完成条件、非目标、来源、假设、未知项、前置条件、权限、evidence plan 与失败恢复，并通过来源事件和 revision 保留演进历史。
+
 ### Run
 
 Task 的一次具体执行。Run 可以失败、重试、替换或并行存在；Task 不因某个 Run 结束而自动结束。
@@ -347,6 +375,14 @@ Task 的一次具体执行。Run 可以失败、重试、替换或并行存在�
 ### Artifact
 
 任务产生或使用的文件、文档、代码、链接、图片、报告和其他交付物。
+
+### EvidenceRef
+
+支持某个 success criterion 的可检查事实引用。它指向 Artifact、外部对象或可复现 observation，并绑定 Task、Run、Goal revision、内容版本、捕获环境、可见范围和证据限制。
+
+### Review Pack
+
+面向用户的结果审查投影。它以 success criteria 为索引，呈现 `satisfied/partial/unverified/failed`、EvidenceRef、限制、外部副作用、剩余风险、回滚与审计入口；它不替代 Control Plane 的完成事实来源。
 
 ### Memory
 
@@ -381,7 +417,7 @@ Task B
 2. 一个 Run 第一阶段对应一个主要 DSH session。
 3. Run 可以创建内部执行单元，但这些不成为新的用户 Task，除非 Router 明确拆分。
 4. session 被压缩、替换或丢失时，Task 仍然存在。
-5. Task 完成由完成条件判断，不能仅凭模型回复“完成了”。
+5. Task 完成由当前 Goal revision 的完成条件和 EvidenceRef 判断，不能仅凭模型回复“完成了”、退出码或过程日志。
 
 ## 消息路由示例
 
@@ -416,11 +452,13 @@ Pegas 需要自己的持久存储，至少保存：
 
 - Conversation Event；
 - Task；
+- Goal Contract revisions；
 - Run；
 - Trigger；
 - Approval；
 - Action；
 - Artifact metadata；
+- EvidenceRef 与 Review Pack；
 - Notification delivery；
 - Memory metadata；
 - DSH 对象映射。
@@ -433,6 +471,7 @@ Pegas 需要自己的持久存储，至少保存：
 4. 状态更新和待执行工作应尽量在同一事务内提交。
 5. 无法确认是否已产生副作用时，进入 Waiting 或 Failed，不能盲目重试。
 6. 重启恢复从结构化状态开始，不依赖模型回忆聊天内容。
+7. Review Pack 只引用已经持久化并通过权限检查的 evidence；视觉 evidence 必须绑定最终 Artifact revision、环境与视口/时间码。
 
 ### Outbox
 
@@ -444,7 +483,7 @@ Pending → Sending → Sent
                   ↘ Unknown
 ```
 
-相同 Action ID 不应产生两个独立发送任务。
+相同 Action ID 不应产生两个独立发送任务。GOAL-001 的 Report、evidence capture、Review Pack 和 OutboxItem 还必须按权威合同定义的 Task/Run/Goal revision、来源 revision/hash、渠道与接收者语义键建立唯一约束。Task 完成、Review Pack 持久化和对应 OutboxItem 创建应共享一个权威提交边界；通知发送失败可以独立重试，但不能删除 evidence、重复完成 Task 或把投递成功解释为用户验收。
 
 ## 自我修改与发布
 

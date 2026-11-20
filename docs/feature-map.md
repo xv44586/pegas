@@ -2,7 +2,7 @@
 
 > 状态：Living Document
 >
-> 更新日期：2026-11-19
+> 更新日期：2026-11-20
 
 Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查这里和代码，确认能力是否已经存在、权威实现在哪里、还缺什么；功能合入时必须同步更新对应条目。它不代替 Issue 或路线图，而是防止同一能力被不同入口重复实现。
 
@@ -29,6 +29,7 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 | ROUTE-002    | Router 只判断任务归属，不判断执行工具能力、不直接代替 Agent 回复                                      | Usable   | `src/worker/processor.ts`, Router schema                                                                                                                                    | `test/processor.test.ts`, `test/router.test.ts`                                                                            | 多活 Worker 下的用户级 fencing                                        |
 | TASK-001     | 五状态工作项与独立 Run，失败重试保留完整执行历史                                                      | Usable   | `src/storage/sqlite-store.ts`, `docs/task-lifecycle.md`                                                                                                                     | `test/sqlite-store.test.ts`, `test/control-plane.test.ts`, Web 重试回归                                                    | 完成/取消控制入口、依赖、暂停                                         |
 | TASK-002     | completed WorkChannel 可在 Mandate 复核后恢复；用户停止后原 Channel 永久关闭；Run 与 Runtime 独立结束 | Partial  | lifecycle、store、processor、Channel API/Web、`docs/task-lifecycle.md`                                                                                                      | Mandate/ended/执行快照、恢复/停止/fencing/Runtime 回归；`pnpm check`, `pnpm smoke`                                         | 多 Source Policy、dropped/完成条件、外部副作用审计                    |
+| GOAL-001     | 用户从模糊意图开始，由 Pegas 共同形成可执行目标，并以 evidence 而非处理过程审查结果                   | Planned  | 权威领域合同：`docs/goal-contract-and-evidence.md`；产品定位与架构仅提供派生摘要                                                                                            | 暂无                                                                                                                       | Goal Contract、EvidenceRef、完成门禁与 Review Pack                    |
 | BRAND-001    | Pegas 主入口与 Channel 使用固定蓝色、自有、由系统分配的 Worker 图标；状态以独立徽记和文字表达         | Usable   | `src/brand/agent-icon.ts`, `src/storage/sqlite-store.ts`, `web/src/PegasAgentIcon.tsx`, `scripts/generate-agent-icons.mjs`                                                  | 分配/迁移/API/UI、固定品牌色、状态徽记、SVG 漂移和浏览器截图；`pnpm check`, `pnpm smoke`                                   | 暗色主题与 VoiceOver/NVDA 实机验证                                    |
 | CHANNEL-001  | 用户从 Pegas 主入口按需进入持久 WorkChannel 查看并继续同一件工作                                      | Usable   | `src/channel/work-channel.ts`, `src/control-plane/server.ts`, `web/src/api.ts`, `web/src/App.tsx`, `docs/channel-worker-collaboration.md`                                   | Channel 用户隔离/兼容 API、定向输入/返回主路由回归；收缩/展开 rail 与桌面/移动几何截图；`pnpm check`, `pnpm smoke`         | ChannelEvent 时间线与来源/协作关系                                    |
 | CHANNEL-002  | Channel 时间线完整展示输入、路由、Run、工具摘要和结果                                                 | Partial  | `src/storage/sqlite-store.ts`, `src/control-plane/server.ts`, `web/src/api.ts`, `web/src/App.tsx`, `docs/channel-worker-collaboration.md`                                   | 双 Channel/跨用户 API 隔离、Web 切换竞态、真实 Candidate 反向隔离；`pnpm check`, `pnpm smoke`, `pnpm review:ui -- --force` | 分页/增量游标、路由原因、ChannelEvent 与工具事件                      |
@@ -53,6 +54,14 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 | QUALITY-002  | 覆盖率下限和无用代码检查防止质量倒退                                                                  | Usable   | `vitest.config.ts`, `knip.json`                                                                                                                                             | `pnpm test:coverage`, `pnpm deadcode`                                                                                      | 逐步提高阈值、补 UI 与 Recovery 测试                                  |
 
 **SETTINGS-001 更新（2026-11-18）**：独立改写服务和未保存配置测试已形成 Usable 闭环。权威实现为 `src/rewrite/*`、`src/control-plane/server.ts`、`src/storage/sqlite-store.ts` 与 `web/src/App.tsx`；自动化证据包括改写草稿探测、错误脱敏、密钥地址切换、Web 测试交互回归，以及 `pnpm check` 和 `pnpm smoke`。下一缺口仍为多用户 scope、按 Task 覆盖和持续健康监控。
+
+### GOAL-001：目标形成与证据化交付（2026-11-20）
+
+- **用户结果**：用户可以用不完整的愿望、问题、例子或语音开始；实际 Executor 帮助其澄清期望结果、关键上下文、前置条件、权限和完成标准。交付时，用户在 Outbox 按 success criteria 审查 evidence，而不是阅读代码、工具调用或处理过程。
+- **验收条件**：Goal Contract 有来源事件和 revision；用户事实、Executor 推断与未知项可区分；Router 只归属 Task；Control Plane 只在当前 Goal revision 的必需 EvidenceRef 充分时完成 Task；Review Pack 逐项显示 `satisfied/partial/unverified/failed`、证据限制、剩余风险和回滚；视觉变化必须提供绑定最终 Artifact revision 的截图、关键帧或页面渲染；Outbox 聚合预览 evidence，并提供 Artifact、Channel 与按需审计入口。
+- **非目标**：不强制简单任务进入长访谈；不新增用户必须理解的 Worker/Run/Goal Contract 操作对象；不把 Agent 总结、自由文本 `ready`、退出码、代码 diff 或日志洪流独立当作完成证据；不因本设计提升 `TASK-002`、`NOTIFY-003` 或 `QUALITY-001` 的当前状态。
+- **数据与权限边界**：Goal Contract、EvidenceRef、Review Pack 和完成判断均以服务端为权威；evidence 继承用户、Task、Artifact 和敏感信息范围；目标扩张重新检查 Policy、成本、风险和 Mandate；客户端只负责预览、选择和下钻。
+- **失败与恢复**：目标整理失败保留原始 Conversation Event；缺少上下文或权限时持久等待并释放 Run；evidence 缺失、失效或不匹配最终 revision 时相应 criterion 保持未验证；Review Pack 持久化后通知可独立重试，不能因投递失败删除证据或重复完成 Task。
 
 ### SETTINGS-001：模型服务设置重构验收边界（2026-11-19）
 
