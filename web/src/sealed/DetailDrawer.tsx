@@ -37,15 +37,44 @@ export function DetailDrawer({
   ) => Promise<void>
 }) {
   const closeRef = useRef<HTMLButtonElement>(null)
-  useEffect(() => closeRef.current?.focus(), [])
+  const drawerRef = useRef<HTMLElement>(null)
+  useEffect(() => {
+    closeRef.current?.focus()
+    const containFocus = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const focusable = drawerRef.current?.querySelectorAll<HTMLElement>(
+        'a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+      )
+      if (!focusable?.length) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last?.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first?.focus()
+      }
+    }
+    document.addEventListener('keydown', containFocus)
+    return () => document.removeEventListener('keydown', containFocus)
+  }, [onClose])
   return (
     <div
       className="drawer-backdrop"
       onMouseDown={event => event.target === event.currentTarget && onClose()}
     >
       <aside
+        aria-modal="true"
         aria-label={view.kind === 'task' ? '工作详情' : '详情'}
         className="detail-drawer"
+        ref={drawerRef}
+        role="dialog"
       >
         <header className="drawer-header">
           <div>
@@ -115,6 +144,23 @@ function TaskDetail({
   const [confirmingStop, setConfirmingStop] = useState(false)
   const [stopping, setStopping] = useState(false)
   const [stopError, setStopError] = useState('')
+  const [retrying, setRetrying] = useState(false)
+  const [retryError, setRetryError] = useState('')
+
+  async function retryRun() {
+    if (!run || retrying) return
+    setRetrying(true)
+    setRetryError('')
+    try {
+      await onRetry(run)
+    } catch (caught) {
+      setRetryError(
+        caught instanceof Error ? caught.message : '重试失败，请稍后再试。',
+      )
+    } finally {
+      setRetrying(false)
+    }
+  }
 
   async function stopChannel() {
     if (!onStop || stopping) return
@@ -150,6 +196,7 @@ function TaskDetail({
           </header>
           <p>{run?.lastError ?? '服务端没有提供失败原因。'}</p>
           <small>重试会创建新的运行记录；既有记录会保留。</small>
+          {retryError && <small role="alert">{retryError}</small>}
         </section>
       )}
       <section className="detail-section">
@@ -241,11 +288,12 @@ function TaskDetail({
         {state === '失败' && run ? (
           <button
             className="primary-button"
-            onClick={() => void onRetry(run)}
+            disabled={retrying}
+            onClick={() => void retryRun()}
             type="button"
           >
             <RotateCw size={16} />
-            重试
+            {retrying ? '正在重试…' : '重试'}
           </button>
         ) : state === '进行中' ? (
           <>

@@ -17,10 +17,12 @@ import { AppShell, GlobalSearch } from './sealed/Shell'
 import { type ReviewFixture, UiReviewHarness } from './sealed/UiReviewHarness'
 import {
   emptySnapshot,
+  isAttentionMessage,
   latestRunForTask,
   type AppData,
   type AppPage,
   type DrawerView,
+  type SettingsSection,
   type ThemeChoice,
 } from './sealed/types'
 import type {
@@ -51,12 +53,16 @@ export function App() {
   const [page, setPage] = useState<AppPage>(() => pageFromLocation())
   const [drawer, setDrawer] = useState<DrawerView>()
   const [continuationTaskId, setContinuationTaskId] = useState<string>()
+  const [composerDraft, setComposerDraft] = useState('')
+  const [settingsSection, setSettingsSection] =
+    useState<SettingsSection>('pegas')
   const [searchOpen, setSearchOpen] = useState(false)
   const [theme, setTheme] = useState<ThemeChoice>(() => readTheme())
   const [systemDark, setSystemDark] = useState(() => systemPrefersDark())
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [unauthorized, setUnauthorized] = useState(false)
+  const [snapshotLoaded, setSnapshotLoaded] = useState(false)
   const [setupOpen, setSetupOpen] = useState(
     () =>
       new URLSearchParams(window.location.search).get('setup') === '1' ||
@@ -64,33 +70,44 @@ export function App() {
   )
   const returnFocusRef = useRef<HTMLElement | null>(null)
   const restoredOutboxRef = useRef(false)
+  const snapshotRequestRef = useRef(0)
 
   const loadSnapshot = useCallback(async () => {
+    const requestId = snapshotRequestRef.current + 1
+    snapshotRequestRef.current = requestId
     try {
-      const snapshot = await api.snapshot()
-      setData(current => ({ ...current, snapshot }))
+      const [snapshot, usage] = await Promise.all([
+        api.snapshot(),
+        api.modelUsage().catch(() => undefined),
+      ])
+      if (requestId !== snapshotRequestRef.current) return
+      setData(current => ({
+        ...current,
+        snapshot,
+        ...(usage ? { usage } : {}),
+      }))
+      setSnapshotLoaded(true)
       setError('')
       setUnauthorized(false)
     } catch (caught) {
+      if (requestId !== snapshotRequestRef.current) return
       if (caught instanceof ApiError && caught.status === 401)
         setUnauthorized(true)
       else
         setError(caught instanceof Error ? caught.message : '无法连接 Pegas。')
     } finally {
-      setLoading(false)
+      if (requestId === snapshotRequestRef.current) setLoading(false)
     }
   }, [api])
 
   const loadConfiguration = useCallback(async () => {
-    const [settings, usage, catalog] = await Promise.allSettled([
+    const [settings, catalog] = await Promise.allSettled([
       api.settings(),
-      api.modelUsage(),
       api.agentModels(),
     ])
     setData(current => ({
       ...current,
       ...(settings.status === 'fulfilled' ? { settings: settings.value } : {}),
-      ...(usage.status === 'fulfilled' ? { usage: usage.value } : {}),
     }))
     if (catalog.status === 'fulfilled') setAgentModels(catalog.value)
   }, [api])
@@ -186,12 +203,17 @@ export function App() {
         nextPage === 'attention' ? 'outbox' : nextPage,
       )
     if (nextPage !== 'attention') url.searchParams.delete('outbox')
-    window.history.replaceState(
-      {},
-      '',
-      `${url.pathname}${url.search}${url.hash}`,
-    )
+    window.history.pushState({}, '', `${url.pathname}${url.search}${url.hash}`)
   }
+
+  useEffect(() => {
+    const restorePage = () => {
+      setPage(pageFromLocation())
+      setDrawer(undefined)
+    }
+    window.addEventListener('popstate', restorePage)
+    return () => window.removeEventListener('popstate', restorePage)
+  }, [])
 
   useEffect(() => {
     if (typeof window.matchMedia !== 'function') return
@@ -297,7 +319,7 @@ export function App() {
   }
 
   useEffect(() => {
-    if (restoredOutboxRef.current || loading) return
+    if (restoredOutboxRef.current || loading || !snapshotLoaded) return
     const messageId = new URLSearchParams(window.location.search).get('outbox')
     if (!messageId) {
       restoredOutboxRef.current = true
@@ -311,7 +333,7 @@ export function App() {
     restoredOutboxRef.current = true
     setPage('attention')
     void openAttentionMessage(message)
-  }, [data.snapshot.messages, loading])
+  }, [data.snapshot.messages, loading, snapshotLoaded])
 
   if (unauthorized)
     return (
@@ -334,7 +356,7 @@ export function App() {
     onOpenDrawer: openDrawer,
   }
   const unreadCount = data.snapshot.messages.filter(
-    message => !message.readAt,
+    message => !message.readAt && isAttentionMessage(message),
   ).length
   const selectedAgentProvider =
     data.settings?.settings.agentModelMode === 'override'
@@ -359,7 +381,10 @@ export function App() {
     <>
       <AppShell
         channels={data.snapshot.channels}
-        onNavigate={navigate}
+        onNavigate={nextPage => {
+          if (nextPage === 'settings') setSettingsSection('pegas')
+          navigate(nextPage)
+        }}
         onOpenChannel={channel =>
           openDrawer({
             kind: 'task',
@@ -385,12 +410,21 @@ export function App() {
             actions={actions}
             api={api}
             continuationChannel={continuationChannel}
+            draft={composerDraft}
             modelProvider={selectedAgentProvider}
             models={availableAgentModels}
             onClearContinuation={() => setContinuationTaskId(undefined)}
+            onConfigureVoice={() => {
+              setSettingsSection('voice')
+              navigate('settings')
+            }}
+            onDraftChange={setComposerDraft}
             onSelectModel={selectAgentModel}
             onSent={loadSnapshot}
             selectedModelId={selectedAgentModelId}
+            speechEnabled={
+              data.settings?.speech?.provider === 'openai-compatible'
+            }
             snapshot={data.snapshot}
           />
         )}
@@ -409,6 +443,7 @@ export function App() {
         {page === 'settings' && (
           <SettingsPage
             agentModels={agentModels}
+            initialSection={settingsSection}
             onBack={() => navigate('conversation')}
             onDiscoverModels={(provider, model, draft) =>
               api.discoverModels(provider, model, draft)
@@ -480,6 +515,8 @@ export function App() {
           response={data.settings}
           onContinueSettings={() => {
             setSetupOpen(false)
+            localStorage.setItem('pegas-setup-complete', 'true')
+            setSettingsSection('pegas')
             navigate('settings')
           }}
           onComplete={() => {

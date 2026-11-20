@@ -24,9 +24,10 @@ import type { DshModelCatalogItem, OutboxMessage, Snapshot } from '../types'
 import { useVoiceDictation } from '../useVoiceDictation'
 import { EmptyCapability, PageToolbar } from './Shell'
 import {
+  attentionKind,
   formatRelativeTime,
+  isAttentionMessage,
   latestRunForTask,
-  payloadType,
   statusLabel,
   textFromPayload,
   type DrawerView,
@@ -309,6 +310,10 @@ export function ConversationPage({
   onSelectModel,
   continuationChannel,
   onClearContinuation,
+  draft,
+  onDraftChange,
+  speechEnabled,
+  onConfigureVoice,
 }: {
   api: PegasApi
   snapshot: Snapshot
@@ -320,8 +325,11 @@ export function ConversationPage({
   onSelectModel: (model: DshModelCatalogItem) => Promise<void>
   continuationChannel?: Snapshot['channels'][number]
   onClearContinuation: () => void
+  draft: string
+  onDraftChange: (draft: string) => void
+  speechEnabled: boolean
+  onConfigureVoice: () => void
 }) {
-  const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState('')
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(
@@ -354,8 +362,7 @@ export function ConversationPage({
   }, [messages.length])
   const dictation = useVoiceDictation({
     transcribe: blob => api.transcribeVoice(blob),
-    onTranscript: text =>
-      setDraft(current => `${current}${current ? ' ' : ''}${text}`),
+    onTranscript: text => onDraftChange(`${draft}${draft ? ' ' : ''}${text}`),
   })
   const latestChannel = snapshot.channels[0]
   const latestRun = latestChannel
@@ -369,7 +376,7 @@ export function ConversationPage({
     setError('')
     try {
       await api.sendMessage(text, continuationChannel?.id)
-      setDraft('')
+      onDraftChange('')
       onClearContinuation()
       await onSent()
     } catch (caught) {
@@ -523,7 +530,7 @@ export function ConversationPage({
             enterKeyHint="send"
             id="pegas-message"
             name="message"
-            onChange={event => setDraft(event.target.value)}
+            onChange={event => onDraftChange(event.target.value)}
             onKeyDown={event => {
               if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault()
@@ -565,7 +572,17 @@ export function ConversationPage({
                 className={
                   dictation.state === 'recording' ? 'is-recording' : ''
                 }
-                onClick={dictation.toggle}
+                onClick={() => {
+                  if (dictation.state === 'recording') {
+                    dictation.toggle()
+                    return
+                  }
+                  if (!speechEnabled) {
+                    onConfigureVoice()
+                    return
+                  }
+                  dictation.toggle()
+                }}
                 type="button"
               >
                 <Mic size={20} />
@@ -610,7 +627,7 @@ export function WorkPage({
     const run = latestRunForTask(snapshot.runs, channel.id)
     if (filter === 'waiting')
       return !run || run.status === 'waiting' || run.status === 'queued'
-    return run?.status === 'running'
+    return run?.status === 'running' || run?.status === 'failed'
   })
   return (
     <div className="standard-page">
@@ -697,23 +714,6 @@ export function WorkPage({
   )
 }
 
-type AttentionKind = 'approval' | 'input' | 'failed' | 'update'
-
-function attentionKind(message: OutboxMessage): AttentionKind {
-  switch (payloadType(message.payload)) {
-    case 'run.failed':
-      return 'failed'
-    case 'approval.required':
-    case 'approval.requested':
-      return 'approval'
-    case 'input.required':
-    case 'input.requested':
-      return 'input'
-    default:
-      return 'update'
-  }
-}
-
 function attentionAction(message: OutboxMessage): {
   label: string
   icon: typeof Check
@@ -736,7 +736,9 @@ export function AttentionPage({
   const [filter, setFilter] = useState<'all' | 'approval' | 'input' | 'failed'>(
     'all',
   )
-  const unread = snapshot.messages.filter(message => !message.readAt)
+  const unread = snapshot.messages.filter(
+    message => !message.readAt && isAttentionMessage(message),
+  )
   const visible = unread.filter(message => {
     if (filter === 'all') return true
     return attentionKind(message) === filter

@@ -60,6 +60,7 @@ const sectionIcons: Record<SettingsSection, typeof Bot> = {
 }
 
 interface SettingsPageProps {
+  initialSection?: SettingsSection
   response?: SettingsResponse
   usage?: ModelUsageReport
   agentModels?: DshModelCatalog
@@ -105,6 +106,7 @@ type SettingsTestRewrite = (
 }>
 
 export function SettingsPage({
+  initialSection = 'pegas',
   response,
   usage,
   agentModels,
@@ -119,7 +121,7 @@ export function SettingsPage({
   systemDark,
   onThemeChange,
 }: SettingsPageProps) {
-  const [section, setSection] = useState<SettingsSection>('pegas')
+  const [section, setSection] = useState<SettingsSection>(initialSection)
   const [draft, setDraft] = useState<RuntimeSettings | undefined>(
     response?.settings,
   )
@@ -127,12 +129,10 @@ export function SettingsPage({
   const [notice, setNotice] = useState('')
   const [modelServiceProvider, setModelServiceProvider] =
     useState<RuntimeSettings['modelProvider']>()
-  const selectedProvider = response?.capabilities.providers.find(
-    provider => provider.id === draft?.modelProvider,
-  )
   const [providerDraft, setProviderDraft] = useState<ModelProviderDraft>()
   const [speechDraft, setSpeechDraft] = useState<SpeechSettingsDraft>()
   const [rewriteDraft, setRewriteDraft] = useState<RewriteSettingsDraft>()
+  useEffect(() => setSection(initialSection), [initialSection])
   useEffect(() => {
     setDraft(response?.settings)
     setModelServiceProvider(response?.settings.modelProvider)
@@ -315,11 +315,15 @@ export function SettingsPage({
                 className="secondary-button"
                 onClick={() => {
                   setDraft(response?.settings)
-                  if (selectedProvider)
+                  setModelServiceProvider(response?.settings.modelProvider)
+                  const savedProvider = response?.capabilities.providers.find(
+                    provider => provider.id === response.settings.modelProvider,
+                  )
+                  if (savedProvider)
                     setProviderDraft({
-                      name: selectedProvider.name,
-                      protocol: selectedProvider.protocol,
-                      baseUrl: selectedProvider.baseUrl,
+                      name: savedProvider.name,
+                      protocol: savedProvider.protocol,
+                      baseUrl: savedProvider.baseUrl,
                       apiKey: '',
                       clearApiKey: false,
                     })
@@ -898,6 +902,7 @@ function ModelServices({
                         baseUrl: event.target.value,
                       })
                     }
+                    readOnly={active.id !== 'custom'}
                     value={providerDraft.baseUrl}
                   />
                 </label>

@@ -132,7 +132,10 @@ const settingsResponse: SettingsResponse = {
 }
 
 function installFetch(
-  custom?: (path: string, init?: RequestInit) => Response | undefined,
+  custom?: (
+    path: string,
+    init?: RequestInit,
+  ) => Response | Promise<Response> | undefined,
 ) {
   const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const path =
@@ -265,7 +268,10 @@ function installFetch(
 
 function installSnapshotFetch(
   nextSnapshot: Snapshot,
-  custom?: (path: string, init?: RequestInit) => Response | undefined,
+  custom?: (
+    path: string,
+    init?: RequestInit,
+  ) => Response | Promise<Response> | undefined,
 ) {
   return installFetch((path, init) => {
     const overridden = custom?.(path, init)
@@ -331,16 +337,14 @@ describe('sealed Pegas UI', () => {
     await screen.findByText('你的私人智能工作伙伴')
     fireEvent.keyDown(window, { key: 'k', metaKey: true })
     const dialog = screen.getByRole('dialog', { name: '全局搜索' })
-    expect(
-      within(dialog).getByPlaceholderText('搜索事情、消息或文件'),
-    ).toBeTruthy()
+    expect(within(dialog).getByPlaceholderText('搜索事情')).toBeTruthy()
     fireEvent.change(
-      within(dialog).getByRole('textbox', { name: '搜索事情、消息或文件' }),
+      within(dialog).getByRole('textbox', { name: '搜索事情' }),
       { target: { value: '不存在' } },
     )
     expect(within(dialog).getByText('没有匹配的事情')).toBeTruthy()
     fireEvent.change(
-      within(dialog).getByRole('textbox', { name: '搜索事情、消息或文件' }),
+      within(dialog).getByRole('textbox', { name: '搜索事情' }),
       { target: { value: '安全' } },
     )
     fireEvent.click(
@@ -451,7 +455,7 @@ describe('sealed Pegas UI', () => {
     )
   })
 
-  it('edits and saves the active provider connection', async () => {
+  it('keeps preset provider URLs read-only and saves credential changes', async () => {
     const fetchMock = installFetch()
     render(<App />)
     fireEvent.click(
@@ -460,9 +464,9 @@ describe('sealed Pegas UI', () => {
       }),
     )
     fireEvent.click(screen.getByRole('button', { name: /模型服务/ }))
-    fireEvent.change(screen.getByLabelText('服务地址'), {
-      target: { value: 'https://new-provider.example/v1' },
-    })
+    expect(screen.getByLabelText('服务地址').hasAttribute('readonly')).toBe(
+      true,
+    )
     fireEvent.change(screen.getByLabelText('API Key'), {
       target: { value: 'new-secret' },
     })
@@ -474,7 +478,7 @@ describe('sealed Pegas UI', () => {
             path === '/v1/settings' &&
             init?.method === 'PUT' &&
             typeof init.body === 'string' &&
-            init.body.includes('https://new-provider.example/v1'),
+            init.body.includes('new-secret'),
         ),
       ).toBe(true),
     )
@@ -593,10 +597,41 @@ describe('sealed Pegas UI', () => {
     )
   })
 
+  it('restores the saved provider and credential draft when settings are cancelled', async () => {
+    installFetch()
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /事情归类/ }))
+    fireEvent.change(screen.getByLabelText('归类模型服务'), {
+      target: { value: 'anthropic' },
+    })
+    expect(screen.getByLabelText('归类模型服务')).toHaveProperty(
+      'value',
+      'anthropic',
+    )
+    fireEvent.click(screen.getByRole('button', { name: '取消' }))
+    expect(screen.getByLabelText('归类模型服务')).toHaveProperty(
+      'value',
+      'magpie',
+    )
+    fireEvent.click(screen.getByRole('button', { name: /模型服务/ }))
+    expect(screen.getByLabelText('服务地址')).toHaveProperty(
+      'value',
+      'https://api-magpie.example/v1',
+    )
+  })
+
   it('sends a message and preserves the live API behavior', async () => {
     const fetchMock = installFetch()
     render(<App />)
     const composer = await screen.findByLabelText('给 Pegas 发消息')
+    const usageCallsBefore = fetchMock.mock.calls.filter(
+      ([path]) => typeof path === 'string' && path.startsWith('/v1/usage?'),
+    ).length
     fireEvent.change(composer, { target: { value: '继续执行并报告结果' } })
     fireEvent.click(screen.getByRole('button', { name: '发送' }))
     await waitFor(() =>
@@ -605,6 +640,75 @@ describe('sealed Pegas UI', () => {
         expect.objectContaining({ method: 'POST' }),
       ),
     )
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.filter(
+          ([path]) => typeof path === 'string' && path.startsWith('/v1/usage?'),
+        ).length,
+      ).toBeGreaterThan(usageCallsBefore),
+    )
+  })
+
+  it('preserves an unsent composer draft across main-page navigation', async () => {
+    installFetch()
+    render(<App />)
+    const composer = await screen.findByLabelText('给 Pegas 发消息')
+    fireEvent.change(composer, { target: { value: '不要丢失这段草稿' } })
+    fireEvent.click(
+      within(screen.getByLabelText('主导航')).getByRole('button', {
+        name: /所有事情/,
+      }),
+    )
+    fireEvent.click(
+      within(screen.getByLabelText('主导航')).getByRole('button', {
+        name: /^对话$/,
+      }),
+    )
+    expect(screen.getByLabelText('给 Pegas 发消息')).toHaveProperty(
+      'value',
+      '不要丢失这段草稿',
+    )
+  })
+
+  it('ignores an older snapshot response after a newer refresh completes', async () => {
+    let resolveFirst: ((response: Response) => void) | undefined
+    let eventRequests = 0
+    installFetch(path => {
+      if (!path.startsWith('/v1/events?')) return undefined
+      eventRequests += 1
+      if (eventRequests === 1)
+        return new Promise<Response>(resolve => {
+          resolveFirst = resolve
+        })
+      return Response.json({
+        events: [
+          {
+            ...snapshot.events[0],
+            id: 'event-newer',
+            payload: { text: '较新的快照' },
+          },
+        ],
+      })
+    })
+    render(<App />)
+    const composer = await screen.findByLabelText('给 Pegas 发消息')
+    fireEvent.change(composer, { target: { value: '触发刷新' } })
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    expect(await screen.findByText('较新的快照')).toBeTruthy()
+    resolveFirst?.(
+      Response.json({
+        events: [
+          {
+            ...snapshot.events[0],
+            id: 'event-older',
+            payload: { text: '过期快照' },
+          },
+        ],
+      }),
+    )
+    await new Promise(resolve => window.setTimeout(resolve, 0))
+    expect(screen.queryByText('过期快照')).toBeNull()
+    expect(screen.getByText('较新的快照')).toBeTruthy()
   })
 
   it('continues a completed task with the newest run and scopes the next message', async () => {
@@ -745,6 +849,22 @@ describe('sealed Pegas UI', () => {
     expect(within(list).getByText(channel.title)).toBeTruthy()
   })
 
+  it('keeps failed work visible in the active work list', async () => {
+    installSnapshotFetch({
+      ...snapshot,
+      runs: [{ ...run, status: 'failed', lastError: '执行失败' }],
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /所有事情/,
+      }),
+    )
+    const list = screen.getByLabelText('事情列表')
+    expect(within(list).getByText(channel.title)).toBeTruthy()
+    expect(within(list).getByText('失败')).toBeTruthy()
+  })
+
   it('classifies attention items from structured payload facts only', async () => {
     const sourceMessage = snapshot.messages[0]
     if (!sourceMessage) throw new Error('Expected an outbox fixture message')
@@ -756,6 +876,11 @@ describe('sealed Pegas UI', () => {
           status: 'failed',
           payload: { type: 'agent.message', text: '传输失败但不是执行失败' },
         },
+        {
+          ...sourceMessage,
+          id: 'message-2',
+          payload: { type: 'run.failed', text: '执行确实失败' },
+        },
       ],
     })
     render(<App />)
@@ -764,10 +889,11 @@ describe('sealed Pegas UI', () => {
         name: /待你处理/,
       }),
     )
-    expect(screen.getByRole('button', { name: '打开事情' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '查看原因' })).toBeTruthy()
+    expect(screen.queryByText('传输失败但不是执行失败')).toBeNull()
     expect(screen.queryByRole('button', { name: '稍后处理' })).toBeNull()
     fireEvent.click(screen.getByRole('tab', { name: '失败' }))
-    expect(screen.queryByText('传输失败但不是执行失败')).toBeNull()
+    expect(screen.getByText('执行确实失败')).toBeTruthy()
   })
 
   it('restores a URL-backed attention detail and preserves its address', async () => {
@@ -779,6 +905,21 @@ describe('sealed Pegas UI', () => {
     ).toBeTruthy()
     expect(await screen.findByLabelText('工作详情')).toBeTruthy()
     expect(window.location.search).toContain('outbox=message-1')
+  })
+
+  it('restores a URL-backed detail after the initial snapshot load fails', async () => {
+    window.history.replaceState({}, '', '/?view=outbox&outbox=message-1')
+    let eventRequests = 0
+    installFetch(path => {
+      if (!path.startsWith('/v1/events?')) return undefined
+      eventRequests += 1
+      return eventRequests === 1
+        ? Response.json({ message: 'offline' }, { status: 503 })
+        : Response.json({ events: snapshot.events })
+    })
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '重新连接' }))
+    expect(await screen.findByLabelText('工作详情')).toBeTruthy()
   })
 
   it('uses a semantic composer and does not submit during IME composition', async () => {
@@ -842,6 +983,49 @@ describe('sealed Pegas UI', () => {
     )
   })
 
+  it('opens voice settings without requesting microphone access when speech is disabled', async () => {
+    const getUserMedia = vi.fn()
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: { getUserMedia },
+    })
+    installFetch(path =>
+      path === '/v1/settings'
+        ? Response.json({
+            ...settingsResponse,
+            speech: {
+              provider: 'disabled',
+              baseUrl: '',
+              model: '',
+              hasApiKey: false,
+            },
+          })
+        : undefined,
+    )
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '语音输入' }))
+    expect(
+      await screen.findByRole('heading', { name: '语音与输入' }),
+    ).toBeTruthy()
+    expect(getUserMedia).not.toHaveBeenCalled()
+  })
+
+  it('pushes page history and restores the prior page on browser back', async () => {
+    installFetch()
+    render(<App />)
+    await screen.findByText('你的私人智能工作伙伴')
+    fireEvent.click(
+      within(screen.getByLabelText('主导航')).getByRole('button', {
+        name: /所有事情/,
+      }),
+    )
+    expect(screen.getByRole('heading', { name: '所有事情' })).toBeTruthy()
+    window.history.back()
+    await waitFor(() =>
+      expect(screen.getByText('你的私人智能工作伙伴')).toBeTruthy(),
+    )
+  })
+
   it('shows the access-token recovery screen on unauthorized responses', async () => {
     installFetch(path =>
       path.startsWith('/v1/events?')
@@ -877,6 +1061,18 @@ describe('sealed Pegas UI', () => {
     expect(screen.getByText('语音与完成确认')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: /进入 Pegas/ }))
     expect(onComplete).toHaveBeenCalledOnce()
+  })
+
+  it('marks onboarding complete when continuing into settings', async () => {
+    localStorage.removeItem('pegas-setup-complete')
+    installFetch()
+    render(<App />)
+    await screen.findByText('欢迎使用 Pegas')
+    for (let index = 0; index < 3; index += 1)
+      fireEvent.click(screen.getByRole('button', { name: /^继续$/ }))
+    fireEvent.click(screen.getByRole('button', { name: '继续设置' }))
+    expect(await screen.findByRole('heading', { name: /^Pegas$/ })).toBeTruthy()
+    expect(localStorage.getItem('pegas-setup-complete')).toBe('true')
   })
 
   it.each([
@@ -927,6 +1123,47 @@ describe('sealed Pegas UI', () => {
     expect(onStop).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: '确认停止' }))
     await waitFor(() => expect(onStop).toHaveBeenCalledWith(channel))
+  })
+
+  it('keeps a failed run visible and reports retry errors inline', async () => {
+    render(
+      <DetailDrawer
+        onChange={vi.fn()}
+        onClose={vi.fn()}
+        onRetry={() => Promise.reject(new Error('暂时无法创建重试'))}
+        view={{
+          kind: 'task',
+          channel,
+          run: { ...run, status: 'failed', lastError: '原始失败' },
+        }}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: '重试' }))
+    expect((await screen.findByRole('alert')).textContent).toContain(
+      '暂时无法创建重试',
+    )
+    expect(screen.getByText('原始失败')).toBeTruthy()
+  })
+
+  it('presents the detail drawer as a modal and traps keyboard focus', () => {
+    render(
+      <DetailDrawer
+        onChange={vi.fn()}
+        onClose={vi.fn()}
+        onRetry={vi.fn()}
+        onStop={() => Promise.resolve()}
+        view={{ kind: 'task', channel, run }}
+      />,
+    )
+    const dialog = screen.getByRole('dialog', { name: '工作详情' })
+    expect(dialog.getAttribute('aria-modal')).toBe('true')
+    const close = screen.getByRole('button', { name: '关闭详情' })
+    const stop = screen.getByRole('button', { name: '停止事情' })
+    expect(document.activeElement).toBe(close)
+    fireEvent.keyDown(document, { key: 'Tab', shiftKey: true })
+    expect(document.activeElement).toBe(stop)
+    fireEvent.keyDown(document, { key: 'Tab' })
+    expect(document.activeElement).toBe(close)
   })
 
   it('does not infer collaboration facts from free-form status text', () => {

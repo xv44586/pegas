@@ -192,9 +192,9 @@ export function GlobalSearch({
         <div className="command-input">
           <Search size={20} />
           <input
-            aria-label="搜索事情、消息或文件"
+            aria-label="搜索事情"
             onChange={event => setQuery(event.target.value)}
-            placeholder="搜索事情、消息或文件"
+            placeholder="搜索事情"
             ref={inputRef}
             value={query}
           />

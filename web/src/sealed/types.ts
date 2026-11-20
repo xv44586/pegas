@@ -1,5 +1,6 @@
 import type {
   ModelUsageReport,
+  OutboxMessage,
   Run,
   SettingsResponse,
   Snapshot,
@@ -89,10 +90,34 @@ export function textFromPayload(payload: unknown): string {
   return ''
 }
 
-export function payloadType(payload: unknown): string | undefined {
+function payloadType(payload: unknown): string | undefined {
   if (!payload || typeof payload !== 'object') return undefined
   const type = (payload as Record<string, unknown>).type
   return typeof type === 'string' ? type : undefined
+}
+
+export type AttentionKind =
+  'approval' | 'input' | 'failed' | 'result' | 'update'
+
+export function attentionKind(message: OutboxMessage): AttentionKind {
+  switch (payloadType(message.payload)) {
+    case 'run.failed':
+      return 'failed'
+    case 'run.completed':
+      return 'result'
+    case 'approval.required':
+    case 'approval.requested':
+      return 'approval'
+    case 'input.required':
+    case 'input.requested':
+      return 'input'
+    default:
+      return 'update'
+  }
+}
+
+export function isAttentionMessage(message: OutboxMessage): boolean {
+  return attentionKind(message) !== 'update'
 }
 
 export function latestRunForTask(
