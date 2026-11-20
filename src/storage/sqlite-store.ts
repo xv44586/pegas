@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -18,6 +18,19 @@ import type {
   Task,
 } from '../core/domain.js'
 import type { ExecutorResult } from '../executor/executor.js'
+import type {
+  ArtifactDraft,
+  EvidenceVerification,
+  EvidenceRef,
+  EvidenceRefDraft,
+  GoalContract,
+  GoalContractDraft,
+  ReviewCriterion,
+  ReviewPack,
+  TaskArtifact,
+  WorkerReport,
+  WorkerReportDraft,
+} from '../goal/goal-delivery.js'
 import {
   createMandate,
   revalidateMandate,
@@ -379,6 +392,139 @@ CREATE INDEX inbox_events_by_user_status_time
 ON inbox_events (user_id, status, created_at);
 `
 
+const migration15 = `
+ALTER TABLE runs ADD COLUMN goal_revision INTEGER;
+ALTER TABLE runs ADD COLUMN claim_token_hash TEXT;
+
+CREATE TABLE goal_contracts (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES tasks(id),
+  revision INTEGER NOT NULL CHECK (revision > 0),
+  command_id TEXT NOT NULL UNIQUE,
+  based_on_event_ids_json TEXT NOT NULL,
+  desired_outcome TEXT NOT NULL,
+  contract_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (task_id, revision)
+);
+
+CREATE INDEX goal_contracts_by_task_revision
+ON goal_contracts (task_id, revision DESC);
+
+CREATE TABLE task_artifacts (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES tasks(id),
+  run_id TEXT REFERENCES runs(id),
+  command_id TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  mime_type TEXT,
+  uri TEXT,
+  revision TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  size_bytes INTEGER,
+  metadata_json TEXT NOT NULL,
+  sensitivity TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX task_artifacts_by_task_time
+ON task_artifacts (task_id, created_at DESC);
+
+CREATE TABLE evidence_refs (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES tasks(id),
+  run_id TEXT NOT NULL REFERENCES runs(id),
+  command_id TEXT NOT NULL UNIQUE,
+  source_key TEXT NOT NULL,
+  goal_revision INTEGER NOT NULL CHECK (goal_revision > 0),
+  criterion_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  artifact_id TEXT REFERENCES task_artifacts(id),
+  external_ref TEXT,
+  producer_identity TEXT NOT NULL,
+  capture_mechanism TEXT NOT NULL,
+  trust_class TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  artifact_revision TEXT,
+  observation_snapshot_json TEXT,
+  verification_json TEXT NOT NULL,
+  captured_at TEXT NOT NULL,
+  environment_json TEXT NOT NULL,
+  presentation_json TEXT NOT NULL,
+  sensitivity TEXT NOT NULL,
+  limitations_json TEXT NOT NULL
+);
+
+CREATE INDEX evidence_refs_by_task_goal_criterion
+ON evidence_refs (task_id, goal_revision, criterion_id, captured_at);
+
+CREATE UNIQUE INDEX evidence_refs_semantic_dedupe
+ON evidence_refs (task_id, run_id, goal_revision, criterion_id, source_key, kind);
+
+CREATE TABLE evidence_commands (
+  command_id TEXT PRIMARY KEY,
+  evidence_id TEXT NOT NULL REFERENCES evidence_refs(id),
+  run_id TEXT NOT NULL REFERENCES runs(id),
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE evidence_verification_events (
+  id TEXT PRIMARY KEY,
+  evidence_id TEXT NOT NULL REFERENCES evidence_refs(id),
+  command_id TEXT NOT NULL UNIQUE,
+  verification_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX evidence_verifications_by_evidence_time
+ON evidence_verification_events (evidence_id, created_at);
+
+CREATE TABLE review_packs (
+  id TEXT PRIMARY KEY,
+  revision INTEGER NOT NULL CHECK (revision > 0),
+  task_id TEXT NOT NULL REFERENCES tasks(id),
+  run_id TEXT NOT NULL REFERENCES runs(id),
+  goal_revision INTEGER NOT NULL CHECK (goal_revision > 0),
+  basis_event_ids_json TEXT NOT NULL,
+  basis_event_set_hash TEXT NOT NULL,
+  projection_as_of TEXT NOT NULL,
+  final_outcome TEXT NOT NULL CHECK (final_outcome IN ('completed','partial','failed')),
+  criteria_json TEXT NOT NULL,
+  side_effects_json TEXT NOT NULL,
+  remaining_risks_json TEXT NOT NULL,
+  rollback_json TEXT,
+  audit_link TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (task_id, goal_revision, basis_event_set_hash)
+);
+
+CREATE INDEX review_packs_by_task_revision
+ON review_packs (task_id, revision DESC);
+
+CREATE TABLE worker_reports (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES tasks(id),
+  run_id TEXT NOT NULL REFERENCES runs(id),
+  worker_id TEXT NOT NULL,
+  claim_token_hash TEXT,
+  goal_revision INTEGER NOT NULL CHECK (goal_revision > 0),
+  report_sequence INTEGER NOT NULL CHECK (report_sequence >= 0),
+  status TEXT NOT NULL,
+  evidence_ref_ids_json TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  limitations_json TEXT NOT NULL,
+  remaining_risks_json TEXT NOT NULL,
+  rollback_json TEXT,
+  review_pack_id TEXT REFERENCES review_packs(id),
+  created_at TEXT NOT NULL,
+  UNIQUE (run_id, report_sequence)
+);
+
+CREATE INDEX worker_reports_by_run_sequence
+ON worker_reports (run_id, report_sequence);
+`
+
 interface InboxRow {
   id: string
   user_id: string
@@ -417,6 +563,8 @@ interface RunRow {
   executor: string
   executor_ref: string | null
   resume_from_ref: string | null
+  goal_revision: number | null
+  claim_token_hash: string | null
   status: Run['status']
   input_json: string
   output_json: string | null
@@ -427,6 +575,107 @@ interface RunRow {
   execution_context_json: string | null
   created_at: string
   updated_at: string
+}
+
+interface GoalContractRow {
+  id: string
+  task_id: string
+  revision: number
+  command_id: string
+  based_on_event_ids_json: string
+  desired_outcome: string
+  contract_json: string
+  created_at: string
+}
+
+interface TaskArtifactRow {
+  id: string
+  task_id: string
+  run_id: string | null
+  command_id: string
+  name: string
+  kind: TaskArtifact['kind']
+  mime_type: string | null
+  uri: string | null
+  revision: string
+  content_hash: string
+  size_bytes: number | null
+  metadata_json: string
+  sensitivity: string
+  created_at: string
+}
+
+interface EvidenceRefRow {
+  id: string
+  task_id: string
+  run_id: string
+  command_id: string
+  source_key: string
+  goal_revision: number
+  criterion_id: string
+  kind: string
+  artifact_id: string | null
+  external_ref: string | null
+  producer_identity: string
+  capture_mechanism: string
+  trust_class: string
+  content_hash: string
+  artifact_revision: string | null
+  observation_snapshot_json: string | null
+  verification_json: string
+  captured_at: string
+  environment_json: string
+  presentation_json: string
+  sensitivity: string
+  limitations_json: string
+}
+
+interface EvidenceVerificationEventRow {
+  id: string
+  evidence_id: string
+  command_id: string
+  verification_json: string
+  created_at: string
+}
+
+interface ReviewPackRow {
+  id: string
+  revision: number
+  task_id: string
+  run_id: string
+  goal_revision: number
+  basis_event_ids_json: string
+  projection_as_of: string
+  final_outcome: ReviewPack['finalOutcome']
+  criteria_json: string
+  side_effects_json: string
+  remaining_risks_json: string
+  rollback_json: string | null
+  audit_link: string
+  created_at: string
+}
+
+interface WorkerReportRow {
+  id: string
+  task_id: string
+  run_id: string
+  worker_id: string
+  claim_token_hash: string | null
+  goal_revision: number
+  report_sequence: number
+  status: WorkerReport['status']
+  evidence_ref_ids_json: string
+  summary: string
+  limitations_json: string
+  remaining_risks_json: string
+  rollback_json: string | null
+  review_pack_id: string | null
+  created_at: string
+}
+
+interface CursorPage<T> {
+  items: T[]
+  nextCursor?: string
 }
 
 interface OutboxRow {
@@ -519,6 +768,8 @@ export class SettingsRevisionConflictError extends Error {
   }
 }
 
+export class RunClaimError extends Error {}
+
 export class PegasStore {
   readonly #database: DatabaseSync
   readonly #clock: Clock
@@ -551,6 +802,7 @@ export class PegasStore {
     this.#migrate(12, migration12)
     this.#migrate(13, migration13)
     this.#migrate(14, migration14)
+    this.#migrate(15, migration15)
   }
 
   #backfillWorkerIconIds(): void {
@@ -1191,13 +1443,20 @@ export class PegasStore {
           parseExecutionContext(previous.execution_context_json),
           executionContext,
         )
+      const goalRevision = (
+        this.#database
+          .prepare(
+            'SELECT MAX(revision) AS revision FROM goal_contracts WHERE task_id = ?',
+          )
+          .get(task.id) as { revision: number | null }
+      ).revision
       const runId = randomUUID()
       this.#database
         .prepare(
           `INSERT INTO runs
-            (id, task_id, origin_event_id, executor, resume_from_ref, status,
+            (id, task_id, origin_event_id, executor, resume_from_ref, goal_revision, status,
              input_json, execution_context_json, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`,
         )
         .run(
           runId,
@@ -1205,6 +1464,7 @@ export class PegasStore {
           event.id,
           executor,
           compatible ? previous.executor_ref : null,
+          goalRevision,
           JSON.stringify(decision.input),
           JSON.stringify(executionContext),
           now,
@@ -1321,9 +1581,1070 @@ export class PegasStore {
     return row ? toTask(row) : undefined
   }
 
+  createGoalContract(
+    taskId: string,
+    userId: string,
+    commandId: string,
+    draft: GoalContractDraft,
+  ): GoalContract {
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const task = this.#taskById(taskId)
+      if (task.userId !== userId)
+        throw new Error('Task belongs to another user')
+      const existing = this.#database
+        .prepare('SELECT * FROM goal_contracts WHERE command_id = ?')
+        .get(commandId) as unknown as GoalContractRow | undefined
+      if (existing) {
+        if (existing.task_id !== taskId)
+          throw new Error('Command ID is already used')
+        this.#database.exec('COMMIT')
+        return toGoalContract(existing)
+      }
+      if (task.status === 'completed' || task.status === 'cancelled')
+        throw new Error('Closed Task cannot accept a new Goal revision')
+      const sourcePlaceholders = draft.basedOnEventIds.map(() => '?').join(',')
+      const sourceRows = this.#database
+        .prepare(
+          `SELECT id FROM inbox_events
+           WHERE user_id = ? AND id IN (${sourcePlaceholders}) AND (
+             id = ? OR EXISTS (
+               SELECT 1 FROM task_events
+               WHERE task_events.event_id = inbox_events.id
+                 AND task_events.task_id = ?
+             )
+           )`,
+        )
+        .all(userId, ...draft.basedOnEventIds, task.originEventId, taskId) as {
+        id: string
+      }[]
+      const sourceIds = new Set(sourceRows.map(row => row.id))
+      const invalidSource = draft.basedOnEventIds.find(
+        eventId => !sourceIds.has(eventId),
+      )
+      if (invalidSource)
+        throw new Error(`Event ${invalidSource} is not a source for this Task`)
+      const revisionRow = this.#database
+        .prepare(
+          'SELECT COALESCE(MAX(revision), 0) + 1 AS revision FROM goal_contracts WHERE task_id = ?',
+        )
+        .get(taskId) as { revision: number }
+      const id = randomUUID()
+      const createdAt = this.#clock.now().toISOString()
+      this.#database
+        .prepare(
+          `INSERT INTO goal_contracts
+            (id, task_id, revision, command_id, based_on_event_ids_json,
+             desired_outcome, contract_json, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          id,
+          taskId,
+          revisionRow.revision,
+          commandId,
+          JSON.stringify(draft.basedOnEventIds),
+          draft.desiredOutcome,
+          JSON.stringify(draft),
+          createdAt,
+        )
+      this.#database
+        .prepare(
+          `UPDATE tasks SET goal = ?, status_reason = ?, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(draft.desiredOutcome, 'goal_defined', createdAt, taskId)
+      const latestRun = this.#database
+        .prepare(
+          `SELECT * FROM runs WHERE task_id = ?
+           ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+        )
+        .get(taskId) as unknown as RunRow | undefined
+      if (
+        latestRun &&
+        (latestRun.status === 'queued' || latestRun.goal_revision === null)
+      ) {
+        this.#database
+          .prepare(
+            `UPDATE runs SET goal_revision = ?, updated_at = ? WHERE id = ?`,
+          )
+          .run(revisionRow.revision, createdAt, latestRun.id)
+      } else if (latestRun?.goal_revision !== revisionRow.revision) {
+        if (
+          latestRun &&
+          (latestRun.status === 'running' || latestRun.status === 'waiting')
+        ) {
+          this.#database
+            .prepare(
+              `UPDATE runs SET status = 'cancelled', claimed_by = NULL,
+               lease_until = NULL, last_error = ?, updated_at = ? WHERE id = ?`,
+            )
+            .run(
+              `superseded_by_goal_revision:${String(revisionRow.revision)}`,
+              createdAt,
+              latestRun.id,
+            )
+        }
+        if (latestRun) {
+          this.#database
+            .prepare(
+              `INSERT INTO runs
+                (id, task_id, executor, resume_from_ref, retry_of_run_id,
+                 goal_revision, status, input_json, execution_context_json,
+                 created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`,
+            )
+            .run(
+              randomUUID(),
+              taskId,
+              latestRun.executor,
+              latestRun.executor_ref ?? latestRun.resume_from_ref,
+              latestRun.id,
+              revisionRow.revision,
+              JSON.stringify(draft.desiredOutcome),
+              latestRun.execution_context_json,
+              createdAt,
+              createdAt,
+            )
+        }
+      }
+      const contract = this.#goalContractById(id)
+      this.#database.exec('COMMIT')
+      return contract
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  currentGoalContract(
+    taskId: string,
+    userId: string,
+  ): GoalContract | undefined {
+    const task = this.#taskById(taskId)
+    if (task.userId !== userId) throw new Error('Task belongs to another user')
+    const row = this.#database
+      .prepare(
+        `SELECT * FROM goal_contracts
+         WHERE task_id = ? ORDER BY revision DESC LIMIT 1`,
+      )
+      .get(taskId) as unknown as GoalContractRow | undefined
+    return row ? toGoalContract(row) : undefined
+  }
+
+  listGoalContracts(taskId: string, userId: string): GoalContract[] {
+    const task = this.#taskById(taskId)
+    if (task.userId !== userId) throw new Error('Task belongs to another user')
+    const rows = this.#database
+      .prepare(
+        'SELECT * FROM goal_contracts WHERE task_id = ? ORDER BY revision ASC',
+      )
+      .all(taskId)
+    return rows.map(row => toGoalContract(row as unknown as GoalContractRow))
+  }
+
+  pageGoalContracts(
+    taskId: string,
+    userId: string,
+    limit: number,
+    cursor?: string,
+  ): CursorPage<GoalContract> {
+    const task = this.#taskById(taskId)
+    if (task.userId !== userId) throw new Error('Task belongs to another user')
+    const cursorRowId = this.#cursorRowId('goal_contracts', taskId, cursor)
+    const rows = this.#database
+      .prepare(
+        `SELECT * FROM goal_contracts
+         WHERE task_id = ? AND (? IS NULL OR rowid < ?)
+         ORDER BY rowid DESC LIMIT ?`,
+      )
+      .all(
+        taskId,
+        cursorRowId,
+        cursorRowId,
+        limit + 1,
+      ) as unknown as GoalContractRow[]
+    return cursorPage(rows, limit, toGoalContract)
+  }
+
+  createArtifact(
+    taskId: string,
+    userId: string,
+    commandId: string,
+    draft: ArtifactDraft,
+  ): TaskArtifact {
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const task = this.#taskById(taskId)
+      if (task.userId !== userId)
+        throw new Error('Task belongs to another user')
+      const existing = this.#database
+        .prepare('SELECT * FROM task_artifacts WHERE command_id = ?')
+        .get(commandId) as unknown as TaskArtifactRow | undefined
+      if (existing) {
+        if (existing.task_id !== taskId)
+          throw new Error('Command ID is already used')
+        this.#database.exec('COMMIT')
+        return toTaskArtifact(existing)
+      }
+      if (task.status === 'completed' || task.status === 'cancelled')
+        throw new Error('Closed Task cannot accept Artifacts')
+      if (draft.runId) {
+        const run = this.#runById(draft.runId)
+        if (run.taskId !== taskId)
+          throw new Error('Artifact Run belongs to another Task')
+        if (this.listRuns(task.id).at(-1)?.id !== run.id)
+          throw new Error('Artifact must target the latest Run')
+      }
+      const id = randomUUID()
+      const createdAt = this.#clock.now().toISOString()
+      this.#database
+        .prepare(
+          `INSERT INTO task_artifacts
+            (id, task_id, run_id, command_id, name, kind, mime_type, uri,
+             revision, content_hash, size_bytes, metadata_json, sensitivity,
+             created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          id,
+          taskId,
+          draft.runId ?? null,
+          commandId,
+          draft.name,
+          draft.kind,
+          draft.mimeType ?? null,
+          draft.uri ?? null,
+          draft.revision,
+          draft.contentHash,
+          draft.sizeBytes ?? null,
+          JSON.stringify(draft.metadata),
+          draft.sensitivity,
+          createdAt,
+        )
+      const artifact = this.#artifactById(id)
+      this.#database.exec('COMMIT')
+      return artifact
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  listArtifacts(taskId: string, userId: string): TaskArtifact[] {
+    const task = this.#taskById(taskId)
+    if (task.userId !== userId) throw new Error('Task belongs to another user')
+    const rows = this.#database
+      .prepare(
+        `SELECT * FROM task_artifacts
+         WHERE task_id = ? ORDER BY created_at ASC, rowid ASC`,
+      )
+      .all(taskId)
+    return rows.map(row => toTaskArtifact(row as unknown as TaskArtifactRow))
+  }
+
+  pageArtifacts(
+    taskId: string,
+    userId: string,
+    limit: number,
+    cursor?: string,
+  ): CursorPage<TaskArtifact> {
+    const task = this.#taskById(taskId)
+    if (task.userId !== userId) throw new Error('Task belongs to another user')
+    const cursorRowId = this.#cursorRowId('task_artifacts', taskId, cursor)
+    const rows = this.#database
+      .prepare(
+        `SELECT * FROM task_artifacts
+         WHERE task_id = ? AND (? IS NULL OR rowid < ?)
+         ORDER BY rowid DESC LIMIT ?`,
+      )
+      .all(
+        taskId,
+        cursorRowId,
+        cursorRowId,
+        limit + 1,
+      ) as unknown as TaskArtifactRow[]
+    return cursorPage(rows, limit, toTaskArtifact)
+  }
+
+  artifactsByIds(
+    taskId: string,
+    userId: string,
+    artifactIds: string[],
+  ): TaskArtifact[] {
+    const task = this.#taskById(taskId)
+    if (task.userId !== userId) throw new Error('Task belongs to another user')
+    const uniqueIds = [...new Set(artifactIds)]
+    if (uniqueIds.length === 0) return []
+    const rows = this.#database
+      .prepare(
+        `SELECT * FROM task_artifacts
+         WHERE task_id = ? AND id IN (${uniqueIds.map(() => '?').join(',')})
+         ORDER BY rowid DESC`,
+      )
+      .all(taskId, ...uniqueIds) as unknown as TaskArtifactRow[]
+    return rows.map(toTaskArtifact)
+  }
+
+  createEvidenceRef(
+    runId: string,
+    userId: string,
+    commandId: string,
+    draft: EvidenceRefDraft,
+  ): EvidenceRef {
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const run = this.#runById(runId)
+      const task = this.#taskById(run.taskId)
+      if (task.userId !== userId)
+        throw new Error('Task belongs to another user')
+      const existing = this.#database
+        .prepare(
+          `SELECT evidence_refs.* FROM evidence_commands
+           JOIN evidence_refs ON evidence_refs.id = evidence_commands.evidence_id
+           WHERE evidence_commands.command_id = ?`,
+        )
+        .get(commandId) as unknown as EvidenceRefRow | undefined
+      if (existing) {
+        if (existing.run_id !== runId)
+          throw new Error('Command ID is already used')
+        this.#database.exec('COMMIT')
+        return toEvidenceRef(existing)
+      }
+      if (task.status === 'completed' || task.status === 'cancelled')
+        throw new Error('Closed Task cannot accept Evidence')
+      if (this.listRuns(task.id).at(-1)?.id !== runId)
+        throw new Error('Evidence must target the latest Run')
+      const goal = this.currentGoalContract(task.id, userId)
+      if (goal?.revision !== draft.goalRevision)
+        throw new Error('Evidence must target the current Goal revision')
+      if (run.goalRevision !== draft.goalRevision)
+        throw new Error('Evidence must target the Run Goal revision')
+      const criterion = goal.successCriteria.find(
+        item => item.criterionId === draft.criterionId,
+      )
+      if (!criterion) throw new Error('Evidence criterion does not exist')
+      const plan = goal.evidencePlan.find(
+        item => item.id === criterion.evidencePlanRef,
+      )
+      if (!plan) throw new Error('Evidence plan does not exist')
+      if (!plan.acceptedKinds.includes(draft.kind))
+        throw new Error('Evidence kind is not accepted by the criterion plan')
+      if (!plan.acceptedTrustClasses.includes(draft.trustClass))
+        throw new Error('Evidence trust class is not accepted by the plan')
+
+      const artifact = draft.artifactId
+        ? this.#artifactById(draft.artifactId)
+        : undefined
+      if (artifact && artifact.taskId !== task.id)
+        throw new Error('Evidence Artifact belongs to another Task')
+      if (
+        ['screenshot', 'render', 'keyframe'].includes(draft.kind) &&
+        !artifact
+      )
+        throw new Error('Visual evidence requires an immutable Artifact')
+      if (
+        ['screenshot', 'render', 'keyframe'].includes(draft.kind) &&
+        artifact?.runId !== runId
+      )
+        throw new Error('Visual evidence must use an Artifact from this Run')
+      validateVisualEvidence(draft, artifact)
+      if (
+        draft.verification.result === 'passed' &&
+        draft.verification.verifierIdentity === draft.producerIdentity
+      )
+        throw new Error('Evidence producer cannot be its sole verifier')
+
+      const id = randomUUID()
+      const capturedAt = this.#clock.now().toISOString()
+      const contentHash =
+        artifact?.contentHash ?? draft.observationSnapshot?.snapshotHash
+      if (!contentHash) throw new Error('Evidence content hash is required')
+      const sourceKey = artifact
+        ? `artifact:${artifact.revision}:${artifact.contentHash}`
+        : `observation:${contentHash}`
+      const semanticDuplicate = this.#database
+        .prepare(
+          `SELECT * FROM evidence_refs
+           WHERE task_id = ? AND run_id = ? AND goal_revision = ? AND criterion_id = ?
+             AND source_key = ? AND kind = ?`,
+        )
+        .get(
+          task.id,
+          runId,
+          draft.goalRevision,
+          draft.criterionId,
+          sourceKey,
+          draft.kind,
+        ) as unknown as EvidenceRefRow | undefined
+      if (semanticDuplicate) {
+        if (
+          !sameEvidenceAttestation(
+            toEvidenceRef(semanticDuplicate),
+            draft,
+            artifact,
+            contentHash,
+          )
+        )
+          throw new Error('Evidence source has a conflicting attestation')
+        this.#database
+          .prepare(
+            `INSERT INTO evidence_commands
+              (command_id, evidence_id, run_id, created_at)
+             VALUES (?, ?, ?, ?)`,
+          )
+          .run(commandId, semanticDuplicate.id, runId, capturedAt)
+        this.#database.exec('COMMIT')
+        return toEvidenceRef(semanticDuplicate)
+      }
+      this.#database
+        .prepare(
+          `INSERT INTO evidence_refs
+            (id, task_id, run_id, command_id, source_key, goal_revision, criterion_id,
+             kind, artifact_id, external_ref, producer_identity,
+             capture_mechanism, trust_class, content_hash, artifact_revision,
+             observation_snapshot_json, verification_json, captured_at,
+             environment_json, presentation_json, sensitivity,
+             limitations_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          id,
+          task.id,
+          runId,
+          commandId,
+          sourceKey,
+          draft.goalRevision,
+          draft.criterionId,
+          draft.kind,
+          artifact?.id ?? null,
+          draft.externalRef ?? null,
+          draft.producerIdentity,
+          draft.captureMechanism,
+          draft.trustClass,
+          contentHash,
+          artifact?.revision ?? null,
+          draft.observationSnapshot
+            ? JSON.stringify(draft.observationSnapshot)
+            : null,
+          JSON.stringify(draft.verification),
+          capturedAt,
+          JSON.stringify(draft.environment),
+          JSON.stringify(draft.presentation),
+          draft.sensitivity,
+          JSON.stringify(draft.limitations),
+        )
+      const evidence = this.#evidenceById(id)
+      this.#database
+        .prepare(
+          `INSERT INTO evidence_commands
+            (command_id, evidence_id, run_id, created_at)
+           VALUES (?, ?, ?, ?)`,
+        )
+        .run(commandId, evidence.id, runId, capturedAt)
+      this.#database
+        .prepare(
+          `INSERT INTO evidence_verification_events
+            (id, evidence_id, command_id, verification_json, created_at)
+           VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run(
+          randomUUID(),
+          evidence.id,
+          `capture:${commandId}`,
+          JSON.stringify(draft.verification),
+          capturedAt,
+        )
+      this.#wakeEvidenceReporting(runId, capturedAt)
+      this.#database.exec('COMMIT')
+      return evidence
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  recordEvidenceVerification(
+    evidenceId: string,
+    userId: string,
+    commandId: string,
+    verification: EvidenceVerification,
+  ): EvidenceRef {
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const evidence = this.#evidenceById(evidenceId)
+      const task = this.#taskById(evidence.taskId)
+      if (task.userId !== userId)
+        throw new Error('Task belongs to another user')
+      const existing = this.#database
+        .prepare(
+          'SELECT * FROM evidence_verification_events WHERE command_id = ?',
+        )
+        .get(commandId) as EvidenceVerificationEventRow | undefined
+      if (existing) {
+        if (existing.evidence_id !== evidenceId)
+          throw new Error('Command ID is already used')
+        this.#database.exec('COMMIT')
+        return this.#evidenceById(evidenceId)
+      }
+      if (task.status === 'completed' || task.status === 'cancelled')
+        throw new Error('Closed Task cannot accept Evidence verification')
+      if (this.listRuns(task.id).at(-1)?.id !== evidence.runId)
+        throw new Error('Evidence verification must target the latest Run')
+      if (
+        verification.result === 'passed' &&
+        verification.verifierIdentity === evidence.producerIdentity
+      )
+        throw new Error('Evidence producer cannot be its sole verifier')
+      const createdAt = this.#clock.now().toISOString()
+      this.#database
+        .prepare(
+          `INSERT INTO evidence_verification_events
+            (id, evidence_id, command_id, verification_json, created_at)
+           VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run(
+          randomUUID(),
+          evidenceId,
+          commandId,
+          JSON.stringify(verification),
+          createdAt,
+        )
+      this.#database
+        .prepare('UPDATE evidence_refs SET verification_json = ? WHERE id = ?')
+        .run(JSON.stringify(verification), evidenceId)
+      this.#wakeEvidenceReporting(evidence.runId, createdAt)
+      const updated = this.#evidenceById(evidenceId)
+      this.#database.exec('COMMIT')
+      return updated
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  listEvidenceRefs(
+    taskId: string,
+    userId: string,
+    goalRevision?: number,
+  ): EvidenceRef[] {
+    const task = this.#taskById(taskId)
+    if (task.userId !== userId) throw new Error('Task belongs to another user')
+    const rows = goalRevision
+      ? this.#database
+          .prepare(
+            `SELECT * FROM evidence_refs
+             WHERE task_id = ? AND goal_revision = ?
+             ORDER BY captured_at ASC, rowid ASC`,
+          )
+          .all(taskId, goalRevision)
+      : this.#database
+          .prepare(
+            `SELECT * FROM evidence_refs
+             WHERE task_id = ? ORDER BY captured_at ASC, rowid ASC`,
+          )
+          .all(taskId)
+    return rows.map(row => toEvidenceRef(row as unknown as EvidenceRefRow))
+  }
+
+  pageEvidenceRefs(
+    taskId: string,
+    userId: string,
+    limit: number,
+    cursor?: string,
+    goalRevision?: number,
+    runId?: string,
+  ): CursorPage<EvidenceRef> {
+    const task = this.#taskById(taskId)
+    if (task.userId !== userId) throw new Error('Task belongs to another user')
+    const cursorRowId = this.#cursorRowId('evidence_refs', taskId, cursor)
+    const rows = this.#database
+      .prepare(
+        `SELECT * FROM evidence_refs
+         WHERE task_id = ? AND (? IS NULL OR rowid < ?)
+           AND (? IS NULL OR goal_revision = ?)
+           AND (? IS NULL OR run_id = ?)
+         ORDER BY rowid DESC LIMIT ?`,
+      )
+      .all(
+        taskId,
+        cursorRowId,
+        cursorRowId,
+        goalRevision ?? null,
+        goalRevision ?? null,
+        runId ?? null,
+        runId ?? null,
+        limit + 1,
+      ) as unknown as EvidenceRefRow[]
+    return cursorPage(rows, limit, toEvidenceRef)
+  }
+
+  evidenceByIds(
+    taskId: string,
+    userId: string,
+    evidenceIds: string[],
+  ): EvidenceRef[] {
+    const task = this.#taskById(taskId)
+    if (task.userId !== userId) throw new Error('Task belongs to another user')
+    const uniqueIds = [...new Set(evidenceIds)]
+    if (uniqueIds.length === 0) return []
+    const rows = this.#database
+      .prepare(
+        `SELECT * FROM evidence_refs
+         WHERE task_id = ? AND id IN (${uniqueIds.map(() => '?').join(',')})`,
+      )
+      .all(taskId, ...uniqueIds) as unknown as EvidenceRefRow[]
+    const byId = new Map(rows.map(row => [row.id, toEvidenceRef(row)]))
+    return uniqueIds.flatMap(id => {
+      const evidence = byId.get(id)
+      return evidence ? [evidence] : []
+    })
+  }
+
+  submitWorkerReport(
+    runId: string,
+    userId: string | undefined,
+    workerAuthority: string | { claimToken: string },
+    draft: WorkerReportDraft,
+  ): { report: WorkerReport; reviewPack?: ReviewPack; completed: boolean } {
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const run = this.#runById(runId)
+      const task = this.#taskById(run.taskId)
+      if (typeof workerAuthority === 'string' && task.userId !== userId)
+        throw new Error('Task belongs to another user')
+      const existing = this.#database
+        .prepare(
+          'SELECT * FROM worker_reports WHERE run_id = ? AND report_sequence = ?',
+        )
+        .get(runId, draft.reportSequence) as unknown as
+        WorkerReportRow | undefined
+      if (existing) {
+        if (typeof workerAuthority === 'string') {
+          if (existing.worker_id !== workerAuthority)
+            throw new Error('Worker Report belongs to another reporter')
+        } else if (
+          !existing.claim_token_hash ||
+          !safeDigestEqual(
+            hashClaimToken(workerAuthority.claimToken),
+            existing.claim_token_hash,
+          )
+        ) {
+          throw new RunClaimError('Run claim capability is invalid or expired')
+        }
+        const report = toWorkerReport(existing)
+        const reviewPack = existing.review_pack_id
+          ? this.#reviewPackById(existing.review_pack_id)
+          : undefined
+        this.#database.exec('COMMIT')
+        return {
+          report,
+          ...(reviewPack ? { reviewPack } : {}),
+          completed: reviewPack?.finalOutcome === 'completed',
+        }
+      }
+      const claim =
+        typeof workerAuthority === 'string'
+          ? this.#claimForInternalWorker(runId, workerAuthority)
+          : this.#claimForCapability(runId, workerAuthority.claimToken)
+      const workerId = claim.workerId
+      if (task.status === 'completed' || task.status === 'cancelled')
+        throw new Error('Closed Task cannot accept Worker Reports')
+      if (this.listRuns(task.id).at(-1)?.id !== runId)
+        throw new Error('Worker Report must target the latest Run')
+      if (run.claimedBy !== workerId)
+        throw new Error(`Worker ${workerId} does not own run ${runId}`)
+      if (new Set(draft.evidenceRefIds).size !== draft.evidenceRefIds.length)
+        throw new Error('Worker Report evidence references must be unique')
+      const latest = this.#database
+        .prepare(
+          'SELECT MAX(report_sequence) AS sequence FROM worker_reports WHERE run_id = ?',
+        )
+        .get(runId) as { sequence: number | null }
+      if (latest.sequence !== null && draft.reportSequence <= latest.sequence)
+        throw new Error('Worker Report sequence must increase')
+      if (run.status === 'cancelled')
+        throw new Error('Stopped Run cannot accept Worker Reports')
+      if (
+        (draft.status === 'started' || draft.status === 'progress') &&
+        run.status !== 'running'
+      )
+        throw new Error(`${draft.status} Worker Report requires a running Run`)
+      if (
+        draft.status !== 'started' &&
+        draft.status !== 'progress' &&
+        run.status !== 'running' &&
+        run.status !== 'waiting'
+      )
+        throw new Error('Final Worker Report requires a running or waiting Run')
+      const goal = this.currentGoalContract(task.id, task.userId)
+      if (goal?.revision !== draft.goalRevision)
+        throw new Error('Worker Report must target the current Goal revision')
+      if (run.goalRevision !== draft.goalRevision)
+        throw new Error('Worker Report must target the Run Goal revision')
+      const evidenceRows =
+        draft.evidenceRefIds.length === 0
+          ? []
+          : (this.#database
+              .prepare(
+                `SELECT * FROM evidence_refs WHERE id IN (${draft.evidenceRefIds
+                  .map(() => '?')
+                  .join(',')})`,
+              )
+              .all(...draft.evidenceRefIds) as unknown as EvidenceRefRow[])
+      const evidenceById = new Map(
+        evidenceRows.map(row => [row.id, toEvidenceRef(row)]),
+      )
+      const reportedEvidence = draft.evidenceRefIds.map(id => {
+        const item = evidenceById.get(id)
+        if (!item) throw new Error(`Evidence ${id} does not exist`)
+        if (
+          item.taskId !== task.id ||
+          item.runId !== runId ||
+          item.goalRevision !== goal.revision
+        )
+          throw new Error('Worker Report references unrelated evidence')
+        return item
+      })
+      const evidence =
+        draft.status === 'ready'
+          ? (
+              this.#database
+                .prepare(
+                  `SELECT * FROM evidence_refs
+                   WHERE task_id = ? AND run_id = ? AND goal_revision = ?
+                   ORDER BY rowid ASC`,
+                )
+                .all(
+                  task.id,
+                  runId,
+                  goal.revision,
+                ) as unknown as EvidenceRefRow[]
+            ).map(toEvidenceRef)
+          : reportedEvidence
+      const effectiveEvidenceRefIds = evidence.map(item => item.id)
+      const reportId = randomUUID()
+      const now = this.#clock.now().toISOString()
+      this.#database
+        .prepare(
+          `INSERT INTO worker_reports
+            (id, task_id, run_id, worker_id, claim_token_hash,
+             goal_revision, report_sequence, status,
+             evidence_ref_ids_json, summary, limitations_json,
+             remaining_risks_json, rollback_json, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          reportId,
+          task.id,
+          runId,
+          workerId,
+          claim.claimTokenHash,
+          goal.revision,
+          draft.reportSequence,
+          draft.status,
+          JSON.stringify(effectiveEvidenceRefIds),
+          draft.summary,
+          JSON.stringify(draft.limitations),
+          JSON.stringify(draft.remainingRisks),
+          draft.rollback ? JSON.stringify(draft.rollback) : null,
+          now,
+        )
+
+      let reviewPack: ReviewPack | undefined
+      let completed = false
+      if (draft.status === 'ready' || draft.status === 'failed') {
+        const criteria = reviewCriteria(goal, evidence)
+        completed =
+          draft.status === 'ready' &&
+          goal.successCriteria.every(criterion => {
+            if (!criterion.required) return true
+            return (
+              criteria.find(item => item.criterionId === criterion.criterionId)
+                ?.completionStatus === 'satisfied'
+            )
+          })
+        const finalOutcome =
+          draft.status === 'failed'
+            ? ('failed' as const)
+            : completed
+              ? ('completed' as const)
+              : ('partial' as const)
+        const basisEventIds = [task.originEventId, ...goal.basedOnEventIds]
+        const basisEventSetHash = createHash('sha256')
+          .update(
+            JSON.stringify({
+              runId,
+              goalRevision: goal.revision,
+              reportSequence: draft.reportSequence,
+              evidenceRefIds: [...effectiveEvidenceRefIds].sort(),
+            }),
+          )
+          .digest('hex')
+        const revisionRow = this.#database
+          .prepare(
+            'SELECT COALESCE(MAX(revision), 0) + 1 AS revision FROM review_packs WHERE task_id = ?',
+          )
+          .get(task.id) as { revision: number }
+        const reviewPackId = randomUUID()
+        this.#database
+          .prepare(
+            `INSERT INTO review_packs
+              (id, revision, task_id, run_id, goal_revision,
+               basis_event_ids_json, basis_event_set_hash, projection_as_of,
+               final_outcome, criteria_json, side_effects_json,
+               remaining_risks_json, rollback_json, audit_link, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            reviewPackId,
+            revisionRow.revision,
+            task.id,
+            runId,
+            goal.revision,
+            JSON.stringify([...new Set(basisEventIds)]),
+            basisEventSetHash,
+            now,
+            finalOutcome,
+            JSON.stringify(criteria),
+            JSON.stringify([]),
+            JSON.stringify(draft.remainingRisks),
+            draft.rollback ? JSON.stringify(draft.rollback) : null,
+            `/?channel=${encodeURIComponent(task.id)}&run=${encodeURIComponent(runId)}`,
+            now,
+          )
+        this.#database
+          .prepare('UPDATE worker_reports SET review_pack_id = ? WHERE id = ?')
+          .run(reviewPackId, reportId)
+        reviewPack = this.#reviewPackById(reviewPackId)
+      }
+
+      if (completed && reviewPack) {
+        this.#database
+          .prepare(
+            `UPDATE runs SET status = 'cancelled', claimed_by = NULL,
+             lease_until = NULL, last_error = ?, updated_at = ?
+             WHERE task_id = ? AND id <> ?
+               AND status IN ('queued','running','waiting')`,
+          )
+          .run(`superseded_by:${runId}`, now, task.id, runId)
+        this.#database
+          .prepare(
+            `UPDATE runs SET status = 'completed', claimed_by = NULL,
+             lease_until = NULL, last_error = NULL, updated_at = ? WHERE id = ?`,
+          )
+          .run(now, runId)
+        this.#database
+          .prepare(
+            `UPDATE tasks SET status = 'completed', status_reason = NULL,
+             ended_json = ?, updated_at = ? WHERE id = ?`,
+          )
+          .run(
+            JSON.stringify({ at: now, by: 'executor', outcome: 'completed' }),
+            now,
+            task.id,
+          )
+        this.enqueueOutbox({
+          userId: task.userId,
+          taskId: task.id,
+          channel: 'conversation',
+          dedupeKey: `review-ready:${reviewPack.id}`,
+          payload: {
+            type: 'review.ready',
+            taskId: task.id,
+            runId,
+            reviewPackId: reviewPack.id,
+            text: draft.summary,
+          },
+        })
+      } else if (draft.status === 'failed') {
+        this.#database
+          .prepare(
+            `UPDATE runs SET status = 'failed', claimed_by = NULL,
+             lease_until = NULL, last_error = ?, updated_at = ? WHERE id = ?`,
+          )
+          .run(draft.summary, now, runId)
+        this.#database
+          .prepare(
+            `UPDATE tasks SET status = 'started', status_reason = 'last_run_failed',
+             updated_at = ? WHERE id = ?`,
+          )
+          .run(now, task.id)
+        this.enqueueOutbox({
+          userId: task.userId,
+          taskId: task.id,
+          channel: 'conversation',
+          dedupeKey: `goal-report-failed:${reportId}`,
+          payload: {
+            type: 'run.failed',
+            taskId: task.id,
+            runId,
+            error: draft.summary,
+            ...(reviewPack ? { reviewPackId: reviewPack.id } : {}),
+          },
+        })
+      } else if (
+        draft.status === 'ready' ||
+        draft.status === 'waiting' ||
+        draft.status === 'blocked'
+      ) {
+        const reason =
+          draft.status === 'ready'
+            ? 'awaiting_evidence'
+            : draft.status === 'blocked'
+              ? 'blocked'
+              : 'awaiting_user_input'
+        this.#database
+          .prepare(
+            `UPDATE runs SET status = 'waiting', lease_until = NULL,
+             updated_at = ? WHERE id = ?`,
+          )
+          .run(now, runId)
+        this.#database
+          .prepare(
+            `UPDATE tasks SET status = 'started', status_reason = ?,
+             ended_json = NULL, updated_at = ? WHERE id = ?`,
+          )
+          .run(reason, now, task.id)
+        this.enqueueOutbox({
+          userId: task.userId,
+          taskId: task.id,
+          channel: 'conversation',
+          dedupeKey: `goal-attention:${reportId}`,
+          payload: {
+            type:
+              draft.status === 'ready'
+                ? 'goal.evidence_required'
+                : draft.status === 'blocked'
+                  ? 'run.blocked'
+                  : 'run.waiting',
+            taskId: task.id,
+            runId,
+            text: draft.summary,
+            ...(reviewPack ? { reviewPackId: reviewPack.id } : {}),
+          },
+        })
+      } else {
+        this.#database
+          .prepare(
+            `UPDATE tasks SET status = 'started', status_reason = NULL,
+             updated_at = ? WHERE id = ?`,
+          )
+          .run(now, task.id)
+      }
+
+      const report = this.#workerReportById(reportId)
+      this.#database.exec('COMMIT')
+      return {
+        report,
+        ...(reviewPack ? { reviewPack } : {}),
+        completed,
+      }
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  listReviewPacks(taskId: string, userId: string): ReviewPack[] {
+    const task = this.#taskById(taskId)
+    if (task.userId !== userId) throw new Error('Task belongs to another user')
+    const rows = this.#database
+      .prepare(
+        'SELECT * FROM review_packs WHERE task_id = ? ORDER BY revision ASC',
+      )
+      .all(taskId)
+    return rows.map(row => toReviewPack(row as unknown as ReviewPackRow))
+  }
+
+  currentReviewPack(
+    taskId: string,
+    userId: string,
+    goalRevision: number,
+  ): ReviewPack | undefined {
+    const task = this.#taskById(taskId)
+    if (task.userId !== userId) throw new Error('Task belongs to another user')
+    const row = this.#database
+      .prepare(
+        `SELECT * FROM review_packs
+         WHERE task_id = ? AND goal_revision = ?
+           AND run_id = (
+             SELECT id FROM runs WHERE task_id = ?
+             ORDER BY created_at DESC, rowid DESC LIMIT 1
+           )
+         ORDER BY revision DESC LIMIT 1`,
+      )
+      .get(taskId, goalRevision, taskId) as unknown as ReviewPackRow | undefined
+    return row ? toReviewPack(row) : undefined
+  }
+
+  pageReviewPacks(
+    taskId: string,
+    userId: string,
+    limit: number,
+    cursor?: string,
+  ): CursorPage<ReviewPack> {
+    const task = this.#taskById(taskId)
+    if (task.userId !== userId) throw new Error('Task belongs to another user')
+    const cursorRowId = this.#cursorRowId('review_packs', taskId, cursor)
+    const rows = this.#database
+      .prepare(
+        `SELECT * FROM review_packs
+         WHERE task_id = ? AND (? IS NULL OR rowid < ?)
+         ORDER BY rowid DESC LIMIT ?`,
+      )
+      .all(
+        taskId,
+        cursorRowId,
+        cursorRowId,
+        limit + 1,
+      ) as unknown as ReviewPackRow[]
+    return cursorPage(rows, limit, toReviewPack)
+  }
+
+  listWorkerReports(runId: string, userId: string): WorkerReport[] {
+    const run = this.#runById(runId)
+    const task = this.#taskById(run.taskId)
+    if (task.userId !== userId) throw new Error('Task belongs to another user')
+    const rows = this.#database
+      .prepare(
+        `SELECT * FROM worker_reports
+         WHERE run_id = ? ORDER BY report_sequence ASC`,
+      )
+      .all(runId)
+    return rows.map(row => toWorkerReport(row as unknown as WorkerReportRow))
+  }
+
+  pageWorkerReports(
+    runId: string,
+    userId: string,
+    limit: number,
+    cursor?: string,
+  ): CursorPage<WorkerReport> {
+    const run = this.#runById(runId)
+    const task = this.#taskById(run.taskId)
+    if (task.userId !== userId) throw new Error('Task belongs to another user')
+    const cursorRowId = this.#cursorRowId('worker_reports', runId, cursor)
+    const rows = this.#database
+      .prepare(
+        `SELECT * FROM worker_reports
+         WHERE run_id = ? AND (? IS NULL OR rowid < ?)
+         ORDER BY rowid DESC LIMIT ?`,
+      )
+      .all(
+        runId,
+        cursorRowId,
+        cursorRowId,
+        limit + 1,
+      ) as unknown as WorkerReportRow[]
+    return cursorPage(rows, limit, toWorkerReport)
+  }
+
   claimNextRun(workerId: string, leaseMs = 30_000): ClaimedRun | undefined {
     const now = this.#clock.now()
     const leaseUntil = new Date(now.getTime() + leaseMs).toISOString()
+    const claimToken = randomUUID()
+    const claimTokenHash = hashClaimToken(claimToken)
     this.#database.exec('BEGIN IMMEDIATE')
     try {
       let row = this.#database
@@ -1332,15 +2653,21 @@ export class PegasStore {
            WHERE task_id IN (SELECT id FROM tasks WHERE status NOT IN ('completed','cancelled'))
            AND ((status = 'queued' AND NOT EXISTS (
              SELECT 1 FROM runs AS active WHERE active.task_id = runs.task_id AND active.status = 'running'
-           )) OR (status = 'running' AND lease_until <= ?))
+           )) OR (status = 'running' AND lease_until <= ?)
+             OR (status = 'waiting' AND lease_until <= ? AND task_id IN (
+               SELECT id FROM tasks WHERE status_reason = 'awaiting_evidence'
+             )))
            ORDER BY created_at ASC, rowid ASC LIMIT 1`,
         )
-        .get(now.toISOString()) as unknown as RunRow | undefined
+        .get(now.toISOString(), now.toISOString()) as unknown as
+        RunRow | undefined
       if (!row) {
         this.#database.exec('COMMIT')
         return undefined
       }
 
+      let phase: ClaimedRun['phase'] =
+        row.status === 'waiting' ? 'report' : 'execute'
       if (row.status === 'running') {
         this.#database
           .prepare(
@@ -1351,26 +2678,38 @@ export class PegasStore {
         row = this.#database
           .prepare('SELECT * FROM runs WHERE id = ?')
           .get(replacement.id) as unknown as RunRow
+        phase = 'execute'
       }
 
-      this.#database
-        .prepare(
-          `UPDATE runs
-           SET status = 'running', claimed_by = ?, lease_until = ?,
-               attempts = attempts + 1, updated_at = ?
-           WHERE id = ?`,
-        )
-        .run(workerId, leaseUntil, now.toISOString(), row.id)
-      this.#database
-        .prepare(
-          `UPDATE tasks SET status = 'started', status_reason = NULL, updated_at = ?
-           WHERE id = ?`,
-        )
-        .run(now.toISOString(), row.task_id)
+      if (phase === 'report') {
+        this.#database
+          .prepare(
+            `UPDATE runs SET claimed_by = ?, lease_until = ?,
+             claim_token_hash = ?, updated_at = ? WHERE id = ?`,
+          )
+          .run(workerId, leaseUntil, claimTokenHash, now.toISOString(), row.id)
+      } else {
+        this.#database
+          .prepare(
+            `UPDATE runs
+             SET status = 'running', claimed_by = ?, lease_until = ?,
+                 claim_token_hash = ?, attempts = attempts + 1, updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(workerId, leaseUntil, claimTokenHash, now.toISOString(), row.id)
+      }
+      if (phase === 'execute') {
+        this.#database
+          .prepare(
+            `UPDATE tasks SET status = 'started', status_reason = NULL, updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(now.toISOString(), row.task_id)
+      }
       const run = this.#runById(row.id)
       const task = this.#taskById(row.task_id)
       this.#database.exec('COMMIT')
-      return { run, task }
+      return { run, task, claimToken, phase }
     } catch (error) {
       this.#database.exec('ROLLBACK')
       throw error
@@ -1410,7 +2749,8 @@ export class PegasStore {
   }
 
   completeRun(runId: string, workerId: string, result: ExecutorResult): void {
-    const now = this.#clock.now().toISOString()
+    const nowDate = this.#clock.now()
+    const now = nowDate.toISOString()
     this.#database.exec('BEGIN IMMEDIATE')
     try {
       const run = this.#runById(runId)
@@ -1427,14 +2767,27 @@ export class PegasStore {
           )
           .get(task.id, runId),
       )
+      const requiresEvidence = Boolean(
+        this.currentGoalContract(task.id, task.userId),
+      )
       this.#database
         .prepare(
           `UPDATE runs
-           SET status = 'completed', executor_ref = ?, output_json = ?,
-               claimed_by = NULL, lease_until = NULL, last_error = NULL, updated_at = ?
+           SET status = ?, executor_ref = ?, output_json = ?,
+               claimed_by = ?, lease_until = ?, last_error = NULL, updated_at = ?
            WHERE id = ?`,
         )
-        .run(result.executorRef, JSON.stringify(result.output), now, runId)
+        .run(
+          requiresEvidence ? 'waiting' : 'completed',
+          result.executorRef,
+          JSON.stringify(result.output),
+          requiresEvidence ? workerId : null,
+          requiresEvidence
+            ? new Date(nowDate.getTime() + 30_000).toISOString()
+            : null,
+          now,
+          runId,
+        )
       const usage = result.usage
       this.#database
         .prepare(
@@ -1475,13 +2828,14 @@ export class PegasStore {
       this.#database
         .prepare(
           `UPDATE tasks
-           SET status = ?, status_reason = NULL,
+           SET status = ?, status_reason = ?,
                ended_json = ?, updated_at = ?
            WHERE id = ?`,
         )
         .run(
-          hasPendingWork ? 'started' : 'completed',
-          hasPendingWork
+          requiresEvidence || hasPendingWork ? 'started' : 'completed',
+          requiresEvidence ? 'awaiting_evidence' : null,
+          requiresEvidence || hasPendingWork
             ? null
             : JSON.stringify({
                 at: now,
@@ -1495,9 +2849,11 @@ export class PegasStore {
         userId: task.userId,
         taskId: task.id,
         channel: 'conversation',
-        dedupeKey: `run-completed:${runId}`,
+        dedupeKey: requiresEvidence
+          ? `goal-report-required:${runId}`
+          : `run-completed:${runId}`,
         payload: {
-          type: 'run.completed',
+          type: requiresEvidence ? 'goal.report_required' : 'run.completed',
           taskId: task.id,
           runId,
           text: result.output,
@@ -1706,14 +3062,73 @@ export class PegasStore {
     )
   }
 
+  #claimForCapability(
+    runId: string,
+    claimToken: string,
+  ): { workerId: string; claimTokenHash: string } {
+    const row = this.#database
+      .prepare(
+        `SELECT claimed_by, claim_token_hash, lease_until
+         FROM runs WHERE id = ?`,
+      )
+      .get(runId) as
+      | {
+          claimed_by: string | null
+          claim_token_hash: string | null
+          lease_until: string | null
+        }
+      | undefined
+    const suppliedHash = hashClaimToken(claimToken)
+    if (
+      !row?.claimed_by ||
+      !row.claim_token_hash ||
+      !safeDigestEqual(suppliedHash, row.claim_token_hash) ||
+      (row.lease_until !== null &&
+        row.lease_until <= this.#clock.now().toISOString())
+    )
+      throw new RunClaimError('Run claim capability is invalid or expired')
+    return { workerId: row.claimed_by, claimTokenHash: suppliedHash }
+  }
+
+  #claimForInternalWorker(
+    runId: string,
+    workerId: string,
+  ): { workerId: string; claimTokenHash: string | null } {
+    const row = this.#database
+      .prepare('SELECT claimed_by, claim_token_hash FROM runs WHERE id = ?')
+      .get(runId) as
+      { claimed_by: string | null; claim_token_hash: string | null } | undefined
+    if (row?.claimed_by !== workerId)
+      throw new Error(`Worker ${workerId} does not own run ${runId}`)
+    return { workerId, claimTokenHash: row.claim_token_hash }
+  }
+
+  #wakeEvidenceReporting(runId: string, now: string): void {
+    this.#database
+      .prepare(
+        `UPDATE runs SET lease_until = ?, updated_at = ?
+         WHERE id = ? AND status = 'waiting' AND EXISTS (
+           SELECT 1 FROM worker_reports WHERE worker_reports.run_id = runs.id
+         )`,
+      )
+      .run(now, now, runId)
+  }
+
   #createRetry(row: RunRow, now: string): Run {
     const id = randomUUID()
+    const goalRevision = (
+      this.#database
+        .prepare(
+          'SELECT MAX(revision) AS revision FROM goal_contracts WHERE task_id = ?',
+        )
+        .get(row.task_id) as { revision: number | null }
+    ).revision
     this.#database
       .prepare(
         `INSERT INTO runs
-      (id, task_id, executor, resume_from_ref, retry_of_run_id, status, input_json,
+      (id, task_id, executor, resume_from_ref, retry_of_run_id, goal_revision, status, input_json,
        execution_context_json, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`,
+      VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -1721,6 +3136,7 @@ export class PegasStore {
         row.executor,
         row.executor_ref ?? row.resume_from_ref,
         row.id,
+        goalRevision,
         row.input_json,
         row.execution_context_json ??
           JSON.stringify({ executor: row.executor }),
@@ -1892,6 +3308,91 @@ export class PegasStore {
       )
   }
 
+  #cursorRowId(
+    table:
+      | 'goal_contracts'
+      | 'task_artifacts'
+      | 'evidence_refs'
+      | 'review_packs'
+      | 'worker_reports',
+    ownerId: string,
+    cursor?: string,
+  ): number | null {
+    if (!cursor) return null
+    const row =
+      table === 'goal_contracts'
+        ? this.#database
+            .prepare(
+              'SELECT rowid FROM goal_contracts WHERE id = ? AND task_id = ?',
+            )
+            .get(cursor, ownerId)
+        : table === 'task_artifacts'
+          ? this.#database
+              .prepare(
+                'SELECT rowid FROM task_artifacts WHERE id = ? AND task_id = ?',
+              )
+              .get(cursor, ownerId)
+          : table === 'evidence_refs'
+            ? this.#database
+                .prepare(
+                  'SELECT rowid FROM evidence_refs WHERE id = ? AND task_id = ?',
+                )
+                .get(cursor, ownerId)
+            : table === 'review_packs'
+              ? this.#database
+                  .prepare(
+                    'SELECT rowid FROM review_packs WHERE id = ? AND task_id = ?',
+                  )
+                  .get(cursor, ownerId)
+              : this.#database
+                  .prepare(
+                    'SELECT rowid FROM worker_reports WHERE id = ? AND run_id = ?',
+                  )
+                  .get(cursor, ownerId)
+    if (!row) throw new Error('Pagination cursor is invalid')
+    return (row as { rowid: number }).rowid
+  }
+
+  #goalContractById(contractId: string): GoalContract {
+    const row = this.#database
+      .prepare('SELECT * FROM goal_contracts WHERE id = ?')
+      .get(contractId)
+    if (!row) throw new Error(`Goal Contract ${contractId} does not exist`)
+    return toGoalContract(row as unknown as GoalContractRow)
+  }
+
+  #artifactById(artifactId: string): TaskArtifact {
+    const row = this.#database
+      .prepare('SELECT * FROM task_artifacts WHERE id = ?')
+      .get(artifactId)
+    if (!row) throw new Error(`Artifact ${artifactId} does not exist`)
+    return toTaskArtifact(row as unknown as TaskArtifactRow)
+  }
+
+  #evidenceById(evidenceId: string): EvidenceRef {
+    const row = this.#database
+      .prepare('SELECT * FROM evidence_refs WHERE id = ?')
+      .get(evidenceId)
+    if (!row) throw new Error(`Evidence ${evidenceId} does not exist`)
+    return toEvidenceRef(row as unknown as EvidenceRefRow)
+  }
+
+  #reviewPackById(reviewPackId: string): ReviewPack {
+    const row = this.#database
+      .prepare('SELECT * FROM review_packs WHERE id = ?')
+      .get(reviewPackId)
+    if (!row) throw new Error(`Review Pack ${reviewPackId} does not exist`)
+    return toReviewPack(row as unknown as ReviewPackRow)
+  }
+
+  #workerReportById(reportId: string): WorkerReport {
+    const row = this.#database
+      .prepare('SELECT * FROM worker_reports WHERE id = ?')
+      .get(reportId)
+    if (!row) throw new Error(`Worker Report ${reportId} does not exist`)
+    return toWorkerReport(row as unknown as WorkerReportRow)
+  }
+
   #taskById(taskId: string): Task {
     const row = this.#database
       .prepare('SELECT * FROM tasks WHERE id = ?')
@@ -2031,6 +3532,7 @@ function toRun(row: RunRow): Run {
     executor: row.executor,
     ...(row.executor_ref ? { executorRef: row.executor_ref } : {}),
     ...(row.resume_from_ref ? { resumeFromRef: row.resume_from_ref } : {}),
+    ...(row.goal_revision === null ? {} : { goalRevision: row.goal_revision }),
     executionContext: parseExecutionContext(
       row.execution_context_json ?? JSON.stringify({ executor: row.executor }),
     ),
@@ -2046,6 +3548,276 @@ function toRun(row: RunRow): Run {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
+}
+
+function cursorPage<Row extends { id: string }, Value>(
+  rows: Row[],
+  limit: number,
+  convert: (row: Row) => Value,
+): CursorPage<Value> {
+  const hasMore = rows.length > limit
+  const pageRows = hasMore ? rows.slice(0, limit) : rows
+  const nextCursor = hasMore ? pageRows.at(-1)?.id : undefined
+  return {
+    items: pageRows.map(convert),
+    ...(nextCursor ? { nextCursor } : {}),
+  }
+}
+
+function toGoalContract(row: GoalContractRow): GoalContract {
+  const draft = JSON.parse(row.contract_json) as GoalContractDraft
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    revision: row.revision,
+    commandId: row.command_id,
+    ...draft,
+    createdAt: row.created_at,
+  }
+}
+
+function toTaskArtifact(row: TaskArtifactRow): TaskArtifact {
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    commandId: row.command_id,
+    ...(row.run_id ? { runId: row.run_id } : {}),
+    name: row.name,
+    kind: row.kind,
+    ...(row.mime_type ? { mimeType: row.mime_type } : {}),
+    ...(row.uri ? { uri: row.uri } : {}),
+    revision: row.revision,
+    contentHash: row.content_hash,
+    ...(row.size_bytes === null ? {} : { sizeBytes: row.size_bytes }),
+    metadata: JSON.parse(row.metadata_json) as Record<string, unknown>,
+    sensitivity: row.sensitivity,
+    createdAt: row.created_at,
+  }
+}
+
+function toEvidenceRef(row: EvidenceRefRow): EvidenceRef {
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    runId: row.run_id,
+    commandId: row.command_id,
+    goalRevision: row.goal_revision,
+    criterionId: row.criterion_id,
+    kind: row.kind,
+    ...(row.artifact_id ? { artifactId: row.artifact_id } : {}),
+    ...(row.external_ref ? { externalRef: row.external_ref } : {}),
+    producerIdentity: row.producer_identity,
+    captureMechanism: row.capture_mechanism,
+    trustClass: row.trust_class,
+    contentHash: row.content_hash,
+    ...(row.artifact_revision
+      ? { artifactRevision: row.artifact_revision }
+      : {}),
+    ...(row.observation_snapshot_json
+      ? {
+          observationSnapshot: JSON.parse(
+            row.observation_snapshot_json,
+          ) as NonNullable<EvidenceRef['observationSnapshot']>,
+        }
+      : {}),
+    verification: JSON.parse(
+      row.verification_json,
+    ) as EvidenceRef['verification'],
+    capturedAt: row.captured_at,
+    environment: JSON.parse(row.environment_json) as Record<string, unknown>,
+    presentation: JSON.parse(row.presentation_json) as Record<string, unknown>,
+    sensitivity: row.sensitivity,
+    limitations: JSON.parse(row.limitations_json) as string[],
+  }
+}
+
+function toReviewPack(row: ReviewPackRow): ReviewPack {
+  return {
+    id: row.id,
+    revision: row.revision,
+    taskId: row.task_id,
+    runId: row.run_id,
+    goalRevision: row.goal_revision,
+    basisEventIds: JSON.parse(row.basis_event_ids_json) as string[],
+    projectionAsOf: row.projection_as_of,
+    finalOutcome: row.final_outcome,
+    criteria: JSON.parse(row.criteria_json) as ReviewCriterion[],
+    sideEffects: JSON.parse(row.side_effects_json) as Record<string, unknown>[],
+    remainingRisks: JSON.parse(row.remaining_risks_json) as string[],
+    ...(row.rollback_json
+      ? {
+          rollback: JSON.parse(row.rollback_json) as Record<string, unknown>,
+        }
+      : {}),
+    auditLink: row.audit_link,
+    createdAt: row.created_at,
+  }
+}
+
+function toWorkerReport(row: WorkerReportRow): WorkerReport {
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    runId: row.run_id,
+    reporterIdentity: row.worker_id,
+    goalRevision: row.goal_revision,
+    reportSequence: row.report_sequence,
+    status: row.status,
+    evidenceRefIds: JSON.parse(row.evidence_ref_ids_json) as string[],
+    summary: row.summary,
+    limitations: JSON.parse(row.limitations_json) as string[],
+    remainingRisks: JSON.parse(row.remaining_risks_json) as string[],
+    ...(row.rollback_json
+      ? {
+          rollback: JSON.parse(row.rollback_json) as Record<string, unknown>,
+        }
+      : {}),
+    ...(row.review_pack_id ? { reviewPackId: row.review_pack_id } : {}),
+    createdAt: row.created_at,
+  }
+}
+
+function reviewCriteria(
+  goal: GoalContract,
+  evidence: EvidenceRef[],
+): ReviewCriterion[] {
+  return goal.successCriteria.map(criterion => {
+    const plan = goal.evidencePlan.find(
+      item => item.id === criterion.evidencePlanRef,
+    )
+    if (!plan)
+      throw new Error('Goal Contract references a missing evidence plan')
+    const matching = evidence.filter(
+      item => item.criterionId === criterion.criterionId,
+    )
+    const passed = matching.filter(
+      item => item.verification.result === 'passed',
+    )
+    const completionStatus: ReviewCriterion['completionStatus'] =
+      passed.length >= plan.minimumCount
+        ? 'satisfied'
+        : passed.length > 0
+          ? 'partial'
+          : matching.some(item => item.verification.result === 'failed')
+            ? 'failed'
+            : 'unverified'
+    return {
+      criterionId: criterion.criterionId,
+      completionStatus,
+      currentValidity:
+        completionStatus === 'satisfied'
+          ? 'valid'
+          : completionStatus === 'partial'
+            ? 'warning'
+            : completionStatus === 'failed'
+              ? 'invalid'
+              : 'unknown',
+      evidenceRefs: matching.map(item => item.id),
+      explanation:
+        completionStatus === 'satisfied'
+          ? `${String(passed.length)} verified evidence item(s) satisfy the criterion.`
+          : `${String(passed.length)} of ${String(plan.minimumCount)} required verified evidence item(s) are available.`,
+      limitations: [...new Set(matching.flatMap(item => item.limitations))],
+    }
+  })
+}
+
+function validateVisualEvidence(
+  draft: EvidenceRefDraft,
+  artifact: TaskArtifact | undefined,
+): void {
+  if (draft.kind === 'screenshot' || draft.kind === 'keyframe') {
+    if (artifact?.kind !== 'image' || !artifact.mimeType?.startsWith('image/'))
+      throw new Error(
+        `${draft.kind} evidence requires an image Artifact with an image MIME type`,
+      )
+  }
+  if (draft.kind === 'render') {
+    const compatibleKind =
+      artifact?.kind === 'image' ||
+      artifact?.kind === 'webpage' ||
+      artifact?.kind === 'document'
+    const compatibleMime =
+      artifact?.mimeType?.startsWith('image/') === true ||
+      artifact?.mimeType === 'text/html' ||
+      artifact?.mimeType === 'application/pdf'
+    if (!compatibleKind || !compatibleMime)
+      throw new Error('Render evidence requires a render-compatible Artifact')
+  }
+  if (draft.kind === 'screenshot' || draft.kind === 'render') {
+    const viewport = draft.environment.viewport
+    if (!viewport || typeof viewport !== 'object' || Array.isArray(viewport))
+      throw new Error('Visual evidence requires a capture viewport')
+    const { width, height } = viewport as Record<string, unknown>
+    if (
+      typeof width !== 'number' ||
+      !Number.isFinite(width) ||
+      width <= 0 ||
+      typeof height !== 'number' ||
+      !Number.isFinite(height) ||
+      height <= 0
+    )
+      throw new Error('Visual evidence viewport dimensions must be positive')
+  }
+  if (draft.kind === 'keyframe') {
+    const timecode = draft.presentation.timecode
+    if (
+      typeof timecode !== 'number' ||
+      !Number.isFinite(timecode) ||
+      timecode < 0
+    )
+      throw new Error('Keyframe evidence requires a non-negative timecode')
+  }
+}
+
+function sameEvidenceAttestation(
+  existing: EvidenceRef,
+  draft: EvidenceRefDraft,
+  artifact: TaskArtifact | undefined,
+  contentHash: string,
+): boolean {
+  return (
+    existing.artifactId === draft.artifactId &&
+    existing.externalRef === draft.externalRef &&
+    existing.producerIdentity === draft.producerIdentity &&
+    existing.captureMechanism === draft.captureMechanism &&
+    existing.trustClass === draft.trustClass &&
+    existing.contentHash === contentHash &&
+    existing.artifactRevision === artifact?.revision &&
+    stableJson(existing.observationSnapshot) ===
+      stableJson(draft.observationSnapshot) &&
+    stableJson(existing.environment) === stableJson(draft.environment) &&
+    stableJson(existing.presentation) === stableJson(draft.presentation) &&
+    existing.sensitivity === draft.sensitivity &&
+    stableJson(existing.limitations) === stableJson(draft.limitations)
+  )
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value))
+    return `[${value.map(item => stableJson(item)).join(',')}]`
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>
+    return `{${Object.keys(record)
+      .sort()
+      .map(key => `${JSON.stringify(key)}:${stableJson(record[key])}`)
+      .join(',')}}`
+  }
+  if (value === undefined) return 'undefined'
+  return JSON.stringify(value)
+}
+
+function hashClaimToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex')
+}
+
+function safeDigestEqual(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left, 'hex')
+  const rightBuffer = Buffer.from(right, 'hex')
+  return (
+    leftBuffer.length === rightBuffer.length &&
+    timingSafeEqual(leftBuffer, rightBuffer)
+  )
 }
 
 function toModelUsageRecord(row: ModelUsageRow): ModelUsageRecord {

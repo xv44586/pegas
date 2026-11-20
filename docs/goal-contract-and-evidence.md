@@ -2,7 +2,7 @@
 
 > Feature：`GOAL-001`
 >
-> 状态：Planned
+> 状态：Partial
 >
 > 更新日期：2026-11-20
 
@@ -271,15 +271,25 @@ Outbox 的产品已读、外部投递状态、用户是否接受结果、evidenc
 
 ## 计划中的实现顺序
 
-1. 定义 Goal Contract revision、EvidenceRef、Review Pack 和 criterion 状态合同；
+1. [x] 定义 Goal Contract revision、EvidenceRef、Review Pack 和 criterion 状态合同；
 2. 让 Executor 生成最小目标简报，并保存用户确认与修订；
-3. 为结构化 Report 增加 evidence references，由 Control Plane 实施完成门禁；
-4. 扩展 Artifact 与 Outbox API，支持 evidence 聚合、权限和预览；
+3. [x] 为结构化 Report 增加 evidence references，由 Control Plane 实施完成门禁；
+4. [~] 扩展 Artifact 与 Outbox API，支持 evidence 聚合、权限和预览；服务端元数据、聚合与所有者权限已完成，内容预览和外部渠道投影待实现；
 5. 实现 Web Review Pack、视觉 evidence 画廊和 Channel 审计下钻；
 6. 用真实任务样本验证哪些字段和提问有价值，再决定 Memory、Scheduler 与反馈闭环的后续范围。
+
+## 当前服务端 API（Partial）
+
+- `GET/POST /v1/tasks/:taskId/goals`：读取 revision 历史或以稳定 `commandId` 创建新 revision；来源事件必须属于当前用户和 Task。新 revision 会重绑定尚未开始的 Run，或原子终止旧 revision 的活动 Run 并创建绑定新 revision 的后继 Run。
+- `GET/POST /v1/tasks/:taskId/artifacts`：登记不可变 Artifact revision、SHA-256、媒体类型、敏感级别和可选 Run 归属。
+- `GET /v1/tasks/:taskId/evidence` 与 `POST /v1/runs/:runId/evidence`：按当前 Goal revision 和 Run 保存证据。HTTP 写入的 `confirmedForCapture: true` 只记录 `pending` 的用户主张，不能产生通过验证或完成 Task；自动验证只能由进程内可信验证器追加 verification event。语义重复 evidence 在同一 Run 内去重，重试 Run 可以对同一不可变来源重新取证；视觉 evidence 还必须绑定兼容的图片/渲染 Artifact、视口或时间码。
+- `GET/POST /v1/runs/:runId/reports`：保存有递增序号的结构化 Worker Report；HTTP 写入要求该次 Run claim 独有且可轮换的 capability，服务端从 capability 推导 Reporter，不能由请求体冒充 Worker。`ready` 只表达完成主张，不绕过 evidence plan。
+- `GET /v1/tasks/:taskId/review-packs` 与 `GET /v1/tasks/:taskId/delivery`：按 criterion 返回当前 Run 的 Review Pack、Artifact 和 evidence 聚合，并提供 Channel/Run 审计链接；历史列表使用 `limit`/opaque `cursor` 分页，默认 50、上限 200。
+
+Task、Run、Review Pack 和 `review.ready` OutboxItem 在同一个 SQLite 提交边界内更新。`ready` Report 在该事务内重新读取当前 Run 的全部 EvidenceRef，不能因 Worker 事务外快照与 Control Plane 并发写入而漏证或丢失唤醒。响应丢失后，重复 Report 使用持久化在原 Report 上的 capability hash 验证并返回同一完成链；过期 capability 不能创建新序号 Report。同一 Run 内，同一 Artifact revision 或 observation snapshot 换 command ID 重放时不会被重复计数。Evidence capture 不可变，`pending → passed/failed` 通过 append-only verification event 演进；缓存的当前 verification 只用于投影。Run 在领取时生成不可出现在普通 Run API 的 claim capability，所有权更换时轮换；DSH Executor 子进程不会继承 Pegas 控制面、恢复、通知、隐私或模型凭证。当前用户 API 仍沿用单用户实例 bearer token 加 `userId` 所有者校验，因此高风险用户接受必须等 `APPROVAL-001` 提供受认证 confirmation capability，不能由普通 evidence 请求字段获得产品级信任。
 
 自动化至少覆盖：手段被误当目标、来源冲突、缺少权限、用户拒绝继续澄清、执行中目标变化、部分完成、证据缺失、Agent 自我声明被拒、旧 revision evidence、敏感 evidence 脱敏、视觉证据缺少目标视口、Outbox 聚合/去重、通知失败恢复和重复事件。
 
 ## 回滚
 
-在 GOAL-001 尚未实现前，本文件只定义产品与架构方向。后续代码回滚时应停止创建新 Goal Contract/EvidenceRef/Review Pack，保留已经持久化的历史记录为只读，并回退到现有 Task/Report/Outbox 投影；不得删除用户输入、Artifact、审计记录或已产生的外部副作用。
+回滚服务端写路径时应停止创建新 Goal Contract/EvidenceRef/verification event/Review Pack，保留 schema v15 中已经持久化的历史记录为只读，并让尚未绑定 Goal 的旧 Task 继续使用兼容 Task/Run/Outbox 投影；不得删除用户输入、Artifact、审计记录或已产生的外部副作用。已绑定 Goal 的 Task 不得绕过 evidence 门禁直接改为 completed；应保持 `started/awaiting_evidence`，或在显式迁移审计后恢复执行。若回滚到不了解 claim capability 的版本，必须先停止 GOAL Report HTTP 写入，不能把 capability 降级为共享 Worker token。

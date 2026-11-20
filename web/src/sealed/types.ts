@@ -118,12 +118,16 @@ export function attentionKind(message: OutboxMessage): AttentionKind {
     case 'run.failed':
       return 'failed'
     case 'run.completed':
+    case 'review.ready':
       return 'result'
     case 'approval.required':
     case 'approval.requested':
       return 'approval'
     case 'input.required':
     case 'input.requested':
+    case 'goal.evidence_required':
+    case 'run.blocked':
+    case 'run.waiting':
       return 'input'
     default:
       return 'update'

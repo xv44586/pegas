@@ -6,6 +6,7 @@ import type {
   ExecutorResult,
   RunExecutor,
 } from '../src/executor/executor.js'
+import type { GoalContractDraft } from '../src/goal/goal-delivery.js'
 import { RuleBasedTaskRouter } from '../src/router/router.js'
 import { PegasStore } from '../src/storage/sqlite-store.js'
 import {
@@ -64,6 +65,147 @@ describe('event and run processing', () => {
     expect(store.listTasks('user-1')).toMatchObject([
       { status: 'completed', ended: { outcome: 'completed' } },
     ])
+    store.close()
+  })
+
+  it('persists a partial structured Report for a Goal-bound Executor result', async () => {
+    const store = new PegasStore(':memory:')
+    const enqueued = store.enqueueEvent({
+      userId: 'user-1',
+      type: 'user.message',
+      source: 'web',
+      payload: { text: 'Deliver a verified result' },
+    }).event
+    const executor = new EchoExecutor()
+    await processNextEvent(
+      store,
+      new RoutingEventHandler(new RuleBasedTaskRouter(), executor.name),
+      'worker-goal',
+    )
+    const task = store.listTasks('user-1')[0]
+    if (!task) throw new Error('Expected a Task')
+    store.createGoalContract(
+      task.id,
+      'user-1',
+      'goal-processor',
+      processorGoal(enqueued.id),
+    )
+    const claimed = store.claimNextRun('worker-goal')
+    if (!claimed) throw new Error('Expected a claimed Run')
+    await executeClaimedRun(
+      store,
+      executor,
+      claimed,
+      'worker-goal',
+      process.cwd(),
+      new AbortController().signal,
+    )
+
+    expect(store.listRuns(task.id)).toMatchObject([{ status: 'waiting' }])
+    expect(store.listWorkerReports(claimed.run.id, 'user-1')).toMatchObject([
+      {
+        reporterIdentity: 'worker-goal',
+        reportSequence: 0,
+        status: 'ready',
+        evidenceRefIds: [],
+      },
+    ])
+    expect(store.listReviewPacks(task.id, 'user-1')).toMatchObject([
+      { finalOutcome: 'partial' },
+    ])
+    expect(store.findTask(task.id, 'user-1')).toMatchObject({
+      status: 'started',
+      statusReason: 'awaiting_evidence',
+    })
+    store.createEvidenceRef(claimed.run.id, 'user-1', 'processor-evidence', {
+      goalRevision: claimed.run.goalRevision ?? 0,
+      criterionId: 'result',
+      kind: 'observation',
+      producerIdentity: 'worker-goal',
+      captureMechanism: 'deterministic-check',
+      trustClass: 'control-plane',
+      observationSnapshot: {
+        observedValue: { delivered: true },
+        sourceObjectId: 'processor-result',
+        issuerIdentity: 'control-plane',
+        observedAt: '2026-11-20T00:00:00.000Z',
+        snapshotHash: 'a'.repeat(64),
+      },
+      verification: {
+        method: 'deterministic-check',
+        verifierIdentity: 'control-plane',
+        verifierVersion: 'v1',
+        result: 'passed',
+        verifiedAt: '2026-11-20T00:00:00.000Z',
+      },
+      environment: {},
+      presentation: {},
+      sensitivity: 'private',
+      limitations: [],
+    })
+    const reportingClaim = store.claimNextRun('worker-review')
+    expect(reportingClaim).toMatchObject({
+      phase: 'report',
+      run: { id: claimed.run.id },
+    })
+    if (!reportingClaim) throw new Error('Expected a reporting claim')
+    await executeClaimedRun(
+      store,
+      new NeverExecuteExecutor(),
+      reportingClaim,
+      'worker-review',
+      process.cwd(),
+      new AbortController().signal,
+    )
+    expect(store.findTask(task.id, 'user-1')?.status).toBe('completed')
+    expect(store.listRuns(task.id)).toMatchObject([{ status: 'completed' }])
+    store.close()
+  })
+
+  it('includes Evidence captured during execution in the initial ready Report', async () => {
+    const store = new PegasStore(':memory:')
+    const enqueued = store.enqueueEvent({
+      userId: 'user-1',
+      type: 'user.message',
+      source: 'web',
+      payload: { text: 'Deliver evidence captured during execution' },
+    }).event
+    const executor = new EchoExecutor()
+    await processNextEvent(
+      store,
+      new RoutingEventHandler(new RuleBasedTaskRouter(), executor.name),
+      'worker-evidence',
+    )
+    const task = store.listTasks('user-1')[0]
+    if (!task) throw new Error('Expected a Task')
+    const goal = store.createGoalContract(
+      task.id,
+      'user-1',
+      'goal-execution-evidence',
+      processorGoal(enqueued.id),
+    )
+    const claimed = store.claimNextRun('worker-evidence')
+    if (!claimed) throw new Error('Expected a claimed Run')
+    const evidence = store.createEvidenceRef(
+      claimed.run.id,
+      'user-1',
+      'execution-evidence',
+      processorEvidence(goal.revision, 'execution-result'),
+    )
+    await executeClaimedRun(
+      store,
+      executor,
+      claimed,
+      'worker-evidence',
+      process.cwd(),
+      new AbortController().signal,
+    )
+
+    expect(store.listWorkerReports(claimed.run.id, 'user-1')).toMatchObject([
+      { reportSequence: 0, evidenceRefIds: [evidence.id] },
+    ])
+    expect(store.findTask(task.id, 'user-1')?.status).toBe('completed')
+    expect(store.claimNextRun('another-worker')).toBeUndefined()
     store.close()
   })
 
@@ -287,5 +429,78 @@ class UsageReportingExecutor implements RunExecutor {
         tokens: { inputTokens: 42, outputTokens: 9 },
       },
     })
+  }
+}
+
+class NeverExecuteExecutor implements RunExecutor {
+  readonly name = 'must-not-execute'
+
+  execute(): Promise<ExecutorResult> {
+    return Promise.reject(new Error('Report recovery must not re-execute'))
+  }
+}
+
+function processorGoal(eventId: string): GoalContractDraft {
+  return {
+    basedOnEventIds: [eventId],
+    desiredOutcome: 'Deliver a verified result.',
+    beneficiaries: ['user-1'],
+    successCriteria: [
+      {
+        criterionId: 'result',
+        observableStatement: 'The result is independently verified.',
+        required: true,
+        evidencePlanRef: 'result-evidence',
+      },
+    ],
+    nonGoals: [],
+    constraints: [],
+    contextSources: [],
+    assumptions: [],
+    unknowns: [],
+    prerequisites: [],
+    permissionBoundary: {},
+    reviewCheckpoints: ['final'],
+    evidencePlan: [
+      {
+        id: 'result-evidence',
+        criterionId: 'result',
+        acceptedKinds: ['observation'],
+        acceptedTrustClasses: ['control-plane'],
+        minimumCount: 1,
+        presentation: 'inline',
+      },
+    ],
+    failureAndRecovery: 'Keep the Task open.',
+    feedbackSignals: [],
+  }
+}
+
+function processorEvidence(goalRevision: number, sourceObjectId: string) {
+  return {
+    goalRevision,
+    criterionId: 'result',
+    kind: 'observation',
+    producerIdentity: 'worker-evidence',
+    captureMechanism: 'deterministic-check',
+    trustClass: 'control-plane',
+    observationSnapshot: {
+      observedValue: { delivered: true },
+      sourceObjectId,
+      issuerIdentity: 'control-plane',
+      observedAt: '2026-11-20T00:00:00.000Z',
+      snapshotHash: 'b'.repeat(64),
+    },
+    verification: {
+      method: 'deterministic-check',
+      verifierIdentity: 'control-plane',
+      verifierVersion: 'v1',
+      result: 'passed' as const,
+      verifiedAt: '2026-11-20T00:00:00.000Z',
+    },
+    environment: {},
+    presentation: {},
+    sensitivity: 'private',
+    limitations: [],
   }
 }

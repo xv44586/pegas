@@ -189,7 +189,7 @@ Backlog → Unstarted → Started → Completed（软结束）
 Backlog / Unstarted / Started ── 用户明确停止 ──→ Cancelled（硬结束）
 ```
 
-Task 只使用这五个工作项状态；等待条件、暂停与最近执行失败作为原因表达。`completed` 是可恢复的软结束，`cancelled` 只表示用户停止，是原 Task 永久不可恢复的硬结束。Run 单独保存 queued、running、waiting、completed、failed、cancelled；Run 或 Worker Runtime 结束不决定 Task 是否结束。当前 Run 的结构化 `ready` Report 只是 Worker 的完成主张；绑定审批、Artifact、EvidenceRef 或外部 Thread 时，Control Plane 必须验证当前 Goal revision 的条件全部满足后才能结束 Task。自由文本、进程退出、退出码和 Agent 自我总结都不能独立完成 Task。授权复核失败保持 completed 并把输入退回 Router/Eval，不伪装成人工停止。`TASK-002` 的恢复状态机保持现有边界；Goal Contract、EvidenceRef 与 Review Pack 属于 Planned 的 `GOAL-001`，详细合同见 `docs/goal-contract-and-evidence.md`。
+Task 只使用这五个工作项状态；等待条件、暂停与最近执行失败作为原因表达。`completed` 是可恢复的软结束，`cancelled` 只表示用户停止，是原 Task 永久不可恢复的硬结束。Run 单独保存 queued、running、waiting、completed、failed、cancelled；Run 或 Worker Runtime 结束不决定 Task 是否结束。当前 Run 的结构化 `ready` Report 只是 Worker 的完成主张；绑定审批、Artifact、EvidenceRef 或外部 Thread 时，Control Plane 必须验证当前 Goal revision 的条件全部满足后才能结束 Task。自由文本、进程退出、退出码和 Agent 自我总结都不能独立完成 Task。授权复核失败保持 completed 并把输入退回 Router/Eval，不伪装成人工停止。`TASK-002` 的恢复状态机保持现有边界；Goal Contract、EvidenceRef、结构化 Report 与 Review Pack 已进入 `GOAL-001` 的服务端 Partial 闭环，详细合同和剩余可信验证器/Web 缺口见 `docs/goal-contract-and-evidence.md`。
 
 #### Goal Contract 与完成门禁
 
@@ -232,7 +232,9 @@ Worker 只能提交结构化协作请求。Control Plane 校验来源 Run、授�
 
 #### Report 与 Watchdog
 
-当前正常状态以 Worker 主动提交的结构化 Report 为事实来源，至少区分 `started`、`progress`、`waiting`、`ready`、`blocked` 和 `failed`；当前 `ready` 流程尚未实施 GOAL-001 的 evidence 完成门禁。
+当前正常状态以 Worker 主动提交的结构化 Report 为事实来源，至少区分 `started`、`progress`、`waiting`、`ready`、`blocked` 和 `failed`。当 Task 已有 Goal Contract 时，`ready` 流程已实施 GOAL-001 的 evidence 完成门禁；尚未接入结构化 Report 的旧 Task 继续沿用兼容完成路径，直到 Executor 适配完成。
+
+每次 Run claim 都生成只交给 Worker Runtime 的 capability；Report API 以 capability 推导当前 Reporter，并在所有权恢复时轮换，普通 Run 投影不返回该值。Executor 子进程不继承 Pegas 控制面凭证。执行结束到 Report 持久化之间使用短 reporting lease：内置 Worker 会立即写入结构化 Report；若进程在两者之间退出，新 Worker 原地接管同一个 Run 的 reporting phase，使用已持久化 output 生成 Report，不能重新执行 Executor 和外部副作用。已经持久化的 partial Report 在新 evidence 捕获或 verification event 到达时重新唤醒 reporting phase，由新序号 Report 重新计算完成门禁。
 
 GOAL-001 目标流程中，`ready` Report 可以引用 EvidenceRef，但不能自证 evidence 充分。Control Plane 先做引用结构校验，再按 evidence kind、trust class 与 criterion evidence plan 执行语义验证；高风险结果需要确定性验证器、独立证明或用户接受。验证通过后，Control Plane 计算 criterion 状态并生成 Review Pack，再原子更新 Run、Task/WorkChannel、ChannelEvent、协作结果投递和必要的 OutboxItem。
 

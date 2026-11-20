@@ -124,7 +124,7 @@ export class DshCliExecutor implements RunExecutor {
     ]
     const child = spawn(this.#command, arguments_, {
       cwd: input.workingDirectory,
-      env: process.env,
+      env: executorEnvironment(process.env),
       shell: false,
       stdio: ['pipe', 'pipe', 'pipe'],
     })
@@ -264,6 +264,22 @@ export class DshCliExecutor implements RunExecutor {
       durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
     }
   }
+}
+
+export function executorEnvironment(
+  source: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  const protectedKeys = new Set([
+    'PEGAS_API_TOKEN',
+    'PEGAS_RECOVERY_TOKEN',
+    'PEGAS_PUSH_WEBHOOK_TOKEN',
+    'PEGAS_PRIVACY_HMAC_KEY',
+    'PEGAS_MODEL_API_KEY',
+    'PEGAS_SPEECH_API_KEY',
+  ])
+  return Object.fromEntries(
+    Object.entries(source).filter(([key]) => !protectedKeys.has(key)),
+  )
 }
 
 function isWorkspaceSessionMismatch(message: string): boolean {

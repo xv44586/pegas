@@ -41,7 +41,7 @@
 - [ ] 新建、补充、纠正和取消 Task 的完整路由；
 - [ ] 从自由文本或语音形成带 revision 的 Goal Contract，只追问会改变结果、权限、成本或风险的关键未知项；
 - [ ] Task 与 Run 完整状态迁移；
-- [ ] success criteria、EvidenceRef 与 Control Plane 完成门禁；
+- [x] success criteria、EvidenceRef 与 Control Plane 完成门禁；
 - [x] 第一版 DSH headless Executor Adapter；
 - [x] Run 与 DSH session 映射及租约过期恢复；
 - [x] Outbox dispatcher 与一个真实投递渠道；

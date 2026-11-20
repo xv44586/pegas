@@ -48,6 +48,7 @@ export interface Run {
   executor: string
   executorRef?: string
   resumeFromRef?: string
+  goalRevision?: number
   executionContext?: {
     executor: string
     workspace?: string

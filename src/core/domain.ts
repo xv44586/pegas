@@ -93,6 +93,7 @@ export interface Run {
   executor: string
   executorRef?: string
   resumeFromRef?: string
+  goalRevision?: number
   executionContext: ExecutionContext
   status: RunStatus
   input: string
@@ -108,6 +109,8 @@ export interface Run {
 export interface ClaimedRun {
   run: Run
   task: Task
+  claimToken: string
+  phase: 'execute' | 'report'
 }
 
 export interface ModelTokenUsage {
