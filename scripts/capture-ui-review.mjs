@@ -539,6 +539,17 @@ async function assertGeometry(page, label) {
       if (Number.parseFloat(style.paddingRight) < 32)
         out.push(`select chevron padding is too small (${style.paddingRight})`)
     }
+    if (globalThis.matchMedia('(pointer: coarse)').matches) {
+      for (const control of globalThis.document.querySelectorAll(
+        '.page-toolbar button',
+      )) {
+        const rect = control.getBoundingClientRect()
+        if (rect.width && (rect.width < 44 || rect.height < 44))
+          out.push(
+            `toolbar touch target is too small (${String(Math.round(rect.width))}x${String(Math.round(rect.height))})`,
+          )
+      }
+    }
     for (const row of globalThis.document.querySelectorAll('.test-row')) {
       const button = row.querySelector('button')
       const input = row.querySelector('input')

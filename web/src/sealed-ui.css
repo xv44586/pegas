@@ -245,6 +245,14 @@ a {
   height: 7px;
   width: 7px;
 }
+.brand-lockup .connection-connecting i,
+.setting-summary-row em.is-unknown i {
+  background: var(--caution);
+}
+.brand-lockup .connection-offline i,
+.setting-summary-row em.is-unavailable i {
+  background: var(--critical);
+}
 .primary-nav {
   display: grid;
   gap: 5px;
@@ -3095,6 +3103,9 @@ kbd {
   input:not([type='checkbox']):not([type='radio']),
   select {
     min-height: 44px;
+  }
+  .page-toolbar button {
+    min-width: 44px;
   }
   .radio-row label {
     min-height: 44px;

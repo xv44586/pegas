@@ -171,8 +171,8 @@ export function formatRelativeTime(value: string): string {
 
 export function statusLabel(channel: WorkChannel, run?: Run): string {
   if (channel.status === 'cancelled') return '已归档'
-  if (channel.status === 'completed') return '已完成'
-  return run ? runStatusLabel(run) : '等待中'
+  if (run) return runStatusLabel(run)
+  return channel.status === 'completed' ? '已完成' : '等待中'
 }
 
 export function runStatusLabel(run: Run): string {

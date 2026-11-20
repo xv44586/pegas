@@ -1393,6 +1393,24 @@ describe('sealed Pegas UI', () => {
     expect(screen.queryByRole('button', { name: '重试' })).toBeNull()
   })
 
+  it('preserves a selected failed Run diagnostic after its Channel completes', () => {
+    render(
+      <DetailDrawer
+        onChange={vi.fn()}
+        onClose={vi.fn()}
+        onRetry={vi.fn()}
+        view={{
+          kind: 'task',
+          channel: { ...channel, status: 'completed', canStop: false },
+          run: { ...run, status: 'failed', lastError: '旧 Run 仍需诊断' },
+        }}
+      />,
+    )
+    expect(screen.getByText('执行已停止')).toBeTruthy()
+    expect(screen.getByText('旧 Run 仍需诊断')).toBeTruthy()
+    expect(screen.getByRole('button', { name: '重试' })).toBeTruthy()
+  })
+
   it('presents the detail drawer as a modal and traps keyboard focus', () => {
     render(
       <DetailDrawer
@@ -1607,6 +1625,91 @@ describe('sealed Pegas UI', () => {
     expect(screen.getByText(/尚未取得用量数据/)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '重新读取' }))
     await waitFor(() => expect(usageRequests).toBeGreaterThan(1))
+  })
+
+  it('renders entirely unavailable usage as unknown instead of zero', async () => {
+    installFetch(path =>
+      path.startsWith('/v1/usage?')
+        ? Response.json({
+            summary: {
+              records: 1,
+              completeRecords: 0,
+              partialRecords: 0,
+              unavailableRecords: 1,
+              inputTokens: 0,
+              outputTokens: 0,
+              durationMs: 0,
+            },
+            records: [
+              {
+                runId: run.id,
+                taskId: channel.id,
+                userId: 'owner',
+                workerIconId: 'computer',
+                executor: 'dsh',
+                completeness: 'unavailable',
+                reportedSteps: 0,
+                unreportedSteps: 1,
+                observedAt: run.updatedAt,
+              },
+            ],
+          })
+        : undefined,
+    )
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /模型用量/ }))
+    const tokenMetric = screen.getByText('总 Token').closest('article')
+    const cacheMetric = screen.getByText('缓存读取').closest('article')
+    const durationMetric = screen.getByText('运行时长').closest('article')
+    if (!tokenMetric || !cacheMetric || !durationMetric)
+      throw new Error('Expected usage metric cards')
+    expect(within(tokenMetric).getByText('—')).toBeTruthy()
+    expect(within(cacheMetric).getByText('—')).toBeTruthy()
+    expect(within(durationMetric).getByText('—')).toBeTruthy()
+    expect(screen.getAllByText('执行器未回报').length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('shows the shell as offline when the authoritative snapshot fails', async () => {
+    installFetch(path =>
+      path.startsWith('/v1/events?')
+        ? Response.json({ message: 'control plane offline' }, { status: 503 })
+        : undefined,
+    )
+    render(<App />)
+    expect(await screen.findByText('control plane offline')).toBeTruthy()
+    expect(screen.getByText('离线')).toBeTruthy()
+    expect(screen.queryByText('在线')).toBeNull()
+  })
+
+  it('marks a saved execution model unavailable when it is absent from the catalog', async () => {
+    installFetch(path =>
+      path === '/v1/settings/agent-models'
+        ? Response.json({
+            defaultProvider: 'Magpie',
+            defaultModel: 'different-model',
+            models: [
+              {
+                provider: 'Magpie',
+                id: 'different-model',
+                name: 'different-model',
+              },
+            ],
+          })
+        : undefined,
+    )
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    expect(await screen.findByText('未在模型目录中')).toBeTruthy()
+    expect(screen.queryByText('可用')).toBeNull()
   })
 
   it('does not let a slow usage request starve the core snapshot', async () => {
@@ -2124,6 +2227,79 @@ describe('sealed Pegas UI', () => {
     fireEvent.click(await screen.findByRole('button', { name: '重试' }))
     const drawer = await screen.findByLabelText('工作详情')
     expect(await within(drawer).findByText(/Run 2 · run-retr/)).toBeTruthy()
+    expect(within(drawer).queryByRole('button', { name: '重试' })).toBeNull()
+  })
+
+  it('selects the successor Run after retrying from a failed attention item', async () => {
+    const failedRun: Run = {
+      ...run,
+      id: 'run-attention-failed',
+      status: 'failed',
+      lastError: 'attention provider timeout',
+      updatedAt: '2026-11-19T08:01:00.000Z',
+    }
+    const retryRun: Run = {
+      ...run,
+      id: 'run-attention-retry',
+      status: 'queued',
+      retryOfRunId: failedRun.id,
+      createdAt: '2026-11-19T08:03:00.000Z',
+      updatedAt: '2026-11-19T08:03:00.000Z',
+    }
+    const sourceMessage = snapshot.messages[0]
+    if (!sourceMessage) throw new Error('Expected an outbox fixture message')
+    const attentionMessage = {
+      ...sourceMessage,
+      payload: {
+        type: 'run.failed',
+        runId: failedRun.id,
+        error: failedRun.lastError,
+      },
+    }
+    let retried = false
+    installSnapshotFetch(
+      {
+        ...snapshot,
+        runs: [failedRun],
+        messages: [attentionMessage],
+      },
+      (path, init) => {
+        if (
+          path === `/v1/runs/${failedRun.id}/retry` &&
+          init?.method === 'POST'
+        ) {
+          retried = true
+          return Response.json({ run: retryRun })
+        }
+        if (path.endsWith('/read'))
+          return Response.json({
+            message: { ...attentionMessage, readAt: run.updatedAt },
+          })
+        if (path.startsWith('/v1/runs?'))
+          return Response.json({
+            runs: retried ? [failedRun, retryRun] : [failedRun],
+          })
+        if (path.startsWith('/v1/channels/task-1/timeline?'))
+          return Response.json({
+            channel,
+            events: snapshot.events,
+            messages: [attentionMessage],
+            runs: retried ? [failedRun, retryRun] : [failedRun],
+          })
+        return undefined
+      },
+    )
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '查看原因' }))
+    fireEvent.click(await screen.findByRole('button', { name: '重试' }))
+    const drawer = await screen.findByLabelText('工作详情')
+    expect(await within(drawer).findByText(/Run 2 · run-atte/)).toBeTruthy()
+    expect(within(drawer).getByText('Pegas 正在推进这件事')).toBeTruthy()
     expect(within(drawer).queryByRole('button', { name: '重试' })).toBeNull()
   })
 

@@ -598,6 +598,7 @@ export function App() {
     <>
       <AppShell
         channels={data.snapshot.channels}
+        connectionStatus={loading ? 'connecting' : error ? 'offline' : 'online'}
         onNavigate={nextPage => {
           if (nextPage === 'settings') {
             setSettingsSection('pegas')
@@ -750,7 +751,21 @@ export function App() {
             )
           }}
           onRetry={async run => {
-            await api.retryRun(run.id)
+            const successor = await api.retryRun(run.id)
+            setDrawer(current => {
+              if (current?.kind !== 'task' || current.channel.id !== run.taskId)
+                return current
+              return {
+                ...current,
+                run: successor,
+                runs: [
+                  ...(current.runs?.filter(item => item.id !== successor.id) ??
+                    []),
+                  successor,
+                ],
+                selectedRunId: successor.id,
+              }
+            })
             await Promise.all([loadSnapshot(), loadTaskDrawer(run.taskId)])
           }}
           onStop={async channel => {

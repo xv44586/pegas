@@ -526,6 +526,16 @@ function PegasSettings({
       : selectedProvider && selectedModel
         ? `${selectedProvider}::${selectedModel}`
         : ''
+  const selectedModelAvailable = agentModels?.models.some(
+    model =>
+      model.provider.toLocaleLowerCase() ===
+        selectedProvider.toLocaleLowerCase() && model.id === selectedModel,
+  )
+  const availability = !agentModels
+    ? { className: 'is-unknown', label: '目录未知' }
+    : selectedModelAvailable
+      ? { className: '', label: '可用' }
+      : { className: 'is-unavailable', label: '未在模型目录中' }
   return (
     <div className="settings-pane pegas-settings">
       <div className="pegas-settings-title">
@@ -542,9 +552,9 @@ function PegasSettings({
             ? `${selectedProvider} · ${selectedModel}`
             : '服务端未提供'}
         </b>
-        <em>
+        <em className={availability.className}>
           <i />
-          可用
+          {availability.label}
         </em>
         <button
           className="secondary-button"
@@ -1704,7 +1714,19 @@ function UsageSettings({
   onRetry: () => void
 }) {
   const summary = usage?.summary
-  const total = (summary?.inputTokens ?? 0) + (summary?.outputTokens ?? 0)
+  const hasTokenUsage = usage?.records.some(
+    record =>
+      record.inputTokens !== undefined || record.outputTokens !== undefined,
+  )
+  const hasCacheUsage = usage?.records.some(
+    record => record.cacheReadTokens !== undefined,
+  )
+  const hasDuration = usage?.records.some(
+    record => record.durationMs !== undefined,
+  )
+  const total = hasTokenUsage
+    ? (summary?.inputTokens ?? 0) + (summary?.outputTokens ?? 0)
+    : undefined
   return (
     <div className="settings-pane">
       <SettingsHeading
@@ -1730,22 +1752,26 @@ function UsageSettings({
           <div className="usage-metrics">
             <article>
               <small>总 Token</small>
-              <strong>{total.toLocaleString('zh-CN')}</strong>
-              <span>输入 + 输出</span>
+              <strong>{total?.toLocaleString('zh-CN') ?? '—'}</strong>
+              <span>{hasTokenUsage ? '输入 + 输出' : '执行器未回报'}</span>
             </article>
             <article>
               <small>缓存读取</small>
               <strong>
-                {(summary?.cacheReadTokens ?? 0).toLocaleString('zh-CN')}
+                {hasCacheUsage
+                  ? (summary?.cacheReadTokens ?? 0).toLocaleString('zh-CN')
+                  : '—'}
               </strong>
-              <span>供应商上报</span>
+              <span>{hasCacheUsage ? '供应商上报' : '执行器未回报'}</span>
             </article>
             <article>
               <small>运行时长</small>
               <strong>
-                {String(Math.round((summary?.durationMs ?? 0) / 1000))}s
+                {hasDuration
+                  ? `${String(Math.round((summary?.durationMs ?? 0) / 1000))}s`
+                  : '—'}
               </strong>
-              <span>Pegas 观测</span>
+              <span>{hasDuration ? 'Pegas 观测' : '执行器未回报'}</span>
             </article>
             <article>
               <small>费用</small>

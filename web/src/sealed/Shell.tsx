@@ -34,6 +34,7 @@ const navItems: readonly {
 
 interface AppShellProps {
   page: AppPage
+  connectionStatus: 'connecting' | 'online' | 'offline'
   onNavigate: (page: AppPage) => void
   channels: WorkChannel[]
   unreadCount: number
@@ -43,6 +44,7 @@ interface AppShellProps {
 
 export function AppShell({
   page,
+  connectionStatus,
   onNavigate,
   channels,
   unreadCount,
@@ -58,9 +60,13 @@ export function AppShell({
           <PegasMark size={42} />
           <div>
             <strong>Pegas</strong>
-            <span>
+            <span className={`connection-${connectionStatus}`}>
               <i />
-              在线
+              {connectionStatus === 'online'
+                ? '在线'
+                : connectionStatus === 'connecting'
+                  ? '连接中'
+                  : '离线'}
             </span>
           </div>
         </div>
