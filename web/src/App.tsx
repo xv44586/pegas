@@ -55,8 +55,9 @@ export function App() {
   const [drawer, setDrawer] = useState<DrawerView>()
   const [continuationTaskId, setContinuationTaskId] = useState<string>()
   const [composerDraft, setComposerDraft] = useState('')
-  const [settingsSection, setSettingsSection] =
-    useState<SettingsSection>('pegas')
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>(() =>
+    settingsSectionFromLocation(),
+  )
   const [searchOpen, setSearchOpen] = useState(false)
   const [theme, setTheme] = useState<ThemeChoice>(() => readTheme())
   const [systemDark, setSystemDark] = useState(() => systemPrefersDark())
@@ -117,30 +118,36 @@ export function App() {
     }
   }, [api])
 
-  const loadConfiguration = useCallback(async () => {
-    const [settings, catalog] = await Promise.allSettled([
-      api.settings(),
-      api.agentModels(),
-    ])
-    setData(current => ({
-      ...current,
-      ...(settings.status === 'fulfilled' ? { settings: settings.value } : {}),
-    }))
-    const failures = [
-      settings.status === 'rejected'
-        ? settings.reason instanceof Error
-          ? settings.reason.message
-          : '无法读取设置。'
-        : '',
-      catalog.status === 'rejected'
-        ? catalog.reason instanceof Error
-          ? catalog.reason.message
-          : '无法读取执行模型目录。'
-        : '',
-    ].filter(Boolean)
-    setConfigurationError(failures.join('；'))
-    if (catalog.status === 'fulfilled') setAgentModels(catalog.value)
-  }, [api])
+  const loadConfiguration = useCallback(
+    async (preserveSettings = false) => {
+      const [settings, catalog] = await Promise.allSettled([
+        api.settings(),
+        api.agentModels(),
+      ])
+      setData(current => ({
+        ...current,
+        ...(settings.status === 'fulfilled' &&
+        (!preserveSettings || !current.settings)
+          ? { settings: settings.value }
+          : {}),
+      }))
+      const failures = [
+        settings.status === 'rejected'
+          ? settings.reason instanceof Error
+            ? settings.reason.message
+            : '无法读取设置。'
+          : '',
+        catalog.status === 'rejected'
+          ? catalog.reason instanceof Error
+            ? catalog.reason.message
+            : '无法读取执行模型目录。'
+          : '',
+      ].filter(Boolean)
+      setConfigurationError(failures.join('；'))
+      if (catalog.status === 'fulfilled') setAgentModels(catalog.value)
+    },
+    [api],
+  )
 
   useEffect(() => {
     void loadSnapshot()
@@ -321,7 +328,7 @@ export function App() {
     restoreFocus()
   }
 
-  function navigate(nextPage: AppPage) {
+  function navigate(nextPage: AppPage, nextSettingsSection?: SettingsSection) {
     setPage(nextPage)
     const url = new URL(window.location.href)
     if (nextPage === 'conversation') url.searchParams.delete('view')
@@ -331,6 +338,12 @@ export function App() {
         nextPage === 'attention' ? 'outbox' : nextPage,
       )
     if (nextPage !== 'attention') url.searchParams.delete('outbox')
+    if (nextPage === 'settings')
+      url.searchParams.set(
+        'section',
+        nextSettingsSection ?? settingsSectionFromLocation(),
+      )
+    else url.searchParams.delete('section')
     window.history.pushState({}, '', `${url.pathname}${url.search}${url.hash}`)
   }
 
@@ -347,6 +360,7 @@ export function App() {
   useEffect(() => {
     const restorePage = () => {
       setPage(pageFromLocation())
+      setSettingsSection(settingsSectionFromLocation())
       const messageId = new URLSearchParams(window.location.search).get(
         'outbox',
       )
@@ -456,6 +470,11 @@ export function App() {
         ),
       },
     }))
+    setDrawer(current =>
+      current?.kind === 'message' && current.message.id === updated.id
+        ? { ...current, message: updated }
+        : current,
+    )
   }
 
   async function openAttentionMessage(message: OutboxMessage) {
@@ -486,7 +505,7 @@ export function App() {
       item => item.id === message.taskId,
     )
     if (!channel) {
-      setDrawer(undefined)
+      setDrawer({ kind: 'message', message })
       return
     }
     const selectedRunId = runIdFromMessage(message)
@@ -580,8 +599,10 @@ export function App() {
       <AppShell
         channels={data.snapshot.channels}
         onNavigate={nextPage => {
-          if (nextPage === 'settings') setSettingsSection('pegas')
-          navigate(nextPage)
+          if (nextPage === 'settings') {
+            setSettingsSection('pegas')
+            navigate(nextPage, 'pegas')
+          } else navigate(nextPage)
         }}
         onOpenChannel={channel =>
           openDrawer({
@@ -599,8 +620,9 @@ export function App() {
             <span>{error || configurationError}</span>
             <button
               onClick={() => {
-                void loadSnapshot()
-                void loadConfiguration()
+                if (error) void loadSnapshot()
+                if (configurationError)
+                  void loadConfiguration(Boolean(data.settings))
               }}
               type="button"
             >
@@ -620,7 +642,7 @@ export function App() {
             onClearContinuation={() => setContinuationTaskId(undefined)}
             onConfigureVoice={() => {
               setSettingsSection('voice')
-              navigate('settings')
+              navigate('settings', 'voice')
             }}
             onDraftChange={setComposerDraft}
             onSelectModel={selectAgentModel}
@@ -657,6 +679,16 @@ export function App() {
             }
             onOpenDrawer={openDrawer}
             onReloadUsage={() => void loadUsage()}
+            onSectionChange={nextSection => {
+              setSettingsSection(nextSection)
+              const url = new URL(window.location.href)
+              url.searchParams.set('section', nextSection)
+              window.history.replaceState(
+                {},
+                '',
+                `${url.pathname}${url.search}${url.hash}`,
+              )
+            }}
             onThemeChange={setTheme}
             onSave={saveSettings}
             onTestModel={(provider, model, draft) =>
@@ -750,6 +782,7 @@ export function App() {
 function pageFromLocation(): AppPage {
   const view = new URLSearchParams(window.location.search).get('view')
   if (view === 'outbox') return 'attention'
+  if (view === 'tasks') return 'work'
   if (
     view === 'work' ||
     view === 'attention' ||
@@ -759,6 +792,27 @@ function pageFromLocation(): AppPage {
   )
     return view
   return 'conversation'
+}
+
+function settingsSectionFromLocation(): SettingsSection {
+  const section = new URLSearchParams(window.location.search).get('section')
+  const valid: readonly SettingsSection[] = [
+    'pegas',
+    'appearance',
+    'models',
+    'router',
+    'voice',
+    'connections',
+    'memory',
+    'privacy',
+    'notifications',
+    'usage',
+    'recovery',
+    'about',
+  ]
+  return valid.includes(section as SettingsSection)
+    ? (section as SettingsSection)
+    : 'pegas'
 }
 
 function AccessGate({ onToken }: { onToken: (token: string) => void }) {

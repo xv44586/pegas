@@ -990,6 +990,56 @@ describe('sealed Pegas UI', () => {
     expect(window.location.search).toContain('outbox=message-1')
   })
 
+  it('restores taskless Outbox messages from their direct URL', async () => {
+    const sourceMessage = snapshot.messages[0]
+    if (!sourceMessage) throw new Error('Expected an outbox fixture message')
+    window.history.replaceState({}, '', '/?view=outbox&outbox=message-1')
+    const tasklessMessage = {
+      ...sourceMessage,
+      taskId: undefined,
+      payload: { type: 'run.failed', error: '后台检查需要你的处理' },
+    }
+    installSnapshotFetch(
+      {
+        ...snapshot,
+        messages: [tasklessMessage],
+      },
+      path =>
+        path.endsWith('/read')
+          ? Response.json({
+              message: {
+                ...tasklessMessage,
+                readAt: '2026-11-19T09:00:00.000Z',
+              },
+            })
+          : undefined,
+    )
+    render(<App />)
+    expect(await screen.findByLabelText('消息详情')).toBeTruthy()
+    expect(screen.getAllByText('后台检查需要你的处理').length).toBeGreaterThan(
+      0,
+    )
+  })
+
+  it('keeps legacy task-list URLs mapped to all work', async () => {
+    window.history.replaceState({}, '', '/?view=tasks')
+    installFetch()
+    render(<App />)
+    expect(
+      await screen.findByRole('heading', { name: '所有事情' }),
+    ).toBeTruthy()
+  })
+
+  it('restores the voice settings section from its direct URL', async () => {
+    window.history.replaceState({}, '', '/?view=settings&section=voice')
+    installFetch()
+    render(<App />)
+    expect(
+      await screen.findByRole('heading', { name: '语音与输入' }),
+    ).toBeTruthy()
+    expect(window.location.search).toContain('section=voice')
+  })
+
   it('restores a URL-backed Channel drawer and preserves its scoped timeline', async () => {
     window.history.replaceState({}, '', '/?channel=task-1')
     installFetch(path =>
@@ -1499,6 +1549,38 @@ describe('sealed Pegas UI', () => {
     expect(
       await screen.findByText('设置你的个人执行伙伴如何工作和与你沟通。'),
     ).toBeTruthy()
+  })
+
+  it('preserves unsaved settings while reconnecting a failed model catalog', async () => {
+    let catalogRequests = 0
+    installFetch(path => {
+      if (path !== '/v1/settings/agent-models') return undefined
+      catalogRequests += 1
+      return catalogRequests === 1
+        ? Response.json({ message: 'catalog offline' }, { status: 503 })
+        : Response.json({
+            defaultProvider: 'Magpie',
+            defaultModel: 'deepseek-v4.1-flash',
+            models: [],
+          })
+    })
+    render(<App />)
+    expect(await screen.findByText(/catalog offline/)).toBeTruthy()
+    fireEvent.click(
+      within(screen.getByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /语音与输入/ }))
+    const serviceUrl = await screen.findByLabelText('服务地址')
+    fireEvent.change(serviceUrl, {
+      target: { value: 'http://127.0.0.1:19090/v1' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '重新连接' }))
+    await waitFor(() => expect(catalogRequests).toBeGreaterThan(1))
+    expect(screen.getByLabelText<HTMLInputElement>('服务地址').value).toBe(
+      'http://127.0.0.1:19090/v1',
+    )
   })
 
   it('surfaces usage and agent catalog failures without inventing zero usage', async () => {

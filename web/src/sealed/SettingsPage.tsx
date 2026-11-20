@@ -75,6 +75,7 @@ interface SettingsPageProps {
   onOpenDrawer: (drawer: DrawerView) => void
   onReloadUsage: () => void
   onBack: () => void
+  onSectionChange?: (section: SettingsSection) => void
   onDiscoverModels: (
     provider: RuntimeSettings['modelProvider'],
     model: string,
@@ -118,6 +119,7 @@ export function SettingsPage({
   onOpenDrawer,
   onReloadUsage,
   onBack,
+  onSectionChange,
   onDiscoverModels,
   onTestModel,
   onTestSpeech,
@@ -215,7 +217,10 @@ export function SettingsPage({
             <button
               className={section === item.id ? 'is-active' : ''}
               key={item.id}
-              onClick={() => setSection(item.id)}
+              onClick={() => {
+                setSection(item.id)
+                onSectionChange?.(item.id)
+              }}
               type="button"
             >
               <Icon size={17} />

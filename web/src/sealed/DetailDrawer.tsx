@@ -78,7 +78,13 @@ export function DetailDrawer({
     >
       <aside
         aria-modal="true"
-        aria-label={view.kind === 'task' ? '工作详情' : '详情'}
+        aria-label={
+          view.kind === 'task'
+            ? '工作详情'
+            : view.kind === 'message'
+              ? '消息详情'
+              : '详情'
+        }
         className="detail-drawer"
         ref={drawerRef}
         role="dialog"
@@ -110,6 +116,7 @@ export function DetailDrawer({
             usage={view.usage}
           />
         )}
+        {view.kind === 'message' && <MessageDetail view={view} />}
         {view.kind === 'runtime' && <RuntimeDetail run={view.run} />}
         {view.kind === 'rule' && <RuleDetail title={view.title} />}
         {view.kind === 'preview' && <PreviewDetail view={view} />}
@@ -120,15 +127,48 @@ export function DetailDrawer({
 
 function drawerEyebrow(view: DrawerView): string {
   if (view.kind === 'task') return '工作详情'
+  if (view.kind === 'message') return '待你处理'
   if (view.kind === 'runtime') return 'Pegas'
   if (view.kind === 'rule') return '行为与规则'
   return '内容预览'
 }
 function drawerTitle(view: DrawerView): string {
   if (view.kind === 'task') return view.channel.title
+  if (view.kind === 'message') return 'Pegas 消息'
   if (view.kind === 'runtime') return '执行环境详情'
   if (view.kind === 'rule') return view.title
   return view.title
+}
+
+function MessageDetail({
+  view,
+}: {
+  view: Extract<DrawerView, { kind: 'message' }>
+}) {
+  const text = textFromPayload(view.message.payload)
+  return (
+    <div className="drawer-body">
+      <section className="detail-section">
+        <h3>消息内容</h3>
+        <p>{text || '服务端没有提供消息正文。'}</p>
+      </section>
+      <section className="detail-section metadata-list">
+        <h3>消息信息</h3>
+        <dl>
+          <Meta label="来源" value="Pegas" />
+          <Meta label="投递状态" value={view.message.status} />
+          <Meta
+            label="创建时间"
+            value={formatRelativeTime(view.message.createdAt)}
+          />
+        </dl>
+      </section>
+      <div className="info-banner">
+        <LockKeyhole size={16} />
+        此消息没有关联事情；这里只展示服务端保存的原始消息。
+      </div>
+    </div>
+  )
 }
 
 function TaskDetail({

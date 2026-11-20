@@ -43,6 +43,7 @@ export type DrawerView =
       }
     }
   | { kind: 'runtime'; run?: Run }
+  | { kind: 'message'; message: OutboxMessage }
   | { kind: 'rule'; title: string }
   | {
       kind: 'preview'
