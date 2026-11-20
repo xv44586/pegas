@@ -22,6 +22,7 @@ Electron main
 - 导航只允许启动时确定的本机 Pegas origin；外部 `http`/`https` URL 交给 macOS 默认浏览器。
 - 权限默认拒绝；仅允许受信本机 origin 的 audio media 请求，用于封板语音输入。
 - 服务监听 `127.0.0.1` 并使用运行时选择的空闲端口。数据目录不放在应用包内。
+- 内置服务每次启动生成随机实例 bearer；Electron session 仅向受信本机 origin 自动添加认证头。Renderer、URL、sessionStorage 和日志都不接触该 bearer。连接外部回环服务时则使用显式配置的 `PEGAS_API_TOKEN`。
 
 ## 运行与打包
 
@@ -35,10 +36,10 @@ Electron main
 
 ## 验证证据
 
-- 10 个桌面运行时自动化测试覆盖隔离环境、可信回环 origin、回环端口、就绪等待、ASAR 服务路径、优雅退出、SIGKILL 升级、macOS 进程组信号、异常 leader 的残留执行器清理，以及首次设置遮罩下的 smoke 恢复路径。
+- 11 个桌面运行时自动化测试覆盖隔离环境、可信回环 origin 与 bearer 注入、回环端口、就绪等待、ASAR 服务路径、优雅退出、SIGKILL 升级、macOS 进程组信号、异常 leader 的残留执行器清理，以及首次设置遮罩下的 smoke 恢复路径。
 - 开发态与打包态 Electron smoke 均通过 UI 提交 Task 并等待 Worker 完成 Run；随后终止 Worker，确认产品页立即撤下且不再接受输入，并在故障页出现后立刻退出，断言 Control Plane 与 Worker 进程组均已消失。
 - 两类 Electron smoke 同时验证窗口标题、无控制台错误，以及 `contextIsolation: true`、`sandbox: true`、`nodeIntegration: false`。
-- `pnpm check` 通过 30 个测试文件、248 个测试；独立 `pnpm smoke` 通过真实 Task→Run 闭环。
+- `pnpm check` 通过 33 个测试文件、327 个测试；独立 `pnpm smoke` 与 `pnpm smoke:desktop` 通过真实 Task→Run 闭环。
 - 主界面和服务失败截图分别保存为 `output/feature-review/media/desktop-electron-macos.png` 与 `output/feature-review/media/desktop-electron-service-failure.png`，均不提交到仓库。
 
 ## 失败与回滚

@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 
@@ -6,6 +7,7 @@ import { app, BrowserWindow, session, shell } from 'electron'
 
 import {
   availableLoopbackPort,
+  desktopRequestHeaders,
   desktopServiceEnvironment,
   desktopServiceRoot,
   isLoopbackAppUrl,
@@ -49,25 +51,27 @@ void app.whenReady().then(startDesktop).catch(showStartupFailure)
 
 async function startDesktop(): Promise<void> {
   const externalUrl = process.env.PEGAS_DESKTOP_SERVER_URL
+  let apiToken = process.env.PEGAS_API_TOKEN
   if (externalUrl) {
     if (!isLoopbackAppUrl(externalUrl))
       throw new Error('PEGAS_DESKTOP_SERVER_URL must use a loopback HTTP URL')
     appUrl = externalUrl
   } else {
+    apiToken ??= randomBytes(32).toString('base64url')
     const port = await availableLoopbackPort()
     appUrl = `http://127.0.0.1:${String(port)}`
     const dataDir =
       process.env.PEGAS_DESKTOP_DATA_DIR ??
       join(app.getPath('userData'), 'data')
     await mkdir(dataDir, { recursive: true })
-    startServices(port, dataDir)
+    startServices(port, dataDir, apiToken)
     await waitForControlPlane(appUrl)
   }
-  configurePermissions(appUrl)
+  configureSession(appUrl, apiToken)
   await createWindow(appUrl)
 }
 
-function startServices(port: number, dataDir: string): void {
+function startServices(port: number, dataDir: string, apiToken: string): void {
   const applicationRoot = desktopServiceRoot({
     isPackaged: app.isPackaged,
     appPath: app.getAppPath(),
@@ -76,6 +80,7 @@ function startServices(port: number, dataDir: string): void {
   const environment = desktopServiceEnvironment({
     port,
     dataDir,
+    apiToken,
     testMode: process.env.PEGAS_DESKTOP_TEST === '1',
   })
   for (const entry of ['control-plane/main.js', 'worker/main.js']) {
@@ -131,7 +136,22 @@ async function createWindow(trustedUrl: string): Promise<void> {
   await window.loadURL(trustedUrl)
 }
 
-function configurePermissions(trustedUrl: string): void {
+function configureSession(trustedUrl: string, apiToken?: string): void {
+  if (apiToken) {
+    session.defaultSession.webRequest.onBeforeSendHeaders(
+      { urls: [`${new URL(trustedUrl).origin}/*`] },
+      (details, callback) => {
+        callback({
+          requestHeaders: desktopRequestHeaders(
+            details.url,
+            trustedUrl,
+            apiToken,
+            details.requestHeaders,
+          ),
+        })
+      },
+    )
+  }
   session.defaultSession.setPermissionCheckHandler(
     (webContents, permission, requestingOrigin, details) =>
       permission === 'media' &&

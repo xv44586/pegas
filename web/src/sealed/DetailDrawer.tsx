@@ -10,6 +10,7 @@ import {
   LockKeyhole,
   Play,
   RotateCw,
+  ShieldCheck,
   X,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
@@ -29,6 +30,7 @@ export function DetailDrawer({
   onRetry,
   onContinue,
   onStop,
+  onDecideApproval,
 }: {
   view: DrawerView
   onClose: () => void
@@ -39,6 +41,11 @@ export function DetailDrawer({
   ) => void
   onStop?: (
     channel: Extract<DrawerView, { kind: 'task' }>['channel'],
+  ) => Promise<void>
+  onDecideApproval?: (
+    approvalId: string,
+    optionId: string,
+    rationale?: string,
   ) => Promise<void>
 }) {
   const closeRef = useRef<HTMLButtonElement>(null)
@@ -117,6 +124,13 @@ export function DetailDrawer({
           />
         )}
         {view.kind === 'message' && <MessageDetail view={view} />}
+        {view.kind === 'approval' && (
+          <ApprovalDetail
+            key={`${view.approval.id}:${view.approval.decision?.id ?? view.approval.status}`}
+            onDecide={onDecideApproval}
+            view={view}
+          />
+        )}
         {view.kind === 'runtime' && <RuntimeDetail run={view.run} />}
         {view.kind === 'rule' && <RuleDetail title={view.title} />}
         {view.kind === 'preview' && <PreviewDetail view={view} />}
@@ -128,6 +142,7 @@ export function DetailDrawer({
 function drawerEyebrow(view: DrawerView): string {
   if (view.kind === 'task') return '工作详情'
   if (view.kind === 'message') return '待你处理'
+  if (view.kind === 'approval') return '需要确认'
   if (view.kind === 'runtime') return 'Pegas'
   if (view.kind === 'rule') return '行为与规则'
   return '内容预览'
@@ -135,9 +150,168 @@ function drawerEyebrow(view: DrawerView): string {
 function drawerTitle(view: DrawerView): string {
   if (view.kind === 'task') return view.channel.title
   if (view.kind === 'message') return 'Pegas 消息'
+  if (view.kind === 'approval') return view.approval.prompt.summary
   if (view.kind === 'runtime') return '执行环境详情'
   if (view.kind === 'rule') return view.title
   return view.title
+}
+
+function ApprovalDetail({
+  view,
+  onDecide,
+}: {
+  view: Extract<DrawerView, { kind: 'approval' }>
+  onDecide?: (
+    approvalId: string,
+    optionId: string,
+    rationale?: string,
+  ) => Promise<void>
+}) {
+  const pending = view.approval.status === 'pending'
+  const [selected, setSelected] = useState(
+    pending
+      ? view.approval.prompt.recommendedOptionId
+      : (view.approval.decision?.optionId ??
+          view.approval.prompt.recommendedOptionId),
+  )
+  const [rationale, setRationale] = useState(
+    pending ? '' : (view.approval.decision?.rationale ?? ''),
+  )
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState('')
+
+  async function submitDecision() {
+    if (!onDecide || !pending || submitting) return
+    setSubmitting(true)
+    setError('')
+    try {
+      await onDecide(view.approval.id, selected, rationale)
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : '提交决定失败，请重试。',
+      )
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="drawer-body">
+      <section className="approval-card">
+        <header>
+          <ShieldCheck size={20} />
+          <strong>{view.approval.prompt.summary}</strong>
+        </header>
+        <p>{view.approval.prompt.impact}</p>
+        <dl>
+          <Meta label="状态" value={approvalStatus(view.approval.status)} />
+          <Meta label="Action" value={actionStatus(view.action.status)} />
+          <Meta label="Run" value={view.approval.requestRunId} />
+        </dl>
+        {view.action.result && (
+          <pre className="approval-result">
+            {JSON.stringify(view.action.result, null, 2)}
+          </pre>
+        )}
+      </section>
+      <section className="detail-section">
+        <fieldset className="approval-options">
+          <legend>你的决定</legend>
+          {view.approval.prompt.options.map(option => (
+            <label className="approval-option" key={option.id}>
+              <input
+                checked={selected === option.id}
+                disabled={!pending || submitting}
+                name={`approval-${view.approval.id}`}
+                onChange={() => setSelected(option.id)}
+                type="radio"
+              />
+              <span>
+                <strong>
+                  {option.label}
+                  {option.id === view.approval.prompt.recommendedOptionId
+                    ? ' · 建议'
+                    : ''}
+                </strong>
+                {option.description && <small>{option.description}</small>}
+              </span>
+            </label>
+          ))}
+        </fieldset>
+        <label className="approval-rationale">
+          <span>补充说明（可选）</span>
+          <textarea
+            disabled={!pending || submitting}
+            onChange={event => setRationale(event.target.value)}
+            placeholder="告诉 Pegas 需要注意什么"
+            value={rationale}
+          />
+        </label>
+        {(error || view.decisionError) && (
+          <p className="settings-error" role="alert">
+            {error || view.decisionError}
+          </p>
+        )}
+      </section>
+      <footer className="drawer-footer">
+        {pending && onDecide ? (
+          <button
+            className="primary-button"
+            disabled={submitting}
+            onClick={() => void submitDecision()}
+            type="button"
+          >
+            {submitting ? '正在提交…' : '提交决定'}
+          </button>
+        ) : (
+          <span className="drawer-footnote">
+            {approvalFootnote(view.approval.status)}
+          </span>
+        )}
+      </footer>
+    </div>
+  )
+}
+
+function approvalFootnote(
+  status: Extract<DrawerView, { kind: 'approval' }>['approval']['status'],
+): string {
+  if (status === 'cancelled') return '此请求已取消，不会继续执行。'
+  if (status === 'rejected') return '已拒绝执行此动作。'
+  if (status === 'revision_requested') return '已要求修改，Pegas 会重新规划。'
+  if (status === 'approved') return '决定已保存，Pegas 会从持久恢复点继续。'
+  return '决定已记录，正在恢复执行状态。'
+}
+
+function actionStatus(
+  status: Extract<DrawerView, { kind: 'approval' }>['action']['status'],
+): string {
+  const labels = {
+    awaiting_approval: '等待授权',
+    authorized: '已授权，等待结果',
+    rejected: '未授权',
+    succeeded: '执行成功',
+    failed: '执行失败',
+    unknown: '结果未知，需核对',
+  } satisfies Record<
+    Extract<DrawerView, { kind: 'approval' }>['action']['status'],
+    string
+  >
+  return labels[status]
+}
+
+function approvalStatus(
+  status: Extract<DrawerView, { kind: 'approval' }>['approval']['status'],
+) {
+  const labels: Record<typeof status, string> = {
+    pending: '等待决定',
+    decision_recorded: '决定已记录',
+    approved: '已批准',
+    rejected: '已拒绝',
+    revision_requested: '需要修改',
+    cancelled: '已取消',
+  }
+  return labels[status]
 }
 
 function MessageDetail({

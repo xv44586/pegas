@@ -14,7 +14,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { App, formatRelativeTime } from './App'
 import { DetailDrawer } from './sealed/DetailDrawer'
 import { Onboarding } from './sealed/Onboarding'
-import type { Run, SettingsResponse, Snapshot, WorkChannel } from './types'
+import { unresolvedAttentionMessages } from './sealed/types'
+import type {
+  Approval,
+  DurableAction,
+  Run,
+  SettingsResponse,
+  Snapshot,
+  WorkChannel,
+} from './types'
 
 const channel: WorkChannel = {
   id: 'task-1',
@@ -130,6 +138,42 @@ const settingsResponse: SettingsResponse = {
     model: '',
     hasApiKey: false,
   },
+}
+
+function approvalFixture(id: string): Approval {
+  return {
+    id,
+    taskId: channel.id,
+    actionId: `action-${id}`,
+    requestRunId: run.id,
+    status: 'pending',
+    prompt: {
+      summary: '发布候选版本',
+      impact: '这会把候选版本公开给所有用户。',
+      recommendedOptionId: 'reject',
+      options: [
+        { id: 'approve', label: '发布', kind: 'approve' },
+        { id: 'reject', label: '暂不发布', kind: 'reject' },
+      ],
+    },
+    createdAt: '2026-11-20T00:00:00.000Z',
+  }
+}
+
+function actionFixture(approval: Approval): DurableAction {
+  return {
+    id: approval.actionId,
+    taskId: approval.taskId,
+    requestRunId: approval.requestRunId,
+    kind: 'publish.release',
+    risk: 'high',
+    idempotencyKey: `action-${approval.id}`,
+    status: approval.status === 'pending' ? 'awaiting_approval' : 'authorized',
+    request: { release: 'v1' },
+    recoveryPoint: { step: 'before_publish' },
+    createdAt: approval.createdAt,
+    updatedAt: approval.resolvedAt ?? approval.createdAt,
+  }
 }
 
 function installFetch(
@@ -1139,6 +1183,582 @@ describe('sealed Pegas UI', () => {
     expect(screen.getByText('执行确实失败')).toBeTruthy()
   })
 
+  it('opens a structured Approval from the attention inbox', async () => {
+    const sourceMessage = snapshot.messages[0]
+    if (!sourceMessage) throw new Error('Expected an outbox message fixture')
+    const approval = approvalFixture('approval-attention')
+    const approvalMessage = {
+      ...sourceMessage,
+      payload: { type: 'approval.required', approvalId: approval.id },
+    }
+    installSnapshotFetch({ ...snapshot, messages: [approvalMessage] }, path => {
+      if (path.startsWith(`/v1/approvals/${approval.id}?`))
+        return Response.json({ approval })
+      if (path.startsWith(`/v1/actions/${approval.actionId}?`))
+        return Response.json({ action: actionFixture(approval) })
+      if (path.endsWith('/read'))
+        return Response.json({
+          message: {
+            ...approvalMessage,
+            readAt: '2026-11-20T00:01:00.000Z',
+          },
+        })
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '查看内容' }))
+    expect(await screen.findByText(approval.prompt.impact)).toBeTruthy()
+    expect(screen.getByRole('button', { name: '提交决定' })).toBeTruthy()
+  })
+
+  it('keeps a saved Approval decision when the Action refresh fails', async () => {
+    const sourceMessage = snapshot.messages[0]
+    if (!sourceMessage) throw new Error('Expected an outbox message fixture')
+    const pending = approvalFixture('approval-refresh-failure')
+    const resolved: Approval = {
+      ...pending,
+      status: 'approved',
+      resolvedAt: '2026-11-20T00:02:00.000Z',
+    }
+    const approvalMessage = {
+      ...sourceMessage,
+      payload: { type: 'approval.required', approvalId: pending.id },
+    }
+    let approvalReads = 0
+    let actionReads = 0
+    const intervalCallbacks: (() => void)[] = []
+    vi.spyOn(window, 'setInterval').mockImplementation(handler => {
+      if (typeof handler === 'function')
+        intervalCallbacks.push(handler as () => void)
+      return intervalCallbacks.length
+    })
+    installSnapshotFetch(
+      { ...snapshot, messages: [approvalMessage] },
+      (path, init) => {
+        if (path.startsWith(`/v1/approvals/${pending.id}?`)) {
+          approvalReads += 1
+          return Response.json({
+            approval: approvalReads === 1 ? pending : resolved,
+          })
+        }
+        if (path.startsWith(`/v1/actions/${pending.actionId}?`)) {
+          actionReads += 1
+          if (actionReads === 1)
+            return Response.json({ action: actionFixture(pending) })
+          if (actionReads === 2)
+            return Response.json(
+              { message: 'Action service unavailable' },
+              { status: 503 },
+            )
+          return Response.json({
+            action: { ...actionFixture(resolved), status: 'succeeded' },
+          })
+        }
+        if (
+          path === `/v1/approvals/${pending.id}/decisions` &&
+          init?.method === 'POST'
+        )
+          return Response.json({ approval: resolved })
+        if (path.endsWith('/read'))
+          return Response.json({
+            message: { ...approvalMessage, readAt: resolved.resolvedAt },
+          })
+        return undefined
+      },
+    )
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '查看内容' }))
+    fireEvent.click(await screen.findByRole('radio', { name: /^发布$/ }))
+    fireEvent.click(screen.getByRole('button', { name: '提交决定' }))
+
+    expect(
+      await screen.findByText('决定已保存，Pegas 会从持久恢复点继续。'),
+    ).toBeTruthy()
+    expect(
+      await screen.findByText(/决定已保存，但 Action 状态刷新失败/),
+    ).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '提交决定' })).toBeNull()
+
+    await act(async () => {
+      for (const callback of intervalCallbacks) callback()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(await screen.findByText('执行成功')).toBeTruthy()
+    expect(screen.queryByText(/决定已保存，但 Action 状态刷新失败/)).toBeNull()
+  })
+
+  it('replaces a local choice with the decision already saved elsewhere', async () => {
+    const sourceMessage = snapshot.messages[0]
+    if (!sourceMessage) throw new Error('Expected an outbox message fixture')
+    const pending = approvalFixture('approval-cross-device')
+    const remote: Approval = {
+      ...pending,
+      status: 'rejected',
+      resolvedAt: '2026-11-20T00:03:00.000Z',
+      decision: {
+        id: 'remote-decision',
+        approvalId: pending.id,
+        eventId: 'remote-event',
+        commandId: 'remote-command',
+        userId: 'owner',
+        optionId: 'reject',
+        kind: 'reject',
+        rationale: '另一台设备决定暂不发布',
+        decidedAt: '2026-11-20T00:03:00.000Z',
+        appliedAt: '2026-11-20T00:03:00.000Z',
+      },
+    }
+    const approvalMessage = {
+      ...sourceMessage,
+      payload: { type: 'approval.required', approvalId: pending.id },
+    }
+    let approvalReads = 0
+    let actionReads = 0
+    installSnapshotFetch(
+      { ...snapshot, messages: [approvalMessage] },
+      (path, init) => {
+        if (path.startsWith(`/v1/approvals/${pending.id}?`)) {
+          approvalReads += 1
+          return Response.json({
+            approval: approvalReads === 1 ? pending : remote,
+          })
+        }
+        if (path.startsWith(`/v1/actions/${pending.actionId}?`)) {
+          actionReads += 1
+          return Response.json({
+            action:
+              actionReads === 1
+                ? actionFixture(pending)
+                : { ...actionFixture(remote), status: 'rejected' },
+          })
+        }
+        if (
+          path === `/v1/approvals/${pending.id}/decisions` &&
+          init?.method === 'POST'
+        )
+          return Response.json(
+            { message: 'Approval has already been decided' },
+            { status: 409 },
+          )
+        if (path.endsWith('/read'))
+          return Response.json({
+            message: { ...approvalMessage, readAt: remote.resolvedAt },
+          })
+        return undefined
+      },
+    )
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '查看内容' }))
+    fireEvent.click(await screen.findByRole('radio', { name: /^发布$/ }))
+    fireEvent.change(screen.getByPlaceholderText('告诉 Pegas 需要注意什么'), {
+      target: { value: '本机尝试发布' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '提交决定' }))
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole<HTMLInputElement>('radio', { name: /暂不发布/ })
+          .checked,
+      ).toBe(true),
+    )
+    expect(
+      screen.getByPlaceholderText<HTMLTextAreaElement>(
+        '告诉 Pegas 需要注意什么',
+      ).value,
+    ).toBe('另一台设备决定暂不发布')
+    expect(screen.getByText('已拒绝执行此动作。')).toBeTruthy()
+    expect(screen.queryByText(/提交决定失败/)).toBeNull()
+  })
+
+  it('refreshes an open Approval when another device resolves it', async () => {
+    const sourceMessage = snapshot.messages[0]
+    if (!sourceMessage) throw new Error('Expected an outbox message fixture')
+    const pending = approvalFixture('approval-open-poll')
+    const remote: Approval = {
+      ...pending,
+      status: 'approved',
+      resolvedAt: '2026-11-20T00:04:00.000Z',
+      decision: {
+        id: 'polled-decision',
+        approvalId: pending.id,
+        eventId: 'polled-event',
+        commandId: 'polled-command',
+        userId: 'owner',
+        optionId: 'approve',
+        kind: 'approve',
+        decidedAt: '2026-11-20T00:04:00.000Z',
+        appliedAt: '2026-11-20T00:04:00.000Z',
+      },
+    }
+    const approvalMessage = {
+      ...sourceMessage,
+      payload: { type: 'approval.required', approvalId: pending.id },
+    }
+    let approvalReads = 0
+    let actionReads = 0
+    const intervalCallbacks: (() => void)[] = []
+    vi.spyOn(window, 'setInterval').mockImplementation(handler => {
+      if (typeof handler === 'function')
+        intervalCallbacks.push(handler as () => void)
+      return intervalCallbacks.length
+    })
+    installSnapshotFetch({ ...snapshot, messages: [approvalMessage] }, path => {
+      if (path.startsWith(`/v1/approvals/${pending.id}?`)) {
+        approvalReads += 1
+        return Response.json({
+          approval: approvalReads === 1 ? pending : remote,
+        })
+      }
+      if (path.startsWith(`/v1/actions/${pending.actionId}?`)) {
+        actionReads += 1
+        return Response.json({
+          action:
+            actionReads === 1
+              ? actionFixture(pending)
+              : { ...actionFixture(remote), status: 'succeeded' },
+        })
+      }
+      if (path.endsWith('/read'))
+        return Response.json({
+          message: { ...approvalMessage, readAt: remote.resolvedAt },
+        })
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '查看内容' }))
+    expect(await screen.findByRole('button', { name: '提交决定' })).toBeTruthy()
+
+    await act(async () => {
+      for (const callback of intervalCallbacks) callback()
+      await Promise.resolve()
+    })
+
+    expect(
+      await screen.findByText('决定已保存，Pegas 会从持久恢复点继续。'),
+    ).toBeTruthy()
+    expect(screen.getByText('执行成功')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '提交决定' })).toBeNull()
+  })
+
+  it('does not let a slower pending poll overwrite a resolved Approval', async () => {
+    const sourceMessage = snapshot.messages[0]
+    if (!sourceMessage) throw new Error('Expected an outbox message fixture')
+    const pending = approvalFixture('approval-poll-race')
+    const remote: Approval = {
+      ...pending,
+      status: 'approved',
+      resolvedAt: '2026-11-20T00:05:00.000Z',
+      decision: {
+        id: 'race-decision',
+        approvalId: pending.id,
+        eventId: 'race-event',
+        commandId: 'race-command',
+        userId: 'owner',
+        optionId: 'approve',
+        kind: 'approve',
+        decidedAt: '2026-11-20T00:05:00.000Z',
+        appliedAt: '2026-11-20T00:05:00.000Z',
+      },
+    }
+    const approvalMessage = {
+      ...sourceMessage,
+      payload: { type: 'approval.required', approvalId: pending.id },
+    }
+    let resolveStale: ((response: Response) => void) | undefined
+    const staleResponse = new Promise<Response>(resolve => {
+      resolveStale = resolve
+    })
+    let approvalReads = 0
+    let actionReads = 0
+    const intervalCallbacks: (() => void)[] = []
+    vi.spyOn(window, 'setInterval').mockImplementation(handler => {
+      if (typeof handler === 'function')
+        intervalCallbacks.push(handler as () => void)
+      return intervalCallbacks.length
+    })
+    installSnapshotFetch({ ...snapshot, messages: [approvalMessage] }, path => {
+      if (path.startsWith(`/v1/approvals/${pending.id}?`)) {
+        approvalReads += 1
+        if (approvalReads === 1) return Response.json({ approval: pending })
+        if (approvalReads === 2) return staleResponse
+        return Response.json({ approval: remote })
+      }
+      if (path.startsWith(`/v1/actions/${pending.actionId}?`)) {
+        actionReads += 1
+        return Response.json({
+          action:
+            actionReads === 1
+              ? actionFixture(pending)
+              : { ...actionFixture(remote), status: 'succeeded' },
+        })
+      }
+      if (path.endsWith('/read'))
+        return Response.json({
+          message: { ...approvalMessage, readAt: remote.resolvedAt },
+        })
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '查看内容' }))
+    expect(await screen.findByRole('button', { name: '提交决定' })).toBeTruthy()
+    const refreshApproval = intervalCallbacks.at(-1)
+    if (!refreshApproval) throw new Error('Expected Approval poll interval')
+
+    act(() => refreshApproval())
+    act(() => refreshApproval())
+
+    expect(
+      await screen.findByText('决定已保存，Pegas 会从持久恢复点继续。'),
+    ).toBeTruthy()
+    expect(screen.getByText('执行成功')).toBeTruthy()
+    resolveStale?.(Response.json({ approval: pending }))
+    await act(async () => Promise.resolve())
+    expect(screen.getByText('执行成功')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '提交决定' })).toBeNull()
+  })
+
+  it('does not let a stale post-decision Action refresh overwrite a poll', async () => {
+    const sourceMessage = snapshot.messages[0]
+    if (!sourceMessage) throw new Error('Expected an outbox message fixture')
+    const pending = approvalFixture('approval-decision-action-race')
+    const approved: Approval = {
+      ...pending,
+      status: 'approved',
+      resolvedAt: '2026-11-20T00:06:00.000Z',
+      decision: {
+        id: 'decision-action-race',
+        approvalId: pending.id,
+        eventId: 'decision-action-race-event',
+        commandId: 'decision-action-race-command',
+        userId: 'owner',
+        optionId: 'approve',
+        kind: 'approve',
+        decidedAt: '2026-11-20T00:06:00.000Z',
+        appliedAt: '2026-11-20T00:06:00.000Z',
+      },
+    }
+    const approvalMessage = {
+      ...sourceMessage,
+      payload: { type: 'approval.required', approvalId: pending.id },
+    }
+    let resolveStaleAction: ((response: Response) => void) | undefined
+    const staleActionResponse = new Promise<Response>(resolve => {
+      resolveStaleAction = resolve
+    })
+    let approvalReads = 0
+    let actionReads = 0
+    const intervalCallbacks: (() => void)[] = []
+    vi.spyOn(window, 'setInterval').mockImplementation(handler => {
+      if (typeof handler === 'function')
+        intervalCallbacks.push(handler as () => void)
+      return intervalCallbacks.length
+    })
+    installSnapshotFetch(
+      { ...snapshot, messages: [approvalMessage] },
+      (path, init) => {
+        if (path.startsWith(`/v1/approvals/${pending.id}?`)) {
+          approvalReads += 1
+          return Response.json({
+            approval: approvalReads === 1 ? pending : approved,
+          })
+        }
+        if (
+          path === `/v1/approvals/${pending.id}/decisions` &&
+          init?.method === 'POST'
+        )
+          return Response.json({ approval: approved })
+        if (path.startsWith(`/v1/actions/${pending.actionId}?`)) {
+          actionReads += 1
+          if (actionReads === 1)
+            return Response.json({ action: actionFixture(pending) })
+          if (actionReads === 2) return staleActionResponse
+          return Response.json({
+            action: { ...actionFixture(approved), status: 'succeeded' },
+          })
+        }
+        if (path.endsWith('/read'))
+          return Response.json({
+            message: { ...approvalMessage, readAt: approved.resolvedAt },
+          })
+        return undefined
+      },
+    )
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '查看内容' }))
+    fireEvent.click(await screen.findByRole('radio', { name: /^发布$/ }))
+    fireEvent.click(screen.getByRole('button', { name: '提交决定' }))
+    expect(
+      await screen.findByText('决定已保存，Pegas 会从持久恢复点继续。'),
+    ).toBeTruthy()
+    await waitFor(() => expect(actionReads).toBe(2))
+    await act(async () => {
+      for (const callback of intervalCallbacks) callback()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(approvalReads).toBe(2))
+    await waitFor(() => expect(actionReads).toBe(3))
+    expect(await screen.findByText('执行成功')).toBeTruthy()
+    resolveStaleAction?.(
+      Response.json({
+        action: { ...actionFixture(approved), status: 'authorized' },
+      }),
+    )
+    await act(async () => Promise.resolve())
+    expect(screen.getByText('执行成功')).toBeTruthy()
+  })
+
+  it('ignores a stale Approval response after another item opens', async () => {
+    const sourceMessage = snapshot.messages[0]
+    if (!sourceMessage) throw new Error('Expected an outbox message fixture')
+    const first = approvalFixture('approval-slow')
+    const second: Approval = {
+      ...approvalFixture('approval-fast'),
+      prompt: {
+        ...approvalFixture('approval-fast').prompt,
+        summary: '快速审批',
+      },
+    }
+    let resolveFirst: ((response: Response) => void) | undefined
+    const firstResponse = new Promise<Response>(resolve => {
+      resolveFirst = resolve
+    })
+    const firstMessage = {
+      ...sourceMessage,
+      id: 'message-slow',
+      payload: {
+        type: 'approval.required',
+        approvalId: first.id,
+        summary: '慢速审批',
+      },
+    }
+    const secondMessage = {
+      ...sourceMessage,
+      id: 'message-fast',
+      payload: {
+        type: 'approval.required',
+        approvalId: second.id,
+        summary: '快速审批',
+      },
+    }
+    installSnapshotFetch(
+      { ...snapshot, messages: [firstMessage, secondMessage] },
+      path => {
+        if (path.startsWith(`/v1/approvals/${first.id}?`)) return firstResponse
+        if (path.startsWith(`/v1/approvals/${second.id}?`))
+          return Response.json({ approval: second })
+        if (path.startsWith(`/v1/actions/${second.actionId}?`))
+          return Response.json({ action: actionFixture(second) })
+        if (path.endsWith('/read'))
+          return Response.json({
+            message: { ...secondMessage, readAt: run.updatedAt },
+          })
+        return undefined
+      },
+    )
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    const slowArticle = screen.getByText('慢速审批').closest('article')
+    const fastArticle = screen.getByText('快速审批').closest('article')
+    if (!slowArticle || !fastArticle) throw new Error('Expected attention rows')
+    fireEvent.click(
+      within(slowArticle).getByRole('button', { name: '查看内容' }),
+    )
+    fireEvent.click(
+      within(fastArticle).getByRole('button', { name: '查看内容' }),
+    )
+    expect(
+      await screen.findByRole('heading', { name: '快速审批' }),
+    ).toBeTruthy()
+    resolveFirst?.(Response.json({ approval: first }))
+    await act(async () => Promise.resolve())
+    expect(screen.getByRole('heading', { name: '快速审批' })).toBeTruthy()
+    expect(
+      screen.queryByRole('heading', { name: first.prompt.summary }),
+    ).toBeNull()
+  })
+
+  it.each([
+    [401, 'Unauthorized', '连接到 Pegas'],
+    [503, '审批服务暂时不可用', '审批服务暂时不可用'],
+  ] as const)(
+    'surfaces Approval detail HTTP %s failures',
+    async (status, message, expected) => {
+      const sourceMessage = snapshot.messages[0]
+      if (!sourceMessage) throw new Error('Expected an outbox message fixture')
+      const approvalMessage = {
+        ...sourceMessage,
+        payload: {
+          type: 'approval.required',
+          approvalId: `approval-error-${String(status)}`,
+        },
+      }
+      const fetchMock = installSnapshotFetch(
+        { ...snapshot, messages: [approvalMessage] },
+        path => {
+          if (path.startsWith('/v1/approvals/'))
+            return Response.json({ message }, { status })
+          if (path.endsWith('/read'))
+            return Response.json({
+              message: {
+                ...approvalMessage,
+                readAt: '2026-11-20T00:01:00.000Z',
+              },
+            })
+          return undefined
+        },
+      )
+      render(<App />)
+      fireEvent.click(
+        within(await screen.findByLabelText('主导航')).getByRole('button', {
+          name: /待你处理/,
+        }),
+      )
+      fireEvent.click(screen.getByRole('button', { name: '查看内容' }))
+      expect(await screen.findByText(expected)).toBeTruthy()
+      expect(
+        fetchMock.mock.calls.some(
+          ([path]) => typeof path === 'string' && path.endsWith('/read'),
+        ),
+      ).toBe(false)
+    },
+  )
+
   it('restores a URL-backed attention detail and preserves its address', async () => {
     window.history.replaceState({}, '', '/?view=outbox&outbox=message-1')
     installFetch()
@@ -1423,8 +2043,7 @@ describe('sealed Pegas UI', () => {
       />,
     )
     expect(screen.getByText('欢迎使用 Pegas')).toBeTruthy()
-    expect(screen.getByText(/确认能力尚未接入/)).toBeTruthy()
-    expect(screen.queryByText(/执行前会请求确认/)).toBeNull()
+    expect(screen.getByText(/高风险 Action 会持久等待/)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: /继续/ }))
     expect(screen.getByText('连接模型服务')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: /继续/ }))
@@ -1632,6 +2251,188 @@ describe('sealed Pegas UI', () => {
     )
     expect(screen.queryByText('正在并行处理')).toBeNull()
     expect(screen.queryByText('已转交给 Pegas')).toBeNull()
+  })
+
+  it('renders a structured Approval and submits one explicit decision', async () => {
+    const approval = approvalFixture('approval-1')
+    const onDecide = vi.fn(() => Promise.resolve())
+    render(
+      <DetailDrawer
+        onChange={vi.fn()}
+        onClose={vi.fn()}
+        onDecideApproval={onDecide}
+        onRetry={vi.fn()}
+        view={{
+          kind: 'approval',
+          approval,
+          action: actionFixture(approval),
+          message: {
+            id: 'approval-message',
+            userId: 'owner',
+            taskId: channel.id,
+            status: 'sent',
+            payload: { type: 'approval.required', approvalId: approval.id },
+            createdAt: approval.createdAt,
+          },
+        }}
+      />,
+    )
+
+    expect(screen.getByText(approval.prompt.impact)).toBeTruthy()
+    expect(
+      screen.getByRole<HTMLInputElement>('radio', { name: /暂不发布/ }).checked,
+    ).toBe(true)
+    fireEvent.click(screen.getByRole('radio', { name: /^发布$/ }))
+    fireEvent.change(screen.getByPlaceholderText('告诉 Pegas 需要注意什么'), {
+      target: { value: '先确认回滚开关' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '提交决定' }))
+    await waitFor(() =>
+      expect(onDecide).toHaveBeenCalledWith(
+        approval.id,
+        'approve',
+        '先确认回滚开关',
+      ),
+    )
+  })
+
+  it('resets Approval form state when a different Approval opens', () => {
+    const first = approvalFixture('approval-first')
+    const second: Approval = {
+      ...approvalFixture('approval-second'),
+      prompt: {
+        ...approvalFixture('approval-second').prompt,
+        summary: '删除旧备份',
+        recommendedOptionId: 'approve',
+      },
+    }
+    const message = {
+      id: 'approval-message',
+      userId: 'owner',
+      taskId: channel.id,
+      status: 'sent' as const,
+      payload: { type: 'approval.required', approvalId: first.id },
+      createdAt: first.createdAt,
+    }
+    const { rerender } = render(
+      <DetailDrawer
+        onChange={vi.fn()}
+        onClose={vi.fn()}
+        onDecideApproval={vi.fn(() => Promise.resolve())}
+        onRetry={vi.fn()}
+        view={{
+          kind: 'approval',
+          approval: first,
+          action: actionFixture(first),
+          message,
+        }}
+      />,
+    )
+    fireEvent.click(screen.getByRole('radio', { name: /^发布$/ }))
+    fireEvent.change(screen.getByPlaceholderText('告诉 Pegas 需要注意什么'), {
+      target: { value: '不要带到下一条审批' },
+    })
+
+    rerender(
+      <DetailDrawer
+        onChange={vi.fn()}
+        onClose={vi.fn()}
+        onDecideApproval={vi.fn(() => Promise.resolve())}
+        onRetry={vi.fn()}
+        view={{
+          kind: 'approval',
+          approval: second,
+          action: actionFixture(second),
+          message: {
+            ...message,
+            id: 'approval-message-second',
+            payload: { type: 'approval.required', approvalId: second.id },
+          },
+        }}
+      />,
+    )
+
+    expect(
+      screen.getByRole<HTMLInputElement>('radio', { name: /^发布/ }).checked,
+    ).toBe(true)
+    expect(
+      screen.getByPlaceholderText<HTMLTextAreaElement>(
+        '告诉 Pegas 需要注意什么',
+      ).value,
+    ).toBe('')
+  })
+
+  it('reopens a resolved Approval with the saved decision and Action outcome', () => {
+    const pending = approvalFixture('approval-resolved')
+    const approval: Approval = {
+      ...pending,
+      status: 'approved',
+      resolvedAt: '2026-11-20T00:05:00.000Z',
+      decision: {
+        id: 'decision-resolved',
+        approvalId: pending.id,
+        eventId: 'event-resolved',
+        commandId: 'command-resolved',
+        userId: 'owner',
+        optionId: 'approve',
+        kind: 'approve',
+        rationale: '先保留旧版本',
+        decidedAt: '2026-11-20T00:04:00.000Z',
+        appliedAt: '2026-11-20T00:05:00.000Z',
+      },
+    }
+    const action: DurableAction = {
+      ...actionFixture(approval),
+      status: 'succeeded',
+      result: { release: 'published' },
+    }
+    render(
+      <DetailDrawer
+        onChange={vi.fn()}
+        onClose={vi.fn()}
+        onRetry={vi.fn()}
+        view={{
+          kind: 'approval',
+          approval,
+          action,
+          message: {
+            id: 'approval-message-resolved',
+            userId: 'owner',
+            taskId: channel.id,
+            status: 'sent',
+            payload: { type: 'approval.required', approvalId: approval.id },
+            createdAt: approval.createdAt,
+          },
+        }}
+      />,
+    )
+
+    expect(
+      screen.getByRole<HTMLInputElement>('radio', { name: /^发布/ }).checked,
+    ).toBe(true)
+    expect(
+      screen.getByPlaceholderText<HTMLTextAreaElement>(
+        '告诉 Pegas 需要注意什么',
+      ).value,
+    ).toBe('先保留旧版本')
+    expect(screen.getByText('执行成功')).toBeTruthy()
+    expect(screen.getByText(/published/)).toBeTruthy()
+  })
+
+  it('removes resolved Approval notifications from unresolved attention', () => {
+    const sourceMessage = snapshot.messages[0]
+    if (!sourceMessage) throw new Error('Expected an outbox message fixture')
+    const required = {
+      ...sourceMessage,
+      id: 'approval-required',
+      payload: { type: 'approval.required', approvalId: 'approval-resolved' },
+    }
+    const resolved = {
+      ...sourceMessage,
+      id: 'approval-resolved-message',
+      payload: { type: 'approval.resolved', approvalId: 'approval-resolved' },
+    }
+    expect(unresolvedAttentionMessages([required, resolved])).toEqual([])
   })
 
   it.each(['file', 'image', 'video', 'web'] as const)(

@@ -11,11 +11,67 @@ import { RuleBasedTaskRouter } from '../src/router/router.js'
 import { PegasStore } from '../src/storage/sqlite-store.js'
 import {
   executeClaimedRun,
+  localControlPlaneBaseUrl,
   processNextEvent,
   RoutingEventHandler,
 } from '../src/worker/processor.js'
 
 describe('event and run processing', () => {
+  it('keeps the Run capability transport on loopback', () => {
+    expect(localControlPlaneBaseUrl('127.0.0.1', 4317)).toBe(
+      'http://127.0.0.1:4317',
+    )
+    expect(localControlPlaneBaseUrl('localhost', 4317)).toBe(
+      'http://localhost:4317',
+    )
+    expect(localControlPlaneBaseUrl('::1', 4317)).toBe('http://[::1]:4317')
+    expect(localControlPlaneBaseUrl('0.0.0.0', 4317)).toBe(
+      'http://127.0.0.1:4317',
+    )
+    expect(localControlPlaneBaseUrl('::', 4317)).toBe('http://[::1]:4317')
+    expect(() => localControlPlaneBaseUrl('192.168.1.20', 4317)).toThrow(
+      /loopback transport/,
+    )
+  })
+
+  it('passes the active Run capability to the Executor', async () => {
+    const store = new PegasStore(':memory:')
+    const executor = new CapabilityCapturingExecutor()
+    store.enqueueEvent({
+      userId: 'user-1',
+      type: 'user.message',
+      source: 'web',
+      payload: { text: 'Publish the protected release' },
+    })
+    await processNextEvent(
+      store,
+      new RoutingEventHandler(new RuleBasedTaskRouter(), executor.name),
+      'worker-capability',
+    )
+    const claimed = store.claimNextRun('worker-capability')
+    if (!claimed) throw new Error('Expected a claimed Run')
+
+    await executeClaimedRun(
+      store,
+      executor,
+      claimed,
+      'worker-capability',
+      process.cwd(),
+      new AbortController().signal,
+      'http://127.0.0.1:4317',
+    )
+
+    expect(executor.input).toMatchObject({
+      runId: claimed.run.id,
+      taskId: claimed.task.id,
+      actionCapability: {
+        baseUrl: 'http://127.0.0.1:4317',
+        claimToken: claimed.claimToken,
+      },
+    })
+    store.close()
+  })
+
   it('routes a user message through a durable run', async () => {
     const store = new PegasStore(':memory:')
     store.enqueueEvent({
@@ -52,6 +108,7 @@ describe('event and run processing', () => {
       'worker-1',
       process.cwd(),
       new AbortController().signal,
+      'http://127.0.0.1:4317',
     )
 
     const completedRuns = store.listRuns()
@@ -99,6 +156,7 @@ describe('event and run processing', () => {
       'worker-goal',
       process.cwd(),
       new AbortController().signal,
+      'http://127.0.0.1:4317',
     )
 
     expect(store.listRuns(task.id)).toMatchObject([{ status: 'waiting' }])
@@ -156,6 +214,7 @@ describe('event and run processing', () => {
       'worker-review',
       process.cwd(),
       new AbortController().signal,
+      'http://127.0.0.1:4317',
     )
     expect(store.findTask(task.id, 'user-1')?.status).toBe('completed')
     expect(store.listRuns(task.id)).toMatchObject([{ status: 'completed' }])
@@ -199,6 +258,7 @@ describe('event and run processing', () => {
       'worker-evidence',
       process.cwd(),
       new AbortController().signal,
+      'http://127.0.0.1:4317',
     )
 
     expect(store.listWorkerReports(claimed.run.id, 'user-1')).toMatchObject([
@@ -233,6 +293,7 @@ describe('event and run processing', () => {
       'worker-1',
       process.cwd(),
       new AbortController().signal,
+      'http://127.0.0.1:4317',
     )
     const task = store.listTasks('user-1')[0]
     if (!task) throw new Error('Expected the task')
@@ -284,6 +345,7 @@ describe('event and run processing', () => {
       'worker-1',
       process.cwd(),
       new AbortController().signal,
+      'http://127.0.0.1:4317',
     )
 
     expect(store.listOutbox('user-1')).toMatchObject([
@@ -324,6 +386,7 @@ describe('event and run processing', () => {
       'worker-1',
       process.cwd(),
       new AbortController().signal,
+      'http://127.0.0.1:4317',
     )
 
     expect(store.listModelUsage('user-1', claimed.task.id)).toMatchObject({
@@ -372,6 +435,7 @@ describe('event and run processing', () => {
       'worker-1',
       process.cwd(),
       shutdown.signal,
+      'http://127.0.0.1:4317',
     )
     shutdown.abort(new Error('worker runtime stopped'))
     await execution
@@ -396,6 +460,19 @@ class AcknowledgingExecutor implements RunExecutor {
     return Promise.resolve({
       executorRef: 'session-ack',
       output: 'Review complete',
+    })
+  }
+}
+
+class CapabilityCapturingExecutor implements RunExecutor {
+  readonly name = 'capability-capturing-test'
+  input?: ExecutorInput
+
+  execute(input: ExecutorInput): Promise<ExecutorResult> {
+    this.input = input
+    return Promise.resolve({
+      executorRef: 'session-capability',
+      output: 'Protected release handled',
     })
   }
 }

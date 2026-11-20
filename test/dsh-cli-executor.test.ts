@@ -30,8 +30,48 @@ describe('DshCliExecutor', () => {
         PEGAS_PRIVACY_HMAC_KEY: 'privacy',
         PEGAS_MODEL_API_KEY: 'model',
         PEGAS_SPEECH_API_KEY: 'speech',
+        PEGAS_RUN_CLAIM_TOKEN: 'stale-run-claim',
+        PEGAS_RUN_ID: 'stale-run',
+        PEGAS_TASK_ID: 'stale-task',
+        PEGAS_CONTROL_PLANE_URL: 'http://stale.example',
       }),
     ).toEqual({ PATH: '/usr/bin', DSH_API_KEY: 'executor-owned' })
+  })
+
+  it('exposes only the active Run capability to the Executor process', async () => {
+    const command = fakeDsh(`
+console.log(JSON.stringify({
+  type: 'final',
+  sessionId: 'session-capability',
+  text: JSON.stringify({
+    baseUrl: process.env.PEGAS_CONTROL_PLANE_URL,
+    runId: process.env.PEGAS_RUN_ID,
+    taskId: process.env.PEGAS_TASK_ID,
+    claimToken: process.env.PEGAS_RUN_CLAIM_TOKEN,
+    apiToken: process.env.PEGAS_API_TOKEN
+  }),
+  reason: { kind: 'completed' }
+}))
+`)
+    const executor = new DshCliExecutor({ command })
+
+    const result = await executor.execute({
+      runId: 'run-current',
+      taskId: 'task-current',
+      prompt: 'perform a protected action',
+      workingDirectory: process.cwd(),
+      actionCapability: {
+        baseUrl: 'http://127.0.0.1:4317',
+        claimToken: 'current-run-claim',
+      },
+    })
+
+    expect(JSON.parse(result.output)).toEqual({
+      baseUrl: 'http://127.0.0.1:4317',
+      runId: 'run-current',
+      taskId: 'task-current',
+      claimToken: 'current-run-claim',
+    })
   })
 
   it('accepts only a completed final event and captures the session id', async () => {

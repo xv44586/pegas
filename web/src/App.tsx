@@ -17,9 +17,10 @@ import { AppShell, GlobalSearch } from './sealed/Shell'
 import { type ReviewFixture, UiReviewHarness } from './sealed/UiReviewHarness'
 import {
   emptySnapshot,
-  isAttentionMessage,
+  approvalIdFromMessage,
   latestRunForTask,
   runIdFromMessage,
+  unresolvedAttentionMessages,
   type AppData,
   type AppPage,
   type DrawerView,
@@ -27,6 +28,7 @@ import {
   type ThemeChoice,
 } from './sealed/types'
 import type {
+  Approval,
   DshModelCatalog,
   DshModelCatalogItem,
   ModelProviderDraft,
@@ -77,6 +79,8 @@ export function App() {
   const usageRequestRef = useRef(0)
   const configurationRequestRef = useRef(0)
   const taskDrawerRequestRef = useRef(new Map<string, number>())
+  const attentionRequestRef = useRef(0)
+  const approvalProjectionRequestRef = useRef(0)
 
   const loadSnapshot = useCallback(async () => {
     const requestId = snapshotRequestRef.current + 1
@@ -306,6 +310,7 @@ export function App() {
     view: DrawerView,
     options: { rememberTrigger?: boolean; updateLocation?: boolean } = {},
   ) {
+    attentionRequestRef.current += 1
     if (options.rememberTrigger !== false) rememberFocus()
     setDrawer(enrichDrawer(view))
     if (view.kind === 'task') {
@@ -324,6 +329,7 @@ export function App() {
     }
   }
   function closeDrawer() {
+    attentionRequestRef.current += 1
     const url = new URL(window.location.href)
     if (url.searchParams.has('channel') || url.searchParams.has('task')) {
       url.searchParams.delete('channel')
@@ -366,6 +372,7 @@ export function App() {
   }
 
   const openDrawerChannelId = drawer?.kind === 'task' ? drawer.channel.id : ''
+  const openApprovalId = drawer?.kind === 'approval' ? drawer.approval.id : ''
   useEffect(() => {
     if (!openDrawerChannelId) return
     const interval = window.setInterval(
@@ -376,7 +383,41 @@ export function App() {
   }, [loadTaskDrawer, openDrawerChannelId])
 
   useEffect(() => {
+    if (!openApprovalId) return
+    let cancelled = false
+    const refresh = async () => {
+      const requestId = approvalProjectionRequestRef.current + 1
+      approvalProjectionRequestRef.current = requestId
+      try {
+        const approval = await api.approval(openApprovalId)
+        if (requestId !== approvalProjectionRequestRef.current) return
+        const action = await api.action(approval.actionId)
+        if (cancelled || requestId !== approvalProjectionRequestRef.current)
+          return
+        setDrawer(current =>
+          current?.kind === 'approval' && current.approval.id === openApprovalId
+            ? current.approval.status !== 'pending' &&
+              approval.status === 'pending'
+              ? current
+              : { ...current, approval, action, decisionError: undefined }
+            : current,
+        )
+      } catch {
+        // Keep the last authoritative projection visible during transient polls.
+      }
+    }
+    const interval = window.setInterval(() => void refresh(), 5_000)
+    return () => {
+      cancelled = true
+      approvalProjectionRequestRef.current += 1
+      window.clearInterval(interval)
+    }
+  }, [api, openApprovalId])
+
+  useEffect(() => {
     const restorePage = () => {
+      const attentionRequestId = attentionRequestRef.current + 1
+      attentionRequestRef.current = attentionRequestId
       setPage(pageFromLocation())
       setSettingsSection(settingsSectionFromLocation())
       const messageId = new URLSearchParams(window.location.search).get(
@@ -384,7 +425,7 @@ export function App() {
       )
       const message = data.snapshot.messages.find(item => item.id === messageId)
       if (message) {
-        restoreAttentionDrawer(message)
+        void restoreAttentionDrawer(message, attentionRequestId)
         return
       }
       const parameters = new URLSearchParams(window.location.search)
@@ -500,6 +541,8 @@ export function App() {
   }
 
   async function openAttentionMessage(message: OutboxMessage) {
+    const requestId = attentionRequestRef.current + 1
+    attentionRequestRef.current = requestId
     rememberFocus()
     const url = new URL(window.location.href)
     url.searchParams.set('view', 'outbox')
@@ -509,27 +552,57 @@ export function App() {
       '',
       `${url.pathname}${url.search}${url.hash}`,
     )
-    restoreAttentionDrawer(message)
+    const restored = await restoreAttentionDrawer(message, requestId)
+    if (!restored) return
     if (message.readAt) return
     try {
       await markRead(message)
     } catch (caught) {
-      if (caught instanceof ApiError && caught.status === 401)
-        setUnauthorized(true)
-      else
-        setError(
-          caught instanceof Error ? caught.message : '标记已读失败，请重试。',
-        )
+      handleAttentionError(caught)
     }
   }
 
-  function restoreAttentionDrawer(message: OutboxMessage) {
+  function handleAttentionError(caught: unknown) {
+    if (caught instanceof ApiError && caught.status === 401)
+      setUnauthorized(true)
+    else
+      setError(
+        caught instanceof Error ? caught.message : '标记已读失败，请重试。',
+      )
+  }
+
+  async function restoreAttentionDrawer(
+    message: OutboxMessage,
+    requestId: number,
+  ): Promise<boolean> {
+    const approvalId = approvalIdFromMessage(message)
+    if (approvalId) {
+      try {
+        const approval = await api.approval(approvalId)
+        if (requestId !== attentionRequestRef.current) return false
+        const action = await api.action(approval.actionId)
+        if (requestId !== attentionRequestRef.current) return false
+        setDrawer({ kind: 'approval', approval, action, message })
+        return true
+      } catch (caught) {
+        if (requestId !== attentionRequestRef.current) return false
+        if (caught instanceof ApiError && caught.status === 401)
+          setUnauthorized(true)
+        else
+          setError(
+            caught instanceof Error
+              ? caught.message
+              : '读取审批详情失败，请重试。',
+          )
+        return false
+      }
+    }
     const channel = data.snapshot.channels.find(
       item => item.id === message.taskId,
     )
     if (!channel) {
       setDrawer({ kind: 'message', message })
-      return
+      return true
     }
     const selectedRunId = runIdFromMessage(message)
     setDrawer(
@@ -543,6 +616,7 @@ export function App() {
       }),
     )
     void loadTaskDrawer(channel.id)
+    return true
   }
 
   useEffect(() => {
@@ -594,9 +668,9 @@ export function App() {
     isDark,
     onOpenDrawer: openDrawer,
   }
-  const unreadCount = data.snapshot.messages.filter(
-    message => !message.readAt && isAttentionMessage(message),
-  ).length
+  const unreadCount = unresolvedAttentionMessages(
+    data.snapshot.messages,
+  ).filter(message => !message.readAt).length
   const selectedAgentProvider =
     data.settings?.settings.agentModelMode === 'override'
       ? data.settings.settings.agentModelProvider
@@ -771,6 +845,101 @@ export function App() {
                 )
                 ?.focus(),
             )
+          }}
+          onDecideApproval={async (approvalId, optionId, rationale) => {
+            approvalProjectionRequestRef.current += 1
+            let approval: Approval
+            try {
+              approval = await api.decideApproval(
+                approvalId,
+                optionId,
+                rationale,
+              )
+            } catch (caught) {
+              let refreshedApproval: Approval
+              try {
+                refreshedApproval = await api.approval(approvalId)
+              } catch {
+                throw caught
+              }
+              if (refreshedApproval.status === 'pending') throw caught
+              approvalProjectionRequestRef.current += 1
+              setDrawer(current =>
+                current?.kind === 'approval' &&
+                current.approval.id === approvalId
+                  ? { ...current, approval: refreshedApproval }
+                  : current,
+              )
+              const actionRequestId = approvalProjectionRequestRef.current
+              try {
+                const refreshedAction = await api.action(
+                  refreshedApproval.actionId,
+                )
+                if (actionRequestId !== approvalProjectionRequestRef.current)
+                  return
+                setDrawer(current =>
+                  current?.kind === 'approval' &&
+                  current.approval.id === approvalId
+                    ? {
+                        ...current,
+                        approval: refreshedApproval,
+                        action: refreshedAction,
+                      }
+                    : current,
+                )
+              } catch (refreshError) {
+                if (actionRequestId !== approvalProjectionRequestRef.current)
+                  return
+                const message =
+                  refreshError instanceof Error
+                    ? `决定已保存，但 Action 状态刷新失败：${refreshError.message}`
+                    : '决定已保存，但 Action 状态刷新失败，请稍后重试。'
+                setDrawer(current =>
+                  current?.kind === 'approval' &&
+                  current.approval.id === approvalId
+                    ? { ...current, decisionError: message }
+                    : current,
+                )
+                void loadSnapshot().catch(handleAttentionError)
+                return
+              }
+              void loadSnapshot().catch(handleAttentionError)
+              return
+            }
+            approvalProjectionRequestRef.current += 1
+            setDrawer(current =>
+              current?.kind === 'approval' && current.approval.id === approvalId
+                ? { ...current, approval }
+                : current,
+            )
+            const actionRequestId = approvalProjectionRequestRef.current
+            try {
+              const action = await api.action(approval.actionId)
+              if (actionRequestId !== approvalProjectionRequestRef.current)
+                return
+              setDrawer(current =>
+                current?.kind === 'approval' &&
+                current.approval.id === approvalId
+                  ? { ...current, approval, action }
+                  : current,
+              )
+            } catch (caught) {
+              if (actionRequestId !== approvalProjectionRequestRef.current)
+                return
+              const message =
+                caught instanceof Error
+                  ? `决定已保存，但 Action 状态刷新失败：${caught.message}`
+                  : '决定已保存，但 Action 状态刷新失败，请稍后重试。'
+              setDrawer(current =>
+                current?.kind === 'approval' &&
+                current.approval.id === approvalId
+                  ? { ...current, decisionError: message }
+                  : current,
+              )
+              void loadSnapshot().catch(handleAttentionError)
+              return
+            }
+            void loadSnapshot().catch(handleAttentionError)
           }}
           onRetry={async run => {
             const successor = await api.retryRun(run.id)

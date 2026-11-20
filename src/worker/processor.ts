@@ -5,10 +5,24 @@ import type {
 } from '../core/domain.js'
 import type { RunExecutor } from '../executor/executor.js'
 import type { TaskRouter } from '../router/router.js'
-import type { PegasStore } from '../storage/sqlite-store.js'
+import {
+  TaskActionBlockedError,
+  type PegasStore,
+} from '../storage/sqlite-store.js'
 
 export interface EventHandler {
   handle(event: InboxEvent, store: PegasStore): Promise<void>
+}
+
+export function localControlPlaneBaseUrl(host: string, port: number): string {
+  if (host === '0.0.0.0') return `http://127.0.0.1:${String(port)}`
+  if (host === '::') return `http://[::1]:${String(port)}`
+  if (host === '127.0.0.1' || host === 'localhost')
+    return `http://${host}:${String(port)}`
+  if (host === '::1') return `http://[::1]:${String(port)}`
+  throw new Error(
+    'Run claim capability requires a loopback transport; bind PEGAS_API_HOST to a loopback or wildcard address',
+  )
 }
 
 export class RoutingEventHandler implements EventHandler {
@@ -29,6 +43,10 @@ export class RoutingEventHandler implements EventHandler {
   }
 
   async handle(event: InboxEvent, store: PegasStore): Promise<void> {
+    if (event.type === 'approval.decided') {
+      store.applyApprovalDecision(event)
+      return
+    }
     const decision = await this.#router.route(
       event,
       store.listTasks(event.userId),
@@ -55,6 +73,10 @@ export async function processNextEvent(
     await handler.handle(event, store)
     store.completeEvent(event.id, workerId)
   } catch (error) {
+    if (error instanceof TaskActionBlockedError) {
+      store.parkEventForBlockedAction(event.id, workerId, error.taskId)
+      return true
+    }
     const message = error instanceof Error ? error.message : String(error)
     store.failEvent(event.id, workerId, message)
   }
@@ -68,6 +90,7 @@ export async function executeClaimedRun(
   workerId: string,
   workingDirectory: string,
   signal: AbortSignal,
+  controlPlaneBaseUrl: string,
 ): Promise<void> {
   if (claimed.phase === 'report') {
     const goalRevision = claimed.run.goalRevision
@@ -117,6 +140,10 @@ export async function executeClaimedRun(
       taskId: claimed.task.id,
       prompt: claimed.run.input,
       workingDirectory,
+      actionCapability: {
+        baseUrl: controlPlaneBaseUrl,
+        claimToken: claimed.claimToken,
+      },
       ...(claimed.run.executorRef || claimed.run.resumeFromRef
         ? {
             resumeSessionId:
@@ -162,7 +189,11 @@ export async function executeClaimedRun(
   const persistedRun = store
     .listRuns(claimed.task.id)
     .find(run => run.id === claimed.run.id)
-  if (persistedRun?.goalRevision !== undefined) {
+  if (
+    persistedRun?.goalRevision !== undefined &&
+    persistedRun.status === 'waiting' &&
+    persistedRun.claimedBy === workerId
+  ) {
     const evidenceRefIds = store
       .listEvidenceRefs(
         claimed.task.id,

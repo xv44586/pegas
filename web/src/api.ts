@@ -1,6 +1,8 @@
 import type {
+  Approval,
   InboxEvent,
   ChannelTimeline,
+  DurableAction,
   DshModelCatalog,
   ModelCatalogItem,
   ModelUsageReport,
@@ -226,6 +228,44 @@ export class PegasApi {
     )
     if (!response.ok) await throwResponse(response)
     return ((await response.json()) as { message: OutboxMessage }).message
+  }
+
+  async approval(approvalId: string): Promise<Approval> {
+    const user = encodeURIComponent(this.#userId)
+    const response = await this.#get<{ approval: Approval }>(
+      `/v1/approvals/${encodeURIComponent(approvalId)}?userId=${user}`,
+    )
+    return response.approval
+  }
+
+  async action(actionId: string): Promise<DurableAction> {
+    const user = encodeURIComponent(this.#userId)
+    const response = await this.#get<{ action: DurableAction }>(
+      `/v1/actions/${encodeURIComponent(actionId)}?userId=${user}`,
+    )
+    return response.action
+  }
+
+  async decideApproval(
+    approvalId: string,
+    optionId: string,
+    rationale?: string,
+  ): Promise<Approval> {
+    const response = await fetch(
+      `/v1/approvals/${encodeURIComponent(approvalId)}/decisions`,
+      {
+        method: 'POST',
+        headers: this.#headers(true),
+        body: JSON.stringify({
+          userId: this.#userId,
+          commandId: crypto.randomUUID(),
+          optionId,
+          ...(rationale?.trim() ? { rationale: rationale.trim() } : {}),
+        }),
+      },
+    )
+    if (!response.ok) await throwResponse(response)
+    return ((await response.json()) as { approval: Approval }).approval
   }
 
   modelUsage(taskId?: string): Promise<ModelUsageReport> {

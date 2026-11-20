@@ -1,5 +1,7 @@
 import type {
+  Approval,
   ChannelTimeline,
+  DurableAction,
   ModelUsageReport,
   OutboxMessage,
   Run,
@@ -44,6 +46,13 @@ export type DrawerView =
     }
   | { kind: 'runtime'; run?: Run }
   | { kind: 'message'; message: OutboxMessage }
+  | {
+      kind: 'approval'
+      approval: Approval
+      action: DurableAction
+      message: OutboxMessage
+      decisionError?: string
+    }
   | { kind: 'rule'; title: string }
   | {
       kind: 'preview'
@@ -116,6 +125,7 @@ export type AttentionKind =
 export function attentionKind(message: OutboxMessage): AttentionKind {
   switch (payloadType(message.payload)) {
     case 'run.failed':
+    case 'action.failed':
       return 'failed'
     case 'run.completed':
     case 'review.ready':
@@ -128,6 +138,8 @@ export function attentionKind(message: OutboxMessage): AttentionKind {
     case 'goal.evidence_required':
     case 'run.blocked':
     case 'run.waiting':
+    case 'action.outcome_unknown':
+    case 'action.reconciliation_required':
       return 'input'
     default:
       return 'update'
@@ -138,10 +150,37 @@ export function isAttentionMessage(message: OutboxMessage): boolean {
   return attentionKind(message) !== 'update'
 }
 
+export function unresolvedAttentionMessages(
+  messages: readonly OutboxMessage[],
+): OutboxMessage[] {
+  const resolvedApprovalIds = new Set(
+    messages
+      .filter(message => payloadType(message.payload) === 'approval.resolved')
+      .map(approvalIdFromMessage)
+      .filter((id): id is string => Boolean(id)),
+  )
+  return messages.filter(message => {
+    if (!isAttentionMessage(message)) return false
+    if (attentionKind(message) !== 'approval') return true
+    const approvalId = approvalIdFromMessage(message)
+    return !approvalId || !resolvedApprovalIds.has(approvalId)
+  })
+}
+
 export function runIdFromMessage(message: OutboxMessage): string | undefined {
   if (!message.payload || typeof message.payload !== 'object') return undefined
   const runId = (message.payload as Record<string, unknown>).runId
   return typeof runId === 'string' && runId.trim() ? runId : undefined
+}
+
+export function approvalIdFromMessage(
+  message: OutboxMessage,
+): string | undefined {
+  if (!message.payload || typeof message.payload !== 'object') return undefined
+  const approvalId = (message.payload as Record<string, unknown>).approvalId
+  return typeof approvalId === 'string' && approvalId.trim()
+    ? approvalId
+    : undefined
 }
 
 export function latestRunForTask(

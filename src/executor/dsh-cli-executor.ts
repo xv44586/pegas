@@ -124,7 +124,17 @@ export class DshCliExecutor implements RunExecutor {
     ]
     const child = spawn(this.#command, arguments_, {
       cwd: input.workingDirectory,
-      env: executorEnvironment(process.env),
+      env: {
+        ...executorEnvironment(process.env),
+        ...(input.actionCapability
+          ? {
+              PEGAS_CONTROL_PLANE_URL: input.actionCapability.baseUrl,
+              PEGAS_RUN_ID: input.runId,
+              PEGAS_TASK_ID: input.taskId,
+              PEGAS_RUN_CLAIM_TOKEN: input.actionCapability.claimToken,
+            }
+          : {}),
+      },
       shell: false,
       stdio: ['pipe', 'pipe', 'pipe'],
     })
@@ -276,6 +286,10 @@ export function executorEnvironment(
     'PEGAS_PRIVACY_HMAC_KEY',
     'PEGAS_MODEL_API_KEY',
     'PEGAS_SPEECH_API_KEY',
+    'PEGAS_CONTROL_PLANE_URL',
+    'PEGAS_RUN_ID',
+    'PEGAS_TASK_ID',
+    'PEGAS_RUN_CLAIM_TOKEN',
   ])
   return Object.fromEntries(
     Object.entries(source).filter(([key]) => !protectedKeys.has(key)),
@@ -450,6 +464,16 @@ function executorPrompt(userInput: string): string {
 如果任务需要调用工具，在第一次实质工具调用前，先用一句简短自然的中文确认你将处理的具体对象和预期结果。这句话会原样展示给用户；说完立即继续执行，不要等待用户再次确认。先检查已有工具和权限，不要仅凭猜测声称缺少工具或要求安装工具。
 
 如果任务无需工具即可直接回答，就直接给出最终答案，不要额外发送形式化回执。后续普通执行进度不需要反复汇报；只在需要用户决策、遇到无法自行解决的阻塞或取得最终结果时面向用户输出。
+
+需要执行高风险或不可逆副作用时，使用进程环境中的 PEGAS_CONTROL_PLANE_URL、PEGAS_RUN_ID 和 PEGAS_RUN_CLAIM_TOKEN 调用 Pegas Approval API。claim token 只能作为 x-pegas-run-claim-token 请求头发送给该本机 Control Plane，不能输出到对话、日志、文件或第三方服务。
+
+创建 Approval：POST /v1/runs/:runId/approvals。下面是可直接序列化的合法请求体，必须替换各字段的实际值；options 至少两个且必须同时包含 approve 和 reject，recommendedOptionId 必须引用其中一个 option：
+{"action":{"kind":"publish.release","risk":"high","idempotencyKey":"stable-action-key","request":{"target":"actual-target"},"recoveryPoint":{"step":"before-side-effect"},"approval":{"summary":"准备执行的具体动作","impact":"可见影响与范围","recommendedOptionId":"approve","options":[{"id":"approve","label":"批准执行","kind":"approve"},{"id":"reject","label":"不执行","kind":"reject"}]}}}
+创建成功后不要执行副作用，立即结束当前 turn，等待 Pegas 恢复新 Run。
+
+恢复上下文会给出 actionId 和用户决定；只有 decision 为 approve 才执行副作用。随后向 POST /v1/actions/:actionId/outcomes 发送新 Run 的 claim header，以及合法请求体：
+{"commandId":"stable-outcome-key","status":"succeeded","result":{"summary":"actual-result"}}
+status 只能是 succeeded、failed 或 unknown。idempotencyKey 和 commandId 是网络重试键：同一逻辑操作的每次重试必须保持原键和完全相同的 payload；不能因响应丢失生成新键。
 </pegas_execution_contract>`
 }
 

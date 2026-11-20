@@ -6,6 +6,15 @@ import { DatabaseSync } from 'node:sqlite'
 import { systemClock, type Clock } from '../core/clock.js'
 import { assignWorkerIconId, isWorkerIconId } from '../brand/agent-icon.js'
 import type {
+  ActionOutcomeDraft,
+  ActionRequestDraft,
+  Approval,
+  ApprovalDecision,
+  ApprovalDecisionDraft,
+  ApprovalPrompt,
+  DurableAction,
+} from '../approval/approval.js'
+import type {
   ClaimedRun,
   ExecutionContext,
   InboxEvent,
@@ -525,6 +534,97 @@ CREATE INDEX worker_reports_by_run_sequence
 ON worker_reports (run_id, report_sequence);
 `
 
+const migration16 = `
+PRAGMA defer_foreign_keys = ON;
+
+CREATE TABLE actions_v16 (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES tasks(id),
+  run_id TEXT REFERENCES runs(id),
+  kind TEXT NOT NULL,
+  risk TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  status TEXT NOT NULL,
+  request_json TEXT NOT NULL,
+  result_json TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  resume_run_id TEXT REFERENCES runs(id),
+  recovery_point_json TEXT NOT NULL DEFAULT '{}',
+  request_claim_hash TEXT,
+  request_fingerprint TEXT,
+  protocol_version INTEGER NOT NULL DEFAULT 0
+);
+
+INSERT INTO actions_v16
+  (id, task_id, run_id, kind, risk, idempotency_key, status,
+   request_json, result_json, created_at, updated_at)
+SELECT id, task_id, run_id, kind, risk, idempotency_key, status,
+       request_json, result_json, created_at, updated_at
+FROM actions;
+
+CREATE TABLE approvals_v16 (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES tasks(id),
+  action_id TEXT NOT NULL UNIQUE REFERENCES actions_v16(id),
+  status TEXT NOT NULL,
+  prompt_json TEXT NOT NULL,
+  response_json TEXT,
+  created_at TEXT NOT NULL,
+  resolved_at TEXT,
+  user_id TEXT,
+  protocol_version INTEGER NOT NULL DEFAULT 0
+);
+
+INSERT INTO approvals_v16
+  (id, task_id, action_id, status, prompt_json, response_json,
+   created_at, resolved_at, user_id)
+SELECT approvals.id, approvals.task_id, approvals.action_id, approvals.status,
+       approvals.prompt_json, approvals.response_json, approvals.created_at,
+       approvals.resolved_at, tasks.user_id
+FROM approvals
+INNER JOIN tasks ON tasks.id = approvals.task_id;
+
+DROP TABLE approvals;
+DROP TABLE actions;
+ALTER TABLE actions_v16 RENAME TO actions;
+ALTER TABLE approvals_v16 RENAME TO approvals;
+
+CREATE INDEX actions_by_task_time ON actions (task_id, created_at DESC);
+CREATE UNIQUE INDEX actions_v1_idempotency_key
+ON actions (idempotency_key) WHERE protocol_version = 1;
+
+CREATE TABLE approval_decisions (
+  id TEXT PRIMARY KEY,
+  approval_id TEXT NOT NULL UNIQUE REFERENCES approvals(id),
+  event_id TEXT NOT NULL UNIQUE REFERENCES inbox_events(id),
+  command_id TEXT NOT NULL UNIQUE,
+  user_id TEXT NOT NULL,
+  option_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('approve','reject','revise')),
+  rationale TEXT,
+  decided_at TEXT NOT NULL,
+  applied_at TEXT
+);
+
+CREATE INDEX approvals_by_task_time ON approvals (task_id, created_at DESC);
+CREATE INDEX approvals_by_user_time
+ON approvals (user_id, created_at DESC, id DESC);
+CREATE INDEX approvals_by_user_status_time
+ON approvals (user_id, status, created_at DESC, id DESC);
+
+CREATE TABLE action_outcomes (
+  id TEXT PRIMARY KEY,
+  action_id TEXT NOT NULL UNIQUE REFERENCES actions(id),
+  run_id TEXT NOT NULL REFERENCES runs(id),
+  command_id TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL CHECK (status IN ('succeeded','failed','unknown')),
+  result_json TEXT NOT NULL,
+  claim_token_hash TEXT NOT NULL,
+  recorded_at TEXT NOT NULL
+);
+`
+
 interface InboxRow {
   id: string
   user_id: string
@@ -575,6 +675,61 @@ interface RunRow {
   execution_context_json: string | null
   created_at: string
   updated_at: string
+}
+
+interface ActionRow {
+  id: string
+  task_id: string
+  run_id: string
+  resume_run_id: string | null
+  kind: string
+  risk: DurableAction['risk']
+  idempotency_key: string
+  status: DurableAction['status']
+  request_json: string
+  recovery_point_json: string
+  result_json: string | null
+  request_claim_hash: string | null
+  request_fingerprint: string | null
+  created_at: string
+  updated_at: string
+}
+
+interface ApprovalRow {
+  id: string
+  user_id: string | null
+  task_id: string
+  action_id: string
+  status: Approval['status']
+  prompt_json: string
+  created_at: string
+  resolved_at: string | null
+}
+
+interface ApprovalDecisionRow {
+  id: string
+  approval_id: string
+  event_id: string
+  command_id: string
+  user_id: string
+  option_id: string
+  kind: ApprovalDecision['kind']
+  rationale: string | null
+  decided_at: string
+  applied_at: string | null
+}
+
+interface ApprovalProjectionRow extends ApprovalRow {
+  request_run_id: string
+  decision_id: string | null
+  decision_event_id: string | null
+  decision_command_id: string | null
+  decision_user_id: string | null
+  decision_option_id: string | null
+  decision_kind: ApprovalDecision['kind'] | null
+  decision_rationale: string | null
+  decision_decided_at: string | null
+  decision_applied_at: string | null
 }
 
 interface GoalContractRow {
@@ -770,6 +925,17 @@ export class SettingsRevisionConflictError extends Error {
 
 export class RunClaimError extends Error {}
 
+export class TaskActionBlockedError extends Error {
+  readonly taskId: string
+  readonly actionStatus: string
+
+  constructor(taskId: string, actionStatus: string) {
+    super(`Task cannot continue while Action status is ${actionStatus}`)
+    this.taskId = taskId
+    this.actionStatus = actionStatus
+  }
+}
+
 export class PegasStore {
   readonly #database: DatabaseSync
   readonly #clock: Clock
@@ -803,6 +969,7 @@ export class PegasStore {
     this.#migrate(13, migration13)
     this.#migrate(14, migration14)
     this.#migrate(15, migration15)
+    this.#migrate(16, migration16)
   }
 
   #backfillWorkerIconIds(): void {
@@ -1320,6 +1487,83 @@ export class PegasStore {
       .run(nextStatus, error, eventId, workerId)
   }
 
+  parkEventForBlockedAction(
+    eventId: string,
+    workerId: string,
+    taskId: string,
+  ): 'parked' | 'released' | 'failed' {
+    const now = this.#clock.now().toISOString()
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const event = this.#database
+        .prepare(
+          `SELECT user_id FROM inbox_events
+           WHERE id = ? AND status = 'processing' AND claimed_by = ?`,
+        )
+        .get(eventId, workerId) as { user_id: string } | undefined
+      if (!event)
+        throw new Error(`Worker ${workerId} does not own event ${eventId}`)
+      const task = this.#taskById(taskId)
+      if (task.userId !== event.user_id)
+        throw new Error('Task belongs to another user')
+      this.#database
+        .prepare(
+          `INSERT INTO task_events (event_id, task_id, relation, created_at)
+           VALUES (?, ?, 'blocked_action', ?)
+           ON CONFLICT(event_id) DO UPDATE SET
+             task_id = excluded.task_id,
+             relation = excluded.relation,
+             created_at = excluded.created_at`,
+        )
+        .run(eventId, taskId, now)
+      if (task.status === 'cancelled') {
+        this.#database
+          .prepare(
+            `UPDATE inbox_events
+             SET status = 'failed', claimed_by = NULL, lease_until = NULL,
+                 last_error = 'blocked_task_stopped'
+             WHERE id = ? AND claimed_by = ?`,
+          )
+          .run(eventId, workerId)
+        this.#database.exec('COMMIT')
+        return 'failed'
+      }
+      const blockingAction = this.#database
+        .prepare(
+          `SELECT status FROM actions
+           WHERE task_id = ? AND protocol_version = 1
+             AND status IN ('awaiting_approval','authorized','failed','unknown')
+           ORDER BY updated_at DESC, id DESC LIMIT 1`,
+        )
+        .get(taskId) as { status: string } | undefined
+      if (!blockingAction) {
+        this.#database
+          .prepare(
+            `UPDATE inbox_events
+             SET status = 'pending', claimed_by = NULL, lease_until = NULL,
+                 last_error = NULL
+             WHERE id = ? AND claimed_by = ?`,
+          )
+          .run(eventId, workerId)
+        this.#database.exec('COMMIT')
+        return 'released'
+      }
+      this.#database
+        .prepare(
+          `UPDATE inbox_events
+           SET status = 'processing', claimed_by = NULL,
+               lease_until = '9999-12-31T23:59:59.999Z', last_error = ?
+           WHERE id = ? AND claimed_by = ?`,
+        )
+        .run(`blocked_by_action:${blockingAction.status}`, eventId, workerId)
+      this.#database.exec('COMMIT')
+      return 'parked'
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
   createTaskFromEvent(event: InboxEvent, title: string): Task {
     const now = this.#clock.now().toISOString()
     const id = randomUUID()
@@ -1405,11 +1649,26 @@ export class PegasStore {
 
       const resumed =
         decision.kind === 'continue_task' && task.status === 'completed'
+      const blockingAction = this.#database
+        .prepare(
+          `SELECT status FROM actions
+           WHERE task_id = ? AND protocol_version = 1
+             AND status IN ('awaiting_approval','authorized','failed','unknown')
+           ORDER BY updated_at DESC, id DESC LIMIT 1`,
+        )
+        .get(task.id) as { status: string } | undefined
+      if (decision.kind === 'continue_task' && blockingAction) {
+        throw new TaskActionBlockedError(task.id, blockingAction.status)
+      }
 
       this.#database
         .prepare(
           `INSERT INTO task_events (event_id, task_id, relation, created_at)
-           VALUES (?, ?, ?, ?)`,
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(event_id) DO UPDATE SET
+             task_id = excluded.task_id,
+             relation = excluded.relation,
+             created_at = excluded.created_at`,
         )
         .run(
           event.id,
@@ -1476,7 +1735,21 @@ export class PegasStore {
            status_reason = ?, ended_json = NULL, updated_at = ?
            WHERE id = ?`,
         )
-        .run(resumed ? 'resumed' : null, now, task.id)
+        .run(
+          blockingAction?.status === 'unknown'
+            ? 'action_outcome_unknown'
+            : blockingAction?.status === 'failed'
+              ? 'action_failed'
+              : blockingAction?.status === 'authorized'
+                ? 'action_outcome_pending'
+                : blockingAction?.status === 'awaiting_approval'
+                  ? 'awaiting_approval'
+                  : resumed
+                    ? 'resumed'
+                    : null,
+          now,
+          task.id,
+        )
 
       const run = this.#runById(runId)
       task = this.#taskById(task.id)
@@ -1624,6 +1897,19 @@ export class PegasStore {
       )
       if (invalidSource)
         throw new Error(`Event ${invalidSource} is not a source for this Task`)
+      const unreconciledAction = this.#database
+        .prepare(
+          `SELECT status FROM actions
+           WHERE task_id = ? AND protocol_version = 1
+             AND status IN ('failed','unknown')
+           ORDER BY updated_at DESC, id DESC LIMIT 1`,
+        )
+        .get(taskId) as { status: 'failed' | 'unknown' } | undefined
+      if (unreconciledAction) {
+        throw new Error(
+          `Goal cannot be revised until the ${unreconciledAction.status} Action outcome is reconciled`,
+        )
+      }
       const revisionRow = this.#database
         .prepare(
           'SELECT COALESCE(MAX(revision), 0) + 1 AS revision FROM goal_contracts WHERE task_id = ?',
@@ -1660,9 +1946,27 @@ export class PegasStore {
            ORDER BY created_at DESC, rowid DESC LIMIT 1`,
         )
         .get(taskId) as unknown as RunRow | undefined
+      const latestAction = latestRun
+        ? (this.#database
+            .prepare(
+              `SELECT * FROM actions WHERE resume_run_id = ?
+               AND protocol_version = 1
+               ORDER BY created_at DESC, id DESC LIMIT 1`,
+            )
+            .get(latestRun.id) as unknown as ActionRow | undefined)
+        : undefined
+      if (
+        latestRun?.status === 'running' &&
+        latestAction?.status === 'authorized'
+      ) {
+        throw new Error(
+          'Goal cannot be revised while an authorized Action is executing',
+        )
+      }
       if (
         latestRun &&
-        (latestRun.status === 'queued' || latestRun.goal_revision === null)
+        (latestRun.status === 'queued' || latestRun.goal_revision === null) &&
+        latestAction?.status !== 'authorized'
       ) {
         this.#database
           .prepare(
@@ -1670,9 +1974,72 @@ export class PegasStore {
           )
           .run(revisionRow.revision, createdAt, latestRun.id)
       } else if (latestRun?.goal_revision !== revisionRow.revision) {
+        if (latestRun) {
+          const supersededApprovals = this.#database
+            .prepare(
+              `SELECT approvals.id, approvals.action_id FROM approvals
+               INNER JOIN actions ON actions.id = approvals.action_id
+               WHERE approvals.protocol_version = 1
+                 AND approvals.status IN ('pending','decision_recorded')
+                 AND actions.protocol_version = 1 AND actions.run_id = ?`,
+            )
+            .all(latestRun.id) as { id: string; action_id: string }[]
+          this.#database
+            .prepare(
+              `UPDATE approvals SET status = 'cancelled', resolved_at = ?
+               WHERE protocol_version = 1 AND status IN ('pending','decision_recorded')
+                 AND action_id IN (
+                   SELECT id FROM actions WHERE run_id = ? AND protocol_version = 1
+                 )`,
+            )
+            .run(createdAt, latestRun.id)
+          this.#database
+            .prepare(
+              `UPDATE actions SET status = 'rejected', result_json = ?, updated_at = ?
+               WHERE protocol_version = 1 AND status = 'awaiting_approval'
+                 AND run_id = ?`,
+            )
+            .run(
+              JSON.stringify({ reason: 'superseded_by_goal_revision' }),
+              createdAt,
+              latestRun.id,
+            )
+          if (latestAction?.status === 'authorized') {
+            this.#database
+              .prepare(
+                `UPDATE actions SET status = 'rejected', result_json = ?, updated_at = ?
+                 WHERE id = ? AND status = 'authorized'`,
+              )
+              .run(
+                JSON.stringify({
+                  reason: 'superseded_by_goal_revision_before_execution',
+                }),
+                createdAt,
+                latestAction.id,
+              )
+          }
+          for (const approval of supersededApprovals) {
+            this.enqueueOutbox({
+              userId: task.userId,
+              taskId: task.id,
+              channel: 'conversation',
+              dedupeKey: `approval-resolved:${approval.id}`,
+              payload: {
+                type: 'approval.resolved',
+                taskId: task.id,
+                approvalId: approval.id,
+                actionId: approval.action_id,
+                decision: 'cancelled',
+              },
+            })
+          }
+          this.#wakeBlockedTaskEvents(task.id, createdAt)
+        }
         if (
           latestRun &&
-          (latestRun.status === 'running' || latestRun.status === 'waiting')
+          (latestRun.status === 'queued' ||
+            latestRun.status === 'running' ||
+            latestRun.status === 'waiting')
         ) {
           this.#database
             .prepare(
@@ -2277,6 +2644,21 @@ export class PegasStore {
         run.status !== 'waiting'
       )
         throw new Error('Final Worker Report requires a running or waiting Run')
+      if (draft.status !== 'started' && draft.status !== 'progress') {
+        const unresolvedAction = this.#database
+          .prepare(
+            `SELECT status FROM actions
+             WHERE resume_run_id = ? AND protocol_version = 1
+               AND status = 'authorized'
+             LIMIT 1`,
+          )
+          .get(runId) as { status: 'authorized' } | undefined
+        if (unresolvedAction) {
+          throw new Error(
+            'Authorized Action outcome must be recorded before a final Worker Report',
+          )
+        }
+      }
       const goal = this.currentGoalContract(task.id, task.userId)
       if (goal?.revision !== draft.goalRevision)
         throw new Error('Worker Report must target the current Goal revision')
@@ -2355,8 +2737,29 @@ export class PegasStore {
       let completed = false
       if (draft.status === 'ready' || draft.status === 'failed') {
         const criteria = reviewCriteria(goal, evidence)
+        const sideEffects = (
+          this.#database
+            .prepare(
+              `SELECT * FROM actions WHERE task_id = ?
+               AND protocol_version = 1 ORDER BY created_at ASC, id ASC`,
+            )
+            .all(task.id) as unknown as ActionRow[]
+        ).map(row => {
+          const action = toDurableAction(row)
+          return {
+            actionId: action.id,
+            kind: action.kind,
+            status: action.status,
+            ...(action.result ? { result: action.result } : {}),
+          }
+        })
+        const sideEffectsSatisfied = sideEffects.every(
+          action =>
+            action.status === 'succeeded' || action.status === 'rejected',
+        )
         completed =
           draft.status === 'ready' &&
+          sideEffectsSatisfied &&
           goal.successCriteria.every(criterion => {
             if (!criterion.required) return true
             return (
@@ -2407,7 +2810,7 @@ export class PegasStore {
             now,
             finalOutcome,
             JSON.stringify(criteria),
-            JSON.stringify([]),
+            JSON.stringify(sideEffects),
             JSON.stringify(draft.remainingRisks),
             draft.rollback ? JSON.stringify(draft.rollback) : null,
             `/?channel=${encodeURIComponent(task.id)}&run=${encodeURIComponent(runId)}`,
@@ -2488,12 +2891,24 @@ export class PegasStore {
         draft.status === 'waiting' ||
         draft.status === 'blocked'
       ) {
+        const blockingAction = this.#database
+          .prepare(
+            `SELECT status FROM actions WHERE resume_run_id = ?
+             AND protocol_version = 1
+             AND status IN ('awaiting_approval','authorized','failed','unknown')
+             LIMIT 1`,
+          )
+          .get(runId) as { status: DurableAction['status'] } | undefined
         const reason =
-          draft.status === 'ready'
-            ? 'awaiting_evidence'
-            : draft.status === 'blocked'
-              ? 'blocked'
-              : 'awaiting_user_input'
+          blockingAction?.status === 'unknown'
+            ? 'action_outcome_unknown'
+            : blockingAction?.status === 'failed'
+              ? 'action_failed'
+              : draft.status === 'ready'
+                ? 'awaiting_evidence'
+                : draft.status === 'blocked'
+                  ? 'blocked'
+                  : 'awaiting_user_input'
         this.#database
           .prepare(
             `UPDATE runs SET status = 'waiting', lease_until = NULL,
@@ -2640,6 +3055,646 @@ export class PegasStore {
     return cursorPage(rows, limit, toWorkerReport)
   }
 
+  requestApproval(
+    runId: string,
+    claimToken: string,
+    draft: ActionRequestDraft,
+  ): { action: DurableAction; approval: Approval } {
+    const fingerprint = createHash('sha256')
+      .update(stableJson(draft))
+      .digest('hex')
+    const suppliedClaimHash = hashClaimToken(claimToken)
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const existing = this.#database
+        .prepare(
+          `SELECT * FROM actions
+           WHERE idempotency_key = ? AND protocol_version = 1`,
+        )
+        .get(draft.idempotencyKey) as unknown as ActionRow | undefined
+      if (existing) {
+        if (
+          !existing.request_claim_hash ||
+          !safeDigestEqual(suppliedClaimHash, existing.request_claim_hash)
+        ) {
+          throw new RunClaimError('Run claim capability is invalid')
+        }
+        if (
+          existing.run_id !== runId ||
+          existing.request_fingerprint !== fingerprint
+        ) {
+          throw new Error('Action idempotency key is already used')
+        }
+        const approval = this.#database
+          .prepare('SELECT * FROM approvals WHERE action_id = ?')
+          .get(existing.id) as unknown as ApprovalRow | undefined
+        if (!approval) throw new Error('Approval record is missing')
+        this.#database.exec('COMMIT')
+        return initialApprovalResponse(existing, approval)
+      }
+
+      const claim = this.#claimForCapability(runId, claimToken)
+      const run = this.#runById(runId)
+      if (run.status !== 'running') throw new Error('Run is not executing')
+      const task = this.#taskById(run.taskId)
+      if (task.status === 'completed' || task.status === 'cancelled') {
+        throw new Error('Task is closed')
+      }
+      const unresolvedPriorAction = this.#database
+        .prepare(
+          `SELECT status FROM actions
+           WHERE resume_run_id = ? AND protocol_version = 1
+             AND status IN ('authorized','failed','unknown')
+           ORDER BY updated_at DESC, id DESC LIMIT 1`,
+        )
+        .get(runId) as
+        { status: 'authorized' | 'failed' | 'unknown' } | undefined
+      if (unresolvedPriorAction?.status === 'authorized') {
+        throw new Error(
+          'Authorized Action outcome must be recorded before requesting another Approval',
+        )
+      }
+      if (unresolvedPriorAction) {
+        throw new Error(
+          `Action outcome must be reconciled before requesting another Approval (${unresolvedPriorAction.status})`,
+        )
+      }
+      const now = this.#clock.now().toISOString()
+      const actionId = randomUUID()
+      const approvalId = randomUUID()
+      this.#database
+        .prepare(
+          `INSERT INTO actions
+            (id, task_id, run_id, kind, risk, idempotency_key, status,
+             request_json, recovery_point_json, request_claim_hash,
+             request_fingerprint, protocol_version, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'awaiting_approval', ?, ?, ?, ?, 1, ?, ?)`,
+        )
+        .run(
+          actionId,
+          task.id,
+          run.id,
+          draft.kind,
+          draft.risk,
+          draft.idempotencyKey,
+          JSON.stringify(draft.request),
+          JSON.stringify(draft.recoveryPoint),
+          claim.claimTokenHash,
+          fingerprint,
+          now,
+          now,
+        )
+      this.#database
+        .prepare(
+          `INSERT INTO approvals
+            (id, user_id, task_id, action_id, status, prompt_json,
+             protocol_version, created_at)
+           VALUES (?, ?, ?, ?, 'pending', ?, 1, ?)`,
+        )
+        .run(
+          approvalId,
+          task.userId,
+          task.id,
+          actionId,
+          JSON.stringify(draft.approval),
+          now,
+        )
+      this.#database
+        .prepare(
+          `UPDATE runs SET status = 'waiting', claimed_by = NULL,
+           lease_until = NULL, claim_token_hash = NULL, updated_at = ?
+           WHERE id = ? AND status = 'running' AND claimed_by = ?`,
+        )
+        .run(now, run.id, claim.workerId)
+      this.#database
+        .prepare(
+          `UPDATE tasks SET status = 'started', status_reason = 'awaiting_approval',
+           ended_json = NULL, updated_at = ? WHERE id = ?`,
+        )
+        .run(now, task.id)
+      this.enqueueOutbox({
+        userId: task.userId,
+        taskId: task.id,
+        channel: 'conversation',
+        dedupeKey: `approval-required:${approvalId}`,
+        payload: {
+          type: 'approval.required',
+          taskId: task.id,
+          runId: run.id,
+          approvalId,
+          actionId,
+          risk: draft.risk,
+          summary: draft.approval.summary,
+          impact: draft.approval.impact,
+          prompt: draft.approval,
+        },
+      })
+      const action = this.#actionById(actionId)
+      const approval = this.#approvalById(approvalId)
+      this.#database.exec('COMMIT')
+      return { action, approval }
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  assertApprovalRequestCapability(runId: string, claimToken: string): void {
+    const suppliedHash = hashClaimToken(claimToken)
+    const replayRows = this.#database
+      .prepare(
+        `SELECT request_claim_hash FROM actions
+         WHERE run_id = ? AND protocol_version = 1
+           AND request_claim_hash IS NOT NULL`,
+      )
+      .all(runId) as { request_claim_hash: string }[]
+    if (
+      replayRows.some(row =>
+        safeDigestEqual(suppliedHash, row.request_claim_hash),
+      )
+    )
+      return
+    this.#claimForCapability(runId, claimToken)
+  }
+
+  assertActionOutcomeCapability(actionId: string, claimToken: string): void {
+    const suppliedHash = hashClaimToken(claimToken)
+    const replayRows = this.#database
+      .prepare(
+        `SELECT claim_token_hash FROM action_outcomes
+         WHERE action_id = ?`,
+      )
+      .all(actionId) as { claim_token_hash: string }[]
+    if (
+      replayRows.some(row =>
+        safeDigestEqual(suppliedHash, row.claim_token_hash),
+      )
+    )
+      return
+    const action = this.#database
+      .prepare(
+        `SELECT resume_run_id FROM actions
+         WHERE id = ? AND protocol_version = 1`,
+      )
+      .get(actionId) as { resume_run_id: string | null } | undefined
+    if (!action?.resume_run_id) {
+      throw new RunClaimError('Run claim capability is invalid')
+    }
+    this.#claimForCapability(action.resume_run_id, claimToken)
+  }
+
+  getApproval(approvalId: string, userId: string): Approval | undefined {
+    const row = this.#database
+      .prepare(
+        `SELECT approvals.* FROM approvals
+         INNER JOIN tasks ON tasks.id = approvals.task_id
+         INNER JOIN actions ON actions.id = approvals.action_id
+         WHERE approvals.id = ? AND tasks.user_id = ?
+           AND approvals.protocol_version = 1
+           AND actions.protocol_version = 1`,
+      )
+      .get(approvalId, userId) as unknown as ApprovalRow | undefined
+    return row ? this.#approvalFromRow(row) : undefined
+  }
+
+  getAction(actionId: string, userId: string): DurableAction | undefined {
+    const row = this.#database
+      .prepare(
+        `SELECT actions.* FROM actions
+         INNER JOIN tasks ON tasks.id = actions.task_id
+         WHERE actions.id = ? AND tasks.user_id = ?
+           AND actions.protocol_version = 1`,
+      )
+      .get(actionId, userId) as unknown as ActionRow | undefined
+    return row ? toDurableAction(row) : undefined
+  }
+
+  pageApprovals(
+    userId: string,
+    limit: number,
+    cursor?: string,
+    status?: Approval['status'],
+  ): CursorPage<Approval> {
+    let cursorCreatedAt: string | null = null
+    let cursorId: string | null = null
+    if (cursor) {
+      const cursorRow = this.#database
+        .prepare(
+          `SELECT approvals.created_at, approvals.id FROM approvals
+           INNER JOIN actions ON actions.id = approvals.action_id
+           WHERE approvals.id = ? AND approvals.user_id = ?
+             AND approvals.protocol_version = 1
+             AND actions.protocol_version = 1
+             AND (? IS NULL OR approvals.status = ?)`,
+        )
+        .get(cursor, userId, status ?? null, status ?? null) as
+        { created_at: string; id: string } | undefined
+      if (!cursorRow) throw new Error('Pagination cursor is invalid')
+      cursorCreatedAt = cursorRow.created_at
+      cursorId = cursorRow.id
+    }
+    const projection = `SELECT approvals.*, actions.run_id AS request_run_id,
+      approval_decisions.id AS decision_id,
+      approval_decisions.event_id AS decision_event_id,
+      approval_decisions.command_id AS decision_command_id,
+      approval_decisions.user_id AS decision_user_id,
+      approval_decisions.option_id AS decision_option_id,
+      approval_decisions.kind AS decision_kind,
+      approval_decisions.rationale AS decision_rationale,
+      approval_decisions.decided_at AS decision_decided_at,
+      approval_decisions.applied_at AS decision_applied_at
+      FROM approvals
+      INNER JOIN actions ON actions.id = approvals.action_id
+      LEFT JOIN approval_decisions ON approval_decisions.approval_id = approvals.id`
+    const cursorPredicate = `AND (? IS NULL OR approvals.created_at < ?
+      OR (approvals.created_at = ? AND approvals.id < ?))`
+    const rows = (status
+      ? this.#database
+          .prepare(
+            `${projection}
+             WHERE approvals.user_id = ? AND approvals.status = ?
+               AND approvals.protocol_version = 1
+               AND actions.protocol_version = 1 ${cursorPredicate}
+             ORDER BY approvals.created_at DESC, approvals.id DESC LIMIT ?`,
+          )
+          .all(
+            userId,
+            status,
+            cursorCreatedAt,
+            cursorCreatedAt,
+            cursorCreatedAt,
+            cursorId,
+            limit + 1,
+          )
+      : this.#database
+          .prepare(
+            `${projection}
+             WHERE approvals.user_id = ? AND approvals.protocol_version = 1
+               AND actions.protocol_version = 1
+               ${cursorPredicate}
+             ORDER BY approvals.created_at DESC, approvals.id DESC LIMIT ?`,
+          )
+          .all(
+            userId,
+            cursorCreatedAt,
+            cursorCreatedAt,
+            cursorCreatedAt,
+            cursorId,
+            limit + 1,
+          )) as unknown as ApprovalProjectionRow[]
+    return cursorPage(rows, limit, toApprovalProjection)
+  }
+
+  decideApproval(
+    approvalId: string,
+    userId: string,
+    draft: ApprovalDecisionDraft,
+  ): { approval: Approval; decision: ApprovalDecision; event: InboxEvent } {
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const byCommand = this.#database
+        .prepare('SELECT * FROM approval_decisions WHERE command_id = ?')
+        .get(draft.commandId) as unknown as ApprovalDecisionRow | undefined
+      if (byCommand) {
+        if (
+          byCommand.approval_id !== approvalId ||
+          byCommand.user_id !== userId ||
+          byCommand.option_id !== draft.optionId ||
+          (byCommand.rationale ?? undefined) !== draft.rationale
+        ) {
+          throw new Error('Decision command ID is already used')
+        }
+        const approval = this.#approvalById(approvalId)
+        const event = this.#eventById(byCommand.event_id)
+        this.#database.exec('COMMIT')
+        return { approval, decision: toApprovalDecision(byCommand), event }
+      }
+
+      const approval = this.#approvalById(approvalId)
+      const task = this.#taskById(approval.taskId)
+      if (task.userId !== userId)
+        throw new Error('Task belongs to another user')
+      const existingDecision = this.#database
+        .prepare('SELECT * FROM approval_decisions WHERE approval_id = ?')
+        .get(approvalId) as unknown as ApprovalDecisionRow | undefined
+      if (existingDecision) {
+        if (
+          existingDecision.user_id !== userId ||
+          existingDecision.option_id !== draft.optionId ||
+          (existingDecision.rationale ?? undefined) !== draft.rationale
+        ) {
+          throw new Error('Approval has already been decided')
+        }
+        const event = this.#eventById(existingDecision.event_id)
+        this.#database.exec('COMMIT')
+        return {
+          approval,
+          decision: toApprovalDecision(existingDecision),
+          event,
+        }
+      }
+      if (task.status === 'completed' || task.status === 'cancelled') {
+        throw new Error('Task is closed')
+      }
+      if (approval.status !== 'pending') {
+        throw new Error('Approval has already been decided')
+      }
+      const option = approval.prompt.options.find(
+        option => option.id === draft.optionId,
+      )
+      if (!option) throw new Error('Approval option does not exist')
+
+      const now = this.#clock.now().toISOString()
+      const decisionId = randomUUID()
+      const event = this.enqueueEvent({
+        userId,
+        type: 'approval.decided',
+        source: 'approval',
+        dedupeKey: `approval-decision:${approvalId}`,
+        payload: { approvalId, decisionId },
+      }).event
+      this.#database
+        .prepare(
+          `INSERT INTO approval_decisions
+            (id, approval_id, event_id, command_id, user_id, option_id, kind,
+             rationale, decided_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          decisionId,
+          approvalId,
+          event.id,
+          draft.commandId,
+          userId,
+          option.id,
+          option.kind,
+          draft.rationale ?? null,
+          now,
+        )
+      this.#database
+        .prepare(
+          `UPDATE approvals SET status = 'decision_recorded'
+           WHERE id = ? AND status = 'pending'`,
+        )
+        .run(approvalId)
+      this.#applyApprovalDecisionInTransaction(event)
+      const decision = this.#decisionByApprovalId(approvalId)
+      const updated = this.#approvalById(approvalId)
+      this.#database.exec('COMMIT')
+      return { approval: updated, decision, event }
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  applyApprovalDecision(event: InboxEvent): Run | undefined {
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const successor = this.#applyApprovalDecisionInTransaction(event)
+      this.#database.exec('COMMIT')
+      return successor
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  #applyApprovalDecisionInTransaction(event: InboxEvent): Run | undefined {
+    const row = this.#database
+      .prepare('SELECT * FROM approval_decisions WHERE event_id = ?')
+      .get(event.id) as unknown as ApprovalDecisionRow | undefined
+    if (
+      !row ||
+      event.type !== 'approval.decided' ||
+      event.source !== 'approval'
+    ) {
+      throw new Error('Approval decision event is not trusted')
+    }
+    if (row.user_id !== event.userId) {
+      throw new Error('Approval decision event belongs to another user')
+    }
+    const approval = this.#approvalById(row.approval_id)
+    const action = this.#actionById(approval.actionId)
+    const task = this.#taskById(approval.taskId)
+    if (task.userId !== event.userId) {
+      throw new Error('Task belongs to another user')
+    }
+    if (row.applied_at) {
+      const resumed = action.resumeRunId
+        ? this.#runById(action.resumeRunId)
+        : undefined
+      return resumed
+    }
+    const now = this.#clock.now().toISOString()
+    if (task.status === 'cancelled') {
+      this.#database
+        .prepare(
+          `UPDATE approvals SET status = 'cancelled', resolved_at = ? WHERE id = ?`,
+        )
+        .run(now, approval.id)
+      this.#database
+        .prepare('UPDATE approval_decisions SET applied_at = ? WHERE id = ?')
+        .run(now, row.id)
+      return undefined
+    }
+    const original = this.#runById(action.requestRunId)
+    if (original.status !== 'waiting' && original.status !== 'cancelled') {
+      throw new Error('Approval source Run is not waiting')
+    }
+    let successor: Run | undefined
+    if (action.resumeRunId) {
+      successor = this.#runById(action.resumeRunId)
+    } else {
+      const successorId = randomUUID()
+      const decisionContext = {
+        type: 'approval.decision',
+        approvalId: approval.id,
+        actionId: action.id,
+        optionId: row.option_id,
+        decision: row.kind,
+        ...(row.rationale ? { rationale: row.rationale } : {}),
+        action: {
+          kind: action.kind,
+          risk: action.risk,
+          request: action.request,
+          recoveryPoint: action.recoveryPoint,
+        },
+      }
+      this.#database
+        .prepare(
+          `INSERT INTO runs
+              (id, task_id, retry_of_run_id, executor, resume_from_ref,
+               goal_revision, status, input_json, execution_context_json,
+               created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`,
+        )
+        .run(
+          successorId,
+          task.id,
+          original.id,
+          original.executor,
+          original.executorRef ?? original.resumeFromRef ?? null,
+          original.goalRevision ?? null,
+          JSON.stringify(JSON.stringify(decisionContext)),
+          JSON.stringify(original.executionContext),
+          now,
+          now,
+        )
+      this.#database
+        .prepare(
+          `UPDATE actions SET resume_run_id = ?, status = ?, updated_at = ?
+             WHERE id = ?`,
+        )
+        .run(
+          successorId,
+          row.kind === 'approve' ? 'authorized' : 'rejected',
+          now,
+          action.id,
+        )
+      successor = this.#runById(successorId)
+    }
+    this.#database
+      .prepare(
+        `UPDATE runs SET status = 'cancelled', claimed_by = NULL,
+           lease_until = NULL, claim_token_hash = NULL,
+           last_error = 'superseded_by_approval_decision', updated_at = ?
+           WHERE id = ? AND status = 'waiting'`,
+      )
+      .run(now, original.id)
+    this.#database
+      .prepare(`UPDATE approvals SET status = ?, resolved_at = ? WHERE id = ?`)
+      .run(
+        row.kind === 'approve'
+          ? 'approved'
+          : row.kind === 'reject'
+            ? 'rejected'
+            : 'revision_requested',
+        now,
+        approval.id,
+      )
+    this.#database
+      .prepare('UPDATE approval_decisions SET applied_at = ? WHERE id = ?')
+      .run(now, row.id)
+    this.#database
+      .prepare(
+        `INSERT OR IGNORE INTO task_events
+            (event_id, task_id, relation, created_at)
+           VALUES (?, ?, 'approval_decision', ?)`,
+      )
+      .run(event.id, task.id, now)
+    this.#database
+      .prepare(
+        `UPDATE tasks SET status = 'started', status_reason = 'approval_resolved',
+           ended_json = NULL, updated_at = ? WHERE id = ?`,
+      )
+      .run(now, task.id)
+    this.enqueueOutbox({
+      userId: task.userId,
+      taskId: task.id,
+      channel: 'conversation',
+      dedupeKey: `approval-resolved:${approval.id}`,
+      payload: {
+        type: 'approval.resolved',
+        taskId: task.id,
+        approvalId: approval.id,
+        actionId: action.id,
+        decision: row.kind,
+        runId: successor.id,
+      },
+    })
+    if (row.kind !== 'approve') this.#wakeBlockedTaskEvents(task.id, now)
+    return successor
+  }
+
+  recordActionOutcome(
+    actionId: string,
+    claimToken: string,
+    draft: ActionOutcomeDraft,
+  ): DurableAction {
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const existing = this.#database
+        .prepare('SELECT * FROM action_outcomes WHERE command_id = ?')
+        .get(draft.commandId) as
+        | {
+            action_id: string
+            status: string
+            result_json: string
+            claim_token_hash: string
+          }
+        | undefined
+      if (existing) {
+        const suppliedHash = hashClaimToken(claimToken)
+        if (!safeDigestEqual(suppliedHash, existing.claim_token_hash)) {
+          throw new RunClaimError('Run claim capability is invalid')
+        }
+        if (
+          existing.action_id !== actionId ||
+          existing.status !== draft.status ||
+          stableJson(JSON.parse(existing.result_json)) !==
+            stableJson(draft.result)
+        ) {
+          throw new Error('Action outcome command ID is already used')
+        }
+        const action = this.#actionById(actionId)
+        this.#database.exec('COMMIT')
+        return action
+      }
+      const actionRow = this.#database
+        .prepare('SELECT * FROM actions WHERE id = ? AND protocol_version = 1')
+        .get(actionId) as unknown as ActionRow | undefined
+      if (!actionRow?.resume_run_id) {
+        throw new RunClaimError('Run claim capability is invalid')
+      }
+      const claim = this.#claimForCapability(
+        actionRow.resume_run_id,
+        claimToken,
+      )
+      const action = toDurableAction(actionRow)
+      if (action.status !== 'authorized') {
+        throw new Error('Only an authorized Action can record an outcome')
+      }
+      const existingForAction = this.#database
+        .prepare('SELECT 1 FROM action_outcomes WHERE action_id = ?')
+        .get(actionId)
+      if (existingForAction) throw new Error('Action outcome already exists')
+      const now = this.#clock.now().toISOString()
+      this.#database
+        .prepare(
+          `INSERT INTO action_outcomes
+            (id, action_id, run_id, command_id, status, result_json,
+             claim_token_hash, recorded_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          randomUUID(),
+          actionId,
+          actionRow.resume_run_id,
+          draft.commandId,
+          draft.status,
+          JSON.stringify(draft.result),
+          claim.claimTokenHash,
+          now,
+        )
+      this.#database
+        .prepare(
+          `UPDATE actions SET status = ?, result_json = ?, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(draft.status, JSON.stringify(draft.result), now, actionId)
+      if (draft.status === 'succeeded') {
+        this.#wakeBlockedTaskEvents(action.taskId, now)
+      }
+      const updated = this.#actionById(actionId)
+      this.#database.exec('COMMIT')
+      return updated
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
   claimNextRun(workerId: string, leaseMs = 30_000): ClaimedRun | undefined {
     const now = this.#clock.now()
     const leaseUntil = new Date(now.getTime() + leaseMs).toISOString()
@@ -2653,6 +3708,12 @@ export class PegasStore {
            WHERE task_id IN (SELECT id FROM tasks WHERE status NOT IN ('completed','cancelled'))
            AND ((status = 'queued' AND NOT EXISTS (
              SELECT 1 FROM runs AS active WHERE active.task_id = runs.task_id AND active.status = 'running'
+           ) AND NOT EXISTS (
+             SELECT 1 FROM actions
+             WHERE actions.task_id = runs.task_id
+               AND actions.protocol_version = 1
+               AND actions.status IN ('awaiting_approval','authorized','failed','unknown')
+               AND (actions.resume_run_id IS NULL OR actions.resume_run_id <> runs.id)
            )) OR (status = 'running' AND lease_until <= ?)
              OR (status = 'waiting' AND lease_until <= ? AND task_id IN (
                SELECT id FROM tasks WHERE status_reason = 'awaiting_evidence'
@@ -2668,7 +3729,99 @@ export class PegasStore {
 
       let phase: ClaimedRun['phase'] =
         row.status === 'waiting' ? 'report' : 'execute'
+      if (row.status === 'queued') {
+        const revokedApproval = this.#database
+          .prepare(
+            `SELECT actions.id FROM actions
+             INNER JOIN approvals ON approvals.action_id = actions.id
+             WHERE actions.resume_run_id = ?
+               AND actions.protocol_version = 1
+               AND approvals.protocol_version = 1
+               AND approvals.status = 'approved'
+               AND actions.status <> 'authorized'`,
+          )
+          .get(row.id) as { id: string } | undefined
+        if (revokedApproval) {
+          this.#database
+            .prepare(
+              `UPDATE runs SET status = 'cancelled', last_error = 'approval_authorization_revoked',
+               claimed_by = NULL, lease_until = NULL, claim_token_hash = NULL,
+               updated_at = ? WHERE id = ?`,
+            )
+            .run(now.toISOString(), row.id)
+          this.#database.exec('COMMIT')
+          return undefined
+        }
+      }
       if (row.status === 'running') {
+        const interruptedAction = this.#database
+          .prepare(
+            `SELECT * FROM actions WHERE resume_run_id = ?
+             AND protocol_version = 1
+             AND status IN ('authorized','succeeded','failed','unknown')`,
+          )
+          .get(row.id) as unknown as ActionRow | undefined
+        if (interruptedAction) {
+          const hadOutcome = interruptedAction.status !== 'authorized'
+          const reason = {
+            reason: hadOutcome
+              ? 'run_lease_expired_after_outcome'
+              : 'run_lease_expired_before_outcome',
+            runId: row.id,
+          }
+          this.#database
+            .prepare(
+              `UPDATE actions SET status = 'unknown', result_json = ?, updated_at = ?
+               WHERE id = ? AND status = 'authorized'`,
+            )
+            .run(
+              JSON.stringify(reason),
+              now.toISOString(),
+              interruptedAction.id,
+            )
+          this.#database
+            .prepare(
+              `UPDATE runs SET status = 'failed', last_error = ?, claimed_by = NULL,
+               lease_until = NULL, claim_token_hash = NULL, updated_at = ? WHERE id = ?`,
+            )
+            .run(
+              hadOutcome
+                ? 'action_resume_interrupted_after_outcome'
+                : 'action_outcome_unknown_after_lease_expiry',
+              now.toISOString(),
+              row.id,
+            )
+          const task = this.#taskById(row.task_id)
+          this.#database
+            .prepare(
+              `UPDATE tasks SET status = 'started', status_reason = ?,
+               updated_at = ? WHERE id = ?`,
+            )
+            .run(
+              hadOutcome
+                ? 'action_resume_interrupted'
+                : 'action_outcome_unknown',
+              now.toISOString(),
+              task.id,
+            )
+          this.enqueueOutbox({
+            userId: task.userId,
+            taskId: task.id,
+            channel: 'conversation',
+            dedupeKey: `action-reconciliation-required:${interruptedAction.id}`,
+            payload: {
+              type: 'action.reconciliation_required',
+              taskId: task.id,
+              runId: row.id,
+              actionId: interruptedAction.id,
+              text: hadOutcome
+                ? '高风险动作已记录结果，但恢复流程中断，需要核对后再继续。'
+                : '高风险动作在执行期间中断，结果未知，需要核对后再继续。',
+            },
+          })
+          this.#database.exec('COMMIT')
+          return undefined
+        }
         this.#database
           .prepare(
             `UPDATE runs SET status = 'failed', last_error = 'lease_expired', claimed_by = NULL, lease_until = NULL, updated_at = ? WHERE id = ?`,
@@ -2758,6 +3911,47 @@ export class PegasStore {
         throw new Error(`Worker ${workerId} does not own run ${runId}`)
       }
       const task = this.#taskById(run.taskId)
+      const resumedAction = this.#database
+        .prepare(
+          `SELECT * FROM actions WHERE resume_run_id = ?
+           AND protocol_version = 1`,
+        )
+        .get(runId) as unknown as ActionRow | undefined
+      if (resumedAction?.status === 'authorized') {
+        this.#database
+          .prepare(
+            `UPDATE actions SET status = 'unknown', result_json = ?, updated_at = ?
+             WHERE id = ? AND status = 'authorized'`,
+          )
+          .run(
+            JSON.stringify({ reason: 'executor_completed_without_outcome' }),
+            now,
+            resumedAction.id,
+          )
+      }
+      const blockingActionRow = this.#database
+        .prepare(
+          `SELECT * FROM actions
+           WHERE task_id = ? AND protocol_version = 1
+             AND status IN ('awaiting_approval','authorized','failed','unknown')
+           ORDER BY CASE status
+             WHEN 'unknown' THEN 0
+             WHEN 'failed' THEN 1
+             WHEN 'authorized' THEN 2
+             ELSE 3
+           END, updated_at DESC, id DESC
+           LIMIT 1`,
+        )
+        .get(task.id) as unknown as ActionRow | undefined
+      const blockingAction = blockingActionRow
+        ? toDurableAction(blockingActionRow)
+        : undefined
+      const actionStatus = blockingAction?.status
+      const actionBlocksCompletion =
+        actionStatus === 'awaiting_approval' ||
+        actionStatus === 'authorized' ||
+        actionStatus === 'failed' ||
+        actionStatus === 'unknown'
       const hasPendingWork = Boolean(
         this.#database
           .prepare(
@@ -2770,6 +3964,12 @@ export class PegasStore {
       const requiresEvidence = Boolean(
         this.currentGoalContract(task.id, task.userId),
       )
+      const runStatus =
+        actionStatus === 'failed'
+          ? 'failed'
+          : actionBlocksCompletion || requiresEvidence
+            ? 'waiting'
+            : 'completed'
       this.#database
         .prepare(
           `UPDATE runs
@@ -2778,11 +3978,11 @@ export class PegasStore {
            WHERE id = ?`,
         )
         .run(
-          requiresEvidence ? 'waiting' : 'completed',
+          runStatus,
           result.executorRef,
           JSON.stringify(result.output),
-          requiresEvidence ? workerId : null,
-          requiresEvidence
+          requiresEvidence && !actionBlocksCompletion ? workerId : null,
+          requiresEvidence && !actionBlocksCompletion
             ? new Date(nowDate.getTime() + 30_000).toISOString()
             : null,
           now,
@@ -2833,9 +4033,21 @@ export class PegasStore {
            WHERE id = ?`,
         )
         .run(
-          requiresEvidence || hasPendingWork ? 'started' : 'completed',
-          requiresEvidence ? 'awaiting_evidence' : null,
-          requiresEvidence || hasPendingWork
+          actionBlocksCompletion || requiresEvidence || hasPendingWork
+            ? 'started'
+            : 'completed',
+          actionStatus === 'unknown'
+            ? 'action_outcome_unknown'
+            : actionStatus === 'failed'
+              ? 'action_failed'
+              : actionStatus === 'authorized'
+                ? 'action_outcome_pending'
+                : actionStatus === 'awaiting_approval'
+                  ? 'awaiting_approval'
+                  : requiresEvidence
+                    ? 'awaiting_evidence'
+                    : null,
+          actionBlocksCompletion || requiresEvidence || hasPendingWork
             ? null
             : JSON.stringify({
                 at: now,
@@ -2849,13 +4061,34 @@ export class PegasStore {
         userId: task.userId,
         taskId: task.id,
         channel: 'conversation',
-        dedupeKey: requiresEvidence
-          ? `goal-report-required:${runId}`
-          : `run-completed:${runId}`,
+        dedupeKey:
+          actionStatus === 'unknown'
+            ? `action-outcome-unknown:${blockingAction?.id ?? runId}`
+            : actionStatus === 'failed'
+              ? `action-failed:${blockingAction?.id ?? runId}`
+              : actionStatus === 'authorized'
+                ? `action-outcome-pending:${blockingAction?.id ?? runId}`
+                : actionStatus === 'awaiting_approval'
+                  ? `approval-pending:${blockingAction?.id ?? runId}`
+                  : requiresEvidence
+                    ? `goal-report-required:${runId}`
+                    : `run-completed:${runId}`,
         payload: {
-          type: requiresEvidence ? 'goal.report_required' : 'run.completed',
+          type:
+            actionStatus === 'unknown'
+              ? 'action.outcome_unknown'
+              : actionStatus === 'failed'
+                ? 'action.failed'
+                : actionStatus === 'authorized'
+                  ? 'action.outcome_pending'
+                  : actionStatus === 'awaiting_approval'
+                    ? 'approval.pending'
+                    : requiresEvidence
+                      ? 'goal.report_required'
+                      : 'run.completed',
           taskId: task.id,
           runId,
+          ...(blockingAction ? { actionId: blockingAction.id } : {}),
           text: result.output,
         },
       })
@@ -2913,6 +4146,26 @@ export class PegasStore {
         throw new Error(`Worker ${workerId} does not own run ${runId}`)
       }
       const task = this.#taskById(run.taskId)
+      const resumedActionRow = this.#database
+        .prepare(
+          `SELECT * FROM actions WHERE resume_run_id = ?
+           AND protocol_version = 1`,
+        )
+        .get(runId) as unknown as ActionRow | undefined
+      let actionStatus = resumedActionRow?.status
+      if (resumedActionRow?.status === 'authorized') {
+        actionStatus = 'unknown'
+        this.#database
+          .prepare(
+            `UPDATE actions SET status = 'unknown', result_json = ?, updated_at = ?
+             WHERE id = ? AND status = 'authorized'`,
+          )
+          .run(
+            JSON.stringify({ reason: 'run_failed_before_outcome', error }),
+            now,
+            resumedActionRow.id,
+          )
+      }
       this.#database
         .prepare(
           `UPDATE runs
@@ -2922,16 +4175,62 @@ export class PegasStore {
         .run(error, now, runId)
       this.#database
         .prepare(
-          `UPDATE tasks SET status = 'started', status_reason = 'last_run_failed', updated_at = ?
+          `UPDATE tasks SET status = 'started', status_reason = ?, updated_at = ?
            WHERE id = ?`,
         )
-        .run(now, task.id)
+        .run(
+          actionStatus === 'unknown'
+            ? 'action_outcome_unknown'
+            : actionStatus === 'failed'
+              ? 'action_failed'
+              : actionStatus === 'succeeded'
+                ? 'action_resume_interrupted'
+                : 'last_run_failed',
+          now,
+          task.id,
+        )
+      const actionId = resumedActionRow?.id
       this.enqueueOutbox({
         userId: task.userId,
         taskId: task.id,
         channel: 'conversation',
-        dedupeKey: `run-failed:${runId}`,
-        payload: { type: 'run.failed', taskId: task.id, runId, error },
+        dedupeKey:
+          actionStatus === 'unknown'
+            ? `action-outcome-unknown:${actionId ?? runId}`
+            : actionStatus === 'failed'
+              ? `action-failed:${actionId ?? runId}`
+              : actionStatus === 'succeeded'
+                ? `action-reconciliation-required:${actionId ?? runId}`
+                : `run-failed:${runId}`,
+        payload:
+          actionStatus === 'unknown'
+            ? {
+                type: 'action.outcome_unknown',
+                taskId: task.id,
+                runId,
+                actionId,
+                text: '高风险动作执行失败且尚未记录结果，需要核对后再继续。',
+                error,
+              }
+            : actionStatus === 'failed'
+              ? {
+                  type: 'action.failed',
+                  taskId: task.id,
+                  runId,
+                  actionId,
+                  text: '高风险动作已记录失败，恢复流程已停止。',
+                  error,
+                }
+              : actionStatus === 'succeeded'
+                ? {
+                    type: 'action.reconciliation_required',
+                    taskId: task.id,
+                    runId,
+                    actionId,
+                    text: '高风险动作已成功，但后续恢复流程失败，需要核对后再继续。',
+                    error,
+                  }
+                : { type: 'run.failed', taskId: task.id, runId, error },
       })
       this.#database.exec('COMMIT')
     } catch (caught) {
@@ -2971,6 +4270,19 @@ export class PegasStore {
         throw new Error('Task already has active work')
       if (this.listRuns(task.id).at(-1)?.id !== runId)
         throw new Error('Only the latest failed run can be retried')
+      if (
+        this.#database
+          .prepare(
+            `SELECT 1 FROM actions
+             WHERE protocol_version = 1 AND (
+               (resume_run_id = ? AND status IN ('authorized','succeeded','failed','unknown'))
+               OR (task_id = ? AND status IN ('awaiting_approval','authorized','failed','unknown'))
+             )`,
+          )
+          .get(runId, task.id)
+      ) {
+        throw new Error('Action outcome must be reconciled before retrying')
+      }
       const now = this.#clock.now().toISOString()
       const run = this.#createRetry(row, now)
       this.#database
@@ -3018,6 +4330,20 @@ export class PegasStore {
       }
       if (task.status === 'completed') throw new Error('Task already ended')
       const now = this.#clock.now().toISOString()
+      const cancelledApprovals = this.#database
+        .prepare(
+          `SELECT id, action_id FROM approvals
+           WHERE task_id = ? AND protocol_version = 1
+             AND status IN ('pending','decision_recorded')`,
+        )
+        .all(taskId) as { id: string; action_id: string }[]
+      const interruptedActions = this.#database
+        .prepare(
+          `SELECT id, resume_run_id FROM actions
+           WHERE task_id = ? AND protocol_version = 1
+             AND status IN ('authorized','unknown')`,
+        )
+        .all(taskId) as { id: string; resume_run_id: string | null }[]
       const ended = {
         at: now,
         by: 'human' as const,
@@ -3037,6 +4363,72 @@ export class PegasStore {
            WHERE task_id = ? AND status IN ('queued','running','waiting')`,
         )
         .run(now, taskId)
+      this.#database
+        .prepare(
+          `UPDATE approvals SET status = 'cancelled', resolved_at = ?
+           WHERE task_id = ? AND protocol_version = 1
+             AND status IN ('pending','decision_recorded')`,
+        )
+        .run(now, taskId)
+      this.#database
+        .prepare(
+          `UPDATE actions SET status = 'rejected', updated_at = ?
+           WHERE task_id = ? AND protocol_version = 1
+             AND status = 'awaiting_approval'`,
+        )
+        .run(now, taskId)
+      this.#database
+        .prepare(
+          `UPDATE actions SET status = 'unknown', result_json = ?, updated_at = ?
+           WHERE task_id = ? AND protocol_version = 1
+             AND status = 'authorized'`,
+        )
+        .run(
+          JSON.stringify({ reason: 'task_stopped_before_outcome' }),
+          now,
+          taskId,
+        )
+      for (const approval of cancelledApprovals) {
+        this.enqueueOutbox({
+          userId: task.userId,
+          taskId: task.id,
+          channel: 'conversation',
+          dedupeKey: `approval-resolved:${approval.id}`,
+          payload: {
+            type: 'approval.resolved',
+            taskId: task.id,
+            approvalId: approval.id,
+            actionId: approval.action_id,
+            decision: 'cancelled',
+          },
+        })
+      }
+      for (const action of interruptedActions) {
+        this.enqueueOutbox({
+          userId: task.userId,
+          taskId: task.id,
+          channel: 'conversation',
+          dedupeKey: `action-reconciliation-required:${action.id}`,
+          payload: {
+            type: 'action.reconciliation_required',
+            taskId: task.id,
+            actionId: action.id,
+            ...(action.resume_run_id ? { runId: action.resume_run_id } : {}),
+            reason: reason ?? 'stopped_by_user',
+            text: '任务已停止，但高风险动作的最终结果未知，需要人工核对。',
+          },
+        })
+      }
+      this.#database
+        .prepare(
+          `UPDATE inbox_events SET status = 'failed', lease_until = NULL,
+             last_error = 'blocked_task_stopped'
+           WHERE id IN (
+             SELECT event_id FROM task_events
+             WHERE task_id = ? AND relation = 'blocked_action'
+           ) AND status = 'processing' AND last_error LIKE 'blocked_by_action:%'`,
+        )
+        .run(taskId)
       this.#database
         .prepare(
           `INSERT INTO task_commands (command_id, task_id, kind, created_at)
@@ -3083,8 +4475,8 @@ export class PegasStore {
       !row?.claimed_by ||
       !row.claim_token_hash ||
       !safeDigestEqual(suppliedHash, row.claim_token_hash) ||
-      (row.lease_until !== null &&
-        row.lease_until <= this.#clock.now().toISOString())
+      !row.lease_until ||
+      row.lease_until <= this.#clock.now().toISOString()
     )
       throw new RunClaimError('Run claim capability is invalid or expired')
     return { workerId: row.claimed_by, claimTokenHash: suppliedHash }
@@ -3112,6 +4504,36 @@ export class PegasStore {
          )`,
       )
       .run(now, now, runId)
+  }
+
+  #wakeBlockedTaskEvents(taskId: string, now: string): void {
+    this.#database
+      .prepare(
+        `UPDATE inbox_events
+         SET status = 'pending', claimed_by = NULL, lease_until = NULL,
+             last_error = NULL
+         WHERE id IN (
+           SELECT event_id FROM task_events
+           WHERE task_id = ? AND relation = 'blocked_action'
+         )
+           AND status = 'processing'
+           AND last_error LIKE 'blocked_by_action:%'
+           AND NOT EXISTS (
+             SELECT 1 FROM actions
+             WHERE actions.task_id = ? AND actions.protocol_version = 1
+               AND actions.status IN ('awaiting_approval','authorized','failed','unknown')
+           )`,
+      )
+      .run(taskId, taskId)
+    this.#database
+      .prepare(
+        `UPDATE task_events SET created_at = ?
+         WHERE task_id = ? AND relation = 'blocked_action'
+           AND event_id IN (
+             SELECT id FROM inbox_events WHERE status = 'pending'
+           )`,
+      )
+      .run(now, taskId)
   }
 
   #createRetry(row: RunRow, now: string): Run {
@@ -3393,6 +4815,51 @@ export class PegasStore {
     return toWorkerReport(row as unknown as WorkerReportRow)
   }
 
+  #actionById(actionId: string): DurableAction {
+    const row = this.#database
+      .prepare('SELECT * FROM actions WHERE id = ?')
+      .get(actionId)
+    if (!row) throw new Error(`Action ${actionId} does not exist`)
+    return toDurableAction(row as unknown as ActionRow)
+  }
+
+  #approvalById(approvalId: string): Approval {
+    const row = this.#database
+      .prepare(
+        `SELECT approvals.* FROM approvals
+         INNER JOIN actions ON actions.id = approvals.action_id
+         WHERE approvals.id = ? AND approvals.protocol_version = 1
+           AND actions.protocol_version = 1`,
+      )
+      .get(approvalId)
+    if (!row) throw new Error(`Approval ${approvalId} does not exist`)
+    return this.#approvalFromRow(row as unknown as ApprovalRow)
+  }
+
+  #approvalFromRow(row: ApprovalRow): Approval {
+    const action = this.#actionById(row.action_id)
+    const decision = this.#database
+      .prepare('SELECT * FROM approval_decisions WHERE approval_id = ?')
+      .get(row.id) as unknown as ApprovalDecisionRow | undefined
+    return toApproval(row, action.requestRunId, decision)
+  }
+
+  #decisionByApprovalId(approvalId: string): ApprovalDecision {
+    const row = this.#database
+      .prepare('SELECT * FROM approval_decisions WHERE approval_id = ?')
+      .get(approvalId)
+    if (!row) throw new Error(`Approval ${approvalId} has no decision`)
+    return toApprovalDecision(row as unknown as ApprovalDecisionRow)
+  }
+
+  #eventById(eventId: string): InboxEvent {
+    const row = this.#database
+      .prepare('SELECT * FROM inbox_events WHERE id = ?')
+      .get(eventId)
+    if (!row) throw new Error(`Event ${eventId} does not exist`)
+    return toInboxEvent(row as unknown as InboxRow)
+  }
+
   #taskById(taskId: string): Task {
     const row = this.#database
       .prepare('SELECT * FROM tasks WHERE id = ?')
@@ -3547,6 +5014,122 @@ function toRun(row: RunRow): Run {
     ...(row.last_error ? { lastError: row.last_error } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  }
+}
+
+function toDurableAction(row: ActionRow): DurableAction {
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    requestRunId: row.run_id,
+    ...(row.resume_run_id ? { resumeRunId: row.resume_run_id } : {}),
+    kind: row.kind,
+    risk: row.risk,
+    idempotencyKey: row.idempotency_key,
+    status: row.status,
+    request: JSON.parse(row.request_json) as Record<string, unknown>,
+    recoveryPoint: JSON.parse(row.recovery_point_json) as Record<
+      string,
+      unknown
+    >,
+    ...(row.result_json
+      ? {
+          result: JSON.parse(row.result_json) as Record<string, unknown>,
+        }
+      : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
+function initialApprovalResponse(
+  action: ActionRow,
+  approval: ApprovalRow,
+): { action: DurableAction; approval: Approval } {
+  return {
+    action: {
+      id: action.id,
+      taskId: action.task_id,
+      requestRunId: action.run_id,
+      kind: action.kind,
+      risk: action.risk,
+      idempotencyKey: action.idempotency_key,
+      status: 'awaiting_approval',
+      request: JSON.parse(action.request_json) as Record<string, unknown>,
+      recoveryPoint: JSON.parse(action.recovery_point_json) as Record<
+        string,
+        unknown
+      >,
+      createdAt: action.created_at,
+      updatedAt: action.created_at,
+    },
+    approval: {
+      id: approval.id,
+      taskId: approval.task_id,
+      actionId: approval.action_id,
+      requestRunId: action.run_id,
+      status: 'pending',
+      prompt: JSON.parse(approval.prompt_json) as ApprovalPrompt,
+      createdAt: approval.created_at,
+    },
+  }
+}
+
+function toApproval(
+  row: ApprovalRow,
+  requestRunId: string,
+  decision?: ApprovalDecisionRow,
+): Approval {
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    actionId: row.action_id,
+    requestRunId,
+    status: row.status,
+    prompt: JSON.parse(row.prompt_json) as ApprovalPrompt,
+    ...(decision ? { decision: toApprovalDecision(decision) } : {}),
+    createdAt: row.created_at,
+    ...(row.resolved_at ? { resolvedAt: row.resolved_at } : {}),
+  }
+}
+
+function toApprovalProjection(row: ApprovalProjectionRow): Approval {
+  const decision =
+    row.decision_id &&
+    row.decision_event_id &&
+    row.decision_command_id &&
+    row.decision_user_id &&
+    row.decision_option_id &&
+    row.decision_kind &&
+    row.decision_decided_at
+      ? {
+          id: row.decision_id,
+          approval_id: row.id,
+          event_id: row.decision_event_id,
+          command_id: row.decision_command_id,
+          user_id: row.decision_user_id,
+          option_id: row.decision_option_id,
+          kind: row.decision_kind,
+          rationale: row.decision_rationale,
+          decided_at: row.decision_decided_at,
+          applied_at: row.decision_applied_at,
+        }
+      : undefined
+  return toApproval(row, row.request_run_id, decision)
+}
+
+function toApprovalDecision(row: ApprovalDecisionRow): ApprovalDecision {
+  return {
+    id: row.id,
+    approvalId: row.approval_id,
+    eventId: row.event_id,
+    commandId: row.command_id,
+    userId: row.user_id,
+    optionId: row.option_id,
+    kind: row.kind,
+    ...(row.rationale ? { rationale: row.rationale } : {}),
+    decidedAt: row.decided_at,
+    ...(row.applied_at ? { appliedAt: row.applied_at } : {}),
   }
 }
 

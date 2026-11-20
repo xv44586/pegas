@@ -234,7 +234,9 @@ Worker 只能提交结构化协作请求。Control Plane 校验来源 Run、授�
 
 当前正常状态以 Worker 主动提交的结构化 Report 为事实来源，至少区分 `started`、`progress`、`waiting`、`ready`、`blocked` 和 `failed`。当 Task 已有 Goal Contract 时，`ready` 流程已实施 GOAL-001 的 evidence 完成门禁；尚未接入结构化 Report 的旧 Task 继续沿用兼容完成路径，直到 Executor 适配完成。
 
-每次 Run claim 都生成只交给 Worker Runtime 的 capability；Report API 以 capability 推导当前 Reporter，并在所有权恢复时轮换，普通 Run 投影不返回该值。Executor 子进程不继承 Pegas 控制面凭证。执行结束到 Report 持久化之间使用短 reporting lease：内置 Worker 会立即写入结构化 Report；若进程在两者之间退出，新 Worker 原地接管同一个 Run 的 reporting phase，使用已持久化 output 生成 Report，不能重新执行 Executor 和外部副作用。已经持久化的 partial Report 在新 evidence 捕获或 verification event 到达时重新唤醒 reporting phase，由新序号 Report 重新计算完成门禁。
+每次 Run claim 都生成只交给 Worker Runtime 的 capability；Report API 以 capability 推导当前 Reporter，并在所有权恢复时轮换，普通 Run 投影不返回该值。Executor 子进程不继承 Pegas 实例 bearer、恢复 token 或模型密钥；为执行实际 Approval 协议，只注入当前 Run 的短期 claim、Run/Task ID 与本机 Control Plane URL，并在每次 spawn 前剥离父进程中可能残留的旧 claim。执行结束到 Report 持久化之间使用短 reporting lease：内置 Worker 会立即写入结构化 Report；若进程在两者之间退出，新 Worker 原地接管同一个 Run 的 reporting phase，使用已持久化 output 生成 Report，不能重新执行 Executor 和外部副作用。已经持久化的 partial Report 在新 evidence 捕获或 verification event 到达时重新唤醒 reporting phase，由新序号 Report 重新计算完成门禁。
+
+短期 claim 的传输地址只能是 loopback；服务监听 wildcard 时 Worker 仍通过对应回环地址访问。绑定具体非回环 IP 的部署不能启用当前明文 capability 通道，未来远程 Worker 必须使用独立 HTTPS/mTLS 内部入口。
 
 GOAL-001 目标流程中，`ready` Report 可以引用 EvidenceRef，但不能自证 evidence 充分。Control Plane 先做引用结构校验，再按 evidence kind、trust class 与 criterion evidence plan 执行语义验证；高风险结果需要确定性验证器、独立证明或用户接受。验证通过后，Control Plane 计算 criterion 状态并生成 Review Pack，再原子更新 Run、Task/WorkChannel、ChannelEvent、协作结果投递和必要的 OutboxItem。
 
@@ -285,6 +287,8 @@ Scheduler 不直接调用 Agent。它在事务中推进 Trigger 的下一次时�
 - 用户已经建立的长期授权规则。
 
 Approval 是持久对象，可以跨进程和设备等待。审批通过只授权描述中的动作，不能自动扩大整个 Task 的权限。
+
+APPROVAL-001 的具体状态机、能力令牌、幂等与恢复协议见 `docs/approval-lifecycle.md`。批准只代表授权继续，不能作为外部副作用已成功的证据；恢复 Run 必须单独回报 Action outcome，无法判断时保存为 `unknown` 并停止自动重试。
 
 ### 8. Notification
 

@@ -90,6 +90,9 @@ export interface OutboxMessage {
   readAt?: string
 }
 
+export type Approval = ServerApproval
+export type DurableAction = ServerDurableAction
+
 export interface Snapshot {
   events: InboxEvent[]
   messages: OutboxMessage[]
@@ -257,3 +260,7 @@ export interface DshModelCatalog {
   defaultModel: string
   models: DshModelCatalogItem[]
 }
+import type {
+  Approval as ServerApproval,
+  DurableAction as ServerDurableAction,
+} from '../../src/approval/approval'

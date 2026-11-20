@@ -10,6 +10,13 @@ import {
 import { extname, resolve, sep } from 'node:path'
 
 import { projectWorkChannel } from '../channel/work-channel.js'
+import {
+  approvalStatuses,
+  parseActionOutcomeDraft,
+  parseActionRequestDraft,
+  parseApprovalDecisionDraft,
+  type ApprovalStatus,
+} from '../approval/approval.js'
 import type { NewInboxEvent } from '../core/domain.js'
 import type { DshModelCatalog } from '../executor/dsh-model-catalog.js'
 import {
@@ -82,7 +89,7 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
       if (await tryServeWeb(request, response, options.webRoot)) return
 
       if (
-        !isRunReportWrite(request) &&
+        !isRunCapabilityWrite(request) &&
         !isAuthorized(request, options.apiToken)
       ) {
         return sendJson(response, 401, { error: 'unauthorized' })
@@ -539,6 +546,122 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
           run: options.store.retryRun(
             decodeURIComponent(retryMatch[1] ?? ''),
             body.userId,
+          ),
+        })
+      }
+
+      const runApprovalMatch = /^\/v1\/runs\/([^/]+)\/approvals$/.exec(
+        taskResourceUrl.pathname,
+      )
+      if (runApprovalMatch && request.method === 'POST') {
+        const claimToken = runClaimToken(request)
+        if (!claimToken)
+          return sendJson(response, 403, { error: 'run_claim_required' })
+        const runId = decodeURIComponent(runApprovalMatch[1] ?? '')
+        options.store.assertApprovalRequestCapability(runId, claimToken)
+        const body = await readJson(request)
+        if (!isRecord(body)) throw new Error('Request body must be an object')
+        return sendJson(
+          response,
+          201,
+          options.store.requestApproval(
+            runId,
+            claimToken,
+            parseActionRequestDraft(body.action),
+          ),
+        )
+      }
+
+      if (
+        /^\/v1\/approvals(?:\/|$)/.test(taskResourceUrl.pathname) &&
+        (!options.apiToken || !isAuthorized(request, options.apiToken))
+      ) {
+        return sendJson(response, 401, { error: 'unauthorized' })
+      }
+
+      const approvalDecisionMatch =
+        /^\/v1\/approvals\/([^/]+)\/decisions$/.exec(taskResourceUrl.pathname)
+      if (approvalDecisionMatch && request.method === 'POST') {
+        const body = await readJson(request)
+        if (!isRecord(body)) throw new Error('Request body must be an object')
+        const result = options.store.decideApproval(
+          decodeURIComponent(approvalDecisionMatch[1] ?? ''),
+          requiredString(body.userId, 'userId'),
+          parseApprovalDecisionDraft(body),
+        )
+        return sendJson(
+          response,
+          result.event.status === 'processed' ? 200 : 202,
+          result,
+        )
+      }
+
+      const approvalMatch = /^\/v1\/approvals\/([^/]+)$/.exec(
+        taskResourceUrl.pathname,
+      )
+      if (approvalMatch && request.method === 'GET') {
+        const approval = options.store.getApproval(
+          decodeURIComponent(approvalMatch[1] ?? ''),
+          requiredQuery(taskResourceUrl, 'userId'),
+        )
+        return approval
+          ? sendJson(response, 200, { approval })
+          : sendJson(response, 404, { error: 'not_found' })
+      }
+
+      if (
+        taskResourceUrl.pathname === '/v1/approvals' &&
+        request.method === 'GET'
+      ) {
+        const userId = requiredQuery(taskResourceUrl, 'userId')
+        const statusValue = taskResourceUrl.searchParams.get('status')
+        const status = statusValue
+          ? parseApprovalStatus(statusValue)
+          : undefined
+        const page = pageRequest(taskResourceUrl)
+        const approvals = options.store.pageApprovals(
+          userId,
+          page.limit,
+          page.cursor,
+          status,
+        )
+        return sendJson(response, 200, {
+          approvals: approvals.items,
+          ...(approvals.nextCursor ? { nextCursor: approvals.nextCursor } : {}),
+        })
+      }
+
+      const actionMatch = /^\/v1\/actions\/([^/]+)$/.exec(
+        taskResourceUrl.pathname,
+      )
+      if (actionMatch && request.method === 'GET') {
+        if (!options.apiToken || !isAuthorized(request, options.apiToken)) {
+          return sendJson(response, 401, { error: 'unauthorized' })
+        }
+        const action = options.store.getAction(
+          decodeURIComponent(actionMatch[1] ?? ''),
+          requiredQuery(taskResourceUrl, 'userId'),
+        )
+        return action
+          ? sendJson(response, 200, { action })
+          : sendJson(response, 404, { error: 'not_found' })
+      }
+
+      const actionOutcomeMatch = /^\/v1\/actions\/([^/]+)\/outcomes$/.exec(
+        taskResourceUrl.pathname,
+      )
+      if (actionOutcomeMatch && request.method === 'POST') {
+        const claimToken = runClaimToken(request)
+        if (!claimToken)
+          return sendJson(response, 403, { error: 'run_claim_required' })
+        const actionId = decodeURIComponent(actionOutcomeMatch[1] ?? '')
+        options.store.assertActionOutcomeCapability(actionId, claimToken)
+        const body = await readJson(request)
+        return sendJson(response, 201, {
+          action: options.store.recordActionOutcome(
+            actionId,
+            claimToken,
+            parseActionOutcomeDraft(body),
           ),
         })
       }
@@ -1128,10 +1251,13 @@ function isAuthorized(
   )
 }
 
-function isRunReportWrite(request: IncomingMessage): boolean {
+function isRunCapabilityWrite(request: IncomingMessage): boolean {
   if (request.method !== 'POST' || !request.url) return false
   const pathname = new URL(request.url, 'http://localhost').pathname
-  return /^\/v1\/runs\/[^/]+\/reports$/.test(pathname)
+  return (
+    /^\/v1\/runs\/[^/]+\/(reports|approvals)$/.test(pathname) ||
+    /^\/v1\/actions\/[^/]+\/outcomes$/.test(pathname)
+  )
 }
 
 function runClaimToken(request: IncomingMessage): string | undefined {
@@ -1218,6 +1344,11 @@ function parseNewInboxEvent(value: unknown): NewInboxEvent {
   const userId = requiredString(value.userId, 'userId')
   const type = requiredString(value.type, 'type')
   const source = requiredString(value.source, 'source')
+  if (type === 'approval.decided' || source === 'approval') {
+    throw new Error(
+      'Approval decision events are reserved for the Control Plane',
+    )
+  }
   const dedupeKey = optionalString(value.dedupeKey, 'dedupeKey')
   if (!Object.hasOwn(value, 'payload')) throw new Error('payload is required')
   return {
@@ -1242,6 +1373,14 @@ function requiredString(value: unknown, field: string): string {
 function optionalString(value: unknown, field: string): string | undefined {
   if (value === undefined) return undefined
   return requiredString(value, field)
+}
+
+function parseApprovalStatus(value: string): ApprovalStatus {
+  const status = approvalStatuses.find(status => status === value)
+  if (!status) {
+    throw new Error('Approval status is invalid')
+  }
+  return status
 }
 
 function sendJson(

@@ -112,7 +112,7 @@ export function Onboarding({
               </span>
               <span>
                 <ShieldCheck size={16} />
-                高风险操作确认能力尚未接入，请先检查当前能力状态
+                高风险 Action 会持久等待你的决定，再从恢复点继续
               </span>
             </div>
           )}

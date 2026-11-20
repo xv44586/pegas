@@ -27,10 +27,10 @@ import { EmptyCapability, PageToolbar } from './Shell'
 import {
   attentionKind,
   formatRelativeTime,
-  isAttentionMessage,
   latestRunForTask,
   statusLabel,
   textFromPayload,
+  unresolvedAttentionMessages,
   type DrawerView,
 } from './types'
 
@@ -771,11 +771,11 @@ export function AttentionPage({
   const [filter, setFilter] = useState<'all' | 'approval' | 'input' | 'failed'>(
     'all',
   )
-  const attentionMessages = snapshot.messages
-    .filter(isAttentionMessage)
-    .toSorted(
-      (left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt),
-    )
+  const attentionMessages = unresolvedAttentionMessages(
+    snapshot.messages,
+  ).toSorted(
+    (left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt),
+  )
   const visible = attentionMessages.filter(message => {
     if (filter === 'all') return true
     return attentionKind(message) === filter
