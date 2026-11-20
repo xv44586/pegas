@@ -3022,9 +3022,6 @@ kbd {
   .page-header-actions {
     gap: 2px;
   }
-  .page-toolbar button:first-child {
-    display: none;
-  }
   .filter-row {
     overflow-x: auto;
   }
@@ -3072,7 +3069,8 @@ kbd {
     padding: 10px 14px;
   }
   .settings-footer > span {
-    display: none;
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
   .card-title {
     display: grid;

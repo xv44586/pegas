@@ -58,6 +58,15 @@ describe('sealed UI layout contracts', () => {
     expect(sealedUi).toContain('@media (prefers-reduced-motion: reduce)')
   })
 
+  it('keeps mobile search and settings save feedback visible', () => {
+    expect(sealedUi).not.toMatch(
+      /@media \(max-width: 520px\)[\s\S]*?\.page-toolbar button:first-child\s*\{[^}]*display:\s*none;/,
+    )
+    expect(sealedUi).not.toMatch(
+      /@media \(max-width: 520px\)[\s\S]*?\.settings-footer\s*>\s*span\s*\{[^}]*display:\s*none;/,
+    )
+  })
+
   it('separates model provider and settings layouts', () => {
     expect(sealedUi).toMatch(
       /\.model-service-layout\s*\{[^}]*grid-template-columns:\s*220px minmax\(0, 1fr\);/,

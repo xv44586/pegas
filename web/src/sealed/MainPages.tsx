@@ -365,6 +365,7 @@ export function ConversationPage({
     transcribe: blob => api.transcribeVoice(blob),
     onTranscript: text => onDraftChange(`${draft}${draft ? ' ' : ''}${text}`),
   })
+  const dictationBusy = dictation.state !== 'idle'
   const latestChannel = snapshot.channels[0]
   const latestRun = latestChannel
     ? latestRunForTask(snapshot.runs, latestChannel.id)
@@ -372,7 +373,7 @@ export function ConversationPage({
 
   async function send() {
     const text = draft.trim()
-    if (!text || sending) return
+    if (!text || sending || dictationBusy) return
     setSending(true)
     setError('')
     try {
@@ -539,8 +540,12 @@ export function ConversationPage({
             onChange={event => onDraftChange(event.target.value)}
             onKeyDown={event => {
               if (event.key === 'Enter' && !event.shiftKey) {
+                const legacyKeyCode = (
+                  event.nativeEvent as unknown as { keyCode?: number }
+                ).keyCode
+                if (event.nativeEvent.isComposing || legacyKeyCode === 229)
+                  return
                 event.preventDefault()
-                if (event.nativeEvent.isComposing) return
                 event.currentTarget.form?.requestSubmit()
               }
             }}
@@ -596,7 +601,7 @@ export function ConversationPage({
               <button
                 aria-label="发送"
                 className="send-button"
-                disabled={!draft.trim() || sending}
+                disabled={!draft.trim() || sending || dictationBusy}
                 type="submit"
               >
                 <ArrowUp size={20} />
@@ -636,11 +641,14 @@ export function WorkPage({
       (channel.status === 'completed' || channel.status === 'cancelled')
     )
       return false
-    if (filter === 'waiting')
-      return !run || run.status === 'waiting' || run.status === 'queued'
+    if (filter === 'waiting') return !run || run.status === 'waiting'
     if (channel.status === 'completed' || channel.status === 'cancelled')
       return false
-    return run?.status === 'running' || run?.status === 'failed'
+    return (
+      run?.status === 'queued' ||
+      run?.status === 'running' ||
+      run?.status === 'failed'
+    )
   })
   return (
     <div className="standard-page">

@@ -19,6 +19,7 @@ import {
   emptySnapshot,
   isAttentionMessage,
   latestRunForTask,
+  runIdFromMessage,
   type AppData,
   type AppPage,
   type DrawerView,
@@ -70,33 +71,19 @@ export function App() {
       localStorage.getItem('pegas-setup-complete') !== 'true',
   )
   const returnFocusRef = useRef<HTMLElement | null>(null)
-  const restoredOutboxRef = useRef(false)
+  const restoredDetailRef = useRef(false)
   const snapshotRequestRef = useRef(0)
+  const usageRequestRef = useRef(0)
 
   const loadSnapshot = useCallback(async () => {
     const requestId = snapshotRequestRef.current + 1
     snapshotRequestRef.current = requestId
     try {
-      const [snapshotResult, usageResult] = await Promise.allSettled([
-        api.snapshot(),
-        api.modelUsage(),
-      ])
+      const snapshotResult = await api.snapshot()
       if (requestId !== snapshotRequestRef.current) return
-      if (snapshotResult.status === 'rejected') throw snapshotResult.reason
-      const usageError =
-        usageResult.status === 'rejected'
-          ? usageResult.reason instanceof Error
-            ? usageResult.reason.message
-            : '无法读取模型用量。'
-          : ''
       setData(current => ({
         ...current,
-        snapshot: snapshotResult.value,
-        usage:
-          usageResult.status === 'fulfilled'
-            ? usageResult.value
-            : current.usage,
-        usageError,
+        snapshot: snapshotResult,
       }))
       setSnapshotLoaded(true)
       setError('')
@@ -109,6 +96,23 @@ export function App() {
         setError(caught instanceof Error ? caught.message : '无法连接 Pegas。')
     } finally {
       if (requestId === snapshotRequestRef.current) setLoading(false)
+    }
+  }, [api])
+
+  const loadUsage = useCallback(async () => {
+    const requestId = usageRequestRef.current + 1
+    usageRequestRef.current = requestId
+    try {
+      const usage = await api.modelUsage()
+      if (requestId !== usageRequestRef.current) return
+      setData(current => ({ ...current, usage, usageError: '' }))
+    } catch (caught) {
+      if (requestId !== usageRequestRef.current) return
+      setData(current => ({
+        ...current,
+        usageError:
+          caught instanceof Error ? caught.message : '无法读取模型用量。',
+      }))
     }
   }, [api])
 
@@ -139,10 +143,18 @@ export function App() {
 
   useEffect(() => {
     void loadSnapshot()
+    void loadUsage()
     void loadConfiguration()
-    const interval = window.setInterval(() => void loadSnapshot(), 5_000)
-    return () => window.clearInterval(interval)
-  }, [loadConfiguration, loadSnapshot])
+    const snapshotInterval = window.setInterval(
+      () => void loadSnapshot(),
+      5_000,
+    )
+    const usageInterval = window.setInterval(() => void loadUsage(), 30_000)
+    return () => {
+      window.clearInterval(snapshotInterval)
+      window.clearInterval(usageInterval)
+    }
+  }, [loadConfiguration, loadSnapshot, loadUsage])
 
   useEffect(() => {
     const listener = (event: KeyboardEvent) => {
@@ -196,7 +208,12 @@ export function App() {
         runsById.set(snapshotRun.id, snapshotRun)
     }
     const runs = [...runsById.values()]
-    const run = latestRunForTask(runs, channel.id) ?? view.run
+    const run =
+      (view.selectedRunId
+        ? runs.find(item => item.id === view.selectedRunId)
+        : undefined) ??
+      latestRunForTask(runs, channel.id) ??
+      view.run
     const records =
       data.usage?.records.filter(record => record.runId === run?.id) ?? []
     if (!records.length)
@@ -221,39 +238,72 @@ export function App() {
       },
     }
   }
-  function openDrawer(view: DrawerView) {
-    rememberFocus()
-    setDrawer(enrichDrawer(view))
-    if (view.kind === 'task') void loadTaskDrawer(view.channel.id)
-  }
-  async function loadTaskDrawer(channelId: string) {
-    try {
-      const scoped = await api.snapshot(channelId)
-      const timeline = scoped.channelTimeline
-      setDrawer(current => {
-        if (current?.kind !== 'task' || current.channel.id !== channelId)
-          return current
-        const runs = timeline?.runs ?? scoped.runs
-        return enrichDrawer({
-          ...current,
-          channel: timeline?.channel ?? current.channel,
-          run: latestRunForTask(runs, channelId) ?? current.run,
-          runs,
-          ...(timeline ? { timeline } : {}),
-          timelineError: undefined,
+  const loadTaskDrawer = useCallback(
+    async (channelId: string) => {
+      try {
+        const scoped = await api.snapshot(channelId)
+        const timeline = scoped.channelTimeline
+        setDrawer(current => {
+          if (current?.kind !== 'task' || current.channel.id !== channelId)
+            return current
+          const runs = timeline?.runs ?? scoped.runs
+          const selectedRun = current.selectedRunId
+            ? runs.find(item => item.id === current.selectedRunId)
+            : undefined
+          return {
+            ...current,
+            channel: timeline?.channel ?? current.channel,
+            run:
+              selectedRun ?? latestRunForTask(runs, channelId) ?? current.run,
+            runs,
+            ...(timeline ? { timeline } : {}),
+            timelineError: undefined,
+          }
         })
-      })
-    } catch (caught) {
-      const message =
-        caught instanceof Error ? caught.message : '无法读取 Channel 时间线。'
-      setDrawer(current =>
-        current?.kind === 'task' && current.channel.id === channelId
-          ? { ...current, timelineError: message }
-          : current,
-      )
+      } catch (caught) {
+        const message =
+          caught instanceof Error ? caught.message : '无法读取 Channel 时间线。'
+        setDrawer(current =>
+          current?.kind === 'task' && current.channel.id === channelId
+            ? { ...current, timelineError: message }
+            : current,
+        )
+      }
+    },
+    [api],
+  )
+  function openDrawer(
+    view: DrawerView,
+    options: { rememberTrigger?: boolean; updateLocation?: boolean } = {},
+  ) {
+    if (options.rememberTrigger !== false) rememberFocus()
+    setDrawer(enrichDrawer(view))
+    if (view.kind === 'task') {
+      if (options.updateLocation !== false) {
+        const url = new URL(window.location.href)
+        url.searchParams.set('channel', view.channel.id)
+        url.searchParams.delete('task')
+        url.searchParams.delete('outbox')
+        window.history.pushState(
+          {},
+          '',
+          `${url.pathname}${url.search}${url.hash}`,
+        )
+      }
+      void loadTaskDrawer(view.channel.id)
     }
   }
   function closeDrawer() {
+    const url = new URL(window.location.href)
+    if (url.searchParams.has('channel') || url.searchParams.has('task')) {
+      url.searchParams.delete('channel')
+      url.searchParams.delete('task')
+      window.history.replaceState(
+        {},
+        '',
+        `${url.pathname}${url.search}${url.hash}`,
+      )
+    }
     setDrawer(undefined)
     restoreFocus()
   }
@@ -279,6 +329,16 @@ export function App() {
     window.history.pushState({}, '', `${url.pathname}${url.search}${url.hash}`)
   }
 
+  const openDrawerChannelId = drawer?.kind === 'task' ? drawer.channel.id : ''
+  useEffect(() => {
+    if (!openDrawerChannelId) return
+    const interval = window.setInterval(
+      () => void loadTaskDrawer(openDrawerChannelId),
+      5_000,
+    )
+    return () => window.clearInterval(interval)
+  }, [loadTaskDrawer, openDrawerChannelId])
+
   useEffect(() => {
     const restorePage = () => {
       setPage(pageFromLocation())
@@ -286,12 +346,30 @@ export function App() {
         'outbox',
       )
       const message = data.snapshot.messages.find(item => item.id === messageId)
-      if (message) restoreAttentionDrawer(message)
-      else setDrawer(undefined)
+      if (message) {
+        restoreAttentionDrawer(message)
+        return
+      }
+      const parameters = new URLSearchParams(window.location.search)
+      const channelId = parameters.get('channel') ?? parameters.get('task')
+      const channel = data.snapshot.channels.find(item => item.id === channelId)
+      if (channel) {
+        setDrawer({
+          kind: 'task',
+          channel,
+          run: latestRunForTask(data.snapshot.runs, channel.id),
+        })
+        void loadTaskDrawer(channel.id)
+      } else setDrawer(undefined)
     }
     window.addEventListener('popstate', restorePage)
     return () => window.removeEventListener('popstate', restorePage)
-  }, [data.snapshot.channels, data.snapshot.messages, data.snapshot.runs])
+  }, [
+    data.snapshot.channels,
+    data.snapshot.messages,
+    data.snapshot.runs,
+    loadTaskDrawer,
+  ])
 
   useEffect(() => {
     if (typeof window.matchMedia !== 'function') return
@@ -406,32 +484,49 @@ export function App() {
       setDrawer(undefined)
       return
     }
+    const selectedRunId = runIdFromMessage(message)
     setDrawer(
       enrichDrawer({
         kind: 'task',
         channel,
-        run: latestRunForTask(data.snapshot.runs, channel.id),
+        run:
+          data.snapshot.runs.find(item => item.id === selectedRunId) ??
+          latestRunForTask(data.snapshot.runs, channel.id),
+        ...(selectedRunId ? { selectedRunId } : {}),
       }),
     )
     void loadTaskDrawer(channel.id)
   }
 
   useEffect(() => {
-    if (restoredOutboxRef.current || loading || !snapshotLoaded) return
-    const messageId = new URLSearchParams(window.location.search).get('outbox')
-    if (!messageId) {
-      restoredOutboxRef.current = true
-      return
-    }
+    if (restoredDetailRef.current || loading || !snapshotLoaded) return
+    const parameters = new URLSearchParams(window.location.search)
+    const messageId = parameters.get('outbox')
     const message = data.snapshot.messages.find(item => item.id === messageId)
-    if (!message) {
-      restoredOutboxRef.current = true
+    if (message) {
+      restoredDetailRef.current = true
+      setPage('attention')
+      void openAttentionMessage(message)
       return
     }
-    restoredOutboxRef.current = true
-    setPage('attention')
-    void openAttentionMessage(message)
-  }, [data.snapshot.messages, loading, snapshotLoaded])
+    const channelId = parameters.get('channel') ?? parameters.get('task')
+    const channel = data.snapshot.channels.find(item => item.id === channelId)
+    if (!channelId || channel) restoredDetailRef.current = true
+    if (!channel) return
+    setDrawer({
+      kind: 'task',
+      channel,
+      run: latestRunForTask(data.snapshot.runs, channel.id),
+    })
+    void loadTaskDrawer(channel.id)
+  }, [
+    data.snapshot.channels,
+    data.snapshot.messages,
+    data.snapshot.runs,
+    loadTaskDrawer,
+    loading,
+    snapshotLoaded,
+  ])
 
   if (unauthorized)
     return (
@@ -524,7 +619,10 @@ export function App() {
             }}
             onDraftChange={setComposerDraft}
             onSelectModel={selectAgentModel}
-            onSent={loadSnapshot}
+            onSent={async () => {
+              await loadSnapshot()
+              void loadUsage()
+            }}
             selectedModelId={selectedAgentModelId}
             speechEnabled={
               data.settings?.speech?.provider === 'openai-compatible'
@@ -553,7 +651,7 @@ export function App() {
               api.discoverModels(provider, model, draft)
             }
             onOpenDrawer={openDrawer}
-            onReloadUsage={() => void loadSnapshot()}
+            onReloadUsage={() => void loadUsage()}
             onThemeChange={setTheme}
             onSave={saveSettings}
             onTestModel={(provider, model, draft) =>
@@ -579,11 +677,14 @@ export function App() {
           onClose={closeSearch}
           onOpen={channel => {
             setSearchOpen(false)
-            openDrawer({
-              kind: 'task',
-              channel,
-              run: latestRunForTask(data.snapshot.runs, channel.id),
-            })
+            openDrawer(
+              {
+                kind: 'task',
+                channel,
+                run: latestRunForTask(data.snapshot.runs, channel.id),
+              },
+              { rememberTrigger: false },
+            )
           }}
         />
       )}

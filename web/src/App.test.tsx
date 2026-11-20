@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -401,6 +402,25 @@ describe('sealed Pegas UI', () => {
     await waitFor(() => expect(document.activeElement).toBe(trigger))
   })
 
+  it('traps focus in global search and restores the original trigger after opening a result', async () => {
+    installFetch()
+    render(<App />)
+    const trigger = await screen.findByRole('button', { name: '全局搜索' })
+    trigger.focus()
+    fireEvent.click(trigger)
+    const dialog = screen.getByRole('dialog', { name: '全局搜索' })
+    const input = within(dialog).getByRole('textbox', { name: '搜索事情' })
+    const close = within(dialog).getByRole('button', { name: '关闭搜索' })
+    close.focus()
+    fireEvent.keyDown(document, { key: 'Tab' })
+    expect(document.activeElement).toBe(input)
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: /安全自更新流程/ }),
+    )
+    fireEvent.click(await screen.findByRole('button', { name: '关闭详情' }))
+    await waitFor(() => expect(document.activeElement).toBe(trigger))
+  })
+
   it('toggles light and dark from the header without opening a menu', async () => {
     installFetch()
     render(<App />)
@@ -617,6 +637,12 @@ describe('sealed Pegas UI', () => {
       }),
     )
     const modelSelect = await screen.findByLabelText('模型')
+    expect(
+      within(modelSelect).getByRole('option', { name: '共享模型 · Magpie' }),
+    ).toBeTruthy()
+    expect(
+      within(modelSelect).getByRole('option', { name: '共享模型 · Other' }),
+    ).toBeTruthy()
     fireEvent.change(modelSelect, { target: { value: 'Other::shared-model' } })
     fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
     await waitFor(() =>
@@ -887,6 +913,22 @@ describe('sealed Pegas UI', () => {
     expect(within(list).getByText(channel.title)).toBeTruthy()
   })
 
+  it('keeps queued work visible in the active filter', async () => {
+    installSnapshotFetch({
+      ...snapshot,
+      runs: [{ ...run, status: 'queued' }],
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /所有事情/,
+      }),
+    )
+    const list = screen.getByLabelText('事情列表')
+    expect(within(list).getByText(channel.title)).toBeTruthy()
+    expect(within(list).getByText('进行中')).toBeTruthy()
+  })
+
   it('keeps failed work visible in the active work list', async () => {
     installSnapshotFetch({
       ...snapshot,
@@ -943,6 +985,30 @@ describe('sealed Pegas UI', () => {
     ).toBeTruthy()
     expect(await screen.findByLabelText('工作详情')).toBeTruthy()
     expect(window.location.search).toContain('outbox=message-1')
+  })
+
+  it('restores a URL-backed Channel drawer and preserves its scoped timeline', async () => {
+    window.history.replaceState({}, '', '/?channel=task-1')
+    installFetch(path =>
+      path.startsWith('/v1/channels/task-1/timeline?')
+        ? Response.json({
+            channel,
+            events: [
+              {
+                ...snapshot.events[0],
+                id: 'deep-linked-event',
+                payload: { text: '深链接 Channel 时间线' },
+              },
+            ],
+            messages: [],
+            runs: snapshot.runs,
+          })
+        : undefined,
+    )
+    render(<App />)
+    expect(await screen.findByLabelText('工作详情')).toBeTruthy()
+    expect(await screen.findByText('深链接 Channel 时间线')).toBeTruthy()
+    expect(window.location.search).toContain('channel=task-1')
   })
 
   it('restores a URL-backed detail after the initial snapshot load fails', async () => {
@@ -1011,6 +1077,12 @@ describe('sealed Pegas UI', () => {
         ([path, init]) => path === '/v1/events' && init?.method === 'POST',
       ),
     ).toBe(false)
+    fireEvent.keyDown(composer, { key: 'Enter', keyCode: 229 })
+    expect(
+      fetchMock.mock.calls.some(
+        ([path, init]) => path === '/v1/events' && init?.method === 'POST',
+      ),
+    ).toBe(false)
     fireEvent.keyDown(composer, { key: 'Enter' })
     await waitFor(() =>
       expect(
@@ -1046,6 +1118,53 @@ describe('sealed Pegas UI', () => {
       await screen.findByRole('heading', { name: '语音与输入' }),
     ).toBeTruthy()
     expect(getUserMedia).not.toHaveBeenCalled()
+  })
+
+  it('blocks message submission while dictation is recording', async () => {
+    class FakeMediaRecorder {
+      static isTypeSupported() {
+        return false
+      }
+      state: RecordingState = 'inactive'
+      mimeType = 'audio/webm'
+      ondataavailable: ((event: BlobEvent) => void) | null = null
+      onerror: (() => void) | null = null
+      onstop: (() => void) | null = null
+      start() {
+        this.state = 'recording'
+      }
+      stop() {
+        this.state = 'inactive'
+        this.onstop?.()
+      }
+    }
+    vi.stubGlobal('MediaRecorder', FakeMediaRecorder)
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: {
+        getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [] }),
+      },
+    })
+    const fetchMock = installFetch()
+    render(<App />)
+    const composer = await screen.findByLabelText('给 Pegas 发消息')
+    fireEvent.change(composer, { target: { value: '先不要发送' } })
+    fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '停止录音' })).toBeTruthy(),
+    )
+    expect(screen.getByRole('button', { name: '发送' })).toHaveProperty(
+      'disabled',
+      true,
+    )
+    const recordingForm = composer.closest('form')
+    if (!recordingForm) throw new Error('Expected the composer form')
+    fireEvent.submit(recordingForm)
+    expect(
+      fetchMock.mock.calls.some(
+        ([path, init]) => path === '/v1/events' && init?.method === 'POST',
+      ),
+    ).toBe(false)
   })
 
   it('pushes page history and restores the prior page on browser back', async () => {
@@ -1091,6 +1210,8 @@ describe('sealed Pegas UI', () => {
       />,
     )
     expect(screen.getByText('欢迎使用 Pegas')).toBeTruthy()
+    expect(screen.getByText(/确认能力尚未接入/)).toBeTruthy()
+    expect(screen.queryByText(/执行前会请求确认/)).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: /继续/ }))
     expect(screen.getByText('连接模型服务')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: /继续/ }))
@@ -1378,6 +1499,17 @@ describe('sealed Pegas UI', () => {
     await waitFor(() => expect(usageRequests).toBeGreaterThan(1))
   })
 
+  it('does not let a slow usage request starve the core snapshot', async () => {
+    installFetch(path => {
+      if (path.startsWith('/v1/usage?'))
+        return new Promise<Response>(() => undefined)
+      return undefined
+    })
+    render(<App />)
+    expect(await screen.findByText('你的私人智能工作伙伴')).toBeTruthy()
+    expect(await screen.findByText('安全自更新流程')).toBeTruthy()
+  })
+
   it('restores profile-managed execution after a model override', async () => {
     const fetchMock = installFetch()
     render(<App />)
@@ -1439,6 +1571,88 @@ describe('sealed Pegas UI', () => {
     fireEvent.click(action)
     fireEvent.click(await screen.findByRole('button', { name: '关闭详情' }))
     await waitFor(() => expect(document.activeElement).toBe(action))
+  })
+
+  it('opens an attention item on the Run referenced by its payload', async () => {
+    const sourceMessage = snapshot.messages[0]
+    if (!sourceMessage) throw new Error('Expected an outbox message fixture')
+    const failedRun: Run = {
+      ...run,
+      id: 'run-failed',
+      status: 'failed',
+      lastError: '旧 Run 的 provider timeout',
+      updatedAt: '2026-11-19T08:01:00.000Z',
+    }
+    const successfulRetry: Run = {
+      ...run,
+      id: 'run-success',
+      status: 'completed',
+      output: '重试成功',
+      updatedAt: '2026-11-19T08:10:00.000Z',
+    }
+    installSnapshotFetch({
+      ...snapshot,
+      runs: [failedRun, successfulRetry],
+      messages: [
+        {
+          ...sourceMessage,
+          payload: {
+            type: 'run.failed',
+            runId: failedRun.id,
+            error: failedRun.lastError,
+          },
+        },
+      ],
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '查看原因' }))
+    const drawer = await screen.findByLabelText('工作详情')
+    expect(
+      within(drawer).getAllByText('旧 Run 的 provider timeout').length,
+    ).toBeGreaterThan(0)
+    expect(within(drawer).getByText('执行已停止')).toBeTruthy()
+  })
+
+  it('refreshes an open Channel timeline during polling', async () => {
+    vi.useFakeTimers()
+    let timelineRequests = 0
+    try {
+      installFetch(path => {
+        if (!path.startsWith('/v1/channels/task-1/timeline?')) return undefined
+        timelineRequests += 1
+        return Response.json({
+          channel,
+          events: snapshot.events,
+          messages: snapshot.messages,
+          runs: snapshot.runs,
+        })
+      })
+      render(<App />)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      fireEvent.click(
+        within(screen.getByLabelText('主导航')).getByRole('button', {
+          name: /所有事情/,
+        }),
+      )
+      fireEvent.click(screen.getByRole('button', { name: /安全自更新流程/ }))
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(timelineRequests).toBe(1)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000)
+      })
+      expect(timelineRequests).toBeGreaterThan(1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('reopens an attention detail when browser history returns to its URL', async () => {
@@ -1688,7 +1902,6 @@ describe('sealed Pegas UI', () => {
         name: /所有事情/,
       }),
     )
-    fireEvent.click(screen.getByRole('tab', { name: '等待中' }))
     fireEvent.click(screen.getByRole('button', { name: /安全自更新流程/ }))
     const drawer = await screen.findByLabelText('工作详情')
     expect(within(drawer).getByText(/Run 1/)).toBeTruthy()

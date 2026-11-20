@@ -323,7 +323,10 @@ export function SettingsPage({
           (section !== 'models' ||
             modelServiceProvider === draft.modelProvider) && (
             <footer className="settings-footer">
-              <span className={notice.includes('失败') ? 'is-error' : ''}>
+              <span
+                className={notice.includes('失败') ? 'is-error' : ''}
+                role={notice.includes('失败') ? 'alert' : 'status'}
+              >
                 {notice}
               </span>
               <button
@@ -629,7 +632,7 @@ function PegasSettings({
                     key={`${model.provider}/${model.id}`}
                     value={`${model.provider}::${model.id}`}
                   >
-                    {model.name}
+                    {model.name} · {model.provider}
                   </option>
                 ))
               ) : (
@@ -673,15 +676,14 @@ function PegasSettings({
           </div>
           <div className="compact-field-row">
             <span>开始工作前</span>
-            <select defaultValue="高风险操作先确认" disabled>
-              <option>高风险操作先确认</option>
-              <option>每次都确认</option>
+            <select defaultValue="确认服务尚未接入" disabled>
+              <option>确认服务尚未接入</option>
             </select>
           </div>
           <h3>工作规则</h3>
           <div className="rule-list">
             {[
-              '重要外部操作先请求确认',
+              '重要外部操作确认规则（尚未接入）',
               '产品设计优先给出具体界面方案',
               '发布前先说明回滚路径',
             ].map(rule => (
@@ -715,8 +717,8 @@ function PegasSettings({
         <div className="setting-section">
           <h3>自主程度</h3>
           <p className="setting-copy">
-            Pegas
-            可以独立完成低风险、可恢复的步骤；外部发布、付款、删除与权限变更始终需要确认。
+            Approval
+            服务尚未建立服务端事实来源；当前界面不能保证外部发布、付款、删除或权限变更会被自动拦截。
           </p>
           <input
             aria-label="自主程度"

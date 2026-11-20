@@ -174,6 +174,7 @@ export function GlobalSearch({
   onOpen: (channel: WorkChannel) => void
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
+  const dialogRef = useRef<HTMLElement>(null)
   const [query, setQuery] = useState('')
   const visibleChannels = channels
     .filter(channel =>
@@ -182,13 +183,41 @@ export function GlobalSearch({
         .includes(query.toLowerCase()),
     )
     .slice(0, 5)
-  useEffect(() => inputRef.current?.focus(), [])
+  useEffect(() => {
+    inputRef.current?.focus()
+    const containFocus = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab') return
+      const focusable = Array.from(
+        dialogRef.current?.querySelectorAll<HTMLElement>(
+          'button:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      )
+      const first = focusable[0]
+      const last = focusable.at(-1)
+      if (!first || !last) return
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    document.addEventListener('keydown', containFocus)
+    return () => document.removeEventListener('keydown', containFocus)
+  }, [])
   return (
     <div
       className="modal-backdrop"
       onMouseDown={event => event.target === event.currentTarget && onClose()}
     >
-      <section aria-label="全局搜索" className="command-dialog" role="dialog">
+      <section
+        aria-label="全局搜索"
+        aria-modal="true"
+        className="command-dialog"
+        ref={dialogRef}
+        role="dialog"
+      >
         <div className="command-input">
           <Search size={20} />
           <input

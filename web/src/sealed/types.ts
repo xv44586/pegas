@@ -32,6 +32,7 @@ export type DrawerView =
       kind: 'task'
       channel: WorkChannel
       run?: Run
+      selectedRunId?: string
       runs?: Run[]
       timeline?: ChannelTimeline
       timelineError?: string
@@ -130,6 +131,12 @@ export function attentionKind(message: OutboxMessage): AttentionKind {
 
 export function isAttentionMessage(message: OutboxMessage): boolean {
   return attentionKind(message) !== 'update'
+}
+
+export function runIdFromMessage(message: OutboxMessage): string | undefined {
+  if (!message.payload || typeof message.payload !== 'object') return undefined
+  const runId = (message.payload as Record<string, unknown>).runId
+  return typeof runId === 'string' && runId.trim() ? runId : undefined
 }
 
 export function latestRunForTask(
