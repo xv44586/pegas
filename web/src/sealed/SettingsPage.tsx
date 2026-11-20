@@ -133,7 +133,10 @@ export function SettingsPage({
     response?.settings,
   )
   const [saving, setSaving] = useState(false)
-  const [notice, setNotice] = useState('')
+  const [notice, setNotice] = useState<{
+    kind: 'success' | 'error'
+    message: string
+  }>()
   const [modelServiceProvider, setModelServiceProvider] =
     useState<RuntimeSettings['modelProvider']>()
   const [providerDraft, setProviderDraft] = useState<ModelProviderDraft>()
@@ -191,15 +194,24 @@ export function SettingsPage({
   async function save() {
     if (!draft || !providerDraft || saving) return
     setSaving(true)
-    setNotice('')
+    setNotice(undefined)
     try {
       await onSave(draft, providerDraft, speechDraft, rewriteDraft)
-      setNotice('更改已保存')
+      setNotice({ kind: 'success', message: '更改已保存' })
     } catch (caught) {
-      setNotice(caught instanceof Error ? caught.message : '保存失败，请重试。')
+      setNotice({
+        kind: 'error',
+        message:
+          caught instanceof Error ? caught.message : '保存失败，请重试。',
+      })
     } finally {
       setSaving(false)
     }
+  }
+
+  function selectSection(next: SettingsSection) {
+    setSection(next)
+    onSectionChange?.(next)
   }
 
   return (
@@ -217,10 +229,7 @@ export function SettingsPage({
             <button
               className={section === item.id ? 'is-active' : ''}
               key={item.id}
-              onClick={() => {
-                setSection(item.id)
-                onSectionChange?.(item.id)
-              }}
+              onClick={() => selectSection(item.id)}
               type="button"
             >
               <Icon size={17} />
@@ -231,96 +240,98 @@ export function SettingsPage({
       </aside>
       <section className="settings-content">
         <div className="settings-scroll-region">
-          {section === 'appearance' ? (
-            <AppearanceSettings
-              onChange={onThemeChange}
-              systemDark={systemDark}
-              theme={theme}
-            />
-          ) : !draft || !response ? (
-            <div className="settings-loading">正在读取设置…</div>
-          ) : (
-            <>
-              {section === 'pegas' && (
-                <PegasSettings
-                  agentModels={agentModels}
-                  draft={draft}
-                  onChange={setDraft}
-                  onOpenDrawer={onOpenDrawer}
-                />
-              )}
-              {section === 'models' && (
-                <ModelServices
-                  draft={draft}
-                  onDiscoverModels={onDiscoverModels}
-                  onOpenRouter={() => setSection('router')}
-                  onTestModel={onTestModel}
-                  providerDraft={providerDraft}
-                  response={response}
-                  selected={modelServiceProvider}
-                  setSelected={setModelServiceProvider}
-                  setProviderDraft={setProviderDraft}
-                />
-              )}
-              {section === 'router' && (
-                <RouterSettings
-                  draft={draft}
-                  response={response}
-                  onChange={next => {
-                    if (next.modelProvider !== draft.modelProvider) {
-                      const provider = response.capabilities.providers.find(
-                        item => item.id === next.modelProvider,
-                      )
-                      if (provider)
-                        setProviderDraft({
-                          name: provider.name,
-                          protocol: provider.protocol,
-                          baseUrl: provider.baseUrl,
-                          apiKey: '',
-                          clearApiKey: false,
-                        })
-                    }
-                    setDraft(next)
-                  }}
-                />
-              )}
-              {section === 'voice' &&
-                speechDraft &&
-                rewriteDraft &&
-                providerDraft && (
-                  <VoiceSettings
+          <fieldset className="settings-fields" disabled={saving}>
+            {section === 'appearance' ? (
+              <AppearanceSettings
+                onChange={onThemeChange}
+                systemDark={systemDark}
+                theme={theme}
+              />
+            ) : !draft || !response ? (
+              <div className="settings-loading">正在读取设置…</div>
+            ) : (
+              <>
+                {section === 'pegas' && (
+                  <PegasSettings
+                    agentModels={agentModels}
                     draft={draft}
                     onChange={setDraft}
-                    onSpeechChange={setSpeechDraft}
-                    onRewriteChange={setRewriteDraft}
-                    onTestRewrite={onTestRewrite}
-                    onTestSpeech={onTestSpeech}
-                    providerDraft={providerDraft}
-                    rewriteDraft={rewriteDraft}
-                    speechDraft={speechDraft}
+                    onOpenDrawer={onOpenDrawer}
                   />
                 )}
-              {section === 'connections' && <ConnectionsSettings />}
-              {section === 'memory' && <MemorySettings />}
-              {section === 'privacy' && (
-                <PrivacySettings
-                  available={response.capabilities.privacyAvailable}
-                  draft={draft}
-                  onChange={setDraft}
-                />
-              )}
-              {section === 'notifications' && <NotificationSettings />}
-              {section === 'usage' && (
-                <UsageSettings
-                  error={usageError}
-                  onRetry={onReloadUsage}
-                  usage={usage}
-                />
-              )}
-              {section === 'recovery' && <RecoverySettings />}
-              {section === 'about' && <AboutSettings />}
-            </>
-          )}
+                {section === 'models' && (
+                  <ModelServices
+                    draft={draft}
+                    onDiscoverModels={onDiscoverModels}
+                    onOpenRouter={() => selectSection('router')}
+                    onTestModel={onTestModel}
+                    providerDraft={providerDraft}
+                    response={response}
+                    selected={modelServiceProvider}
+                    setSelected={setModelServiceProvider}
+                    setProviderDraft={setProviderDraft}
+                  />
+                )}
+                {section === 'router' && (
+                  <RouterSettings
+                    draft={draft}
+                    response={response}
+                    onChange={next => {
+                      if (next.modelProvider !== draft.modelProvider) {
+                        const provider = response.capabilities.providers.find(
+                          item => item.id === next.modelProvider,
+                        )
+                        if (provider)
+                          setProviderDraft({
+                            name: provider.name,
+                            protocol: provider.protocol,
+                            baseUrl: provider.baseUrl,
+                            apiKey: '',
+                            clearApiKey: false,
+                          })
+                      }
+                      setDraft(next)
+                    }}
+                  />
+                )}
+                {section === 'voice' &&
+                  speechDraft &&
+                  rewriteDraft &&
+                  providerDraft && (
+                    <VoiceSettings
+                      draft={draft}
+                      onChange={setDraft}
+                      onSpeechChange={setSpeechDraft}
+                      onRewriteChange={setRewriteDraft}
+                      onTestRewrite={onTestRewrite}
+                      onTestSpeech={onTestSpeech}
+                      providerDraft={providerDraft}
+                      rewriteDraft={rewriteDraft}
+                      speechDraft={speechDraft}
+                    />
+                  )}
+                {section === 'connections' && <ConnectionsSettings />}
+                {section === 'memory' && <MemorySettings />}
+                {section === 'privacy' && (
+                  <PrivacySettings
+                    available={response.capabilities.privacyAvailable}
+                    draft={draft}
+                    onChange={setDraft}
+                  />
+                )}
+                {section === 'notifications' && <NotificationSettings />}
+                {section === 'usage' && (
+                  <UsageSettings
+                    error={usageError}
+                    onRetry={onReloadUsage}
+                    usage={usage}
+                  />
+                )}
+                {section === 'recovery' && <RecoverySettings />}
+                {section === 'about' && <AboutSettings />}
+              </>
+            )}
+          </fieldset>
         </div>
         {draft &&
           providerDraft &&
@@ -329,13 +340,14 @@ export function SettingsPage({
             modelServiceProvider === draft.modelProvider) && (
             <footer className="settings-footer">
               <span
-                className={notice.includes('失败') ? 'is-error' : ''}
-                role={notice.includes('失败') ? 'alert' : 'status'}
+                className={notice?.kind === 'error' ? 'is-error' : ''}
+                role={notice?.kind === 'error' ? 'alert' : 'status'}
               >
-                {notice}
+                {notice?.message}
               </span>
               <button
                 className="secondary-button"
+                disabled={saving}
                 onClick={() => {
                   setDraft(response?.settings)
                   setModelServiceProvider(response?.settings.modelProvider)
@@ -1277,6 +1289,29 @@ function VoiceSettings({
   const [rewriteResult, setRewriteResult] = useState('')
   const [rewriteTesting, setRewriteTesting] = useState(false)
   const [rewriteError, setRewriteError] = useState('')
+  const rewriteRequestRef = useRef(0)
+  useEffect(() => {
+    rewriteRequestRef.current += 1
+    setRewriteTesting(false)
+    setRewriteResult('')
+    setRewriteError('')
+  }, [
+    draft.modelName,
+    draft.modelProvider,
+    draft.rewriteMode,
+    providerDraft.apiKey,
+    providerDraft.baseUrl,
+    providerDraft.clearApiKey,
+    providerDraft.name,
+    providerDraft.protocol,
+    rewriteDraft.apiKey,
+    rewriteDraft.baseUrl,
+    rewriteDraft.clearApiKey,
+    rewriteDraft.mode,
+    rewriteDraft.model,
+    rewriteDraft.protocol,
+    rewriteSample,
+  ])
   const dictation = useVoiceDictation({
     maximumSeconds: 20,
     transcribe: async audio => {
@@ -1288,6 +1323,8 @@ function VoiceSettings({
     },
   })
   async function testRewrite() {
+    const requestId = rewriteRequestRef.current + 1
+    rewriteRequestRef.current = requestId
     setRewriteTesting(true)
     setRewriteError('')
     setRewriteResult('')
@@ -1298,11 +1335,13 @@ function VoiceSettings({
         draft,
         providerDraft,
       )
+      if (requestId !== rewriteRequestRef.current) return
       setRewriteResult(`${result.rewritten} · ${String(result.latencyMs)} ms`)
     } catch (caught) {
+      if (requestId !== rewriteRequestRef.current) return
       setRewriteError(caught instanceof Error ? caught.message : '改写测试失败')
     } finally {
-      setRewriteTesting(false)
+      if (requestId === rewriteRequestRef.current) setRewriteTesting(false)
     }
   }
   return (

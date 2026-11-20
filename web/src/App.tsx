@@ -75,6 +75,7 @@ export function App() {
   const restoredDetailRef = useRef(false)
   const snapshotRequestRef = useRef(0)
   const usageRequestRef = useRef(0)
+  const configurationRequestRef = useRef(0)
   const taskDrawerRequestRef = useRef(new Map<string, number>())
 
   const loadSnapshot = useCallback(async () => {
@@ -120,10 +121,13 @@ export function App() {
 
   const loadConfiguration = useCallback(
     async (preserveSettings = false) => {
+      const requestId = configurationRequestRef.current + 1
+      configurationRequestRef.current = requestId
       const [settings, catalog] = await Promise.allSettled([
         api.settings(),
         api.agentModels(),
       ])
+      if (requestId !== configurationRequestRef.current) return
       setData(current => ({
         ...current,
         ...(settings.status === 'fulfilled' &&
@@ -488,6 +492,7 @@ export function App() {
       `${url.pathname}${url.search}${url.hash}`,
     )
     restoreAttentionDrawer(message)
+    if (message.readAt) return
     try {
       await markRead(message)
     } catch (caught) {

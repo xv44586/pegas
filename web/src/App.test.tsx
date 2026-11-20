@@ -577,6 +577,45 @@ describe('sealed Pegas UI', () => {
     )
   })
 
+  it('discards a rewrite test result after its sample changes', async () => {
+    let resolveRewrite: ((response: Response) => void) | undefined
+    installFetch((path, init) => {
+      if (path === '/v1/settings/rewrite/test' && init?.method === 'POST')
+        return new Promise<Response>(resolve => {
+          resolveRewrite = resolve
+        })
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /语音与输入/ }))
+    fireEvent.click(screen.getByRole('button', { name: '测试改写' }))
+    const sample = screen
+      .getByText('测试文本')
+      .closest('label')
+      ?.querySelector('textarea')
+    if (!sample) throw new Error('Expected rewrite sample input')
+    fireEvent.change(sample, { target: { value: '新的测试文本' } })
+    resolveRewrite?.(
+      Response.json({
+        original: '旧文本',
+        rewritten: '过期结果',
+        changed: true,
+        latencyMs: 50,
+      }),
+    )
+    await act(async () => Promise.resolve())
+    expect(screen.queryByText(/过期结果/)).toBeNull()
+    expect(screen.getByRole('button', { name: '测试改写' })).toHaveProperty(
+      'disabled',
+      false,
+    )
+  })
+
   it('keeps settings actions outside the scroll region and uses native styled selects', async () => {
     installFetch()
     render(<App />)
@@ -600,6 +639,71 @@ describe('sealed Pegas UI', () => {
     expect(routerProvider.tagName).toBe('SELECT')
     fireEvent.click(screen.getByRole('button', { name: /语音与输入/ }))
     expect(screen.getByLabelText('语音服务').tagName).toBe('SELECT')
+  })
+
+  it('disables settings fields while a save is in flight', async () => {
+    let resolveSave: ((response: Response) => void) | undefined
+    installFetch((path, init) => {
+      if (path === '/v1/settings' && init?.method === 'PUT')
+        return new Promise<Response>(resolve => {
+          resolveSave = resolve
+        })
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    const model = await screen.findByLabelText('模型')
+    fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
+    expect(model.matches(':disabled')).toBe(true)
+    expect(screen.getByRole('button', { name: '保存中…' })).toHaveProperty(
+      'disabled',
+      true,
+    )
+    resolveSave?.(Response.json(settingsResponse))
+    await screen.findByText('更改已保存')
+  })
+
+  it('keeps model-service Router shortcuts in sync with the URL', async () => {
+    installFetch()
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /模型服务/ }))
+    const [routerShortcut] = await screen.findAllByRole('button', {
+      name: '打开设置',
+    })
+    if (!routerShortcut) throw new Error('Expected a Router settings shortcut')
+    fireEvent.click(routerShortcut)
+    expect(screen.getByRole('heading', { name: '事情归类' })).toBeTruthy()
+    expect(window.location.search).toContain('section=router')
+  })
+
+  it('announces revision-conflict save responses as errors', async () => {
+    installFetch((path, init) =>
+      path === '/v1/settings' && init?.method === 'PUT'
+        ? Response.json(
+            { message: '设置已在其他设备更新，请刷新后重试' },
+            { status: 409 },
+          )
+        : undefined,
+    )
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(await screen.findByRole('button', { name: '保存更改' }))
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('设置已在其他设备更新，请刷新后重试')
+    expect(alert.className).toContain('is-error')
   })
 
   it('opens the isolated pegas runtime from Pegas settings', async () => {
@@ -1601,6 +1705,42 @@ describe('sealed Pegas UI', () => {
     )
   })
 
+  it('ignores an older configuration failure after a newer reconnect succeeds', async () => {
+    let catalogRequests = 0
+    let rejectOlder: ((response: Response) => void) | undefined
+    installFetch(path => {
+      if (path !== '/v1/settings/agent-models') return undefined
+      catalogRequests += 1
+      if (catalogRequests === 1)
+        return Response.json(
+          { message: 'initial catalog error' },
+          { status: 503 },
+        )
+      if (catalogRequests === 2)
+        return new Promise<Response>(resolve => {
+          rejectOlder = resolve
+        })
+      return Response.json({
+        defaultProvider: 'Magpie',
+        defaultModel: 'deepseek-v4.1-flash',
+        models: [],
+      })
+    })
+    render(<App />)
+    const reconnect = await screen.findByRole('button', { name: '重新连接' })
+    fireEvent.click(reconnect)
+    fireEvent.click(reconnect)
+    await waitFor(() => expect(catalogRequests).toBe(3))
+    await waitFor(() =>
+      expect(screen.queryByText(/initial catalog error/)).toBeNull(),
+    )
+    rejectOlder?.(
+      Response.json({ message: 'stale catalog error' }, { status: 503 }),
+    )
+    await act(async () => Promise.resolve())
+    expect(screen.queryByText(/stale catalog error/)).toBeNull()
+  })
+
   it('surfaces usage and agent catalog failures without inventing zero usage', async () => {
     let usageRequests = 0
     installFetch(path => {
@@ -2146,6 +2286,42 @@ describe('sealed Pegas UI', () => {
     fireEvent.click(screen.getByRole('button', { name: '关闭详情' }))
     expect(screen.getByText('已读但仍需处理')).toBeTruthy()
     expect(screen.getByText(/已读 · 来自/)).toBeTruthy()
+  })
+
+  it('does not mark an already-read attention item again', async () => {
+    const sourceMessage = snapshot.messages[0]
+    if (!sourceMessage) throw new Error('Expected an outbox message fixture')
+    let readRequests = 0
+    installSnapshotFetch(
+      {
+        ...snapshot,
+        messages: [
+          {
+            ...sourceMessage,
+            readAt: '2026-11-19T09:00:00.000Z',
+            payload: { type: 'run.failed', error: '仍需处理' },
+          },
+        ],
+      },
+      path => {
+        if (!path.endsWith('/read')) return undefined
+        readRequests += 1
+        return Response.json(
+          { message: 'read service offline' },
+          { status: 503 },
+        )
+      },
+    )
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '查看原因' }))
+    expect(await screen.findByLabelText('工作详情')).toBeTruthy()
+    expect(readRequests).toBe(0)
+    expect(screen.queryByText('read service offline')).toBeNull()
   })
 
   it('renders every Run attempt and its failure diagnostic', async () => {

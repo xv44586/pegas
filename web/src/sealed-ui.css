@@ -1237,6 +1237,13 @@ kbd {
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
 }
+.settings-fields {
+  border: 0;
+  margin: 0;
+  min-width: 0;
+  padding: 0;
+  width: 100%;
+}
 .settings-pane {
   margin: 0 auto;
   max-width: 900px;
