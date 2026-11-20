@@ -4,6 +4,8 @@ Feature：`TASK-001`（现有五状态与失败重试）和 `TASK-002`（Partial
 
 非目标：不增加定时重试策略或完整审批产品。当前 Run 的结构化 `ready` Report 在没有未满足完成条件时结束 Task；存在审批、Artifact 或外部 Thread 等条件时保持 started/awaiting condition，直到 Control Plane 验证条件满足。
 
+`GOAL-001` 的后续完成合同不会把 `ready` 扩张为 Worker 自证成功。计划中的 Goal Contract 会把 success criteria 与 EvidenceRef 绑定；`ready` 只表达 Worker 已准备交付，Control Plane 逐项验证当前 Goal revision 后才生成 Review Pack 并决定是否完成。Agent 总结、退出码、代码 diff 和过程日志不能独立满足条件。该能力尚未实现，不改变 `TASK-002` 当前 Partial 状态，权威设计见 `docs/goal-contract-and-evidence.md`。
+
 边界：服务端为状态权威；重试接口沿用现有单用户 API token，并校验 userId 与 Task 归属。原输入、执行器和已保存 session 用于恢复，不新增权限。对执行产生的外部副作用不承诺 exactly-once；沿用已保存 session 的恢复边界。
 
 迁移：schema v7 将 inbox→backlog、planning→unstarted、running/waiting/paused/failed→started，保留等待/暂停/失败的原因。v10 为 Task 回填不可变 `mandate_json` 和结构化 `ended_json`，为 Run 回填保守的 `execution_context_json`，并增加停止命令幂等表；历史 cancelled 一律按人工停止迁移，历史 completed 保留可恢复结束记录。v5 和 v6 分别属于 Provider 连接与 Agent 模型覆盖。早期 Task-only v5 候选库在启动时识别并修正迁移编号，然后应用 Provider 迁移。运行前应备份数据库；回滚需同时恢复旧版数据库备份与应用，不能让旧 Worker 与新库混跑。
