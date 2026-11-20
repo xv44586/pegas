@@ -1,6 +1,11 @@
-import { spawn } from 'node:child_process'
-import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs'
+import { execFileSync, spawn } from 'node:child_process'
+import {
+  chmodSync,
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { relative, resolve, sep } from 'node:path'
@@ -40,13 +45,33 @@ if (
 rmSync(outputDirectory, { recursive: true, force: true })
 mkdirSync(outputDirectory, { recursive: true })
 
-const dataDirectory = mkdtempSync(joinPath(tmpdir(), 'pegas-ui-review-'))
+const dataDirectory = mkdtempSync(resolve(tmpdir(), 'pegas-ui-review-'))
+const dshFixture = resolve(dataDirectory, 'ui-review-dsh')
+writeFileSync(
+  dshFixture,
+  `#!/usr/bin/env node
+process.stdout.write(\`- id: agent-default-model
+  config:
+    provider: fixture
+    model: deepseek-v4.1-flash
+- id: llm-pi-ai
+  config:
+    providers:
+      fixture:
+        models:
+          - id: deepseek-v4.1-flash
+            name: DeepSeek V4.1 Flash
+\`)
+`,
+)
+chmodSync(dshFixture, 0o755)
 const port = await availablePort()
 const environment = {
   ...process.env,
   PEGAS_API_HOST: '127.0.0.1',
   PEGAS_API_PORT: String(port),
   PEGAS_DATA_DIR: dataDirectory,
+  PEGAS_DSH_COMMAND: dshFixture,
   PEGAS_EVENT_POLL_MS: '25',
   PEGAS_EXECUTOR: 'echo',
   PEGAS_SPEECH_PROVIDER: 'disabled',
@@ -68,145 +93,369 @@ const children = [
     stdio: 'inherit',
   }),
 ]
+
 let browser
 try {
   await waitUntilReady(port)
   await seedConversation(port)
   browser = await chromium.launch({ headless: true })
-  const context = await browser.newContext({
-    viewport: { width: 1440, height: 1000 },
+
+  const desktop = await browser.newContext({
+    viewport: { width: 1440, height: 900 },
     colorScheme: 'light',
     reducedMotion: 'reduce',
     deviceScaleFactor: 1,
   })
-  const page = await context.newPage()
-  page.setDefaultTimeout(10_000)
-  await mockModelDiscovery(page)
+  await desktop.addInitScript(() =>
+    localStorage.setItem('pegas-setup-complete', 'true'),
+  )
+  const page = await desktop.newPage()
+  page.setDefaultTimeout(12_000)
   await page.goto(`http://127.0.0.1:${String(port)}/`)
-  await page.getByRole('textbox', { name: '告诉 Pegas 你想完成什么' }).waitFor()
-  await assertGeometry(page, 'desktop-home')
-  await shot(page, 'desktop-home.png')
-  await assertMainConversationContainsSeededChannels(page)
-
-  await page.getByRole('button', { name: '打开工作区' }).click()
-  await page.getByRole('button', { name: '关闭工作区' }).waitFor()
-  await waitForPanelInViewport(page)
-  await assertGeometry(page, 'workspace-open')
-  await shot(page, 'workspace-open.png')
-  await page.getByRole('button', { name: '关闭工作区' }).click()
+  const composerInput = page.getByRole('textbox', { name: '给 Pegas 发消息' })
+  await composerInput.waitFor()
+  await capture(page, 'desktop-conversation.png', 'desktop-conversation')
+  await composerInput.focus()
+  await capture(page, 'desktop-composer-focus.png', 'desktop-composer-focus')
+  await page.getByRole('button', { name: /选择执行模型/ }).click()
+  await page.getByRole('dialog', { name: '选择模型' }).waitFor()
+  await capture(
+    page,
+    'desktop-composer-model-picker.png',
+    'desktop-composer-model-picker',
+  )
+  await page.keyboard.press('Escape')
+  await composerInput.fill(
+    '请帮我整理下周的重点工作。\n先列出计划，再标记需要我确认的事项。',
+  )
+  await capture(
+    page,
+    'desktop-composer-multiline.png',
+    'desktop-composer-multiline',
+  )
+  await composerInput.fill('')
 
   await page
-    .getByRole('button', {
-      name: /打开 Channel：确认设置.*插件详情.*可达/u,
-    })
+    .getByLabel('主导航')
+    .getByRole('button', { name: '所有事情' })
     .click()
-  await page.getByRole('heading', { name: '模型用量' }).waitFor()
-  await assertChannelTimelineIsolation(page)
-  await waitForPanelInViewport(page)
-  await assertGeometry(page, 'workspace-usage')
-  await shot(page, 'channel-timeline-isolation.png')
-  await shot(page, 'workspace-usage.png')
-  await page.getByRole('button', { name: '关闭工作区' }).click()
+  await page.getByRole('heading', { name: '所有事情', exact: true }).waitFor()
+  await capture(page, 'desktop-all-work.png', 'desktop-all-work')
 
-  await page.getByRole('button', { name: /Outbox/u }).click()
-  await page.getByRole('heading', { name: '需要你关注的消息' }).waitFor()
-  await assertGeometry(page, 'outbox')
-  await shot(page, 'outbox.png')
-  await page.getByRole('button', { name: /Channels/u }).click()
-
-  await page.getByRole('button', { name: '收起侧栏' }).click()
-  await page.getByRole('button', { name: '展开侧栏' }).waitFor()
-  await assertGeometry(page, 'sidebar-collapsed')
-  await shot(page, 'sidebar-collapsed.png')
-  await page.getByRole('button', { name: '展开侧栏' }).click()
-
-  await page.getByRole('button', { name: '设置', exact: true }).click()
-  await page.getByRole('button', { name: '关闭设置' }).waitFor()
-  await page.getByRole('heading', { name: '模型服务' }).waitFor()
-  await assertDefaultRouterSettings(page)
-  await assertGeometry(page, 'settings')
-  await shot(page, 'settings.png')
-  await page.getByRole('button', { name: '获取模型列表' }).click()
-  await page.getByRole('button', { name: '选择模型', exact: true }).waitFor()
-  await assertGeometry(page, 'settings-model-picker')
-  await shot(page, 'settings-model-picker.png')
   await page
-    .getByRole('navigation', { name: '模型列表分页' })
-    .scrollIntoViewIfNeeded()
-  await assertGeometry(page, 'settings-model-pagination')
-  await shot(page, 'settings-model-pagination.png')
-  await page.getByRole('button', { name: '选择模型', exact: true }).click()
-  await page.getByRole('button', { name: '关闭设置' }).click()
+    .getByLabel('主导航')
+    .getByRole('button', { name: '待你处理' })
+    .click()
+  await page.getByRole('heading', { name: '待你处理', exact: true }).waitFor()
+  await capture(page, 'desktop-attention.png', 'desktop-attention')
 
-  await page.getByRole('button', { name: '插件', exact: true }).click()
-  await page.getByRole('button', { name: '关闭插件' }).waitFor()
-  await assertGeometry(page, 'plugins')
-  await shot(page, 'plugins.png')
   await page
-    .getByRole('button', { name: /查看插件：/u })
+    .getByLabel('主导航')
+    .getByRole('button', { name: '自动化' })
+    .click()
+  await page.getByRole('heading', { name: '自动化', exact: true }).waitFor()
+  await capture(page, 'desktop-automation.png', 'desktop-automation')
+
+  await page.getByLabel('主导航').getByRole('button', { name: '记忆' }).click()
+  await page.getByRole('heading', { name: '记忆', exact: true }).waitFor()
+  await capture(page, 'desktop-memory.png', 'desktop-memory')
+
+  await page.getByLabel('主导航').getByRole('button', { name: '对话' }).click()
+  await page
+    .getByLabel('主导航')
+    .getByRole('button')
+    .filter({ hasText: '封板' })
     .first()
     .click()
-  await page.getByRole('button', { name: '关闭插件详情' }).waitFor()
-  await assertGeometry(page, 'plugin-detail')
-  await shot(page, 'plugin-detail.png')
+  await page.getByLabel('工作详情').waitFor()
+  await capture(page, 'desktop-work-detail.png', 'desktop-work-detail')
+  const artifact = page.getByRole('button', { name: /执行方案\.md/u })
+  if (await artifact.count()) {
+    await artifact.click()
+    await page.getByRole('heading', { name: '文件预览' }).waitFor()
+    await capture(page, 'desktop-file-preview.png', 'desktop-file-preview')
+  }
+  await page.getByRole('button', { name: '关闭详情' }).click()
 
-  const statusPage = await context.newPage()
-  await mockAgentStatusSnapshot(statusPage)
-  await statusPage.goto(`http://127.0.0.1:${String(port)}/`)
-  await statusPage
-    .getByRole('button', { name: /打开 Channel：/u })
-    .first()
+  await page
+    .getByLabel('主导航')
+    .getByRole('button', { name: '设置', exact: true })
+    .click()
+  await page.getByRole('heading', { name: 'Pegas', exact: true }).waitFor()
+  await capture(page, 'desktop-settings-pegas.png', 'desktop-settings-pegas')
+  await page.getByRole('tab', { name: '行为与规则' }).click()
+  await capture(
+    page,
+    'desktop-settings-behavior.png',
+    'desktop-settings-behavior',
+  )
+  await page.getByRole('button', { name: '查看运行时' }).click()
+  await page.getByRole('heading', { name: '执行环境详情' }).waitFor()
+  await capture(page, 'desktop-runtime.png', 'desktop-runtime')
+  await page.getByRole('button', { name: '关闭详情' }).click()
+
+  await page
+    .getByLabel('设置分类')
+    .getByRole('button', { name: '外观', exact: true })
+    .click()
+  await page.getByRole('heading', { name: '外观', exact: true }).waitFor()
+  await capture(
+    page,
+    'desktop-settings-appearance.png',
+    'desktop-settings-appearance',
+  )
+
+  await page
+    .getByLabel('设置分类')
+    .getByRole('button', { name: '模型服务' })
+    .click()
+  await page.getByRole('heading', { name: '模型服务', exact: true }).waitFor()
+  await capture(page, 'desktop-settings-models.png', 'desktop-settings-models')
+  await page
+    .getByLabel('设置分类')
+    .getByRole('button', { name: '事情归类' })
+    .click()
+  await page.getByRole('heading', { name: '事情归类', exact: true }).waitFor()
+  await capture(page, 'desktop-settings-router.png', 'desktop-settings-router')
+  await page
+    .getByLabel('设置分类')
+    .getByRole('button', { name: '语音与输入' })
+    .click()
+  await page.getByRole('heading', { name: '语音与输入', exact: true }).waitFor()
+  await page.getByLabel('语音服务').selectOption('openai-compatible')
+  await page.getByLabel('启用轻量改写').check()
+  await capture(page, 'desktop-settings-voice.png', 'desktop-settings-voice')
+  await page.getByRole('button', { name: '测试改写' }).scrollIntoViewIfNeeded()
+  await capture(
+    page,
+    'desktop-settings-rewrite.png',
+    'desktop-settings-rewrite',
+  )
+  await page
+    .getByLabel('设置分类')
+    .getByRole('button', { name: '模型用量' })
+    .click()
+  await page.getByRole('heading', { name: '模型用量', exact: true }).waitFor()
+  await capture(page, 'desktop-settings-usage.png', 'desktop-settings-usage')
+
+  for (const [label, slug] of [
+    ['能力与连接', 'connections'],
+    ['记忆', 'memory'],
+    ['隐私', 'privacy'],
+    ['通知', 'notifications'],
+    ['数据与恢复', 'recovery'],
+    ['关于', 'about'],
+  ]) {
+    await page
+      .getByLabel('设置分类')
+      .getByRole('button', { name: label, exact: true })
+      .click()
+    if (slug === 'about') await page.locator('.about-pane').waitFor()
+    else await page.getByRole('heading', { name: label, exact: true }).waitFor()
+    await capture(
+      page,
+      `desktop-settings-${slug}.png`,
+      `desktop-settings-${slug}`,
+    )
+  }
+
+  await page.goto(`http://127.0.0.1:${String(port)}/?setup=1`)
+  await page
+    .getByRole('heading', { name: '欢迎使用 Pegas', exact: true })
     .waitFor()
-  await assertAgentStatusBadges(statusPage)
-  await assertGeometry(statusPage, 'agent-status-badges')
-  await shot(statusPage, 'agent-status-badges.png')
-  await context.close()
+  await capture(page, 'desktop-onboarding.png', 'desktop-onboarding')
+  for (const [heading, slug] of [
+    ['连接模型服务', 'models'],
+    ['准备执行环境', 'runtime'],
+    ['语音与完成确认', 'finish'],
+  ]) {
+    await page.getByRole('button', { name: '继续', exact: true }).click()
+    await page.getByRole('heading', { name: heading, exact: true }).waitFor()
+    await capture(
+      page,
+      `desktop-onboarding-${slug}.png`,
+      `desktop-onboarding-${slug}`,
+    )
+  }
+  await desktop.close()
+
+  const dark = await browser.newContext({
+    viewport: { width: 1440, height: 900 },
+    colorScheme: 'dark',
+    reducedMotion: 'reduce',
+    deviceScaleFactor: 1,
+  })
+  await dark.addInitScript(() =>
+    localStorage.setItem('pegas-setup-complete', 'true'),
+  )
+  const darkPage = await dark.newPage()
+  await darkPage.addInitScript(() =>
+    localStorage.setItem('pegas-theme', 'dark'),
+  )
+  await darkPage.goto(`http://127.0.0.1:${String(port)}/`)
+  await darkPage.getByRole('textbox', { name: '给 Pegas 发消息' }).waitFor()
+  await capture(darkPage, 'desktop-dark.png', 'desktop-dark')
+  await darkPage
+    .getByLabel('主导航')
+    .getByRole('button', { name: '设置', exact: true })
+    .click()
+  await darkPage
+    .getByLabel('设置分类')
+    .getByRole('button', { name: '事情归类' })
+    .click()
+  await capture(
+    darkPage,
+    'desktop-dark-settings-router.png',
+    'desktop-dark-settings-router',
+  )
+  await dark.close()
+
+  for (const theme of ['warm', 'system']) {
+    const themed = await browser.newContext({
+      viewport: { width: 1440, height: 900 },
+      colorScheme: theme === 'system' ? 'dark' : 'light',
+      reducedMotion: 'reduce',
+      deviceScaleFactor: 1,
+    })
+    await themed.addInitScript(() =>
+      localStorage.setItem('pegas-setup-complete', 'true'),
+    )
+    const themedPage = await themed.newPage()
+    await themedPage.addInitScript(
+      value => localStorage.setItem('pegas-theme', value),
+      theme,
+    )
+    await themedPage.goto(`http://127.0.0.1:${String(port)}/`)
+    await themedPage.getByRole('textbox', { name: '给 Pegas 发消息' }).waitFor()
+    await capture(themedPage, `desktop-${theme}.png`, `desktop-${theme}`)
+    await themed.close()
+  }
 
   const mobile = await browser.newContext({
     viewport: { width: 390, height: 844 },
     colorScheme: 'light',
     reducedMotion: 'reduce',
     deviceScaleFactor: 1,
+    hasTouch: true,
   })
+  await mobile.addInitScript(() =>
+    localStorage.setItem('pegas-setup-complete', 'true'),
+  )
   const mobilePage = await mobile.newPage()
-  await mockModelDiscovery(mobilePage)
   await mobilePage.goto(`http://127.0.0.1:${String(port)}/`)
+  const mobileComposer = mobilePage.getByRole('textbox', {
+    name: '给 Pegas 发消息',
+  })
+  await mobileComposer.waitFor()
+  await capture(mobilePage, 'mobile-conversation.png', 'mobile-conversation')
+  await mobileComposer.focus()
+  await capture(
+    mobilePage,
+    'mobile-composer-focus.png',
+    'mobile-composer-focus',
+  )
+  await mobilePage.getByRole('button', { name: /选择执行模型/ }).click()
+  await mobilePage.getByRole('dialog', { name: '选择模型' }).waitFor()
+  await capture(
+    mobilePage,
+    'mobile-composer-model-picker.png',
+    'mobile-composer-model-picker',
+  )
+  await mobilePage.keyboard.press('Escape')
   await mobilePage
-    .getByRole('textbox', { name: '告诉 Pegas 你想完成什么' })
-    .waitFor()
-  await assertGeometry(mobilePage, 'mobile-home')
-  await shot(mobilePage, 'mobile-home.png')
-  await mobilePage.goto(`http://127.0.0.1:${String(port)}/?view=outbox`)
-  await mobilePage.getByRole('heading', { name: '需要你关注的消息' }).waitFor()
-  await assertGeometry(mobilePage, 'mobile-outbox')
-  await shot(mobilePage, 'mobile-outbox.png')
-  await mobilePage.goto(`http://127.0.0.1:${String(port)}/`)
-  await mobilePage.getByRole('button', { name: '展开侧栏' }).click()
-  await mobilePage.getByRole('button', { name: '收起侧栏' }).waitFor()
-  await assertGeometry(mobilePage, 'mobile-sidebar-open')
-  await shot(mobilePage, 'mobile-sidebar-open.png')
-  await mobilePage.getByRole('button', { name: '设置', exact: true }).click()
-  await mobilePage.getByRole('button', { name: '关闭设置' }).waitFor()
-  await mobilePage.getByRole('heading', { name: '模型服务' }).waitFor()
-  await mobilePage.getByRole('button', { name: '获取模型列表' }).click()
-  await mobilePage.getByRole('searchbox', { name: '搜索已获取模型' }).waitFor()
-  await assertGeometry(mobilePage, 'mobile-settings-model-picker')
-  await shot(mobilePage, 'mobile-settings-model-picker.png')
-  await mobilePage
-    .getByRole('navigation', { name: '模型列表分页' })
-    .scrollIntoViewIfNeeded()
-  await assertGeometry(mobilePage, 'mobile-settings-model-pagination')
-  await shot(mobilePage, 'mobile-settings-model-pagination.png')
-  await mobilePage.getByRole('button', { name: '关闭设置' }).click()
-  await mobilePage
-    .getByRole('button', { name: /^打开 Channel：/u })
-    .first()
+    .getByLabel('移动端主导航')
+    .getByRole('button', { name: '所有事情' })
     .click()
-  await mobilePage.getByRole('heading', { name: '模型用量' }).waitFor()
-  await waitForPanelInViewport(mobilePage)
-  await assertGeometry(mobilePage, 'mobile-workspace-usage')
-  await shot(mobilePage, 'mobile-workspace-usage.png')
+  await mobilePage
+    .getByRole('heading', { name: '所有事情', exact: true })
+    .waitFor()
+  await capture(mobilePage, 'mobile-all-work.png', 'mobile-all-work')
+  await mobilePage.getByRole('tab', { name: '已完成' }).click()
+  const mobileWork = mobilePage
+    .getByLabel('事情列表')
+    .getByRole('button')
+    .first()
+  if (await mobileWork.count()) {
+    await mobileWork.click()
+    await mobilePage.getByLabel('工作详情').waitFor()
+    await capture(mobilePage, 'mobile-work-detail.png', 'mobile-work-detail')
+    await mobilePage.getByRole('button', { name: '关闭详情' }).click()
+  }
+  await mobilePage
+    .getByLabel('移动端主导航')
+    .getByRole('button', { name: '设置' })
+    .click()
+  await mobilePage
+    .getByRole('heading', { name: 'Pegas', exact: true })
+    .waitFor()
+  await capture(mobilePage, 'mobile-settings.png', 'mobile-settings')
+  await mobilePage
+    .getByLabel('设置分类')
+    .getByRole('button', { name: '外观', exact: true })
+    .click()
+  await capture(
+    mobilePage,
+    'mobile-settings-appearance.png',
+    'mobile-settings-appearance',
+  )
+  await mobilePage
+    .getByLabel('设置分类')
+    .getByRole('button', { name: '事情归类', exact: true })
+    .click()
+  await capture(
+    mobilePage,
+    'mobile-settings-router.png',
+    'mobile-settings-router',
+  )
+  await mobilePage
+    .getByLabel('设置分类')
+    .getByRole('button', { name: '语音与输入', exact: true })
+    .click()
+  await mobilePage.getByLabel('语音服务').selectOption('openai-compatible')
+  await mobilePage.getByLabel('启用轻量改写').check()
+  await mobilePage
+    .getByRole('button', { name: '测试改写' })
+    .scrollIntoViewIfNeeded()
+  await capture(
+    mobilePage,
+    'mobile-settings-voice.png',
+    'mobile-settings-voice',
+  )
   await mobile.close()
+
+  const reviewFixtures = [
+    'task-completed',
+    'task-running',
+    'task-waiting',
+    'task-failed',
+    'preview-file',
+    'preview-image',
+    'preview-video',
+    'preview-web',
+  ]
+  for (const [size, viewport] of [
+    ['desktop', { width: 1440, height: 900 }],
+    ['mobile', { width: 390, height: 844 }],
+  ]) {
+    const review = await browser.newContext({
+      viewport,
+      colorScheme: 'light',
+      reducedMotion: 'reduce',
+      deviceScaleFactor: 1,
+    })
+    for (const fixture of reviewFixtures) {
+      const fixturePage = await review.newPage()
+      await fixturePage.addInitScript(value => {
+        globalThis.__PEGAS_UI_REVIEW__ = value
+      }, fixture)
+      await fixturePage.goto(`http://127.0.0.1:${String(port)}/`)
+      await fixturePage.getByRole('button', { name: '关闭详情' }).waitFor()
+      await capture(fixturePage, `${size}-${fixture}.png`, `${size}-${fixture}`)
+      await fixturePage.close()
+    }
+    await review.close()
+  }
+
   console.log(`UI review captured in ${outputRelative}`)
 } finally {
   if (browser) await browser.close().catch(() => undefined)
@@ -220,8 +469,8 @@ try {
 
 async function seedConversation(apiPort) {
   for (const [index, text] of [
-    '复核 Pegas 的首页与工作区布局',
-    '确认设置和插件详情仍然可达',
+    '为 Pegas 封板新的白底界面',
+    '检查设置与工作详情是否一致',
   ].entries()) {
     const response = await fetch(
       `http://127.0.0.1:${String(apiPort)}/v1/events`,
@@ -243,143 +492,22 @@ async function seedConversation(apiPort) {
   const deadline = Date.now() + 25_000
   while (Date.now() < deadline) {
     const response = await fetch(
-      `http://127.0.0.1:${String(apiPort)}/v1/tasks?userId=owner`,
+      `http://127.0.0.1:${String(apiPort)}/v1/channels?userId=owner`,
     )
     const body = await response.json()
-    if (body.tasks?.length >= 2) return
+    if (body.channels?.length >= 2) return
     await wait(50)
   }
-  throw new Error('UI review tasks were not created')
+  throw new Error('UI review channels were not created')
 }
 
-async function assertMainConversationContainsSeededChannels(page) {
-  const feed = page.locator('.conversation-feed')
-  await feed
-    .getByText('复核 Pegas 的首页与工作区布局', { exact: true })
-    .first()
-    .waitFor()
-  await feed
-    .getByText('确认设置和插件详情仍然可达', { exact: true })
-    .first()
-    .waitFor()
-}
-
-async function assertChannelTimelineIsolation(page) {
-  const feed = page.locator('.conversation-feed')
-  await feed
-    .getByText('确认设置和插件详情仍然可达', { exact: true })
-    .first()
-    .waitFor()
-  await feed.getByText(/原样返回了输入.*确认设置和插件详情仍然可达/u).waitFor()
-  if (
-    (await feed
-      .getByText('复核 Pegas 的首页与工作区布局', { exact: true })
-      .count()) !== 0 ||
-    (await feed
-      .getByText(/原样返回了输入.*复核 Pegas 的首页与工作区布局/u)
-      .count()) !== 0
-  )
-    throw new Error('Selected Channel leaked another Channel timeline')
-}
-
-async function mockAgentStatusSnapshot(page) {
-  const statuses = [
-    ['backlog', '待分配', 'car'],
-    ['unstarted', '未开始', 'camera'],
-    ['started', '进行中', 'computer'],
-    ['completed', '已完成', 'phone'],
-    ['cancelled', '已停止', 'car'],
-  ]
-  const channels = statuses.map(([status, title, workerIconId], index) => ({
-    id: `status-${status}`,
-    taskId: `status-${status}`,
-    userId: 'owner',
-    originEventId: `event-${status}`,
-    title,
-    goal: '状态由徽记形状和文字共同表达',
-    status,
-    workerIconId,
-    createdAt: `2026-11-19T0${String(index + 1)}:00:00.000Z`,
-    updatedAt: `2026-11-19T0${String(index + 1)}:05:00.000Z`,
-    latestActivityAt: `2026-11-19T0${String(index + 1)}:05:00.000Z`,
-    canResume: status === 'completed',
-    canStop: ['backlog', 'unstarted', 'started'].includes(status),
-  }))
-  await page.route('**/v1/**', route => {
-    const path = new URL(route.request().url()).pathname
-    const body =
-      path === '/v1/channels'
-        ? { channels }
-        : path === '/v1/events'
-          ? { events: [] }
-          : path === '/v1/runs'
-            ? { runs: [] }
-            : path === '/v1/outbox'
-              ? { messages: [] }
-              : {}
-    return route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify(body),
-    })
+async function capture(page, name, label) {
+  await assertGeometry(page, label)
+  await page.screenshot({
+    path: resolve(outputDirectory, name),
+    fullPage: false,
+    animations: 'disabled',
   })
-}
-
-async function mockModelDiscovery(page) {
-  await page.route('**/v1/settings/models/discover', route =>
-    route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        models: Array.from({ length: 165 }, (_, index) => ({
-          id:
-            index === 0
-              ? 'discovery-api/deepseek-v4.1-flash-1017'
-              : `review/model-${String(index).padStart(3, '0')}`,
-          name:
-            index === 0
-              ? 'DeepSeek V4.1 Flash 1017'
-              : `Review model ${String(index + 1)}`,
-        })),
-      }),
-    }),
-  )
-}
-
-async function assertDefaultRouterSettings(page) {
-  const magpie = page.getByRole('radio', { name: 'Magpie', exact: true })
-  if (!(await magpie.isChecked()))
-    throw new Error('Fresh settings did not default to Magpie')
-  const modelName = await page.getByLabel('模型 ID').inputValue()
-  if (modelName !== 'discovery-api/deepseek-v4.1-flash-1017')
-    throw new Error(`Fresh Router model defaulted to ${modelName}`)
-}
-
-async function assertAgentStatusBadges(page) {
-  const result = await page
-    .locator('.task-row .pegas-agent-avatar')
-    .evaluateAll(avatars => ({
-      backgrounds: avatars.map(avatar =>
-        globalThis
-          .getComputedStyle(avatar)
-          .getPropertyValue('--pegas-icon-background')
-          .trim(),
-      ),
-      statuses: avatars
-        .map(avatar =>
-          avatar
-            .querySelector('.pegas-agent-status')
-            ?.getAttribute('data-status'),
-        )
-        .filter(Boolean),
-    }))
-  if (result.backgrounds.some(background => background !== '#4d6bfe'))
-    throw new Error(
-      `Worker identity color drifted: ${result.backgrounds.join(', ')}`,
-    )
-  const expected = ['backlog', 'unstarted', 'started', 'completed', 'cancelled']
-  if (expected.some(status => !result.statuses.includes(status)))
-    throw new Error(`Missing status badge: ${result.statuses.join(', ')}`)
 }
 
 async function assertGeometry(page, label) {
@@ -387,17 +515,11 @@ async function assertGeometry(page, label) {
     const out = []
     const root = globalThis.document.documentElement
     if (root.scrollWidth > root.clientWidth + 1)
-      out.push(`page overflows ${root.scrollWidth}>${root.clientWidth}`)
-    const composer = globalThis.document.querySelector('.composer-wrap')
-    if (composer) {
-      const rect = composer.getBoundingClientRect()
-      if (rect.left < -1 || rect.right > globalThis.innerWidth + 1)
-        out.push(`composer crosses viewport ${rect.left}..${rect.right}`)
-      if (rect.bottom > globalThis.innerHeight + 1 || rect.top < -1)
-        out.push(`composer is not visible ${rect.top}..${rect.bottom}`)
-    }
+      out.push(
+        `page overflows ${String(root.scrollWidth)}>${String(root.clientWidth)}`,
+      )
     for (const element of globalThis.document.querySelectorAll(
-      '.identity-rail, .workspace-panel, .settings-layer, .plugin-dialog, .plugin-detail',
+      '.app-shell, .composer-wrap, .detail-drawer, .settings-page, .onboarding-dialog, .command-dialog',
     )) {
       const rect = element.getBoundingClientRect()
       if (!rect.width || !rect.height) continue
@@ -407,113 +529,128 @@ async function assertGeometry(page, label) {
         )
     }
     for (const element of globalThis.document.querySelectorAll(
-      '.detail-title, .usage-summary, .usage-source-note, .section-heading-row',
+      '.page-header, .setting-summary-row, .compact-field-row, .artifact-row, .work-list > button',
     )) {
       if (element.scrollWidth > element.clientWidth + 1)
         out.push(
-          `${element.className} has clipped horizontal content ${String(element.scrollWidth)}>${String(element.clientWidth)} rect=${String(Math.round(element.getBoundingClientRect().width))} display=${globalThis.getComputedStyle(element).display}`,
+          `${element.className} clips horizontally ${String(element.scrollWidth)}>${String(element.clientWidth)}`,
         )
     }
-    const modelPicker = globalThis.document.querySelector('.model-picker-panel')
-    if (modelPicker) {
-      const parent = modelPicker.parentElement
-      const pickerRect = modelPicker.getBoundingClientRect()
-      const parentRect = parent?.getBoundingClientRect()
-      if (parentRect && pickerRect.width < parentRect.width * 0.75)
+    const settingsContent =
+      globalThis.document.querySelector('.settings-content')
+    const scrollRegion = globalThis.document.querySelector(
+      '.settings-scroll-region',
+    )
+    const settingsFooter = globalThis.document.querySelector('.settings-footer')
+    if (settingsContent && scrollRegion && settingsFooter) {
+      if (settingsFooter.parentElement !== settingsContent)
+        out.push('settings footer is not a direct child of settings content')
+      if (scrollRegion.contains(settingsFooter))
+        out.push('settings footer is inside the scrolling region')
+      const scrollRect = scrollRegion.getBoundingClientRect()
+      const footerRect = settingsFooter.getBoundingClientRect()
+      if (Math.abs(scrollRect.bottom - footerRect.top) > 2)
         out.push(
-          `model picker collapsed to ${String(Math.round(pickerRect.width))} inside ${String(Math.round(parentRect.width))}`,
+          `settings layers do not meet ${String(Math.round(scrollRect.bottom))}..${String(Math.round(footerRect.top))}`,
         )
-      const list = modelPicker.querySelector('.model-picker-list')
-      if (
-        list &&
-        list.scrollHeight > list.clientHeight &&
-        list.clientHeight <= 0
-      )
-        out.push('model picker list has no usable scroll viewport')
-      const search = modelPicker.querySelector('.model-picker-search')
-      const searchInput = search?.querySelector('input')
-      const searchIcon = search?.querySelector('svg')
-      if (search && searchInput) {
-        const searchRect = search.getBoundingClientRect()
-        const inputRect = searchInput.getBoundingClientRect()
-        if (inputRect.width < searchRect.width - 1)
+    }
+    for (const element of globalThis.document.querySelectorAll('select')) {
+      const rect = element.getBoundingClientRect()
+      if (!rect.width || !rect.height) continue
+      const style = globalThis.getComputedStyle(element)
+      if (style.appearance !== 'none')
+        out.push(`select keeps native appearance (${style.appearance})`)
+      if (rect.height < 40)
+        out.push(`select is too short (${String(Math.round(rect.height))})`)
+      if (Number.parseFloat(style.paddingRight) < 32)
+        out.push(`select chevron padding is too small (${style.paddingRight})`)
+    }
+    if (globalThis.matchMedia('(pointer: coarse)').matches) {
+      for (const control of globalThis.document.querySelectorAll(
+        '.page-toolbar button',
+      )) {
+        const rect = control.getBoundingClientRect()
+        if (rect.width && (rect.width < 44 || rect.height < 44))
           out.push(
-            `model search collapsed to ${String(Math.round(inputRect.width))} inside ${String(Math.round(searchRect.width))}`,
+            `toolbar touch target is too small (${String(Math.round(rect.width))}x${String(Math.round(rect.height))})`,
           )
-        if (searchIcon) {
-          const iconRect = searchIcon.getBoundingClientRect()
-          const padding = Number.parseFloat(
-            globalThis.getComputedStyle(searchInput).paddingInlineStart,
-          )
-          if (padding < iconRect.right - inputRect.left + 6)
-            out.push('model search text overlaps its icon')
-        }
       }
     }
-    for (const button of globalThis.document.querySelectorAll(
-      '.sidebar-section-nav button',
-    )) {
+    for (const row of globalThis.document.querySelectorAll('.test-row')) {
+      const button = row.querySelector('button')
+      const input = row.querySelector('input')
+      if (!button || !input) continue
       const buttonRect = button.getBoundingClientRect()
-      for (const child of button.children) {
-        const rect = child.getBoundingClientRect()
-        if (
-          rect.left < buttonRect.left - 1 ||
-          rect.right > buttonRect.right + 1
+      const inputRect = input.getBoundingClientRect()
+      if (buttonRect.width < 72)
+        out.push(`test button is too narrow (${String(buttonRect.width)})`)
+      if (button.scrollWidth > button.clientWidth + 1)
+        out.push('test button text wraps or clips')
+      if (inputRect.width <= buttonRect.width)
+        out.push('test input does not receive the flexible row width')
+    }
+    for (const label of globalThis.document.querySelectorAll(
+      '.radio-row label',
+    )) {
+      if (label.scrollWidth > label.clientWidth + 1)
+        out.push('radio label wraps or clips')
+    }
+    for (const toggle of globalThis.document.querySelectorAll(
+      ".switch-row input[type='checkbox']",
+    )) {
+      const rect = toggle.getBoundingClientRect()
+      if (Math.abs(rect.width - 40) > 1 || Math.abs(rect.height - 22) > 1)
+        out.push(
+          `switch track changed size (${String(Math.round(rect.width))}x${String(Math.round(rect.height))})`,
         )
-          out.push(
-            `sidebar navigation content crosses its button ${String(Math.round(rect.left))}..${String(Math.round(rect.right))} outside ${String(Math.round(buttonRect.left))}..${String(Math.round(buttonRect.right))}`,
-          )
+    }
+    const composer = globalThis.document.querySelector('.composer')
+    const composerInput = composer?.querySelector('textarea')
+    const sendButton = composer?.querySelector('.send-button')
+    if (composer && composerInput && sendButton) {
+      const composerStyle = globalThis.getComputedStyle(composer)
+      const inputStyle = globalThis.getComputedStyle(composerInput)
+      const sendRect = sendButton.getBoundingClientRect()
+      if (Number.parseFloat(composerStyle.borderRadius) > 26)
+        out.push(`composer is too pill-shaped (${composerStyle.borderRadius})`)
+      if (inputStyle.fieldSizing !== 'content')
+        out.push(
+          `composer textarea does not auto-size (${inputStyle.fieldSizing})`,
+        )
+      if (sendRect.width < 38 || sendRect.height < 38)
+        out.push(
+          `composer send target is too small (${String(Math.round(sendRect.width))}x${String(Math.round(sendRect.height))})`,
+        )
+      if (globalThis.document.activeElement === composerInput) {
+        if (
+          inputStyle.outlineStyle !== 'none' &&
+          Number.parseFloat(inputStyle.outlineWidth) > 0
+        )
+          out.push('composer textarea draws its own inner focus rectangle')
+        if (composerStyle.boxShadow === 'none')
+          out.push('focused composer has no visible outer focus treatment')
       }
     }
-    const sidebarRail = globalThis.document.querySelector('.identity-rail')
-    const sidebarList = globalThis.document.querySelector('.task-sidebar-list')
-    if (sidebarRail && sidebarList) {
-      const railRect = sidebarRail.getBoundingClientRect()
-      const listRect = sidebarList.getBoundingClientRect()
+    const modelPicker = globalThis.document.querySelector(
+      '.composer-model-picker',
+    )
+    if (modelPicker) {
+      const rect = modelPicker.getBoundingClientRect()
       if (
-        listRect.left < railRect.left - 1 ||
-        listRect.right > railRect.right + 1
+        rect.left < -1 ||
+        rect.right > globalThis.innerWidth + 1 ||
+        rect.top < -1 ||
+        rect.bottom > globalThis.innerHeight + 1
       )
         out.push(
-          `sidebar list crosses its rail ${String(Math.round(listRect.left))}..${String(Math.round(listRect.right))} outside ${String(Math.round(railRect.left))}..${String(Math.round(railRect.right))}`,
+          `model picker escapes viewport (${String(Math.round(rect.left))}, ${String(Math.round(rect.top))}, ${String(Math.round(rect.right))}, ${String(Math.round(rect.bottom))})`,
         )
+      if (!modelPicker.querySelector('[role="option"]'))
+        out.push('model picker has no selectable options')
     }
     return out
   })
-  if (label === 'sidebar-collapsed' || label === 'mobile-home') {
-    const visibleRailButtons = page.locator('.identity-rail button:visible')
-    const count = await visibleRailButtons.count()
-    if (count !== 1)
-      failures.push(`collapsed sidebar exposes ${String(count)} buttons`)
-    else if (
-      (await visibleRailButtons.first().getAttribute('aria-label')) !==
-      '展开侧栏'
-    )
-      failures.push('collapsed sidebar button does not expand the sidebar')
-  }
   if (failures.length) throw new Error(`${label}: ${failures.join('; ')}`)
-}
-
-async function waitForPanelInViewport(page) {
-  await page.waitForFunction(() => {
-    const panel = globalThis.document.querySelector('.workspace-panel')
-    if (!panel) return false
-    const rect = panel.getBoundingClientRect()
-    const minimumExpectedWidth = Math.min(320, globalThis.innerWidth - 56)
-    return (
-      rect.width >= minimumExpectedWidth &&
-      rect.left >= -1 &&
-      rect.right <= globalThis.innerWidth + 1
-    )
-  })
-}
-
-async function shot(page, name) {
-  await page.screenshot({
-    path: resolve(outputDirectory, name),
-    fullPage: true,
-    animations: 'disabled',
-  })
 }
 
 function changedFiles(base) {
@@ -547,7 +684,7 @@ async function waitUntilReady(apiPort) {
       const response = await fetch(`http://127.0.0.1:${String(apiPort)}/readyz`)
       if (response.ok) return
     } catch {
-      // The process is still starting.
+      // Control Plane is still starting.
     }
     await wait(50)
   }
@@ -561,8 +698,4 @@ function wait(milliseconds) {
 function waitForExit(child) {
   if (child.exitCode !== null) return Promise.resolve()
   return new Promise(resolveExit => child.once('exit', resolveExit))
-}
-
-function joinPath(...parts) {
-  return resolve(...parts)
 }

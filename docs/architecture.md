@@ -83,6 +83,14 @@ Independent Recovery Plane
 
 主执行平面处理用户目标，恢复平面只维护 Pegas 的生命线。两者不能共享同一个进程生命周期，也不能要求 Control Plane 正常运行后才能执行回滚。
 
+### 客户端呈现边界
+
+Web、macOS、iOS 和其他渠道共享同一服务端 Conversation、Task、Run、Outbox、设置与恢复事实。客户端可以保存主题、布局和未发送草稿等本地呈现偏好，但不能自行创造 Automation、Memory、Approval、Artifact、Worker 或 Subagent 的权威状态。
+
+DESIGN-002 的封板 Web 信息架构把“模型服务”“事情归类”和“Pegas”明确分开：模型服务只管理连接与模型目录；事情归类只绑定 Router；Pegas 设置执行模型、隔离运行环境、系统提示词/规则和自主程度。三个页面可以引用同一服务端配置对象的不同字段，但不能把两套凭证边界或 Router/Executor 职责合并。DSH 的执行 profile 归 Executor 管理，产品 UI 只展示服务端返回的实际 profile 与模型快照。
+
+运行、待确认、失败、交接和多 Agent 协作状态以详情视图呈现。确认文案必须由实际 Executor 检查真实工具和权限后生成；传输状态仍只作为界面元数据。后端尚未建立契约的封板页面必须显示诚实空状态，不得用浏览器本地模拟可写成功。
+
 ### 0. Supervisor 与 Recovery API
 
 Supervisor 是独立于 Pegas Control Plane 的最小守护进程，负责：

@@ -186,7 +186,7 @@ export class PegasApi {
     return this.#get<SettingsResponse>('/v1/settings')
   }
 
-  async retryRun(runId: string): Promise<void> {
+  async retryRun(runId: string): Promise<Run> {
     const response = await fetch(
       `/v1/runs/${encodeURIComponent(runId)}/retry`,
       {
@@ -196,6 +196,7 @@ export class PegasApi {
       },
     )
     if (!response.ok) await throwResponse(response)
+    return ((await response.json()) as { run: Run }).run
   }
 
   async stopChannel(channelId: string, reason?: string): Promise<void> {

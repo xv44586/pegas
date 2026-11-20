@@ -104,7 +104,7 @@ export interface ChannelTimeline {
   runs: Run[]
 }
 
-export interface ModelUsageRecord {
+interface ModelUsageRecord {
   runId: string
   taskId: string
   userId: string
@@ -160,7 +160,7 @@ export interface RuntimeSettings {
   updatedAt: string
 }
 
-export type ModelProviderId =
+type ModelProviderId =
   | 'magpie'
   | 'openai'
   | 'anthropic'
@@ -203,7 +203,7 @@ export interface ModelProviderDraft {
   clearApiKey: boolean
 }
 
-export interface SettingsCapabilities {
+interface SettingsCapabilities {
   providers: ModelProviderCapability[]
   privacyAvailable: boolean
 }
@@ -245,7 +245,7 @@ export interface ModelCatalogItem {
   name: string
 }
 
-interface DshModelCatalogItem {
+export interface DshModelCatalogItem {
   provider: string
   id: string
   name: string
