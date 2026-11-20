@@ -74,6 +74,7 @@ export function App() {
   const restoredDetailRef = useRef(false)
   const snapshotRequestRef = useRef(0)
   const usageRequestRef = useRef(0)
+  const taskDrawerRequestRef = useRef(new Map<string, number>())
 
   const loadSnapshot = useCallback(async () => {
     const requestId = snapshotRequestRef.current + 1
@@ -240,8 +241,11 @@ export function App() {
   }
   const loadTaskDrawer = useCallback(
     async (channelId: string) => {
+      const requestId = (taskDrawerRequestRef.current.get(channelId) ?? 0) + 1
+      taskDrawerRequestRef.current.set(channelId, requestId)
       try {
         const scoped = await api.snapshot(channelId)
+        if (taskDrawerRequestRef.current.get(channelId) !== requestId) return
         const timeline = scoped.channelTimeline
         setDrawer(current => {
           if (current?.kind !== 'task' || current.channel.id !== channelId)
@@ -261,6 +265,7 @@ export function App() {
           }
         })
       } catch (caught) {
+        if (taskDrawerRequestRef.current.get(channelId) !== requestId) return
         const message =
           caught instanceof Error ? caught.message : '无法读取 Channel 时间线。'
         setDrawer(current =>
@@ -694,6 +699,14 @@ export function App() {
           onClose={closeDrawer}
           onContinue={channel => {
             setContinuationTaskId(channel.id)
+            const url = new URL(window.location.href)
+            url.searchParams.delete('channel')
+            url.searchParams.delete('task')
+            window.history.replaceState(
+              {},
+              '',
+              `${url.pathname}${url.search}${url.hash}`,
+            )
             setDrawer(undefined)
             navigate('conversation')
             window.setTimeout(() =>

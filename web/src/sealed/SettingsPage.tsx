@@ -24,7 +24,7 @@ import {
   Trash2,
   Volume2,
 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import type {
   DshModelCatalog,
@@ -762,6 +762,7 @@ function ModelServices({
   const [modelPage, setModelPage] = useState(0)
   const [busy, setBusy] = useState<'test' | 'discover'>()
   const [status, setStatus] = useState('')
+  const providerRequestRef = useRef(0)
   const active =
     providers.find(provider => provider.id === selected) ?? providers[0]
   const activeProviderDraft: ModelProviderDraft = {
@@ -773,6 +774,8 @@ function ModelServices({
   }
   async function discover() {
     if (!active) return
+    const requestId = providerRequestRef.current + 1
+    providerRequestRef.current = requestId
     setBusy('discover')
     setStatus('')
     try {
@@ -785,17 +788,21 @@ function ModelServices({
           ? providerDraft
           : activeProviderDraft,
       )
+      if (providerRequestRef.current !== requestId) return
       setModels(result)
       setModelPage(0)
       setStatus(`已读取 ${String(result.length)} 个模型`)
     } catch (caught) {
+      if (providerRequestRef.current !== requestId) return
       setStatus(caught instanceof Error ? caught.message : '读取模型目录失败')
     } finally {
-      setBusy(undefined)
+      if (providerRequestRef.current === requestId) setBusy(undefined)
     }
   }
   async function test() {
     if (!active) return
+    const requestId = providerRequestRef.current + 1
+    providerRequestRef.current = requestId
     setBusy('test')
     setStatus('')
     try {
@@ -808,11 +815,13 @@ function ModelServices({
           ? providerDraft
           : activeProviderDraft,
       )
+      if (providerRequestRef.current !== requestId) return
       setStatus(`连接正常 · ${String(result.latencyMs)} ms`)
     } catch (caught) {
+      if (providerRequestRef.current !== requestId) return
       setStatus(caught instanceof Error ? caught.message : '连接测试失败')
     } finally {
-      setBusy(undefined)
+      if (providerRequestRef.current === requestId) setBusy(undefined)
     }
   }
   const visibleModels = models.filter(model =>
@@ -855,6 +864,7 @@ function ModelServices({
                 className={provider.id === active?.id ? 'is-active' : ''}
                 key={provider.id}
                 onClick={() => {
+                  providerRequestRef.current += 1
                   setSelected(provider.id)
                   setModels([])
                   setModelPage(0)

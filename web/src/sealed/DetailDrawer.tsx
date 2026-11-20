@@ -43,12 +43,14 @@ export function DetailDrawer({
 }) {
   const closeRef = useRef<HTMLButtonElement>(null)
   const drawerRef = useRef<HTMLElement>(null)
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
   useEffect(() => {
     closeRef.current?.focus()
     const containFocus = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault()
-        onClose()
+        onCloseRef.current()
         return
       }
       if (event.key !== 'Tab') return
@@ -68,7 +70,7 @@ export function DetailDrawer({
     }
     document.addEventListener('keydown', containFocus)
     return () => document.removeEventListener('keydown', containFocus)
-  }, [onClose])
+  }, [])
   return (
     <div
       className="drawer-backdrop"

@@ -811,6 +811,9 @@ describe('sealed Pegas UI', () => {
     expect(screen.getByText(/Run 1 · run-newe/)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '继续追问' }))
     expect(screen.getByText(/继续事情：/)).toBeTruthy()
+    expect(new URLSearchParams(window.location.search).has('channel')).toBe(
+      false,
+    )
 
     const composer = screen.getByLabelText('给 Pegas 发消息')
     fireEvent.change(composer, { target: { value: '继续补充验收证据' } })
@@ -1361,6 +1364,31 @@ describe('sealed Pegas UI', () => {
     expect(document.activeElement).toBe(close)
   })
 
+  it('does not steal drawer focus when polling refreshes its props', () => {
+    const firstClose = vi.fn()
+    const { rerender } = render(
+      <DetailDrawer
+        onChange={vi.fn()}
+        onClose={firstClose}
+        onContinue={vi.fn()}
+        onRetry={vi.fn()}
+        view={{ kind: 'task', channel, run }}
+      />,
+    )
+    const continueButton = screen.getByRole('button', { name: '继续追问' })
+    continueButton.focus()
+    rerender(
+      <DetailDrawer
+        onChange={vi.fn()}
+        onClose={vi.fn()}
+        onContinue={vi.fn()}
+        onRetry={vi.fn()}
+        view={{ kind: 'task', channel, run: { ...run, attempts: 2 } }}
+      />,
+    )
+    expect(document.activeElement).toBe(continueButton)
+  })
+
   it('does not infer collaboration facts from free-form status text', () => {
     render(
       <DetailDrawer
@@ -1650,6 +1678,63 @@ describe('sealed Pegas UI', () => {
         await vi.advanceTimersByTimeAsync(5_000)
       })
       expect(timelineRequests).toBeGreaterThan(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('ignores an older scoped timeline response after a newer poll completes', async () => {
+    vi.useFakeTimers()
+    let timelineRequests = 0
+    let resolveOlder: ((response: Response) => void) | undefined
+    try {
+      installFetch(path => {
+        if (!path.startsWith('/v1/channels/task-1/timeline?')) return undefined
+        timelineRequests += 1
+        if (timelineRequests === 1)
+          return new Promise<Response>(resolve => {
+            resolveOlder = resolve
+          })
+        return Response.json({
+          channel,
+          events: [
+            {
+              ...snapshot.events[0],
+              id: 'newer-scoped-event',
+              payload: { text: '较新的时间线' },
+            },
+          ],
+          messages: snapshot.messages,
+          runs: snapshot.runs,
+        })
+      })
+      render(<App />)
+      await act(async () => vi.advanceTimersByTimeAsync(0))
+      fireEvent.click(
+        within(screen.getByLabelText('主导航')).getByRole('button', {
+          name: /所有事情/,
+        }),
+      )
+      fireEvent.click(screen.getByRole('button', { name: /安全自更新流程/ }))
+      await act(async () => vi.advanceTimersByTimeAsync(5_000))
+      expect(screen.getByText('较新的时间线')).toBeTruthy()
+      resolveOlder?.(
+        Response.json({
+          channel,
+          events: [
+            {
+              ...snapshot.events[0],
+              id: 'older-scoped-event',
+              payload: { text: '过期时间线' },
+            },
+          ],
+          messages: snapshot.messages,
+          runs: snapshot.runs,
+        }),
+      )
+      await act(async () => vi.advanceTimersByTimeAsync(0))
+      expect(screen.queryByText('过期时间线')).toBeNull()
+      expect(screen.getByText('较新的时间线')).toBeTruthy()
     } finally {
       vi.useRealTimers()
     }
@@ -2020,5 +2105,33 @@ describe('sealed Pegas UI', () => {
       'value',
       'claude-sonnet-4-5',
     )
+  })
+
+  it('does not attribute an old provider discovery result to a new selection', async () => {
+    let resolveDiscovery: ((response: Response) => void) | undefined
+    installFetch((path, init) => {
+      if (path === '/v1/settings/models/discover' && init?.method === 'POST')
+        return new Promise<Response>(resolve => {
+          resolveDiscovery = resolve
+        })
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /模型服务/ }))
+    fireEvent.click(screen.getByRole('button', { name: '获取模型目录' }))
+    fireEvent.click(screen.getByRole('button', { name: /Anthropic/ }))
+    resolveDiscovery?.(
+      Response.json({
+        models: [{ id: 'magpie-only', name: 'Magpie only' }],
+      }),
+    )
+    await act(async () => Promise.resolve())
+    expect(screen.queryByText('Magpie only')).toBeNull()
+    expect(screen.getByRole('heading', { name: 'Anthropic' })).toBeTruthy()
   })
 })
