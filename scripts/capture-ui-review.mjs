@@ -147,6 +147,17 @@ try {
 
   await page
     .getByLabel('设置分类')
+    .getByRole('button', { name: '外观', exact: true })
+    .click()
+  await page.getByRole('heading', { name: '外观', exact: true }).waitFor()
+  await capture(
+    page,
+    'desktop-settings-appearance.png',
+    'desktop-settings-appearance',
+  )
+
+  await page
+    .getByLabel('设置分类')
     .getByRole('button', { name: '模型服务' })
     .click()
   await page.getByRole('heading', { name: '模型服务', exact: true }).waitFor()
@@ -303,6 +314,15 @@ try {
     .getByRole('heading', { name: 'Pegas', exact: true })
     .waitFor()
   await capture(mobilePage, 'mobile-settings.png', 'mobile-settings')
+  await mobilePage
+    .getByLabel('设置分类')
+    .getByRole('button', { name: '外观', exact: true })
+    .click()
+  await capture(
+    mobilePage,
+    'mobile-settings-appearance.png',
+    'mobile-settings-appearance',
+  )
   await mobilePage
     .getByLabel('设置分类')
     .getByRole('button', { name: '事情归类', exact: true })

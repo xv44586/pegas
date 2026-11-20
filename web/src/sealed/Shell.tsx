@@ -4,14 +4,12 @@ import {
   CheckCircle2,
   ChevronRight,
   Clock3,
-  Command,
   FileText,
   Layers3,
   MessageCircle,
   MoonStar,
   Search,
   Settings,
-  Sparkles,
   Sun,
   X,
   Zap,
@@ -20,7 +18,7 @@ import { useEffect, useRef, useState } from 'react'
 
 import type { WorkChannel } from '../types'
 import { PegasMark } from './PegasMark'
-import type { AppPage, ThemeChoice } from './types'
+import type { AppPage } from './types'
 
 const navItems: readonly {
   id: AppPage
@@ -141,66 +139,27 @@ export function AppShell({
 
 export function PageToolbar({
   onSearch,
-  onTheme,
+  onToggleAppearance,
+  isDark,
 }: {
   onSearch: () => void
-  onTheme: () => void
+  onToggleAppearance: () => void
+  isDark: boolean
 }) {
+  const appearanceLabel = isDark ? '切换到明亮外观' : '切换到深色外观'
   return (
     <div className="page-toolbar">
       <button aria-label="全局搜索" onClick={onSearch} type="button">
         <Search size={20} />
       </button>
-      <button aria-label="切换外观" onClick={onTheme} type="button">
-        <MoonStar size={20} />
+      <button
+        aria-label={appearanceLabel}
+        onClick={onToggleAppearance}
+        title={appearanceLabel}
+        type="button"
+      >
+        {isDark ? <Sun size={20} /> : <MoonStar size={20} />}
       </button>
-    </div>
-  )
-}
-
-export function ThemeMenu({
-  theme,
-  onChange,
-  onClose,
-}: {
-  theme: ThemeChoice
-  onChange: (theme: ThemeChoice) => void
-  onClose: () => void
-}) {
-  const ref = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    const listener = (event: MouseEvent) => {
-      if (!ref.current?.contains(event.target as Node)) onClose()
-    }
-    document.addEventListener('mousedown', listener)
-    return () => document.removeEventListener('mousedown', listener)
-  }, [onClose])
-  const choices: readonly {
-    id: ThemeChoice
-    label: string
-    icon: typeof Sun
-  }[] = [
-    { id: 'system', label: '跟随系统', icon: Command },
-    { id: 'light', label: '明亮', icon: Sun },
-    { id: 'warm', label: '暖纸', icon: Sparkles },
-    { id: 'dark', label: '深色', icon: MoonStar },
-  ]
-  return (
-    <div className="theme-menu popover" ref={ref} role="menu">
-      <strong>外观</strong>
-      {choices.map(({ id, label, icon: Icon }) => (
-        <button
-          aria-checked={theme === id}
-          key={id}
-          onClick={() => onChange(id)}
-          role="menuitemradio"
-          type="button"
-        >
-          <Icon size={17} />
-          <span>{label}</span>
-          {theme === id && <CheckCircle2 size={16} />}
-        </button>
-      ))}
     </div>
   )
 }

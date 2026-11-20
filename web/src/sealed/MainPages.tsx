@@ -31,7 +31,8 @@ import {
 
 interface PageActions {
   onSearch: () => void
-  onTheme: () => void
+  onToggleAppearance: () => void
+  isDark: boolean
   onOpenDrawer: (drawer: DrawerView) => void
 }
 
@@ -54,7 +55,11 @@ function PageHeader({
       </div>
       <div className="page-header-actions">
         {children}
-        <PageToolbar onSearch={actions.onSearch} onTheme={actions.onTheme} />
+        <PageToolbar
+          isDark={actions.isDark}
+          onSearch={actions.onSearch}
+          onToggleAppearance={actions.onToggleAppearance}
+        />
       </div>
     </header>
   )

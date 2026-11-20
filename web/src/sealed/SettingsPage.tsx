@@ -9,6 +9,9 @@ import {
   Link2,
   LockKeyhole,
   Mic,
+  Monitor,
+  MoonStar,
+  Palette,
   Pencil,
   Plus,
   RotateCw,
@@ -16,6 +19,7 @@ import {
   Shield,
   SlidersHorizontal,
   Sparkles,
+  Sun,
   Trash2,
   Volume2,
 } from 'lucide-react'
@@ -37,10 +41,12 @@ import {
   settingsSections,
   type DrawerView,
   type SettingsSection,
+  type ThemeChoice,
 } from './types'
 
 const sectionIcons: Record<SettingsSection, typeof Bot> = {
   pegas: Bot,
+  appearance: Palette,
   models: Layers3,
   router: SlidersHorizontal,
   voice: Mic,
@@ -77,6 +83,9 @@ interface SettingsPageProps {
   ) => Promise<{ ok: true; latencyMs: number }>
   onTestSpeech: SettingsTestSpeech
   onTestRewrite: SettingsTestRewrite
+  theme: ThemeChoice
+  systemDark: boolean
+  onThemeChange: (theme: ThemeChoice) => void
 }
 
 type SettingsTestSpeech = (
@@ -106,6 +115,9 @@ export function SettingsPage({
   onTestModel,
   onTestSpeech,
   onTestRewrite,
+  theme,
+  systemDark,
+  onThemeChange,
 }: SettingsPageProps) {
   const [section, setSection] = useState<SettingsSection>('pegas')
   const [draft, setDraft] = useState<RuntimeSettings | undefined>(
@@ -209,7 +221,13 @@ export function SettingsPage({
       </aside>
       <section className="settings-content">
         <div className="settings-scroll-region">
-          {!draft || !response ? (
+          {section === 'appearance' ? (
+            <AppearanceSettings
+              onChange={onThemeChange}
+              systemDark={systemDark}
+              theme={theme}
+            />
+          ) : !draft || !response ? (
             <div className="settings-loading">正在读取设置…</div>
           ) : (
             <>
@@ -368,6 +386,91 @@ function SettingsHeading({
       <h2>{title}</h2>
       <p>{description}</p>
     </header>
+  )
+}
+
+function AppearanceSettings({
+  theme,
+  systemDark,
+  onChange,
+}: {
+  theme: ThemeChoice
+  systemDark: boolean
+  onChange: (theme: ThemeChoice) => void
+}) {
+  const choices: readonly {
+    id: ThemeChoice
+    label: string
+    description: string
+    icon: typeof Sun
+  }[] = [
+    {
+      id: 'system',
+      label: '跟随系统',
+      description: `随系统自动切换；当前为${systemDark ? '深色' : '明亮'}。`,
+      icon: Monitor,
+    },
+    {
+      id: 'light',
+      label: '明亮',
+      description: '默认白底，适合明亮环境。',
+      icon: Sun,
+    },
+    {
+      id: 'warm',
+      label: '暖纸',
+      description: '柔和米白，适合长时间阅读。',
+      icon: Sparkles,
+    },
+    {
+      id: 'dark',
+      label: '深色',
+      description: '深色表面，适合低光环境。',
+      icon: MoonStar,
+    },
+  ]
+  return (
+    <div className="settings-pane appearance-settings">
+      <SettingsHeading
+        title="外观"
+        description="选择 Pegas 在这台设备上的显示方式。"
+      />
+      <fieldset>
+        <legend>主题</legend>
+        <div className="appearance-options">
+          {choices.map(({ id, label, description, icon: Icon }) => (
+            <label className={theme === id ? 'is-active' : ''} key={id}>
+              <span
+                aria-hidden="true"
+                className={`appearance-preview is-${id}`}
+              >
+                <i />
+                <i />
+                <i />
+              </span>
+              <span className="appearance-option-copy">
+                <span>
+                  <Icon size={17} />
+                  <strong>{label}</strong>
+                </span>
+                <small>{description}</small>
+              </span>
+              <input
+                checked={theme === id}
+                name="appearance-theme"
+                onChange={() => onChange(id)}
+                type="radio"
+                value={id}
+              />
+            </label>
+          ))}
+        </div>
+      </fieldset>
+      <div className="info-banner">
+        <CircleHelp size={16} />
+        更改会立即生效，并保存在当前设备。
+      </div>
+    </div>
   )
 }
 

@@ -13,6 +13,7 @@ export type ThemeChoice = 'system' | 'light' | 'warm' | 'dark'
 
 export type SettingsSection =
   | 'pegas'
+  | 'appearance'
   | 'models'
   | 'router'
   | 'voice'
@@ -65,6 +66,7 @@ export const settingsSections: readonly {
   label: string
 }[] = [
   { id: 'pegas', label: 'Pegas' },
+  { id: 'appearance', label: '外观' },
   { id: 'models', label: '模型服务' },
   { id: 'router', label: '事情归类' },
   { id: 'voice', label: '语音与输入' },

@@ -786,39 +786,6 @@ a {
   padding: 6px 10px;
 }
 
-.popover {
-  background: var(--surface-raised);
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  box-shadow: var(--shadow-pop);
-  position: fixed;
-  z-index: 30;
-}
-.theme-menu {
-  bottom: 78px;
-  left: 50px;
-  padding: 12px;
-  width: 230px;
-}
-.theme-menu strong {
-  display: block;
-  padding: 5px 8px 9px;
-}
-.theme-menu button {
-  align-items: center;
-  background: transparent;
-  border-radius: 8px;
-  display: grid;
-  gap: 10px;
-  grid-template-columns: 20px 1fr 18px;
-  min-height: 40px;
-  padding: 0 8px;
-  text-align: left;
-  width: 100%;
-}
-.theme-menu button:hover {
-  background: var(--surface);
-}
 .modal-backdrop,
 .onboarding-backdrop {
   align-items: flex-start;
@@ -1234,6 +1201,130 @@ kbd {
 .settings-loading {
   color: var(--muted);
   padding: 50px;
+}
+.appearance-settings fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+.appearance-settings legend {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+.appearance-options {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.appearance-options > label {
+  align-items: center;
+  background: var(--surface-raised);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--card-radius);
+  cursor: pointer;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: 76px minmax(0, 1fr) 18px;
+  min-height: 104px;
+  padding: 14px;
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease;
+}
+.appearance-options > label:hover {
+  background: var(--surface);
+}
+.appearance-options > label.is-active {
+  background: var(--accent-softer);
+  border-color: var(--accent);
+}
+.appearance-options > label:has(input:focus-visible) {
+  outline: 3px solid color-mix(in srgb, var(--accent) 33%, transparent);
+  outline-offset: 2px;
+}
+.appearance-options input {
+  accent-color: var(--accent);
+  height: 17px;
+  margin: 0;
+  width: 17px;
+}
+.appearance-option-copy {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+.appearance-option-copy > span {
+  align-items: center;
+  display: flex;
+  gap: 7px;
+}
+.appearance-option-copy small {
+  color: var(--muted);
+  line-height: 1.45;
+}
+.appearance-preview {
+  --preview-canvas: #ffffff;
+  --preview-ink: #3f3f3b;
+  --preview-line: #e8e8e4;
+  --preview-rail: #f7f7f5;
+  background: var(--preview-canvas);
+  border: 1px solid var(--preview-line);
+  border-radius: 9px;
+  display: block;
+  height: 64px;
+  overflow: hidden;
+  position: relative;
+  width: 76px;
+}
+.appearance-preview i {
+  display: block;
+  position: absolute;
+}
+.appearance-preview i:first-child {
+  background: var(--preview-rail);
+  border-right: 1px solid var(--preview-line);
+  inset: 0 auto 0 0;
+  width: 20px;
+}
+.appearance-preview i:nth-child(2) {
+  background: var(--preview-ink);
+  border-radius: 3px;
+  height: 5px;
+  left: 29px;
+  opacity: 0.8;
+  right: 10px;
+  top: 14px;
+}
+.appearance-preview i:last-child {
+  background: var(--preview-rail);
+  border: 1px solid var(--preview-line);
+  border-radius: 4px;
+  bottom: 10px;
+  height: 24px;
+  left: 29px;
+  right: 9px;
+}
+.appearance-preview.is-warm {
+  --preview-canvas: #fbf8f1;
+  --preview-ink: #4a443c;
+  --preview-line: #e7ded1;
+  --preview-rail: #f3eee5;
+}
+.appearance-preview.is-dark {
+  --preview-canvas: #151615;
+  --preview-ink: #d4d4ce;
+  --preview-line: #444540;
+  --preview-rail: #252624;
+}
+.appearance-preview.is-system {
+  background: linear-gradient(90deg, #ffffff 0 50%, #151615 50%);
+}
+.appearance-preview.is-system i:first-child {
+  background: linear-gradient(90deg, #f7f7f5 0 50%, #252624 50%);
+}
+.appearance-settings .info-banner {
+  margin-top: 14px;
 }
 
 .model-service-layout {
@@ -2467,11 +2558,6 @@ kbd {
     flex: 0 0 auto;
     padding: 0 18px;
   }
-  .theme-menu {
-    bottom: 78px;
-    left: auto;
-    right: 14px;
-  }
   .settings-page {
     display: block;
     overflow: auto;
@@ -2544,6 +2630,9 @@ kbd {
     padding: 12px 0;
   }
   .router-settings .compact-field-row:nth-of-type(2) {
+    grid-template-columns: 1fr;
+  }
+  .appearance-options {
     grid-template-columns: 1fr;
   }
   .connection-grid,

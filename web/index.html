@@ -4,7 +4,26 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <meta name="theme-color" content="#171b19" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#ffffff" />
+    <script>
+      try {
+        const storedTheme = localStorage.getItem('pegas-theme')
+        const theme = ['system', 'light', 'warm', 'dark'].includes(storedTheme)
+          ? storedTheme
+          : 'light'
+        const systemDark = matchMedia('(prefers-color-scheme: dark)').matches
+        const dark = theme === 'dark' || (theme === 'system' && systemDark)
+        document.documentElement.dataset.theme = theme
+        document.querySelector('meta[name="color-scheme"]').content =
+          theme === 'system' ? 'light dark' : dark ? 'dark' : 'light'
+        document.querySelector('meta[name="theme-color"]').content = dark
+          ? '#151615'
+          : '#ffffff'
+      } catch {
+        document.documentElement.dataset.theme = 'light'
+      }
+    </script>
     <meta
       name="description"
       content="Pegas — 会记住、安排、执行并跟进的个人智能代理"

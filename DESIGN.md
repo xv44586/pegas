@@ -43,7 +43,7 @@ The approved implementation contract is [docs/sealed-ui-rebuild.md](docs/sealed-
 - Mobile: compact primary navigation and full-height detail overlay, with the same information order and actions.
 - Settings: dedicated page with a stable category rail; model services, classification Router and Pegas runtime are separate destinations.
 - Conversation: editorial message flow and bottom composer; execution events are inspectable facts, not fake assistant bubbles.
-- Search and theme menus are small, focused overlays. First-run setup is a guided flow, not a settings dump.
+- Search remains a small, focused overlay. The header appearance control toggles the rendered light/dark scheme directly; complete system, light, warm and dark choices live in the dedicated Appearance settings page. First-run setup is a guided flow, not a settings dump.
 
 ## Component rules
 

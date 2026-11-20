@@ -299,13 +299,35 @@ describe('sealed Pegas UI', () => {
     await waitFor(() => expect(document.activeElement).toBe(trigger))
   })
 
-  it('switches appearance with semantic theme tokens', async () => {
+  it('toggles light and dark from the header without opening a menu', async () => {
     installFetch()
     render(<App />)
-    fireEvent.click(await screen.findByRole('button', { name: '切换外观' }))
-    fireEvent.click(screen.getByRole('menuitemradio', { name: /深色/ }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: '切换到深色外观' }),
+    )
     expect(document.documentElement.dataset.theme).toBe('dark')
     expect(localStorage.getItem('pegas-theme')).toBe('dark')
+    expect(screen.queryByRole('menu')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '切换到明亮外观' }))
+    expect(document.documentElement.dataset.theme).toBe('light')
+    expect(localStorage.getItem('pegas-theme')).toBe('light')
+  })
+
+  it('offers the complete appearance choices in settings', async () => {
+    installFetch()
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /外观/ }))
+    expect(screen.getByRole('heading', { name: '外观' })).toBeTruthy()
+    expect(screen.getAllByRole('radio')).toHaveLength(4)
+    fireEvent.click(screen.getByRole('radio', { name: /暖纸/ }))
+    expect(document.documentElement.dataset.theme).toBe('warm')
+    expect(localStorage.getItem('pegas-theme')).toBe('warm')
+    expect(screen.queryByRole('button', { name: '保存更改' })).toBeNull()
   })
 
   it('keeps model services, classification and Pegas settings separate', async () => {

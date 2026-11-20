@@ -13,7 +13,7 @@ import {
 import { Onboarding } from './sealed/Onboarding'
 import { PegasMark } from './sealed/PegasMark'
 import { SettingsPage } from './sealed/SettingsPage'
-import { AppShell, GlobalSearch, ThemeMenu } from './sealed/Shell'
+import { AppShell, GlobalSearch } from './sealed/Shell'
 import { type ReviewFixture, UiReviewHarness } from './sealed/UiReviewHarness'
 import {
   emptySnapshot,
@@ -49,8 +49,8 @@ export function App() {
   const [page, setPage] = useState<AppPage>('conversation')
   const [drawer, setDrawer] = useState<DrawerView>()
   const [searchOpen, setSearchOpen] = useState(false)
-  const [themeOpen, setThemeOpen] = useState(false)
   const [theme, setTheme] = useState<ThemeChoice>(() => readTheme())
+  const [systemDark, setSystemDark] = useState(() => systemPrefersDark())
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [unauthorized, setUnauthorized] = useState(false)
@@ -105,7 +105,6 @@ export function App() {
       }
       if (event.key === 'Escape') {
         closeSearch()
-        setThemeOpen(false)
         closeDrawer()
       }
     }
@@ -167,9 +166,38 @@ export function App() {
   }
 
   useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return
+    const query = window.matchMedia('(prefers-color-scheme: dark)')
+    const listener = (event: MediaQueryListEvent) =>
+      setSystemDark(event.matches)
+    query.addEventListener('change', listener)
+    return () => query.removeEventListener('change', listener)
+  }, [])
+
+  useEffect(() => {
+    const listener = (event: StorageEvent) => {
+      if (event.key === 'pegas-theme') setTheme(readTheme())
+    }
+    window.addEventListener('storage', listener)
+    return () => window.removeEventListener('storage', listener)
+  }, [])
+
+  const isDark = theme === 'dark' || (theme === 'system' && systemDark)
+
+  useEffect(() => {
     document.documentElement.dataset.theme = theme
     localStorage.setItem('pegas-theme', theme)
-  }, [theme])
+    const colorScheme = document.querySelector<HTMLMetaElement>(
+      'meta[name="color-scheme"]',
+    )
+    if (colorScheme)
+      colorScheme.content =
+        theme === 'system' ? 'light dark' : isDark ? 'dark' : 'light'
+    const themeColor = document.querySelector<HTMLMetaElement>(
+      'meta[name="theme-color"]',
+    )
+    if (themeColor) themeColor.content = isDark ? '#151615' : '#ffffff'
+  }, [isDark, theme])
 
   async function saveSettings(
     settings: RuntimeSettings,
@@ -210,7 +238,8 @@ export function App() {
 
   const actions = {
     onSearch: openSearch,
-    onTheme: () => setThemeOpen(current => !current),
+    onToggleAppearance: () => setTheme(isDark ? 'light' : 'dark'),
+    isDark,
     onOpenDrawer: openDrawer,
   }
   const unreadCount = data.snapshot.messages.filter(
@@ -270,6 +299,7 @@ export function App() {
               api.discoverModels(provider, model, draft)
             }
             onOpenDrawer={openDrawer}
+            onThemeChange={setTheme}
             onSave={saveSettings}
             onTestModel={(provider, model, draft) =>
               api.testModel(provider, model, draft)
@@ -281,17 +311,9 @@ export function App() {
               api.testSpeechConnection(audio, speech)
             }
             response={data.settings}
-            usage={data.usage}
-          />
-        )}
-        {themeOpen && (
-          <ThemeMenu
-            onChange={choice => {
-              setTheme(choice)
-              setThemeOpen(false)
-            }}
-            onClose={() => setThemeOpen(false)}
+            systemDark={systemDark}
             theme={theme}
+            usage={data.usage}
           />
         )}
       </AppShell>
@@ -395,6 +417,13 @@ function readTheme(): ThemeChoice {
     value === 'system'
     ? value
     : 'light'
+}
+
+function systemPrefersDark(): boolean {
+  return (
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-color-scheme: dark)').matches
+  )
 }
 
 export { formatRelativeTime } from './sealed/types'
