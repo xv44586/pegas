@@ -799,8 +799,13 @@ function ModelServices({
     apiKey: '',
     clearApiKey: false,
   }
+  const probeModel =
+    active?.id === draft.modelProvider
+      ? draft.modelName.trim()
+      : (active?.defaultModel.trim() ?? '')
+  const canProbe = Boolean(probeModel)
   async function discover() {
-    if (!active) return
+    if (!active || !canProbe) return
     const requestId = providerRequestRef.current + 1
     providerRequestRef.current = requestId
     setBusy('discover')
@@ -808,9 +813,7 @@ function ModelServices({
     try {
       const result = await onDiscoverModels(
         active.id,
-        active.id === draft.modelProvider
-          ? draft.modelName
-          : active.defaultModel,
+        probeModel,
         active.id === draft.modelProvider && providerDraft
           ? providerDraft
           : activeProviderDraft,
@@ -827,7 +830,7 @@ function ModelServices({
     }
   }
   async function test() {
-    if (!active) return
+    if (!active || !canProbe) return
     const requestId = providerRequestRef.current + 1
     providerRequestRef.current = requestId
     setBusy('test')
@@ -835,9 +838,7 @@ function ModelServices({
     try {
       const result = await onTestModel(
         active.id,
-        active.id === draft.modelProvider
-          ? draft.modelName
-          : active.defaultModel,
+        probeModel,
         active.id === draft.modelProvider && providerDraft
           ? providerDraft
           : activeProviderDraft,
@@ -939,7 +940,7 @@ function ModelServices({
               </div>
               <button
                 className="secondary-button"
-                disabled={Boolean(busy)}
+                disabled={Boolean(busy) || !canProbe}
                 onClick={() => void test()}
                 type="button"
               >
@@ -1044,6 +1045,12 @@ function ModelServices({
                 Provider；请先在“事情归类”中选用。
               </div>
             )}
+            {!canProbe && (
+              <div className="info-banner">
+                <LockKeyhole size={16} />
+                请先在“事情归类”中选用并填写模型，再测试连接或读取目录。
+              </div>
+            )}
             <h4>正在使用</h4>
             <dl>
               <div>
@@ -1074,7 +1081,7 @@ function ModelServices({
             </h4>
             <button
               className="secondary-button"
-              disabled={Boolean(busy)}
+              disabled={Boolean(busy) || !canProbe}
               onClick={() => void discover()}
               type="button"
             >
@@ -1836,7 +1843,7 @@ function UsageSettings({
               <div key={record.runId}>
                 <span>
                   {record.modelRef ?? record.executor}
-                  <small>{record.runId}</small>
+                  <small>{`事情 ${record.taskId} · Run ${record.runId}`}</small>
                 </span>
                 <span>
                   {record.inputTokens?.toLocaleString('zh-CN') ?? '—'}

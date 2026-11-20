@@ -715,9 +715,6 @@ export function WorkPage({
                   <strong>{channel.title}</strong>
                   <small>{channel.goal}</small>
                 </span>
-                <span className="work-artifacts">
-                  <FileText size={15} />
-                </span>
                 <time>{formatRelativeTime(channel.latestActivityAt)}</time>
                 <span className={`status-text status-${state}`}>{state}</span>
               </button>

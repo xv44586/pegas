@@ -383,7 +383,11 @@ export function App() {
           run: latestRunForTask(data.snapshot.runs, channel.id),
         })
         void loadTaskDrawer(channel.id)
-      } else setDrawer(undefined)
+      } else
+        setDrawer(current => {
+          if (current) restoreFocus()
+          return undefined
+        })
     }
     window.addEventListener('popstate', restorePage)
     return () => window.removeEventListener('popstate', restorePage)

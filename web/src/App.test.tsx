@@ -513,6 +513,50 @@ describe('sealed Pegas UI', () => {
     )
   })
 
+  it('does not probe a non-current custom provider without a model', async () => {
+    const customSettings: SettingsResponse = {
+      ...settingsResponse,
+      capabilities: {
+        ...settingsResponse.capabilities,
+        providers: [
+          ...settingsResponse.capabilities.providers,
+          {
+            id: 'custom',
+            name: '自定义',
+            category: 'custom',
+            protocol: 'openai-chat',
+            baseUrl: 'https://models.example/v1',
+            defaultModel: '',
+            description: '自定义服务',
+            requiresApiKey: false,
+            hasApiKey: false,
+            available: true,
+          },
+        ],
+      },
+    }
+    installFetch(path =>
+      path === '/v1/settings' ? Response.json(customSettings) : undefined,
+    )
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /模型服务/ }))
+    fireEvent.click(screen.getByRole('button', { name: /自定义/ }))
+    expect(screen.getByRole('button', { name: '测试连接' })).toHaveProperty(
+      'disabled',
+      true,
+    )
+    expect(screen.getByRole('button', { name: '获取模型目录' })).toHaveProperty(
+      'disabled',
+      true,
+    )
+    expect(screen.getByText(/请先在“事情归类”中选用并填写模型/)).toBeTruthy()
+  })
+
   it('keeps preset provider URLs read-only and saves credential changes', async () => {
     const fetchMock = installFetch()
     render(<App />)
@@ -1050,6 +1094,18 @@ describe('sealed Pegas UI', () => {
     const list = screen.getByLabelText('事情列表')
     expect(within(list).getByText(channel.title)).toBeTruthy()
     expect(within(list).getByText('失败')).toBeTruthy()
+  })
+
+  it('does not imply that work has an artifact without an artifact fact', async () => {
+    installFetch()
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /所有事情/,
+      }),
+    )
+    const list = screen.getByLabelText('事情列表')
+    expect(list.querySelector('.work-artifacts')).toBeNull()
   })
 
   it('classifies attention items from structured payload facts only', async () => {
@@ -1814,6 +1870,20 @@ describe('sealed Pegas UI', () => {
     expect(screen.getAllByText('执行器未回报').length).toBeGreaterThanOrEqual(3)
   })
 
+  it('keeps task and run attribution in the global usage table', async () => {
+    installFetch()
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /模型用量/ }))
+    expect(
+      await screen.findByText(`事情 ${channel.id} · Run ${run.id}`),
+    ).toBeTruthy()
+  })
+
   it('shows the shell as offline when the authoritative snapshot fails', async () => {
     installFetch(path =>
       path.startsWith('/v1/events?')
@@ -1924,6 +1994,23 @@ describe('sealed Pegas UI', () => {
     fireEvent.click(action)
     fireEvent.click(await screen.findByRole('button', { name: '关闭详情' }))
     await waitFor(() => expect(document.activeElement).toBe(action))
+  })
+
+  it('restores focus when browser history closes a task drawer', async () => {
+    installFetch()
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /所有事情/,
+      }),
+    )
+    const trigger = screen.getByRole('button', { name: /安全自更新流程/ })
+    trigger.focus()
+    fireEvent.click(trigger)
+    expect(await screen.findByLabelText('工作详情')).toBeTruthy()
+    window.history.back()
+    await waitFor(() => expect(screen.queryByLabelText('工作详情')).toBeNull())
+    await waitFor(() => expect(document.activeElement).toBe(trigger))
   })
 
   it('opens an attention item on the Run referenced by its payload', async () => {
