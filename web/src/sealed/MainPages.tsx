@@ -22,6 +22,7 @@ import type { PegasApi } from '../api'
 import { MarkdownMessage } from '../MarkdownMessage'
 import type { DshModelCatalogItem, OutboxMessage, Snapshot } from '../types'
 import { useVoiceDictation } from '../useVoiceDictation'
+import { PegasAgentIcon } from '../PegasAgentIcon'
 import { EmptyCapability, PageToolbar } from './Shell'
 import {
   attentionKind,
@@ -626,16 +627,16 @@ export function WorkPage({
   >('active')
   const [query, setQuery] = useState('')
   const visible = snapshot.channels.filter(channel => {
+    const run = latestRunForTask(snapshot.runs, channel.id)
     if (
       query &&
-      !`${channel.title} ${channel.goal}`
+      !`${channel.title} ${channel.goal} ${run?.output ?? ''}`
         .toLowerCase()
         .includes(query.toLowerCase())
     )
       return false
     if (filter === 'completed') return channel.status === 'completed'
     if (filter === 'archived') return channel.status === 'cancelled'
-    const run = latestRunForTask(snapshot.runs, channel.id)
     if (
       filter === 'waiting' &&
       (channel.status === 'completed' || channel.status === 'cancelled')
@@ -662,7 +663,7 @@ export function WorkPage({
           <input
             aria-label="搜索事情"
             onChange={event => setQuery(event.target.value)}
-            placeholder="搜索事情、结果或文件"
+            placeholder="搜索事情或结果"
             value={query}
           />
         </label>
@@ -709,11 +710,18 @@ export function WorkPage({
                 type="button"
               >
                 <span className="work-icon">
-                  <FileText size={20} />
+                  <PegasAgentIcon iconId={channel.workerIconId} size={38} />
                 </span>
                 <span className="work-copy">
                   <strong>{channel.title}</strong>
                   <small>{channel.goal}</small>
+                  <small className="work-context">
+                    {run
+                      ? [run.executor, run.executionContext?.model]
+                          .filter(Boolean)
+                          .join(' · ')
+                      : '尚未分配执行器'}
+                  </small>
                 </span>
                 <time>{formatRelativeTime(channel.latestActivityAt)}</time>
                 <span className={`status-text status-${state}`}>{state}</span>
@@ -763,7 +771,11 @@ export function AttentionPage({
   const [filter, setFilter] = useState<'all' | 'approval' | 'input' | 'failed'>(
     'all',
   )
-  const attentionMessages = snapshot.messages.filter(isAttentionMessage)
+  const attentionMessages = snapshot.messages
+    .filter(isAttentionMessage)
+    .toSorted(
+      (left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt),
+    )
   const visible = attentionMessages.filter(message => {
     if (filter === 'all') return true
     return attentionKind(message) === filter
@@ -879,6 +891,7 @@ export function AutomationPage({ actions }: { actions: PageActions }) {
         </span>
       </div>
       <EmptyCapability
+        availabilityLabel="服务端能力尚未启用"
         icon={Zap}
         title="自动化能力正在建设"
         description="计划任务与条件触发会在服务端形成可恢复的事实来源后出现在这里。"
@@ -910,6 +923,7 @@ export function MemoryPage({ actions }: { actions: PageActions }) {
         </button>
       </div>
       <EmptyCapability
+        availabilityLabel="服务端能力尚未启用"
         icon={Volume2}
         title="记忆能力正在建设"
         description="记忆会带来源、作用范围和删除路径；在服务端能力完成前不会写入本机假数据。"

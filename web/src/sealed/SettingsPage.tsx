@@ -264,6 +264,7 @@ export function SettingsPage({
                     draft={draft}
                     onDiscoverModels={onDiscoverModels}
                     onOpenRouter={() => selectSection('router')}
+                    onOpenVoice={() => selectSection('voice')}
                     onTestModel={onTestModel}
                     providerDraft={providerDraft}
                     response={response}
@@ -771,6 +772,7 @@ function ModelServices({
   onDiscoverModels,
   onTestModel,
   onOpenRouter,
+  onOpenVoice,
 }: {
   response: SettingsResponse
   draft: RuntimeSettings
@@ -781,6 +783,7 @@ function ModelServices({
   onDiscoverModels: SettingsPageProps['onDiscoverModels']
   onTestModel: SettingsPageProps['onTestModel']
   onOpenRouter: () => void
+  onOpenVoice: () => void
 }) {
   const providers = response.capabilities.providers
   const [query, setQuery] = useState('')
@@ -1067,10 +1070,14 @@ function ModelServices({
               <div>
                 <dt>输入改写</dt>
                 <dd>
-                  {active.id === response.settings.modelProvider
-                    ? '跟随事情归类'
-                    : '未引用'}
-                  <button onClick={onOpenRouter} type="button">
+                  {response.settings.rewriteMode === 'disabled'
+                    ? '未启用'
+                    : response.rewrite?.mode === 'custom'
+                      ? '未引用（使用独立服务）'
+                      : active.id === response.settings.modelProvider
+                        ? '跟随事情归类'
+                        : '未引用'}
+                  <button onClick={onOpenVoice} type="button">
                     打开设置
                   </button>
                 </dd>
@@ -1296,7 +1303,19 @@ function VoiceSettings({
   const [rewriteResult, setRewriteResult] = useState('')
   const [rewriteTesting, setRewriteTesting] = useState(false)
   const [rewriteError, setRewriteError] = useState('')
+  const speechRequestRef = useRef(0)
   const rewriteRequestRef = useRef(0)
+  useEffect(() => {
+    speechRequestRef.current += 1
+    setSpeechResult('')
+  }, [
+    speechDraft.apiKey,
+    speechDraft.baseUrl,
+    speechDraft.clearApiKey,
+    speechDraft.hasApiKey,
+    speechDraft.model,
+    speechDraft.provider,
+  ])
   useEffect(() => {
     rewriteRequestRef.current += 1
     setRewriteTesting(false)
@@ -1322,10 +1341,13 @@ function VoiceSettings({
   const dictation = useVoiceDictation({
     maximumSeconds: 20,
     transcribe: async audio => {
+      const requestId = speechRequestRef.current + 1
+      speechRequestRef.current = requestId
       const result = await onTestSpeech(audio, speechDraft)
-      setSpeechResult(
-        `${result.transcript.text} · ${String(result.latencyMs)} ms`,
-      )
+      if (requestId === speechRequestRef.current)
+        setSpeechResult(
+          `${result.transcript.text} · ${String(result.latencyMs)} ms`,
+        )
       return result.transcript
     },
   })

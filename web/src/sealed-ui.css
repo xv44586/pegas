@@ -941,12 +941,23 @@ a {
 }
 .work-icon {
   align-items: center;
-  background: var(--surface);
   border-radius: 11px;
   display: flex;
   height: 38px;
   justify-content: center;
   width: 38px;
+}
+.work-icon .pegas-agent-avatar {
+  --pegas-icon-background: var(--accent);
+  --pegas-icon-foreground: #fff;
+  display: flex;
+  height: 38px;
+  width: 38px;
+}
+.work-icon .pegas-agent-glyph {
+  display: block;
+  height: 100%;
+  width: 100%;
 }
 .work-copy {
   display: grid;
@@ -959,6 +970,10 @@ a {
 .work-list time {
   color: var(--muted);
   font-size: 12px;
+}
+.work-copy .work-context {
+  color: var(--text-soft);
+  font-size: 11px;
 }
 .status-text {
   align-items: center;

@@ -2655,4 +2655,230 @@ describe('sealed Pegas UI', () => {
     expect(screen.queryByText('Magpie only')).toBeNull()
     expect(screen.getByRole('heading', { name: 'Anthropic' })).toBeTruthy()
   })
+
+  it('does not stack global search over an open detail drawer', async () => {
+    installFetch()
+    render(<App />)
+    fireEvent.click(
+      await screen.findByRole('button', { name: /进行中 · 安全自更新流程/ }),
+    )
+    expect(await screen.findByLabelText('工作详情')).toBeTruthy()
+    fireEvent.keyDown(window, { key: 'k', metaKey: true })
+    expect(screen.queryByRole('dialog', { name: '全局搜索' })).toBeNull()
+  })
+
+  it('reports the actual rewrite owner from model services', async () => {
+    installFetch(path =>
+      path === '/v1/settings'
+        ? Response.json({
+            ...settingsResponse,
+            settings: { ...settingsResponse.settings, rewriteMode: 'disabled' },
+          })
+        : undefined,
+    )
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /模型服务/ }))
+    expect(screen.getByText('未启用')).toBeTruthy()
+    const rewriteShortcut = screen.getAllByRole('button', {
+      name: '打开设置',
+    })[1]
+    if (!rewriteShortcut) throw new Error('Expected rewrite settings shortcut')
+    fireEvent.click(rewriteShortcut)
+    expect(screen.getByRole('heading', { name: '语音与输入' })).toBeTruthy()
+  })
+
+  it('invalidates a speech test result when its connection changes', async () => {
+    class FakeMediaRecorder {
+      static isTypeSupported() {
+        return false
+      }
+      state: RecordingState = 'inactive'
+      mimeType = 'audio/webm'
+      ondataavailable: ((event: BlobEvent) => void) | null = null
+      onerror: (() => void) | null = null
+      onstop: (() => void) | null = null
+      start() {
+        this.state = 'recording'
+      }
+      stop() {
+        this.state = 'inactive'
+        this.ondataavailable?.({ data: new Blob(['voice']) } as BlobEvent)
+        this.onstop?.()
+      }
+    }
+    vi.stubGlobal('MediaRecorder', FakeMediaRecorder)
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: {
+        getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [] }),
+      },
+    })
+    installFetch((path, init) =>
+      path === '/v1/settings/speech/test' && init?.method === 'POST'
+        ? Response.json({
+            transcript: { text: '旧连接识别结果' },
+            latencyMs: 45,
+          })
+        : undefined,
+    )
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /语音与输入/ }))
+    fireEvent.click(screen.getByRole('button', { name: '录一段测试' }))
+    fireEvent.click(await screen.findByRole('button', { name: '结束并识别' }))
+    expect(await screen.findByText(/旧连接识别结果/)).toBeTruthy()
+    const [speechBaseUrl] = screen.getAllByLabelText('服务地址')
+    if (!speechBaseUrl) throw new Error('missing speech base URL field')
+    fireEvent.change(speechBaseUrl, {
+      target: { value: 'http://127.0.0.1:19000/v1' },
+    })
+    expect(screen.queryByText(/旧连接识别结果/)).toBeNull()
+  })
+
+  it('derives drawer token totals from reported input and output', async () => {
+    installSnapshotFetch(snapshot, path =>
+      path.startsWith('/v1/usage?')
+        ? Response.json({
+            summary: {
+              records: 1,
+              completeRecords: 1,
+              partialRecords: 0,
+              unavailableRecords: 0,
+              inputTokens: 40,
+              outputTokens: 10,
+              durationMs: 100,
+            },
+            records: [
+              {
+                runId: run.id,
+                taskId: channel.id,
+                userId: 'owner',
+                workerIconId: 'computer',
+                executor: 'dsh',
+                completeness: 'complete',
+                inputTokens: 40,
+                outputTokens: 10,
+                reportedSteps: 1,
+                unreportedSteps: 0,
+                observedAt: run.updatedAt,
+              },
+            ],
+          })
+        : undefined,
+    )
+    render(<App />)
+    fireEvent.click(
+      await screen.findByRole('button', { name: /进行中 · 安全自更新流程/ }),
+    )
+    expect(
+      within(screen.getByLabelText('工作详情')).getByText('50'),
+    ).toBeTruthy()
+  })
+
+  it('keeps work identity, execution context and result search truthful', async () => {
+    installSnapshotFetch({
+      ...snapshot,
+      channels: [{ ...channel, status: 'completed' }],
+      runs: [{ ...run, status: 'completed', output: '独特验收结果' }],
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /所有事情/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('tab', { name: '已完成' }))
+    const list = screen.getByLabelText('事情列表')
+    expect(
+      list.querySelector('use[href$="#pegas-agent-computer"]'),
+    ).toBeTruthy()
+    expect(within(list).getByText(/dsh · deepseek-v4.1-flash/)).toBeTruthy()
+    const search = screen.getByPlaceholderText('搜索事情或结果')
+    fireEvent.change(search, { target: { value: '独特验收结果' } })
+    expect(screen.getByText(channel.title)).toBeTruthy()
+  })
+
+  it('shows ordinary empty work without claiming the service is disabled', async () => {
+    installSnapshotFetch({ ...snapshot, channels: [], runs: [] })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /所有事情/,
+      }),
+    )
+    expect(screen.getByText('这里还没有事情')).toBeTruthy()
+    expect(screen.queryByText('服务端能力尚未启用')).toBeNull()
+  })
+
+  it('shows newest attention items first', async () => {
+    const source = snapshot.messages[0]
+    if (!source) throw new Error('missing attention fixture')
+    installSnapshotFetch({
+      ...snapshot,
+      messages: [
+        {
+          ...source,
+          id: 'older',
+          createdAt: '2026-11-19T08:00:00.000Z',
+          payload: { type: 'run.failed', error: '较早失败' },
+        },
+        {
+          ...source,
+          id: 'newer',
+          createdAt: '2026-11-19T09:00:00.000Z',
+          payload: { type: 'run.failed', error: '最新失败' },
+        },
+      ],
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    const articles = screen.getAllByRole('article')
+    expect(articles[0]?.textContent).toContain('最新失败')
+    expect(articles[1]?.textContent).toContain('较早失败')
+  })
+
+  it('keeps protected data hidden until a replacement token is validated', async () => {
+    vi.useFakeTimers()
+    try {
+      let eventRequests = 0
+      let replacementPending: Promise<Response> | undefined
+      installFetch(path => {
+        if (!path.startsWith('/v1/events?')) return undefined
+        eventRequests += 1
+        if (eventRequests === 1)
+          return Response.json({ events: snapshot.events })
+        if (eventRequests === 2)
+          return Response.json({ message: 'unauthorized' }, { status: 401 })
+        replacementPending ??= new Promise<Response>(() => undefined)
+        return replacementPending
+      })
+      render(<App />)
+      await act(async () => vi.advanceTimersByTimeAsync(0))
+      expect(screen.getByText(channel.title)).toBeTruthy()
+      await act(async () => vi.advanceTimersByTimeAsync(5_000))
+      expect(screen.getByRole('heading', { name: '连接到 Pegas' })).toBeTruthy()
+      fireEvent.change(screen.getByLabelText('访问令牌'), {
+        target: { value: 'invalid-replacement' },
+      })
+      fireEvent.click(screen.getByRole('button', { name: /继续/ }))
+      await act(async () => Promise.resolve())
+      expect(screen.getByRole('heading', { name: '连接到 Pegas' })).toBeTruthy()
+      expect(screen.queryByText(channel.title)).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

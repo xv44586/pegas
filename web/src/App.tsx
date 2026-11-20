@@ -173,17 +173,18 @@ export function App() {
       if (setupOpen) return
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault()
+        if (drawer || searchOpen) return
         rememberFocus()
         setSearchOpen(true)
       }
-      if (event.key === 'Escape') {
-        closeSearch()
-        closeDrawer()
+      if (event.key === 'Escape' && !event.defaultPrevented) {
+        if (searchOpen) closeSearch()
+        else if (drawer) closeDrawer()
       }
     }
     window.addEventListener('keydown', listener)
     return () => window.removeEventListener('keydown', listener)
-  }, [setupOpen])
+  }, [drawer, searchOpen, setupOpen])
 
   function rememberFocus() {
     if (document.activeElement instanceof HTMLElement)
@@ -238,13 +239,26 @@ export function App() {
         ? values.reduce((total, value) => total + value, 0)
         : undefined
     }
+    const totalTokens = records
+      .map(record => {
+        if (record.totalTokens !== undefined) return record.totalTokens
+        if (
+          record.inputTokens === undefined &&
+          record.outputTokens === undefined
+        )
+          return undefined
+        return (record.inputTokens ?? 0) + (record.outputTokens ?? 0)
+      })
+      .filter((value): value is number => value !== undefined)
     return {
       ...view,
       channel,
       run,
       runs,
       usage: {
-        totalTokens: sum('totalTokens'),
+        totalTokens: totalTokens.length
+          ? totalTokens.reduce((total, value) => total + value, 0)
+          : undefined,
         durationMs: sum('durationMs'),
         costUsd: sum('costUsd'),
       },
@@ -567,7 +581,6 @@ export function App() {
         onToken={nextToken => {
           sessionStorage.setItem('pegas-token', nextToken)
           setToken(nextToken)
-          setUnauthorized(false)
         }}
       />
     )

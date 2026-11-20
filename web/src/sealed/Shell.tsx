@@ -273,10 +273,12 @@ export function EmptyCapability({
   icon: Icon = Bot,
   title,
   description,
+  availabilityLabel,
 }: {
   icon?: typeof Bot
   title: string
   description: string
+  availabilityLabel?: string
 }) {
   return (
     <div className="empty-capability">
@@ -285,7 +287,7 @@ export function EmptyCapability({
       </span>
       <h2>{title}</h2>
       <p>{description}</p>
-      <small>服务端能力尚未启用</small>
+      {availabilityLabel && <small>{availabilityLabel}</small>}
     </div>
   )
 }
