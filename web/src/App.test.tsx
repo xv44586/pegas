@@ -3640,7 +3640,9 @@ describe('sealed Pegas UI', () => {
     fireEvent.click(screen.getByRole('button', { name: '已完成' }))
     const list = screen.getByLabelText('事情列表')
     expect(
-      list.querySelector('use[href$="#pegas-agent-computer"]'),
+      list.querySelector(
+        'img.pegas-agent-glyph[src="/brand/agent-computer.webp"]',
+      ),
     ).toBeTruthy()
     expect(within(list).getByText(/dsh · deepseek-v4.1-flash/)).toBeTruthy()
     const search = screen.getByPlaceholderText('搜索事情或结果')

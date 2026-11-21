@@ -8,13 +8,14 @@ import { PegasMark } from './PegasMark'
 afterEach(cleanup)
 
 describe('PegasMark', () => {
-  it('renders the mascot face tile instead of the old abstract swoosh', () => {
+  it('renders the transparent mascot illustration instead of the flat vector face', () => {
     const { container } = render(<PegasMark size={42} />)
-    const svg = container.querySelector('svg.pegas-mark')
-    expect(svg?.getAttribute('viewBox')).toBe('0 0 64 64')
-    expect(svg?.querySelector('rect[fill="currentColor"]')).toBeTruthy()
-    expect(svg?.querySelector('rect[fill="#181818"]')).toBeTruthy()
-    expect(svg?.querySelectorAll('circle[fill="#7defff"]').length).toBe(2)
-    expect(svg?.innerHTML).not.toContain('M6.2 30.8')
+    const mark = container.querySelector('img.pegas-mark')
+    expect(mark?.getAttribute('src')).toBe('/brand/agent-bot.webp')
+    expect(mark?.getAttribute('width')).toBe('42')
+    expect(mark?.getAttribute('height')).toBe('42')
+    expect(mark?.getAttribute('aria-hidden')).toBe('true')
+    expect(mark?.getAttribute('alt')).toBe('')
+    expect(container.querySelector('svg.pegas-mark')).toBeNull()
   })
 })

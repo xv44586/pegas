@@ -1,72 +1,82 @@
-import { readFile } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
 
-const spriteModuleDirectory = path.resolve(
+const repositoryRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
-  '../web/src',
+  '..',
 )
+const brandDirectory = path.join(repositoryRoot, 'web/public/brand')
 
-const tablerSourcePaths = {
-  car: [
-    'M5 17a2 2 0 1 0 4 0a2 2 0 1 0 -4 0',
-    'M15 17a2 2 0 1 0 4 0a2 2 0 1 0 -4 0',
-    'M5 17h-2v-6l2 -5h9l4 5h1a2 2 0 0 1 2 2v4h-2m-4 0h-6m-6 -6h15m-6 0v-5',
-  ],
-  camera: [
-    'M5 7h1a2 2 0 0 0 2 -2a1 1 0 0 1 1 -1h6a1 1 0 0 1 1 1a2 2 0 0 0 2 2h1a2 2 0 0 1 2 2v9a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-9a2 2 0 0 1 2 -2',
-    'M9 13a3 3 0 1 0 6 0a3 3 0 0 0 -6 0',
-  ],
-  computer: [
-    'M3 5a1 1 0 0 1 1 -1h16a1 1 0 0 1 1 1v10a1 1 0 0 1 -1 1h-16a1 1 0 0 1 -1 -1v-10',
-    'M7 20h10',
-    'M9 16v4',
-    'M15 16v4',
-  ],
-  phone: [
-    'M6 5a2 2 0 0 1 2 -2h8a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-8a2 2 0 0 1 -2 -2v-14',
-    'M11 4h2',
-    'M12 17v.01',
-  ],
+const illustratedAgents = {
+  bot: 'pegas-mascot.png',
+  car: 'worker-car.png',
+  camera: 'worker-camera.png',
+  computer: 'worker-computer.png',
+  phone: 'worker-phone.png',
 } as const
 
-async function readAsset(fileName: string) {
-  return readFile(path.join(spriteModuleDirectory, fileName), 'utf8')
+function webpDimensions(data: Buffer) {
+  expect(data.subarray(0, 4).toString('latin1')).toBe('RIFF')
+  expect(data.subarray(8, 12).toString('latin1')).toBe('WEBP')
+  const chunk = data.subarray(12, 16).toString('latin1')
+  const declaredBytes = 8 + data.readUInt32LE(4)
+  if (chunk === 'VP8X') {
+    return {
+      width: 1 + data.readUIntLE(24, 3),
+      height: 1 + data.readUIntLE(27, 3),
+      hasAlpha: (data.readUInt8(20) & 0x10) !== 0,
+      declaredBytes,
+    }
+  }
+  expect(chunk).toBe('VP8L')
+  expect(data.readUInt8(20)).toBe(0x2f)
+  const bits = data.readUInt32LE(21)
+  return {
+    width: 1 + (bits & 0x3fff),
+    height: 1 + ((bits >> 14) & 0x3fff),
+    hasAlpha: ((bits >> 28) & 1) === 1,
+    declaredBytes,
+  }
 }
 
-describe('worker icon assets adapt Tabler outline geometry', () => {
-  it.each(Object.entries(tablerSourcePaths))(
-    'renders %s from the unmodified Tabler source paths',
-    async (name, sourcePaths) => {
-      const [spriteModule, sprite] = await Promise.all([
-        readAsset('agent-icon-sprite.ts'),
-        readAsset('pegas-agents.svg'),
-      ])
-
-      for (const document of [spriteModule.replaceAll('\\"', '"'), sprite]) {
-        expect(document).toContain(
-          'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" transform="translate(8 8) scale(2)"',
-        )
-        for (const pathData of sourcePaths) {
-          expect(document).toContain(`<path d="${pathData}"/>`)
-        }
-      }
+describe('illustrated agent identity assets', () => {
+  it.each(Object.keys(illustratedAgents))(
+    'ships %s as a 256px transparent lossless webp',
+    async iconId => {
+      const tilePath = path.join(brandDirectory, `agent-${iconId}.webp`)
+      const data = await readFile(tilePath)
+      const details = webpDimensions(data)
+      expect(details.width).toBe(256)
+      expect(details.height).toBe(256)
+      expect(details.hasAlpha).toBe(true)
+      expect(details.declaredBytes).toBe(data.length)
+      expect(data.length).toBeGreaterThan(5_000)
+      expect(data.length).toBeLessThan(120_000)
     },
   )
 
-  it('keeps the Pegas bot identity on its own geometry', async () => {
-    const bot = (await readAsset('agent-icon-sprite.ts')).replaceAll('\\"', '"')
+  it.each(Object.entries(illustratedAgents))(
+    'keeps the %s png master for asset regeneration',
+    async (_iconId, masterName) => {
+      const details = await stat(path.join(brandDirectory, masterName))
+      expect(details.size).toBeGreaterThan(10_000)
+    },
+  )
 
-    const botSymbol = bot.slice(
-      bot.indexOf('id="pegas-agent-bot"'),
-      bot.indexOf('</symbol>'),
-    )
-    expect(botSymbol).toContain('<path d="M32 18V11"/>')
-    expect(botSymbol).toContain(
-      '<rect x="17" y="18" width="30" height="27" rx="6"/>',
-    )
-    expect(botSymbol).not.toContain('translate(8 8) scale(2)')
+  it('derives every identity asset from the brand generator manifest', async () => {
+    const manifest = JSON.parse(
+      await readFile(
+        path.join(repositoryRoot, 'scripts/brand-icons-manifest.json'),
+        'utf8',
+      ),
+    ) as Record<string, string>
+    for (const iconId of Object.keys(illustratedAgents)) {
+      expect(manifest[`web/public/brand/agent-${iconId}.webp`]).toMatch(
+        /^[0-9a-f]{64}$/,
+      )
+    }
   })
 })

@@ -13,6 +13,9 @@ Pegas 拥有自己的动漫风格形象：一个圆润、安静的白色支援�
 
 形象拥有四个姿态（idle / waiting / celebrate / blocked），并统一派生为
 favicon、apple-touch-icon 与 macOS 桌面图标，替换旧的抽象 P/翼形标志。
+侧栏、接入页与设置页的 `PegasMark` 直接使用透明背景的 idle 插画；
+「所有事情」里每个 Channel 的身份图标（car / camera / computer / phone）
+也使用同一插画语汇的专属角色（详见 `docs/agent-icon-assets.md`）。
 
 ## 设计决策
 
@@ -38,6 +41,13 @@ favicon、apple-touch-icon 与 macOS 桌面图标，替换旧的抽象 P/翼形�
 - 姿态位图：`pegas-mascot-{waiting,celebrate,blocked}.webp`（480 宽，
   各约 26–37KB）与同源 PNG；`PegasMascot` 通过 `pose` 属性选择资产并按
   各自宽高比占位。
+- 身份插画：`web/public/brand/agent-{bot,car,camera,computer,phone}.webp`
+  （256×256 透明无损 WebP，由 `scripts/generate-brand-icons.mjs` 从
+  `pegas-mascot.png` 与 `worker-{car,camera,computer,phone}.png` 母版派生）。
+  `bot` 即 idle 形象本体；car 是青色眼睛的白色小车、camera 是蓝圈镜头
+  单眼相机、computer 是带笑脸的显示器、phone 是青色双眼的手机，全部
+  白色陶瓷机体 + periwinkle 点缀 + 墨色面罩 + 青色眼神光，与形象同风格。
+  UI 内不加底板，直接透明落在页面背景上。
 - 出现位置：对话欢迎区（`MainPages.tsx`，148px）、关于页
   （`SettingsPage.tsx`，168px，具名图像）、发送中 composer 等待指示
   （waiting，30px + 「正在整理…」文字）、待你处理空状态（celebrate，
@@ -45,10 +55,12 @@ favicon、apple-touch-icon 与 macOS 桌面图标，替换旧的抽象 P/翼形�
 - 应用图标派生：`scripts/generate-brand-icons.mjs`（`pnpm brand:generate` /
   `pnpm brand:check`，已串入 `pnpm check`）。generate 需要 python3 + Pillow；
   check 只比对 `scripts/brand-icons-manifest.json` 的 sha256，纯 Node、
-  CI 无需 Pillow。以 idle 姿态合成 1024 品牌蓝
-  圆角底板，派生 `web/public/favicon.svg`（矢量简化脸）、`favicon-32.png`、
-  `apple-touch-icon.png`、`desktop/icon.svg`（自包含 data URI）与
-  `desktop/Pegas.icns`（手写 ICNS 容器，PNG payload，含 16–1024 全尺寸）。
+  CI 无需 Pillow。以 idle 姿态合成 1024 品牌蓝圆角底板（应用图标需要
+  实底以适配桌面/主屏），派生 `web/public/favicon.svg`（内嵌 128px 插画
+  位图的自包含 SVG）、`favicon-32.png`、`apple-touch-icon.png`、
+  `desktop/icon.svg`（自包含 data URI）与 `desktop/Pegas.icns`（手写
+  ICNS 容器，PNG payload，含 16–1024 全尺寸）；同脚本派生五个 256px
+  透明身份插画。
 - 原始生成图（1536×1024，含透明通道）保存在本地
   `research/pegas-mascot/`，不提交。
 
@@ -61,10 +73,11 @@ favicon、apple-touch-icon 与 macOS 桌面图标，替换旧的抽象 P/翼形�
 5. 三主题（light/warm/dark）下无需滤镜即可读。
 6. 发送中显示 waiting 姿态与文字；待你处理空状态显示 celebrate 姿态。
 7. favicon / touch icon / 桌面 icns 与形象同源；`pnpm brand:check` 防漂移。
+8. 侧栏 `PegasMark` 与「所有事情」Channel 图标使用同风格透明插画，无蓝色底板；38px 列表尺寸下角色可辨认。
 
 ## 非目标
 
-- 不引入动画或表情包。`PegasMark` 已统一为与 favicon 同源的矢量 mascot 脸（侧栏/设置/接入页共用）。
+- 不引入动画或表情包。`PegasMark` 已统一为透明 idle 插画（侧栏/设置/接入页共用）；UI 内不使用应用图标的蓝底板。
 - 不让形象承担状态表达；Channel 状态仍由徽记与文字表达（BRAND-001）。
 
 ## 数据、权限与恢复边界
@@ -86,16 +99,16 @@ Sparkles 欢迎图标与关于页标志；无 schema 或 API 变化。
   icon 链接与产物、desktop/icon.svg 自包含。
 - `web/src/sealed/ApprovalMascot.test.tsx`：pending 审批显示具名 blocked
   姿态，resolved 后移除。
-- `web/src/sealed/PegasMark.test.tsx`：lockup 标志为 mascot 脸而非旧抽象翼形。
-- `pnpm brand:check`：五个应用图标产物与生成器一致。
+- `web/src/sealed/PegasMark.test.tsx`：lockup 标志为透明 idle 插画（`/brand/agent-bot.webp`）而非矢量脸或旧抽象翼形。
+- `test/agent-icon-assets.test.ts`：五个身份插画 256×256 透明 WebP、母版齐全、manifest 覆盖。
+- `pnpm brand:check`：十个品牌位图产物与生成器一致。
 - 浏览器截图：light/dark 欢迎区与关于页（`output/feature-review/media/
 desktop-settings-about.png` 及本地探针截图）。
 - 完整门禁：`pnpm check`、`pnpm smoke`（见 Feature Map 与提交说明）。
 
 ## 剩余风险与下一缺口
 
-- 位图为单一姿态；等待/庆祝/阻塞等情绪姿态未定义。
-- favicon 与桌面图标仍是旧的抽象 P/翼形标志，与形象未统一。
-- 暗色主题与移动端实机截图待补（沿用 DESIGN-002 截图流程）。
+- 暗色主题与移动端实机截图待补（沿用 DESIGN-002 截图流程）；白色机体
+  在暗色画布上依赖自身阴影成立，若未来出现低对比场景再考虑描边版本。
 - 生成式位图的版权归属按生成平台条款处理；造型为原创 prompt 设计，
   未引用参考图。

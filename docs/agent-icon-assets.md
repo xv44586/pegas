@@ -11,20 +11,22 @@ Pegas 使用自己的图标系统替代 DS Bot 鲸鱼形象。主入口固定为
 机器人；每个新 Channel 由服务端自动分配并持久化一个 Worker 图标，用户不能指定或修改
 `workerIconId`。Worker 图标本体始终使用 Pegas 蓝；Channel 状态由独立的小徽记、文字和既有进度元素表达，不再改变 Worker 身份色。
 
-`car`、`camera`、`computer`、`phone` 四个 Worker 符号改编自 MIT 许可的
-Tabler Icons outline 几何（24×24 网格、描边 2），经统一
-`translate(8 8) scale(2)` 变换映射到 64×64 品牌网格，保持 4px 等效描边与
-8px 安全边距。蓝色圆角底板、品牌变量与 `bot` 主入口机器人仍为 Pegas 自有设计。
-来源与许可证见 `THIRD_PARTY_NOTICES.md`。
+`bot`、`car`、`camera`、`computer`、`phone` 五个身份统一使用 Pegas 自有的
+柔和 3D 陶瓷质感插画（白色机体、periwinkle 蓝点缀、墨色面罩与青色眼神光，
+与 BRAND-002 形象同一风格），由 `scripts/generate-brand-icons.mjs` 裁切
+透明边距、等比缩放并居中到 256×256 透明画布，输出无损 WebP；UI 中无底板，
+插画直接落在页面背景上。此前改编自 MIT Tabler Icons 的线性 Worker 符号
+及其 sprite 管线已整体退役，当前产物不含第三方几何；历史记录见 git 历史
+与 `docs/pegas-mascot.md`。
 
 ## 验收条件
 
 1. Pegas 主入口、主页、设置和消息身份始终使用 `bot`，Channel 不使用第三方角色形象。
 2. 新 Channel 只从 `car`、`camera`、`computer`、`phone` 中由系统确定性分配；分配结果写入 Task，扩展图标库不会重排旧 Channel。
 3. `backlog`、`unstarted`、`started`、`completed`、`cancelled` 分别使用三点、时钟、靶心、对勾和叉形徽记；状态同时有文字，不只依赖颜色。
-4. 图标通过内联 SVG sprite 的文档内 `<use>` 复用（`PegasAgentSprite` 在 `AppShell` 单例挂载），并通过固定的 `--pegas-icon-background` 与 `--pegas-icon-foreground` 接收品牌主题；状态徽记由 Web 组件独立渲染。
+4. 图标以显式宽高的 `<img>` 渲染 `/brand/agent-<id>.webp`，透明背景、三主题无需变量或滤镜（白色机体在暗色画布天然成立）；加载不引起布局偏移；状态徽记由 Web 组件独立渲染，Forced Colors 下插画保留原色并以系统色描边界定形状。
 5. 已命名按钮内的图标为装饰图像；独立信息图像由调用方提供可访问名称。状态徽记在 Forced Colors 下使用系统色，并始终有形状或文字作为非颜色线索。
-6. 生成脚本是 SVG 几何和 sprite 的唯一事实来源；`pnpm icons:check` 阻止产物漂移。
+6. `scripts/generate-brand-icons.mjs` 是全部身份插画的唯一事实来源（母版 PNG 提交在 `web/public/brand/`）；`pnpm brand:check` 以 sha256 manifest 阻止产物漂移。
 
 ## 非目标
 
@@ -35,35 +37,35 @@ Tabler Icons outline 几何（24×24 网格、描边 2），经统一
 
 ## 权威实现与产物
 
-- 生成器：`scripts/generate-agent-icons.mjs`
+- 生成器：`scripts/generate-brand-icons.mjs`（`pnpm brand:generate` / `pnpm brand:check`）
 - 服务端分配：`src/brand/agent-icon.ts`, `src/storage/sqlite-store.ts`
 - Channel 投影：`src/channel/work-channel.ts`
 - Web 渲染：`web/src/PegasAgentIcon.tsx`, `web/src/agent-icon-id.ts`
-- 产物：`web/src/agent-icon-sprite.ts`（运行时内联 sprite）与 `web/src/pegas-agents.svg`（参考 sprite，不对外服务）。旧 `web/public/icons/agents/` 下五个手绘独立 SVG 与静态 sprite 已删除。
+- 产物：`web/public/brand/agent-{bot,car,camera,computer,phone}.webp`（256×256 无损、全透明背景）与同源母版 `pegas-mascot.png`、`worker-{car,camera,computer,phone}.png`。旧手绘 SVG、Tabler 线性 sprite（`scripts/generate-agent-icons.mjs`、`web/src/agent-icon-sprite.ts`、`web/src/pegas-agents.svg`）与 `icons:generate`/`icons:check` 脚本均已删除。
 
-图标路径由生成器中的 `iconDefinitions` 定义。每个图标只声明自身的白色符号；背景、可访问名称和主题变量由统一模板生成。
-Worker 符号使用生成器内的 `tablerGlyph` 辅助函数声明 Tabler 源路径；修改几何时必须同步
-`test/agent-icon-assets.test.ts` 中的源路径快照与第三方声明。
+身份插画由生成器裁切 alpha 边距后等比缩放居中到 256 透明画布。
+更换插画时替换母版 PNG 并运行 `pnpm brand:generate`，同步更新
+`test/agent-icon-assets.test.ts` 的尺寸/体积约束。
 
 ## 生成与检查
 
-重新生成全部图标：
+重新生成全部品牌位图（需要 python3 + Pillow）：
 
 ```bash
-pnpm icons:generate
+pnpm brand:generate
 ```
 
-只读检查已提交产物是否缺失或与生成器漂移：
+只读检查已提交产物是否缺失或与 manifest 漂移（纯 Node，CI 可运行）：
 
 ```bash
-pnpm icons:check
+pnpm brand:check
 ```
 
 `pnpm check` 会自动执行漂移检查。扩展新图标时：
 
-1. 在生成器 `iconDefinitions` 增加唯一名称、可访问名称、描述和几何；
+1. 制作同风格透明插画母版 PNG，放入 `web/public/brand/` 并登记到生成器 `agentSourceNames`/`agentIconIds`；
 2. 把 Worker 类型加入 `src/brand/agent-icon.ts` 和 Web 类型/注册表；
-3. 运行 `pnpm icons:generate`；
+3. 运行 `pnpm brand:generate`；
 4. 增加分配、迁移、小尺寸与状态徽记测试。
 
 旧 Task 已经保存 `worker_icon_id`，因此扩大分配池只影响此后创建的 Channel。
@@ -78,9 +80,9 @@ pnpm icons:check
 
 ## 验证证据
 
-- `pnpm icons:check`：内联 sprite 模块与参考 sprite 与生成器完全一致。
-- `web/src/PegasAgentIcon.test.tsx`：sprite 单例内联、五个 symbol 齐全、`<use>` 指向文档内 fragment。
-- `test/agent-icon-assets.test.ts`：四个 Worker 图标逐路径锁定 Tabler 源几何与缩放变换，`bot` 保持自有几何。
+- `pnpm brand:check`：十个品牌位图产物与 sha256 manifest 完全一致。
+- `web/src/PegasAgentIcon.test.tsx`：五个身份逐一指向对应透明插画、显式宽高占位、装饰/具名可访问性与五状态徽记。
+- `test/agent-icon-assets.test.ts`：五个身份资产为 256×256 带透明通道的 WebP、RIFF 长度自洽、体积 5KB–120KB、母版 PNG 齐全、manifest 覆盖。
 - 自动化覆盖确定性分配、非法第三方 ID、历史数据回填、API 投影、旧服务兼容、固定蓝色身份与 UI 状态徽记。
 - 浏览器截图覆盖 Pegas 固定机器人、Channel 多形状、五状态徽记和收缩侧栏。
 - 完整门禁：`pnpm check`, `pnpm smoke`。
@@ -101,13 +103,10 @@ Playwright `forcedColors: 'active'` 验证 Worker 图标几何与状态文字线
 - light 主题 `--critical` 与 `--critical-soft` 对比度 4.28 < 4.5：调整为
   `#b93a46`（全表面 ≥ 4.8），并写入 `test/sealed-ui-contrast.test.ts` 回归。
 
-### 首绘竞态修复（2026-11-21）
+### 渲染管线演进（2026-11-21）
 
-外部 sprite `<use>` 曾在页面首次绘制时尚未解码，导致 `pnpm review:ui`
-早期截图（如 `desktop-all-work.png`）Worker 图标列空白；该现象在基线
-main 即可复现，属既有问题。本变更把 sprite 内联进文档根治：生成器额外
-产出 `web/src/agent-icon-sprite.ts`（字符串模块，`.prettierignore` 排除），
-`PegasAgentSprite` 在 `AppShell` 根部挂载一次隐藏 SVG，`PegasAgentIcon`
-的 `<use>` 改为文档内 fragment（`#pegas-agent-<id>`），首帧即有几何，
-不再依赖网络解码。参考 `pegas-agents.svg` 仍生成于 `web/src/`，仅作几何审查用途。
-修复后 `review:ui` 首帧截图图标列像素验证非空（蓝色像素 2367）。
+外部 sprite `<use>` 曾在首帧未解码导致 Worker 图标列空白，第一版修复把
+sprite 内联进文档（`PegasAgentSprite` 单例 + 文档内 fragment）。随
+BRAND-002 透明插画落地，身份图标改为直接 `<img>` 引用同源 WebP（显式
+宽高占位、`decoding="async"`），内联 sprite 管线整体退役；首帧不再有
+`<use>` 解码竞态，位图按普通图片资源缓存加载。
