@@ -73,6 +73,14 @@ PEGAS_PUSH_WEBHOOK_URL=https://example.com/pegas \
 pnpm dev:notification
 ```
 
+主机级外部健康检查（独立于被监测进程，掉线/恢复各告警一次）：
+
+```bash
+PEGAS_HEALTHCHECK_TARGETS=control-plane=http://127.0.0.1:8787/healthz,recovery=http://127.0.0.1:8788/healthz \
+PEGAS_HEALTHCHECK_ALERT_WEBHOOK_URL=https://example.com/pegas-alert \
+pnpm dev:healthcheck
+```
+
 Web 开发服务器默认位于 `http://127.0.0.1:4319`，并将 API 请求代理到 `http://127.0.0.1:4317`。生产构建由 Control Plane 在同一地址直接提供。
 
 默认情况下 Control Plane 和 Recovery API 只监听本机回环地址。对外暴露任何接口前必须配置独立访问令牌。

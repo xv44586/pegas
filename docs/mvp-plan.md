@@ -83,7 +83,7 @@
 - [x] Mac 执行节点注册、心跳和离线状态（EXEC-004：节点绑定 Run 离线明确等待，其他事情不阻塞；节点管理 UI 待补）；
 - [ ] Remote Sandbox 执行节点；
 - [ ] 独立 Recovery API 的移动端状态、重启和回滚界面；
-- [ ] 主机级外部健康检查和离线告警。
+- [x] 主机级外部健康检查和离线告警（OBS-001：独立 Watchdog 进程探测 /healthz，连续失败阈值判定掉线，offline/recovered 各告警一次经 Webhook，掉线期间不重复刷屏；launchd/cron 托管与多主机部署属运维配置）。
 
 ## MVP 完成定义
 
