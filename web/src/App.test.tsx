@@ -5184,6 +5184,458 @@ describe('sealed Pegas UI', () => {
     expect(screen.queryByText('先发布一个可回滚的候选版本')).toBeNull()
   })
 
+  it('filters server search by status, attention, worker and sort', async () => {
+    const fetchMock = installFetch()
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '全局搜索' }))
+    const dialog = screen.getByRole('dialog', { name: '全局搜索' })
+    const endedFilter = within(dialog).getByRole('button', { name: '已结束' })
+    fireEvent.click(endedFilter)
+    expect(await within(dialog).findByText('没有匹配的事情')).toBeTruthy()
+    expect(endedFilter.getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(within(dialog).getByRole('button', { name: '进行中' }))
+    fireEvent.click(within(dialog).getByRole('button', { name: '需关注' }))
+    fireEvent.change(within(dialog).getByLabelText('搜索排序'), {
+      target: { value: 'created' },
+    })
+    fireEvent.change(within(dialog).getByLabelText('执行者筛选'), {
+      target: { value: 'computer' },
+    })
+    expect(
+      await within(dialog).findByRole('button', { name: /安全自更新流程/ }),
+    ).toBeTruthy()
+    const searchCalls = fetchMock.mock.calls
+      .map(([path]) => path)
+      .filter(
+        (path): path is string =>
+          typeof path === 'string' && path.startsWith('/v1/channels/search?'),
+      )
+    const lastUrl = new URL(searchCalls.at(-1) ?? '', 'http://localhost')
+    expect(lastUrl.searchParams.get('ended')).toBe('false')
+    expect(lastUrl.searchParams.get('needsAttention')).toBe('true')
+    expect(lastUrl.searchParams.get('sort')).toBe('created')
+    expect(lastUrl.searchParams.get('workerIconId')).toBe('computer')
+    expect(lastUrl.searchParams.get('q')).toBeNull()
+  })
+
+  it('loads more search results with the server cursor', async () => {
+    const secondChannel: WorkChannel = {
+      ...channel,
+      id: 'task-2',
+      taskId: 'task-2',
+      title: '整理季度汇报',
+      goal: '汇总本季度关键结果',
+    }
+    const fetchMock = installFetch(path => {
+      if (!path.startsWith('/v1/channels/search?')) return undefined
+      const params = new URL(path, 'http://localhost').searchParams
+      if (params.get('cursor'))
+        return Response.json({
+          channels: [secondChannel],
+          matches: [],
+        })
+      return Response.json({
+        channels: [channel],
+        matches: [],
+        nextCursor: 'task-1',
+      })
+    })
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '全局搜索' }))
+    const dialog = screen.getByRole('dialog', { name: '全局搜索' })
+    fireEvent.change(
+      within(dialog).getByRole('textbox', { name: '搜索事情' }),
+      { target: { value: '季度' } },
+    )
+    const loadMore = await within(dialog).findByRole('button', {
+      name: '加载更多',
+    })
+    fireEvent.click(loadMore)
+    expect(
+      await within(dialog).findByRole('button', { name: /整理季度汇报/ }),
+    ).toBeTruthy()
+    expect(
+      within(dialog).getByRole('button', { name: /安全自更新流程/ }),
+    ).toBeTruthy()
+    expect(
+      within(dialog).queryByRole('button', { name: '加载更多' }),
+    ).toBeNull()
+    const cursorCall = fetchMock.mock.calls
+      .map(([path]) => path)
+      .find(
+        (path): path is string =>
+          typeof path === 'string' &&
+          path.startsWith('/v1/channels/search?') &&
+          path.includes('cursor=task-1'),
+      )
+    expect(cursorCall).toBeTruthy()
+  })
+
+  it('shows a retryable error when loading more search results fails', async () => {
+    installFetch(path => {
+      if (!path.startsWith('/v1/channels/search?')) return undefined
+      const params = new URL(path, 'http://localhost').searchParams
+      if (params.get('cursor'))
+        return Response.json({ message: '翻页暂时不可用' }, { status: 500 })
+      return Response.json({
+        channels: [channel],
+        matches: [],
+        nextCursor: 'task-1',
+      })
+    })
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '全局搜索' }))
+    const dialog = screen.getByRole('dialog', { name: '全局搜索' })
+    fireEvent.change(
+      within(dialog).getByRole('textbox', { name: '搜索事情' }),
+      { target: { value: '安全' } },
+    )
+    fireEvent.click(
+      await within(dialog).findByRole('button', { name: '加载更多' }),
+    )
+    const alert = await within(dialog).findByRole('alert')
+    expect(within(alert).getByText(/翻页暂时不可用/)).toBeTruthy()
+    expect(
+      within(dialog).queryByRole('button', { name: /安全自更新流程/ }),
+    ).toBeNull()
+    fireEvent.click(within(alert).getByRole('button', { name: '重试' }))
+    expect(
+      await within(dialog).findByRole('button', { name: /安全自更新流程/ }),
+    ).toBeTruthy()
+  })
+
+  it('drills into evidence records per goal revision with pagination', async () => {
+    const fetchMock = installFetch(path => {
+      if (path.startsWith('/v1/tasks/task-1/delivery?'))
+        return Response.json(deliveryFixture)
+      if (path.startsWith('/v1/tasks/task-1/goals?'))
+        return Response.json({
+          contracts: [goalFixture],
+          current: goalFixture,
+        })
+      if (path.startsWith('/v1/tasks/task-1/review-packs?'))
+        return Response.json({
+          reviewPacks: [reviewPackFixture],
+          current: reviewPackFixture,
+        })
+      if (path.startsWith('/v1/tasks/task-1/evidence?')) {
+        const params = new URL(path, 'http://localhost').searchParams
+        if (params.get('cursor'))
+          return Response.json({
+            evidence: [
+              {
+                id: 'evidence-old-2',
+                goalRevision: 2,
+                criterionId: 'criterion-rollback',
+                kind: 'log',
+                verification: { result: 'failed' },
+                sensitivity: 'internal',
+                capturedAt: '2026-11-20T00:01:00.000Z',
+                limitations: ['缺少回滚演练'],
+              },
+            ],
+          })
+        return Response.json({
+          evidence: [
+            {
+              id: 'evidence-old-1',
+              goalRevision: 2,
+              criterionId: 'criterion-verify',
+              kind: 'screenshot',
+              verification: { result: 'passed' },
+              sensitivity: 'internal',
+              capturedAt: '2026-11-20T00:03:00.000Z',
+              limitations: [],
+            },
+          ],
+          nextCursor: 'cursor-evidence-1',
+        })
+      }
+      return undefined
+    })
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(screen.getByRole('button', { name: /安全自更新流程/ }))
+    expect(await screen.findByText('目标与交付')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '查看历史修订' }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: '查看证据记录 v2' }),
+    )
+    expect(await screen.findByText('screenshot · 已通过')).toBeTruthy()
+    expect(
+      screen.getByText(/标准 criterion-verify · 敏感级 internal/),
+    ).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '加载更多证据' }))
+    expect(await screen.findByText('log · 未通过')).toBeTruthy()
+    expect(screen.getByText('局限：缺少回滚演练')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '加载更多证据' })).toBeNull()
+    const evidenceCalls = fetchMock.mock.calls
+      .map(([path]) => path)
+      .filter(
+        (path): path is string =>
+          typeof path === 'string' &&
+          path.startsWith('/v1/tasks/task-1/evidence?'),
+      )
+    expect(evidenceCalls.length).toBe(2)
+    const firstUrl = new URL(evidenceCalls[0] ?? '', 'http://localhost')
+    expect(firstUrl.searchParams.get('goalRevision')).toBe('2')
+    const secondUrl = new URL(evidenceCalls[1] ?? '', 'http://localhost')
+    expect(secondUrl.searchParams.get('cursor')).toBe('cursor-evidence-1')
+    fireEvent.click(screen.getByRole('button', { name: '收起证据记录 v2' }))
+    expect(screen.queryByText('screenshot · 已通过')).toBeNull()
+  })
+
+  it('shows an empty state and retry for revision evidence failures', async () => {
+    let evidenceRequests = 0
+    installFetch(path => {
+      if (path.startsWith('/v1/tasks/task-1/delivery?'))
+        return Response.json(deliveryFixture)
+      if (path.startsWith('/v1/tasks/task-1/goals?'))
+        return Response.json({
+          contracts: [
+            {
+              ...goalFixture,
+              id: 'goal-0',
+              revision: 1,
+              desiredOutcome: '先发布一个可回滚的候选版本',
+            },
+            goalFixture,
+          ],
+          current: goalFixture,
+        })
+      if (path.startsWith('/v1/tasks/task-1/review-packs?'))
+        return Response.json({ reviewPacks: [] })
+      if (path.startsWith('/v1/tasks/task-1/evidence?')) {
+        const params = new URL(path, 'http://localhost').searchParams
+        if (params.get('goalRevision') === '1')
+          return Response.json({ evidence: [] })
+        evidenceRequests += 1
+        if (evidenceRequests === 1)
+          return Response.json({ message: '证据服务暂不可用' }, { status: 500 })
+        return Response.json({
+          evidence: [
+            {
+              id: 'evidence-retry',
+              goalRevision: 2,
+              criterionId: 'criterion-verify',
+              kind: 'report',
+              verification: { result: 'pending' },
+              sensitivity: 'internal',
+              capturedAt: '2026-11-20T00:03:00.000Z',
+              limitations: [],
+            },
+          ],
+        })
+      }
+      return undefined
+    })
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(screen.getByRole('button', { name: /安全自更新流程/ }))
+    expect(await screen.findByText('目标与交付')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '查看历史修订' }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: '查看证据记录 v1' }),
+    )
+    expect(await screen.findByText('这个修订还没有证据记录。')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '查看证据记录 v2' }))
+    const alert = await screen.findByText(/证据服务暂不可用/)
+    fireEvent.click(within(alert).getByRole('button', { name: '重试' }))
+    expect(await screen.findByText('report · 待验证')).toBeTruthy()
+  })
+
+  it('jumps from a collaboration card to the target task drawer', async () => {
+    const targetChannel: WorkChannel = {
+      ...channel,
+      id: 'task-2',
+      taskId: 'task-2',
+      title: '候选版本健康检查',
+      goal: '在独立环境验证候选版本',
+      status: 'completed',
+      canResume: true,
+      canStop: false,
+    }
+    const fetchMock = installFetch(path => {
+      if (path.startsWith('/v1/channels/task-1/collaborations?'))
+        return Response.json({
+          relations: [
+            {
+              id: 'relation-1',
+              commandId: 'cmd-relation-1',
+              userId: 'owner',
+              kind: 'delegate',
+              status: 'completed',
+              sourceTaskId: 'task-1',
+              sourceRunId: 'run-1',
+              rootRelationId: 'relation-1',
+              depth: 0,
+              targetTaskId: 'task-2',
+              request: {
+                commandId: 'cmd-relation-1',
+                kind: 'delegate',
+                goal: '验证候选版本健康检查',
+                reason: '需要独立环境执行',
+                expectedOutput: '健康检查截图',
+                contextRefs: [],
+              },
+              result: {
+                outcome: 'completed',
+                summary: '健康检查通过',
+                targetRunId: 'run-2',
+              },
+              createdAt: '2026-11-20T00:00:00.000Z',
+              updatedAt: '2026-11-20T00:05:00.000Z',
+              settledAt: '2026-11-20T00:05:00.000Z',
+            },
+          ],
+        })
+      if (path.startsWith('/v1/channels/task-2/timeline?'))
+        return Response.json({
+          channel: targetChannel,
+          events: [
+            {
+              ...snapshot.events[0],
+              id: 'target-event-1',
+              payload: { text: '目标事情的时间线内容' },
+            },
+          ],
+          messages: [],
+          runs: [],
+        })
+      return undefined
+    })
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(screen.getByRole('button', { name: /安全自更新流程/ }))
+    expect(await screen.findByText('协作记录')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '打开目标事情' }))
+    expect(
+      await screen.findByRole('heading', { name: '候选版本健康检查' }),
+    ).toBeTruthy()
+    expect(await screen.findByText('目标事情的时间线内容')).toBeTruthy()
+    expect(
+      fetchMock.mock.calls.some(
+        ([path]) =>
+          typeof path === 'string' &&
+          path.startsWith('/v1/channels/task-2/timeline?'),
+      ),
+    ).toBe(true)
+  })
+
+  it('shows a collaboration jump error without leaving the drawer', async () => {
+    installFetch(path => {
+      if (path.startsWith('/v1/channels/task-1/collaborations?'))
+        return Response.json({
+          relations: [
+            {
+              id: 'relation-1',
+              commandId: 'cmd-relation-1',
+              userId: 'owner',
+              kind: 'delegate',
+              status: 'active',
+              sourceTaskId: 'task-1',
+              sourceRunId: 'run-1',
+              rootRelationId: 'relation-1',
+              depth: 0,
+              targetTaskId: 'task-missing',
+              request: {
+                commandId: 'cmd-relation-1',
+                kind: 'delegate',
+                goal: '验证候选版本健康检查',
+                reason: '需要独立环境执行',
+                expectedOutput: '健康检查截图',
+                contextRefs: [],
+              },
+              createdAt: '2026-11-20T00:00:00.000Z',
+              updatedAt: '2026-11-20T00:05:00.000Z',
+            },
+          ],
+        })
+      if (path.startsWith('/v1/channels/task-missing/timeline?'))
+        return Response.json({ message: '目标事情不存在' }, { status: 404 })
+      return undefined
+    })
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(screen.getByRole('button', { name: /安全自更新流程/ }))
+    expect(await screen.findByText('协作记录')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '打开目标事情' }))
+    expect(await screen.findByText(/目标事情不存在/)).toBeTruthy()
+    expect(screen.getByText('Pegas 正在推进这件事')).toBeTruthy()
+    expect(screen.getByRole('button', { name: '打开目标事情' })).toBeTruthy()
+  })
+
+  it('nests child collaboration relations under their parent', async () => {
+    installFetch(path => {
+      if (path.startsWith('/v1/channels/task-1/collaborations?'))
+        return Response.json({
+          relations: [
+            {
+              id: 'relation-child',
+              commandId: 'cmd-relation-child',
+              userId: 'owner',
+              kind: 'delegate',
+              status: 'active',
+              sourceTaskId: 'task-1',
+              sourceRunId: 'run-1',
+              parentRelationId: 'relation-root',
+              rootRelationId: 'relation-root',
+              depth: 1,
+              targetTaskId: 'task-3',
+              request: {
+                commandId: 'cmd-relation-child',
+                kind: 'delegate',
+                goal: '子协作任务',
+                reason: '需要再拆分',
+                expectedOutput: '子任务结果',
+                contextRefs: [],
+              },
+              createdAt: '2026-11-20T00:01:00.000Z',
+              updatedAt: '2026-11-20T00:02:00.000Z',
+            },
+            {
+              id: 'relation-root',
+              commandId: 'cmd-relation-root',
+              userId: 'owner',
+              kind: 'delegate',
+              status: 'active',
+              sourceTaskId: 'task-1',
+              sourceRunId: 'run-1',
+              rootRelationId: 'relation-root',
+              depth: 0,
+              targetTaskId: 'task-2',
+              request: {
+                commandId: 'cmd-relation-root',
+                kind: 'delegate',
+                goal: '根协作任务',
+                reason: '需要独立环境执行',
+                expectedOutput: '根任务结果',
+                contextRefs: [],
+              },
+              createdAt: '2026-11-20T00:00:00.000Z',
+              updatedAt: '2026-11-20T00:05:00.000Z',
+            },
+          ],
+        })
+      return undefined
+    })
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(screen.getByRole('button', { name: /安全自更新流程/ }))
+    expect(await screen.findByText('协作记录')).toBeTruthy()
+    const rootItem = screen.getByText('根协作任务').closest('li')
+    if (!rootItem) throw new Error('missing root collaboration item')
+    expect(within(rootItem).getByText('子协作任务')).toBeTruthy()
+    expect(within(rootItem).getByText(/第 1 层/)).toBeTruthy()
+    const nestedList = rootItem.querySelector('.collaboration-list.is-nested')
+    expect(nestedList).toBeTruthy()
+  })
+
   it('submits trusted verification for pending evidence', async () => {
     let verified = false
     const pendingDelivery: TaskDelivery = {

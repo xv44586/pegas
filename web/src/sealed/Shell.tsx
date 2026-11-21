@@ -16,7 +16,13 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import type { ChannelSearchResult, WorkChannel } from '../types'
+import type {
+  ChannelSearchFilters,
+  ChannelSearchResult,
+  ChannelSearchSort,
+  WorkChannel,
+  WorkerIconId,
+} from '../types'
 import { PegasMark } from './PegasMark'
 import { PegasMascot, type PegasMascotPose } from './PegasMascot'
 import type { AppPage } from './types'
@@ -185,7 +191,11 @@ export function GlobalSearch({
   channels: WorkChannel[]
   onClose: () => void
   onOpen: (channel: WorkChannel) => void
-  onSearch?: (query: string) => Promise<ChannelSearchResult>
+  onSearch?: (
+    query: string,
+    filters: ChannelSearchFilters,
+    cursor?: string,
+  ) => Promise<ChannelSearchResult>
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
   const dialogRef = useRef<HTMLElement>(null)
@@ -193,15 +203,27 @@ export function GlobalSearch({
   const [result, setResult] = useState<ChannelSearchResult>()
   const [searching, setSearching] = useState(false)
   const [searchError, setSearchError] = useState('')
+  const [scope, setScope] = useState<'all' | 'active' | 'ended'>('all')
+  const [needsAttention, setNeedsAttention] = useState(false)
+  const [workerIcon, setWorkerIcon] = useState<WorkerIconId | 'all'>('all')
+  const [sort, setSort] = useState<ChannelSearchSort>('updated')
+  const [loadingMore, setLoadingMore] = useState(false)
   const searchRequestRef = useRef(0)
   const trimmedQuery = query.trim()
+  const hasFilters =
+    scope !== 'all' ||
+    needsAttention ||
+    workerIcon !== 'all' ||
+    sort !== 'updated'
+  const serverMode = Boolean(onSearch) && (Boolean(trimmedQuery) || hasFilters)
   const runSearch = useCallback(
-    (searchQuery: string) => {
+    (searchQuery: string, filters: ChannelSearchFilters) => {
       if (!onSearch) return
       const requestId = searchRequestRef.current + 1
       searchRequestRef.current = requestId
       setSearching(true)
-      onSearch(searchQuery)
+      setLoadingMore(false)
+      onSearch(searchQuery, filters)
         .then(next => {
           if (requestId !== searchRequestRef.current) return
           setResult(next)
@@ -220,16 +242,74 @@ export function GlobalSearch({
   )
   useEffect(() => {
     if (!onSearch) return
-    if (!trimmedQuery) {
+    if (!trimmedQuery && !hasFilters) {
       searchRequestRef.current += 1
       setResult(undefined)
       setSearching(false)
       setSearchError('')
+      setLoadingMore(false)
       return
     }
-    const timer = window.setTimeout(() => runSearch(trimmedQuery), 200)
+    const filters: ChannelSearchFilters = {
+      sort,
+      ...(scope === 'all' ? {} : { ended: scope === 'ended' }),
+      ...(needsAttention ? { needsAttention: true } : {}),
+      ...(workerIcon === 'all' ? {} : { workerIconId: workerIcon }),
+    }
+    const timer = window.setTimeout(
+      () => runSearch(trimmedQuery, filters),
+      trimmedQuery ? 200 : 0,
+    )
     return () => window.clearTimeout(timer)
-  }, [onSearch, runSearch, trimmedQuery])
+  }, [
+    onSearch,
+    runSearch,
+    trimmedQuery,
+    hasFilters,
+    scope,
+    needsAttention,
+    workerIcon,
+    sort,
+  ])
+  async function loadMore() {
+    if (!onSearch || !result?.nextCursor || loadingMore || searching) return
+    const cursor = result.nextCursor
+    const requestId = searchRequestRef.current
+    const filters: ChannelSearchFilters = {
+      sort,
+      ...(scope === 'all' ? {} : { ended: scope === 'ended' }),
+      ...(needsAttention ? { needsAttention: true } : {}),
+      ...(workerIcon === 'all' ? {} : { workerIconId: workerIcon }),
+    }
+    setLoadingMore(true)
+    try {
+      const next = await onSearch(trimmedQuery, filters, cursor)
+      if (requestId !== searchRequestRef.current) return
+      setResult(current =>
+        current
+          ? {
+              channels: [
+                ...current.channels,
+                ...next.channels.filter(
+                  channel =>
+                    !current.channels.some(item => item.id === channel.id),
+                ),
+              ],
+              matches: [...current.matches, ...next.matches],
+              ...(next.nextCursor ? { nextCursor: next.nextCursor } : {}),
+            }
+          : next,
+      )
+      setSearchError('')
+    } catch (caught) {
+      if (requestId !== searchRequestRef.current) return
+      setSearchError(
+        caught instanceof Error ? caught.message : '加载更多结果失败。',
+      )
+    } finally {
+      if (requestId === searchRequestRef.current) setLoadingMore(false)
+    }
+  }
   const localChannels = channels
     .filter(channel =>
       `${channel.title} ${channel.goal}`
@@ -237,8 +317,7 @@ export function GlobalSearch({
         .includes(trimmedQuery.toLowerCase()),
     )
     .slice(0, 5)
-  const visibleChannels =
-    onSearch && trimmedQuery ? (result?.channels ?? []) : localChannels
+  const visibleChannels = serverMode ? (result?.channels ?? []) : localChannels
   const snippetFor = (channelId: string) =>
     result?.matches.find(
       match => match.channelId === channelId && match.sourceKind !== 'channel',
@@ -246,6 +325,28 @@ export function GlobalSearch({
     result?.matches.find(match => match.channelId === channelId)?.snippet
   const resultRefs = useRef<(HTMLButtonElement | null)[]>([])
   resultRefs.current = []
+  const filterControls: {
+    label: string
+    pressed: boolean
+    toggle: () => void
+  }[] = [
+    { label: '全部', pressed: scope === 'all', toggle: () => setScope('all') },
+    {
+      label: '进行中',
+      pressed: scope === 'active',
+      toggle: () => setScope('active'),
+    },
+    {
+      label: '已结束',
+      pressed: scope === 'ended',
+      toggle: () => setScope('ended'),
+    },
+    {
+      label: '需关注',
+      pressed: needsAttention,
+      toggle: () => setNeedsAttention(current => !current),
+    },
+  ]
   function focusResult(index: number) {
     const options = resultRefs.current.filter(Boolean)
     if (!options.length) return
@@ -304,59 +405,131 @@ export function GlobalSearch({
           />
           <kbd>ESC</kbd>
         </div>
-        <p className="command-section-label">
-          {trimmedQuery ? '搜索结果' : '最近'}
-        </p>
-        {searchError && (
-          <div className="command-empty" role="alert">
-            {searchError}
-            <button
-              className="inline-link"
-              onClick={() => runSearch(trimmedQuery)}
-              type="button"
+        {onSearch && (
+          <div className="command-filters">
+            <div
+              aria-label="搜索状态筛选"
+              className="command-filter-group"
+              role="group"
             >
-              重试
-            </button>
-          </div>
-        )}
-        {searching && !searchError && (
-          <div className="command-empty">正在搜索…</div>
-        )}
-        {!searching && !searchError && visibleChannels.length ? (
-          visibleChannels.map((channel, index) => (
-            <button
-              key={channel.id}
-              onClick={() => onOpen(channel)}
-              onKeyDown={event => {
-                if (event.key === 'ArrowDown') {
-                  event.preventDefault()
-                  focusResult(index + 1)
-                } else if (event.key === 'ArrowUp') {
-                  event.preventDefault()
-                  if (index === 0) inputRef.current?.focus()
-                  else focusResult(index - 1)
+              {filterControls.map(control => (
+                <button
+                  aria-pressed={control.pressed}
+                  className="command-filter"
+                  key={control.label}
+                  onClick={control.toggle}
+                  type="button"
+                >
+                  {control.label}
+                </button>
+              ))}
+            </div>
+            <label className="command-select">
+              <span>排序</span>
+              <select
+                aria-label="搜索排序"
+                onChange={event =>
+                  setSort(event.target.value as ChannelSearchSort)
                 }
-              }}
-              ref={element => {
-                resultRefs.current[index] = element
-              }}
+                value={sort}
+              >
+                <option value="updated">最近更新</option>
+                <option value="created">最近创建</option>
+                <option value="ended">最近结束</option>
+              </select>
+            </label>
+            <label className="command-select">
+              <span>执行者</span>
+              <select
+                aria-label="执行者筛选"
+                onChange={event =>
+                  setWorkerIcon(event.target.value as WorkerIconId | 'all')
+                }
+                value={workerIcon}
+              >
+                <option value="all">全部</option>
+                <option value="car">汽车</option>
+                <option value="camera">相机</option>
+                <option value="computer">电脑</option>
+                <option value="phone">手机</option>
+              </select>
+            </label>
+          </div>
+        )}
+        <div className="command-dialog-body">
+          <p className="command-section-label">
+            {serverMode ? '搜索结果' : '最近'}
+          </p>
+          {searchError && (
+            <div className="command-empty" role="alert">
+              {searchError}
+              <button
+                className="inline-link"
+                onClick={() =>
+                  runSearch(trimmedQuery, {
+                    sort,
+                    ...(scope === 'all' ? {} : { ended: scope === 'ended' }),
+                    ...(needsAttention ? { needsAttention: true } : {}),
+                    ...(workerIcon === 'all'
+                      ? {}
+                      : { workerIconId: workerIcon }),
+                  })
+                }
+                type="button"
+              >
+                重试
+              </button>
+            </div>
+          )}
+          {searching && !searchError && (
+            <div className="command-empty">正在搜索…</div>
+          )}
+          {!searching && !searchError && visibleChannels.length ? (
+            visibleChannels.map((channel, index) => (
+              <button
+                key={channel.id}
+                onClick={() => onOpen(channel)}
+                onKeyDown={event => {
+                  if (event.key === 'ArrowDown') {
+                    event.preventDefault()
+                    focusResult(index + 1)
+                  } else if (event.key === 'ArrowUp') {
+                    event.preventDefault()
+                    if (index === 0) inputRef.current?.focus()
+                    else focusResult(index - 1)
+                  }
+                }}
+                ref={element => {
+                  resultRefs.current[index] = element
+                }}
+                type="button"
+              >
+                <Clock3 size={17} />
+                <span>
+                  <strong>{channel.title}</strong>
+                  <small>{snippetFor(channel.id) ?? channel.goal}</small>
+                </span>
+                <ChevronRight size={16} />
+              </button>
+            ))
+          ) : !searching && !searchError ? (
+            <div className="command-empty">
+              {trimmedQuery || hasFilters || channels.length
+                ? '没有匹配的事情'
+                : '还没有可搜索的事情'}
+            </div>
+          ) : null}
+          {serverMode && !searching && Boolean(result?.nextCursor) && (
+            <button
+              className="command-load-more"
+              disabled={loadingMore}
+              onClick={() => void loadMore()}
               type="button"
             >
-              <Clock3 size={17} />
-              <span>
-                <strong>{channel.title}</strong>
-                <small>{snippetFor(channel.id) ?? channel.goal}</small>
-              </span>
-              <ChevronRight size={16} />
+              {loadingMore ? '正在加载…' : '加载更多'}
             </button>
-          ))
-        ) : !searching && !searchError ? (
-          <div className="command-empty">
-            {trimmedQuery || channels.length
-              ? '没有匹配的事情'
-              : '还没有可搜索的事情'}
-          </div>
-        ) : null}
+          )}
+        </div>
         <button
           aria-label="关闭搜索"
           className="command-close"

@@ -1281,7 +1281,9 @@ export function App() {
         <GlobalSearch
           channels={data.snapshot.channels}
           onClose={closeSearch}
-          onSearch={query => api.searchChannels(query)}
+          onSearch={(query, filters, cursor) =>
+            api.searchChannels(query, filters, cursor)
+          }
           onOpen={channel => {
             setSearchOpen(false)
             openDrawer(

@@ -162,3 +162,12 @@
 - 类型边界整理：`RuntimeSettingsSelection` 拆为纯类型模块（原路径 re-export），web 侧 `ChannelRelation` 按服务端合同镜像，`collaboration.ts` 权限类型改 type-only import——web tsconfig 类型图不再拉入 node 模块；均为等价类型重构。
 - 证据：`pnpm check`（74 文件 / 668 测试，App.test.tsx 新增 10 条、附件投影回归 1 条、文案断言若干）、`pnpm smoke`、`pnpm review:ui -- --force`（57 张截图）；真实 Control Plane + Worker 联调覆盖附件上传/投影/预览、pending 证据验证、历史修订、Worker 覆盖保存、协作卡片、投递核对、静默时段落库、节点心跳；axe 三主题 × 新视图 0 违例；实拍 15 张见 `output/feature-review/live-evidence-endpoints/`。详见 `docs/feature-map.md` DESIGN-002「剩余服务端接口接入」小节。
 - 仍缺：规则与数据恢复占位（服务端契约未提供）、搜索筛选/分页 UI、validity 失效事件、`/v1/evidence?goalRevision=` 列表、协作操作入口与目标事情跳转；语音直发待真实 ASR 供应商联调；多附件/事件与附件进入模型上下文属 CONV-001 后续。
+
+## 14. 搜索筛选分页、按修订证据列表与协作跳转收尾（2026-11-21）
+
+- 全局搜索对话框新增筛选栏：状态 chips（全部/进行中/已结束，映射 `ended=false/true`）、「需关注」开关（`needsAttention=true`）、排序下拉（最近更新/最近创建/最近结束）与执行者下拉（汽车/相机/电脑/手机，映射 `workerIconId`）；空查询 + 仅筛选也走 `GET /v1/channels/search`，纯空态仍显示本地最近 5 条；筛选变化立即重查、文本输入 200ms 防抖、过期响应按 requestId 丢弃。
+- 搜索结果超过一页（8 条）时底部出现「加载更多」：携带服务端 `nextCursor` 续页并按 id 去重追加；续页失败就地报错，「重试」回到第一页；结果区改为可滚动容器（max-height 52vh），加载更多按钮固定在结果底部。
+- 「目标与交付」历史修订中每个目标修订新增「查看证据记录 vN」：`GET /v1/tasks/:id/evidence?goalRevision=N&limit=20&cursor=` 按修订独立展开/缓存/续页，条目展示类型、验证结论（已通过/待验证/未通过）、完成标准、敏感级、相对时间与局限；空修订如实提示「这个修订还没有证据记录」，读取失败按修订隔离报错并可重试；切换事情时历史与证据状态整体重置。
+- 协作记录升级为层级树 + 跳转：按 `parentRelationId` 把子协作嵌套渲染在父卡片下（左侧竖线缩进，parent 缺席时按根渲染）；带 `targetTaskId` 的卡片提供「打开目标事情」，经新增 `api.channelTimeline`（单请求 `GET /v1/channels/:id/timeline`，校验投影完整性并兜底 workerIconId）打开目标事情详情抽屉并触发既有 delivery/协作/时间线加载；目标不存在或读取失败在协作区就地报错，按钮恢复可再试。
+- 证据：`pnpm check`（74 文件 / 676 测试，App.test.tsx 新增 8 条回归）、`pnpm smoke`、`pnpm review:ui -- --force`（57 张截图）；真实 Control Plane（store 级 seed：双修订 Goal + 22 条证据 + 真实 depth0/depth1 委派链 + 10 个填充事情）联调覆盖筛选参数、排序切换、8→14 续页、v2 证据 20→22 续页与 v1 隔离、协作两级跳转；axe 三主题 × 搜索对话框/证据/协作抽屉 0 违例；实拍 12 张见 `output/feature-review/live-evidence-wrapup/`。详见 `docs/feature-map.md` DESIGN-002「搜索筛选分页、按修订证据列表与协作跳转收尾」小节。
+- 仍缺：规则与数据恢复占位、协作发起/取消入口（owner 侧服务端契约未提供）、validity 失效事件；语音直发待真实 ASR 供应商联调；「所有事情」页服务端排序/筛选属 CHANNEL-003 后续。
