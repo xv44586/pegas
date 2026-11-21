@@ -72,6 +72,7 @@ export function runtimeSettingsDefaults(
     agentModelName: '',
     privacyMode: config.privacyMode,
     rewriteMode: config.rewriteMode,
+    chatLaneEnabled: config.chatLaneEnabled,
   }
 }
 
@@ -189,7 +190,7 @@ export function parseRuntimeSettingsUpdate(
     ...(apiKey ? { apiKey } : {}),
     clearApiKey: providerValue.clearApiKey === true,
   }
-  const settings = {
+  const settings: RuntimeSettingsSelection = {
     routerMode,
     modelProvider,
     modelName,
@@ -198,6 +199,9 @@ export function parseRuntimeSettingsUpdate(
     agentModelName,
     privacyMode,
     rewriteMode,
+    ...(typeof value.chatLaneEnabled === 'boolean'
+      ? { chatLaneEnabled: value.chatLaneEnabled }
+      : {}),
   }
   const hasApiKey = provider.apiKey
     ? true

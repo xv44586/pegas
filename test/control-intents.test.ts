@@ -590,6 +590,7 @@ function task(
     title,
     goal: title,
     status,
+    kind: 'work',
     workerIconId: 'computer',
     mandate: {
       strength: 'explicit',

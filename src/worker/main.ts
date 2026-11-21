@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
 import { loadConfig } from '../core/config.js'
+import { ConversationExecutor } from '../executor/conversation-executor.js'
 import { DshCliExecutor } from '../executor/dsh-cli-executor.js'
 import { EchoExecutor } from '../executor/echo-executor.js'
 import type { ExecutorInput, RunExecutor } from '../executor/executor.js'
@@ -90,7 +91,7 @@ const selfChangeExecutor = config.selfChangeEnabled
       recoveryBaseUrl: config.recoveryBaseUrl,
       ...(config.recoveryToken ? { recoveryToken: config.recoveryToken } : {}),
       editor: executor,
-      compatibility: { minimumSchema: 1, maximumSchema: 31 },
+      compatibility: { minimumSchema: 1, maximumSchema: 32 },
       reviewer: 'pegas-self-change-gate',
       controlPlaneBaseUrl,
     })
@@ -98,6 +99,14 @@ const selfChangeExecutor = config.selfChangeEnabled
 const runExecutor: RunExecutor = selfChangeExecutor
   ? new SelfChangeRoutingExecutor(store, executor, selfChangeExecutor)
   : executor
+const conversationExecutor = new ConversationExecutor(executor)
+const laneExecutor: RunExecutor = {
+  name: runExecutor.name,
+  execute: input =>
+    input.executionContext?.protocol === 'conversation-v1'
+      ? conversationExecutor.execute(input)
+      : runExecutor.execute(input),
+}
 const router = new SettingsAwareTaskRouter(store, createRouter)
 const eventHandler = new RoutingEventHandler(router, executor.name, task => {
   const settings = store.getRuntimeSettings()
@@ -118,6 +127,7 @@ const eventHandler = new RoutingEventHandler(router, executor.name, task => {
 const lifecycle = { stopping: false }
 const shutdown = new AbortController()
 const activeRuns = new Set<Promise<void>>()
+const activeChatRuns = new Set<Promise<void>>()
 
 const nodeCapabilities = [
   'dsh',
@@ -165,11 +175,11 @@ while (!lifecycle.stopping) {
   // The signal callback may change stopping while a run is being awaited.
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
   while (!lifecycle.stopping && activeRuns.size < config.workerConcurrency) {
-    const claimed = store.claimNextRun(workerId, 30_000, config.nodeId)
+    const claimed = store.claimNextRun(workerId, 30_000, config.nodeId, 'work')
     if (!claimed) break
     const execution = executeClaimedRun(
       store,
-      runExecutor,
+      laneExecutor,
       claimed,
       workerId,
       config.workspaceRoot,
@@ -191,10 +201,45 @@ while (!lifecycle.stopping) {
     activeRuns.add(execution)
   }
 
+  // EXEC-005: the chat lane has its own concurrency budget so heavy Runs
+  // never starve instant replies, and chat never consumes heavy Run slots.
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+  while (!lifecycle.stopping && activeChatRuns.size < config.chatConcurrency) {
+    const claimed = store.claimNextRun(
+      workerId,
+      30_000,
+      config.nodeId,
+      'conversation',
+    )
+    if (!claimed) break
+    const execution = executeClaimedRun(
+      store,
+      laneExecutor,
+      claimed,
+      workerId,
+      config.workspaceRoot,
+      shutdown.signal,
+      controlPlaneBaseUrl,
+      telemetry,
+    )
+      .catch((error: unknown) => {
+        logger.error('conversation.persistence_failed', error, {
+          runId: claimed.run.id,
+          workerId,
+        })
+        metrics.increment('pegas_errors_total', {
+          component: 'worker',
+          kind: 'conversation_persistence',
+        })
+      })
+      .finally(() => activeChatRuns.delete(execution))
+    activeChatRuns.add(execution)
+  }
+
   if (!routed) await wait(config.eventPollMs)
 }
 
-await Promise.allSettled(activeRuns)
+await Promise.allSettled([...activeRuns, ...activeChatRuns])
 store.close()
 
 function requestStop(): void {

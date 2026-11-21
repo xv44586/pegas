@@ -60,6 +60,10 @@ export class RoutingEventHandler implements EventHandler {
       await this.#handleCollaborationEvent(event, store)
       return
     }
+    if (event.type === 'conversation.suggest_task') {
+      this.#handleConversationSuggestion(event, store)
+      return
+    }
     const decision = await this.#router.route(
       event,
       store.listRoutingCandidates(event.userId),
@@ -72,8 +76,58 @@ export class RoutingEventHandler implements EventHandler {
       store.applyControlIntent(event, decision)
       return
     }
+    if (
+      decision.kind === 'reply' &&
+      !store.getRuntimeSettings().chatLaneEnabled
+    ) {
+      store.applyRoutingDecision(
+        event,
+        {
+          kind: 'create_task',
+          title: decision.input.trim().replaceAll(/\s+/g, ' ').slice(0, 120),
+          goal: decision.input,
+          input: decision.input,
+          reason: `Chat lane disabled; reply fell back to a Task. ${decision.reason}`,
+        },
+        this.#executorName,
+        task => this.#executionContext(task),
+      )
+      return
+    }
+    if (decision.kind === 'reply') {
+      const settings = store.getRuntimeSettings()
+      store.applyRoutingDecision(event, decision, this.#executorName, {
+        executor: this.#executorName,
+        protocol: 'conversation-v1',
+        permissions: JSON.stringify({
+          mode: 'read-only',
+          approvalPolicy: 'never',
+          additionalDirectories: [],
+          privacyMode: settings.privacyMode,
+        }),
+      })
+      return
+    }
     store.applyRoutingDecision(event, decision, this.#executorName, task =>
       this.#executionContext(task),
+    )
+  }
+
+  #handleConversationSuggestion(event: InboxEvent, store: PegasStore): void {
+    const payload = recordPayload(event.payload, 'conversation.suggest_task')
+    const text = requiredPayloadString(payload, 'text')
+    store.applyRoutingDecision(
+      event,
+      {
+        kind: 'create_task',
+        title: text.replaceAll(/\s+/g, ' ').slice(0, 120),
+        goal: text,
+        input: text,
+        reason:
+          'Conversation executor suggested a Task for work with side effects.',
+      },
+      this.#executorName,
+      task => this.#executionContext(task),
     )
   }
 
@@ -181,6 +235,9 @@ export class RoutingEventHandler implements EventHandler {
       if (decision.kind === 'steer_task' || decision.kind === 'cancel_task') {
         throw new Error('Handback routing cannot mint control intents')
       }
+      if (decision.kind === 'reply') {
+        throw new Error('Handback routing cannot mint instant replies')
+      }
       if (
         decision.kind === 'continue_task' &&
         !candidates.some(task => task.id === decision.taskId)
@@ -232,6 +289,118 @@ function recordPayload(value: unknown, field: string): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value))
     throw new Error(`${field} must be an object`)
   return value as Record<string, unknown>
+}
+
+/**
+ * EXEC-005: the conversation lane. The Run executes on the user's rolling
+ * conversation session with a read-only tool surface; the reply goes through
+ * the normal Outbox. A structured suggest_task marker upgrades the request
+ * into a full Task through the Durable Inbox instead of executing side
+ * effects here.
+ */
+async function executeConversationRun(
+  store: PegasStore,
+  executor: RunExecutor,
+  claimed: ClaimedRun,
+  workerId: string,
+  workingDirectory: string,
+  signal: AbortSignal,
+  telemetry?: { logger?: Logger; metrics?: MetricsRegistry },
+): Promise<void> {
+  const runStartedAt = performance.now()
+  const leaseHeartbeat = setInterval(() => {
+    try {
+      store.renewRunLease(claimed.run.id, workerId)
+    } catch (error) {
+      telemetry?.logger?.error('conversation.lease_renew_failed', error, {
+        runId: claimed.run.id,
+        workerId,
+      })
+    }
+  }, 10_000)
+  leaseHeartbeat.unref()
+  const memories = store.memoryContextEntriesForTask(
+    claimed.task.userId,
+    claimed.task.id,
+  )
+  const workRules = store.workRuleContextForUser(claimed.task.userId)
+  const resumeSessionId = store.conversationSessionRef(claimed.task.userId)
+  let result
+  try {
+    result = await executor.execute({
+      runId: claimed.run.id,
+      taskId: claimed.task.id,
+      prompt: claimed.run.input,
+      workingDirectory,
+      executionContext: claimed.run.executionContext,
+      executionContractVersion: claimed.run.executionContractVersion,
+      mandate: claimed.task.mandate,
+      ...(memories.length > 0 ? { memories } : {}),
+      ...(workRules.rules.length > 0 || workRules.customInstructions
+        ? { workRules }
+        : {}),
+      ...(resumeSessionId ? { resumeSessionId } : {}),
+      onExecutorRef: executorRef => {
+        store.recordExecutorRef(claimed.run.id, workerId, executorRef)
+        store.recordConversationSessionRef(claimed.task.userId, executorRef)
+      },
+      signal,
+    })
+  } catch (error) {
+    clearInterval(leaseHeartbeat)
+    if (signal.aborted) return
+    if (!store.ownsRun(claimed.run.id, workerId)) return
+    const message = error instanceof Error ? error.message : String(error)
+    store.failRun(claimed.run.id, workerId, message)
+    telemetry?.logger?.error('conversation.execution_failed', error, {
+      runId: claimed.run.id,
+      taskId: claimed.task.id,
+      workerId,
+    })
+    telemetry?.metrics?.increment('pegas_runs_total', { outcome: 'failed' })
+    return
+  }
+  clearInterval(leaseHeartbeat)
+  if (!store.ownsRun(claimed.run.id, workerId)) return
+  store.recordConversationSessionRef(claimed.task.userId, result.executorRef)
+  const suggestion = conversationSuggestion(result.output)
+  if (suggestion) {
+    store.completeRun(claimed.run.id, workerId, {
+      ...result,
+      output: suggestion.reply ?? '这件事需要作为正式任务处理，我已为你创建。',
+    })
+    store.enqueueEvent({
+      userId: claimed.task.userId,
+      type: 'conversation.suggest_task',
+      source: 'conversation',
+      dedupeKey: `suggest-task:${claimed.run.id}`,
+      payload: { text: suggestion.goal, fromTaskId: claimed.task.id },
+    })
+    telemetry?.metrics?.increment('pegas_runs_total', { outcome: 'completed' })
+    return
+  }
+  store.completeRun(claimed.run.id, workerId, result)
+  telemetry?.metrics?.increment('pegas_runs_total', { outcome: 'completed' })
+  telemetry?.metrics?.observe(
+    'pegas_run_duration_seconds',
+    (performance.now() - runStartedAt) / 1000,
+    { outcome: 'completed' },
+  )
+}
+
+export function conversationSuggestion(
+  output: string,
+): { goal: string; reply?: string } | undefined {
+  const trimmed = output.trim()
+  const match =
+    /^PEGAS_SUGGEST_TASK_BEGIN\s*\n([\s\S]*?)\nPEGAS_SUGGEST_TASK_END\s*$/m.exec(
+      trimmed,
+    )
+  if (!match) return undefined
+  const goal = (match[1] ?? '').trim()
+  if (!goal) return undefined
+  const reply = trimmed.slice(0, match.index).trim()
+  return { goal, ...(reply ? { reply } : {}) }
 }
 
 function collaborationPayload(value: unknown): Record<string, unknown> {
@@ -417,6 +586,18 @@ export async function executeClaimedRun(
           ? ['Required evidence has not been captured yet.']
           : [],
     })
+    return
+  }
+  if (claimed.task.kind === 'conversation') {
+    await executeConversationRun(
+      store,
+      executor,
+      claimed,
+      workerId,
+      workingDirectory,
+      signal,
+      telemetry,
+    )
     return
   }
   const runAbort = new AbortController()

@@ -675,6 +675,86 @@ CREATE TABLE behavior_preferences (
 );
 `
 
+const migration32 = `
+ALTER TABLE tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'work'
+CHECK (kind IN ('work', 'conversation'));
+
+ALTER TABLE runtime_settings ADD COLUMN chat_lane_enabled INTEGER NOT NULL DEFAULT 0
+CHECK (chat_lane_enabled IN (0, 1));
+
+CREATE TABLE conversation_sessions (
+  user_id TEXT PRIMARY KEY,
+  executor_ref TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+DROP TRIGGER IF EXISTS worker_profiles_after_task_insert;
+CREATE TRIGGER worker_profiles_after_task_insert
+AFTER INSERT ON tasks
+WHEN NEW.kind <> 'conversation'
+BEGIN
+  INSERT OR IGNORE INTO worker_profiles
+    (id, task_id, revision, model_mode, created_at, updated_at)
+  VALUES ('worker-profile:' || NEW.id, NEW.id, 1, 'inherit', NEW.created_at, NEW.updated_at);
+END;
+
+DROP TRIGGER IF EXISTS channel_search_tasks_after_insert;
+CREATE TRIGGER channel_search_tasks_after_insert
+AFTER INSERT ON tasks
+WHEN NEW.kind <> 'conversation'
+BEGIN
+  INSERT INTO channel_search_documents
+    (task_id, source_kind, source_id, text, updated_at)
+  VALUES
+    (NEW.id, 'channel', NEW.id, NEW.title || char(10) || NEW.goal, NEW.updated_at);
+END;
+
+DROP TRIGGER IF EXISTS channel_search_tasks_after_update;
+CREATE TRIGGER channel_search_tasks_after_update
+AFTER UPDATE OF title, goal ON tasks
+WHEN NEW.kind <> 'conversation'
+BEGIN
+  INSERT OR REPLACE INTO channel_search_documents
+    (task_id, source_kind, source_id, text, updated_at)
+  VALUES
+    (NEW.id, 'channel', NEW.id, NEW.title || char(10) || NEW.goal, NEW.updated_at);
+END;
+
+DROP TRIGGER IF EXISTS channel_search_routed_input_after_insert;
+CREATE TRIGGER channel_search_routed_input_after_insert
+AFTER INSERT ON task_events
+BEGIN
+  INSERT OR REPLACE INTO channel_search_documents
+    (task_id, source_kind, source_id, text, updated_at)
+  SELECT
+    NEW.task_id,
+    'input',
+    inbox_events.id,
+    json_extract(inbox_events.payload_json, '$.text'),
+    inbox_events.created_at
+  FROM inbox_events
+  INNER JOIN tasks ON tasks.id = NEW.task_id
+  WHERE inbox_events.id = NEW.event_id
+    AND tasks.user_id = inbox_events.user_id
+    AND tasks.kind <> 'conversation'
+    AND inbox_events.type = 'user.message'
+    AND json_valid(inbox_events.payload_json)
+    AND json_type(inbox_events.payload_json, '$.text') = 'text';
+END;
+
+DROP TRIGGER IF EXISTS channel_search_run_output_after_update;
+CREATE TRIGGER channel_search_run_output_after_update
+AFTER UPDATE OF output_json ON runs
+WHEN NEW.output_json IS NOT NULL
+  AND (SELECT kind FROM tasks WHERE id = NEW.task_id) <> 'conversation'
+BEGIN
+  INSERT OR REPLACE INTO channel_search_documents
+    (task_id, source_kind, source_id, text, updated_at)
+  VALUES
+    (NEW.task_id, 'run', NEW.id, json_extract(NEW.output_json, '$'), NEW.updated_at);
+END;
+`
+
 const migration2 = `
 ALTER TABLE tasks ADD COLUMN goal TEXT NOT NULL DEFAULT '';
 
@@ -1794,6 +1874,7 @@ interface TaskRow {
   title: string
   goal: string
   status: Task['status']
+  kind?: string | null
   worker_icon_id: string | null
   status_reason: string | null
   target_resource?: string | null
@@ -2166,6 +2247,7 @@ interface ModelUsageRow {
 interface RuntimeSettingsRow {
   revision: number
   router_mode: RuntimeSettings['routerMode']
+  chat_lane_enabled?: number | null
   model_provider: string
   model_connection_id: string | null
   model_name: string
@@ -2364,6 +2446,7 @@ export class PegasStore {
     this.#migrate(29, migration29)
     this.#migrate(30, migration30)
     this.#migrate(31, migration31)
+    this.#migrate(32, migration32)
   }
 
   #backfillWorkerIconIds(): void {
@@ -2479,8 +2562,8 @@ export class PegasStore {
         `INSERT OR IGNORE INTO runtime_settings
           (id, revision, router_mode, model_provider, model_connection_id, model_name,
            agent_model_mode, agent_model_provider, agent_model_name,
-           privacy_mode, rewrite_mode, updated_at)
-         VALUES (1, 1, ?, 'openai-compatible', ?, ?, ?, ?, ?, ?, ?, ?)`,
+           privacy_mode, rewrite_mode, chat_lane_enabled, updated_at)
+         VALUES (1, 1, ?, 'openai-compatible', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         defaults.routerMode,
@@ -2491,6 +2574,7 @@ export class PegasStore {
         defaults.agentModelName,
         defaults.privacyMode,
         defaults.rewriteMode,
+        defaults.chatLaneEnabled ? 1 : 0,
         now,
       )
     return this.getRuntimeSettings()
@@ -3170,6 +3254,7 @@ export class PegasStore {
         `SELECT * FROM tasks
          WHERE user_id = ? AND (? IS NULL OR id <> ?)
            AND status IN ('backlog','unstarted','started')
+           AND kind = 'work'
          ORDER BY
            CASE WHEN status_reason IN (
              'awaiting_approval','awaiting_goal_clarification',
@@ -4540,7 +4625,8 @@ export class PegasStore {
          SET revision = revision + 1, router_mode = ?,
              model_provider = 'openai-compatible', model_connection_id = ?,
              model_name = ?, agent_model_mode = ?, agent_model_provider = ?,
-             agent_model_name = ?, privacy_mode = ?, rewrite_mode = ?, updated_at = ?
+             agent_model_name = ?, privacy_mode = ?, rewrite_mode = ?,
+             chat_lane_enabled = COALESCE(?, chat_lane_enabled), updated_at = ?
          WHERE id = 1 AND revision = ?`,
       )
       .run(
@@ -4552,6 +4638,11 @@ export class PegasStore {
         settings.agentModelName,
         settings.privacyMode,
         settings.rewriteMode,
+        settings.chatLaneEnabled === undefined
+          ? null
+          : settings.chatLaneEnabled
+            ? 1
+            : 0,
         this.#clock.now().toISOString(),
         expectedRevision,
       )
@@ -4701,7 +4792,8 @@ export class PegasStore {
            SET revision = revision + 1, router_mode = ?,
                model_provider = 'openai-compatible', model_connection_id = ?,
                model_name = ?, agent_model_mode = ?, agent_model_provider = ?,
-               agent_model_name = ?, privacy_mode = ?, rewrite_mode = ?, updated_at = ?
+               agent_model_name = ?, privacy_mode = ?, rewrite_mode = ?,
+               chat_lane_enabled = COALESCE(?, chat_lane_enabled), updated_at = ?
            WHERE id = 1 AND revision = ?`,
         )
         .run(
@@ -4713,6 +4805,11 @@ export class PegasStore {
           settings.agentModelName,
           settings.privacyMode,
           settings.rewriteMode,
+          settings.chatLaneEnabled === undefined
+            ? null
+            : settings.chatLaneEnabled
+              ? 1
+              : 0,
           now,
           expectedRevision,
         )
@@ -5360,7 +5457,7 @@ export class PegasStore {
     event: InboxEvent,
     decision: Extract<
       RoutingDecision,
-      { kind: 'create_task' | 'continue_task' }
+      { kind: 'create_task' | 'continue_task' | 'reply' }
     >,
     executor: string,
     executionContext: ExecutionContext | ((task: Task) => ExecutionContext),
@@ -5395,13 +5492,24 @@ export class PegasStore {
 
       const now = this.#clock.now().toISOString()
       let task: Task
-      if (decision.kind === 'create_task') {
+      if (decision.kind === 'create_task' || decision.kind === 'reply') {
+        if (
+          decision.kind === 'reply' &&
+          !this.getRuntimeSettings().chatLaneEnabled
+        ) {
+          throw new Error('Reply routing requires the chat lane to be enabled')
+        }
         const taskId = randomUUID()
         const workerIconId = assignWorkerIconId(taskId)
         const mandate = collaboration
           ? this.#taskById(collaboration.source_task_id).mandate
-          : createMandate(event, decision.goal, 'router')
+          : createMandate(
+              event,
+              decision.kind === 'reply' ? decision.input : decision.goal,
+              'router',
+            )
         if (
+          decision.kind === 'create_task' &&
           decision.targetResource === 'pegas_repository' &&
           (collaboration || event.authenticatedActor !== 'human')
         ) {
@@ -5410,22 +5518,28 @@ export class PegasStore {
         this.#database
           .prepare(
             `INSERT INTO tasks
-              (id, user_id, origin_event_id, title, goal, status, worker_icon_id, target_resource, mandate_json, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, 'unstarted', ?, ?, ?, ?, ?)`,
+              (id, user_id, origin_event_id, title, goal, status, kind, worker_icon_id, target_resource, mandate_json, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, 'unstarted', ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             taskId,
             event.userId,
             event.id,
-            decision.title,
-            decision.goal,
+            decision.kind === 'reply'
+              ? conversationTitle(decision.input)
+              : decision.title,
+            decision.kind === 'reply' ? decision.input : decision.goal,
+            decision.kind === 'reply' ? 'conversation' : 'work',
             workerIconId,
-            decision.targetResource ?? null,
+            decision.kind === 'create_task'
+              ? (decision.targetResource ?? null)
+              : null,
             JSON.stringify(mandate),
             now,
             now,
           )
-        this.#ensureWorkerProfile(taskId, now)
+        if (decision.kind === 'create_task')
+          this.#ensureWorkerProfile(taskId, now)
         task = this.#taskById(taskId)
       } else {
         task = this.#taskById(decision.taskId)
@@ -5493,6 +5607,7 @@ export class PegasStore {
               : resumed
                 ? 'resumed'
                 : 'continuation'
+      const relation = decision.kind === 'reply' ? 'origin' : taskEventRelation
 
       this.#database
         .prepare(
@@ -5503,7 +5618,7 @@ export class PegasStore {
              relation = excluded.relation,
              created_at = excluded.created_at`,
         )
-        .run(event.id, task.id, taskEventRelation, now)
+        .run(event.id, task.id, relation, now)
       this.#database
         .prepare(
           `INSERT INTO routing_decisions (event_id, kind, task_id, reason, created_at)
@@ -5937,6 +6052,27 @@ export class PegasStore {
     return rows.map(row => toTask(row as unknown as TaskRow))
   }
 
+  conversationSessionRef(userId: string): string | undefined {
+    const row = this.#database
+      .prepare(
+        'SELECT executor_ref FROM conversation_sessions WHERE user_id = ?',
+      )
+      .get(userId) as { executor_ref: string } | undefined
+    return row?.executor_ref
+  }
+
+  recordConversationSessionRef(userId: string, executorRef: string): void {
+    this.#database
+      .prepare(
+        `INSERT INTO conversation_sessions (user_id, executor_ref, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(user_id) DO UPDATE SET
+           executor_ref = excluded.executor_ref,
+           updated_at = excluded.updated_at`,
+      )
+      .run(userId, executorRef, this.#clock.now().toISOString())
+  }
+
   searchChannels(
     userId: string,
     options: ChannelSearchOptions,
@@ -5963,6 +6099,7 @@ export class PegasStore {
 
     const where = [
       'tasks.user_id = ?',
+      "tasks.kind <> 'conversation'",
       statuses
         ? `tasks.status IN (${statuses.map(() => '?').join(',')})`
         : '1 = 1',
@@ -8640,6 +8777,7 @@ export class PegasStore {
     workerId: string,
     leaseMs = 30_000,
     nodeId?: string,
+    lane?: Task['kind'],
   ): ClaimedRun | undefined {
     const now = this.#clock.now()
     const leaseUntil = new Date(now.getTime() + leaseMs).toISOString()
@@ -8652,6 +8790,7 @@ export class PegasStore {
           `SELECT * FROM runs
            WHERE task_id IN (SELECT id FROM tasks WHERE status NOT IN ('completed','cancelled'))
            AND execution_contract_version <= 2
+           AND (? IS NULL OR task_id IN (SELECT id FROM tasks WHERE kind = ?))
            AND (json_extract(execution_context_json, '$.nodeId') IS NULL
              OR json_extract(execution_context_json, '$.nodeId') = ?)
            AND ((status = 'queued' AND NOT EXISTS (
@@ -8669,6 +8808,8 @@ export class PegasStore {
            ORDER BY created_at ASC, rowid ASC LIMIT 1`,
         )
         .get(
+          lane ?? null,
+          lane ?? null,
           nodeId ?? null,
           now.toISOString(),
           now.toISOString(),
@@ -11150,6 +11291,7 @@ function toRuntimeSettings(row: RuntimeSettingsRow): RuntimeSettings {
     agentModelName: row.agent_model_name,
     privacyMode: row.privacy_mode,
     rewriteMode: row.rewrite_mode,
+    chatLaneEnabled: row.chat_lane_enabled === 1,
     updatedAt: row.updated_at,
   }
 }
@@ -11221,6 +11363,10 @@ function firstSummaryLine(value: string, limit: number): string | undefined {
   return Array.from(line).slice(0, limit).join('')
 }
 
+function conversationTitle(input: string): string {
+  return (firstSummaryLine(input, 60) ?? '即时对话').trim()
+}
+
 function toTask(row: TaskRow): Task {
   const workerIconId = row.worker_icon_id ?? assignWorkerIconId(row.id)
   if (!isWorkerIconId(workerIconId))
@@ -11232,6 +11378,7 @@ function toTask(row: TaskRow): Task {
     title: row.title,
     goal: row.goal || row.title,
     status: row.status,
+    kind: row.kind === 'conversation' ? 'conversation' : 'work',
     workerIconId,
     ...(row.status_reason ? { statusReason: row.status_reason } : {}),
     ...(row.target_resource === 'pegas_repository'

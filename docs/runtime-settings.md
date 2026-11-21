@@ -69,6 +69,14 @@ Environment / encrypted provider connection store
 运行设置是当前 Pegas 实例的全局单例，适合现阶段单用户部署。未来多租户化时需要增加
 scope 与 owner，不应把当前表误当作用户偏好表。
 
+即时应答车道（PLAN-001 P1，ROUTE-004/EXEC-005）由 `chatLaneEnabled` 控制，默认关闭。
+新实例可用 `PEGAS_CHAT_LANE=on` 生成开启的默认记录；此后以服务端保存值为准，
+`PUT /v1/settings` 省略该字段时保留现值（不会因旧客户端保存而意外关闭）。关闭后
+reply 决策兜底为完整 Task，行为回到现状；历史 conversation Task 数据保留可读。
+chat 车道的并发预算独立于重任务：`PEGAS_CHAT_CONCURRENCY`（默认 1）只影响本进程
+领取 conversation Run 的数量，不进入运行设置单例。Web 设置页开关属后续缺口，当前
+经环境变量（首次启动）或设置 API 启停。
+
 ## 保存、失败与恢复
 
 - PUT 使用客户端读到的 `revision` 做乐观并发控制；revision 不一致返回冲突，避免旧

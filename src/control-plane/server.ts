@@ -1270,6 +1270,7 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         return sendJson(response, 200, {
           channels: options.store
             .listTasks(userId)
+            .filter(task => task.kind !== 'conversation')
             .map(task => projectWorkChannel(task)),
         })
       }

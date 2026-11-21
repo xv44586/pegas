@@ -5,6 +5,8 @@ type EventStatus = 'pending' | 'processing' | 'processed' | 'failed'
 export type TaskStatus =
   'backlog' | 'unstarted' | 'started' | 'completed' | 'cancelled'
 
+type TaskKind = 'work' | 'conversation'
+
 interface ActorRef {
   source: string
   id: string
@@ -108,6 +110,8 @@ export interface Task {
   title: string
   goal: string
   status: TaskStatus
+  /** Defaults to 'work' when omitted; conversation Tasks carry 'conversation'. */
+  kind?: TaskKind
   workerIconId: WorkerIconId
   statusReason?: string
   targetResource?: 'pegas_repository'
@@ -233,6 +237,11 @@ export type RoutingDecision =
       input: string
       reason: string
       targetResource?: 'pegas_repository'
+    }
+  | {
+      kind: 'reply'
+      input: string
+      reason: string
     }
   | {
       kind: 'continue_task'

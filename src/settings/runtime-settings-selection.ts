@@ -14,4 +14,6 @@ export interface RuntimeSettingsSelection {
   agentModelName: string
   privacyMode: PrivacyMode
   rewriteMode: RewriteMode
+  /** Defaults to false when omitted (rollback switch, PLAN-001 P1). */
+  chatLaneEnabled?: boolean
 }

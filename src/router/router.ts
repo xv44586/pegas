@@ -104,7 +104,8 @@ export class ModelTaskRouter implements TaskRouter {
       .filter(
         candidate =>
           candidate.task.status !== 'completed' &&
-          candidate.task.status !== 'cancelled',
+          candidate.task.status !== 'cancelled' &&
+          candidate.task.kind !== 'conversation',
       )
       .slice(0, this.#maximumCandidateTasks)
 
@@ -149,6 +150,9 @@ function candidateTasks(candidates: RoutingCandidate[] | Task[]): Task[] {
 
 const routerSystemPrompt = `You route one user message into durable personal-agent tasks.
 Return one JSON object only.
+If the message is casual chat or a simple question that can be answered directly in one reply, needs no external side effects and no deliverable, return:
+{"kind":"reply","taskId":"","title":"","goal":"","reason":"short reason"}
+Only choose reply when certain; when unsure whether real work is needed, prefer create_task.
 If the message clearly continues exactly one listed task, return:
 {"kind":"continue_task","taskId":"listed id","title":"","goal":"","reason":"short reason"}
 If the message redirects, narrows or corrects work that is currently executing on exactly one listed task (its status is "started"), return:
@@ -167,7 +171,13 @@ const routerDecisionSchema = {
   properties: {
     kind: {
       type: 'string',
-      enum: ['create_task', 'continue_task', 'steer_task', 'cancel_task'],
+      enum: [
+        'create_task',
+        'reply',
+        'continue_task',
+        'steer_task',
+        'cancel_task',
+      ],
     },
     taskId: { type: 'string' },
     title: { type: 'string' },
@@ -215,6 +225,9 @@ function modelDecision(
     throw new Error('Router model returned an invalid decision')
   }
   const reason = requiredString(value.reason, 'reason')
+  if (value.kind === 'reply') {
+    return { kind: 'reply', input, reason }
+  }
   if (value.kind === 'continue_task') {
     const taskId = requiredString(value.taskId, 'taskId')
     if (!candidates.some(task => task.id === taskId)) {

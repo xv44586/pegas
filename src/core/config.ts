@@ -26,6 +26,8 @@ export interface PegasConfig {
   nodeId: string
   nodeLabel: string
   routerMode: 'rules' | 'model'
+  chatLaneEnabled: boolean
+  chatConcurrency: number
   modelProvider: ModelProviderId
   modelBaseUrl?: string
   modelApiKey?: string
@@ -149,6 +151,12 @@ export function loadConfig(
     nodeId: nonemptyOr(environment.PEGAS_NODE_ID, hostname()),
     nodeLabel: nonemptyOr(environment.PEGAS_NODE_LABEL, hostname()),
     routerMode,
+    chatLaneEnabled: environment.PEGAS_CHAT_LANE === 'on',
+    chatConcurrency: parsePositiveInteger(
+      environment.PEGAS_CHAT_CONCURRENCY,
+      1,
+      'PEGAS_CHAT_CONCURRENCY',
+    ),
     modelProvider: modelProvider as ModelProviderId,
     ...(modelBaseUrl ? { modelBaseUrl } : {}),
     ...(environment.PEGAS_MODEL_API_KEY
