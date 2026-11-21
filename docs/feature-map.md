@@ -160,6 +160,7 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - **数据与权限边界**：Renderer 只能访问本机 Control Plane 的 HTTP 接口；不暴露 Node/Electron bridge。内置服务每次启动生成随机实例 bearer，Electron session 仅对可信本机 origin 自动附加，renderer 不读取或保存 bearer。麦克风只对本机 Pegas origin 的 audio 请求授权，摄像头、地理位置、通知和未知权限默认拒绝。外部 URL 不在应用内导航。
 - **失败与恢复**：Control Plane 未就绪时显示可读启动失败页并允许退出；主进程退出时向子进程发送 SIGTERM，并在超时后升级；子进程数据继续由现有 SQLite 恢复语义负责。回滚本 Feature commit 即恢复纯 Web 构建，不迁移或删除用户数据。
 - **当前证据（2026-11-20）**：Electron 开发态与 `releases/desktop/mac-arm64/Pegas.app` 打包态均通过真实窗口 smoke：从封板输入器提交消息、等待 Worker 完成 Run，再主动终止 Worker，确认产品页立即撤下并显示“服务已停止”。页面标题、无控制台错误、`contextIsolation`、`sandbox` 和关闭 `nodeIntegration` 的窗口配置均由自动化读取确认。ASAR 打包路径、可信 origin bearer 注入、回环 URL、独立进程组和覆盖 DSH 5 秒清理窗口的 SIGTERM→SIGKILL 退出升级有 11 个专门回归测试，首次设置遮罩也由 smoke 自动退出，应用使用封板蓝色 Pegas 图标。当前完整门禁通过 33 个测试文件、327 个测试，开发态 Electron smoke 通过。
+- **smoke 标题断言修复（2026-11-21）**：DESIGN-002 引入“页面标题随导航更新”（对话页为 `对话 · Pegas`）后，`scripts/smoke-desktop.mjs` 仍断言旧静态标题 `Pegas · 个人智能代理`，导致桌面 smoke 在 main 上必然失败。本修复把断言更新为对话页动态标题，与封板行为一致；复现证据为修复前 `pnpm smoke:desktop` 的 AssertionError（actual `对话 · Pegas` / expected `Pegas · 个人智能代理`），修复后开发态 Electron smoke 通过。不改窗口业务逻辑与数据，回滚本 commit 即恢复旧断言。
 - **发布边界**：当前 Candidate 是本机未签名目录包，适合 MVP 开发与验收；Developer ID 签名、公证、DMG/自动更新和原生通知不在 DESKTOP-001 范围内，进入分发前必须另建发布 Feature。
 
 ## Feature 开发协议

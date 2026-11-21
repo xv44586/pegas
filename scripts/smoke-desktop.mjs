@@ -49,7 +49,7 @@ try {
     .fill(smokeMessage)
   await window.getByRole('button', { name: '发送' }).click()
   await waitForCompletedRun(window, smokeMessage)
-  assert.equal(await window.title(), 'Pegas · 个人智能代理')
+  assert.equal(await window.title(), '对话 · Pegas')
   const security = await application.evaluate(({ BrowserWindow }) => {
     const active = BrowserWindow.getAllWindows()[0]
     return active?.webContents.getLastWebPreferences()
