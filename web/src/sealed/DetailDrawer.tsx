@@ -19,6 +19,7 @@ import { useEffect, useRef, useState } from 'react'
 
 import { ApiError, type PegasApi } from '../api'
 import type {
+  ChannelEvidencePage,
   ChannelRelation,
   DurableAction,
   DshModelCatalog,
@@ -158,6 +159,20 @@ export function DetailDrawer({
             onOpenEvidence={
               onOpenView
                 ? evidence => onOpenView(evidencePreviewView(evidence))
+                : undefined
+            }
+            onOpenTarget={
+              api
+                ? async targetTaskId => {
+                    const timeline = await api.channelTimeline(targetTaskId)
+                    if (!onOpenView)
+                      throw new Error('当前界面不支持打开目标事情。')
+                    onOpenView({
+                      kind: 'task',
+                      channel: timeline.channel,
+                      timeline,
+                    })
+                  }
                 : undefined
             }
             onOpenView={onOpenView}
@@ -801,6 +816,7 @@ function TaskDetail({
   workerProfile,
   workerProfileError,
   onOpenEvidence,
+  onOpenTarget,
   onOpenView,
   onRetry,
   onContinue,
@@ -820,6 +836,7 @@ function TaskDetail({
   workerProfile?: WorkerProfileResponse
   workerProfileError?: string
   onOpenEvidence?: (evidence: ReviewEvidencePreview) => void
+  onOpenTarget?: (targetTaskId: string) => Promise<void>
   onOpenView?: (view: DrawerView) => void
   onRetry: (run: Run) => Promise<void>
   onContinue?: (
@@ -990,6 +1007,7 @@ function TaskDetail({
         <CollaborationSection
           collaborations={collaborations ?? []}
           error={collaborationsError}
+          onOpenTarget={onOpenTarget}
         />
       ) : null}
       <section className="detail-section">
@@ -1331,9 +1349,32 @@ function DeliverySection({
   }>()
   const [historyError, setHistoryError] = useState('')
   const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyKey, setHistoryKey] = useState('')
+  const [expandedRevisions, setExpandedRevisions] = useState<Set<number>>(
+    () => new Set(),
+  )
+  const [evidencePages, setEvidencePages] = useState<
+    Record<number, ChannelEvidencePage>
+  >({})
+  const [evidenceErrors, setEvidenceErrors] = useState<Record<number, string>>(
+    {},
+  )
+  const [evidenceBusy, setEvidenceBusy] = useState<Set<number>>(() => new Set())
   const [verifyingId, setVerifyingId] = useState('')
   const [verifyError, setVerifyError] = useState('')
   const [verifyNotice, setVerifyNotice] = useState('')
+  useEffect(() => {
+    if (historyKey === channelId) return
+    setHistoryKey(channelId)
+    setHistory(undefined)
+    setHistoryError('')
+    setHistoryLoading(false)
+    setHistoryOpen(false)
+    setExpandedRevisions(new Set())
+    setEvidencePages({})
+    setEvidenceErrors({})
+    setEvidenceBusy(new Set())
+  }, [channelId, historyKey])
   const goal = delivery?.goal
   const pack = delivery?.reviewPack
   const statements = new Map(
@@ -1430,6 +1471,60 @@ function DeliverySection({
       setVerifyingId('')
     }
   }
+  function setRevisionBusy(revision: number, busy: boolean) {
+    setEvidenceBusy(current => {
+      const next = new Set(current)
+      if (busy) next.add(revision)
+      else next.delete(revision)
+      return next
+    })
+  }
+  async function loadRevisionEvidence(revision: number, cursor?: string) {
+    if (!api || evidenceBusy.has(revision)) return
+    setRevisionBusy(revision, true)
+    setEvidenceErrors(current => ({ ...current, [revision]: '' }))
+    try {
+      const page = await api.taskEvidence(channelId, revision, cursor)
+      setEvidencePages(current => {
+        const previous = cursor ? current[revision] : undefined
+        return {
+          ...current,
+          [revision]: {
+            evidence: previous
+              ? [
+                  ...previous.evidence,
+                  ...page.evidence.filter(
+                    item =>
+                      !previous.evidence.some(entry => entry.id === item.id),
+                  ),
+                ]
+              : page.evidence,
+            ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+          },
+        }
+      })
+    } catch (caught) {
+      setEvidenceErrors(current => ({
+        ...current,
+        [revision]:
+          caught instanceof Error ? caught.message : '读取证据记录失败。',
+      }))
+    } finally {
+      setRevisionBusy(revision, false)
+    }
+  }
+  function toggleRevisionEvidence(revision: number) {
+    if (expandedRevisions.has(revision)) {
+      setExpandedRevisions(current => {
+        const next = new Set(current)
+        next.delete(revision)
+        return next
+      })
+      return
+    }
+    setExpandedRevisions(current => new Set(current).add(revision))
+    if (!evidencePages[revision]) void loadRevisionEvidence(revision)
+  }
   return (
     <section className="detail-section">
       <h3>目标与交付</h3>
@@ -1522,16 +1617,104 @@ function DeliverySection({
               <h4>目标修订</h4>
               {history.contracts.length ? (
                 <ol className="history-list">
-                  {history.contracts.map(contract => (
-                    <li key={contract.id}>
-                      <strong>
-                        v{String(contract.revision)}
-                        {goal?.id === contract.id ? ' · 当前' : ''}
-                      </strong>
-                      <p>{contract.desiredOutcome}</p>
-                      <small>{formatRelativeTime(contract.createdAt)}</small>
-                    </li>
-                  ))}
+                  {history.contracts.map(contract => {
+                    const revision = contract.revision
+                    const expanded = expandedRevisions.has(revision)
+                    const page = evidencePages[revision]
+                    const evidenceError = evidenceErrors[revision]
+                    const busy = evidenceBusy.has(revision)
+                    return (
+                      <li key={contract.id}>
+                        <strong>
+                          v{String(revision)}
+                          {goal?.id === contract.id ? ' · 当前' : ''}
+                        </strong>
+                        <p>{contract.desiredOutcome}</p>
+                        <small>{formatRelativeTime(contract.createdAt)}</small>
+                        <button
+                          className="inline-link"
+                          onClick={() => toggleRevisionEvidence(revision)}
+                          type="button"
+                        >
+                          {expanded
+                            ? `收起证据记录 v${String(revision)}`
+                            : `查看证据记录 v${String(revision)}`}
+                        </button>
+                        {expanded && (
+                          <div className="revision-evidence">
+                            {busy && !page && (
+                              <p className="drawer-footnote">
+                                正在读取证据记录。
+                              </p>
+                            )}
+                            {evidenceError && (
+                              <p className="settings-error" role="alert">
+                                {evidenceError}
+                                <button
+                                  className="inline-link"
+                                  onClick={() =>
+                                    void loadRevisionEvidence(revision)
+                                  }
+                                  type="button"
+                                >
+                                  重试
+                                </button>
+                              </p>
+                            )}
+                            {page && !evidenceError && (
+                              <>
+                                {page.evidence.length ? (
+                                  <ul className="revision-evidence-list">
+                                    {page.evidence.map(item => (
+                                      <li key={item.id}>
+                                        <strong>
+                                          {item.kind} ·{' '}
+                                          {verificationLabel(
+                                            item.verification.result,
+                                          )}
+                                        </strong>
+                                        <small>
+                                          标准 {item.criterionId} · 敏感级{' '}
+                                          {item.sensitivity} ·{' '}
+                                          {formatRelativeTime(item.capturedAt)}
+                                        </small>
+                                        {item.limitations.length > 0 && (
+                                          <small>
+                                            局限：{item.limitations.join('；')}
+                                          </small>
+                                        )}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                ) : (
+                                  <p className="drawer-footnote">
+                                    这个修订还没有证据记录。
+                                  </p>
+                                )}
+                                {page.nextCursor && (
+                                  <button
+                                    className="inline-link"
+                                    disabled={busy}
+                                    onClick={() => {
+                                      const cursor = page.nextCursor
+                                      if (cursor)
+                                        void loadRevisionEvidence(
+                                          revision,
+                                          cursor,
+                                        )
+                                    }}
+                                    type="button"
+                                  >
+                                    {busy ? '正在加载…' : '加载更多证据'}
+                                  </button>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        )}
+                      </li>
+                    )
+                  })}
                 </ol>
               ) : (
                 <p className="drawer-footnote">还没有目标修订记录。</p>
@@ -1690,10 +1873,95 @@ function ClarificationDetail({
 function CollaborationSection({
   collaborations,
   error,
+  onOpenTarget,
 }: {
   collaborations: ChannelRelation[]
   error?: string
+  onOpenTarget?: (targetTaskId: string) => Promise<void>
 }) {
+  const [openingId, setOpeningId] = useState('')
+  const [openError, setOpenError] = useState('')
+  const relationKey = collaborations.map(relation => relation.id).join(',')
+  useEffect(() => {
+    setOpenError('')
+    setOpeningId('')
+  }, [relationKey])
+  async function openTarget(targetTaskId: string) {
+    if (!onOpenTarget || openingId) return
+    setOpeningId(targetTaskId)
+    setOpenError('')
+    try {
+      await onOpenTarget(targetTaskId)
+    } catch (caught) {
+      setOpenError(
+        caught instanceof Error ? caught.message : '打开目标事情失败。',
+      )
+    } finally {
+      setOpeningId('')
+    }
+  }
+  const childrenByParent = new Map<string, ChannelRelation[]>()
+  for (const relation of collaborations) {
+    if (relation.parentRelationId) {
+      const siblings = childrenByParent.get(relation.parentRelationId) ?? []
+      siblings.push(relation)
+      childrenByParent.set(relation.parentRelationId, siblings)
+    }
+  }
+  function renderRelation(relation: ChannelRelation) {
+    const children = childrenByParent.get(relation.id) ?? []
+    return (
+      <li key={relation.id}>
+        <strong>
+          {collaborationKindLabel(relation.kind)} ·{' '}
+          {collaborationStatusLabel(relation.status)}
+          {relation.depth > 0 ? ` · 第 ${String(relation.depth)} 层` : ''}
+        </strong>
+        <p>{collaborationRequestText(relation)}</p>
+        {relation.result && (
+          <small>
+            结果：
+            {relation.result.outcome === 'completed'
+              ? '已完成'
+              : relation.result.outcome === 'failed'
+                ? '失败'
+                : '已取消'}
+            {relation.result.summary ? ` · ${relation.result.summary}` : ''}
+          </small>
+        )}
+        {relation.targetTaskId && (
+          <small>目标事情：{relation.targetTaskId.slice(0, 8)}</small>
+        )}
+        {relation.targetTaskId && onOpenTarget && (
+          <button
+            className="inline-link"
+            disabled={Boolean(openingId)}
+            onClick={() => {
+              const targetTaskId = relation.targetTaskId
+              if (!targetTaskId) return
+              void openTarget(targetTaskId)
+            }}
+            type="button"
+          >
+            {openingId === relation.targetTaskId ? '正在打开…' : '打开目标事情'}
+          </button>
+        )}
+        <small>
+          {formatRelativeTime(relation.settledAt ?? relation.updatedAt)}
+        </small>
+        {children.length > 0 && (
+          <ol className="collaboration-list is-nested">
+            {children.map(child => renderRelation(child))}
+          </ol>
+        )}
+      </li>
+    )
+  }
+  const relationIds = new Set(collaborations.map(relation => relation.id))
+  const roots = collaborations.filter(
+    relation =>
+      !relation.parentRelationId || !relationIds.has(relation.parentRelationId),
+  )
   return (
     <section className="detail-section">
       <h3>协作记录</h3>
@@ -1702,37 +1970,14 @@ function CollaborationSection({
           {error}
         </p>
       )}
+      {openError && (
+        <p className="settings-error" role="alert">
+          {openError}
+        </p>
+      )}
       {collaborations.length > 0 && (
         <ol className="collaboration-list">
-          {collaborations.map(relation => (
-            <li key={relation.id}>
-              <strong>
-                {collaborationKindLabel(relation.kind)} ·{' '}
-                {collaborationStatusLabel(relation.status)}
-                {relation.depth > 0 ? ` · 第 ${String(relation.depth)} 层` : ''}
-              </strong>
-              <p>{collaborationRequestText(relation)}</p>
-              {relation.result && (
-                <small>
-                  结果：
-                  {relation.result.outcome === 'completed'
-                    ? '已完成'
-                    : relation.result.outcome === 'failed'
-                      ? '失败'
-                      : '已取消'}
-                  {relation.result.summary
-                    ? ` · ${relation.result.summary}`
-                    : ''}
-                </small>
-              )}
-              {relation.targetTaskId && (
-                <small>目标事情：{relation.targetTaskId.slice(0, 8)}</small>
-              )}
-              <small>
-                {formatRelativeTime(relation.settledAt ?? relation.updatedAt)}
-              </small>
-            </li>
-          ))}
+          {roots.map(relation => renderRelation(relation))}
         </ol>
       )}
     </section>

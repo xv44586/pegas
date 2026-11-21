@@ -3,7 +3,9 @@ import type {
   Automation,
   AutomationDraft,
   AutomationInvocation,
+  ChannelEvidencePage,
   ChannelRelation,
+  ChannelSearchFilters,
   ChannelSearchResult,
   EventAttachment,
   ExecutionNode,
@@ -60,6 +62,26 @@ export class PegasApi {
 
   setToken(token: string): void {
     this.#token = token
+  }
+
+  async channelTimeline(channelId: string): Promise<ChannelTimeline> {
+    const user = encodeURIComponent(this.#userId)
+    const raw = await this.#get<unknown>(
+      `/v1/channels/${encodeURIComponent(channelId)}/timeline?userId=${user}&limit=200`,
+    )
+    if (raw && typeof raw === 'object' && 'channel' in raw) {
+      const projected = raw as { channel: Partial<WorkChannel> }
+      if (typeof projected.channel.id === 'string')
+        projected.channel = {
+          ...projected.channel,
+          workerIconId: isWorkerIconId(projected.channel.workerIconId)
+            ? projected.channel.workerIconId
+            : fallbackWorkerIconId(projected.channel.id),
+        }
+    }
+    if (!isChannelTimeline(raw, channelId))
+      throw new Error('服务端返回的 Channel 时间线不完整。')
+    return raw
   }
 
   async snapshot(channelId?: string): Promise<Snapshot> {
@@ -325,15 +347,39 @@ export class PegasApi {
     return response.invocations
   }
 
-  async searchChannels(query: string): Promise<ChannelSearchResult> {
+  async searchChannels(
+    query: string,
+    filters: ChannelSearchFilters = {},
+    cursor?: string,
+  ): Promise<ChannelSearchResult> {
     const params = new URLSearchParams({
       userId: this.#userId,
       limit: '8',
-      sort: 'updated',
+      sort: filters.sort ?? 'updated',
     })
     if (query.trim()) params.set('q', query.trim())
+    if (filters.ended !== undefined) params.set('ended', String(filters.ended))
+    if (filters.needsAttention) params.set('needsAttention', 'true')
+    if (filters.workerIconId) params.set('workerIconId', filters.workerIconId)
+    if (cursor) params.set('cursor', cursor)
     return this.#get<ChannelSearchResult>(
       `/v1/channels/search?${params.toString()}`,
+    )
+  }
+
+  async taskEvidence(
+    taskId: string,
+    goalRevision: number,
+    cursor?: string,
+  ): Promise<ChannelEvidencePage> {
+    const params = new URLSearchParams({
+      userId: this.#userId,
+      goalRevision: String(goalRevision),
+      limit: '20',
+    })
+    if (cursor) params.set('cursor', cursor)
+    return this.#get<ChannelEvidencePage>(
+      `/v1/tasks/${encodeURIComponent(taskId)}/evidence?${params.toString()}`,
     )
   }
 

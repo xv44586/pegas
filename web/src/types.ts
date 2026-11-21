@@ -3,6 +3,15 @@ export type TaskStatus =
 
 export type WorkerIconId = 'car' | 'camera' | 'computer' | 'phone'
 
+export type ChannelSearchSort = 'updated' | 'created' | 'ended'
+
+export interface ChannelSearchFilters {
+  ended?: boolean
+  needsAttention?: boolean
+  workerIconId?: WorkerIconId
+  sort?: ChannelSearchSort
+}
+
 export interface Task {
   id: string
   userId: string
@@ -328,6 +337,21 @@ interface ChannelSearchMatch {
 export interface ChannelSearchResult {
   channels: WorkChannel[]
   matches: ChannelSearchMatch[]
+  nextCursor?: string
+}
+
+export interface ChannelEvidencePage {
+  evidence: {
+    id: string
+    goalRevision: number
+    criterionId: string
+    kind: string
+    artifactId?: string
+    verification: { result: 'passed' | 'pending' | 'failed' }
+    sensitivity: string
+    capturedAt: string
+    limitations: string[]
+  }[]
   nextCursor?: string
 }
 
