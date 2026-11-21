@@ -16,7 +16,7 @@ Pegas 使用自己的图标系统替代 DS Bot 鲸鱼形象。主入口固定为
 1. Pegas 主入口、主页、设置和消息身份始终使用 `bot`，Channel 不使用第三方角色形象。
 2. 新 Channel 只从 `car`、`camera`、`computer`、`phone` 中由系统确定性分配；分配结果写入 Task，扩展图标库不会重排旧 Channel。
 3. `backlog`、`unstarted`、`started`、`completed`、`cancelled` 分别使用三点、时钟、靶心、对勾和叉形徽记；状态同时有文字，不只依赖颜色。
-4. 图标通过同源 SVG sprite 的 `<use>` 复用，并通过固定的 `--pegas-icon-background` 与 `--pegas-icon-foreground` 接收品牌主题；状态徽记由 Web 组件独立渲染。
+4. 图标通过内联 SVG sprite 的文档内 `<use>` 复用（`PegasAgentSprite` 在 `AppShell` 单例挂载），并通过固定的 `--pegas-icon-background` 与 `--pegas-icon-foreground` 接收品牌主题；状态徽记由 Web 组件独立渲染。
 5. 已命名按钮内的图标为装饰图像；独立信息图像由调用方提供可访问名称。状态徽记在 Forced Colors 下使用系统色，并始终有形状或文字作为非颜色线索。
 6. 生成脚本是 SVG 几何和 sprite 的唯一事实来源；`pnpm icons:check` 阻止产物漂移。
 
@@ -70,7 +70,8 @@ pnpm icons:check
 
 ## 验证证据
 
-- `pnpm icons:check`：五个独立 SVG 和一个 sprite 与生成器完全一致。
+- `pnpm icons:check`：五个独立 SVG、一个 sprite 与内联 sprite 模块与生成器完全一致。
+- `web/src/PegasAgentIcon.test.tsx`：sprite 单例内联、五个 symbol 齐全、`<use>` 指向文档内 fragment。
 - 自动化覆盖确定性分配、非法第三方 ID、历史数据回填、API 投影、旧服务兼容、固定蓝色身份与 UI 状态徽记。
 - 浏览器截图覆盖 Pegas 固定机器人、Channel 多形状、五状态徽记和收缩侧栏。
 - 完整门禁：`pnpm check`, `pnpm smoke`。
@@ -79,3 +80,14 @@ pnpm icons:check
 
 仍需 VoiceOver/NVDA 实机验证和正式暗色主题。Forced Colors 下使用系统
 `Highlight` / `HighlightText`，状态仍通过相邻文字或可访问描述表达。
+
+### 首绘竞态修复（2026-11-21）
+
+外部 sprite `<use>` 曾在页面首次绘制时尚未解码，导致 `pnpm review:ui`
+早期截图（如 `desktop-all-work.png`）Worker 图标列空白；该现象在基线
+main 即可复现，属既有问题。本变更把 sprite 内联进文档根治：生成器额外
+产出 `web/src/agent-icon-sprite.ts`（字符串模块，`.prettierignore` 排除），
+`PegasAgentSprite` 在 `AppShell` 根部挂载一次隐藏 SVG，`PegasAgentIcon`
+的 `<use>` 改为文档内 fragment（`#pegas-agent-<id>`），首帧即有几何，
+不再依赖网络解码。静态 `pegas-agents.svg` 仍生成，供外部消费者使用。
+修复后 `review:ui` 首帧截图图标列像素验证非空（蓝色像素 2367）。
