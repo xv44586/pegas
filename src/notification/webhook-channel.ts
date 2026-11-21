@@ -12,6 +12,7 @@ export interface WebhookNotificationChannelOptions {
 
 export class WebhookNotificationChannel implements NotificationChannel {
   readonly name = 'webhook'
+  readonly external = true
   readonly #url: URL
   readonly #token?: string
   readonly #timeoutMs: number

@@ -2,6 +2,12 @@ import type { OutboxMessage } from '../core/domain.js'
 
 export interface NotificationChannel {
   readonly name: string
+  /**
+   * Channels that leave the Pegas trust boundary (webhook, push, messaging
+   * platforms) receive a redacted delivery projection instead of the full
+   * in-app payload. In-app trusted surfaces keep the full projection.
+   */
+  readonly external?: boolean
   deliver(message: OutboxMessage, signal?: AbortSignal): Promise<void>
 }
 

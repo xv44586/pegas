@@ -112,10 +112,11 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 
 - **用户结果**：事情完成时，用户在 Outbox 通知里直接看到按完成条件组织的交付预览——每个 criterion 的状态与解释、证据预览（含视觉 Artifact 引用）、限制、剩余风险、回滚入口和审计链接，而不是执行日志。
 - **验收条件**：`review.ready` OutboxItem 在既有完成事务内附带 `review` 投影：finalOutcome、goalRevision、criteria（completionStatus/explanation/limitations/evidenceCount）、最多 20 条 evidence 预览（kind、verification、Artifact id/name/kind/revision/MIME/uri、presentation、limitations）、remainingRisks、可选 rollback、auditLink。partial Report 不发送 review.ready，Task 保持 awaiting_evidence。
-- **非目标**：不做 Web 卡片渲染与缩略图（DESIGN-002 后续）、不做 evidence 字节内联（仍按 Artifact/附件 API 取回）、不改变 Outbox 投递重试语义。
+- **非目标**：不做 Web 卡片渲染与缩略图（DESIGN-002 后续）、不做 evidence 字节内联（仍按认证内容 API 取回）、不改变 Outbox 投递重试语义。
 - **数据与权限边界**：投影只含用户可见事实；capture environment、工具参数与执行日志不进入 payload；Outbox 仍按 owner 隔离并沿用 dedupeKey 幂等。
 - **失败与恢复**：投影与 Review Pack 同一事务生成，投递失败独立重试不重复完成 Task；重放 Report 返回同一完成链与同一 Outbox 消息。
 - **当前证据（2026-11-21）**：`test/review-pack-outbox.test.ts` 2 个测试（真实截图 Artifact + 可信验证 passed 的完成交付聚合、日志/环境排除断言、partial 不通知且等待证据）。完整门禁通过 64 个测试文件、568 个测试（statement 84.5%、branch 77.75%、function 88.83%、line 87.38%）；`pnpm check`、`pnpm smoke`、`pnpm smoke:desktop` 均通过。
+- **外部渠道脱敏投影更新（2026-11-21）**：`NotificationChannel.external` 标记离开信任边界的渠道（Webhook 默认外部）；Dispatcher 在投递时应用 `externalDeliveryPayload`，持久 Outbox 行保留完整站内预览。`public/private` evidence 保留可检查元数据并附认证 `previewRef`；其余 sensitivity（含未知标签）fail closed 整条脱敏，存在脱敏项时隐藏 criterion explanation/limitations 与 rollback，并给出 `redactedEvidenceCount`；本地 uri/hasContent/presentation/字节永不外发。`test/external-delivery-projection.test.ts` 7 个测试覆盖 restricted 脱敏与引用、private 元数据保留与本地路径排除、未知标签 fail closed、非 review payload 透传、外部/站内渠道差异与持久行完整性、unknown 停车语义不变。完整门禁通过 74 个测试文件、650 个测试（statement 85.04%、branch 78.34%、function 89.11%、line 87.83%）；`pnpm check`、`pnpm smoke`、`pnpm smoke:desktop` 均通过。
 
 ### EXEC-004：执行节点注册与本地事情节点绑定（2026-11-21）
 

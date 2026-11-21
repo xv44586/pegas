@@ -234,6 +234,8 @@ Outbox 的产品已读、外部投递状态、用户是否接受结果、evidenc
 
 服务端为每种投递渠道生成独立 delivery projection，并在 dispatch 时再次校验接收者、渠道可信度、sensitivity 和当前授权。站内可信界面可以按权限预览；Webhook、推送和消息平台默认只发送脱敏摘要或需要认证且短期有效的引用，不嵌入 canonical evidence bytes。外部投递内容一旦离开 Pegas 不能依赖后续撤权回收，因此高敏 evidence 不得进入不可控渠道。
 
+已实现（`src/notification/delivery-projection.ts`）：`NotificationChannel.external=true` 的渠道（Webhook 默认外部）在 dispatch 时收到 `review.ready` 的脱敏投影，持久 Outbox 行保留完整站内预览。sensitivity 为 `public/private` 的 evidence 保留可检查元数据（kind/verification/contentHash/artifactRevision/viewport/timecode/artifactName/limitations）；其余标签（含未知标签，fail closed）整条脱敏为 `{evidenceId, kind, verification, sensitivity, redacted: true, previewRef}`，且存在脱敏项时 criterion 的 explanation/limitations 一并隐藏并给出 `redactedEvidenceCount`。所有 evidence 均附认证站内引用 `previewRef=/v1/evidence/:id/content`；本地 Artifact uri、hasContent、presentation 与 rollback 细节不进入外部投影。非 `review.ready` payload 按生产合同本就是摘要，原样传递；投影不改变重试/unknown 停车语义。
+
 ## 数据、权限与隐私边界
 
 - Goal Contract、EvidenceRef、Review Pack 与完成判断以服务端为权威；客户端只做呈现和交互适配。
@@ -284,7 +286,7 @@ Outbox 的产品已读、外部投递状态、用户是否接受结果、evidenc
 1. [x] 定义 Goal Contract revision、EvidenceRef、Review Pack 和 criterion 状态合同；
 2. [x] 让 Executor 生成最小目标简报，并保存用户确认与修订；提案 API、blocking 澄清停放与用户回答后恢复已实现，Web 澄清卡片待接入；
 3. [x] 为结构化 Report 增加 evidence references，由 Control Plane 实施完成门禁；
-4. [~] 扩展 Artifact 与 Outbox API，支持 evidence 聚合、权限和预览；服务端元数据、聚合、所有者权限、最终修订守卫与所有者内容预览 API 已完成，外部渠道脱敏投影待实现；
+4. [x] 扩展 Artifact 与 Outbox API，支持 evidence 聚合、权限和预览；服务端元数据、聚合、所有者权限、最终修订守卫、所有者内容预览 API 与外部渠道脱敏投影已完成；
 5. 实现 Web Review Pack、视觉 evidence 画廊和 Channel 审计下钻；
 6. 用真实任务样本验证哪些字段和提问有价值，再决定 Memory、Scheduler 与反馈闭环的后续范围。
 

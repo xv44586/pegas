@@ -2,6 +2,7 @@ import {
   DeliveryOutcomeUnknownError,
   type NotificationChannel,
 } from './channel.js'
+import { externalDeliveryPayload } from './delivery-projection.js'
 import type { Logger } from '../observability/logger.js'
 import type { MetricsRegistry } from '../observability/metrics.js'
 import type { PegasStore } from '../storage/sqlite-store.js'
@@ -46,7 +47,12 @@ export class OutboxDispatcher {
     if (!message) return false
 
     try {
-      await this.#channel.deliver(message, signal)
+      // Uncontrolled channels only ever receive the redacted delivery
+      // projection; the durable Outbox row keeps the full in-app payload.
+      const delivery = this.#channel.external
+        ? { ...message, payload: externalDeliveryPayload(message.payload) }
+        : message
+      await this.#channel.deliver(delivery, signal)
       this.#store.markOutboxSent(message.id, this.#dispatcherId)
       this.#metrics?.increment('pegas_outbox_deliveries_total', {
         outcome: 'sent',
