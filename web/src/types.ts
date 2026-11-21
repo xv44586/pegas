@@ -79,6 +79,7 @@ export interface InboxEvent {
   userId: string
   type: string
   source: string
+  attachment?: EventAttachment
   payload: unknown
   status: 'pending' | 'processing' | 'processed' | 'failed'
   createdAt: string
@@ -95,6 +96,8 @@ export interface OutboxMessage {
   updatedAt?: string
   sentAt?: string
   readAt?: string
+  lastError?: string
+  resolution?: OutboxResolution
 }
 
 export type Approval = ServerApproval
@@ -367,10 +370,107 @@ import type {
   ReviewPack as ServerReviewPack,
   TaskArtifact as ServerTaskArtifact,
 } from '../../src/goal/goal-delivery'
+import type {
+  EventAttachment as ServerEventAttachment,
+  ExecutionNode as ServerExecutionNode,
+  NotificationPreferences as ServerNotificationPreferences,
+} from '../../src/core/domain'
+import type {
+  EffectiveWorkerProfile as ServerEffectiveWorkerProfile,
+  WorkerProfile as ServerWorkerProfile,
+} from '../../src/worker/worker-profile'
 
 export type GoalContract = ServerGoalContract
 export type ReviewPack = ServerReviewPack
 export type TaskArtifact = ServerTaskArtifact
+export type EventAttachment = ServerEventAttachment
+export type ExecutionNode = ServerExecutionNode
+export type NotificationPreferences = ServerNotificationPreferences
+type WorkerProfile = ServerWorkerProfile
+type EffectiveWorkerProfile = ServerEffectiveWorkerProfile
+
+type CollaborationKind = 'delegate' | 'handoff' | 'context_note' | 'handback'
+
+type CollaborationStatus =
+  'pending' | 'active' | 'returned' | 'completed' | 'failed' | 'cancelled'
+
+interface CollaborationCommand {
+  commandId: string
+  kind: CollaborationKind
+}
+
+type WorkerCollaborationRequest =
+  | (CollaborationCommand & {
+      kind: 'delegate'
+      goal: string
+      reason: string
+      expectedOutput: string
+      contextRefs: string[]
+    })
+  | (CollaborationCommand & {
+      kind: 'handoff'
+      goal: string
+      reason: string
+      contextRefs: string[]
+    })
+  | (CollaborationCommand & {
+      kind: 'context_note'
+      targetChannelId: string
+      text: string
+      sourceRefs: string[]
+    })
+  | (CollaborationCommand & {
+      kind: 'handback'
+      inputEventId: string
+      reason: string
+    })
+
+interface CollaborationResult {
+  outcome: 'completed' | 'failed' | 'cancelled'
+  summary: string
+  targetRunId?: string
+}
+
+export interface ChannelRelation {
+  id: string
+  commandId: string
+  userId: string
+  kind: CollaborationKind
+  status: CollaborationStatus
+  sourceTaskId: string
+  sourceRunId: string
+  parentRelationId?: string
+  rootRelationId: string
+  depth: number
+  targetTaskId?: string
+  targetEventId?: string
+  returnEventId?: string
+  request: WorkerCollaborationRequest
+  result?: CollaborationResult
+  createdAt: string
+  updatedAt: string
+  settledAt?: string
+}
+
+export interface WorkerProfileResponse {
+  profile: WorkerProfile
+  effective: EffectiveWorkerProfile
+}
+
+export interface NotificationPreferencesUpdate {
+  expectedRevision: number
+  quietStart?: string
+  quietEnd?: string
+  utcOffsetMinutes: number
+}
+
+interface OutboxResolution {
+  resolution: 'sent' | 'failed'
+  note: string
+  previousStatus: 'failed' | 'unknown'
+  resolvedBy: string
+  createdAt: string
+}
 
 export interface ReviewEvidencePreview {
   evidenceId: string

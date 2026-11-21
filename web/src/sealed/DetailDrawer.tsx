@@ -8,6 +8,8 @@ import {
   HardDrive,
   Image as ImageIcon,
   LockKeyhole,
+  Network,
+  Paperclip,
   Play,
   RotateCw,
   ShieldCheck,
@@ -15,18 +17,26 @@ import {
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
+import { ApiError, type PegasApi } from '../api'
 import type {
+  ChannelRelation,
   DurableAction,
+  DshModelCatalog,
+  ExecutionNode,
   GoalContract,
+  OutboxMessage,
   ReviewCriterionPreview,
   ReviewEvidencePreview,
   ReviewProjection,
+  ReviewPack,
   Run,
   TaskDelivery,
+  WorkerProfileResponse,
 } from '../types'
 import { PegasMascot } from './PegasMascot'
 import {
   formatRelativeTime,
+  needsOutboxResolution,
   runStatusLabel,
   statusLabel,
   textFromPayload,
@@ -35,6 +45,7 @@ import {
 
 export function DetailDrawer({
   view,
+  api,
   onClose,
   onChange,
   onOpenView,
@@ -43,8 +54,10 @@ export function DetailDrawer({
   onStop,
   onDecideApproval,
   onReconcileAction,
+  onResolveOutbox,
 }: {
   view: DrawerView
+  api?: PegasApi
   onClose: () => void
   onChange: (view: DrawerView) => void
   onOpenView?: (view: DrawerView) => void
@@ -63,6 +76,11 @@ export function DetailDrawer({
   onReconcileAction?: (
     actionId: string,
     resolution: 'succeeded' | 'failed',
+    note: string,
+  ) => Promise<void>
+  onResolveOutbox?: (
+    messageId: string,
+    resolution: 'sent' | 'failed',
     note: string,
   ) => Promise<void>
 }) {
@@ -130,7 +148,10 @@ export function DetailDrawer({
         </header>
         {view.kind === 'task' && (
           <TaskDetail
+            api={api}
             channel={view.channel}
+            collaborations={view.collaborations}
+            collaborationsError={view.collaborationsError}
             delivery={view.delivery}
             deliveryError={view.deliveryError}
             onContinue={onContinue}
@@ -139,6 +160,7 @@ export function DetailDrawer({
                 ? evidence => onOpenView(evidencePreviewView(evidence))
                 : undefined
             }
+            onOpenView={onOpenView}
             onRetry={onRetry}
             onStop={onStop}
             run={view.run}
@@ -146,9 +168,13 @@ export function DetailDrawer({
             timeline={view.timeline}
             timelineError={view.timelineError}
             usage={view.usage}
+            workerProfile={view.workerProfile}
+            workerProfileError={view.workerProfileError}
           />
         )}
-        {view.kind === 'message' && <MessageDetail view={view} />}
+        {view.kind === 'message' && (
+          <MessageDetail onResolve={onResolveOutbox} view={view} />
+        )}
         {view.kind === 'approval' && (
           <ApprovalDetail
             key={`${view.approval.id}:${view.approval.decision?.id ?? view.approval.status}`}
@@ -206,7 +232,13 @@ export function DetailDrawer({
             questions={view.questions}
           />
         )}
-        {view.kind === 'runtime' && <RuntimeDetail run={view.run} />}
+        {view.kind === 'runtime' && (
+          <RuntimeDetail
+            nodes={view.nodes}
+            nodesError={view.nodesError}
+            run={view.run}
+          />
+        )}
         {view.kind === 'rule' && <RuleDetail title={view.title} />}
         {view.kind === 'preview' && (
           <PreviewDetail
@@ -587,11 +619,19 @@ function approvalStatus(
 }
 
 function MessageDetail({
+  onResolve,
   view,
 }: {
+  onResolve?: (
+    messageId: string,
+    resolution: 'sent' | 'failed',
+    note: string,
+  ) => Promise<void>
   view: Extract<DrawerView, { kind: 'message' }>
 }) {
   const text = textFromPayload(view.message.payload)
+  const message = view.message
+  const needsResolution = Boolean(onResolve) && needsOutboxResolution(message)
   return (
     <div className="drawer-body">
       <section className="detail-section">
@@ -602,13 +642,37 @@ function MessageDetail({
         <h3>消息信息</h3>
         <dl>
           <Meta label="来源" value="Pegas" />
-          <Meta label="投递状态" value={view.message.status} />
+          <Meta label="投递状态" value={outboxStatusLabel(message.status)} />
           <Meta
             label="创建时间"
-            value={formatRelativeTime(view.message.createdAt)}
+            value={formatRelativeTime(message.createdAt)}
           />
+          <Meta label="最近错误" value={message.lastError} />
         </dl>
       </section>
+      {message.resolution && (
+        <section className="detail-section">
+          <h3>人工核对记录</h3>
+          <div className="reconciliation-record">
+            <strong>
+              {message.resolution.resolution === 'sent'
+                ? '人工核对：确认已送达'
+                : '人工核对：确认未送达'}
+            </strong>
+            <p>{message.resolution.note}</p>
+            <small>
+              核对前状态：
+              {message.resolution.previousStatus === 'unknown'
+                ? '投递结果未知'
+                : '投递失败'}{' '}
+              · {formatRelativeTime(message.resolution.createdAt)}
+            </small>
+          </div>
+        </section>
+      )}
+      {needsResolution && onResolve && (
+        <OutboxResolutionForm message={message} onResolve={onResolve} />
+      )}
       <div className="info-banner">
         <LockKeyhole size={16} />
         此消息没有关联事情；这里只展示服务端保存的原始消息。
@@ -617,8 +681,116 @@ function MessageDetail({
   )
 }
 
+function outboxStatusLabel(status: OutboxMessage['status']): string {
+  const labels: Record<OutboxMessage['status'], string> = {
+    pending: '等待投递',
+    sending: '正在投递',
+    sent: '已送达',
+    failed: '投递失败',
+    unknown: '投递结果未知',
+  }
+  return labels[status]
+}
+
+function OutboxResolutionForm({
+  message,
+  onResolve,
+}: {
+  message: OutboxMessage
+  onResolve: (
+    messageId: string,
+    resolution: 'sent' | 'failed',
+    note: string,
+  ) => Promise<void>
+}) {
+  const [resolution, setResolution] = useState<'sent' | 'failed'>('sent')
+  const [note, setNote] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState('')
+
+  async function submit() {
+    if (submitting || !note.trim()) return
+    setSubmitting(true)
+    setError('')
+    try {
+      await onResolve(message.id, resolution, note.trim())
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : '提交核对结论失败，请重试。',
+      )
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <section className="detail-section">
+      <fieldset className="approval-options">
+        <legend>核对真实投递结果</legend>
+        <p className="reconciliation-hint">
+          这条通知
+          {message.status === 'unknown' ? '的投递结果未知' : '被记录为投递失败'}
+          。请在外部渠道（如邮件、IM）核实是否真的收到，再提交结论；结论会永久记录。
+        </p>
+        <label className="approval-option">
+          <input
+            checked={resolution === 'sent'}
+            disabled={submitting}
+            name={`outbox-resolve-${message.id}`}
+            onChange={() => setResolution('sent')}
+            type="radio"
+          />
+          <span>
+            <strong>确认已送达</strong>
+            <small>外部渠道实际收到了这条通知</small>
+          </span>
+        </label>
+        <label className="approval-option">
+          <input
+            checked={resolution === 'failed'}
+            disabled={submitting}
+            name={`outbox-resolve-${message.id}`}
+            onChange={() => setResolution('failed')}
+            type="radio"
+          />
+          <span>
+            <strong>确认未送达</strong>
+            <small>外部渠道没有收到，保留失败事实</small>
+          </span>
+        </label>
+      </fieldset>
+      <label className="approval-rationale">
+        <span>核对依据（必填）</span>
+        <textarea
+          disabled={submitting}
+          maxLength={2000}
+          onChange={event => setNote(event.target.value)}
+          placeholder="例如：已在邮箱收到这条通知，时间与内容一致"
+          value={note}
+        />
+      </label>
+      {error && (
+        <p className="settings-error" role="alert">
+          {error}
+        </p>
+      )}
+      <button
+        className="primary-button"
+        disabled={submitting || !note.trim()}
+        onClick={() => void submit()}
+        type="button"
+      >
+        {submitting ? '正在提交…' : '提交投递核对'}
+      </button>
+    </section>
+  )
+}
+
 function TaskDetail({
+  api,
   channel,
+  collaborations,
+  collaborationsError,
   delivery,
   deliveryError,
   run,
@@ -626,12 +798,18 @@ function TaskDetail({
   timeline,
   timelineError,
   usage,
+  workerProfile,
+  workerProfileError,
   onOpenEvidence,
+  onOpenView,
   onRetry,
   onContinue,
   onStop,
 }: {
+  api?: PegasApi
   channel: Extract<DrawerView, { kind: 'task' }>['channel']
+  collaborations?: ChannelRelation[]
+  collaborationsError?: string
   delivery?: TaskDelivery
   deliveryError?: string
   run?: Run
@@ -639,7 +817,10 @@ function TaskDetail({
   timeline?: Extract<DrawerView, { kind: 'task' }>['timeline']
   timelineError?: string
   usage?: Extract<DrawerView, { kind: 'task' }>['usage']
+  workerProfile?: WorkerProfileResponse
+  workerProfileError?: string
   onOpenEvidence?: (evidence: ReviewEvidencePreview) => void
+  onOpenView?: (view: DrawerView) => void
   onRetry: (run: Run) => Promise<void>
   onContinue?: (
     channel: Extract<DrawerView, { kind: 'task' }>['channel'],
@@ -654,16 +835,20 @@ function TaskDetail({
   )
   const timelineItems = [
     ...(timeline?.events.map(event => ({
-      id: `event-${event.id}`,
+      id: event.id,
+      key: `event-${event.id}`,
       at: event.createdAt,
       role: '你',
       text: textFromPayload(event.payload),
+      attachment: event.attachment,
     })) ?? []),
     ...(timeline?.messages.map(message => ({
-      id: `message-${message.id}`,
+      id: message.id,
+      key: `message-${message.id}`,
       at: message.createdAt,
       role: 'Pegas',
       text: textFromPayload(message.payload),
+      attachment: undefined,
     })) ?? []),
   ]
     .filter(item => item.text)
@@ -794,11 +979,19 @@ function TaskDetail({
       </section>
       {(delivery?.goal ?? delivery?.reviewPack ?? deliveryError) && (
         <DeliverySection
+          api={api}
+          channelId={channel.id}
           delivery={delivery}
           error={deliveryError}
           onOpenEvidence={onOpenEvidence}
         />
       )}
+      {(collaborations?.length ?? 0) > 0 || collaborationsError ? (
+        <CollaborationSection
+          collaborations={collaborations ?? []}
+          error={collaborationsError}
+        />
+      ) : null}
       <section className="detail-section">
         <h3>Channel 时间线</h3>
         {timelineError ? (
@@ -808,27 +1001,57 @@ function TaskDetail({
         ) : timelineItems.length ? (
           <ol className="drawer-timeline">
             {timelineItems.map(item => (
-              <li key={item.id}>
+              <li key={item.key}>
                 <strong>{item.role}</strong>
                 <p>
-                  {item.text.length > 520 && !expandedTimeline.has(item.id)
+                  {item.text.length > 520 && !expandedTimeline.has(item.key)
                     ? `${item.text.slice(0, 520)}…`
                     : item.text}
                 </p>
+                {item.attachment && api && (
+                  <button
+                    className="attachment-link"
+                    onClick={() => {
+                      const attachment = item.attachment
+                      if (!onOpenView || !attachment) return
+                      const mime = attachment.mediaType
+                      onOpenView({
+                        kind: 'preview',
+                        preview: mime.startsWith('image/')
+                          ? 'image'
+                          : mime.startsWith('video/')
+                            ? 'video'
+                            : mime === 'text/html'
+                              ? 'web'
+                              : 'file',
+                        title: attachment.fileName,
+                        description: '随消息上传的附件，字节由服务端存证。',
+                        mimeType: mime,
+                        source: `你上传的附件 · ${formatRelativeTime(attachment.createdAt)}`,
+                        contentUrl: api.eventAttachmentUrl(item.id),
+                        backLabel: '返回工作详情',
+                      })
+                    }}
+                    type="button"
+                  >
+                    <Paperclip size={14} />
+                    {item.attachment.fileName}
+                  </button>
+                )}
                 {item.text.length > 520 && (
                   <button
                     className="inline-link"
                     onClick={() =>
                       setExpandedTimeline(current => {
                         const next = new Set(current)
-                        if (next.has(item.id)) next.delete(item.id)
-                        else next.add(item.id)
+                        if (next.has(item.key)) next.delete(item.key)
+                        else next.add(item.key)
                         return next
                       })
                     }
                     type="button"
                   >
-                    {expandedTimeline.has(item.id)
+                    {expandedTimeline.has(item.key)
                       ? '收起'
                       : item.role === '你'
                         ? '展开完整消息'
@@ -866,6 +1089,12 @@ function TaskDetail({
           />
         </dl>
       </section>
+      <WorkerProfileSection
+        api={api}
+        channel={channel}
+        profile={workerProfile}
+        profileError={workerProfileError}
+      />
       {confirmingStop && (
         <section
           aria-labelledby="stop-confirmation-title"
@@ -1083,14 +1312,28 @@ function CriteriaList({
 }
 
 function DeliverySection({
+  api,
+  channelId,
   delivery,
   error,
   onOpenEvidence,
 }: {
+  api?: PegasApi
+  channelId: string
   delivery?: TaskDelivery
   error?: string
   onOpenEvidence?: (evidence: ReviewEvidencePreview) => void
 }) {
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [history, setHistory] = useState<{
+    contracts: GoalContract[]
+    reviewPacks: ReviewPack[]
+  }>()
+  const [historyError, setHistoryError] = useState('')
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [verifyingId, setVerifyingId] = useState('')
+  const [verifyError, setVerifyError] = useState('')
+  const [verifyNotice, setVerifyNotice] = useState('')
   const goal = delivery?.goal
   const pack = delivery?.reviewPack
   const statements = new Map(
@@ -1141,6 +1384,52 @@ function DeliverySection({
       limitations: criterion.limitations,
       evidenceCount: criterion.evidenceRefs.length,
     })) ?? []
+  const pendingEvidence = (delivery?.evidence ?? []).filter(
+    item => item.verification.result === 'pending',
+  )
+  async function toggleHistory() {
+    if (!api) return
+    if (historyOpen) {
+      setHistoryOpen(false)
+      return
+    }
+    setHistoryOpen(true)
+    if (history || historyLoading) return
+    setHistoryLoading(true)
+    setHistoryError('')
+    try {
+      const [contracts, reviewPacks] = await Promise.all([
+        api.goalContracts(channelId),
+        api.reviewPacks(channelId),
+      ])
+      setHistory({
+        contracts: contracts.contracts,
+        reviewPacks: reviewPacks.reviewPacks,
+      })
+    } catch (caught) {
+      setHistoryError(
+        caught instanceof Error ? caught.message : '读取历史修订失败。',
+      )
+    } finally {
+      setHistoryLoading(false)
+    }
+  }
+  async function verifyEvidence(evidenceId: string) {
+    if (!api || verifyingId) return
+    setVerifyingId(evidenceId)
+    setVerifyError('')
+    setVerifyNotice('')
+    try {
+      await api.verifyEvidence(evidenceId)
+      setVerifyNotice('已提交可信验证；刷新事情详情可查看最新结论。')
+    } catch (caught) {
+      setVerifyError(
+        caught instanceof Error ? caught.message : '提交可信验证失败。',
+      )
+    } finally {
+      setVerifyingId('')
+    }
+  }
   return (
     <section className="detail-section">
       <h3>目标与交付</h3>
@@ -1182,6 +1471,98 @@ function DeliverySection({
         evidence={evidencePreviews}
         onOpenEvidence={onOpenEvidence}
       />
+      {api && pendingEvidence.length > 0 && (
+        <div className="evidence-verify">
+          <p className="drawer-footnote">
+            有 {String(pendingEvidence.length)} 条证据等待可信验证。
+          </p>
+          {pendingEvidence.map(item => (
+            <button
+              className="secondary-button"
+              disabled={Boolean(verifyingId)}
+              key={item.id}
+              onClick={() => void verifyEvidence(item.id)}
+              type="button"
+            >
+              <ShieldCheck size={15} />
+              {verifyingId === item.id
+                ? '正在验证…'
+                : `验证证据 ${item.id.slice(0, 8)}`}
+            </button>
+          ))}
+          {verifyError && (
+            <p className="settings-error" role="alert">
+              {verifyError}
+            </p>
+          )}
+          {verifyNotice && <p className="drawer-footnote">{verifyNotice}</p>}
+        </div>
+      )}
+      {api && (
+        <button
+          className="inline-link"
+          onClick={() => void toggleHistory()}
+          type="button"
+        >
+          {historyOpen ? '收起历史修订' : '查看历史修订'}
+        </button>
+      )}
+      {historyOpen && (
+        <div className="delivery-history">
+          {historyLoading && (
+            <p className="drawer-footnote">正在读取历史修订。</p>
+          )}
+          {historyError && (
+            <p className="settings-error" role="alert">
+              {historyError}
+            </p>
+          )}
+          {history && (
+            <>
+              <h4>目标修订</h4>
+              {history.contracts.length ? (
+                <ol className="history-list">
+                  {history.contracts.map(contract => (
+                    <li key={contract.id}>
+                      <strong>
+                        v{String(contract.revision)}
+                        {goal?.id === contract.id ? ' · 当前' : ''}
+                      </strong>
+                      <p>{contract.desiredOutcome}</p>
+                      <small>{formatRelativeTime(contract.createdAt)}</small>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p className="drawer-footnote">还没有目标修订记录。</p>
+              )}
+              <h4>Review Pack 历史</h4>
+              {history.reviewPacks.length ? (
+                <ol className="history-list">
+                  {history.reviewPacks.map(reviewPack => (
+                    <li key={reviewPack.id}>
+                      <strong>
+                        修订 {String(reviewPack.revision)} · 目标 v
+                        {String(reviewPack.goalRevision)} ·{' '}
+                        {outcomeLabel(reviewPack.finalOutcome)}
+                      </strong>
+                      <p>
+                        按 {String(reviewPack.criteria.length)} 条完成标准审查
+                        {reviewPack.remainingRisks.length > 0
+                          ? `；剩余风险：${reviewPack.remainingRisks.join('；')}`
+                          : ''}
+                      </p>
+                      <small>{formatRelativeTime(reviewPack.createdAt)}</small>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p className="drawer-footnote">还没有 Review Pack 历史。</p>
+              )}
+            </>
+          )}
+        </div>
+      )}
     </section>
   )
 }
@@ -1306,6 +1687,293 @@ function ClarificationDetail({
   )
 }
 
+function CollaborationSection({
+  collaborations,
+  error,
+}: {
+  collaborations: ChannelRelation[]
+  error?: string
+}) {
+  return (
+    <section className="detail-section">
+      <h3>协作记录</h3>
+      {error && (
+        <p className="settings-error" role="alert">
+          {error}
+        </p>
+      )}
+      {collaborations.length > 0 && (
+        <ol className="collaboration-list">
+          {collaborations.map(relation => (
+            <li key={relation.id}>
+              <strong>
+                {collaborationKindLabel(relation.kind)} ·{' '}
+                {collaborationStatusLabel(relation.status)}
+                {relation.depth > 0 ? ` · 第 ${String(relation.depth)} 层` : ''}
+              </strong>
+              <p>{collaborationRequestText(relation)}</p>
+              {relation.result && (
+                <small>
+                  结果：
+                  {relation.result.outcome === 'completed'
+                    ? '已完成'
+                    : relation.result.outcome === 'failed'
+                      ? '失败'
+                      : '已取消'}
+                  {relation.result.summary
+                    ? ` · ${relation.result.summary}`
+                    : ''}
+                </small>
+              )}
+              {relation.targetTaskId && (
+                <small>目标事情：{relation.targetTaskId.slice(0, 8)}</small>
+              )}
+              <small>
+                {formatRelativeTime(relation.settledAt ?? relation.updatedAt)}
+              </small>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  )
+}
+
+function collaborationKindLabel(kind: ChannelRelation['kind']): string {
+  const labels: Record<ChannelRelation['kind'], string> = {
+    delegate: '委派',
+    handoff: '交接',
+    context_note: '上下文注记',
+    handback: '交回',
+  }
+  return labels[kind]
+}
+
+function collaborationStatusLabel(status: ChannelRelation['status']): string {
+  const labels: Record<ChannelRelation['status'], string> = {
+    pending: '等待接收',
+    active: '进行中',
+    returned: '已交回',
+    completed: '已完成',
+    failed: '失败',
+    cancelled: '已取消',
+  }
+  return labels[status]
+}
+
+function collaborationRequestText(relation: ChannelRelation): string {
+  const request = relation.request
+  if (request.kind === 'context_note') return request.text
+  if (request.kind === 'handback') return request.reason
+  return request.goal
+}
+
+function WorkerProfileSection({
+  api,
+  channel,
+  profile,
+  profileError,
+}: {
+  api?: PegasApi
+  channel: Extract<DrawerView, { kind: 'task' }>['channel']
+  profile?: WorkerProfileResponse
+  profileError?: string
+}) {
+  const [response, setResponse] = useState<WorkerProfileResponse>()
+  const [catalog, setCatalog] = useState<DshModelCatalog>()
+  const [catalogError, setCatalogError] = useState('')
+  const [modelMode, setModelMode] = useState<'inherit' | 'override'>('inherit')
+  const [modelKey, setModelKey] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState('')
+  const [saveNotice, setSaveNotice] = useState('')
+  const current = response ?? profile
+  const profileKey = current
+    ? `${current.profile.id}:${String(current.profile.revision)}:${current.profile.modelMode}:${current.profile.modelProvider ?? ''}:${current.profile.modelName ?? ''}`
+    : ''
+  useEffect(() => {
+    setResponse(undefined)
+    setSaveError('')
+    setSaveNotice('')
+  }, [channel.id])
+  useEffect(() => {
+    if (!profileKey) return
+    const [, , mode = 'inherit', provider = '', name = ''] =
+      profileKey.split(':')
+    setModelMode(mode === 'override' ? 'override' : 'inherit')
+    setModelKey(
+      mode === 'override' && provider && name ? `${provider}/${name}` : '',
+    )
+  }, [profileKey])
+  const readOnly = channel.status === 'cancelled'
+  if (!current && !profileError) return null
+  const selectedModel = catalog?.models.find(
+    model => `${model.provider}/${model.id}` === modelKey,
+  )
+  async function openEditor(nextMode: 'inherit' | 'override') {
+    setModelMode(nextMode)
+    setSaveError('')
+    setSaveNotice('')
+    if (!api || nextMode !== 'override' || catalog) return
+    try {
+      const loaded = await api.agentModels()
+      setCatalog(loaded)
+      setCatalogError('')
+      setModelKey(
+        currentKey =>
+          currentKey || `${loaded.defaultProvider}/${loaded.defaultModel}`,
+      )
+    } catch (caught) {
+      setCatalogError(
+        caught instanceof Error ? caught.message : '读取执行模型目录失败。',
+      )
+    }
+  }
+  async function save() {
+    if (!api || !current || saving) return
+    if (modelMode === 'override' && !selectedModel) {
+      setSaveError('请选择一个目录中可用的执行模型。')
+      return
+    }
+    setSaving(true)
+    setSaveError('')
+    setSaveNotice('')
+    try {
+      const saved = await api.saveWorkerProfile(channel.id, {
+        expectedRevision: current.profile.revision,
+        modelMode,
+        ...(modelMode === 'override' && selectedModel
+          ? {
+              modelProvider: selectedModel.provider,
+              modelName: selectedModel.id,
+            }
+          : {}),
+      })
+      setResponse(saved)
+      setSaveNotice('执行设置已保存，对后续运行生效。')
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 409) {
+        setSaveError(
+          '保存冲突：这条设置已在别处更新或事情已归档。正在读取最新设置。',
+        )
+        try {
+          setResponse(await api.workerProfile(channel.id))
+        } catch {
+          setSaveError('保存冲突，且读取最新设置失败；请重新打开详情后重试。')
+        }
+      } else {
+        setSaveError(
+          caught instanceof Error ? caught.message : '保存执行设置失败。',
+        )
+      }
+    } finally {
+      setSaving(false)
+    }
+  }
+  return (
+    <section className="detail-section worker-profile-section">
+      <h3>事情级执行设置</h3>
+      {profileError && (
+        <p className="settings-error" role="alert">
+          {profileError}
+        </p>
+      )}
+      {current && (
+        <>
+          <div className="metadata-list">
+            <dl>
+              <Meta label="生效模型" value={current.effective.modelRef} />
+              <Meta
+                label="设置来源"
+                value={
+                  current.effective.source === 'task'
+                    ? '这件事情的覆盖设置'
+                    : 'Pegas 全局设置'
+                }
+              />
+              <Meta
+                label="设置版本"
+                value={`v${String(current.profile.revision)}`}
+              />
+            </dl>
+          </div>
+          {readOnly || !api ? (
+            <p className="drawer-footnote">
+              {readOnly
+                ? '事情已归档，执行设置为只读。'
+                : '当前为只读预览，无法修改执行设置。'}
+            </p>
+          ) : (
+            <>
+              <label className="field-label">
+                执行模型
+                <select
+                  disabled={saving}
+                  onChange={event =>
+                    void openEditor(
+                      event.target.value === 'override'
+                        ? 'override'
+                        : 'inherit',
+                    )
+                  }
+                  value={modelMode}
+                >
+                  <option value="inherit">跟随 Pegas 全局设置</option>
+                  <option value="override">为这件事情指定模型</option>
+                </select>
+              </label>
+              {modelMode === 'override' && (
+                <label className="field-label">
+                  指定模型
+                  <select
+                    disabled={saving || !catalog}
+                    onChange={event => setModelKey(event.target.value)}
+                    value={modelKey}
+                  >
+                    {!catalog && <option value="">正在读取模型目录…</option>}
+                    {catalog?.models.map(model => (
+                      <option
+                        key={`${model.provider}/${model.id}`}
+                        value={`${model.provider}/${model.id}`}
+                      >
+                        {model.name} · {model.provider}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {catalogError && (
+                <p className="settings-error" role="alert">
+                  {catalogError}
+                </p>
+              )}
+              {saveError && (
+                <p className="settings-error" role="alert">
+                  {saveError}
+                </p>
+              )}
+              {saveNotice && <p className="drawer-footnote">{saveNotice}</p>}
+              <button
+                className="secondary-button"
+                disabled={
+                  saving || (modelMode === 'override' && !selectedModel)
+                }
+                onClick={() => void save()}
+                type="button"
+              >
+                {saving ? '正在保存…' : '保存执行设置'}
+              </button>
+              <p className="drawer-footnote">
+                只影响这件事情的后续运行；已完成的运行记录不会改写。
+              </p>
+            </>
+          )}
+        </>
+      )}
+    </section>
+  )
+}
+
 function ExecutionProfileMeta({ run }: { run?: Run }) {
   const source = workerProfileSourceLabel(
     run?.executionContext?.workerProfileSource,
@@ -1372,7 +2040,15 @@ function stateDescription(state: string, run?: Run): string {
   return '上下文已保存，服务端尚未返回可执行的下一步。'
 }
 
-function RuntimeDetail({ run }: { run?: Run }) {
+function RuntimeDetail({
+  run,
+  nodes,
+  nodesError,
+}: {
+  run?: Run
+  nodes?: ExecutionNode[]
+  nodesError?: string
+}) {
   return (
     <div className="drawer-body">
       <section className="runtime-identity">
@@ -1392,6 +2068,41 @@ function RuntimeDetail({ run }: { run?: Run }) {
           <Meta label="Executor Ref" value={run?.executorRef} />
           <Meta label="Resume Ref" value={run?.resumeFromRef} />
         </dl>
+      </section>
+      <section className="detail-section">
+        <h3>已注册执行节点</h3>
+        {nodesError ? (
+          <p className="settings-error" role="alert">
+            {nodesError}
+          </p>
+        ) : !nodes ? (
+          <p className="drawer-footnote">正在读取执行节点。</p>
+        ) : nodes.length ? (
+          <ol className="execution-node-list">
+            {nodes.map(node => (
+              <li key={node.id}>
+                <span>
+                  <Network size={17} />
+                </span>
+                <div>
+                  <strong>{node.label}</strong>
+                  <small>
+                    {node.capabilities.length
+                      ? node.capabilities.join(' · ')
+                      : '未声明能力'}
+                  </small>
+                  <small>
+                    最近心跳：{formatRelativeTime(node.lastHeartbeatAt)}
+                  </small>
+                </div>
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <p className="drawer-footnote">
+            还没有 Worker 注册为执行节点；控制面自身仍可执行事情。
+          </p>
+        )}
       </section>
       <div className="info-banner">
         <LockKeyhole size={16} />

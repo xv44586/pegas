@@ -1,10 +1,8 @@
 import { createHash } from 'node:crypto'
 
 import type { ExecutionContext } from '../core/domain.js'
-import {
-  decodeExecutionPermissions,
-  type ExecutionPermissions,
-} from '../core/execution-permissions.js'
+import { decodeExecutionPermissions } from '../core/execution-permissions.js'
+import type { ExecutionPermissions } from '../core/execution-permissions.js'
 
 export type CollaborationKind =
   'delegate' | 'handoff' | 'context_note' | 'handback'

@@ -147,3 +147,18 @@
 - `goal.clarification_required` 归类「需要补充」：待你处理显示「去回答」，打开澄清抽屉列出 blocking 问题；对话页在 Task `statusReason=awaiting_goal_clarification` 期间显示内联澄清卡片（解除等待后自动隐藏）。「去回答」跳转对话页、聚焦输入器并携带 taskId 发送，复用既有 continuation 链路。
 - 证据：`pnpm check`（74 文件 / 657 测试，App.test.tsx 新增 7 条回归）、`pnpm smoke`、`pnpm review:ui -- --force`（57 张截图）；真实 Control Plane（bearer + store 级 Goal/Artifact/Evidence/Report seed）联调全链路；axe 三主题 × 审查/预览/澄清/事情详情/对话页 0 违例；实拍见 `output/feature-review/live-evidence-goal/`。
 - 仍缺：历史 Goal/Review Pack 修订下钻、evidence 重验证入口、validity 失效事件；通知偏好、附件上传、语音直发、执行节点、Worker 覆盖与协作卡片未接入；Review Pack criterion 解释文案暂为服务端英文模板。
+
+## 13. 剩余服务端接口接入与文案本地化（2026-11-21）
+
+- 设置「通知」从假开关占位升级为真实免打扰时段：`GET/PUT /v1/settings/notifications`，开关 + 起止时间（24h 制、成对提交/清除）+ 设备时区（UTC±H），expectedRevision 乐观并发、409 就地报错可重读；如实说明静默期通知保留稍后投递、按类型分级开关的服务端契约尚未提供。
+- 设置「能力与连接」从假连接网格升级为真实执行节点列表：`GET /v1/nodes`（名称/能力/最近心跳），运行时抽屉同步新增「已注册执行节点」；空态如实说明控制面自身仍可执行；工具授权清单契约未提供仍保留诚实横幅。
+- 投递核对闭环：failed/unknown 且未核对的通知在待你处理页标记「投递失败/结果未知，待核对」并提供「核对投递」；消息抽屉展示投递状态与最近错误，核对表单二选一（确认已送达/未送达）+ 必填依据（≤2000 字），`POST /v1/outbox/:id/resolve` commandId 幂等；已核对消息展示只读「人工核对记录」，列表行同步结论。
+- 事情详情新增「事情级执行设置」编辑器：`GET/PUT /v1/tasks/:id/worker-profile`，跟随全局/为这件事情指定模型（模型来自 `GET /v1/settings/agent-models` 目录）、展示生效模型/来源/版本，保存携带 expectedRevision，409 冲突提示并自动重读，归档事情只读；修复 5s 轮询重置未保存编辑的问题（同步依赖改为按值比较的稳定键，轮询对象身份变化不再触发重置）。
+- 事情详情新增只读「协作记录」：`GET /v1/channels/:id/collaborations`（委派/交接/上下文注记/交回 × 等待接收/进行中/已交回/已完成/失败/已取消，请求文本、结果摘要、层级与目标事情摘要）。
+- 「目标与交付」新增历史修订下钻（`GET /v1/tasks/:id/goals` + `/review-packs` 按需并行加载，当前修订标记，可折叠）与 pending 证据「验证证据」按钮（`POST /v1/evidence/:id/verify`，提交后详情轮询自动反映最新结论）。
+- 对话输入器附件闭环：「添加附件」启用（隐藏 file input，≤25MB 客户端守卫，chip 可移除），发送后按返回 event 上传 `POST /v1/events/:id/attachments`；消息已发出但附件失败时分离报错不吞事实。服务端 `listEvents`/`pageChannelEvents` 投影补充 `attachment` 元数据，对话与 Channel 时间线渲染附件 chip，点击经认证附件 API fetch→blob 预览（图片/视频/文件占位），可返回工作详情。
+- 语音直发模式：输入工具新增「说完直接发送」开关（aria-pressed），开启后录音结束走 `POST /v1/voice/messages`（idempotency-key、source=web、language=zh、continuation 携带 taskId）直接成为消息，不污染草稿；默认听写转草稿不变，未配置语音仍引导去设置。
+- 文案本地化：Review Pack criterion 解释模板改中文（`N 条已验证证据满足这条完成标准。`/`需要至少 N 条已验证证据，目前只有 M 条。`）；echo Worker 无证据 Report 的 limitations/remainingRisks 改中文；均有测试断言。
+- 类型边界整理：`RuntimeSettingsSelection` 拆为纯类型模块（原路径 re-export），web 侧 `ChannelRelation` 按服务端合同镜像，`collaboration.ts` 权限类型改 type-only import——web tsconfig 类型图不再拉入 node 模块；均为等价类型重构。
+- 证据：`pnpm check`（74 文件 / 668 测试，App.test.tsx 新增 10 条、附件投影回归 1 条、文案断言若干）、`pnpm smoke`、`pnpm review:ui -- --force`（57 张截图）；真实 Control Plane + Worker 联调覆盖附件上传/投影/预览、pending 证据验证、历史修订、Worker 覆盖保存、协作卡片、投递核对、静默时段落库、节点心跳；axe 三主题 × 新视图 0 违例；实拍 15 张见 `output/feature-review/live-evidence-endpoints/`。详见 `docs/feature-map.md` DESIGN-002「剩余服务端接口接入」小节。
+- 仍缺：规则与数据恢复占位（服务端契约未提供）、搜索筛选/分页 UI、validity 失效事件、`/v1/evidence?goalRevision=` 列表、协作操作入口与目标事情跳转；语音直发待真实 ASR 供应商联调；多附件/事件与附件进入模型上下文属 CONV-001 后续。

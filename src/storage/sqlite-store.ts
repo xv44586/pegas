@@ -5122,7 +5122,9 @@ export class PegasStore {
          WHERE user_id = ? ORDER BY created_at ASC`,
       )
       .all(userId)
-    return rows.map(row => toInboxEvent(row as unknown as InboxRow))
+    return rows.map(row =>
+      this.#withEventAttachment(toInboxEvent(row as unknown as InboxRow)),
+    )
   }
 
   /**
@@ -5270,6 +5272,11 @@ export class PegasStore {
       .get(eventId, userId) as unknown as EventAttachmentRow | undefined
   }
 
+  #withEventAttachment(event: InboxEvent): InboxEvent {
+    const row = this.#attachmentRow(event.id, event.userId)
+    return row ? { ...event, attachment: toEventAttachment(row) } : event
+  }
+
   listChannelEvents(taskId: string, userId: string): InboxEvent[] {
     const events: InboxEvent[] = []
     let cursor: string | undefined
@@ -5337,7 +5344,7 @@ export class PegasStore {
     const pageRows = hasMore ? rows.slice(0, limit) : rows
     const nextCursor = hasMore ? pageRows.at(-1)?.id : undefined
     return {
-      events: pageRows.map(row => toInboxEvent(row)),
+      events: pageRows.map(row => this.#withEventAttachment(toInboxEvent(row))),
       ...(nextCursor ? { nextCursor } : {}),
     }
   }
@@ -11037,8 +11044,8 @@ function reviewCriteria(
       evidenceRefs: matching.map(item => item.id),
       explanation:
         completionStatus === 'satisfied'
-          ? `${String(passed.length)} verified evidence item(s) satisfy the criterion.`
-          : `${String(passed.length)} of ${String(plan.minimumCount)} required verified evidence item(s) are available.`,
+          ? `${String(passed.length)} 条已验证证据满足这条完成标准。`
+          : `需要至少 ${String(plan.minimumCount)} 条已验证证据，目前只有 ${String(passed.length)} 条。`,
       limitations: [...new Set(matching.flatMap(item => item.limitations))],
     }
   })

@@ -549,14 +549,10 @@ export async function executeClaimedRun(
       evidenceRefIds,
       summary: result.output,
       limitations:
-        evidenceRefIds.length === 0
-          ? ['No structured evidence references were produced.']
-          : [],
+        evidenceRefIds.length === 0 ? ['本次运行没有产出结构化证据引用。'] : [],
       remainingRisks: [
         ...(evidenceRefIds.length === 0
-          ? [
-              'The Goal remains open until required evidence is captured and verified.',
-            ]
+          ? ['在必需证据被采集并通过验证之前，这个目标会保持未完成。']
           : []),
       ],
     })
