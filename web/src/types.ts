@@ -404,6 +404,27 @@ export interface MemoryRecord extends MemoryDraft {
   updatedAt: string
   lastUsedAt?: string
 }
+
+export interface WorkRuleDraft {
+  title: string
+  content: string
+  enabled: boolean
+}
+
+export interface WorkRuleRecord extends WorkRuleDraft {
+  id: string
+  userId: string
+  revision: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface BehaviorPreferences {
+  userId: string
+  customInstructions: string
+  revision: number
+  updatedAt: string
+}
 import type {
   Approval as ServerApproval,
   DurableAction as ServerDurableAction,

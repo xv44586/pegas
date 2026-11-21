@@ -28,6 +28,7 @@ import {
 import { useEffect, useRef, useState } from 'react'
 
 import type {
+  BehaviorPreferences,
   DshModelCatalog,
   ExecutionNode,
   MemoryRecord,
@@ -41,6 +42,7 @@ import type {
   RewriteSettingsDraft,
   SettingsResponse,
   SpeechSettingsDraft,
+  WorkRuleRecord,
 } from '../types'
 import { useVoiceDictation } from '../useVoiceDictation'
 import { PegasMark } from './PegasMark'
@@ -73,6 +75,10 @@ interface SettingsPageProps {
   response?: SettingsResponse
   memories?: MemoryRecord[]
   memoriesError?: string
+  workRules?: WorkRuleRecord[]
+  workRulesError?: string
+  behaviorPreferences?: BehaviorPreferences
+  behaviorPreferencesError?: string
   notificationPreferences?: NotificationPreferences
   notificationPreferencesError?: string
   executionNodes?: ExecutionNode[]
@@ -91,6 +97,9 @@ interface SettingsPageProps {
   onOpenDrawer: (drawer: DrawerView) => void
   onOpenMemory?: () => void
   onReloadUsage: () => void
+  onReloadWorkRules?: () => void
+  onToggleWorkRule?: (rule: WorkRuleRecord) => Promise<void>
+  onSaveBehavior?: (customInstructions: string) => Promise<void>
   onReloadNotifications?: () => void
   onReloadExecutionNodes?: () => void
   onReloadRecovery?: () => void
@@ -135,6 +144,10 @@ export function SettingsPage({
   response,
   memories,
   memoriesError,
+  workRules,
+  workRulesError,
+  behaviorPreferences,
+  behaviorPreferencesError,
   notificationPreferences,
   notificationPreferencesError,
   executionNodes,
@@ -148,6 +161,9 @@ export function SettingsPage({
   onOpenDrawer,
   onOpenMemory,
   onReloadUsage,
+  onReloadWorkRules,
+  onToggleWorkRule,
+  onSaveBehavior,
   onReloadNotifications,
   onReloadExecutionNodes,
   onReloadRecovery,
@@ -288,9 +304,16 @@ export function SettingsPage({
                 {section === 'pegas' && (
                   <PegasSettings
                     agentModels={agentModels}
+                    behaviorPreferences={behaviorPreferences}
+                    behaviorPreferencesError={behaviorPreferencesError}
                     draft={draft}
                     onChange={setDraft}
                     onOpenDrawer={onOpenDrawer}
+                    onReloadWorkRules={onReloadWorkRules}
+                    onSaveBehavior={onSaveBehavior}
+                    onToggleWorkRule={onToggleWorkRule}
+                    workRules={workRules}
+                    workRulesError={workRulesError}
                   />
                 )}
                 {section === 'models' && (
@@ -576,13 +599,27 @@ function AppearanceSettings({
 function PegasSettings({
   draft,
   agentModels,
+  workRules,
+  workRulesError,
+  behaviorPreferences,
+  behaviorPreferencesError,
   onChange,
   onOpenDrawer,
+  onReloadWorkRules,
+  onToggleWorkRule,
+  onSaveBehavior,
 }: {
   draft: RuntimeSettings
   agentModels?: DshModelCatalog
+  workRules?: WorkRuleRecord[]
+  workRulesError?: string
+  behaviorPreferences?: BehaviorPreferences
+  behaviorPreferencesError?: string
   onChange: (settings: RuntimeSettings) => void
   onOpenDrawer: (drawer: DrawerView) => void
+  onReloadWorkRules?: () => void
+  onToggleWorkRule?: (rule: WorkRuleRecord) => Promise<void>
+  onSaveBehavior?: (customInstructions: string) => Promise<void>
 }) {
   const [tab, setTab] = useState<'model' | 'behavior' | 'autonomy'>('model')
   const models = agentModels?.models ?? []
@@ -734,71 +771,16 @@ function PegasSettings({
         </div>
       )}
       {tab === 'behavior' && (
-        <div className="setting-section">
-          <div className="info-banner">
-            <LockKeyhole size={16} />
-            规则服务尚未建立服务端事实来源；当前仅展示封板结构，不能保存。
-          </div>
-          <h3>基本行为</h3>
-          <div className="compact-field-row">
-            <span>默认语言</span>
-            <select defaultValue="中文" disabled>
-              <option>中文</option>
-              <option>English</option>
-            </select>
-          </div>
-          <div className="compact-field-row">
-            <span>回复长度</span>
-            <div className="segmented">
-              <button disabled type="button">
-                简洁
-              </button>
-              <button className="is-active" disabled type="button">
-                适中
-              </button>
-              <button disabled type="button">
-                详细
-              </button>
-            </div>
-          </div>
-          <div className="compact-field-row">
-            <span>开始工作前</span>
-            <select defaultValue="高风险动作始终确认" disabled>
-              <option>高风险动作始终确认</option>
-            </select>
-          </div>
-          <h3>工作规则</h3>
-          <div className="rule-list">
-            {[
-              '高风险外部操作必须确认（系统规则）',
-              '产品设计优先给出具体界面方案',
-              '发布前先说明回滚路径',
-            ].map(rule => (
-              <button
-                key={rule}
-                onClick={() => onOpenDrawer({ kind: 'rule', title: rule })}
-                type="button"
-              >
-                <span>{rule}</span>
-                <small>全局</small>
-                <Pencil size={15} />
-                <i />
-              </button>
-            ))}
-          </div>
-          <button className="outline-action" disabled type="button">
-            <Plus size={16} />
-            添加规则
-          </button>
-          <label className="field-label">
-            自定义指令
-            <textarea
-              disabled
-              defaultValue="涉及产品设计时，优先给出具体界面方案；涉及发布操作时，先列出回滚路径。"
-              rows={3}
-            />
-          </label>
-        </div>
+        <BehaviorSettings
+          behaviorPreferences={behaviorPreferences}
+          behaviorPreferencesError={behaviorPreferencesError}
+          onOpenDrawer={onOpenDrawer}
+          onReloadWorkRules={onReloadWorkRules}
+          onSaveBehavior={onSaveBehavior}
+          onToggleWorkRule={onToggleWorkRule}
+          workRules={workRules}
+          workRulesError={workRulesError}
+        />
       )}
       {tab === 'autonomy' && (
         <div className="setting-section">
@@ -816,6 +798,238 @@ function PegasSettings({
             type="range"
           />
         </div>
+      )}
+    </div>
+  )
+}
+
+function BehaviorSettings({
+  workRules,
+  workRulesError,
+  behaviorPreferences,
+  behaviorPreferencesError,
+  onOpenDrawer,
+  onReloadWorkRules,
+  onToggleWorkRule,
+  onSaveBehavior,
+}: {
+  workRules?: WorkRuleRecord[]
+  workRulesError?: string
+  behaviorPreferences?: BehaviorPreferences
+  behaviorPreferencesError?: string
+  onOpenDrawer: (drawer: DrawerView) => void
+  onReloadWorkRules?: () => void
+  onToggleWorkRule?: (rule: WorkRuleRecord) => Promise<void>
+  onSaveBehavior?: (customInstructions: string) => Promise<void>
+}) {
+  const [instructions, setInstructions] = useState('')
+  const [savingInstructions, setSavingInstructions] = useState(false)
+  const [togglingRuleId, setTogglingRuleId] = useState('')
+  const [actionError, setActionError] = useState('')
+  const [instructionsNotice, setInstructionsNotice] = useState('')
+  useEffect(() => {
+    if (!behaviorPreferences) return
+    setInstructions(behaviorPreferences.customInstructions)
+  }, [behaviorPreferences])
+  const loading = !workRules && !workRulesError
+  async function toggle(rule: WorkRuleRecord) {
+    if (!onToggleWorkRule || togglingRuleId) return
+    setTogglingRuleId(rule.id)
+    setActionError('')
+    try {
+      await onToggleWorkRule(rule)
+    } catch (caught) {
+      setActionError(
+        caught instanceof Error ? caught.message : '更新规则失败，请重试。',
+      )
+    } finally {
+      setTogglingRuleId('')
+    }
+  }
+  async function saveInstructions() {
+    if (!onSaveBehavior || !behaviorPreferences || savingInstructions) return
+    setSavingInstructions(true)
+    setActionError('')
+    setInstructionsNotice('')
+    try {
+      await onSaveBehavior(instructions)
+      setInstructionsNotice('自定义指令已保存，对后续执行生效。')
+    } catch (caught) {
+      setActionError(
+        caught instanceof Error ? caught.message : '保存自定义指令失败。',
+      )
+    } finally {
+      setSavingInstructions(false)
+    }
+  }
+  return (
+    <div className="setting-section">
+      <div className="info-banner">
+        <CircleHelp size={16} />
+        工作规则与自定义指令以持久偏好的形式提供给执行
+        Agent，在每次执行中持续遵守；它们不授予新权限，高风险动作仍必须经过确认。
+      </div>
+      <h3>基本行为</h3>
+      <div className="compact-field-row">
+        <span>默认语言</span>
+        <select defaultValue="中文" disabled>
+          <option>中文</option>
+          <option>English</option>
+        </select>
+      </div>
+      <div className="compact-field-row">
+        <span>回复长度</span>
+        <div className="segmented">
+          <button disabled type="button">
+            简洁
+          </button>
+          <button className="is-active" disabled type="button">
+            适中
+          </button>
+          <button disabled type="button">
+            详细
+          </button>
+        </div>
+      </div>
+      <div className="compact-field-row">
+        <span>开始工作前</span>
+        <select defaultValue="高风险动作始终确认" disabled>
+          <option>高风险动作始终确认</option>
+        </select>
+      </div>
+      <p className="field-hint">
+        语言与回复长度偏好尚未开放服务端设置；「高风险动作始终确认」由服务端
+        Approval 强制保证，不能关闭。
+      </p>
+      <h3>工作规则</h3>
+      {workRulesError ? (
+        <div className="page-error" role="alert">
+          {workRulesError}
+          {onReloadWorkRules && (
+            <button
+              className="secondary-button"
+              onClick={onReloadWorkRules}
+              type="button"
+            >
+              <RotateCw size={15} />
+              重新读取
+            </button>
+          )}
+        </div>
+      ) : loading ? (
+        <p className="page-loading">正在读取工作规则…</p>
+      ) : (
+        <>
+          <div className="rule-list">
+            <button disabled type="button">
+              <LockKeyhole size={15} />
+              <span>高风险外部操作必须确认</span>
+              <small>系统规则（已锁定）</small>
+            </button>
+            {(workRules ?? []).map(rule => (
+              <div className="rule-row" key={rule.id}>
+                <button
+                  onClick={() =>
+                    onOpenDrawer({
+                      kind: 'rule',
+                      title: rule.title,
+                      rule,
+                      ...(behaviorPreferences
+                        ? { behavior: behaviorPreferences }
+                        : {}),
+                      ...(onReloadWorkRules
+                        ? { onSaved: onReloadWorkRules }
+                        : {}),
+                    })
+                  }
+                  type="button"
+                >
+                  <span>{rule.title}</span>
+                  <small>{rule.enabled ? '全局 · 启用' : '全局 · 停用'}</small>
+                  <Pencil size={15} />
+                </button>
+                <label className="rule-toggle">
+                  <input
+                    aria-label={`${rule.enabled ? '停用' : '启用'}规则：${rule.title}`}
+                    checked={rule.enabled}
+                    disabled={togglingRuleId === rule.id}
+                    onChange={() => void toggle(rule)}
+                    type="checkbox"
+                  />
+                </label>
+              </div>
+            ))}
+          </div>
+          {(workRules ?? []).length === 0 && (
+            <p className="field-hint">
+              还没有自定义工作规则；添加后会注入每次执行。
+            </p>
+          )}
+          <button
+            className="outline-action"
+            onClick={() =>
+              onOpenDrawer({
+                kind: 'rule',
+                title: '添加规则',
+                ...(onReloadWorkRules ? { onSaved: onReloadWorkRules } : {}),
+              })
+            }
+            type="button"
+          >
+            <Plus size={16} />
+            添加规则
+          </button>
+        </>
+      )}
+      {actionError && (
+        <div className="page-error" role="alert">
+          {actionError}
+        </div>
+      )}
+      <h3>自定义指令</h3>
+      {behaviorPreferencesError ? (
+        <div className="page-error" role="alert">
+          {behaviorPreferencesError}
+          {onReloadWorkRules && (
+            <button
+              className="secondary-button"
+              onClick={onReloadWorkRules}
+              type="button"
+            >
+              <RotateCw size={15} />
+              重新读取
+            </button>
+          )}
+        </div>
+      ) : !behaviorPreferences ? (
+        <p className="page-loading">正在读取自定义指令…</p>
+      ) : (
+        <>
+          <label className="field-label">
+            自定义指令
+            <textarea
+              disabled={savingInstructions}
+              onChange={event => setInstructions(event.target.value)}
+              placeholder="例如：涉及产品设计时，优先给出具体界面方案；涉及发布操作时，先列出回滚路径。"
+              rows={3}
+              value={instructions}
+            />
+          </label>
+          <div className="behavior-instructions-footer">
+            <span role="status">{instructionsNotice}</span>
+            <button
+              className="secondary-button"
+              disabled={
+                savingInstructions ||
+                instructions.trim() === behaviorPreferences.customInstructions
+              }
+              onClick={() => void saveInstructions()}
+              type="button"
+            >
+              {savingInstructions ? '保存中…' : '保存自定义指令'}
+            </button>
+          </div>
+        </>
       )}
     </div>
   )

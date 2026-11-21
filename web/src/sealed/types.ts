@@ -1,5 +1,6 @@
 import type {
   Approval,
+  BehaviorPreferences,
   ChannelTimeline,
   ChannelRelation,
   DurableAction,
@@ -14,6 +15,7 @@ import type {
   TaskDelivery,
   WorkChannel,
   WorkerProfileResponse,
+  WorkRuleRecord,
 } from '../types'
 
 export type AppPage =
@@ -83,7 +85,13 @@ export type DrawerView =
       channel: WorkChannel
       message: OutboxMessage
     }
-  | { kind: 'rule'; title: string }
+  | {
+      kind: 'rule'
+      title: string
+      rule?: WorkRuleRecord
+      behavior?: BehaviorPreferences
+      onSaved?: () => void
+    }
   | {
       kind: 'preview'
       preview: 'file' | 'image' | 'video' | 'web'

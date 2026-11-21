@@ -1806,6 +1806,61 @@ kbd {
 .rule-list + .outline-action {
   margin-top: 8px;
 }
+.rule-row {
+  align-items: center;
+  background: var(--surface-raised);
+  border-bottom: 1px solid var(--line);
+  display: flex;
+}
+.rule-row:last-child {
+  border-bottom: 0;
+}
+.rule-row > button {
+  border-bottom: 0;
+  flex: 1;
+  min-width: 0;
+}
+.rule-toggle {
+  align-items: center;
+  display: flex;
+  padding: 0 12px;
+}
+.rule-toggle input[type='checkbox'] {
+  appearance: none;
+  background: var(--line-strong);
+  border-radius: 99px;
+  height: 18px;
+  position: relative;
+  width: 34px;
+}
+.rule-toggle input[type='checkbox']::after {
+  background: white;
+  border-radius: 50%;
+  content: '';
+  height: 14px;
+  left: 2px;
+  position: absolute;
+  top: 2px;
+  transition: transform 160ms ease;
+  width: 14px;
+}
+.rule-toggle input[type='checkbox']:checked {
+  background: var(--positive);
+}
+.rule-toggle input[type='checkbox']:checked::after {
+  transform: translateX(16px);
+}
+.behavior-instructions-footer {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin-top: 8px;
+}
+.behavior-instructions-footer span {
+  color: var(--muted);
+  font-size: 12px;
+}
 .secondary-button,
 .primary-button,
 .danger-button,

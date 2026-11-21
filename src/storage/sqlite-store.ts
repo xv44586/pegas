@@ -90,6 +90,15 @@ import {
   type MemoryUpdateCommand,
 } from '../memory/memory.js'
 import {
+  workRuleFingerprint,
+  type WorkRuleCreateCommand,
+  type WorkRuleContext,
+  type WorkRuleDeleteCommand,
+  type WorkRuleDeletion,
+  type WorkRuleRecord,
+  type WorkRuleUpdateCommand,
+} from '../rules/rules.js'
+import {
   modelProviderPreset,
   type ModelProviderId,
   type ModelProviderProtocol,
@@ -626,6 +635,43 @@ WHEN (
 BEGIN
   SELECT RAISE(ABORT, 'Terminal Outbox states change only through a resolution record');
 END;
+`
+
+const migration31 = `
+CREATE TABLE work_rules (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+  revision INTEGER NOT NULL CHECK (revision > 0),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX work_rules_by_user_created
+ON work_rules (user_id, created_at, id);
+
+CREATE TABLE work_rule_commands (
+  user_id TEXT NOT NULL,
+  command_id TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  operation TEXT NOT NULL CHECK (operation IN ('create', 'update', 'delete')),
+  rule_id TEXT NOT NULL,
+  response_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, command_id)
+);
+
+CREATE INDEX work_rule_commands_by_rule
+ON work_rule_commands (rule_id);
+
+CREATE TABLE behavior_preferences (
+  user_id TEXT PRIMARY KEY,
+  custom_instructions TEXT NOT NULL DEFAULT '',
+  revision INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL
+);
 `
 
 const migration2 = `
@@ -1806,6 +1852,31 @@ interface MemoryCommandRow {
   response_json: string
 }
 
+interface WorkRuleRow {
+  id: string
+  user_id: string
+  title: string
+  content: string
+  enabled: number
+  revision: number
+  created_at: string
+  updated_at: string
+}
+
+interface WorkRuleCommandRow {
+  fingerprint: string
+  operation: 'create' | 'update' | 'delete'
+  rule_id: string
+  response_json: string
+}
+
+interface BehaviorPreferencesRow {
+  user_id: string
+  custom_instructions: string
+  revision: number
+  updated_at: string
+}
+
 interface ChannelRelationRow {
   id: string
   command_id: string
@@ -2218,6 +2289,16 @@ export class MemoryTargetUnavailableError extends Error {}
 
 export class MemoryLimitError extends Error {}
 
+export class WorkRuleCommandConflictError extends Error {}
+
+export class WorkRuleRevisionConflictError extends Error {}
+
+export class WorkRuleNotFoundError extends Error {}
+
+export class WorkRuleLimitError extends Error {}
+
+export class BehaviorPreferencesConflictError extends Error {}
+
 export class TaskActionBlockedError extends Error {
   readonly taskId: string
   readonly actionStatus: string
@@ -2281,6 +2362,7 @@ export class PegasStore {
     this.#migrate(28, migration28)
     this.#migrate(29, migration29)
     this.#migrate(30, migration30)
+    this.#migrate(31, migration31)
   }
 
   #backfillWorkerIconIds(): void {
@@ -3902,6 +3984,360 @@ export class PegasStore {
         fingerprint,
         operation,
         memoryId,
+        JSON.stringify(response),
+        createdAt,
+      )
+  }
+
+  listWorkRules(
+    userId: string,
+    limit = 50,
+    cursor?: string,
+  ): CursorPage<WorkRuleRecord> {
+    if (!Number.isSafeInteger(limit) || limit <= 0 || limit > 200)
+      throw new Error('Work rule limit must be between 1 and 200')
+    const cursorRow = cursor
+      ? (this.#database
+          .prepare('SELECT rowid FROM work_rules WHERE id = ? AND user_id = ?')
+          .get(cursor, userId) as { rowid: number } | undefined)
+      : undefined
+    if (cursor && !cursorRow) throw new Error('Work rule cursor is invalid')
+    const rows = this.#database
+      .prepare(
+        `SELECT * FROM work_rules
+         WHERE user_id = ? AND (? IS NULL OR rowid < ?)
+         ORDER BY rowid DESC LIMIT ?`,
+      )
+      .all(
+        userId,
+        cursorRow?.rowid ?? null,
+        cursorRow?.rowid ?? null,
+        limit + 1,
+      ) as unknown as WorkRuleRow[]
+    return cursorPage(rows, limit, toWorkRuleRecord)
+  }
+
+  findWorkRule(ruleId: string, userId: string): WorkRuleRecord | undefined {
+    const row = this.#database
+      .prepare('SELECT * FROM work_rules WHERE id = ? AND user_id = ?')
+      .get(ruleId, userId) as unknown as WorkRuleRow | undefined
+    return row ? toWorkRuleRecord(row) : undefined
+  }
+
+  createWorkRule(command: WorkRuleCreateCommand): WorkRuleRecord {
+    const nowIso = this.#clock.now().toISOString()
+    const fingerprint = workRuleFingerprint({
+      operation: 'create',
+      rule: command.rule,
+    })
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const replay = this.#workRuleCommandReplay(
+        command.userId,
+        command.commandId,
+        'create',
+        fingerprint,
+      )
+      if (replay) {
+        this.#database.exec('COMMIT')
+        return JSON.parse(replay.response_json) as WorkRuleRecord
+      }
+      const count = this.#database
+        .prepare('SELECT COUNT(*) AS count FROM work_rules WHERE user_id = ?')
+        .get(command.userId) as { count: number }
+      if (count.count >= 100) throw new WorkRuleLimitError()
+      const id = randomUUID()
+      this.#database
+        .prepare(
+          `INSERT INTO work_rules
+            (id, user_id, title, content, enabled, revision, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
+        )
+        .run(
+          id,
+          command.userId,
+          command.rule.title,
+          command.rule.content,
+          command.rule.enabled ? 1 : 0,
+          nowIso,
+          nowIso,
+        )
+      const rule = this.#workRuleById(id)
+      this.#saveWorkRuleCommand(
+        command.userId,
+        command.commandId,
+        'create',
+        fingerprint,
+        rule.id,
+        rule,
+        nowIso,
+      )
+      this.#database.exec('COMMIT')
+      return rule
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  updateWorkRule(
+    ruleId: string,
+    command: WorkRuleUpdateCommand,
+  ): WorkRuleRecord {
+    const nowIso = this.#clock.now().toISOString()
+    const fingerprint = workRuleFingerprint({
+      operation: 'update',
+      ruleId,
+      expectedRevision: command.expectedRevision,
+      rule: command.rule,
+    })
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const replay = this.#workRuleCommandReplay(
+        command.userId,
+        command.commandId,
+        'update',
+        fingerprint,
+      )
+      if (replay) {
+        if (replay.rule_id !== ruleId) throw new WorkRuleCommandConflictError()
+        this.#database.exec('COMMIT')
+        return JSON.parse(replay.response_json) as WorkRuleRecord
+      }
+      const current = this.#workRuleByIdForUser(ruleId, command.userId)
+      if (current.revision !== command.expectedRevision)
+        throw new WorkRuleRevisionConflictError()
+      const result = this.#database
+        .prepare(
+          `UPDATE work_rules
+           SET title = ?, content = ?, enabled = ?, revision = revision + 1,
+               updated_at = ?
+           WHERE id = ? AND user_id = ? AND revision = ?`,
+        )
+        .run(
+          command.rule.title,
+          command.rule.content,
+          command.rule.enabled ? 1 : 0,
+          nowIso,
+          ruleId,
+          command.userId,
+          command.expectedRevision,
+        )
+      if (result.changes !== 1) throw new WorkRuleRevisionConflictError()
+      const rule = this.#workRuleById(ruleId)
+      this.#saveWorkRuleCommand(
+        command.userId,
+        command.commandId,
+        'update',
+        fingerprint,
+        rule.id,
+        rule,
+        nowIso,
+      )
+      this.#database.exec('COMMIT')
+      return rule
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  deleteWorkRule(
+    ruleId: string,
+    command: WorkRuleDeleteCommand,
+  ): WorkRuleDeletion {
+    const nowIso = this.#clock.now().toISOString()
+    const fingerprint = workRuleFingerprint({
+      operation: 'delete',
+      ruleId,
+      expectedRevision: command.expectedRevision,
+    })
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const replay = this.#workRuleCommandReplay(
+        command.userId,
+        command.commandId,
+        'delete',
+        fingerprint,
+      )
+      if (replay) {
+        if (replay.rule_id !== ruleId) throw new WorkRuleCommandConflictError()
+        this.#database.exec('COMMIT')
+        return JSON.parse(replay.response_json) as WorkRuleDeletion
+      }
+      const current = this.#workRuleByIdForUser(ruleId, command.userId)
+      if (current.revision !== command.expectedRevision)
+        throw new WorkRuleRevisionConflictError()
+      const result = this.#database
+        .prepare('DELETE FROM work_rules WHERE id = ? AND user_id = ?')
+        .run(ruleId, command.userId)
+      if (result.changes !== 1) throw new WorkRuleNotFoundError()
+      const deletion: WorkRuleDeletion = {
+        id: ruleId,
+        deleted: true,
+        deletedAt: nowIso,
+      }
+      this.#database
+        .prepare(
+          `UPDATE work_rule_commands SET response_json = ?
+           WHERE rule_id = ? AND user_id = ? AND operation != 'delete'`,
+        )
+        .run(JSON.stringify(deletion), ruleId, command.userId)
+      this.#saveWorkRuleCommand(
+        command.userId,
+        command.commandId,
+        'delete',
+        fingerprint,
+        ruleId,
+        deletion,
+        nowIso,
+      )
+      this.#database.exec('COMMIT')
+      return deletion
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  getBehaviorPreferences(userId: string): {
+    userId: string
+    customInstructions: string
+    revision: number
+    updatedAt: string
+  } {
+    const row = this.#database
+      .prepare('SELECT * FROM behavior_preferences WHERE user_id = ?')
+      .get(userId) as unknown as BehaviorPreferencesRow | undefined
+    return row
+      ? {
+          userId: row.user_id,
+          customInstructions: row.custom_instructions,
+          revision: row.revision,
+          updatedAt: row.updated_at,
+        }
+      : {
+          userId,
+          customInstructions: '',
+          revision: 0,
+          updatedAt: this.#clock.now().toISOString(),
+        }
+  }
+
+  updateBehaviorPreferences(
+    userId: string,
+    update: { expectedRevision: number; customInstructions: string },
+  ): {
+    userId: string
+    customInstructions: string
+    revision: number
+    updatedAt: string
+  } {
+    return this.#runInTransaction(() => {
+      const current = this.getBehaviorPreferences(userId)
+      if (current.revision !== update.expectedRevision)
+        throw new BehaviorPreferencesConflictError(
+          'Behavior preferences revision does not match',
+        )
+      const now = this.#clock.now().toISOString()
+      this.#database
+        .prepare(
+          `INSERT INTO behavior_preferences
+            (user_id, custom_instructions, revision, updated_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT (user_id) DO UPDATE SET
+             custom_instructions = excluded.custom_instructions,
+             revision = excluded.revision,
+             updated_at = excluded.updated_at`,
+        )
+        .run(userId, update.customInstructions, current.revision + 1, now)
+      return this.getBehaviorPreferences(userId)
+    })
+  }
+
+  workRuleContextForUser(userId: string): WorkRuleContext {
+    const rows = this.#database
+      .prepare(
+        `SELECT title, content FROM work_rules
+         WHERE user_id = ? AND enabled = 1
+         ORDER BY rowid ASC`,
+      )
+      .all(userId) as unknown as { title: string; content: string }[]
+    const selected: { title: string; content: string }[] = []
+    let characters = 0
+    for (const row of rows) {
+      const size = Array.from(row.content).length + 200
+      if (selected.length > 0 && characters + size > 24_000) break
+      selected.push(row)
+      characters += size
+    }
+    return {
+      rules: selected,
+      customInstructions:
+        this.getBehaviorPreferences(userId).customInstructions,
+    }
+  }
+
+  #workRuleById(ruleId: string): WorkRuleRecord {
+    const row = this.#database
+      .prepare('SELECT * FROM work_rules WHERE id = ?')
+      .get(ruleId) as unknown as WorkRuleRow | undefined
+    if (!row) throw new WorkRuleNotFoundError()
+    return toWorkRuleRecord(row)
+  }
+
+  #workRuleByIdForUser(ruleId: string, userId: string): WorkRuleRecord {
+    const row = this.#database
+      .prepare('SELECT * FROM work_rules WHERE id = ? AND user_id = ?')
+      .get(ruleId, userId) as unknown as WorkRuleRow | undefined
+    if (!row) throw new WorkRuleNotFoundError()
+    return toWorkRuleRecord(row)
+  }
+
+  #workRuleCommandReplay(
+    userId: string,
+    commandId: string,
+    operation: WorkRuleCommandRow['operation'],
+    fingerprint: string,
+  ): WorkRuleCommandRow | undefined {
+    const row = this.#database
+      .prepare(
+        `SELECT fingerprint, operation, rule_id, response_json
+         FROM work_rule_commands WHERE user_id = ? AND command_id = ?`,
+      )
+      .get(userId, commandId) as unknown as WorkRuleCommandRow | undefined
+    if (!row) return undefined
+    if (row.operation !== operation || row.fingerprint !== fingerprint)
+      throw new WorkRuleCommandConflictError()
+    if (operation !== 'delete') {
+      const response = JSON.parse(row.response_json) as { deleted?: boolean }
+      if (response.deleted === true) throw new WorkRuleNotFoundError()
+    }
+    return row
+  }
+
+  #saveWorkRuleCommand(
+    userId: string,
+    commandId: string,
+    operation: WorkRuleCommandRow['operation'],
+    fingerprint: string,
+    ruleId: string,
+    response: WorkRuleRecord | WorkRuleDeletion,
+    createdAt: string,
+  ): void {
+    this.#database
+      .prepare(
+        `INSERT INTO work_rule_commands
+          (user_id, command_id, fingerprint, operation, rule_id,
+           response_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        userId,
+        commandId,
+        fingerprint,
+        operation,
+        ruleId,
         JSON.stringify(response),
         createdAt,
       )
@@ -10534,6 +10970,19 @@ function toMemoryRecord(row: MemoryRow): MemoryRecord {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     ...(row.last_used_at ? { lastUsedAt: row.last_used_at } : {}),
+  }
+}
+
+function toWorkRuleRecord(row: WorkRuleRow): WorkRuleRecord {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    title: row.title,
+    content: row.content,
+    enabled: row.enabled === 1,
+    revision: row.revision,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   }
 }
 

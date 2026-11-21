@@ -4,6 +4,7 @@ import type {
   ModelUsageSample,
 } from '../core/domain.js'
 import type { MemoryContextEntry } from '../memory/memory.js'
+import type { WorkRuleContext } from '../rules/rules.js'
 
 export interface ExecutorInput {
   runId: string
@@ -15,6 +16,7 @@ export interface ExecutorInput {
   executionContractVersion?: number
   mandate?: Mandate
   memories?: readonly MemoryContextEntry[]
+  workRules?: WorkRuleContext
   actionCapability?: {
     baseUrl: string
     claimToken: string

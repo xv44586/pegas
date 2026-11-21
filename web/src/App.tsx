@@ -34,6 +34,7 @@ import {
 import type {
   Approval,
   Automation,
+  BehaviorPreferences,
   DshModelCatalog,
   DshModelCatalogItem,
   ExecutionNode,
@@ -46,6 +47,7 @@ import type {
   RuntimeSettings,
   RewriteSettingsDraft,
   SpeechSettingsDraft,
+  WorkRuleRecord,
 } from './types'
 
 const userId = 'owner'
@@ -76,6 +78,11 @@ export function App() {
   const [memories, setMemories] = useState<MemoryRecord[]>()
   const [memoriesError, setMemoriesError] = useState('')
   const [memoriesTruncated, setMemoriesTruncated] = useState(false)
+  const [workRules, setWorkRules] = useState<WorkRuleRecord[]>()
+  const [workRulesError, setWorkRulesError] = useState('')
+  const [behaviorPreferences, setBehaviorPreferences] =
+    useState<BehaviorPreferences>()
+  const [behaviorPreferencesError, setBehaviorPreferencesError] = useState('')
   const [notificationPreferences, setNotificationPreferences] =
     useState<NotificationPreferences>()
   const [notificationPreferencesError, setNotificationPreferencesError] =
@@ -106,6 +113,7 @@ export function App() {
   const approvalProjectionRequestRef = useRef(0)
   const automationsRequestRef = useRef(0)
   const memoriesRequestRef = useRef(0)
+  const workRulesRequestRef = useRef(0)
   const notificationsRequestRef = useRef(0)
   const nodesRequestRef = useRef(0)
   const recoveryRequestRef = useRef(0)
@@ -211,6 +219,28 @@ export function App() {
     }
   }, [api])
 
+  const loadWorkRules = useCallback(async () => {
+    const requestId = workRulesRequestRef.current + 1
+    workRulesRequestRef.current = requestId
+    try {
+      const [rulesResult, preferences] = await Promise.all([
+        api.workRules(),
+        api.behaviorPreferences(),
+      ])
+      if (requestId !== workRulesRequestRef.current) return
+      setWorkRules(rulesResult.rules)
+      setWorkRulesError('')
+      setBehaviorPreferences(preferences)
+      setBehaviorPreferencesError('')
+    } catch (caught) {
+      if (requestId !== workRulesRequestRef.current) return
+      const message =
+        caught instanceof Error ? caught.message : '无法读取工作规则。'
+      setWorkRulesError(message)
+      setBehaviorPreferencesError(message)
+    }
+  }, [api])
+
   const loadExecutionNodes = useCallback(async () => {
     const requestId = nodesRequestRef.current + 1
     nodesRequestRef.current = requestId
@@ -252,6 +282,7 @@ export function App() {
       void loadMemories()
     if (page === 'settings' && settingsSection === 'notifications')
       void loadNotificationPreferences()
+    if (page === 'settings' && settingsSection === 'pegas') void loadWorkRules()
     if (page === 'settings' && settingsSection === 'connections')
       void loadExecutionNodes()
     if (page === 'settings' && settingsSection === 'recovery')
@@ -262,6 +293,7 @@ export function App() {
     loadAutomations,
     loadMemories,
     loadNotificationPreferences,
+    loadWorkRules,
     loadExecutionNodes,
     loadRecoveryStatus,
   ])
@@ -1248,6 +1280,8 @@ export function App() {
         {page === 'settings' && (
           <SettingsPage
             agentModels={agentModels}
+            behaviorPreferences={behaviorPreferences}
+            behaviorPreferencesError={behaviorPreferencesError}
             executionNodes={executionNodes}
             executionNodesError={executionNodesError}
             initialSection={settingsSection}
@@ -1265,12 +1299,52 @@ export function App() {
             onReloadNotifications={() => void loadNotificationPreferences()}
             onReloadRecovery={() => void loadRecoveryStatus()}
             onReloadUsage={() => void loadUsage()}
+            onReloadWorkRules={() => void loadWorkRules()}
             onSaveNotifications={async (
               update: NotificationPreferencesUpdate,
             ) => {
               const saved = await api.saveNotificationPreferences(update)
               setNotificationPreferences(saved)
               setNotificationPreferencesError('')
+            }}
+            onSaveBehavior={async customInstructions => {
+              if (!behaviorPreferences) return
+              try {
+                const saved = await api.saveBehaviorPreferences(
+                  behaviorPreferences.revision,
+                  customInstructions,
+                )
+                setBehaviorPreferences(saved)
+                setBehaviorPreferencesError('')
+              } catch (caught) {
+                if (caught instanceof ApiError && caught.status === 409) {
+                  await loadWorkRules()
+                  throw new Error(
+                    '保存冲突：自定义指令已在别处更新，已读取最新内容，请确认后重试。',
+                    { cause: caught },
+                  )
+                }
+                throw caught
+              }
+            }}
+            onToggleWorkRule={async rule => {
+              try {
+                await api.updateWorkRule(rule.id, rule.revision, {
+                  title: rule.title,
+                  content: rule.content,
+                  enabled: !rule.enabled,
+                })
+              } catch (caught) {
+                if (caught instanceof ApiError && caught.status === 409) {
+                  await loadWorkRules()
+                  throw new Error(
+                    '更新冲突：这条规则已在别处更新，已读取最新状态。',
+                    { cause: caught },
+                  )
+                }
+                throw caught
+              }
+              await loadWorkRules()
             }}
             onSectionChange={nextSection => {
               setSettingsSection(nextSection)
@@ -1300,6 +1374,8 @@ export function App() {
             theme={theme}
             usage={data.usage}
             usageError={data.usageError}
+            workRules={workRules}
+            workRulesError={workRulesError}
           />
         )}
       </AppShell>

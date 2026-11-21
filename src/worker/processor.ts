@@ -446,6 +446,7 @@ export async function executeClaimedRun(
       claimed.task.userId,
       claimed.task.id,
     )
+    const workRules = store.workRuleContextForUser(claimed.task.userId)
     result = await executor.execute({
       runId: claimed.run.id,
       taskId: claimed.task.id,
@@ -456,6 +457,9 @@ export async function executeClaimedRun(
       executionContractVersion: claimed.run.executionContractVersion,
       mandate: claimed.task.mandate,
       ...(memories.length > 0 ? { memories } : {}),
+      ...(workRules.rules.length > 0 || workRules.customInstructions
+        ? { workRules }
+        : {}),
       actionCapability: {
         baseUrl: controlPlaneBaseUrl,
         claimToken: claimed.claimToken,
