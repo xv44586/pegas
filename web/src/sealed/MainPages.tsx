@@ -7,6 +7,7 @@ import {
   CircleAlert,
   CircleQuestionMark,
   FileText,
+  Layers3,
   Mic,
   PauseCircle,
   Plus,
@@ -14,7 +15,7 @@ import {
   Search,
   ShieldCheck,
   Sparkles,
-  Volume2,
+  Trash2,
   X,
   Zap,
 } from 'lucide-react'
@@ -22,7 +23,18 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react'
 
 import type { PegasApi } from '../api'
 import { MarkdownMessage } from '../MarkdownMessage'
-import type { DshModelCatalogItem, OutboxMessage, Snapshot } from '../types'
+import type {
+  Automation,
+  AutomationDraft,
+  DshModelCatalogItem,
+  MemoryCategory,
+  MemoryDraft,
+  MemoryRecord,
+  MemoryScope,
+  OutboxMessage,
+  Snapshot,
+  WorkChannel,
+} from '../types'
 import { useVoiceDictation } from '../useVoiceDictation'
 import { PegasAgentIcon } from '../PegasAgentIcon'
 import { EmptyCapability, PageToolbar } from './Shell'
@@ -914,66 +926,840 @@ export function AttentionPage({
   )
 }
 
-export function AutomationPage({ actions }: { actions: PageActions }) {
+export function AutomationPage({
+  actions,
+  automations,
+  channels,
+  error,
+  onCreate,
+  onReload,
+  onSetStatus,
+  onUpdate,
+}: {
+  actions: PageActions
+  automations?: Automation[]
+  channels: WorkChannel[]
+  error: string
+  onCreate: (draft: AutomationDraft) => Promise<void>
+  onReload: () => void
+  onSetStatus: (
+    automation: Automation,
+    action: 'pause' | 'resume' | 'cancel',
+  ) => Promise<void>
+  onUpdate: (automation: Automation, draft: AutomationDraft) => Promise<void>
+}) {
+  const [form, setForm] = useState<
+    { mode: 'create' } | { mode: 'edit'; automation: Automation }
+  >()
+  const [busyId, setBusyId] = useState('')
+  const [confirmCancelId, setConfirmCancelId] = useState<string>()
+  const [actionError, setActionError] = useState('')
+  const activeCount =
+    automations?.filter(item => item.status === 'active').length ?? 0
+  const pausedCount =
+    automations?.filter(item => item.status === 'paused').length ?? 0
+  const endedCount =
+    automations?.filter(
+      item => item.status === 'completed' || item.status === 'cancelled',
+    ).length ?? 0
+  async function runStatus(
+    automation: Automation,
+    action: 'pause' | 'resume' | 'cancel',
+  ) {
+    setBusyId(automation.id)
+    setActionError('')
+    try {
+      await onSetStatus(automation, action)
+      setConfirmCancelId(undefined)
+    } catch (caught) {
+      setActionError(
+        caught instanceof Error ? caught.message : '操作失败，请重试。',
+      )
+    } finally {
+      setBusyId('')
+    }
+  }
   return (
     <div className="standard-page">
       <PageHeader
         actions={actions}
         description="让 Pegas 在合适的时候自动开始"
         title="自动化"
-      />
+      >
+        <button
+          className="primary-button page-header-action"
+          onClick={() => setForm({ mode: 'create' })}
+          type="button"
+        >
+          <Plus size={16} />
+          新建自动化
+        </button>
+      </PageHeader>
       <div className="metric-strip">
         <span>
           <Check size={17} />
-          已启用 <b>0</b>
+          已启用 <b>{activeCount}</b>
         </span>
         <span>
           <PauseCircle size={17} />
-          已暂停 <b>0</b>
+          已暂停 <b>{pausedCount}</b>
         </span>
         <span>
           <CircleAlert size={17} />
-          需要处理 <b>0</b>
+          已结束 <b>{endedCount}</b>
         </span>
       </div>
-      <EmptyCapability
-        availabilityLabel="服务端能力尚未启用"
-        icon={Zap}
-        title="自动化能力正在建设"
-        description="计划任务与条件触发会在服务端形成可恢复的事实来源后出现在这里。"
-      />
+      {error && (
+        <div className="page-error" role="alert">
+          {error}
+          <button className="inline-link" onClick={onReload} type="button">
+            重试
+          </button>
+        </div>
+      )}
+      {actionError && (
+        <div className="page-error" role="alert">
+          {actionError}
+        </div>
+      )}
+      {!automations && !error && (
+        <p className="page-loading">正在读取自动化…</p>
+      )}
+      {automations?.length === 0 && !error && (
+        <EmptyCapability
+          icon={Zap}
+          title="还没有自动化"
+          description="创建一个定时或周期意图，Pegas 会到点自动开始并留下记录。"
+        />
+      )}
+      {automations && automations.length > 0 && (
+        <section className="record-list" aria-label="自动化列表">
+          {automations.map(automation => (
+            <article key={automation.id}>
+              <span className={`record-icon is-${automation.status}`}>
+                <Zap size={18} />
+              </span>
+              <div className="record-copy">
+                <strong>{automation.title}</strong>
+                <small>{automation.prompt}</small>
+                <small className="record-meta">
+                  {describeSchedule(automation)} ·{' '}
+                  {automation.target.kind === 'new_task'
+                    ? '每次创建新事情'
+                    : `续接：${
+                        channels.find(
+                          channel =>
+                            channel.id ===
+                            (automation.target as { taskId: string }).taskId,
+                        )?.title ?? '已有事情'
+                      }`}
+                </small>
+                <small className="record-meta">
+                  {automation.status === 'active' && automation.nextFireAt
+                    ? `下次触发 ${formatDateTime(automation.nextFireAt)}`
+                    : automation.status === 'paused'
+                      ? '已暂停，恢复后重新计算触发时间'
+                      : '已结束，保留历史记录'}
+                  {automation.lastFiredAt
+                    ? ` · 最近触发 ${formatRelativeTime(automation.lastFiredAt)}`
+                    : ''}
+                </small>
+              </div>
+              <span
+                className={`status-text status-${automationStatusLabel(automation.status)}`}
+              >
+                {automationStatusLabel(automation.status)}
+              </span>
+              <div className="record-actions">
+                {(automation.status === 'active' ||
+                  automation.status === 'paused') && (
+                  <button
+                    className="secondary-button"
+                    disabled={busyId === automation.id}
+                    onClick={() => setForm({ mode: 'edit', automation })}
+                    type="button"
+                  >
+                    编辑
+                  </button>
+                )}
+                {automation.status === 'active' && (
+                  <button
+                    className="secondary-button"
+                    disabled={busyId === automation.id}
+                    onClick={() => void runStatus(automation, 'pause')}
+                    type="button"
+                  >
+                    暂停
+                  </button>
+                )}
+                {automation.status === 'paused' && (
+                  <button
+                    className="secondary-button"
+                    disabled={busyId === automation.id}
+                    onClick={() => void runStatus(automation, 'resume')}
+                    type="button"
+                  >
+                    恢复
+                  </button>
+                )}
+                {(automation.status === 'active' ||
+                  automation.status === 'paused') &&
+                  (confirmCancelId === automation.id ? (
+                    <>
+                      <button
+                        className="danger-button"
+                        disabled={busyId === automation.id}
+                        onClick={() => void runStatus(automation, 'cancel')}
+                        type="button"
+                      >
+                        确认结束
+                      </button>
+                      <button
+                        className="quiet-button"
+                        onClick={() => setConfirmCancelId(undefined)}
+                        type="button"
+                      >
+                        保留
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      className="quiet-button"
+                      disabled={busyId === automation.id}
+                      onClick={() => setConfirmCancelId(automation.id)}
+                      type="button"
+                    >
+                      结束
+                    </button>
+                  ))}
+              </div>
+            </article>
+          ))}
+        </section>
+      )}
+      {form && (
+        <AutomationForm
+          channels={channels}
+          draft={form.mode === 'edit' ? form.automation : undefined}
+          onCancel={() => setForm(undefined)}
+          onSubmit={async draft => {
+            if (form.mode === 'edit') await onUpdate(form.automation, draft)
+            else await onCreate(draft)
+            setForm(undefined)
+          }}
+        />
+      )}
     </div>
   )
 }
 
-export function MemoryPage({ actions }: { actions: PageActions }) {
+export function MemoryPage({
+  actions,
+  channels,
+  error,
+  memories,
+  onCreate,
+  onDelete,
+  onReload,
+  onUpdate,
+  truncated,
+}: {
+  actions: PageActions
+  channels: WorkChannel[]
+  error: string
+  memories?: MemoryRecord[]
+  onCreate: (draft: MemoryDraft) => Promise<void>
+  onDelete: (memory: MemoryRecord) => Promise<void>
+  onReload: () => void
+  onUpdate: (memory: MemoryRecord, draft: MemoryDraft) => Promise<void>
+  truncated: boolean
+}) {
+  const [filter, setFilter] = useState<'all' | MemoryScope>('all')
+  const [form, setForm] = useState<
+    { mode: 'create' } | { mode: 'edit'; memory: MemoryRecord }
+  >()
+  const [busyId, setBusyId] = useState('')
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string>()
+  const [actionError, setActionError] = useState('')
+  const visible = (memories ?? []).filter(
+    memory => filter === 'all' || memory.scope === filter,
+  )
+  async function runDelete(memory: MemoryRecord) {
+    setBusyId(memory.id)
+    setActionError('')
+    try {
+      await onDelete(memory)
+      setConfirmDeleteId(undefined)
+    } catch (caught) {
+      setActionError(
+        caught instanceof Error ? caught.message : '删除失败，请重试。',
+      )
+    } finally {
+      setBusyId('')
+    }
+  }
   return (
     <div className="standard-page">
       <PageHeader
         actions={actions}
         description="查看、修改或删除 Pegas 记住的内容"
         title="记忆"
-      />
+      >
+        <button
+          className="primary-button page-header-action"
+          onClick={() => setForm({ mode: 'create' })}
+          type="button"
+        >
+          <Plus size={16} />
+          添加记忆
+        </button>
+      </PageHeader>
       <div className="filter-row" role="tablist">
-        <button aria-selected="true" disabled role="tab" type="button">
-          关于我
-        </button>
-        <button disabled role="tab" type="button">
-          偏好
-        </button>
-        <button disabled role="tab" type="button">
-          长期规则
-        </button>
-        <button disabled role="tab" type="button">
-          事情记忆
-        </button>
+        {memoryScopes.map(scope => (
+          <button
+            aria-pressed={filter === scope.id}
+            aria-selected={filter === scope.id}
+            key={scope.id}
+            onClick={() => setFilter(scope.id)}
+            role="tab"
+            type="button"
+          >
+            {scope.label}
+          </button>
+        ))}
       </div>
-      <EmptyCapability
-        availabilityLabel="服务端能力尚未启用"
-        icon={Volume2}
-        title="记忆能力正在建设"
-        description="记忆会带来源、作用范围和删除路径；在服务端能力完成前不会写入本机假数据。"
-      />
+      {truncated && (
+        <p className="field-hint">
+          仅显示最近的一部分记忆；完整列表以服务端为准。
+        </p>
+      )}
+      {error && (
+        <div className="page-error" role="alert">
+          {error}
+          <button className="inline-link" onClick={onReload} type="button">
+            重试
+          </button>
+        </div>
+      )}
+      {actionError && (
+        <div className="page-error" role="alert">
+          {actionError}
+        </div>
+      )}
+      {!memories && !error && <p className="page-loading">正在读取记忆…</p>}
+      {memories && visible.length === 0 && !error && (
+        <EmptyCapability
+          icon={Layers3}
+          title={memories.length ? '该范围下还没有记忆' : '还没有记忆'}
+          description={
+            memories.length
+              ? '切换其他范围，或添加一条新的记忆。'
+              : '把偏好、事实或经验告诉 Pegas，它会带来源和作用范围保存。'
+          }
+        />
+      )}
+      {memories && visible.length > 0 && (
+        <section className="record-list" aria-label="记忆列表">
+          {visible.map(memory => (
+            <article key={memory.id}>
+              <span className="record-icon is-active">
+                <Layers3 size={18} />
+              </span>
+              <div className="record-copy">
+                <strong>{memory.content}</strong>
+                <small className="record-meta">
+                  {memoryScopeLabel(memory.scope)}
+                  {memory.taskId
+                    ? ` · ${
+                        channels.find(channel => channel.id === memory.taskId)
+                          ?.title ?? '已有事情'
+                      }`
+                    : ''}{' '}
+                  · {memoryCategoryLabel(memory.category)} ·{' '}
+                  {memory.source.kind === 'user_confirmation'
+                    ? '来源：用户确认'
+                    : `来源：${memory.source.kind}`}
+                </small>
+                <small className="record-meta">
+                  更新于 {formatRelativeTime(memory.updatedAt)}
+                  {memory.lastUsedAt
+                    ? ` · 最近使用 ${formatRelativeTime(memory.lastUsedAt)}`
+                    : ''}
+                </small>
+              </div>
+              <div className="record-actions">
+                <button
+                  className="secondary-button"
+                  disabled={busyId === memory.id}
+                  onClick={() => setForm({ mode: 'edit', memory })}
+                  type="button"
+                >
+                  编辑
+                </button>
+                {confirmDeleteId === memory.id ? (
+                  <>
+                    <button
+                      className="danger-button"
+                      disabled={busyId === memory.id}
+                      onClick={() => void runDelete(memory)}
+                      type="button"
+                    >
+                      确认删除
+                    </button>
+                    <button
+                      className="quiet-button"
+                      onClick={() => setConfirmDeleteId(undefined)}
+                      type="button"
+                    >
+                      保留
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    className="quiet-button"
+                    disabled={busyId === memory.id}
+                    onClick={() => setConfirmDeleteId(memory.id)}
+                    type="button"
+                  >
+                    <Trash2 size={15} />
+                    删除
+                  </button>
+                )}
+              </div>
+            </article>
+          ))}
+        </section>
+      )}
+      {form && (
+        <MemoryForm
+          channels={channels}
+          draft={form.mode === 'edit' ? form.memory : undefined}
+          onCancel={() => setForm(undefined)}
+          onSubmit={async draft => {
+            if (form.mode === 'edit') await onUpdate(form.memory, draft)
+            else await onCreate(draft)
+            setForm(undefined)
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+const memoryScopes: readonly { id: 'all' | MemoryScope; label: string }[] = [
+  { id: 'all', label: '全部' },
+  { id: 'global', label: '全局' },
+  { id: 'worker', label: 'Worker' },
+  { id: 'channel', label: '事情' },
+]
+
+const memoryCategories: readonly { id: MemoryCategory; label: string }[] = [
+  { id: 'preference', label: '偏好' },
+  { id: 'fact', label: '事实' },
+  { id: 'context', label: '情境' },
+  { id: 'experience', label: '经验' },
+  { id: 'procedure', label: '过程' },
+  { id: 'sensitive_reference', label: '受保护引用' },
+]
+
+function memoryScopeLabel(scope: MemoryScope): string {
+  return memoryScopes.find(item => item.id === scope)?.label ?? scope
+}
+
+function memoryCategoryLabel(category: MemoryCategory): string {
+  return memoryCategories.find(item => item.id === category)?.label ?? category
+}
+
+function automationStatusLabel(status: Automation['status']): string {
+  if (status === 'active') return '已启用'
+  if (status === 'paused') return '已暂停'
+  if (status === 'completed') return '已完成'
+  return '已结束'
+}
+
+function formatDateTime(value: string): string {
+  const timestamp = Date.parse(value)
+  if (Number.isNaN(timestamp)) return value
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(timestamp))
+}
+
+function describeSchedule(automation: Automation): string {
+  if (automation.schedule.kind === 'once')
+    return `一次性 · ${formatDateTime(automation.schedule.at)}`
+  const minutes = Math.round(automation.schedule.everySeconds / 60)
+  return minutes % 60 === 0
+    ? `每 ${String(minutes / 60)} 小时`
+    : `每 ${String(minutes)} 分钟`
+}
+
+function AutomationForm({
+  channels,
+  draft,
+  onCancel,
+  onSubmit,
+}: {
+  channels: WorkChannel[]
+  draft?: Automation
+  onCancel: () => void
+  onSubmit: (draft: AutomationDraft) => Promise<void>
+}) {
+  const [title, setTitle] = useState(draft?.title ?? '')
+  const [prompt, setPrompt] = useState(draft?.prompt ?? '')
+  const [kind, setKind] = useState<'interval' | 'once'>(
+    draft?.schedule.kind ?? 'interval',
+  )
+  const [everyMinutes, setEveryMinutes] = useState(
+    draft?.schedule.kind === 'interval'
+      ? String(Math.max(1, Math.round(draft.schedule.everySeconds / 60)))
+      : '60',
+  )
+  const [onceAt, setOnceAt] = useState(() => {
+    const base =
+      draft?.schedule.kind === 'once'
+        ? new Date(draft.schedule.at)
+        : new Date(Date.now() + 3_600_000)
+    const local = new Date(base.getTime() - base.getTimezoneOffset() * 60_000)
+    return local.toISOString().slice(0, 16)
+  })
+  const [targetKind, setTargetKind] = useState<'new_task' | 'existing_task'>(
+    draft?.target.kind ?? 'new_task',
+  )
+  const [targetTaskId, setTargetTaskId] = useState(
+    draft?.target.kind === 'existing_task'
+      ? draft.target.taskId
+      : (channels[0]?.id ?? ''),
+  )
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const dialogRef = useRef<HTMLElement>(null)
+  useEffect(() => {
+    dialogRef.current?.focus()
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onCancel()
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onCancel])
+  async function submit() {
+    if (saving) return
+    if (!title.trim() || !prompt.trim()) {
+      setError('名称和意图都不能为空。')
+      return
+    }
+    const minutes = Number(everyMinutes)
+    if (kind === 'interval' && (!Number.isFinite(minutes) || minutes < 1)) {
+      setError('间隔至少 1 分钟。')
+      return
+    }
+    const at = new Date(onceAt)
+    if (kind === 'once' && Number.isNaN(at.getTime())) {
+      setError('请选择有效的执行时间。')
+      return
+    }
+    if (targetKind === 'existing_task' && !targetTaskId) {
+      setError('请选择要续接的事情。')
+      return
+    }
+    setSaving(true)
+    setError('')
+    try {
+      await onSubmit({
+        title: title.trim(),
+        prompt: prompt.trim(),
+        schedule:
+          kind === 'once'
+            ? { kind: 'once', at: at.toISOString() }
+            : { kind: 'interval', everySeconds: Math.round(minutes * 60) },
+        target:
+          targetKind === 'new_task'
+            ? { kind: 'new_task' }
+            : { kind: 'existing_task', taskId: targetTaskId },
+      })
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '保存失败，请重试。')
+    } finally {
+      setSaving(false)
+    }
+  }
+  return (
+    <div
+      className="modal-backdrop"
+      onMouseDown={event => event.target === event.currentTarget && onCancel()}
+    >
+      <section
+        aria-label={draft ? '编辑自动化' : '新建自动化'}
+        aria-modal="true"
+        className="command-dialog record-form"
+        ref={dialogRef}
+        role="dialog"
+        tabIndex={-1}
+      >
+        <header className="record-form-header">
+          <h2>{draft ? '编辑自动化' : '新建自动化'}</h2>
+          <button aria-label="关闭" onClick={onCancel} type="button">
+            <X size={18} />
+          </button>
+        </header>
+        <div className="record-form-body">
+          {error && (
+            <div className="page-error" role="alert">
+              {error}
+            </div>
+          )}
+          <label className="field-label">
+            名称
+            <input
+              onChange={event => setTitle(event.target.value)}
+              value={title}
+            />
+          </label>
+          <label className="field-label">
+            意图
+            <textarea
+              onChange={event => setPrompt(event.target.value)}
+              rows={3}
+              value={prompt}
+            />
+          </label>
+          <label className="field-label">
+            触发方式
+            <select
+              onChange={event =>
+                setKind(event.target.value as 'interval' | 'once')
+              }
+              value={kind}
+            >
+              <option value="interval">固定间隔</option>
+              <option value="once">一次性</option>
+            </select>
+          </label>
+          {kind === 'interval' ? (
+            <label className="field-label">
+              间隔（分钟）
+              <input
+                min={1}
+                onChange={event => setEveryMinutes(event.target.value)}
+                type="number"
+                value={everyMinutes}
+              />
+            </label>
+          ) : (
+            <label className="field-label">
+              执行时间
+              <input
+                onChange={event => setOnceAt(event.target.value)}
+                type="datetime-local"
+                value={onceAt}
+              />
+            </label>
+          )}
+          <label className="field-label">
+            目标
+            <select
+              onChange={event =>
+                setTargetKind(
+                  event.target.value as 'new_task' | 'existing_task',
+                )
+              }
+              value={targetKind}
+            >
+              <option value="new_task">每次创建新事情</option>
+              <option value="existing_task">续接已有事情</option>
+            </select>
+          </label>
+          {targetKind === 'existing_task' && (
+            <label className="field-label">
+              事情
+              <select
+                onChange={event => setTargetTaskId(event.target.value)}
+                value={targetTaskId}
+              >
+                {channels.map(channel => (
+                  <option key={channel.id} value={channel.id}>
+                    {channel.title}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+        </div>
+        <footer className="record-form-footer">
+          <button className="quiet-button" onClick={onCancel} type="button">
+            取消
+          </button>
+          <button
+            className="primary-button"
+            disabled={saving}
+            onClick={() => void submit()}
+            type="button"
+          >
+            {saving ? '保存中…' : '保存'}
+          </button>
+        </footer>
+      </section>
+    </div>
+  )
+}
+
+function MemoryForm({
+  channels,
+  draft,
+  onCancel,
+  onSubmit,
+}: {
+  channels: WorkChannel[]
+  draft?: MemoryRecord
+  onCancel: () => void
+  onSubmit: (draft: MemoryDraft) => Promise<void>
+}) {
+  const [scope, setScope] = useState<MemoryScope>(draft?.scope ?? 'global')
+  const [taskId, setTaskId] = useState(draft?.taskId ?? channels[0]?.id ?? '')
+  const [category, setCategory] = useState<MemoryCategory>(
+    draft?.category ?? 'preference',
+  )
+  const [content, setContent] = useState(draft?.content ?? '')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const dialogRef = useRef<HTMLElement>(null)
+  useEffect(() => {
+    dialogRef.current?.focus()
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onCancel()
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onCancel])
+  async function submit() {
+    if (saving) return
+    if (!content.trim()) {
+      setError('记忆内容不能为空。')
+      return
+    }
+    if (scope !== 'global' && !taskId) {
+      setError('Worker 与事情范围必须选择一件事情。')
+      return
+    }
+    setSaving(true)
+    setError('')
+    try {
+      await onSubmit({
+        scope,
+        ...(scope !== 'global' ? { taskId } : {}),
+        category,
+        content: content.trim(),
+        source: draft?.source ?? { kind: 'user_confirmation' },
+      })
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '保存失败，请重试。')
+    } finally {
+      setSaving(false)
+    }
+  }
+  return (
+    <div
+      className="modal-backdrop"
+      onMouseDown={event => event.target === event.currentTarget && onCancel()}
+    >
+      <section
+        aria-label={draft ? '编辑记忆' : '添加记忆'}
+        aria-modal="true"
+        className="command-dialog record-form"
+        ref={dialogRef}
+        role="dialog"
+        tabIndex={-1}
+      >
+        <header className="record-form-header">
+          <h2>{draft ? '编辑记忆' : '添加记忆'}</h2>
+          <button aria-label="关闭" onClick={onCancel} type="button">
+            <X size={18} />
+          </button>
+        </header>
+        <div className="record-form-body">
+          {error && (
+            <div className="page-error" role="alert">
+              {error}
+            </div>
+          )}
+          <label className="field-label">
+            内容
+            <textarea
+              onChange={event => setContent(event.target.value)}
+              rows={3}
+              value={content}
+            />
+          </label>
+          <label className="field-label">
+            类别
+            <select
+              onChange={event =>
+                setCategory(event.target.value as MemoryCategory)
+              }
+              value={category}
+            >
+              {memoryCategories.map(item => (
+                <option key={item.id} value={item.id}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field-label">
+            作用范围
+            <select
+              onChange={event => setScope(event.target.value as MemoryScope)}
+              value={scope}
+            >
+              <option value="global">全局</option>
+              <option value="worker">Worker</option>
+              <option value="channel">事情</option>
+            </select>
+          </label>
+          {scope !== 'global' && (
+            <label className="field-label">
+              事情
+              <select
+                onChange={event => setTaskId(event.target.value)}
+                value={taskId}
+              >
+                {channels.map(channel => (
+                  <option key={channel.id} value={channel.id}>
+                    {channel.title}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <p className="field-hint">
+            {draft
+              ? '来源保持服务端记录不变；修改会以新修订保存。'
+              : '手动添加的记忆来源记为“用户确认”。'}
+          </p>
+        </div>
+        <footer className="record-form-footer">
+          <button className="quiet-button" onClick={onCancel} type="button">
+            取消
+          </button>
+          <button
+            className="primary-button"
+            disabled={saving}
+            onClick={() => void submit()}
+            type="button"
+          >
+            {saving ? '保存中…' : '保存'}
+          </button>
+        </footer>
+      </section>
     </div>
   )
 }

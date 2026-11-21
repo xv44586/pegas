@@ -28,6 +28,7 @@ import { useEffect, useRef, useState } from 'react'
 
 import type {
   DshModelCatalog,
+  MemoryRecord,
   ModelCatalogItem,
   ModelProviderDraft,
   ModelUsageReport,
@@ -63,6 +64,8 @@ const sectionIcons: Record<SettingsSection, typeof Bot> = {
 interface SettingsPageProps {
   initialSection?: SettingsSection
   response?: SettingsResponse
+  memories?: MemoryRecord[]
+  memoriesError?: string
   usage?: ModelUsageReport
   usageError?: string
   agentModels?: DshModelCatalog
@@ -73,6 +76,7 @@ interface SettingsPageProps {
     rewrite?: RewriteSettingsDraft,
   ) => Promise<void>
   onOpenDrawer: (drawer: DrawerView) => void
+  onOpenMemory?: () => void
   onReloadUsage: () => void
   onBack: () => void
   onSectionChange?: (section: SettingsSection) => void
@@ -112,11 +116,14 @@ type SettingsTestRewrite = (
 export function SettingsPage({
   initialSection = 'pegas',
   response,
+  memories,
+  memoriesError,
   usage,
   usageError,
   agentModels,
   onSave,
   onOpenDrawer,
+  onOpenMemory,
   onReloadUsage,
   onBack,
   onSectionChange,
@@ -312,7 +319,13 @@ export function SettingsPage({
                     />
                   )}
                 {section === 'connections' && <ConnectionsSettings />}
-                {section === 'memory' && <MemorySettings />}
+                {section === 'memory' && (
+                  <MemorySettings
+                    error={memoriesError}
+                    memories={memories}
+                    onOpenMemory={onOpenMemory}
+                  />
+                )}
                 {section === 'privacy' && (
                   <PrivacySettings
                     available={response.capabilities.privacyAvailable}
@@ -1686,17 +1699,53 @@ function ConnectionsSettings() {
     </div>
   )
 }
-function MemorySettings() {
+function MemorySettings({
+  error,
+  memories,
+  onOpenMemory,
+}: {
+  error?: string
+  memories?: MemoryRecord[]
+  onOpenMemory?: () => void
+}) {
+  const globalCount =
+    memories?.filter(memory => memory.scope === 'global').length ?? 0
+  const scopedCount = (memories?.length ?? 0) - globalCount
   return (
     <div className="settings-pane">
       <SettingsHeading
         title="记忆"
         description="管理 Pegas 可以长期记住的内容和作用范围。"
       />
-      <div className="unavailable-card">
-        <Database size={25} />
-        <h3>记忆服务尚未启用</h3>
-        <p>服务端记忆模型完成后，这里会提供范围、来源和删除路径。</p>
+      {error ? (
+        <div className="page-error" role="alert">
+          {error}
+        </div>
+      ) : !memories ? (
+        <p className="page-loading">正在读取记忆…</p>
+      ) : (
+        <div className="settings-card">
+          <div className="card-title">
+            <Database size={20} />
+            <div>
+              <h3>服务端记忆</h3>
+              <p>
+                全局 {globalCount} 条 · Worker/事情 {scopedCount} 条
+              </p>
+            </div>
+          </div>
+          <button
+            className="secondary-button"
+            onClick={onOpenMemory}
+            type="button"
+          >
+            管理记忆
+          </button>
+        </div>
+      )}
+      <div className="info-banner">
+        <LockKeyhole size={16} />
+        记忆的添加、修改与删除在“记忆”页完成；执行时只装载适用范围。
       </div>
     </div>
   )

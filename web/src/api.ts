@@ -1,9 +1,14 @@
 import type {
   Approval,
+  Automation,
+  AutomationDraft,
   InboxEvent,
   ChannelTimeline,
   DurableAction,
   DshModelCatalog,
+  MemoryDraft,
+  MemoryRecord,
+  MemoryScope,
   ModelCatalogItem,
   ModelUsageReport,
   OutboxMessage,
@@ -228,6 +233,140 @@ export class PegasApi {
     )
     if (!response.ok) await throwResponse(response)
     return ((await response.json()) as { message: OutboxMessage }).message
+  }
+
+  async automations(): Promise<Automation[]> {
+    const user = encodeURIComponent(this.#userId)
+    const response = await this.#get<{ automations: Automation[] }>(
+      `/v1/automations?userId=${user}`,
+    )
+    return response.automations
+  }
+
+  async createAutomation(draft: AutomationDraft): Promise<Automation> {
+    const response = await fetch('/v1/automations', {
+      method: 'POST',
+      headers: this.#headers(true),
+      body: JSON.stringify({
+        userId: this.#userId,
+        commandId: crypto.randomUUID(),
+        automation: draft,
+      }),
+    })
+    if (!response.ok) await throwResponse(response)
+    return ((await response.json()) as { automation: Automation }).automation
+  }
+
+  async updateAutomation(
+    automationId: string,
+    expectedRevision: number,
+    draft: AutomationDraft,
+  ): Promise<Automation> {
+    const response = await fetch(
+      `/v1/automations/${encodeURIComponent(automationId)}`,
+      {
+        method: 'PUT',
+        headers: this.#headers(true),
+        body: JSON.stringify({
+          userId: this.#userId,
+          commandId: crypto.randomUUID(),
+          expectedRevision,
+          automation: draft,
+        }),
+      },
+    )
+    if (!response.ok) await throwResponse(response)
+    return ((await response.json()) as { automation: Automation }).automation
+  }
+
+  async setAutomationStatus(
+    automationId: string,
+    expectedRevision: number,
+    action: 'pause' | 'resume' | 'cancel',
+  ): Promise<Automation> {
+    const response = await fetch(
+      `/v1/automations/${encodeURIComponent(automationId)}/${action}`,
+      {
+        method: 'POST',
+        headers: this.#headers(true),
+        body: JSON.stringify({
+          userId: this.#userId,
+          commandId: crypto.randomUUID(),
+          expectedRevision,
+        }),
+      },
+    )
+    if (!response.ok) await throwResponse(response)
+    return ((await response.json()) as { automation: Automation }).automation
+  }
+
+  async memories(options?: {
+    scope?: MemoryScope
+    taskId?: string
+    cursor?: string
+  }): Promise<{ memories: MemoryRecord[]; nextCursor?: string }> {
+    const params = new URLSearchParams({ userId: this.#userId, limit: '200' })
+    if (options?.scope) params.set('scope', options.scope)
+    if (options?.taskId) params.set('taskId', options.taskId)
+    if (options?.cursor) params.set('cursor', options.cursor)
+    return this.#get<{ memories: MemoryRecord[]; nextCursor?: string }>(
+      `/v1/memories?${params.toString()}`,
+    )
+  }
+
+  async createMemory(draft: MemoryDraft): Promise<MemoryRecord> {
+    const response = await fetch('/v1/memories', {
+      method: 'POST',
+      headers: this.#headers(true),
+      body: JSON.stringify({
+        userId: this.#userId,
+        commandId: crypto.randomUUID(),
+        memory: draft,
+      }),
+    })
+    if (!response.ok) await throwResponse(response)
+    return ((await response.json()) as { memory: MemoryRecord }).memory
+  }
+
+  async updateMemory(
+    memoryId: string,
+    expectedRevision: number,
+    draft: MemoryDraft,
+  ): Promise<MemoryRecord> {
+    const response = await fetch(
+      `/v1/memories/${encodeURIComponent(memoryId)}`,
+      {
+        method: 'PUT',
+        headers: this.#headers(true),
+        body: JSON.stringify({
+          userId: this.#userId,
+          commandId: crypto.randomUUID(),
+          expectedRevision,
+          memory: draft,
+        }),
+      },
+    )
+    if (!response.ok) await throwResponse(response)
+    return ((await response.json()) as { memory: MemoryRecord }).memory
+  }
+
+  async deleteMemory(
+    memoryId: string,
+    expectedRevision: number,
+  ): Promise<void> {
+    const response = await fetch(
+      `/v1/memories/${encodeURIComponent(memoryId)}/delete`,
+      {
+        method: 'POST',
+        headers: this.#headers(true),
+        body: JSON.stringify({
+          userId: this.#userId,
+          commandId: crypto.randomUUID(),
+          expectedRevision,
+        }),
+      },
+    )
+    if (!response.ok) await throwResponse(response)
   }
 
   async approval(approvalId: string): Promise<Approval> {

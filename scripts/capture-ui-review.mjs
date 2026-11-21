@@ -154,10 +154,12 @@ try {
     .getByRole('button', { name: '自动化' })
     .click()
   await page.getByRole('heading', { name: '自动化', exact: true }).waitFor()
+  await page.getByText('晨间简报').waitFor()
   await capture(page, 'desktop-automation.png', 'desktop-automation')
 
   await page.getByLabel('主导航').getByRole('button', { name: '记忆' }).click()
   await page.getByRole('heading', { name: '记忆', exact: true }).waitFor()
+  await page.getByText('我喜欢安静、白底、信息层级清楚的界面。').waitFor()
   await capture(page, 'desktop-memory.png', 'desktop-memory')
 
   await page.getByLabel('主导航').getByRole('button', { name: '对话' }).click()
@@ -494,10 +496,47 @@ async function seedConversation(apiPort) {
       `http://127.0.0.1:${String(apiPort)}/v1/channels?userId=owner`,
     )
     const body = await response.json()
-    if (body.channels?.length >= 2) return
+    if (body.channels?.length >= 2) break
     await wait(50)
   }
-  throw new Error('UI review channels were not created')
+  const automationResponse = await fetch(
+    `http://127.0.0.1:${String(apiPort)}/v1/automations`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        userId: 'owner',
+        commandId: 'feature-review-automation',
+        automation: {
+          title: '晨间简报',
+          prompt: '整理今天需要处理的事情。',
+          schedule: { kind: 'interval', everySeconds: 3600 },
+          target: { kind: 'new_task' },
+        },
+      }),
+    },
+  )
+  if (automationResponse.status !== 201)
+    throw new Error('Unable to seed UI review automation')
+  const memoryResponse = await fetch(
+    `http://127.0.0.1:${String(apiPort)}/v1/memories`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        userId: 'owner',
+        commandId: 'feature-review-memory',
+        memory: {
+          scope: 'global',
+          category: 'preference',
+          content: '我喜欢安静、白底、信息层级清楚的界面。',
+          source: { kind: 'user_confirmation' },
+        },
+      }),
+    },
+  )
+  if (memoryResponse.status !== 201)
+    throw new Error('Unable to seed UI review memory')
 }
 
 async function capture(page, name, label) {

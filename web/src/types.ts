@@ -267,6 +267,68 @@ export interface DshModelCatalog {
   defaultModel: string
   models: DshModelCatalogItem[]
 }
+
+type AutomationSchedule =
+  | { kind: 'once'; at: string }
+  | { kind: 'interval'; everySeconds: number; startsAt?: string }
+
+type AutomationTarget =
+  { kind: 'new_task' } | { kind: 'existing_task'; taskId: string }
+
+type AutomationStatus = 'active' | 'paused' | 'completed' | 'cancelled'
+
+export interface Automation {
+  id: string
+  userId: string
+  revision: number
+  title: string
+  prompt: string
+  schedule: AutomationSchedule
+  target: AutomationTarget
+  status: AutomationStatus
+  nextFireAt?: string
+  lastFiredAt?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface AutomationDraft {
+  title: string
+  prompt: string
+  schedule: AutomationSchedule
+  target: AutomationTarget
+}
+
+export type MemoryScope = 'global' | 'worker' | 'channel'
+
+export type MemoryCategory =
+  | 'preference'
+  | 'fact'
+  | 'context'
+  | 'experience'
+  | 'procedure'
+  | 'sensitive_reference'
+
+type MemorySource =
+  | { kind: 'user_confirmation' }
+  | { kind: 'task' | 'run' | 'artifact'; id: string }
+
+export interface MemoryDraft {
+  scope: MemoryScope
+  taskId?: string
+  category: MemoryCategory
+  content: string
+  source: MemorySource
+}
+
+export interface MemoryRecord extends MemoryDraft {
+  id: string
+  userId: string
+  revision: number
+  createdAt: string
+  updatedAt: string
+  lastUsedAt?: string
+}
 import type {
   Approval as ServerApproval,
   DurableAction as ServerDurableAction,
