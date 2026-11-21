@@ -41,9 +41,11 @@ import { PegasMascot } from './PegasMascot'
 import { EmptyCapability, PageToolbar } from './Shell'
 import {
   attentionKind,
+  clarificationQuestions,
   formatRelativeTime,
   isReconciliationMessage,
   latestRunForTask,
+  reviewProjection,
   statusLabel,
   textFromPayload,
   unresolvedAttentionMessages,
@@ -325,6 +327,7 @@ export function ConversationPage({
   modelProvider,
   selectedModelId,
   onSelectModel,
+  onAnswerClarification,
   continuationChannel,
   onClearContinuation,
   draft,
@@ -340,6 +343,7 @@ export function ConversationPage({
   modelProvider?: string
   selectedModelId?: string
   onSelectModel: (model: DshModelCatalogItem) => Promise<void>
+  onAnswerClarification: (channel: Snapshot['channels'][number]) => void
   continuationChannel?: Snapshot['channels'][number]
   onClearContinuation: () => void
   draft: string
@@ -364,17 +368,26 @@ export function ConversationPage({
         at: event.createdAt,
         status: event.status,
       }))
-    const pegas = snapshot.messages.map(message => ({
-      id: message.id,
-      role: 'pegas' as const,
-      text: textFromPayload(message.payload),
-      at: message.createdAt,
-      taskId: message.taskId,
-    }))
+    const pegas = snapshot.messages.map(message => {
+      const channel = snapshot.channels.find(item => item.id === message.taskId)
+      const questions = clarificationQuestions(message)
+      return {
+        id: message.id,
+        role: 'pegas' as const,
+        text: textFromPayload(message.payload),
+        at: message.createdAt,
+        taskId: message.taskId,
+        clarification:
+          channel?.statusReason === 'awaiting_goal_clarification'
+            ? questions
+            : undefined,
+        review: reviewProjection(message),
+      }
+    })
     return [...user, ...pegas]
       .filter(message => message.text)
       .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
-  }, [snapshot.events, snapshot.messages])
+  }, [snapshot.channels, snapshot.events, snapshot.messages])
   useEffect(() => {
     const area = scrollRef.current
     if (area && stickToBottomRef.current) area.scrollTop = area.scrollHeight
@@ -489,6 +502,60 @@ export function ConversationPage({
                     >
                       查看工作详情 <ArrowRight size={15} />
                     </button>
+                  )}
+                  {message.role === 'pegas' && message.clarification && (
+                    <section className="clarification-card">
+                      <header>
+                        <CircleQuestionMark size={17} />
+                        <strong>开始执行前，需要你补充几点</strong>
+                      </header>
+                      <ol className="clarification-questions">
+                        {message.clarification.map(question => (
+                          <li key={question}>{question}</li>
+                        ))}
+                      </ol>
+                      <button
+                        className="primary-button"
+                        onClick={() => {
+                          const channel = snapshot.channels.find(
+                            item => item.id === message.taskId,
+                          )
+                          if (channel) onAnswerClarification(channel)
+                        }}
+                        type="button"
+                      >
+                        去回答 <ArrowRight size={15} />
+                      </button>
+                    </section>
+                  )}
+                  {message.role === 'pegas' && message.review && (
+                    <section className="review-card">
+                      <header>
+                        <CheckCircle2 size={17} />
+                        <strong>这件事有一份交付可以审查</strong>
+                      </header>
+                      <button
+                        className="primary-button"
+                        onClick={() => {
+                          const channel = snapshot.channels.find(
+                            item => item.id === message.taskId,
+                          )
+                          const source = snapshot.messages.find(
+                            item => item.id === message.id,
+                          )
+                          if (channel && source && message.review)
+                            actions.onOpenDrawer({
+                              kind: 'review',
+                              review: message.review,
+                              channel,
+                              message: source,
+                            })
+                        }}
+                        type="button"
+                      >
+                        审查交付 <ArrowRight size={15} />
+                      </button>
+                    </section>
                   )}
                 </div>
               </article>
@@ -797,6 +864,10 @@ function attentionAction(message: OutboxMessage): {
   if (kind === 'failed') return { label: '查看原因', icon: RotateCw }
   if (isReconciliationMessage(message))
     return { label: '去核对', icon: ShieldCheck }
+  if (reviewProjection(message))
+    return { label: '审查交付', icon: CheckCircle2 }
+  if (clarificationQuestions(message))
+    return { label: '去回答', icon: CircleQuestionMark }
   if (kind === 'approval') return { label: '查看内容', icon: ShieldCheck }
   return { label: '打开事情', icon: ArrowRight }
 }

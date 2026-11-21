@@ -22,6 +22,7 @@ import type {
   RewriteSettingsDraft,
   Snapshot,
   Task,
+  TaskDelivery,
   WorkChannel,
 } from './types'
 import { fallbackWorkerIconId, isWorkerIconId } from './agent-icon-id'
@@ -323,6 +324,13 @@ export class PegasApi {
     if (query.trim()) params.set('q', query.trim())
     return this.#get<ChannelSearchResult>(
       `/v1/channels/search?${params.toString()}`,
+    )
+  }
+
+  async taskDelivery(taskId: string): Promise<TaskDelivery> {
+    const user = encodeURIComponent(this.#userId)
+    return this.#get<TaskDelivery>(
+      `/v1/tasks/${encodeURIComponent(taskId)}/delivery?userId=${user}`,
     )
   }
 

@@ -15,7 +15,15 @@ import {
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
-import type { DurableAction, Run } from '../types'
+import type {
+  DurableAction,
+  GoalContract,
+  ReviewCriterionPreview,
+  ReviewEvidencePreview,
+  ReviewProjection,
+  Run,
+  TaskDelivery,
+} from '../types'
 import { PegasMascot } from './PegasMascot'
 import {
   formatRelativeTime,
@@ -28,6 +36,8 @@ import {
 export function DetailDrawer({
   view,
   onClose,
+  onChange,
+  onOpenView,
   onRetry,
   onContinue,
   onStop,
@@ -37,6 +47,7 @@ export function DetailDrawer({
   view: DrawerView
   onClose: () => void
   onChange: (view: DrawerView) => void
+  onOpenView?: (view: DrawerView) => void
   onRetry: (run: Run) => Promise<void>
   onContinue?: (
     channel: Extract<DrawerView, { kind: 'task' }>['channel'],
@@ -120,7 +131,14 @@ export function DetailDrawer({
         {view.kind === 'task' && (
           <TaskDetail
             channel={view.channel}
+            delivery={view.delivery}
+            deliveryError={view.deliveryError}
             onContinue={onContinue}
+            onOpenEvidence={
+              onOpenView
+                ? evidence => onOpenView(evidencePreviewView(evidence))
+                : undefined
+            }
             onRetry={onRetry}
             onStop={onStop}
             run={view.run}
@@ -146,9 +164,56 @@ export function DetailDrawer({
             onReconcile={onReconcileAction}
           />
         )}
+        {view.kind === 'review' && (
+          <ReviewDetail
+            goal={view.goal}
+            onOpenEvidence={
+              onOpenView
+                ? evidence => onOpenView(evidencePreviewView(evidence))
+                : undefined
+            }
+            onOpenTask={
+              onOpenView
+                ? () =>
+                    onOpenView({
+                      kind: 'task',
+                      channel: view.channel,
+                    })
+                : undefined
+            }
+            review={view.review}
+          />
+        )}
+        {view.kind === 'clarification' && (
+          <ClarificationDetail
+            onAnswer={
+              onContinue
+                ? () => {
+                    onContinue(view.channel)
+                    onClose()
+                  }
+                : undefined
+            }
+            onOpenTask={
+              onOpenView
+                ? () =>
+                    onOpenView({
+                      kind: 'task',
+                      channel: view.channel,
+                    })
+                : undefined
+            }
+            questions={view.questions}
+          />
+        )}
         {view.kind === 'runtime' && <RuntimeDetail run={view.run} />}
         {view.kind === 'rule' && <RuleDetail title={view.title} />}
-        {view.kind === 'preview' && <PreviewDetail view={view} />}
+        {view.kind === 'preview' && (
+          <PreviewDetail
+            onBack={view.backLabel ? () => onChange(view) : undefined}
+            view={view}
+          />
+        )}
       </aside>
     </div>
   )
@@ -159,6 +224,8 @@ function drawerEyebrow(view: DrawerView): string {
   if (view.kind === 'message') return '待你处理'
   if (view.kind === 'approval') return '需要确认'
   if (view.kind === 'reconciliation') return '需要核对'
+  if (view.kind === 'review') return '交付审查'
+  if (view.kind === 'clarification') return '需要补充'
   if (view.kind === 'runtime') return 'Pegas'
   if (view.kind === 'rule') return '行为与规则'
   return '内容预览'
@@ -168,6 +235,8 @@ function drawerTitle(view: DrawerView): string {
   if (view.kind === 'message') return 'Pegas 消息'
   if (view.kind === 'approval') return view.approval.prompt.summary
   if (view.kind === 'reconciliation') return '核对动作的真实结果'
+  if (view.kind === 'review') return '按完成标准审查交付'
+  if (view.kind === 'clarification') return view.channel.title
   if (view.kind === 'runtime') return '执行环境详情'
   if (view.kind === 'rule') return view.title
   return view.title
@@ -550,21 +619,27 @@ function MessageDetail({
 
 function TaskDetail({
   channel,
+  delivery,
+  deliveryError,
   run,
   runs,
   timeline,
   timelineError,
   usage,
+  onOpenEvidence,
   onRetry,
   onContinue,
   onStop,
 }: {
   channel: Extract<DrawerView, { kind: 'task' }>['channel']
+  delivery?: TaskDelivery
+  deliveryError?: string
   run?: Run
   runs?: Run[]
   timeline?: Extract<DrawerView, { kind: 'task' }>['timeline']
   timelineError?: string
   usage?: Extract<DrawerView, { kind: 'task' }>['usage']
+  onOpenEvidence?: (evidence: ReviewEvidencePreview) => void
   onRetry: (run: Run) => Promise<void>
   onContinue?: (
     channel: Extract<DrawerView, { kind: 'task' }>['channel'],
@@ -717,6 +792,13 @@ function TaskDetail({
           )}
         </ol>
       </section>
+      {(delivery?.goal ?? delivery?.reviewPack ?? deliveryError) && (
+        <DeliverySection
+          delivery={delivery}
+          error={deliveryError}
+          onOpenEvidence={onOpenEvidence}
+        />
+      )}
       <section className="detail-section">
         <h3>Channel 时间线</h3>
         {timelineError ? (
@@ -863,6 +945,367 @@ function Meta({ label, value }: { label: string; value?: string }) {
     </div>
   )
 }
+
+function evidencePreviewView(
+  evidence: ReviewEvidencePreview,
+): Extract<DrawerView, { kind: 'preview' }> {
+  const mime = evidence.artifact?.mimeType ?? ''
+  const preview =
+    evidence.kind === 'screenshot' ||
+    evidence.kind === 'render' ||
+    evidence.kind === 'keyframe' ||
+    mime.startsWith('image/')
+      ? 'image'
+      : evidence.kind === 'video' || mime.startsWith('video/')
+        ? 'video'
+        : evidence.kind === 'webpage' || mime === 'text/html'
+          ? 'web'
+          : 'file'
+  return {
+    kind: 'preview',
+    preview,
+    title: evidence.artifact?.name ?? `证据 ${evidence.evidenceId.slice(0, 8)}`,
+    description: evidence.limitations.join('；') || undefined,
+    mimeType: mime || undefined,
+    source: `验证：${verificationLabel(evidence.verification)} · 敏感级：${evidence.sensitivity}`,
+    url: evidence.artifact?.uri,
+    backLabel: '返回交付审查',
+    contentUrl: evidence.hasContent
+      ? `/v1/evidence/${encodeURIComponent(evidence.evidenceId)}/content?userId=owner`
+      : undefined,
+  }
+}
+
+function verificationLabel(result: ReviewEvidencePreview['verification']) {
+  if (result === 'passed') return '已通过'
+  if (result === 'failed') return '未通过'
+  return '待验证'
+}
+
+function completionLabel(
+  status: ReviewCriterionPreview['completionStatus'],
+): string {
+  if (status === 'satisfied') return '已满足'
+  if (status === 'partial') return '部分满足'
+  if (status === 'failed') return '未满足'
+  return '未验证'
+}
+
+function outcomeLabel(outcome: ReviewProjection['finalOutcome']): string {
+  if (outcome === 'completed') return '目标已完成'
+  if (outcome === 'partial') return '部分完成'
+  return '未达成'
+}
+
+function EvidenceGallery({
+  evidence,
+  onOpenEvidence,
+}: {
+  evidence: ReviewEvidencePreview[]
+  onOpenEvidence?: (evidence: ReviewEvidencePreview) => void
+}) {
+  if (!evidence.length)
+    return <p className="drawer-footnote">本次交付没有可展示的证据。</p>
+  return (
+    <ul aria-label="证据画廊" className="evidence-gallery">
+      {evidence.map(item => (
+        <li key={item.evidenceId}>
+          <button
+            className="evidence-card"
+            onClick={() => onOpenEvidence?.(item)}
+            type="button"
+          >
+            <span className={`evidence-thumb is-${item.verification}`}>
+              {item.hasContent &&
+              (item.kind === 'screenshot' ||
+                item.kind === 'render' ||
+                item.kind === 'keyframe' ||
+                item.artifact?.mimeType?.startsWith('image/')) ? (
+                <EvidenceThumb
+                  alt={item.artifact?.name ?? '证据缩略图'}
+                  url={`/v1/evidence/${encodeURIComponent(item.evidenceId)}/content?userId=owner`}
+                />
+              ) : item.artifact?.mimeType?.startsWith('video/') ||
+                item.kind === 'video' ? (
+                <Play size={26} />
+              ) : (
+                <FileText size={26} />
+              )}
+            </span>
+            <span className="evidence-copy">
+              <strong>
+                {item.artifact?.name ?? `证据 ${item.evidenceId.slice(0, 8)}`}
+              </strong>
+              <small>
+                {verificationLabel(item.verification)}
+                {item.viewport
+                  ? ` · ${String(item.viewport.width)}×${String(item.viewport.height)}`
+                  : ''}
+                {typeof item.timecode === 'number'
+                  ? ` · ${String(item.timecode)}s`
+                  : ''}
+              </small>
+            </span>
+          </button>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function CriteriaList({
+  criteria,
+  statements,
+}: {
+  criteria: ReviewCriterionPreview[]
+  statements?: Map<string, string>
+}) {
+  return (
+    <ol aria-label="完成标准" className="criteria-list">
+      {criteria.map(criterion => (
+        <li key={criterion.criterionId}>
+          <span className={`criteria-status is-${criterion.completionStatus}`}>
+            {completionLabel(criterion.completionStatus)}
+          </span>
+          <div>
+            <strong>
+              {statements?.get(criterion.criterionId) ?? criterion.criterionId}
+            </strong>
+            <p>{criterion.explanation}</p>
+            {criterion.limitations.length > 0 && (
+              <small>局限：{criterion.limitations.join('；')}</small>
+            )}
+          </div>
+        </li>
+      ))}
+    </ol>
+  )
+}
+
+function DeliverySection({
+  delivery,
+  error,
+  onOpenEvidence,
+}: {
+  delivery?: TaskDelivery
+  error?: string
+  onOpenEvidence?: (evidence: ReviewEvidencePreview) => void
+}) {
+  const goal = delivery?.goal
+  const pack = delivery?.reviewPack
+  const statements = new Map(
+    goal?.successCriteria.map(criterion => [
+      criterion.criterionId,
+      criterion.observableStatement,
+    ]) ?? [],
+  )
+  const artifactsById = new Map(
+    delivery?.artifacts.map(artifact => [artifact.id, artifact]) ?? [],
+  )
+  const evidencePreviews: ReviewEvidencePreview[] = (
+    delivery?.evidence ?? []
+  ).map(item => {
+    const artifact = item.artifactId
+      ? artifactsById.get(item.artifactId)
+      : undefined
+    return {
+      evidenceId: item.id,
+      criterionId: item.criterionId,
+      kind: item.kind,
+      verification: item.verification.result,
+      sensitivity: item.sensitivity,
+      capturedAt: item.capturedAt,
+      contentHash: '',
+      hasContent: Boolean(artifact),
+      ...(artifact
+        ? {
+            artifact: {
+              id: artifact.id,
+              name: artifact.name,
+              kind: artifact.kind,
+              revision: artifact.revision,
+              ...(artifact.mimeType ? { mimeType: artifact.mimeType } : {}),
+              ...(artifact.uri ? { uri: artifact.uri } : {}),
+            },
+          }
+        : {}),
+      presentation: item.presentation,
+      limitations: item.limitations,
+    }
+  })
+  const criteria: ReviewCriterionPreview[] =
+    pack?.criteria.map(criterion => ({
+      criterionId: criterion.criterionId,
+      completionStatus: criterion.completionStatus,
+      explanation: criterion.explanation,
+      limitations: criterion.limitations,
+      evidenceCount: criterion.evidenceRefs.length,
+    })) ?? []
+  return (
+    <section className="detail-section">
+      <h3>目标与交付</h3>
+      {error && (
+        <p className="settings-error" role="alert">
+          {error}
+        </p>
+      )}
+      {goal && (
+        <div className="goal-summary">
+          <small>目标修订 v{String(goal.revision)}</small>
+          <p>{goal.desiredOutcome}</p>
+          {goal.nonGoals.length > 0 && (
+            <small>不做：{goal.nonGoals.join('；')}</small>
+          )}
+        </div>
+      )}
+      {pack ? (
+        <>
+          <p className={`review-outcome is-${pack.finalOutcome}`}>
+            {outcomeLabel(pack.finalOutcome)} · 按 {String(criteria.length)}{' '}
+            条完成标准审查
+          </p>
+          <CriteriaList criteria={criteria} statements={statements} />
+          {pack.remainingRisks.length > 0 && (
+            <p className="review-risks">
+              剩余风险：{pack.remainingRisks.join('；')}
+            </p>
+          )}
+        </>
+      ) : (
+        goal && (
+          <p className="drawer-footnote">
+            还没有 Review Pack；执行完成后会按完成标准生成审查结论。
+          </p>
+        )
+      )}
+      <EvidenceGallery
+        evidence={evidencePreviews}
+        onOpenEvidence={onOpenEvidence}
+      />
+    </section>
+  )
+}
+
+function ReviewDetail({
+  review,
+  goal,
+  onOpenEvidence,
+  onOpenTask,
+}: {
+  review: ReviewProjection
+  goal?: GoalContract
+  onOpenEvidence?: (evidence: ReviewEvidencePreview) => void
+  onOpenTask?: () => void
+}) {
+  const statements = new Map(
+    goal?.successCriteria.map(criterion => [
+      criterion.criterionId,
+      criterion.observableStatement,
+    ]) ?? [],
+  )
+  return (
+    <div className="drawer-body">
+      <section
+        className={`state-hero state-${review.finalOutcome === 'completed' ? '已完成' : review.finalOutcome === 'partial' ? '待确认' : '失败'}`}
+      >
+        <span>
+          {review.finalOutcome === 'completed' ? (
+            <CheckCircle2 size={22} />
+          ) : (
+            <AlertTriangle size={22} />
+          )}
+        </span>
+        <div>
+          <small>{outcomeLabel(review.finalOutcome)}</small>
+          <h3>目标修订 v{String(review.goalRevision)} 的交付审查</h3>
+          <p>结论来自服务端 Review Pack，按完成标准与证据生成。</p>
+        </div>
+      </section>
+      <section className="detail-section">
+        <h3>完成标准</h3>
+        <CriteriaList criteria={review.criteria} statements={statements} />
+      </section>
+      <section className="detail-section">
+        <h3>证据画廊</h3>
+        <EvidenceGallery
+          evidence={review.evidence}
+          onOpenEvidence={onOpenEvidence}
+        />
+      </section>
+      {review.remainingRisks.length > 0 && (
+        <section className="detail-section">
+          <h3>剩余风险</h3>
+          <p className="review-risks">{review.remainingRisks.join('；')}</p>
+        </section>
+      )}
+      {review.rollback && (
+        <section className="detail-section">
+          <h3>回滚说明</h3>
+          <pre className="approval-result">
+            {JSON.stringify(review.rollback, null, 2)}
+          </pre>
+        </section>
+      )}
+      <footer className="drawer-footer">
+        {onOpenTask && (
+          <button className="primary-button" onClick={onOpenTask} type="button">
+            打开事情详情与审计时间线
+          </button>
+        )}
+      </footer>
+    </div>
+  )
+}
+
+function ClarificationDetail({
+  questions,
+  onAnswer,
+  onOpenTask,
+}: {
+  questions: string[]
+  onAnswer?: () => void
+  onOpenTask?: () => void
+}) {
+  return (
+    <div className="drawer-body">
+      <section className="approval-card">
+        <header>
+          <ShieldCheck size={20} />
+          <strong>Pegas 需要先确认这些问题</strong>
+        </header>
+        <p>
+          这些信息会实质改变结果、权限或风险。回答后 Pegas
+          会按当前目标修订继续执行，不会丢失已有进展。
+        </p>
+      </section>
+      <section className="detail-section">
+        <h3>待澄清问题</h3>
+        <ol aria-label="待澄清问题" className="clarification-questions">
+          {questions.map((question, index) => (
+            <li key={`${String(index)}-${question}`}>{question}</li>
+          ))}
+        </ol>
+      </section>
+      <footer className="drawer-footer">
+        {onAnswer && (
+          <button className="primary-button" onClick={onAnswer} type="button">
+            去回答
+          </button>
+        )}
+        {onOpenTask && (
+          <button
+            className="secondary-button"
+            onClick={onOpenTask}
+            type="button"
+          >
+            查看事情详情
+          </button>
+        )}
+      </footer>
+    </div>
+  )
+}
+
 function ExecutionProfileMeta({ run }: { run?: Run }) {
   const source = workerProfileSourceLabel(
     run?.executionContext?.workerProfileSource,
@@ -982,11 +1425,73 @@ function RuleDetail({ title }: { title: string }) {
   )
 }
 
+function useEvidenceContentUrl(rawContentUrl?: string): {
+  contentUrl?: string
+  contentError: string
+  loadingContent: boolean
+} {
+  const [contentUrl, setContentUrl] = useState<string>()
+  const [contentError, setContentError] = useState('')
+  const [loadingContent, setLoadingContent] = useState(false)
+  const needsFetch = Boolean(
+    rawContentUrl && sessionStorage.getItem('pegas-token'),
+  )
+  useEffect(() => {
+    if (!rawContentUrl) return
+    if (!needsFetch) {
+      setContentUrl(rawContentUrl)
+      return
+    }
+    let cancelled = false
+    let objectUrl: string | undefined
+    setLoadingContent(true)
+    setContentError('')
+    fetch(rawContentUrl, {
+      headers: {
+        authorization: `Bearer ${sessionStorage.getItem('pegas-token') ?? ''}`,
+      },
+    })
+      .then(async response => {
+        if (!response.ok) throw new Error('预览内容读取失败。')
+        return response.blob()
+      })
+      .then(blob => {
+        if (cancelled) return
+        objectUrl = URL.createObjectURL(blob)
+        setContentUrl(objectUrl)
+        setLoadingContent(false)
+      })
+      .catch((caught: unknown) => {
+        if (cancelled) return
+        setContentError(
+          caught instanceof Error ? caught.message : '预览内容读取失败。',
+        )
+        setLoadingContent(false)
+      })
+    return () => {
+      cancelled = true
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [rawContentUrl, needsFetch])
+  return { contentUrl, contentError, loadingContent }
+}
+
+function EvidenceThumb({ alt, url }: { alt: string; url: string }) {
+  const { contentUrl, contentError } = useEvidenceContentUrl(url)
+  if (contentError || !contentUrl) return <ImageIcon size={26} />
+  return <img alt={alt} loading="lazy" src={contentUrl} />
+}
+
 function PreviewDetail({
+  onBack,
   view,
 }: {
+  onBack?: () => void
   view: Extract<DrawerView, { kind: 'preview' }>
 }) {
+  const { contentUrl, contentError, loadingContent } = useEvidenceContentUrl(
+    view.contentUrl,
+  )
   const Icon =
     view.preview === 'image'
       ? ImageIcon
@@ -997,27 +1502,60 @@ function PreviewDetail({
           : FileText
   return (
     <div className="drawer-body">
-      <div className={`${view.preview}-preview preview-placeholder`}>
-        <Icon size={48} />
-        <h3>{view.title}</h3>
-        <p>{view.description ?? '服务端没有提供可渲染的预览内容。'}</p>
-      </div>
+      {onBack && view.backLabel && (
+        <button
+          className="inline-link preview-back"
+          onClick={onBack}
+          type="button"
+        >
+          {view.backLabel}
+        </button>
+      )}
+      {loadingContent ? (
+        <div className={`${view.preview}-preview preview-placeholder`}>
+          <Icon size={48} />
+          <h3>{view.title}</h3>
+          <p>正在读取已存证的预览内容…</p>
+        </div>
+      ) : contentError ? (
+        <div className={`${view.preview}-preview preview-placeholder`}>
+          <Icon size={48} />
+          <h3>{view.title}</h3>
+          <p role="alert">{contentError}</p>
+        </div>
+      ) : contentUrl && view.preview === 'image' ? (
+        <figure className="evidence-preview">
+          <img alt={view.title} src={contentUrl} />
+          <figcaption>{view.title}</figcaption>
+        </figure>
+      ) : contentUrl && view.preview === 'video' ? (
+        <figure className="evidence-preview">
+          <video controls preload="metadata" src={contentUrl} />
+          <figcaption>{view.title}</figcaption>
+        </figure>
+      ) : (
+        <div className={`${view.preview}-preview preview-placeholder`}>
+          <Icon size={48} />
+          <h3>{view.title}</h3>
+          <p>{view.description ?? '服务端没有提供可渲染的预览内容。'}</p>
+        </div>
+      )}
       <section className="metadata-list">
         <dl>
           <Meta label="类型" value={view.mimeType} />
           <Meta label="来源" value={view.source} />
         </dl>
       </section>
-      {view.url && (
+      {(view.url ?? contentUrl) && (
         <footer className="drawer-footer">
           <a
             className="primary-button"
-            href={view.url}
+            href={view.url ?? contentUrl}
             rel="noreferrer"
             target="_blank"
           >
             <ExternalLink size={16} />
-            打开来源
+            {view.url ? '打开来源' : '打开原始内容'}
           </a>
         </footer>
       )}

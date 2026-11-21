@@ -36,6 +36,7 @@ function renderWelcome(options?: {
       continuationChannel={undefined}
       draft={options?.draft ?? ''}
       models={[]}
+      onAnswerClarification={() => undefined}
       onClearContinuation={() => undefined}
       onConfigureVoice={() => undefined}
       onDraftChange={() => undefined}

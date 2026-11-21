@@ -18,9 +18,14 @@ import { unresolvedAttentionMessages } from './sealed/types'
 import type {
   Approval,
   DurableAction,
+  GoalContract,
+  ReviewPack,
+  ReviewProjection,
   Run,
   SettingsResponse,
   Snapshot,
+  TaskArtifact,
+  TaskDelivery,
   WorkChannel,
 } from './types'
 
@@ -178,6 +183,156 @@ function actionFixture(approval: Approval): DurableAction {
   }
 }
 
+const goalFixture: GoalContract = {
+  id: 'goal-1',
+  taskId: channel.id,
+  revision: 2,
+  commandId: 'cmd-goal-1',
+  createdAt: '2026-11-20T00:00:00.000Z',
+  basedOnEventIds: ['event-1'],
+  desiredOutcome: '发布经过验证的候选版本，失败时自动回滚',
+  beneficiaries: ['owner'],
+  successCriteria: [
+    {
+      criterionId: 'criterion-verify',
+      observableStatement: '候选版本通过健康检查并留存截图',
+      required: true,
+      evidencePlanRef: 'plan-verify',
+    },
+    {
+      criterionId: 'criterion-rollback',
+      observableStatement: '失败时自动回滚到稳定版本',
+      required: true,
+      evidencePlanRef: 'plan-rollback',
+    },
+  ],
+  nonGoals: ['不修改生产数据库结构'],
+  constraints: [],
+  contextSources: [],
+  assumptions: [],
+  unknowns: [],
+  prerequisites: [],
+  permissionBoundary: {},
+  reviewCheckpoints: [],
+  evidencePlan: [],
+  failureAndRecovery: '失败时回滚到上一个稳定版本。',
+  feedbackSignals: [],
+}
+
+const artifactFixture: TaskArtifact = {
+  id: 'artifact-1',
+  taskId: channel.id,
+  commandId: 'cmd-artifact-1',
+  createdAt: '2026-11-20T00:02:00.000Z',
+  runId: run.id,
+  name: '候选版本健康检查截图',
+  kind: 'image',
+  mimeType: 'image/png',
+  revision: 'r1',
+  contentHash: 'hash-artifact-1',
+  metadata: {},
+  sensitivity: 'internal',
+}
+
+const reviewPackFixture: ReviewPack = {
+  id: 'review-pack-1',
+  revision: 1,
+  taskId: channel.id,
+  runId: run.id,
+  goalRevision: 2,
+  basisEventIds: ['event-1'],
+  projectionAsOf: '2026-11-20T00:05:00.000Z',
+  finalOutcome: 'partial',
+  criteria: [
+    {
+      criterionId: 'criterion-verify',
+      completionStatus: 'satisfied',
+      currentValidity: 'valid',
+      evidenceRefs: ['evidence-1'],
+      explanation: '健康检查通过，截图已存证。',
+      limitations: [],
+    },
+    {
+      criterionId: 'criterion-rollback',
+      completionStatus: 'unverified',
+      currentValidity: 'unknown',
+      evidenceRefs: [],
+      explanation: '还没有触发过一次真实回滚。',
+      limitations: ['缺少回滚演练证据'],
+    },
+  ],
+  sideEffects: [],
+  remainingRisks: ['回滚路径未经过真实演练'],
+  rollback: { step: 'restore-previous-release' },
+  auditLink: `/v1/channels/${channel.id}/timeline`,
+  createdAt: '2026-11-20T00:05:00.000Z',
+}
+
+const deliveryFixture: TaskDelivery = {
+  goal: goalFixture,
+  artifacts: [artifactFixture],
+  evidence: [
+    {
+      id: 'evidence-1',
+      criterionId: 'criterion-verify',
+      kind: 'screenshot',
+      artifactId: artifactFixture.id,
+      verification: { result: 'passed' },
+      sensitivity: 'internal',
+      capturedAt: '2026-11-20T00:03:00.000Z',
+      presentation: {},
+      limitations: [],
+    },
+  ],
+  reviewPack: reviewPackFixture,
+}
+
+const reviewProjectionFixture: ReviewProjection = {
+  finalOutcome: 'partial',
+  goalRevision: 2,
+  criteria: [
+    {
+      criterionId: 'criterion-verify',
+      completionStatus: 'satisfied',
+      explanation: '健康检查通过，截图已存证。',
+      limitations: [],
+      evidenceCount: 1,
+    },
+    {
+      criterionId: 'criterion-rollback',
+      completionStatus: 'unverified',
+      explanation: '还没有触发过一次真实回滚。',
+      limitations: ['缺少回滚演练证据'],
+      evidenceCount: 0,
+    },
+  ],
+  evidence: [
+    {
+      evidenceId: 'evidence-1',
+      criterionId: 'criterion-verify',
+      kind: 'screenshot',
+      verification: 'passed',
+      sensitivity: 'internal',
+      capturedAt: '2026-11-20T00:03:00.000Z',
+      contentHash: 'hash-evidence-1',
+      viewport: { width: 1280, height: 800 },
+      hasContent: true,
+      artifact: {
+        id: artifactFixture.id,
+        name: artifactFixture.name,
+        kind: 'image',
+        revision: 'r1',
+        mimeType: 'image/png',
+      },
+      presentation: {},
+      limitations: [],
+    },
+  ],
+  remainingRisks: ['回滚路径未经过真实演练'],
+  rollback: { step: 'restore-previous-release' },
+  auditLink: `/v1/channels/${channel.id}/timeline`,
+}
+
 function installFetch(
   custom?: (
     path: string,
@@ -230,6 +385,10 @@ function installFetch(
       return Promise.resolve(Response.json({ runs: snapshot.runs }))
     if (path.startsWith('/v1/outbox?'))
       return Promise.resolve(Response.json({ messages: snapshot.messages }))
+    if (/^\/v1\/tasks\/[^/]+\/delivery\?/.test(path))
+      return Promise.resolve(
+        Response.json({ artifacts: [], evidence: [], continuation: {} }),
+      )
     if (path === '/v1/settings')
       return Promise.resolve(Response.json(settingsResponse))
     if (path.startsWith('/v1/usage?'))
@@ -4444,5 +4603,224 @@ describe('sealed Pegas UI', () => {
     expect((submitted as { resolution: string }).resolution).toBe('succeeded')
     expect(await screen.findByText('人工核对：确认已成功')).toBeTruthy()
     expect(screen.queryByRole('button', { name: '提交核对结论' })).toBeNull()
+  })
+
+  it('shows goal, review pack criteria, and the evidence gallery in the task drawer', async () => {
+    installFetch(path =>
+      path.startsWith('/v1/tasks/task-1/delivery?')
+        ? Response.json(deliveryFixture)
+        : undefined,
+    )
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(screen.getByRole('button', { name: /安全自更新流程/ }))
+    expect(await screen.findByText('目标与交付')).toBeTruthy()
+    expect(
+      screen.getByText('发布经过验证的候选版本，失败时自动回滚'),
+    ).toBeTruthy()
+    expect(screen.getByText('不做：不修改生产数据库结构')).toBeTruthy()
+    expect(screen.getByText(/部分完成 · 按 2 条完成标准审查/)).toBeTruthy()
+    const criteria = screen.getByLabelText('完成标准')
+    expect(
+      within(criteria).getByText('候选版本通过健康检查并留存截图'),
+    ).toBeTruthy()
+    expect(within(criteria).getAllByText('已满足').length).toBe(1)
+    expect(within(criteria).getAllByText('未验证').length).toBe(1)
+    expect(screen.getByText('剩余风险：回滚路径未经过真实演练')).toBeTruthy()
+    const gallery = screen.getByLabelText('证据画廊')
+    const card = within(gallery).getByRole('button', {
+      name: /候选版本健康检查截图/,
+    })
+    expect(within(card).getByText('已通过')).toBeTruthy()
+    fireEvent.click(card)
+    const previewImage = await screen.findByAltText('候选版本健康检查截图')
+    expect(previewImage.getAttribute('src')).toBe(
+      '/v1/evidence/evidence-1/content?userId=owner',
+    )
+    fireEvent.click(screen.getByRole('button', { name: '返回交付审查' }))
+    expect(await screen.findByText('目标与交付')).toBeTruthy()
+    expect(screen.getByLabelText('证据画廊')).toBeTruthy()
+  })
+
+  it('surfaces a delivery fetch failure without hiding the task drawer', async () => {
+    installFetch(path =>
+      path.startsWith('/v1/tasks/task-1/delivery?')
+        ? Response.json({ message: '读取交付失败' }, { status: 500 })
+        : undefined,
+    )
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(screen.getByRole('button', { name: /安全自更新流程/ }))
+    expect(await screen.findByText('目标与交付')).toBeTruthy()
+    expect(await screen.findByText('读取交付失败')).toBeTruthy()
+    expect(screen.getByText('Channel 时间线')).toBeTruthy()
+  })
+
+  it('opens the review drawer from a review.ready attention message', async () => {
+    const sourceMessage = snapshot.messages[0]
+    if (!sourceMessage) throw new Error('Expected an outbox message fixture')
+    const reviewMessage = {
+      ...sourceMessage,
+      id: 'message-review',
+      payload: {
+        type: 'review.ready',
+        taskId: channel.id,
+        text: '候选版本已交付，请审查。',
+        review: reviewProjectionFixture,
+      },
+    }
+    installSnapshotFetch({ ...snapshot, messages: [reviewMessage] }, path =>
+      path.startsWith('/v1/tasks/task-1/delivery?')
+        ? Response.json(deliveryFixture)
+        : undefined,
+    )
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '审查交付' }))
+    expect(await screen.findByText('按完成标准审查交付')).toBeTruthy()
+    expect(screen.getByText('部分完成')).toBeTruthy()
+    const criteria = screen.getByLabelText('完成标准')
+    expect(within(criteria).getByText('已满足')).toBeTruthy()
+    expect(within(criteria).getByText('未验证')).toBeTruthy()
+    expect(
+      await within(criteria).findByText('候选版本通过健康检查并留存截图'),
+    ).toBeTruthy()
+    expect(screen.getByText('局限：缺少回滚演练证据')).toBeTruthy()
+    expect(
+      screen.getAllByText('回滚路径未经过真实演练').length,
+    ).toBeGreaterThan(0)
+    const gallery = screen.getByLabelText('证据画廊')
+    fireEvent.click(
+      within(gallery).getByRole('button', { name: /候选版本健康检查截图/ }),
+    )
+    expect(await screen.findByAltText('候选版本健康检查截图')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '返回交付审查' }))
+    expect(await screen.findByText('按完成标准审查交付')).toBeTruthy()
+    fireEvent.click(
+      screen.getByRole('button', { name: '打开事情详情与审计时间线' }),
+    )
+    expect(await screen.findByText('Channel 时间线')).toBeTruthy()
+  })
+
+  it('opens clarification questions and continues the task from the drawer', async () => {
+    const sourceMessage = snapshot.messages[0]
+    if (!sourceMessage) throw new Error('Expected an outbox message fixture')
+    const clarificationMessage = {
+      ...sourceMessage,
+      id: 'message-clarification',
+      payload: {
+        type: 'goal.clarification_required',
+        taskId: channel.id,
+        questions: ['发布窗口是哪个时间段？', '允许影响哪些用户？'],
+        text: '发布窗口是哪个时间段？\n允许影响哪些用户？',
+      },
+    }
+    const fetchMock = installSnapshotFetch({
+      ...snapshot,
+      channels: [{ ...channel, statusReason: 'awaiting_goal_clarification' }],
+      messages: [clarificationMessage],
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '去回答' }))
+    expect(await screen.findByText('Pegas 需要先确认这些问题')).toBeTruthy()
+    const questions = screen.getByLabelText('待澄清问题')
+    expect(within(questions).getByText('发布窗口是哪个时间段？')).toBeTruthy()
+    expect(within(questions).getByText('允许影响哪些用户？')).toBeTruthy()
+    const drawer = screen.getByRole('dialog')
+    fireEvent.click(within(drawer).getByRole('button', { name: '去回答' }))
+    expect(await screen.findByText(/继续事情：/)).toBeTruthy()
+    const composer = screen.getByLabelText('给 Pegas 发消息')
+    fireEvent.change(composer, {
+      target: { value: '今晚 22:00 发布，仅内部用户。' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([path, init]) => {
+          if (path !== '/v1/events' || init?.method !== 'POST') return false
+          const body = JSON.parse(
+            typeof init.body === 'string' ? init.body : '{}',
+          ) as { payload?: { taskId?: string } }
+          return body.payload?.taskId === channel.id
+        }),
+      ).toBe(true),
+    )
+  })
+
+  it('shows an inline clarification card in the conversation while waiting', async () => {
+    const sourceMessage = snapshot.messages[0]
+    if (!sourceMessage) throw new Error('Expected an outbox message fixture')
+    const clarificationMessage = {
+      ...sourceMessage,
+      id: 'message-clarification-inline',
+      payload: {
+        type: 'goal.clarification_required',
+        taskId: channel.id,
+        questions: ['发布窗口是哪个时间段？'],
+        text: '发布窗口是哪个时间段？',
+      },
+    }
+    installSnapshotFetch({
+      ...snapshot,
+      channels: [{ ...channel, statusReason: 'awaiting_goal_clarification' }],
+      messages: [clarificationMessage],
+    })
+    render(<App />)
+    expect(await screen.findByText('开始执行前，需要你补充几点')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /去回答/ }))
+    expect(await screen.findByText(/继续事情：/)).toBeTruthy()
+  })
+
+  it('hides the inline clarification card once the task no longer waits', async () => {
+    const sourceMessage = snapshot.messages[0]
+    if (!sourceMessage) throw new Error('Expected an outbox message fixture')
+    const clarificationMessage = {
+      ...sourceMessage,
+      id: 'message-clarification-resolved',
+      payload: {
+        type: 'goal.clarification_required',
+        taskId: channel.id,
+        questions: ['发布窗口是哪个时间段？'],
+        text: '发布窗口是哪个时间段？',
+      },
+    }
+    installSnapshotFetch({
+      ...snapshot,
+      messages: [clarificationMessage],
+    })
+    render(<App />)
+    await screen.findByText('你的私人智能工作伙伴')
+    expect(screen.queryByText('开始执行前，需要你补充几点')).toBeNull()
+  })
+
+  it('shows a compact review card in the conversation for review.ready', async () => {
+    const sourceMessage = snapshot.messages[0]
+    if (!sourceMessage) throw new Error('Expected an outbox message fixture')
+    const reviewMessage = {
+      ...sourceMessage,
+      id: 'message-review-inline',
+      payload: {
+        type: 'review.ready',
+        taskId: channel.id,
+        text: '候选版本已交付，请审查。',
+        review: reviewProjectionFixture,
+      },
+    }
+    installSnapshotFetch({ ...snapshot, messages: [reviewMessage] })
+    render(<App />)
+    expect(await screen.findByText('这件事有一份交付可以审查')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /审查交付/ }))
+    expect(await screen.findByText('按完成标准审查交付')).toBeTruthy()
   })
 })

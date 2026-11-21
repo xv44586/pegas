@@ -138,3 +138,12 @@
 - 证据：`pnpm check`（53 文件 / 518 测试）、`pnpm smoke`、`pnpm review:ui -- --force`（57 张截图）；真实 Control Plane+Worker+Scheduler（bearer 模式）联调覆盖搜索摘要、真实触发记录与两条核对路径；axe 三主题 × 搜索/触发记录/核对抽屉/待处理页及 390px 移动端 0 违例。详见 `docs/feature-map.md` DESIGN-002 对应小节。
 - 已知服务端缺陷（待独立 fix，未在本变更修改）：短查询（<3 字符）snippet SQL 参数绑定顺序错误导致 400 `datatype mismatch`，UI 就地展示错误；详见 Feature Map CHANNEL-003。
 - 仍缺：搜索状态/时间筛选与分页 UI，以及 Artifact、规则、通知偏好、恢复与协作占位启用。
+
+## 12. Review Pack/证据画廊/澄清卡片接入（2026-11-21）
+
+- 事情详情抽屉新增「目标与交付」区：并行读取 `GET /v1/tasks/:id/delivery`（单请求返回 goal+artifacts+evidence+reviewPack），展示目标修订、期望结果、非目标、Review Pack 逐条完成标准（已满足/部分满足/未满足/未验证）、剩余风险与证据画廊；无 Review Pack 时如实提示；读取失败就地报错且不遮蔽时间线。
+- `review.ready` 通知在待你处理页显示「审查交付」，打开审查抽屉：结论 hero（completed/partial/failed）、完成标准（语句由当前 Goal Contract 补全）、证据画廊、剩余风险、回滚说明与「打开事情详情与审计时间线」；对话页同时显示紧凑审查卡片。
+- 证据画廊缩略图与全屏预览经 `GET /v1/evidence/:id/content` 取回已存证字节：bearer 模式 fetch→blob（卸载时回收 objectURL），无 token 场景直连 URL；预览显示验证结论/敏感级/类型元数据，可「打开原始内容」，并支持「返回交付审查」回到来源抽屉（review 或 task）。
+- `goal.clarification_required` 归类「需要补充」：待你处理显示「去回答」，打开澄清抽屉列出 blocking 问题；对话页在 Task `statusReason=awaiting_goal_clarification` 期间显示内联澄清卡片（解除等待后自动隐藏）。「去回答」跳转对话页、聚焦输入器并携带 taskId 发送，复用既有 continuation 链路。
+- 证据：`pnpm check`（74 文件 / 657 测试，App.test.tsx 新增 7 条回归）、`pnpm smoke`、`pnpm review:ui -- --force`（57 张截图）；真实 Control Plane（bearer + store 级 Goal/Artifact/Evidence/Report seed）联调全链路；axe 三主题 × 审查/预览/澄清/事情详情/对话页 0 违例；实拍见 `output/feature-review/live-evidence-goal/`。
+- 仍缺：历史 Goal/Review Pack 修订下钻、evidence 重验证入口、validity 失效事件；通知偏好、附件上传、语音直发、执行节点、Worker 覆盖与协作卡片未接入；Review Pack criterion 解释文案暂为服务端英文模板。

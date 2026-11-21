@@ -2,11 +2,14 @@ import type {
   Approval,
   ChannelTimeline,
   DurableAction,
+  GoalContract,
   ModelUsageReport,
   OutboxMessage,
+  ReviewProjection,
   Run,
   SettingsResponse,
   Snapshot,
+  TaskDelivery,
   WorkChannel,
 } from '../types'
 
@@ -38,6 +41,8 @@ export type DrawerView =
       runs?: Run[]
       timeline?: ChannelTimeline
       timelineError?: string
+      delivery?: TaskDelivery
+      deliveryError?: string
       usage?: {
         totalTokens?: number
         durationMs?: number
@@ -58,6 +63,19 @@ export type DrawerView =
       action: DurableAction
       message: OutboxMessage
     }
+  | {
+      kind: 'review'
+      review: ReviewProjection
+      channel: WorkChannel
+      message: OutboxMessage
+      goal?: GoalContract
+    }
+  | {
+      kind: 'clarification'
+      questions: string[]
+      channel: WorkChannel
+      message: OutboxMessage
+    }
   | { kind: 'rule'; title: string }
   | {
       kind: 'preview'
@@ -67,6 +85,8 @@ export type DrawerView =
       mimeType?: string
       source?: string
       url?: string
+      contentUrl?: string
+      backLabel?: string
     }
 
 export interface AppData {
@@ -140,6 +160,7 @@ export function attentionKind(message: OutboxMessage): AttentionKind {
       return 'approval'
     case 'input.required':
     case 'input.requested':
+    case 'goal.clarification_required':
     case 'goal.evidence_required':
     case 'run.blocked':
     case 'run.waiting':
@@ -201,6 +222,36 @@ export function isReconciliationMessage(message: OutboxMessage): boolean {
     payloadType(message.payload) === 'action.reconciliation_required' &&
     Boolean(actionIdFromMessage(message))
   )
+}
+
+export function clarificationQuestions(
+  message: OutboxMessage,
+): string[] | undefined {
+  if (payloadType(message.payload) !== 'goal.clarification_required')
+    return undefined
+  const questions = (message.payload as Record<string, unknown>).questions
+  if (!Array.isArray(questions)) return undefined
+  const parsed = questions.filter(
+    (question): question is string =>
+      typeof question === 'string' && Boolean(question.trim()),
+  )
+  return parsed.length ? parsed : undefined
+}
+
+export function reviewProjection(
+  message: OutboxMessage,
+): ReviewProjection | undefined {
+  if (payloadType(message.payload) !== 'review.ready') return undefined
+  const review = (message.payload as Record<string, unknown>).review
+  if (!review || typeof review !== 'object') return undefined
+  const candidate = review as Partial<ReviewProjection>
+  if (
+    !Array.isArray(candidate.criteria) ||
+    !Array.isArray(candidate.evidence) ||
+    typeof candidate.finalOutcome !== 'string'
+  )
+    return undefined
+  return review as ReviewProjection
 }
 
 export function latestRunForTask(
