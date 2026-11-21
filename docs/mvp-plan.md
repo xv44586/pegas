@@ -58,7 +58,7 @@
 - [x] Approval 持久等待、释放 Worker 和事件恢复；
 - [x] Action idempotency 与未知副作用处理（已接入协议的 Executor；通用 DSH tool-call 代理待补）；
 - [x] Memory 来源、修正、删除和按需加载（服务端闭环；自动抽取与 Web 写操作待补）；
-- [ ] SQLite 备份、校验与恢复演练；
+- [x] SQLite 备份、校验与恢复演练（在线备份、SHA-256/integrity 校验、空环境恢复续跑回归）；
 - [ ] Worker、网络和数据库故障注入测试；
 - [ ] Outbox 的重试、合并、静默时段和未知投递处理。
 
@@ -69,7 +69,7 @@
 - [ ] Pegas 生成修改后强制运行完整 CI；
 - [ ] 将 commit 构建成不可变 Release；
 - [ ] Release manifest、产物校验值和 schema 兼容范围（Candidate evidence 校验已完成，artifact 打包与签名待实现）；
-- [ ] 发布前自动备份；
+- [x] 发布前自动备份（Supervisor 启动 Release 前执行已验证备份）；
 - [ ] Candidate readiness 和关键路径 smoke test；
 - [ ] Supervisor 原子切换、观察期和自动回滚；
 - [ ] 发布后从持久 Task 恢复并向用户汇报；

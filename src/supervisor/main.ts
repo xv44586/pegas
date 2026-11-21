@@ -1,7 +1,9 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { resolve } from 'node:path'
+import { existsSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 
 import type { ReleaseRef } from '../core/domain.js'
+import { createDatabaseBackup } from '../storage/backup.js'
 import { createRecoveryServer } from './recovery-server.js'
 import { ReleaseStateStore } from './release-state.js'
 import {
@@ -105,6 +107,18 @@ while (!lifecycle.stopRequested) {
   }
   const release = inspection.state.active
   console.log(`Starting Pegas release ${release.id} from ${release.root}`)
+
+  if (existsSync(databasePath)) {
+    try {
+      const created = await createDatabaseBackup(
+        databasePath,
+        resolve(process.env.PEGAS_BACKUP_DIR ?? join(dataDir, 'backups')),
+      )
+      console.log(`Pre-start database backup verified: ${created.path}`)
+    } catch (error) {
+      console.error('Pre-start database backup failed; continuing', error)
+    }
+  }
 
   const controlPlane = startProcess(release, 'control-plane/main.js')
   children = [controlPlane]
