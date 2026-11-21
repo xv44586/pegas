@@ -78,8 +78,19 @@ pnpm icons:check
 
 ## 剩余风险与下一缺口
 
-仍需 VoiceOver/NVDA 实机验证和正式暗色主题。Forced Colors 下使用系统
-`Highlight` / `HighlightText`，状态仍通过相邻文字或可访问描述表达。
+自动化可访问性门禁已建立：`pnpm a11y:review`（`scripts/a11y-review.mjs`，
+axe-core）对 light/warm/dark 三主题 × 对话/所有事情/待你处理/自动化/记忆/
+设置六 surface 执行 WCAG 2.1 AA 扫描，serious/critical 违例即失败；另以
+Playwright `forcedColors: 'active'` 验证 Worker 图标几何与状态文字线索。
+当前 18 组合 0 违例。VoiceOver/NVDA 实机验证仍待人工执行（自动化无法替代）。
+
+门禁首跑发现并修复的真实缺陷：
+
+- 筛选条误用 `tablist/tab` 且无 `tabpanel`、`aria-controls`：改为
+  `role="group"` + toggle button（`aria-pressed`），设置页真 tablist 去除
+  非法 `aria-pressed`。
+- light 主题 `--critical` 与 `--critical-soft` 对比度 4.28 < 4.5：调整为
+  `#b93a46`（全表面 ≥ 4.8），并写入 `test/sealed-ui-contrast.test.ts` 回归。
 
 ### 首绘竞态修复（2026-11-21）
 

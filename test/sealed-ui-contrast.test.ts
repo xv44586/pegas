@@ -94,7 +94,11 @@ describe('sealed UI status color contrast', () => {
       for (const surface of surfaces) {
         expect(contrast(read('positive'), surface)).toBeGreaterThanOrEqual(4.5)
         expect(contrast(read('caution'), surface)).toBeGreaterThanOrEqual(4.5)
+        expect(contrast(read('critical'), surface)).toBeGreaterThanOrEqual(4.5)
       }
+      expect(
+        contrast(read('critical'), read('critical-soft')),
+      ).toBeGreaterThanOrEqual(4.5)
       expect(
         contrast(read('positive'), read('positive-soft')),
       ).toBeGreaterThanOrEqual(4.5)

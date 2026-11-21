@@ -53,6 +53,9 @@ importers:
       '@vitest/coverage-v8':
         specifier: ^5.1.0
         version: 5.1.0(vitest@5.1.0)
+      axe-core:
+        specifier: ^4.14.1
+        version: 4.14.1
       electron:
         specifier: ^39.8.10
         version: 39.8.10(supports-color@7.2.0)
@@ -1711,6 +1714,13 @@ packages:
       {
         integrity: sha512-lHe62zvbTB5eEABUVi/AwVh0ZKY9rMMDhmm+eeyuuUQbQ3+J+fONVQOZyj+DdrvD4BY33uYniyRJ4UJIaSKAfw==,
       }
+
+  axe-core@4.14.1:
+    resolution:
+      {
+        integrity: sha512-FHfa+lmNjQZfJz1q8wKqIDwC6DExcHt/pkjNQb09a3NPjCKg2rhu5qb2S4r76ASyFNNtuFooJpZe37OgudVGtQ==,
+      }
+    engines: { node: '>=4' }
 
   bail@2.0.2:
     resolution:
@@ -5720,6 +5730,8 @@ snapshots:
   at-least-node@1.0.0: {}
 
   aws4@1.13.2: {}
+
+  axe-core@4.14.1: {}
 
   bail@2.0.2: {}
 
