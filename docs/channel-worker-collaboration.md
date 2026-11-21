@@ -361,6 +361,22 @@ Outbox 的投递状态与产品已读状态分离；`sent` 不代表用户已经
 - 过滤：工作状态、是否结束、是否由委派创建、WorkerProfile、是否需要用户处理。
 - 搜索结果返回片段和稳定 event cursor，进入后定位到原始时间线位置。
 
+### CHANNEL-003 API 与索引合同
+
+```http
+GET /v1/channels/search?userId=owner&q=Telegram&status=started,completed&ended=false&needsAttention=true&workerIconId=computer&sort=updated&limit=25&cursor=<channelId>
+```
+
+- `q` 同时匹配稳定 Channel ID 和用户可见全文；最多 200 个 Unicode 字符。
+- `status` 接受逗号分隔的五种 Task 状态；`ended` 区分活动与结束 Channel；`needsAttention` 只匹配未读 Outbox 或等待用户的 Approval。
+- `sort` 为 `updated`、`created` 或 `ended`，并以 Channel ID 做稳定次级排序；`cursor` 是上一页最后一个 Channel ID。
+- 响应返回 `channels`、最多 50 条 `matches` 片段和可选 `nextCursor`。片段标明 `sourceKind`、`sourceId` 与 `channelId`，不返回隐藏指令或原始工具参数。
+- schema v18 使用 SQLite FTS5 trigram 索引标题、目标、用户输入、Run 输出、Worker Report、Artifact 名称和用户可见 Outbox 文本。事务触发器覆盖待路由的显式 Channel 输入；迁移时回填既有可见事实。
+- 读取始终先按 `userId` 过滤。其他用户的 Channel、索引片段、游标和待处理状态不会出现在响应中。
+- 按 WorkerProfile 与委派来源筛选依赖后续 `WORKER-001` 编辑器和 `COLLAB-001` 关系投影；Web 目前仍使用内存搜索，接入此 API 属 DESIGN-002 的后续交互工作。
+
+自动化证据位于 `test/channel-search.test.ts`：中文 trigram 查询、其他用户隔离、跨用户 TaskEvent 拒绝索引、待路由输入、标题/片段、生命周期与注意力过滤、稳定游标、查询长度上界、HTTP 参数校验、数据库重开索引和迁移后事实保留。`pnpm check`（37 个测试文件、366 个测试，statement 84.31%、line 87.29%）与真实进程/SQLite/HTTP 的 `pnpm smoke` 通过。
+
 ## 权限、幂等与恢复
 
 - 新 Channel 只继承来源 Mandate 中明确允许的范围；扩大范围必须重新审批。
@@ -473,7 +489,7 @@ Outbox 的投递状态与产品已读状态分离；`sent` 不代表用户已经
 | `CHANNEL-002`  | Channel 时间线显示结构化输入、路由、Run、工具摘要和结果                                 | `CHANNEL-001`, `EXEC-001`                                          | Partial  |
 | `WORKER-001`   | 事情继承全局模型并支持显式覆盖、配置快照和受控 Session rollover                         | `CHANNEL-001`, `SETTINGS-001`                                      | Partial  |
 | `COLLAB-001`   | 委派、交接、context note、handback 和结果回送形成持久闭环                               | `CHANNEL-002`, `WORKER-001`, `ROUTE-002`                           | Planned  |
-| `CHANNEL-003`  | 按 ID/对话搜索，并按创建/结束时间和状态排序过滤                                         | `CHANNEL-002`                                                      | Planned  |
+| `CHANNEL-003`  | 按 ID/对话搜索，并按创建/结束时间和状态排序过滤                                         | `CHANNEL-002`                                                      | Usable   |
 | `NOTIFY-003`   | Web Outbox 提供列表、详情、已读和来源 Channel 跳转                                      | `NOTIFY-001`, `CHANNEL-001`                                        | Usable   |
 | `USAGE-001`    | 按 Worker、Channel、Run 记录供应商真实 token、cache、延迟和费用来源                     | `WORKER-001`, `CHANNEL-002`                                        | Usable   |
 | `MEMORY-001`   | 全局、Worker 范围和 Channel 局部记忆可查看、纠正和删除                                  | `WORKER-001`, `CHANNEL-001`                                        | Planned  |

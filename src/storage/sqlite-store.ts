@@ -5,6 +5,11 @@ import { DatabaseSync } from 'node:sqlite'
 
 import { systemClock, type Clock } from '../core/clock.js'
 import { assignWorkerIconId, isWorkerIconId } from '../brand/agent-icon.js'
+import {
+  projectWorkChannel,
+  type ChannelSearchOptions,
+  type ChannelSearchResult,
+} from '../channel/work-channel.js'
 import type {
   ActionOutcomeDraft,
   ActionRequestDraft,
@@ -715,6 +720,210 @@ BEGIN
 END;
 `
 
+const migration18 = `
+CREATE TABLE channel_search_documents (
+  rowid INTEGER PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  source_kind TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  text TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (task_id, source_kind, source_id)
+);
+
+CREATE INDEX channel_search_documents_by_task
+ON channel_search_documents (task_id);
+
+CREATE INDEX tasks_by_user_created
+ON tasks (user_id, created_at DESC, id DESC);
+
+CREATE INDEX tasks_by_user_status
+ON tasks (user_id, status, updated_at DESC, id DESC);
+
+CREATE INDEX outbox_by_task_read
+ON outbox_messages (task_id, read_at);
+
+CREATE VIRTUAL TABLE channel_search USING fts5(
+  text,
+  content = 'channel_search_documents',
+  content_rowid = 'rowid',
+  tokenize = 'trigram'
+);
+
+CREATE TRIGGER channel_search_documents_after_insert
+AFTER INSERT ON channel_search_documents
+BEGIN
+  INSERT INTO channel_search (rowid, text) VALUES (NEW.rowid, NEW.text);
+END;
+
+CREATE TRIGGER channel_search_documents_after_delete
+AFTER DELETE ON channel_search_documents
+BEGIN
+  INSERT INTO channel_search (channel_search, rowid, text)
+  VALUES ('delete', OLD.rowid, OLD.text);
+END;
+
+CREATE TRIGGER channel_search_documents_after_update
+AFTER UPDATE OF text ON channel_search_documents
+BEGIN
+  INSERT INTO channel_search (channel_search, rowid, text)
+  VALUES ('delete', OLD.rowid, OLD.text);
+  INSERT INTO channel_search (rowid, text) VALUES (NEW.rowid, NEW.text);
+END;
+
+CREATE TRIGGER channel_search_tasks_after_insert
+AFTER INSERT ON tasks
+BEGIN
+  INSERT INTO channel_search_documents
+    (task_id, source_kind, source_id, text, updated_at)
+  VALUES
+    (NEW.id, 'channel', NEW.id, NEW.title || char(10) || NEW.goal, NEW.updated_at);
+END;
+
+CREATE TRIGGER channel_search_tasks_after_update
+AFTER UPDATE OF title, goal ON tasks
+BEGIN
+  INSERT OR REPLACE INTO channel_search_documents
+    (task_id, source_kind, source_id, text, updated_at)
+  VALUES
+    (NEW.id, 'channel', NEW.id, NEW.title || char(10) || NEW.goal, NEW.updated_at);
+END;
+
+CREATE TRIGGER channel_search_pending_input_after_insert
+AFTER INSERT ON inbox_events
+WHEN NEW.type = 'user.message'
+  AND json_valid(NEW.payload_json)
+  AND json_type(NEW.payload_json, '$.text') = 'text'
+  AND json_type(NEW.payload_json, '$.taskId') = 'text'
+BEGIN
+  INSERT OR REPLACE INTO channel_search_documents
+    (task_id, source_kind, source_id, text, updated_at)
+  SELECT
+    tasks.id,
+    'input',
+    NEW.id,
+    json_extract(NEW.payload_json, '$.text'),
+    NEW.created_at
+  FROM tasks
+  WHERE tasks.id = json_extract(NEW.payload_json, '$.taskId')
+    AND tasks.user_id = NEW.user_id;
+END;
+
+CREATE TRIGGER channel_search_routed_input_after_insert
+AFTER INSERT ON task_events
+BEGIN
+  INSERT OR REPLACE INTO channel_search_documents
+    (task_id, source_kind, source_id, text, updated_at)
+  SELECT
+    NEW.task_id,
+    'input',
+    inbox_events.id,
+    json_extract(inbox_events.payload_json, '$.text'),
+    inbox_events.created_at
+  FROM inbox_events
+  INNER JOIN tasks ON tasks.id = NEW.task_id
+  WHERE inbox_events.id = NEW.event_id
+    AND tasks.user_id = inbox_events.user_id
+    AND inbox_events.type = 'user.message'
+    AND json_valid(inbox_events.payload_json)
+    AND json_type(inbox_events.payload_json, '$.text') = 'text';
+END;
+
+CREATE TRIGGER channel_search_run_output_after_update
+AFTER UPDATE OF output_json ON runs
+WHEN NEW.output_json IS NOT NULL
+BEGIN
+  INSERT OR REPLACE INTO channel_search_documents
+    (task_id, source_kind, source_id, text, updated_at)
+  VALUES
+    (NEW.task_id, 'run', NEW.id, json_extract(NEW.output_json, '$'), NEW.updated_at);
+END;
+
+CREATE TRIGGER channel_search_report_after_insert
+AFTER INSERT ON worker_reports
+BEGIN
+  INSERT OR REPLACE INTO channel_search_documents
+    (task_id, source_kind, source_id, text, updated_at)
+  VALUES
+    (NEW.task_id, 'report', NEW.id, NEW.summary, NEW.created_at);
+END;
+
+CREATE TRIGGER channel_search_artifact_after_insert
+AFTER INSERT ON task_artifacts
+BEGIN
+  INSERT OR REPLACE INTO channel_search_documents
+    (task_id, source_kind, source_id, text, updated_at)
+  VALUES
+    (NEW.task_id, 'artifact', NEW.id, NEW.name, NEW.created_at);
+END;
+
+CREATE TRIGGER channel_search_outbox_after_insert
+AFTER INSERT ON outbox_messages
+WHEN NEW.task_id IS NOT NULL
+  AND json_valid(NEW.payload_json)
+  AND json_type(NEW.payload_json, '$.text') = 'text'
+BEGIN
+  INSERT OR REPLACE INTO channel_search_documents
+    (task_id, source_kind, source_id, text, updated_at)
+  VALUES
+    (NEW.task_id, 'outbox', NEW.id, json_extract(NEW.payload_json, '$.text'), NEW.created_at);
+END;
+
+INSERT OR REPLACE INTO channel_search_documents
+  (task_id, source_kind, source_id, text, updated_at)
+SELECT id, 'channel', id, title || char(10) || goal, updated_at
+FROM tasks;
+
+INSERT INTO channel_search_documents
+  (task_id, source_kind, source_id, text, updated_at)
+SELECT
+  task_events.task_id,
+  'input',
+  inbox_events.id,
+  json_extract(inbox_events.payload_json, '$.text'),
+  inbox_events.created_at
+FROM task_events
+INNER JOIN inbox_events ON inbox_events.id = task_events.event_id
+INNER JOIN tasks ON tasks.id = task_events.task_id
+WHERE inbox_events.type = 'user.message'
+  AND tasks.user_id = inbox_events.user_id
+  AND json_valid(inbox_events.payload_json)
+  AND json_type(inbox_events.payload_json, '$.text') = 'text'
+;
+
+INSERT OR REPLACE INTO channel_search_documents
+  (task_id, source_kind, source_id, text, updated_at)
+SELECT task_id, 'run', id, json_extract(output_json, '$'), updated_at
+FROM runs
+WHERE output_json IS NOT NULL
+;
+
+INSERT OR REPLACE INTO channel_search_documents
+  (task_id, source_kind, source_id, text, updated_at)
+SELECT task_id, 'report', id, summary, created_at
+FROM worker_reports
+;
+
+INSERT OR REPLACE INTO channel_search_documents
+  (task_id, source_kind, source_id, text, updated_at)
+SELECT task_id, 'artifact', id, name, created_at
+FROM task_artifacts
+;
+
+INSERT OR REPLACE INTO channel_search_documents
+  (task_id, source_kind, source_id, text, updated_at)
+SELECT
+  task_id,
+  'outbox',
+  id,
+  json_extract(payload_json, '$.text'),
+  created_at
+FROM outbox_messages
+WHERE task_id IS NOT NULL
+  AND json_valid(payload_json)
+  AND json_type(payload_json, '$.text') = 'text';
+`
+
 interface InboxRow {
   id: string
   user_id: string
@@ -1086,6 +1295,7 @@ export class PegasStore {
     this.#migrate(15, migration15)
     this.#migrate(16, migration16)
     this.#migrate(17, migration17)
+    this.#migrate(18, migration18)
   }
 
   #backfillWorkerIconIds(): void {
@@ -2107,11 +2317,190 @@ export class PegasStore {
     return rows.map(row => toTask(row as unknown as TaskRow))
   }
 
+  searchChannels(
+    userId: string,
+    options: ChannelSearchOptions,
+  ): ChannelSearchResult {
+    const query = options.query?.trim()
+    if (query && Array.from(query).length > 200)
+      throw new Error('Search query must contain at most 200 characters')
+    if (
+      !Number.isSafeInteger(options.limit) ||
+      options.limit <= 0 ||
+      options.limit > 200
+    )
+      throw new Error('Search limit must be an integer between 1 and 200')
+    const statuses = options.statuses?.length ? options.statuses : undefined
+    const ended = options.ended
+    let cursorValue: string | undefined
+    if (options.cursor) {
+      const cursorRow = this.#database
+        .prepare('SELECT * FROM tasks WHERE id = ? AND user_id = ?')
+        .get(options.cursor, userId) as unknown as TaskRow | undefined
+      if (!cursorRow) throw new Error('Pagination cursor is invalid')
+      cursorValue = taskSearchSortValue(cursorRow, options.sort ?? 'updated')
+    }
+
+    const where = [
+      'tasks.user_id = ?',
+      statuses
+        ? `tasks.status IN (${statuses.map(() => '?').join(',')})`
+        : '1 = 1',
+      ended === undefined
+        ? '1 = 1'
+        : ended
+          ? "tasks.status IN ('completed','cancelled')"
+          : "tasks.status NOT IN ('completed','cancelled')",
+      query
+        ? `(
+             instr(lower(tasks.id), lower(?)) > 0
+             OR ${
+               Array.from(query).length >= 3
+                 ? `EXISTS (
+                     SELECT 1 FROM channel_search
+                     INNER JOIN channel_search_documents
+                       ON channel_search_documents.rowid = channel_search.rowid
+                     WHERE channel_search_documents.task_id = tasks.id
+                       AND channel_search MATCH ?
+                   )`
+                 : `EXISTS (
+                     SELECT 1 FROM channel_search_documents
+                     WHERE channel_search_documents.task_id = tasks.id
+                       AND instr(lower(channel_search_documents.text), lower(?)) > 0
+                   )`
+             }
+           )`
+        : '1 = 1',
+      options.needsAttention
+        ? `(
+             EXISTS (
+               SELECT 1 FROM outbox_messages
+               WHERE outbox_messages.task_id = tasks.id
+                 AND outbox_messages.read_at IS NULL
+             )
+             OR EXISTS (
+               SELECT 1 FROM approvals
+               WHERE approvals.task_id = tasks.id
+                 AND approvals.status = 'awaiting_approval'
+             )
+           )`
+        : '1 = 1',
+      options.workerIconId ? 'tasks.worker_icon_id = ?' : '1 = 1',
+    ]
+    const sortExpression = taskSearchSortExpression(options.sort ?? 'updated')
+    if (cursorValue !== undefined) {
+      where.push(
+        `(
+           ${sortExpression} < ?
+           OR (${sortExpression} = ? AND tasks.id < ?)
+         )`,
+      )
+    }
+    const params: (string | number)[] = [userId]
+    if (statuses) params.push(...statuses)
+    if (query) {
+      params.push(query)
+      if (Array.from(query).length >= 3) params.push(ftsTrigramQuery(query))
+    }
+    if (options.workerIconId) params.push(options.workerIconId)
+    if (cursorValue !== undefined && options.cursor) {
+      params.push(cursorValue, cursorValue, options.cursor)
+    }
+    const rows = this.#database
+      .prepare(
+        `SELECT tasks.* FROM tasks
+         WHERE ${where.join(' AND ')}
+         ORDER BY ${sortExpression} DESC, tasks.id DESC
+         LIMIT ?`,
+      )
+      .all(...params, options.limit + 1) as unknown as TaskRow[]
+    const pageRows = rows.slice(0, options.limit)
+    const channels = pageRows.map(row => projectWorkChannel(toTask(row)))
+    const nextCursor =
+      rows.length > options.limit ? pageRows.at(-1)?.id : undefined
+    return {
+      channels,
+      matches: query
+        ? this.#channelSearchMatches(
+            pageRows.map(row => row.id),
+            query,
+          )
+        : [],
+      ...(nextCursor ? { nextCursor } : {}),
+    }
+  }
+
   findTask(taskId: string, userId: string): Task | undefined {
     const row = this.#database
       .prepare('SELECT * FROM tasks WHERE id = ? AND user_id = ?')
       .get(taskId, userId) as unknown as TaskRow | undefined
     return row ? toTask(row) : undefined
+  }
+
+  #channelSearchMatches(
+    taskIds: string[],
+    query: string,
+  ): ChannelSearchResult['matches'] {
+    if (taskIds.length === 0 || !query.trim()) return []
+    const placeholders = taskIds.map(() => '?').join(',')
+    if (Array.from(query).length < 3) {
+      const rows = this.#database
+        .prepare(
+          `SELECT
+             channel_search_documents.task_id,
+             channel_search_documents.source_kind,
+             channel_search_documents.source_id,
+             substr(
+               channel_search_documents.text,
+               max(1, instr(lower(channel_search_documents.text), lower(?)) - 32),
+               96
+             ) AS snippet
+           FROM channel_search_documents
+           WHERE channel_search_documents.task_id IN (${placeholders})
+             AND instr(lower(channel_search_documents.text), lower(?)) > 0
+           ORDER BY channel_search_documents.rowid ASC
+           LIMIT 50`,
+        )
+        .all(query, ...taskIds, query) as unknown as {
+        task_id: string
+        source_kind: string
+        source_id: string
+        snippet: string
+      }[]
+      return rows.map(row => ({
+        channelId: row.task_id,
+        sourceKind: row.source_kind,
+        sourceId: row.source_id,
+        snippet: row.snippet,
+      }))
+    }
+    const rows = this.#database
+      .prepare(
+        `SELECT
+           channel_search_documents.task_id,
+           channel_search_documents.source_kind,
+           channel_search_documents.source_id,
+           snippet(channel_search, 0, '', '', '…', 24) AS snippet
+         FROM channel_search
+         INNER JOIN channel_search_documents
+           ON channel_search_documents.rowid = channel_search.rowid
+         WHERE channel_search_documents.task_id IN (${placeholders})
+           AND channel_search MATCH ?
+         ORDER BY channel_search_documents.rowid ASC
+         LIMIT 50`,
+      )
+      .all(...taskIds, ftsTrigramQuery(query)) as unknown as {
+      task_id: string
+      source_kind: string
+      source_id: string
+      snippet: string
+    }[]
+    return rows.map(row => ({
+      channelId: row.task_id,
+      sourceKind: row.source_kind,
+      sourceId: row.source_id,
+      snippet: row.snippet,
+    }))
   }
 
   createGoalContract(
@@ -5307,6 +5696,31 @@ function toTask(row: TaskRow): Task {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
+}
+
+function taskSearchSortExpression(
+  sort: NonNullable<ChannelSearchOptions['sort']>,
+): string {
+  if (sort === 'created') return 'tasks.created_at'
+  if (sort === 'ended')
+    return "COALESCE(json_extract(tasks.ended_json, '$.at'), tasks.updated_at)"
+  return 'tasks.updated_at'
+}
+
+function taskSearchSortValue(
+  row: TaskRow,
+  sort: NonNullable<ChannelSearchOptions['sort']>,
+): string {
+  if (sort === 'created') return row.created_at
+  if (sort === 'ended' && row.ended_json) {
+    const ended = JSON.parse(row.ended_json) as { at?: unknown }
+    if (typeof ended.at === 'string') return ended.at
+  }
+  return row.updated_at
+}
+
+function ftsTrigramQuery(query: string): string {
+  return `"${query.replaceAll('"', '""')}"`
 }
 
 function toRun(row: RunRow): Run {

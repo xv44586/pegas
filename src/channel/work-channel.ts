@@ -1,4 +1,31 @@
 import type { Task, TaskEnd, TaskStatus } from '../core/domain.js'
+import type { WorkerIconId } from '../brand/agent-icon.js'
+
+export type ChannelSearchSort = 'updated' | 'created' | 'ended'
+
+export interface ChannelSearchOptions {
+  query?: string
+  statuses?: TaskStatus[]
+  ended?: boolean
+  needsAttention?: boolean
+  workerIconId?: WorkerIconId
+  sort?: ChannelSearchSort
+  limit: number
+  cursor?: string
+}
+
+interface ChannelSearchMatch {
+  channelId: string
+  sourceKind: string
+  sourceId: string
+  snippet: string
+}
+
+export interface ChannelSearchResult {
+  channels: WorkChannel[]
+  matches: ChannelSearchMatch[]
+  nextCursor?: string
+}
 
 /**
  * User-facing projection of the authoritative Task lifecycle.

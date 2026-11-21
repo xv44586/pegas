@@ -10,6 +10,7 @@ import {
 import { extname, resolve, sep } from 'node:path'
 
 import { projectWorkChannel } from '../channel/work-channel.js'
+import { isWorkerIconId, type WorkerIconId } from '../brand/agent-icon.js'
 import {
   approvalStatuses,
   parseActionOutcomeDraft,
@@ -17,7 +18,11 @@ import {
   parseApprovalDecisionDraft,
   type ApprovalStatus,
 } from '../approval/approval.js'
-import type { NewInboxEvent } from '../core/domain.js'
+import type { NewInboxEvent, TaskStatus } from '../core/domain.js'
+import type {
+  ChannelSearchSort,
+  ChannelSearchOptions,
+} from '../channel/work-channel.js'
 import type { DshModelCatalog } from '../executor/dsh-model-catalog.js'
 import {
   parseArtifactDraft,
@@ -593,6 +598,46 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
           runs: options.store.listRuns(taskId),
           messages: options.store.listOutbox(userId, taskId),
         })
+      }
+
+      if (channelTimelineUrl?.pathname === '/v1/channels/search') {
+        if (request.method !== 'GET') {
+          return sendJson(response, 405, { error: 'method_not_allowed' })
+        }
+        const userId = requiredQuery(channelTimelineUrl, 'userId')
+        const page = pageRequest(channelTimelineUrl)
+        const query = optionalQuery(channelTimelineUrl, 'q')
+        if (query && Array.from(query).length > 200)
+          throw new Error('q must contain at most 200 characters')
+        const statuses = parseChannelStatuses(
+          channelTimelineUrl.searchParams.get('status'),
+        )
+        const sort = parseChannelSearchSort(
+          channelTimelineUrl.searchParams.get('sort'),
+        )
+        const ended = optionalBooleanQuery(channelTimelineUrl, 'ended')
+        const needsAttention = optionalBooleanQuery(
+          channelTimelineUrl,
+          'needsAttention',
+        )
+        const workerIconId = parseWorkerIconQuery(
+          channelTimelineUrl.searchParams.get('workerIconId'),
+        )
+        const searchOptions: ChannelSearchOptions = {
+          ...(query ? { query } : {}),
+          ...(statuses ? { statuses } : {}),
+          ...(ended === undefined ? {} : { ended }),
+          ...(needsAttention === undefined ? {} : { needsAttention }),
+          ...(workerIconId ? { workerIconId } : {}),
+          ...(sort ? { sort } : {}),
+          limit: page.limit,
+          ...(page.cursor ? { cursor: page.cursor } : {}),
+        }
+        return sendJson(
+          response,
+          200,
+          options.store.searchChannels(userId, searchOptions),
+        )
       }
 
       if (request.url?.startsWith('/v1/channels') && request.method === 'GET') {
@@ -1451,6 +1496,48 @@ function pageRequest(url: URL): { limit: number; cursor?: string } {
     )
   const cursor = optionalQuery(url, 'cursor')
   return { limit, ...(cursor ? { cursor } : {}) }
+}
+
+function parseChannelStatuses(value: string | null): TaskStatus[] | undefined {
+  if (!value?.trim()) return undefined
+  const allowed = new Set<TaskStatus>([
+    'backlog',
+    'unstarted',
+    'started',
+    'completed',
+    'cancelled',
+  ])
+  const statuses = value
+    .split(',')
+    .map(item => item.trim())
+    .filter(Boolean)
+  if (statuses.length === 0) return undefined
+  const invalid = statuses.find(status => !allowed.has(status as TaskStatus))
+  if (invalid) throw new Error(`Unknown Channel status: ${invalid}`)
+  return [...new Set(statuses)] as TaskStatus[]
+}
+
+function parseChannelSearchSort(
+  value: string | null,
+): ChannelSearchSort | undefined {
+  if (!value) return undefined
+  if (value === 'updated' || value === 'created' || value === 'ended')
+    return value
+  throw new Error('sort must be updated, created or ended')
+}
+
+function optionalBooleanQuery(url: URL, name: string): boolean | undefined {
+  const value = optionalQuery(url, name)
+  if (value === undefined) return undefined
+  if (value === 'true') return true
+  if (value === 'false') return false
+  throw new Error(`${name} must be true or false`)
+}
+
+function parseWorkerIconQuery(value: string | null): WorkerIconId | undefined {
+  if (!value?.trim()) return undefined
+  if (isWorkerIconId(value)) return value
+  throw new Error('workerIconId must be car, camera, computer or phone')
 }
 
 function audioExtension(contentType: string): string {
