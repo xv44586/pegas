@@ -3,14 +3,27 @@ export function PegasMark({ size = 34 }: { size?: number }) {
     <svg
       aria-hidden="true"
       className="pegas-mark"
-      viewBox="0 0 44 44"
+      viewBox="0 0 64 64"
       width={size}
       height={size}
     >
-      <path
-        d="M6.2 30.8c8.7-1.4 13.6-6.1 18.8-11.9 4.1-4.6 8.5-7.2 11.3-5.7 2.8 1.5 2.2 6.1-.8 9.8-5.3 6.4-15.8 9.6-29.3 7.8Z"
-        fill="currentColor"
-      />
+      <rect width="64" height="64" rx="14" fill="currentColor" />
+      <g
+        fill="none"
+        stroke="#ffffff"
+        strokeWidth="3.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M32 17V11" />
+        <circle cx="32" cy="9" r="2.4" fill="#ffffff" stroke="none" />
+        <path d="M17 31l-6 4 6 4" />
+        <path d="M47 31l6 4-6 4" />
+        <rect x="17" y="17" width="30" height="30" rx="13" />
+      </g>
+      <rect x="22" y="25" width="20" height="13" rx="6.5" fill="#181818" />
+      <circle cx="28" cy="31.5" r="2.1" fill="#7defff" />
+      <circle cx="36" cy="31.5" r="2.1" fill="#7defff" />
     </svg>
   )
 }

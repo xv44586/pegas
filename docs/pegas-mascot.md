@@ -41,7 +41,7 @@ favicon、apple-touch-icon 与 macOS 桌面图标，替换旧的抽象 P/翼形�
 - 出现位置：对话欢迎区（`MainPages.tsx`，148px）、关于页
   （`SettingsPage.tsx`，168px，具名图像）、发送中 composer 等待指示
   （waiting，30px + 「正在整理…」文字）、待你处理空状态（celebrate，
-  104px）。blocked 姿态已入库，供后续阻塞/审批界面使用。
+  104px）。blocked 姿态挂载于待确认审批卡头部（具名「Pegas 等待你的决定」，决定后移除）。
 - 应用图标派生：`scripts/generate-brand-icons.mjs`（`pnpm brand:generate` /
   `pnpm brand:check`，已串入 `pnpm check`）。以 idle 姿态合成 1024 品牌蓝
   圆角底板，派生 `web/public/favicon.svg`（矢量简化脸）、`favicon-32.png`、
@@ -62,8 +62,7 @@ favicon、apple-touch-icon 与 macOS 桌面图标，替换旧的抽象 P/翼形�
 
 ## 非目标
 
-- 不替换 `PegasMark` 抽象标志（侧栏 lockup 仍用，后续可统一）。
-- 不引入动画或表情包；blocked 姿态暂不在界面挂载。
+- 不引入动画或表情包。`PegasMark` 已统一为与 favicon 同源的矢量 mascot 脸（侧栏/设置/接入页共用）。
 - 不让形象承担状态表达；Channel 状态仍由徽记与文字表达（BRAND-001）。
 
 ## 数据、权限与恢复边界
@@ -83,6 +82,9 @@ Sparkles 欢迎图标与关于页标志；无 schema 或 API 变化。
   10KB–200KB 区间（含三姿态）。
 - `test/brand-icons.test.ts`：ICNS 容器完整性与全尺寸、favicon/touch
   icon 链接与产物、desktop/icon.svg 自包含。
+- `web/src/sealed/ApprovalMascot.test.tsx`：pending 审批显示具名 blocked
+  姿态，resolved 后移除。
+- `web/src/sealed/PegasMark.test.tsx`：lockup 标志为 mascot 脸而非旧抽象翼形。
 - `pnpm brand:check`：五个应用图标产物与生成器一致。
 - 浏览器截图：light/dark 欢迎区与关于页（`output/feature-review/media/
 desktop-settings-about.png` 及本地探针截图）。

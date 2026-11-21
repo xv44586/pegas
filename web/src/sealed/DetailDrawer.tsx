@@ -16,6 +16,7 @@ import {
 import { useEffect, useRef, useState } from 'react'
 
 import type { DurableAction, Run } from '../types'
+import { PegasMascot } from './PegasMascot'
 import {
   formatRelativeTime,
   runStatusLabel,
@@ -225,7 +226,11 @@ function ApprovalDetail({
     <div className="drawer-body">
       <section className="approval-card">
         <header>
-          <ShieldCheck size={20} />
+          {pending ? (
+            <PegasMascot label="Pegas 等待你的决定" pose="blocked" size={40} />
+          ) : (
+            <ShieldCheck size={20} />
+          )}
           <strong>{view.approval.prompt.summary}</strong>
         </header>
         <p>{view.approval.prompt.impact}</p>
