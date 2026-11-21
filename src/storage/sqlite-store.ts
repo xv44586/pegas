@@ -6079,6 +6079,27 @@ export class PegasStore {
         artifact?.runId !== runId
       )
         throw new Error('Visual evidence must use an Artifact from this Run')
+      if (['screenshot', 'render', 'keyframe'].includes(draft.kind)) {
+        // A visual capture can only prove the final deliverable: the newest
+        // Artifact with the same name in this Task is the final revision.
+        const latestNamed = this.#database
+          .prepare(
+            `SELECT revision, content_hash FROM task_artifacts
+             WHERE task_id = ? AND name = ?
+             ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+          )
+          .get(task.id, artifact?.name ?? '') as
+          { revision: string; content_hash: string } | undefined
+        if (
+          artifact &&
+          latestNamed &&
+          (latestNamed.revision !== artifact.revision ||
+            latestNamed.content_hash !== artifact.contentHash)
+        )
+          throw new Error(
+            'Visual evidence must bind the final Artifact revision',
+          )
+      }
       validateVisualEvidence(draft, artifact)
       if (
         draft.verification.result === 'passed' &&
@@ -6362,6 +6383,40 @@ export class PegasStore {
       .prepare('SELECT artifact_storage_path FROM evidence_refs WHERE id = ?')
       .get(evidenceId) as { artifact_storage_path: string | null } | undefined
     return row?.artifact_storage_path ?? undefined
+  }
+
+  /**
+   * Returns the attested bytes behind one evidence item for owner-scoped
+   * preview rendering. The digest is re-verified on every read so tampered
+   * storage can never be served as delivery proof.
+   */
+  evidenceArtifactContent(
+    evidenceId: string,
+    userId: string,
+  ): { bytes: Buffer; mimeType?: string; contentHash: string } {
+    const row = this.#database
+      .prepare(
+        `SELECT evidence_refs.* FROM evidence_refs
+         INNER JOIN tasks ON tasks.id = evidence_refs.task_id
+         WHERE evidence_refs.id = ? AND tasks.user_id = ?`,
+      )
+      .get(evidenceId, userId) as unknown as EvidenceRefRow | undefined
+    if (!row) throw new Error('Evidence not found')
+    const evidence = toEvidenceRef(row)
+    const storagePath = this.#evidenceStoragePath(evidenceId)
+    if (!storagePath) throw new Error('Evidence has no stored artifact content')
+    const bytes = readFileSync(storagePath)
+    const digest = createHash('sha256').update(bytes).digest('hex')
+    if (digest !== evidence.contentHash)
+      throw new Error('Stored evidence bytes do not match the content hash')
+    const artifact = evidence.artifactId
+      ? this.#artifactById(evidence.artifactId)
+      : undefined
+    return {
+      bytes,
+      ...(artifact?.mimeType ? { mimeType: artifact.mimeType } : {}),
+      contentHash: evidence.contentHash,
+    }
   }
 
   listEvidenceRefs(
@@ -9600,11 +9655,33 @@ export class PegasStore {
       const artifact = item.artifactId
         ? artifacts.get(item.artifactId)
         : undefined
+      const environment = item.environment
+      const viewport =
+        typeof environment.viewport === 'object' && environment.viewport
+          ? (environment.viewport as { width?: unknown; height?: unknown })
+          : undefined
       return {
         evidenceId: item.id,
         criterionId: item.criterionId,
         kind: item.kind,
         verification: item.verification.result,
+        sensitivity: item.sensitivity,
+        capturedAt: item.capturedAt,
+        contentHash: item.contentHash,
+        ...(item.artifactRevision
+          ? { artifactRevision: item.artifactRevision }
+          : {}),
+        ...(viewport &&
+        typeof viewport.width === 'number' &&
+        typeof viewport.height === 'number'
+          ? {
+              viewport: { width: viewport.width, height: viewport.height },
+            }
+          : {}),
+        ...(typeof item.presentation.timecode === 'number'
+          ? { timecode: item.presentation.timecode }
+          : {}),
+        hasContent: this.#evidenceStoragePath(item.id) !== undefined,
         ...(artifact
           ? {
               artifact: {

@@ -211,7 +211,9 @@ Review Pack 以 success criteria 为顺序，不按执行时间罗列动作。�
 - 文档、网页和幻灯片提供最终页面渲染；顺序变化必须能从预览中直接检查；
 - 视觉回归修复优先提供可信的 before/after；全新产物通常只要求最终态。
 
-截图、关键帧和页面渲染必须绑定准确 Artifact revision 或内容哈希，并记录环境、视口/分辨率、捕获时间或视频时间码。旧构建截图、错误 viewport 和修改前 Artifact 不能证明最终交付。
+截图、关键帧和页面渲染必须绑定准确 Artifact revision 或内容哈希，并记录环境、视口/分辨率、捕获时间或视频时间码。旧构建截图、错误 viewport 和修改前 Artifact 不能证明最终交付。服务端在取证时强制最终修订守卫：`screenshot/render/keyframe` 必须绑定该 Task 内同名 Artifact 的最新 revision 与内容哈希，否则拒绝（`Visual evidence must bind the final Artifact revision`）。
+
+已存证字节的 evidence 支持所有者内容预览：`GET /v1/evidence/:id/content?userId=` 返回原始字节，附 `content-type`、`content-length`、`x-pegas-content-sha256` 与 `cache-control: private, no-store`；每次读取都重新校验 SHA-256，被篡改的存证拒绝服务。跨 owner 与不存在统一 404 `not_found`，无存证字节返回 404 `content_unavailable`。`review.ready` 预览投影为每条 evidence 附带 `sensitivity/capturedAt/contentHash/artifactRevision/viewport/timecode/hasContent`，用户不需要进入执行日志即可检查视口、时间码与最终修订；原始 capture environment（工具、路径等）仍不进入投影。
 
 截图只能证明视觉状态，不能替代功能、无障碍、性能、安全或后端正确性的证据。
 
@@ -282,7 +284,7 @@ Outbox 的产品已读、外部投递状态、用户是否接受结果、evidenc
 1. [x] 定义 Goal Contract revision、EvidenceRef、Review Pack 和 criterion 状态合同；
 2. [x] 让 Executor 生成最小目标简报，并保存用户确认与修订；提案 API、blocking 澄清停放与用户回答后恢复已实现，Web 澄清卡片待接入；
 3. [x] 为结构化 Report 增加 evidence references，由 Control Plane 实施完成门禁；
-4. [~] 扩展 Artifact 与 Outbox API，支持 evidence 聚合、权限和预览；服务端元数据、聚合与所有者权限已完成，内容预览和外部渠道投影待实现；
+4. [~] 扩展 Artifact 与 Outbox API，支持 evidence 聚合、权限和预览；服务端元数据、聚合、所有者权限、最终修订守卫与所有者内容预览 API 已完成，外部渠道脱敏投影待实现；
 5. 实现 Web Review Pack、视觉 evidence 画廊和 Channel 审计下钻；
 6. 用真实任务样本验证哪些字段和提问有价值，再决定 Memory、Scheduler 与反馈闭环的后续范围。
 
@@ -296,7 +298,7 @@ Outbox 的产品已读、外部投递状态、用户是否接受结果、evidenc
 - `GET/POST /v1/runs/:runId/reports`：保存有递增序号的结构化 Worker Report；HTTP 写入要求该次 Run claim 独有且可轮换的 capability，服务端从 capability 推导 Reporter，不能由请求体冒充 Worker。`ready` 只表达完成主张，不绕过 evidence plan。
 - `GET /v1/tasks/:taskId/review-packs` 与 `GET /v1/tasks/:taskId/delivery`：按 criterion 返回当前 Run 的 Review Pack、Artifact 和 evidence 聚合，并提供 Channel/Run 审计链接；历史列表使用 `limit`/opaque `cursor` 分页，默认 50、上限 200。
 
-Task、Run、Review Pack 和 `review.ready` OutboxItem 在同一个 SQLite 提交边界内更新。`review.ready` OutboxItem 携带有界的 `review` 预览投影（NOTIFY-004）：`finalOutcome`、Goal revision、按 criterion 的 `completionStatus/explanation/limitations/evidenceCount`、最多 20 条 evidence 预览（kind、verification 结果、绑定 Artifact 的 id/name/kind/revision/MIME/uri、presentation 与 limitations）、`remainingRisks`、可选 `rollback` 与 `auditLink`。执行日志、capture environment 与隐藏提示不进入该投影；用户从 Outbox 即可判断目标是否达成，并按 auditLink 进入 Channel 下钻。`ready` Report 在该事务内重新读取当前 Run 的全部 EvidenceRef，不能因 Worker 事务外快照与 Control Plane 并发写入而漏证或丢失唤醒。响应丢失后，重复 Report 使用持久化在原 Report 上的 capability hash 验证并返回同一完成链；过期 capability 不能创建新序号 Report。同一 Run 内，同一 Artifact revision 或 observation snapshot 换 command ID 重放时不会被重复计数。Evidence capture 不可变，`pending → passed/failed` 通过 append-only verification event 演进；缓存的当前 verification 只用于投影。Run 在领取时生成不可出现在普通 Run API 的 claim capability，所有权更换时轮换；DSH Executor 子进程不会继承 Pegas 控制面、恢复、通知、隐私或模型凭证。当前用户 API 仍沿用单用户实例 bearer token 加 `userId` 所有者校验，因此高风险用户接受必须等 `APPROVAL-001` 提供受认证 confirmation capability，不能由普通 evidence 请求字段获得产品级信任。
+Task、Run、Review Pack 和 `review.ready` OutboxItem 在同一个 SQLite 提交边界内更新。`review.ready` OutboxItem 携带有界的 `review` 预览投影（NOTIFY-004）：`finalOutcome`、Goal revision、按 criterion 的 `completionStatus/explanation/limitations/evidenceCount`、最多 20 条 evidence 预览（kind、verification 结果、sensitivity/capturedAt/contentHash/artifactRevision、精选 viewport 与 keyframe timecode、hasContent、绑定 Artifact 的 id/name/kind/revision/MIME/uri、presentation 与 limitations）、`remainingRisks`、可选 `rollback` 与 `auditLink`。执行日志、原始 capture environment 与隐藏提示不进入该投影；用户从 Outbox 即可判断目标是否达成，并按 auditLink 进入 Channel 下钻。`ready` Report 在该事务内重新读取当前 Run 的全部 EvidenceRef，不能因 Worker 事务外快照与 Control Plane 并发写入而漏证或丢失唤醒。响应丢失后，重复 Report 使用持久化在原 Report 上的 capability hash 验证并返回同一完成链；过期 capability 不能创建新序号 Report。同一 Run 内，同一 Artifact revision 或 observation snapshot 换 command ID 重放时不会被重复计数。Evidence capture 不可变，`pending → passed/failed` 通过 append-only verification event 演进；缓存的当前 verification 只用于投影。Run 在领取时生成不可出现在普通 Run API 的 claim capability，所有权更换时轮换；DSH Executor 子进程不会继承 Pegas 控制面、恢复、通知、隐私或模型凭证。当前用户 API 仍沿用单用户实例 bearer token 加 `userId` 所有者校验，因此高风险用户接受必须等 `APPROVAL-001` 提供受认证 confirmation capability，不能由普通 evidence 请求字段获得产品级信任。
 
 自动化至少覆盖：手段被误当目标、来源冲突、缺少权限、用户拒绝继续澄清、执行中目标变化、部分完成、证据缺失、Agent 自我声明被拒、旧 revision evidence、敏感 evidence 脱敏、视觉证据缺少目标视口、Outbox 聚合/去重、通知失败恢复和重复事件。
 

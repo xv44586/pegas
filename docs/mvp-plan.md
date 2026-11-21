@@ -46,7 +46,7 @@
 - [x] Run 与 DSH session 映射及租约过期恢复；
 - [x] Outbox dispatcher 与一个真实投递渠道；
 - [x] Outbox Review Pack：按完成条件聚合结果 evidence、限制、风险、回滚和审计入口（服务端 `review.ready` 投影已含完整预览；Web 卡片渲染待 DESIGN-002 补齐）；
-- [ ] 图片、视频、UI 和排版变化的最终视觉 evidence 预览；
+- [x] 图片、视频、UI 和排版变化的最终视觉 evidence 预览（服务端：最终修订守卫、预览投影含 viewport/timecode/hash/hasContent、所有者内容 API `GET /v1/evidence/:id/content`；Web 画廊渲染待 DESIGN-002）；
 - [x] Activity/Task 只读视图；
 - [x] 结构化日志、指标和错误追踪（OBS-001：JSON 行日志 + /metrics Prometheus 指标 + 结构化错误记录与错误计数；外部聚合与告警待补）。
 

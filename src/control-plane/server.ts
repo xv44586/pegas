@@ -1293,6 +1293,35 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         return sendJson(response, 200, { evidence })
       }
 
+      const evidenceContentMatch = /^\/v1\/evidence\/([^/]+)\/content$/.exec(
+        taskResourceUrl.pathname,
+      )
+      if (evidenceContentMatch && request.method === 'GET') {
+        const userId = requiredQuery(taskResourceUrl, 'userId')
+        try {
+          const content = options.store.evidenceArtifactContent(
+            decodeURIComponent(evidenceContentMatch[1] ?? ''),
+            userId,
+          )
+          response.writeHead(200, {
+            'content-type': content.mimeType ?? 'application/octet-stream',
+            'content-length': String(content.bytes.byteLength),
+            'x-pegas-content-sha256': content.contentHash,
+            'cache-control': 'private, no-store',
+          })
+          response.end(content.bytes)
+          return
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : 'Unknown error'
+          if (message === 'Evidence not found')
+            return sendJson(response, 404, { error: 'not_found' })
+          if (message === 'Evidence has no stored artifact content')
+            return sendJson(response, 404, { error: 'content_unavailable' })
+          throw error
+        }
+      }
+
       const runReportMatch = /^\/v1\/runs\/([^/]+)\/reports$/.exec(
         taskResourceUrl.pathname,
       )

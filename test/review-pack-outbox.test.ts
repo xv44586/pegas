@@ -239,8 +239,18 @@ describe('NOTIFY-004 Review Pack Outbox preview', () => {
       step: 'restore-previous-release',
     })
     expect(payload.review.auditLink).toContain(seeded.taskId)
-    // Execution logs and hidden environment data never enter the preview.
-    expect(JSON.stringify(payload.review)).not.toContain('viewport')
+    expect(payload.review.evidence[0]).toEqual(
+      expect.objectContaining({
+        sensitivity: 'private',
+        contentHash: expect.any(String) as unknown,
+        artifactRevision: 'rev-1',
+        viewport: { width: 1440, height: 900 },
+        hasContent: true,
+      }),
+    )
+    // Execution logs and hidden capture environment data never enter the
+    // preview; only the curated viewport dimensions are projected.
+    expect(JSON.stringify(payload.review)).not.toContain('environment')
     expect(JSON.stringify(payload.review)).not.toContain('playwright')
   })
 
