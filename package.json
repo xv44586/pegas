@@ -44,7 +44,8 @@
     "start:scheduler": "node dist/scheduler/main.js",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "typecheck": "tsc --noEmit && tsc -p web/tsconfig.json --noEmit && tsc -p web/tsconfig.node.json --noEmit && tsc -p desktop/tsconfig.json --noEmit"
+    "typecheck": "tsc --noEmit && tsc -p web/tsconfig.json --noEmit && tsc -p web/tsconfig.node.json --noEmit && tsc -p desktop/tsconfig.json --noEmit",
+    "a11y:review": "node scripts/a11y-review.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -54,6 +55,7 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.3.0",
     "@vitest/coverage-v8": "^5.1.0",
+    "axe-core": "^4.14.1",
     "electron": "^39.8.10",
     "electron-builder": "^26.18.0",
     "eslint": "^10.15.0",

@@ -1127,9 +1127,9 @@ describe('sealed Pegas UI', () => {
     )
     const list = screen.getByLabelText('事情列表')
     expect(within(list).getByText(channel.title)).toBeTruthy()
-    fireEvent.click(screen.getByRole('tab', { name: '进行中' }))
+    fireEvent.click(screen.getByRole('button', { name: '进行中' }))
     expect(within(list).queryByText(channel.title)).toBeNull()
-    fireEvent.click(screen.getByRole('tab', { name: '等待中' }))
+    fireEvent.click(screen.getByRole('button', { name: '等待中' }))
     expect(within(list).getByText(channel.title)).toBeTruthy()
   })
 
@@ -1204,7 +1204,7 @@ describe('sealed Pegas UI', () => {
     expect(screen.getByRole('button', { name: '查看原因' })).toBeTruthy()
     expect(screen.queryByText('传输失败但不是执行失败')).toBeNull()
     expect(screen.queryByRole('button', { name: '稍后处理' })).toBeNull()
-    fireEvent.click(screen.getByRole('tab', { name: '失败' }))
+    fireEvent.click(screen.getByRole('button', { name: '失败' }))
     expect(screen.getByText('执行确实失败')).toBeTruthy()
   })
 
@@ -2541,9 +2541,9 @@ describe('sealed Pegas UI', () => {
         name: /所有事情/,
       }),
     )
-    fireEvent.click(screen.getByRole('tab', { name: '等待中' }))
+    fireEvent.click(screen.getByRole('button', { name: '等待中' }))
     expect(screen.queryByText(channel.title)).toBeNull()
-    fireEvent.click(screen.getByRole('tab', { name: '已归档' }))
+    fireEvent.click(screen.getByRole('button', { name: '已归档' }))
     expect(screen.getByText(channel.title)).toBeTruthy()
   })
 
@@ -3637,7 +3637,7 @@ describe('sealed Pegas UI', () => {
         name: /所有事情/,
       }),
     )
-    fireEvent.click(screen.getByRole('tab', { name: '已完成' }))
+    fireEvent.click(screen.getByRole('button', { name: '已完成' }))
     const list = screen.getByLabelText('事情列表')
     expect(
       list.querySelector('use[href$="#pegas-agent-computer"]'),
@@ -3737,9 +3737,11 @@ describe('sealed Pegas UI', () => {
     )
     const list = screen.getByLabelText('事情列表')
     expect(within(list).getByText(channel.title)).toBeTruthy()
-    expect(screen.getByRole('tab', { name: '全部' }).ariaSelected).toBe('true')
+    expect(
+      screen.getByRole('button', { name: '全部' }).getAttribute('aria-pressed'),
+    ).toBe('true')
     expect(screen.queryByText('这里还没有事情')).toBeNull()
-    fireEvent.click(screen.getByRole('tab', { name: '进行中' }))
+    fireEvent.click(screen.getByRole('button', { name: '进行中' }))
     expect(screen.getByText('当前筛选下没有事情')).toBeTruthy()
   })
 
@@ -3799,7 +3801,7 @@ describe('sealed Pegas UI', () => {
     )
     expect(document.querySelector('.attention-icon.is-result')).toBeTruthy()
     expect(document.querySelector('.attention-icon.is-failed')).toBeTruthy()
-    fireEvent.click(screen.getByRole('tab', { name: '重要结果' }))
+    fireEvent.click(screen.getByRole('button', { name: '重要结果' }))
     expect(screen.getByText('验收结果已生成')).toBeTruthy()
     expect(screen.queryByText('执行失败原因')).toBeNull()
   })
@@ -4014,9 +4016,9 @@ describe('sealed Pegas UI', () => {
     expect(await screen.findByText('我喜欢安静、白底的界面。')).toBeTruthy()
     expect(screen.queryByText('记忆能力正在建设')).toBeNull()
     expect(screen.getByText(/来源：用户确认/)).toBeTruthy()
-    fireEvent.click(screen.getByRole('tab', { name: '事情' }))
+    fireEvent.click(screen.getByRole('button', { name: '事情' }))
     expect(screen.getByText('该范围下还没有记忆')).toBeTruthy()
-    fireEvent.click(screen.getByRole('tab', { name: '全部' }))
+    fireEvent.click(screen.getByRole('button', { name: '全部' }))
     fireEvent.click(screen.getByRole('button', { name: /删除/ }))
     fireEvent.click(screen.getByRole('button', { name: '确认删除' }))
     await waitFor(() => expect(deleted).toBeTruthy())

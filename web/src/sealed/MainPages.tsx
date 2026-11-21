@@ -698,7 +698,7 @@ export function WorkPage({
           />
         </label>
       </PageHeader>
-      <div className="filter-row" role="tablist">
+      <div className="filter-row" role="group" aria-label="筛选">
         {(
           [
             ['all', '全部'],
@@ -710,10 +710,8 @@ export function WorkPage({
         ).map(([id, label]) => (
           <button
             aria-pressed={filter === id}
-            aria-selected={filter === id}
             key={id}
             onClick={() => setFilter(id)}
-            role="tab"
             type="button"
           >
             {label}
@@ -827,48 +825,38 @@ export function AttentionPage({
         description="Pegas 现在需要你处理的事情"
         title="待你处理"
       />
-      <div className="filter-row" role="tablist">
+      <div className="filter-row" role="group" aria-label="筛选">
         <button
           aria-pressed={filter === 'all'}
-          aria-selected={filter === 'all'}
           onClick={() => setFilter('all')}
-          role="tab"
           type="button"
         >
           全部 {attentionMessages.length}
         </button>
         <button
           aria-pressed={filter === 'approval'}
-          aria-selected={filter === 'approval'}
           onClick={() => setFilter('approval')}
-          role="tab"
           type="button"
         >
           需要确认
         </button>
         <button
           aria-pressed={filter === 'input'}
-          aria-selected={filter === 'input'}
           onClick={() => setFilter('input')}
-          role="tab"
           type="button"
         >
           需要补充
         </button>
         <button
           aria-pressed={filter === 'failed'}
-          aria-selected={filter === 'failed'}
           onClick={() => setFilter('failed')}
-          role="tab"
           type="button"
         >
           失败
         </button>
         <button
           aria-pressed={filter === 'result'}
-          aria-selected={filter === 'result'}
           onClick={() => setFilter('result')}
-          role="tab"
           type="button"
         >
           重要结果
@@ -1315,14 +1303,12 @@ export function MemoryPage({
           添加记忆
         </button>
       </PageHeader>
-      <div className="filter-row" role="tablist">
+      <div className="filter-row" role="group" aria-label="筛选">
         {memoryScopes.map(scope => (
           <button
             aria-pressed={filter === scope.id}
-            aria-selected={filter === scope.id}
             key={scope.id}
             onClick={() => setFilter(scope.id)}
-            role="tab"
             type="button"
           >
             {scope.label}
