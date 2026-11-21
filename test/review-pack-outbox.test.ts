@@ -235,6 +235,9 @@ describe('NOTIFY-004 Review Pack Outbox preview', () => {
       }),
     ])
     expect(payload.review.remainingRisks).toEqual(['移动端视口未验证'])
+    expect(payload.review.criteria[0]?.explanation).toBe(
+      '1 条已验证证据满足这条完成标准。',
+    )
     expect(payload.review.rollback).toEqual({
       step: 'restore-previous-release',
     })
@@ -275,6 +278,9 @@ describe('NOTIFY-004 Review Pack Outbox preview', () => {
     expect(result.completed).toBe(false)
     const pack = result.reviewPack
     expect(pack?.finalOutcome).toBe('partial')
+    expect(pack?.criteria[0]?.explanation).toBe(
+      '需要至少 1 条已验证证据，目前只有 0 条。',
+    )
     // Partial reports do not emit review.ready; the Task stays awaiting evidence.
     const messages = store.listOutbox('owner', seeded.taskId)
     expect(

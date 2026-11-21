@@ -13,6 +13,7 @@ import {
   Plus,
   RotateCw,
   Search,
+  Send,
   ShieldCheck,
   Trash2,
   X,
@@ -45,6 +46,7 @@ import {
   formatRelativeTime,
   isReconciliationMessage,
   latestRunForTask,
+  needsOutboxResolution,
   reviewProjection,
   statusLabel,
   textFromPayload,
@@ -353,6 +355,9 @@ export function ConversationPage({
 }) {
   const [sending, setSending] = useState(false)
   const [error, setError] = useState('')
+  const [attachment, setAttachment] = useState<File>()
+  const [voiceDirectSend, setVoiceDirectSend] = useState(false)
+  const attachmentInputRef = useRef<HTMLInputElement>(null)
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(
     () => new Set(),
   )
@@ -367,6 +372,7 @@ export function ConversationPage({
         text: textFromPayload(event.payload),
         at: event.createdAt,
         status: event.status,
+        attachment: event.attachment,
       }))
     const pegas = snapshot.messages.map(message => {
       const channel = snapshot.channels.find(item => item.id === message.taskId)
@@ -393,8 +399,21 @@ export function ConversationPage({
     if (area && stickToBottomRef.current) area.scrollTop = area.scrollHeight
   }, [messages])
   const dictation = useVoiceDictation({
-    transcribe: blob => api.transcribeVoice(blob),
-    onTranscript: text => onDraftChange(`${draft}${draft ? ' ' : ''}${text}`),
+    transcribe: async blob => {
+      if (!voiceDirectSend) return api.transcribeVoice(blob)
+      const result = await api.sendVoiceMessage(blob, continuationChannel?.id)
+      if (attachment) {
+        await api.uploadEventAttachment(result.event.id, attachment)
+      }
+      setAttachment(undefined)
+      onClearContinuation()
+      await onSent()
+      return result.transcript
+    },
+    onTranscript: text => {
+      if (voiceDirectSend) return
+      onDraftChange(`${draft}${draft ? ' ' : ''}${text}`)
+    },
   })
   const dictationBusy = dictation.state !== 'idle'
   const summaryChannel =
@@ -410,7 +429,17 @@ export function ConversationPage({
     setSending(true)
     setError('')
     try {
-      await api.sendMessage(text, continuationChannel?.id)
+      const event = await api.sendMessage(text, continuationChannel?.id)
+      if (attachment) {
+        try {
+          await api.uploadEventAttachment(event.id, attachment)
+        } catch (caught) {
+          setError(
+            `消息已发送，但附件上传失败：${caught instanceof Error ? caught.message : '请重试。'}`,
+          )
+        }
+      }
+      setAttachment(undefined)
       onDraftChange('')
       onClearContinuation()
       await onSent()
@@ -419,6 +448,16 @@ export function ConversationPage({
     } finally {
       setSending(false)
     }
+  }
+
+  function selectAttachment(file: File | undefined) {
+    if (!file) return
+    if (file.size > 25 * 1024 * 1024) {
+      setError('附件超过 25MB 上限，请压缩后再试。')
+      return
+    }
+    setError('')
+    setAttachment(file)
   }
 
   return (
@@ -463,6 +502,13 @@ export function ConversationPage({
                     <small className="message-delivery">
                       {deliveryStatusLabel(message.status)}
                     </small>
+                  )}
+                  {message.role === 'user' && message.attachment && (
+                    <span className="message-attachment">
+                      <FileText size={14} />
+                      {message.attachment.fileName} ·{' '}
+                      {formatFileSize(message.attachment.byteSize)}
+                    </span>
                   )}
                   {message.text.length > 520 && (
                     <button
@@ -603,6 +649,21 @@ export function ConversationPage({
             {dictation.error}
           </div>
         )}
+        {attachment && (
+          <div className="composer-context" role="status">
+            <span>
+              附件：<strong>{attachment.name}</strong> ·{' '}
+              {formatFileSize(attachment.size)}
+            </span>
+            <button
+              aria-label="移除附件"
+              onClick={() => setAttachment(undefined)}
+              type="button"
+            >
+              <X size={15} />
+            </button>
+          </div>
+        )}
         {continuationChannel && (
           <div className="composer-context" role="status">
             <span>
@@ -646,7 +707,9 @@ export function ConversationPage({
             }}
             placeholder={
               dictation.state === 'recording'
-                ? `正在听 · ${String(dictation.elapsedSeconds)} 秒`
+                ? voiceDirectSend
+                  ? `正在听，说完直接发送 · ${String(dictation.elapsedSeconds)} 秒`
+                  : `正在听 · ${String(dictation.elapsedSeconds)} 秒`
                 : '和 Pegas 一起工作'
             }
             rows={1}
@@ -654,14 +717,41 @@ export function ConversationPage({
           />
           <div className="composer-toolbar">
             <div className="composer-tools" aria-label="输入工具">
+              <input
+                aria-label="选择附件文件"
+                className="visually-hidden"
+                onChange={event => {
+                  selectAttachment(event.target.files?.[0])
+                  event.target.value = ''
+                }}
+                ref={attachmentInputRef}
+                tabIndex={-1}
+                type="file"
+              />
               <button
                 aria-label="添加附件"
                 className="composer-add-button"
-                disabled
-                title="附件能力将在 Artifact API 接入后启用"
+                disabled={sending || dictationBusy}
+                onClick={() => attachmentInputRef.current?.click()}
+                title="添加附件（最大 25MB，随下一条消息发送）"
                 type="button"
               >
                 <Plus size={22} />
+              </button>
+              <button
+                aria-label="说完直接发送"
+                aria-pressed={voiceDirectSend}
+                className={voiceDirectSend ? 'is-armed' : ''}
+                disabled={dictationBusy}
+                onClick={() => setVoiceDirectSend(current => !current)}
+                title={
+                  voiceDirectSend
+                    ? '语音直发已开启：录音结束后直接发送'
+                    : '开启后，录音结束会直接发送，不进入草稿'
+                }
+                type="button"
+              >
+                <Send size={18} />
               </button>
             </div>
             <div className="composer-actions">
@@ -695,6 +785,7 @@ export function ConversationPage({
                   }
                   dictation.toggle()
                 }}
+                title={voiceDirectSend ? '录音并直接发送' : '语音转文字'}
                 type="button"
               >
                 <Mic size={20} />
@@ -856,10 +947,18 @@ function deliveryStatusLabel(
   return '已进入事情'
 }
 
+function formatFileSize(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)}MB`
+  if (bytes >= 1024) return `${String(Math.round(bytes / 1024))}KB`
+  return `${String(bytes)}B`
+}
+
 function attentionAction(message: OutboxMessage): {
   label: string
   icon: typeof Check
 } {
+  if (needsOutboxResolution(message))
+    return { label: '核对投递', icon: ShieldCheck }
   const kind = attentionKind(message)
   if (kind === 'failed') return { label: '查看原因', icon: RotateCw }
   if (isReconciliationMessage(message))
@@ -967,6 +1066,15 @@ export function AttentionPage({
                     {message.readAt ? '已读' : '未读'} · 来自：
                     {channel?.title ?? 'Pegas'} ·{' '}
                     {formatRelativeTime(message.createdAt)}
+                    {needsOutboxResolution(message)
+                      ? message.status === 'unknown'
+                        ? ' · 投递结果未知，待核对'
+                        : ' · 投递失败，待核对'
+                      : message.resolution
+                        ? message.resolution.resolution === 'sent'
+                          ? ' · 人工核对：已送达'
+                          : ' · 人工核对：未送达'
+                        : ''}
                   </small>
                 </div>
                 <button

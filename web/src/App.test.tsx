@@ -389,6 +389,47 @@ function installFetch(
       return Promise.resolve(
         Response.json({ artifacts: [], evidence: [], continuation: {} }),
       )
+    if (/^\/v1\/tasks\/[^/]+\/worker-profile\?/.test(path))
+      return Promise.resolve(
+        Response.json({
+          profile: {
+            id: 'worker-profile-1',
+            taskId: 'task-1',
+            revision: 1,
+            modelMode: 'inherit',
+            createdAt: '2026-11-19T08:00:00.000Z',
+            updatedAt: '2026-11-19T08:00:00.000Z',
+          },
+          effective: {
+            profile: {
+              id: 'worker-profile-1',
+              taskId: 'task-1',
+              revision: 1,
+              modelMode: 'inherit',
+              createdAt: '2026-11-19T08:00:00.000Z',
+              updatedAt: '2026-11-19T08:00:00.000Z',
+            },
+            source: 'global',
+            modelMode: 'profile',
+            modelRef: 'profile',
+          },
+        }),
+      )
+    if (/^\/v1\/channels\/[^/]+\/collaborations\?/.test(path))
+      return Promise.resolve(Response.json({ relations: [] }))
+    if (path === '/v1/nodes')
+      return Promise.resolve(Response.json({ nodes: [] }))
+    if (path.startsWith('/v1/settings/notifications?'))
+      return Promise.resolve(
+        Response.json({
+          preferences: {
+            userId: 'owner',
+            utcOffsetMinutes: 480,
+            revision: 1,
+            updatedAt: '2026-11-19T08:00:00.000Z',
+          },
+        }),
+      )
     if (path === '/v1/settings')
       return Promise.resolve(Response.json(settingsResponse))
     if (path.startsWith('/v1/usage?'))
@@ -449,7 +490,20 @@ function installFetch(
         }),
       )
     if (path === '/v1/events' && init?.method === 'POST')
-      return Promise.resolve(Response.json({ ok: true }))
+      return Promise.resolve(
+        Response.json({
+          event: {
+            id: 'event-new',
+            userId: 'owner',
+            type: 'user.message',
+            source: 'web',
+            payload: { text: '' },
+            status: 'pending',
+            createdAt: '2026-11-19T09:00:00.000Z',
+          },
+          inserted: true,
+        }),
+      )
     if (path === '/v1/settings' && init?.method === 'PUT')
       return Promise.resolve().then(() => {
         const update = JSON.parse(
@@ -4822,5 +4876,552 @@ describe('sealed Pegas UI', () => {
     expect(await screen.findByText('这件事有一份交付可以审查')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: /审查交付/ }))
     expect(await screen.findByText('按完成标准审查交付')).toBeTruthy()
+  })
+
+  it('loads and saves quiet-hours notification preferences', async () => {
+    let saved: unknown
+    const fetchMock = installFetch((path, init) => {
+      if (path === '/v1/settings/notifications' && init?.method === 'PUT') {
+        saved = JSON.parse(typeof init.body === 'string' ? init.body : '{}')
+        const draft = saved as {
+          quietStart?: string
+          quietEnd?: string
+          utcOffsetMinutes: number
+        }
+        return Response.json({
+          preferences: {
+            userId: 'owner',
+            revision: 2,
+            updatedAt: '2026-11-21T00:00:00.000Z',
+            ...draft,
+          },
+        })
+      }
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '通知' }))
+    const enable = await screen.findByLabelText('启用免打扰')
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([path]) =>
+            typeof path === 'string' &&
+            path.startsWith('/v1/settings/notifications?'),
+        ),
+      ).toBe(true),
+    )
+    fireEvent.click(enable)
+    fireEvent.change(screen.getByLabelText('开始时间'), {
+      target: { value: '22:30' },
+    })
+    fireEvent.change(screen.getByLabelText('结束时间'), {
+      target: { value: '07:00' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '保存通知偏好' }))
+    expect(await screen.findByText('通知静默时段已保存')).toBeTruthy()
+    expect(saved).toMatchObject({
+      userId: 'owner',
+      expectedRevision: 1,
+      quietStart: '22:30',
+      quietEnd: '07:00',
+    })
+    expect((saved as { utcOffsetMinutes: number }).utcOffsetMinutes).toBe(
+      -new Date().getTimezoneOffset(),
+    )
+  })
+
+  it('resolves an unknown outbox delivery from the attention drawer', async () => {
+    const sourceMessage = snapshot.messages[0]
+    if (!sourceMessage) throw new Error('Expected an outbox message fixture')
+    const failedNotice = {
+      ...sourceMessage,
+      id: 'message-delivery-unknown',
+      taskId: undefined,
+      status: 'unknown' as const,
+      lastError: 'SMTP 连接中断，投递结果未知',
+      payload: { type: 'run.failed', error: '上游执行失败，通知投递结果未知' },
+    }
+    let submitted: unknown
+    installSnapshotFetch(
+      { ...snapshot, messages: [failedNotice] },
+      (path, init) => {
+        if (
+          path === '/v1/outbox/message-delivery-unknown/resolve' &&
+          init?.method === 'POST'
+        ) {
+          submitted = JSON.parse(
+            typeof init.body === 'string' ? init.body : '{}',
+          )
+          return Response.json(
+            {
+              message: {
+                ...failedNotice,
+                status: 'sent',
+                resolution: {
+                  resolution: 'sent',
+                  note: '已在邮箱收到这条通知',
+                  previousStatus: 'unknown',
+                  resolvedBy: 'owner',
+                  createdAt: '2026-11-21T00:10:00.000Z',
+                },
+              },
+            },
+            { status: 201 },
+          )
+        }
+        if (path.endsWith('/read'))
+          return Response.json({
+            message: { ...failedNotice, readAt: '2026-11-21T00:01:00.000Z' },
+          })
+        return undefined
+      },
+    )
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    expect(await screen.findByText(/投递结果未知，待核对/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '核对投递' }))
+    expect(await screen.findByText('核对真实投递结果')).toBeTruthy()
+    expect(screen.getByText('SMTP 连接中断，投递结果未知')).toBeTruthy()
+    const submit = screen.getByRole('button', { name: '提交投递核对' })
+    expect(submit).toHaveProperty('disabled', true)
+    fireEvent.click(screen.getByRole('radio', { name: /确认已送达/ }))
+    fireEvent.change(screen.getByLabelText('核对依据（必填）'), {
+      target: { value: '已在邮箱收到这条通知' },
+    })
+    fireEvent.click(submit)
+    await waitFor(() => expect(submitted).toBeTruthy())
+    expect(submitted).toMatchObject({
+      userId: 'owner',
+      resolution: 'sent',
+      note: '已在邮箱收到这条通知',
+    })
+    expect(await screen.findByText('人工核对：确认已送达')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '提交投递核对' })).toBeNull()
+    expect(await screen.findByText(/人工核对：已送达/)).toBeTruthy()
+  })
+
+  it('saves a task-level worker profile override with revision guard', async () => {
+    let submitted: unknown
+    const fetchMock = installFetch((path, init) => {
+      if (
+        path === '/v1/tasks/task-1/worker-profile' &&
+        init?.method === 'PUT'
+      ) {
+        submitted = JSON.parse(typeof init.body === 'string' ? init.body : '{}')
+        const draft = submitted as {
+          expectedRevision: number
+          modelMode: 'inherit' | 'override'
+          modelProvider?: string
+          modelName?: string
+        }
+        const profile = {
+          id: 'worker-profile-1',
+          taskId: 'task-1',
+          revision: draft.expectedRevision + 1,
+          modelMode: draft.modelMode,
+          ...(draft.modelProvider
+            ? { modelProvider: draft.modelProvider }
+            : {}),
+          ...(draft.modelName ? { modelName: draft.modelName } : {}),
+          createdAt: '2026-11-19T08:00:00.000Z',
+          updatedAt: '2026-11-21T00:00:00.000Z',
+        }
+        return Response.json({
+          profile,
+          effective: {
+            profile,
+            source: draft.modelMode === 'override' ? 'task' : 'global',
+            modelMode: draft.modelMode === 'override' ? 'override' : 'profile',
+            ...(draft.modelProvider
+              ? { modelProvider: draft.modelProvider }
+              : {}),
+            ...(draft.modelName ? { modelName: draft.modelName } : {}),
+            modelRef:
+              draft.modelMode === 'override'
+                ? `${String(draft.modelProvider)}/${String(draft.modelName)}`
+                : 'profile',
+          },
+        })
+      }
+      return undefined
+    })
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(screen.getByRole('button', { name: /安全自更新流程/ }))
+    expect(await screen.findByText('事情级执行设置')).toBeTruthy()
+    expect(await screen.findByText('Pegas 全局设置')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('执行模型'), {
+      target: { value: 'override' },
+    })
+    const modelPicker = await screen.findByLabelText('指定模型')
+    await waitFor(() =>
+      expect(modelPicker.querySelectorAll('option').length).toBeGreaterThan(1),
+    )
+    fireEvent.change(modelPicker, {
+      target: { value: 'Magpie/gpt-6.1-sol' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '保存执行设置' }))
+    expect(
+      await screen.findByText('执行设置已保存，对后续运行生效。'),
+    ).toBeTruthy()
+    expect(submitted).toMatchObject({
+      userId: 'owner',
+      expectedRevision: 1,
+      modelMode: 'override',
+      modelProvider: 'Magpie',
+      modelName: 'gpt-6.1-sol',
+    })
+    expect(screen.getByText('这件事情的覆盖设置')).toBeTruthy()
+    expect(screen.getByText('v2')).toBeTruthy()
+    expect(
+      fetchMock.mock.calls.filter(
+        ([path]) => path === '/v1/settings/agent-models',
+      ).length,
+    ).toBeGreaterThan(0)
+  })
+
+  it('renders collaboration relations in the task drawer', async () => {
+    installFetch(path =>
+      path.startsWith('/v1/channels/task-1/collaborations?')
+        ? Response.json({
+            relations: [
+              {
+                id: 'relation-1',
+                commandId: 'cmd-relation-1',
+                userId: 'owner',
+                kind: 'delegate',
+                status: 'completed',
+                sourceTaskId: 'task-1',
+                sourceRunId: 'run-1',
+                rootRelationId: 'relation-1',
+                depth: 0,
+                targetTaskId: 'task-2',
+                request: {
+                  commandId: 'cmd-relation-1',
+                  kind: 'delegate',
+                  goal: '验证候选版本健康检查',
+                  reason: '需要独立环境执行',
+                  expectedOutput: '健康检查截图',
+                  contextRefs: [],
+                },
+                result: {
+                  outcome: 'completed',
+                  summary: '健康检查通过',
+                  targetRunId: 'run-2',
+                },
+                createdAt: '2026-11-20T00:00:00.000Z',
+                updatedAt: '2026-11-20T00:05:00.000Z',
+                settledAt: '2026-11-20T00:05:00.000Z',
+              },
+            ],
+          })
+        : undefined,
+    )
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(screen.getByRole('button', { name: /安全自更新流程/ }))
+    expect(await screen.findByText('协作记录')).toBeTruthy()
+    expect(screen.getByText('委派 · 已完成')).toBeTruthy()
+    expect(screen.getByText('验证候选版本健康检查')).toBeTruthy()
+    expect(screen.getByText(/结果：已完成 · 健康检查通过/)).toBeTruthy()
+    expect(screen.getByText(/目标事情：task-2/)).toBeTruthy()
+  })
+
+  it('drills into goal and review pack history from the task drawer', async () => {
+    const fetchMock = installFetch(path => {
+      if (path.startsWith('/v1/tasks/task-1/delivery?'))
+        return Response.json(deliveryFixture)
+      if (path.startsWith('/v1/tasks/task-1/goals?'))
+        return Response.json({
+          contracts: [
+            {
+              ...goalFixture,
+              id: 'goal-0',
+              revision: 1,
+              desiredOutcome: '先发布一个可回滚的候选版本',
+            },
+            goalFixture,
+          ],
+          current: goalFixture,
+        })
+      if (path.startsWith('/v1/tasks/task-1/review-packs?'))
+        return Response.json({
+          reviewPacks: [reviewPackFixture],
+          current: reviewPackFixture,
+        })
+      return undefined
+    })
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(screen.getByRole('button', { name: /安全自更新流程/ }))
+    expect(await screen.findByText('目标与交付')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '查看历史修订' }))
+    expect(await screen.findByText('先发布一个可回滚的候选版本')).toBeTruthy()
+    expect(screen.getByText('v2 · 当前')).toBeTruthy()
+    expect(screen.getByText('Review Pack 历史')).toBeTruthy()
+    expect(screen.getByText(/修订 1 · 目标 v2 · 部分完成/)).toBeTruthy()
+    expect(
+      fetchMock.mock.calls.some(
+        ([path]) =>
+          typeof path === 'string' &&
+          path.startsWith('/v1/tasks/task-1/goals?'),
+      ),
+    ).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: '收起历史修订' }))
+    expect(screen.queryByText('先发布一个可回滚的候选版本')).toBeNull()
+  })
+
+  it('submits trusted verification for pending evidence', async () => {
+    let verified = false
+    const pendingDelivery: TaskDelivery = {
+      ...deliveryFixture,
+      evidence: [
+        {
+          id: 'evidence-pending',
+          criterionId: 'criterion-verify',
+          kind: 'screenshot',
+          artifactId: artifactFixture.id,
+          verification: { result: 'pending' },
+          sensitivity: 'internal',
+          capturedAt: '2026-11-20T00:03:00.000Z',
+          presentation: {},
+          limitations: [],
+        },
+      ],
+    }
+    installFetch((path, init) => {
+      if (path.startsWith('/v1/tasks/task-1/delivery?'))
+        return Response.json(pendingDelivery)
+      if (
+        path === '/v1/evidence/evidence-pending/verify' &&
+        init?.method === 'POST'
+      ) {
+        verified = true
+        return Response.json({ evidence: {} })
+      }
+      return undefined
+    })
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(screen.getByRole('button', { name: /安全自更新流程/ }))
+    expect(await screen.findByText('目标与交付')).toBeTruthy()
+    expect(await screen.findByText('有 1 条证据等待可信验证。')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /验证证据 evidence/ }))
+    expect(
+      await screen.findByText('已提交可信验证；刷新事情详情可查看最新结论。'),
+    ).toBeTruthy()
+    expect(verified).toBe(true)
+  })
+
+  it('lists registered execution nodes in the runtime drawer and settings', async () => {
+    const nodes = [
+      {
+        id: 'node-1',
+        label: 'mac-studio worker',
+        capabilities: ['dsh', 'browser'],
+        lastHeartbeatAt: new Date().toISOString(),
+        createdAt: '2026-11-20T00:00:00.000Z',
+      },
+    ]
+    installFetch(path =>
+      path === '/v1/nodes' ? Response.json({ nodes }) : undefined,
+    )
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(await screen.findByRole('button', { name: '查看运行时' }))
+    expect(await screen.findByText('已注册执行节点')).toBeTruthy()
+    expect(await screen.findByText('mac-studio worker')).toBeTruthy()
+    expect(screen.getByText('dsh · browser')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '关闭详情' }))
+    fireEvent.click(screen.getByRole('button', { name: '能力与连接' }))
+    expect(await screen.findByText('mac-studio worker')).toBeTruthy()
+    expect(screen.getByText(/工具授权清单 API 尚未提供/)).toBeTruthy()
+  })
+
+  it('uploads a selected attachment after sending the message', async () => {
+    const fetchMock = installFetch((path, init) => {
+      if (
+        path.startsWith('/v1/events/event-new/attachments?') &&
+        init?.method === 'POST'
+      )
+        return Response.json(
+          {
+            attachment: {
+              id: 'attachment-1',
+              userId: 'owner',
+              eventId: 'event-new',
+              fileName: 'plan.txt',
+              mediaType: 'text/plain',
+              byteSize: 12,
+              sha256: 'hash-attachment-1',
+              createdAt: '2026-11-21T00:00:00.000Z',
+            },
+          },
+          { status: 201 },
+        )
+      return undefined
+    })
+    render(<App />)
+    const composer = await screen.findByLabelText('给 Pegas 发消息')
+    const fileInput = screen.getByLabelText('选择附件文件')
+    const file = new File(['hello pegas!'], 'plan.txt', { type: 'text/plain' })
+    fireEvent.change(fileInput, { target: { files: [file] } })
+    expect(await screen.findByText(/附件：/)).toBeTruthy()
+    expect(screen.getByText('plan.txt')).toBeTruthy()
+    fireEvent.change(composer, { target: { value: '带上这份计划' } })
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([path, init]) =>
+            typeof path === 'string' &&
+            path.startsWith('/v1/events/event-new/attachments?') &&
+            typeof path === 'string' &&
+            path.includes('fileName=plan.txt') &&
+            init?.method === 'POST' &&
+            init.body === file,
+        ),
+      ).toBe(true),
+    )
+    expect(screen.queryByText(/附件：/)).toBeNull()
+  })
+
+  it('opens an uploaded attachment preview from the task timeline', async () => {
+    const sourceEvent = snapshot.events[0]
+    if (!sourceEvent) throw new Error('Expected an inbox event fixture')
+    const eventWithAttachment = {
+      ...sourceEvent,
+      attachment: {
+        id: 'attachment-1',
+        userId: 'owner',
+        eventId: sourceEvent.id,
+        fileName: '架构草图.png',
+        mediaType: 'image/png',
+        byteSize: 2048,
+        sha256: 'hash-attachment-1',
+        createdAt: '2026-11-21T00:00:00.000Z',
+      },
+    }
+    installSnapshotFetch({
+      ...snapshot,
+      events: [eventWithAttachment],
+    })
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(screen.getByRole('button', { name: /安全自更新流程/ }))
+    const attachmentButton = await screen.findByRole('button', {
+      name: /架构草图.png/,
+    })
+    fireEvent.click(attachmentButton)
+    const preview = await screen.findByAltText('架构草图.png')
+    expect(preview.getAttribute('src')).toBe(
+      '/v1/events/event-1/attachments?userId=owner',
+    )
+    fireEvent.click(screen.getByRole('button', { name: '返回工作详情' }))
+    expect(await screen.findByText('Channel 时间线')).toBeTruthy()
+  })
+
+  it('sends recorded voice directly as a message in direct-send mode', async () => {
+    class FakeMediaRecorder {
+      static isTypeSupported() {
+        return false
+      }
+      state: RecordingState = 'inactive'
+      mimeType = 'audio/webm'
+      ondataavailable: ((event: BlobEvent) => void) | null = null
+      onerror: (() => void) | null = null
+      onstop: (() => void) | null = null
+      start() {
+        this.state = 'recording'
+      }
+      stop() {
+        this.state = 'inactive'
+        this.ondataavailable?.({
+          data: new Blob(['voice-bytes'], { type: 'audio/webm' }),
+        } as BlobEvent)
+        this.onstop?.()
+      }
+    }
+    vi.stubGlobal('MediaRecorder', FakeMediaRecorder)
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: {
+        getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [] }),
+      },
+    })
+    let voicePath = ''
+    const fetchMock = installFetch((path, init) => {
+      if (path.startsWith('/v1/voice/messages?') && init?.method === 'POST') {
+        voicePath = path
+        return Response.json(
+          {
+            event: {
+              id: 'event-voice',
+              userId: 'owner',
+              type: 'user.message',
+              source: 'web',
+              payload: { text: '帮我检查发布状态', inputMode: 'voice' },
+              status: 'pending',
+              createdAt: '2026-11-21T00:00:00.000Z',
+            },
+            inserted: true,
+            transcript: { text: '帮我检查发布状态' },
+          },
+          { status: 202 },
+        )
+      }
+      return undefined
+    })
+    render(<App />)
+    await screen.findByLabelText('给 Pegas 发消息')
+    const toggle = screen.getByRole('button', { name: '说完直接发送' })
+    expect(toggle.getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(screen.getByRole('button', { name: '语音输入' }))
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '停止录音' })).toBeTruthy(),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '停止录音' }))
+    await waitFor(() => expect(voicePath).toContain('/v1/voice/messages?'))
+    expect(voicePath).toContain('source=web')
+    expect(voicePath).toContain('language=zh')
+    expect(
+      fetchMock.mock.calls.some(
+        ([path, init]) =>
+          typeof path === 'string' &&
+          path.startsWith('/v1/voice/messages?') &&
+          Boolean(
+            (init?.headers as Record<string, string> | undefined)?.[
+              'idempotency-key'
+            ],
+          ),
+      ),
+    ).toBe(true)
+    expect(screen.getByLabelText('给 Pegas 发消息')).toHaveProperty('value', '')
+    expect(
+      fetchMock.mock.calls.some(
+        ([path, init]) => path === '/v1/events' && init?.method === 'POST',
+      ),
+    ).toBe(false)
   })
 })

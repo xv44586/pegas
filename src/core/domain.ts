@@ -60,6 +60,7 @@ export interface InboxEvent {
   authenticatedActor?: 'human'
   deviceId?: string
   dedupeKey?: string
+  attachment?: EventAttachment
   payload: unknown
   status: EventStatus
   attempts: number

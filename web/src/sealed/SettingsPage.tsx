@@ -12,6 +12,7 @@ import {
   Mic,
   Monitor,
   MoonStar,
+  Network,
   Palette,
   Pencil,
   Plus,
@@ -28,10 +29,13 @@ import { useEffect, useRef, useState } from 'react'
 
 import type {
   DshModelCatalog,
+  ExecutionNode,
   MemoryRecord,
   ModelCatalogItem,
   ModelProviderDraft,
   ModelUsageReport,
+  NotificationPreferences,
+  NotificationPreferencesUpdate,
   RuntimeSettings,
   RewriteSettingsDraft,
   SettingsResponse,
@@ -41,6 +45,7 @@ import { useVoiceDictation } from '../useVoiceDictation'
 import { PegasMark } from './PegasMark'
 import { PegasMascot } from './PegasMascot'
 import {
+  formatRelativeTime,
   settingsSections,
   type DrawerView,
   type SettingsSection,
@@ -67,6 +72,10 @@ interface SettingsPageProps {
   response?: SettingsResponse
   memories?: MemoryRecord[]
   memoriesError?: string
+  notificationPreferences?: NotificationPreferences
+  notificationPreferencesError?: string
+  executionNodes?: ExecutionNode[]
+  executionNodesError?: string
   usage?: ModelUsageReport
   usageError?: string
   agentModels?: DshModelCatalog
@@ -79,6 +88,9 @@ interface SettingsPageProps {
   onOpenDrawer: (drawer: DrawerView) => void
   onOpenMemory?: () => void
   onReloadUsage: () => void
+  onReloadNotifications?: () => void
+  onReloadExecutionNodes?: () => void
+  onSaveNotifications?: (update: NotificationPreferencesUpdate) => Promise<void>
   onBack: () => void
   onSectionChange?: (section: SettingsSection) => void
   onDiscoverModels: (
@@ -119,6 +131,10 @@ export function SettingsPage({
   response,
   memories,
   memoriesError,
+  notificationPreferences,
+  notificationPreferencesError,
+  executionNodes,
+  executionNodesError,
   usage,
   usageError,
   agentModels,
@@ -126,6 +142,9 @@ export function SettingsPage({
   onOpenDrawer,
   onOpenMemory,
   onReloadUsage,
+  onReloadNotifications,
+  onReloadExecutionNodes,
+  onSaveNotifications,
   onBack,
   onSectionChange,
   onDiscoverModels,
@@ -319,7 +338,13 @@ export function SettingsPage({
                       speechDraft={speechDraft}
                     />
                   )}
-                {section === 'connections' && <ConnectionsSettings />}
+                {section === 'connections' && (
+                  <ConnectionsSettings
+                    error={executionNodesError}
+                    nodes={executionNodes}
+                    onReload={onReloadExecutionNodes}
+                  />
+                )}
                 {section === 'memory' && (
                   <MemorySettings
                     error={memoriesError}
@@ -334,7 +359,14 @@ export function SettingsPage({
                     onChange={setDraft}
                   />
                 )}
-                {section === 'notifications' && <NotificationSettings />}
+                {section === 'notifications' && (
+                  <NotificationSettings
+                    error={notificationPreferencesError}
+                    onReload={onReloadNotifications}
+                    onSave={onSaveNotifications}
+                    preferences={notificationPreferences}
+                  />
+                )}
                 {section === 'usage' && (
                   <UsageSettings
                     error={usageError}
@@ -1662,37 +1694,65 @@ function VoiceSettings({
   )
 }
 
-function ConnectionsSettings() {
+function ConnectionsSettings({
+  error,
+  nodes,
+  onReload,
+}: {
+  error?: string
+  nodes?: ExecutionNode[]
+  onReload?: () => void
+}) {
   return (
     <div className="settings-pane">
       <SettingsHeading
         title="能力与连接"
-        description="查看 Pegas 可以访问的工具与外部服务。"
+        description="查看已注册的执行节点与它们声明的能力。"
       />
+      {error ? (
+        <div className="page-error" role="alert">
+          {error}
+          {onReload && (
+            <button
+              className="secondary-button"
+              onClick={onReload}
+              type="button"
+            >
+              <RotateCw size={15} />
+              重新读取
+            </button>
+          )}
+        </div>
+      ) : !nodes ? (
+        <p className="page-loading">正在读取执行节点…</p>
+      ) : nodes.length ? (
+        <div className="connection-grid">
+          {nodes.map(node => (
+            <article key={node.id}>
+              <span>
+                <Network size={19} />
+              </span>
+              <div>
+                <h3>{node.label}</h3>
+                <p>
+                  {node.capabilities.length
+                    ? node.capabilities.join(' · ')
+                    : '未声明能力'}
+                </p>
+                <p>最近心跳：{formatRelativeTime(node.lastHeartbeatAt)}</p>
+              </div>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <p className="settings-help">
+          还没有 Worker 注册为执行节点；控制面自身仍可执行事情。
+        </p>
+      )}
       <div className="info-banner">
         <LockKeyhole size={16} />
-        能力清单 API 尚未提供，以下为封板中的连接类型，不代表当前已授权。
-      </div>
-      <div className="connection-grid">
-        {[
-          ['本地文件', '状态未提供'],
-          ['浏览器', '状态未提供'],
-          ['GitHub', '状态未提供'],
-          ['Telegram', '状态未提供'],
-        ].map(([name, detail], index) => (
-          <article key={name}>
-            <span>
-              <Link2 size={19} />
-            </span>
-            <div>
-              <h3>{name}</h3>
-              <p>{detail}</p>
-            </div>
-            <button className="secondary-button" disabled type="button">
-              {index < 2 ? '管理' : '连接'}
-            </button>
-          </article>
-        ))}
+        这里只列出服务端已注册的执行节点；工具授权清单 API
+        尚未提供，不代表当前已授权。
       </div>
     </div>
   )
@@ -1799,27 +1859,163 @@ function PrivacySettings({
     </div>
   )
 }
-function NotificationSettings() {
+function NotificationSettings({
+  error,
+  onReload,
+  onSave,
+  preferences,
+}: {
+  error?: string
+  onReload?: () => void
+  onSave?: (update: NotificationPreferencesUpdate) => Promise<void>
+  preferences?: NotificationPreferences
+}) {
+  const [enabled, setEnabled] = useState(false)
+  const [quietStart, setQuietStart] = useState('23:00')
+  const [quietEnd, setQuietEnd] = useState('08:00')
+  const [saving, setSaving] = useState(false)
+  const [notice, setNotice] = useState<{
+    kind: 'success' | 'error'
+    message: string
+  }>()
+  useEffect(() => {
+    if (!preferences) return
+    setEnabled(Boolean(preferences.quietStart && preferences.quietEnd))
+    if (preferences.quietStart) setQuietStart(preferences.quietStart)
+    if (preferences.quietEnd) setQuietEnd(preferences.quietEnd)
+  }, [preferences])
+  const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/
+  const validTimes = timePattern.test(quietStart) && timePattern.test(quietEnd)
+  async function save() {
+    if (!preferences || !onSave || saving || (enabled && !validTimes)) return
+    setSaving(true)
+    setNotice(undefined)
+    try {
+      await onSave({
+        expectedRevision: preferences.revision,
+        utcOffsetMinutes: -new Date().getTimezoneOffset(),
+        ...(enabled ? { quietStart, quietEnd } : {}),
+      })
+      setNotice({ kind: 'success', message: '通知静默时段已保存' })
+    } catch (caught) {
+      setNotice({
+        kind: 'error',
+        message:
+          caught instanceof Error ? caught.message : '保存失败，请重试。',
+      })
+    } finally {
+      setSaving(false)
+    }
+  }
   return (
     <div className="settings-pane">
       <SettingsHeading
         title="通知"
-        description="选择哪些变化值得主动打扰你。"
+        description="设置免打扰时段，让 Pegas 的通知避开你的休息时间。"
       />
-      <div className="info-banner">
-        <LockKeyhole size={16} />
-        通知偏好 API 尚未提供；当前仅展示封板结构。
-      </div>
-      {['事情完成', '需要确认', '执行失败', '长任务阶段性进展'].map(
-        (label, index) => (
-          <label className="switch-row bordered" key={label}>
-            {label}
-            <input defaultChecked={index < 3} disabled type="checkbox" />
-          </label>
-        ),
+      {error ? (
+        <div className="page-error" role="alert">
+          {error}
+          {onReload && (
+            <button
+              className="secondary-button"
+              onClick={onReload}
+              type="button"
+            >
+              <RotateCw size={15} />
+              重新读取
+            </button>
+          )}
+        </div>
+      ) : !preferences ? (
+        <p className="page-loading">正在读取通知偏好…</p>
+      ) : (
+        <>
+          <div className="settings-card">
+            <div className="card-title">
+              <Bell size={20} />
+              <div>
+                <h3>免打扰时段</h3>
+                <p>
+                  时段内产生的通知会保留在服务端，等时段结束后再投递，不会丢失。
+                </p>
+              </div>
+            </div>
+            <label className="switch-row">
+              启用免打扰
+              <input
+                aria-label="启用免打扰"
+                checked={enabled}
+                disabled={saving}
+                onChange={event => setEnabled(event.target.checked)}
+                type="checkbox"
+              />
+            </label>
+            {enabled && (
+              <div className="quiet-hours-row">
+                <label className="field-label">
+                  开始时间
+                  <input
+                    disabled={saving}
+                    onChange={event => setQuietStart(event.target.value)}
+                    type="time"
+                    value={quietStart}
+                  />
+                </label>
+                <label className="field-label">
+                  结束时间
+                  <input
+                    disabled={saving}
+                    onChange={event => setQuietEnd(event.target.value)}
+                    type="time"
+                    value={quietEnd}
+                  />
+                </label>
+              </div>
+            )}
+            {enabled && !validTimes && (
+              <p className="settings-help">
+                请填写完整的开始与结束时间（24 小时制）。
+              </p>
+            )}
+            <p className="settings-help">
+              时区按当前设备（UTC
+              {formatUtcOffset(-new Date().getTimezoneOffset())}
+              ）计算；保存时生效。
+            </p>
+          </div>
+          <div className="settings-inline-actions">
+            <span
+              className={notice?.kind === 'error' ? 'is-error' : ''}
+              role={notice?.kind === 'error' ? 'alert' : 'status'}
+            >
+              {notice?.message}
+            </span>
+            <button
+              className="primary-button"
+              disabled={saving || (enabled && !validTimes)}
+              onClick={() => void save()}
+              type="button"
+            >
+              {saving ? '保存中…' : '保存通知偏好'}
+            </button>
+          </div>
+          <div className="info-banner">
+            <LockKeyhole size={16} />
+            按通知类型分别开关的偏好 API 尚未提供；当前服务端只支持免打扰时段。
+          </div>
+        </>
       )}
     </div>
   )
+}
+
+function formatUtcOffset(minutes: number): string {
+  const sign = minutes >= 0 ? '+' : '-'
+  const absolute = Math.abs(minutes)
+  const hours = Math.floor(absolute / 60)
+  const remainder = absolute % 60
+  return `${sign}${String(hours)}${remainder ? `:${String(remainder).padStart(2, '0')}` : ''}`
 }
 
 function UsageSettings({

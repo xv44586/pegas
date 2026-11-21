@@ -7,22 +7,9 @@ import {
   type ModelProviderId,
   type ModelProviderProtocol,
 } from '../model/provider-catalog.js'
+import type { RuntimeSettingsSelection } from './runtime-settings-selection.js'
 
-type RouterMode = 'model' | 'rules'
-type PrivacyMode = 'disabled' | 'mask'
-type RewriteMode = 'disabled' | 'light'
-type AgentModelMode = 'profile' | 'override'
-
-export interface RuntimeSettingsSelection {
-  routerMode: RouterMode
-  modelProvider: ModelProviderId
-  modelName: string
-  agentModelMode: AgentModelMode
-  agentModelProvider: string
-  agentModelName: string
-  privacyMode: PrivacyMode
-  rewriteMode: RewriteMode
-}
+export type { RuntimeSettingsSelection } from './runtime-settings-selection.js'
 
 export interface RuntimeSettings extends RuntimeSettingsSelection {
   revision: number

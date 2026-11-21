@@ -36,8 +36,11 @@ import type {
   Automation,
   DshModelCatalog,
   DshModelCatalogItem,
+  ExecutionNode,
   MemoryRecord,
   ModelProviderDraft,
+  NotificationPreferences,
+  NotificationPreferencesUpdate,
   OutboxMessage,
   RuntimeSettings,
   RewriteSettingsDraft,
@@ -72,6 +75,12 @@ export function App() {
   const [memories, setMemories] = useState<MemoryRecord[]>()
   const [memoriesError, setMemoriesError] = useState('')
   const [memoriesTruncated, setMemoriesTruncated] = useState(false)
+  const [notificationPreferences, setNotificationPreferences] =
+    useState<NotificationPreferences>()
+  const [notificationPreferencesError, setNotificationPreferencesError] =
+    useState('')
+  const [executionNodes, setExecutionNodes] = useState<ExecutionNode[]>()
+  const [executionNodesError, setExecutionNodesError] = useState('')
   const [theme, setTheme] = useState<ThemeChoice>(() => readTheme())
   const [systemDark, setSystemDark] = useState(() => systemPrefersDark())
   const [loading, setLoading] = useState(true)
@@ -94,6 +103,8 @@ export function App() {
   const approvalProjectionRequestRef = useRef(0)
   const automationsRequestRef = useRef(0)
   const memoriesRequestRef = useRef(0)
+  const notificationsRequestRef = useRef(0)
+  const nodesRequestRef = useRef(0)
 
   const loadSnapshot = useCallback(async () => {
     const requestId = snapshotRequestRef.current + 1
@@ -180,6 +191,38 @@ export function App() {
     }
   }, [api])
 
+  const loadNotificationPreferences = useCallback(async () => {
+    const requestId = notificationsRequestRef.current + 1
+    notificationsRequestRef.current = requestId
+    try {
+      const preferences = await api.notificationPreferences()
+      if (requestId !== notificationsRequestRef.current) return
+      setNotificationPreferences(preferences)
+      setNotificationPreferencesError('')
+    } catch (caught) {
+      if (requestId !== notificationsRequestRef.current) return
+      setNotificationPreferencesError(
+        caught instanceof Error ? caught.message : '无法读取通知偏好。',
+      )
+    }
+  }, [api])
+
+  const loadExecutionNodes = useCallback(async () => {
+    const requestId = nodesRequestRef.current + 1
+    nodesRequestRef.current = requestId
+    try {
+      const nodes = await api.executionNodes()
+      if (requestId !== nodesRequestRef.current) return
+      setExecutionNodes(nodes)
+      setExecutionNodesError('')
+    } catch (caught) {
+      if (requestId !== nodesRequestRef.current) return
+      setExecutionNodesError(
+        caught instanceof Error ? caught.message : '无法读取执行节点。',
+      )
+    }
+  }, [api])
+
   useEffect(() => {
     if (page === 'automation') void loadAutomations()
     if (
@@ -187,7 +230,18 @@ export function App() {
       (page === 'settings' && settingsSection === 'memory')
     )
       void loadMemories()
-  }, [page, settingsSection, loadAutomations, loadMemories])
+    if (page === 'settings' && settingsSection === 'notifications')
+      void loadNotificationPreferences()
+    if (page === 'settings' && settingsSection === 'connections')
+      void loadExecutionNodes()
+  }, [
+    page,
+    settingsSection,
+    loadAutomations,
+    loadMemories,
+    loadNotificationPreferences,
+    loadExecutionNodes,
+  ])
 
   const loadConfiguration = useCallback(
     async (preserveSettings = false) => {
@@ -388,6 +442,58 @@ export function App() {
               : current,
           )
         })
+      void api
+        .workerProfile(channelId)
+        .then(workerProfile => {
+          if (taskDrawerRequestRef.current.get(channelId) !== requestId) return
+          setDrawer(current =>
+            current?.kind === 'task' && current.channel.id === channelId
+              ? { ...current, workerProfile, workerProfileError: undefined }
+              : current,
+          )
+        })
+        .catch((caught: unknown) => {
+          if (taskDrawerRequestRef.current.get(channelId) !== requestId) return
+          setDrawer(current =>
+            current?.kind === 'task' && current.channel.id === channelId
+              ? {
+                  ...current,
+                  workerProfileError:
+                    caught instanceof Error
+                      ? caught.message
+                      : '读取事情级执行设置失败。',
+                }
+              : current,
+          )
+        })
+      void api
+        .channelCollaborations(channelId)
+        .then(collaborations => {
+          if (taskDrawerRequestRef.current.get(channelId) !== requestId) return
+          setDrawer(current =>
+            current?.kind === 'task' && current.channel.id === channelId
+              ? {
+                  ...current,
+                  collaborations,
+                  collaborationsError: undefined,
+                }
+              : current,
+          )
+        })
+        .catch((caught: unknown) => {
+          if (taskDrawerRequestRef.current.get(channelId) !== requestId) return
+          setDrawer(current =>
+            current?.kind === 'task' && current.channel.id === channelId
+              ? {
+                  ...current,
+                  collaborationsError:
+                    caught instanceof Error
+                      ? caught.message
+                      : '读取协作记录失败。',
+                }
+              : current,
+          )
+        })
       try {
         const scoped = await api.snapshot(channelId)
         if (taskDrawerRequestRef.current.get(channelId) !== requestId) return
@@ -429,6 +535,7 @@ export function App() {
     attentionRequestRef.current += 1
     if (options.rememberTrigger !== false) rememberFocus()
     setDrawer(enrichDrawer(view))
+    if (view.kind === 'runtime') loadRuntimeNodes()
     if (view.kind === 'task') {
       if (options.updateLocation !== false) {
         const url = new URL(window.location.href)
@@ -466,6 +573,35 @@ export function App() {
     setDrawer(view)
     if (view.kind === 'task') void loadTaskDrawer(view.channel.id)
     if (view.kind === 'review' && !view.goal) loadReviewGoal(view)
+    if (view.kind === 'runtime') loadRuntimeNodes()
+  }
+  function loadRuntimeNodes() {
+    const requestId = nodesRequestRef.current + 1
+    nodesRequestRef.current = requestId
+    void api
+      .executionNodes()
+      .then(nodes => {
+        if (nodesRequestRef.current !== requestId) return
+        setDrawer(current =>
+          current?.kind === 'runtime'
+            ? { ...current, nodes, nodesError: undefined }
+            : current,
+        )
+      })
+      .catch((caught: unknown) => {
+        if (nodesRequestRef.current !== requestId) return
+        setDrawer(current =>
+          current?.kind === 'runtime'
+            ? {
+                ...current,
+                nodesError:
+                  caught instanceof Error
+                    ? caught.message
+                    : '读取执行节点失败。',
+              }
+            : current,
+        )
+      })
   }
   function loadReviewGoal(view: Extract<DrawerView, { kind: 'review' }>) {
     void api
@@ -704,6 +840,28 @@ export function App() {
 
   async function markRead(message: OutboxMessage) {
     const updated = await api.markOutboxRead(message.id)
+    setData(current => ({
+      ...current,
+      snapshot: {
+        ...current.snapshot,
+        messages: current.snapshot.messages.map(item =>
+          item.id === updated.id ? updated : item,
+        ),
+      },
+    }))
+    setDrawer(current =>
+      current?.kind === 'message' && current.message.id === updated.id
+        ? { ...current, message: updated }
+        : current,
+    )
+  }
+
+  async function resolveOutbox(
+    messageId: string,
+    resolution: 'sent' | 'failed',
+    note: string,
+  ) {
+    const updated = await api.resolveOutboxMessage(messageId, resolution, note)
     setData(current => ({
       ...current,
       snapshot: {
@@ -1067,16 +1225,29 @@ export function App() {
         {page === 'settings' && (
           <SettingsPage
             agentModels={agentModels}
+            executionNodes={executionNodes}
+            executionNodesError={executionNodesError}
             initialSection={settingsSection}
             memories={memories}
             memoriesError={memoriesError}
+            notificationPreferences={notificationPreferences}
+            notificationPreferencesError={notificationPreferencesError}
             onBack={() => navigate('conversation')}
             onDiscoverModels={(provider, model, draft) =>
               api.discoverModels(provider, model, draft)
             }
             onOpenDrawer={openDrawer}
             onOpenMemory={() => navigate('memory')}
+            onReloadExecutionNodes={() => void loadExecutionNodes()}
+            onReloadNotifications={() => void loadNotificationPreferences()}
             onReloadUsage={() => void loadUsage()}
+            onSaveNotifications={async (
+              update: NotificationPreferencesUpdate,
+            ) => {
+              const saved = await api.saveNotificationPreferences(update)
+              setNotificationPreferences(saved)
+              setNotificationPreferencesError('')
+            }}
             onSectionChange={nextSection => {
               setSettingsSection(nextSection)
               const url = new URL(window.location.href)
@@ -1126,10 +1297,12 @@ export function App() {
       )}
       {resolvedDrawer && (
         <DetailDrawer
+          api={api}
           onChange={changeDrawer}
           onClose={closeDrawer}
           onOpenView={openNestedDrawer}
           onContinue={channel => continueChannel(channel.id)}
+          onResolveOutbox={resolveOutbox}
           onDecideApproval={async (approvalId, optionId, rationale) => {
             approvalProjectionRequestRef.current += 1
             let approval: Approval

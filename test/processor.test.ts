@@ -282,6 +282,10 @@ describe('event and run processing', () => {
         reportSequence: 0,
         status: 'ready',
         evidenceRefIds: [],
+        limitations: ['本次运行没有产出结构化证据引用。'],
+        remainingRisks: [
+          '在必需证据被采集并通过验证之前，这个目标会保持未完成。',
+        ],
       },
     ])
     expect(store.listReviewPacks(task.id, 'user-1')).toMatchObject([

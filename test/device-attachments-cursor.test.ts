@@ -236,6 +236,40 @@ describe('CONV-001 event attachments', () => {
     expect(files.equals(bytes)).toBe(true)
   })
 
+  it('projects attachment metadata onto event lists and channel timelines', () => {
+    const { store } = persistentStore()
+    const event = seedMessage(store, 'owner', '请查这份计划')
+    const created = store.applyRoutingDecision(
+      event,
+      {
+        kind: 'create_task',
+        title: '请查这份计划',
+        goal: '请查这份计划',
+        input: '请查这份计划',
+        reason: 'attachment projection test',
+      },
+      'echo',
+    )
+    const attachment = store.attachEventFile(event.id, 'owner', {
+      fileName: 'plan.txt',
+      mediaType: 'text/plain',
+      bytes: Buffer.from('plan-bytes'),
+    })
+    const listed = store
+      .listEvents('owner')
+      .find(entry => entry.id === event.id)
+    expect(listed?.attachment?.id).toBe(attachment.id)
+    expect(listed?.attachment?.fileName).toBe('plan.txt')
+    const timeline = store.pageChannelEvents(created.task.id, 'owner')
+    const timelineEvent = timeline.events.find(entry => entry.id === event.id)
+    expect(timelineEvent?.attachment?.sha256).toBe(attachment.sha256)
+    const withoutAttachment = seedMessage(store, 'owner', '没有附件')
+    expect(
+      store.listEvents('owner').find(entry => entry.id === withoutAttachment.id)
+        ?.attachment,
+    ).toBeUndefined()
+  })
+
   it('detects tampered attachment bytes before serving them', () => {
     const { store, directory } = persistentStore()
     const event = seedMessage(store, 'owner', '附件篡改')

@@ -3,7 +3,11 @@ import type {
   Automation,
   AutomationDraft,
   AutomationInvocation,
+  ChannelRelation,
   ChannelSearchResult,
+  EventAttachment,
+  ExecutionNode,
+  GoalContract,
   InboxEvent,
   ChannelTimeline,
   DurableAction,
@@ -13,7 +17,10 @@ import type {
   MemoryScope,
   ModelCatalogItem,
   ModelUsageReport,
+  NotificationPreferences,
+  NotificationPreferencesUpdate,
   OutboxMessage,
+  ReviewPack,
   Run,
   ModelProviderDraft,
   RuntimeSettings,
@@ -24,6 +31,7 @@ import type {
   Task,
   TaskDelivery,
   WorkChannel,
+  WorkerProfileResponse,
 } from './types'
 import { fallbackWorkerIconId, isWorkerIconId } from './agent-icon-id'
 
@@ -140,7 +148,7 @@ export class PegasApi {
     }))
   }
 
-  async sendMessage(text: string, taskId?: string): Promise<void> {
+  async sendMessage(text: string, taskId?: string): Promise<InboxEvent> {
     const response = await fetch('/v1/events', {
       method: 'POST',
       headers: this.#headers(true),
@@ -153,6 +161,8 @@ export class PegasApi {
       }),
     })
     if (!response.ok) await throwResponse(response)
+    const body = (await response.json()) as { event: InboxEvent }
+    return body.event
   }
 
   async transcribeVoice(
@@ -332,6 +342,186 @@ export class PegasApi {
     return this.#get<TaskDelivery>(
       `/v1/tasks/${encodeURIComponent(taskId)}/delivery?userId=${user}`,
     )
+  }
+
+  async notificationPreferences(): Promise<NotificationPreferences> {
+    const user = encodeURIComponent(this.#userId)
+    const response = await this.#get<{
+      preferences: NotificationPreferences
+    }>(`/v1/settings/notifications?userId=${user}`)
+    return response.preferences
+  }
+
+  async saveNotificationPreferences(
+    update: NotificationPreferencesUpdate,
+  ): Promise<NotificationPreferences> {
+    const response = await fetch('/v1/settings/notifications', {
+      method: 'PUT',
+      headers: this.#headers(true),
+      body: JSON.stringify({ userId: this.#userId, ...update }),
+    })
+    if (!response.ok) await throwResponse(response)
+    const body = (await response.json()) as {
+      preferences: NotificationPreferences
+    }
+    return body.preferences
+  }
+
+  async resolveOutboxMessage(
+    messageId: string,
+    resolution: 'sent' | 'failed',
+    note: string,
+  ): Promise<OutboxMessage> {
+    const response = await fetch(
+      `/v1/outbox/${encodeURIComponent(messageId)}/resolve`,
+      {
+        method: 'POST',
+        headers: this.#headers(true),
+        body: JSON.stringify({
+          userId: this.#userId,
+          commandId: crypto.randomUUID(),
+          resolution,
+          note,
+        }),
+      },
+    )
+    if (!response.ok) await throwResponse(response)
+    const body = (await response.json()) as { message: OutboxMessage }
+    return body.message
+  }
+
+  async executionNodes(): Promise<ExecutionNode[]> {
+    const response = await this.#get<{ nodes: ExecutionNode[] }>('/v1/nodes')
+    return response.nodes
+  }
+
+  async workerProfile(taskId: string): Promise<WorkerProfileResponse> {
+    const user = encodeURIComponent(this.#userId)
+    return this.#get<WorkerProfileResponse>(
+      `/v1/tasks/${encodeURIComponent(taskId)}/worker-profile?userId=${user}`,
+    )
+  }
+
+  async saveWorkerProfile(
+    taskId: string,
+    update: {
+      expectedRevision: number
+      modelMode: 'inherit' | 'override'
+      modelProvider?: string
+      modelName?: string
+    },
+  ): Promise<WorkerProfileResponse> {
+    const response = await fetch(
+      `/v1/tasks/${encodeURIComponent(taskId)}/worker-profile`,
+      {
+        method: 'PUT',
+        headers: this.#headers(true),
+        body: JSON.stringify({
+          userId: this.#userId,
+          commandId: crypto.randomUUID(),
+          ...update,
+        }),
+      },
+    )
+    if (!response.ok) await throwResponse(response)
+    return (await response.json()) as WorkerProfileResponse
+  }
+
+  async channelCollaborations(taskId: string): Promise<ChannelRelation[]> {
+    const user = encodeURIComponent(this.#userId)
+    const response = await this.#get<{ relations: ChannelRelation[] }>(
+      `/v1/channels/${encodeURIComponent(taskId)}/collaborations?userId=${user}&limit=100`,
+    )
+    return response.relations
+  }
+
+  async goalContracts(
+    taskId: string,
+  ): Promise<{ contracts: GoalContract[]; current?: GoalContract }> {
+    const user = encodeURIComponent(this.#userId)
+    return this.#get<{ contracts: GoalContract[]; current?: GoalContract }>(
+      `/v1/tasks/${encodeURIComponent(taskId)}/goals?userId=${user}&limit=50`,
+    )
+  }
+
+  async reviewPacks(
+    taskId: string,
+  ): Promise<{ reviewPacks: ReviewPack[]; current?: ReviewPack }> {
+    const user = encodeURIComponent(this.#userId)
+    return this.#get<{ reviewPacks: ReviewPack[]; current?: ReviewPack }>(
+      `/v1/tasks/${encodeURIComponent(taskId)}/review-packs?userId=${user}&limit=50`,
+    )
+  }
+
+  async verifyEvidence(evidenceId: string): Promise<void> {
+    const response = await fetch(
+      `/v1/evidence/${encodeURIComponent(evidenceId)}/verify`,
+      {
+        method: 'POST',
+        headers: this.#headers(true),
+        body: JSON.stringify({
+          userId: this.#userId,
+          commandId: crypto.randomUUID(),
+        }),
+      },
+    )
+    if (!response.ok) await throwResponse(response)
+  }
+
+  async sendVoiceMessage(
+    audio: Blob,
+    taskId?: string,
+    language = 'zh',
+  ): Promise<{ transcript: VoiceTranscript; event: InboxEvent }> {
+    const params = new URLSearchParams({
+      userId: this.#userId,
+      language,
+      source: 'web',
+      ...(taskId ? { taskId } : {}),
+    })
+    const response = await fetch(`/v1/voice/messages?${params.toString()}`, {
+      method: 'POST',
+      headers: {
+        ...this.#headers(false),
+        'content-type': audio.type || 'application/octet-stream',
+        'idempotency-key': crypto.randomUUID(),
+      },
+      body: audio,
+    })
+    if (!response.ok) await throwResponse(response)
+    return (await response.json()) as {
+      transcript: VoiceTranscript
+      event: InboxEvent
+    }
+  }
+
+  async uploadEventAttachment(
+    eventId: string,
+    file: File,
+  ): Promise<EventAttachment> {
+    const params = new URLSearchParams({
+      userId: this.#userId,
+      fileName: file.name,
+    })
+    const response = await fetch(
+      `/v1/events/${encodeURIComponent(eventId)}/attachments?${params.toString()}`,
+      {
+        method: 'POST',
+        headers: {
+          ...this.#headers(false),
+          'content-type': file.type || 'application/octet-stream',
+        },
+        body: file,
+      },
+    )
+    if (!response.ok) await throwResponse(response)
+    const body = (await response.json()) as { attachment: EventAttachment }
+    return body.attachment
+  }
+
+  eventAttachmentUrl(eventId: string): string {
+    const params = new URLSearchParams({ userId: this.#userId })
+    return `/v1/events/${encodeURIComponent(eventId)}/attachments?${params.toString()}`
   }
 
   async memories(options?: {

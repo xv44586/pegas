@@ -1,7 +1,9 @@
 import type {
   Approval,
   ChannelTimeline,
+  ChannelRelation,
   DurableAction,
+  ExecutionNode,
   GoalContract,
   ModelUsageReport,
   OutboxMessage,
@@ -11,6 +13,7 @@ import type {
   Snapshot,
   TaskDelivery,
   WorkChannel,
+  WorkerProfileResponse,
 } from '../types'
 
 export type AppPage =
@@ -43,13 +46,17 @@ export type DrawerView =
       timelineError?: string
       delivery?: TaskDelivery
       deliveryError?: string
+      workerProfile?: WorkerProfileResponse
+      workerProfileError?: string
+      collaborations?: ChannelRelation[]
+      collaborationsError?: string
       usage?: {
         totalTokens?: number
         durationMs?: number
         costUsd?: number
       }
     }
-  | { kind: 'runtime'; run?: Run }
+  | { kind: 'runtime'; run?: Run; nodes?: ExecutionNode[]; nodesError?: string }
   | { kind: 'message'; message: OutboxMessage }
   | {
       kind: 'approval'
@@ -221,6 +228,13 @@ export function isReconciliationMessage(message: OutboxMessage): boolean {
   return (
     payloadType(message.payload) === 'action.reconciliation_required' &&
     Boolean(actionIdFromMessage(message))
+  )
+}
+
+export function needsOutboxResolution(message: OutboxMessage): boolean {
+  return (
+    !message.resolution &&
+    (message.status === 'failed' || message.status === 'unknown')
   )
 }
 

@@ -1,5 +1,5 @@
 import type { ExecutionContext } from '../core/domain.js'
-import type { RuntimeSettings } from '../settings/runtime-settings.js'
+import type { RuntimeSettingsSelection } from '../settings/runtime-settings-selection.js'
 
 type WorkerProfileModelMode = 'inherit' | 'override'
 
@@ -62,7 +62,7 @@ export function parseWorkerProfileUpdate(value: unknown): WorkerProfileUpdate {
 
 export function effectiveWorkerProfile(
   profile: WorkerProfile,
-  settings: RuntimeSettings,
+  settings: RuntimeSettingsSelection,
 ): EffectiveWorkerProfile {
   const taskOverride = profile.modelMode === 'override'
   const modelMode = taskOverride ? 'override' : settings.agentModelMode
