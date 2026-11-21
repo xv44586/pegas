@@ -355,6 +355,25 @@ export interface ChannelEvidencePage {
   nextCursor?: string
 }
 
+interface RecoveryRelease {
+  id: string
+  commit?: string
+  createdAt: string
+  compatibility?: { minimumSchema: number; maximumSchema: number }
+}
+
+export interface RecoveryStatus {
+  available: boolean
+  integrity: 'ok' | 'degraded' | 'unavailable'
+  source: 'primary' | 'backup' | 'none'
+  diagnostics: string[]
+  phase?: 'stable' | 'verifying' | 'rolled_back'
+  updatedAt?: string
+  lastFailure?: string
+  active?: RecoveryRelease
+  previous?: RecoveryRelease
+}
+
 export type MemoryScope = 'global' | 'worker' | 'channel'
 
 export type MemoryCategory =

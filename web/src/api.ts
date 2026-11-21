@@ -22,6 +22,7 @@ import type {
   NotificationPreferences,
   NotificationPreferencesUpdate,
   OutboxMessage,
+  RecoveryStatus,
   ReviewPack,
   Run,
   ModelProviderDraft,
@@ -439,6 +440,10 @@ export class PegasApi {
   async executionNodes(): Promise<ExecutionNode[]> {
     const response = await this.#get<{ nodes: ExecutionNode[] }>('/v1/nodes')
     return response.nodes
+  }
+
+  async recoveryStatus(): Promise<RecoveryStatus> {
+    return this.#get<RecoveryStatus>('/v1/recovery/status')
   }
 
   async workerProfile(taskId: string): Promise<WorkerProfileResponse> {

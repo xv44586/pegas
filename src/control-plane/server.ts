@@ -23,6 +23,7 @@ import {
 import type {
   NewInboxEvent,
   OutboxResolutionDraft,
+  SupervisorState,
   TaskStatus,
 } from '../core/domain.js'
 import type { Logger } from '../observability/logger.js'
@@ -131,8 +132,153 @@ export interface ControlPlaneOptions {
   modelTimeoutMs?: number
   speechTimeoutMs?: number
   privacyHmacKey?: string
+  recoveryStatus?: RecoveryStatusSource
   logger?: Logger
   metrics?: MetricsRegistry
+}
+
+interface RecoveryStatusSource {
+  baseUrl: string
+  token?: string
+  timeoutMs?: number
+}
+
+interface RecoveryReleaseProjection {
+  id: string
+  commit?: string
+  createdAt: string
+  compatibility?: { minimumSchema: number; maximumSchema: number }
+}
+
+interface RecoveryStatusProjection {
+  available: boolean
+  integrity: 'ok' | 'degraded' | 'unavailable'
+  source: 'primary' | 'backup' | 'none'
+  diagnostics: string[]
+  phase?: SupervisorState['phase']
+  updatedAt?: string
+  lastFailure?: string
+  active?: RecoveryReleaseProjection
+  previous?: RecoveryReleaseProjection
+}
+
+const recoveryStatusTimeoutMs = 3_000
+const maximumRecoveryDiagnostics = 20
+const maximumRecoveryDiagnosticLength = 300
+
+async function fetchRecoveryStatus(
+  source: RecoveryStatusSource,
+): Promise<RecoveryStatusProjection> {
+  let upstream: Response
+  try {
+    upstream = await fetch(new URL('/v1/recovery/status', source.baseUrl), {
+      headers: source.token ? { authorization: `Bearer ${source.token}` } : {},
+      signal: AbortSignal.timeout(source.timeoutMs ?? recoveryStatusTimeoutMs),
+    })
+  } catch {
+    return {
+      available: false,
+      integrity: 'unavailable',
+      source: 'none',
+      diagnostics: ['无法连接独立恢复平面；Supervisor 可能未运行。'],
+    }
+  }
+  if (upstream.status !== 200 && upstream.status !== 503) {
+    return {
+      available: false,
+      integrity: 'unavailable',
+      source: 'none',
+      diagnostics:
+        upstream.status === 401
+          ? ['恢复平面拒绝了控制面凭证；请检查 PEGAS_RECOVERY_TOKEN 配置。']
+          : ['恢复平面返回了意外响应；状态不可用。'],
+    }
+  }
+  let body: unknown
+  try {
+    body = await upstream.json()
+  } catch {
+    return {
+      available: false,
+      integrity: 'unavailable',
+      source: 'none',
+      diagnostics: ['恢复平面响应无法解析；状态不可用。'],
+    }
+  }
+  return projectRecoveryStatus(body)
+}
+
+function projectRecoveryStatus(body: unknown): RecoveryStatusProjection {
+  const record = isRecord(body) ? body : {}
+  const meta = isRecord(record.recoveryState) ? record.recoveryState : {}
+  const integrity =
+    meta.integrity === 'ok' ||
+    meta.integrity === 'degraded' ||
+    meta.integrity === 'unavailable'
+      ? meta.integrity
+      : 'unavailable'
+  const source =
+    meta.source === 'primary' ||
+    meta.source === 'backup' ||
+    meta.source === 'none'
+      ? meta.source
+      : 'none'
+  const diagnostics = Array.isArray(meta.diagnostics)
+    ? meta.diagnostics
+        .filter(
+          (entry): entry is string =>
+            typeof entry === 'string' && entry.trim().length > 0,
+        )
+        .slice(0, maximumRecoveryDiagnostics)
+        .map(entry => entry.slice(0, maximumRecoveryDiagnosticLength))
+    : []
+  const active = projectRecoveryRelease(record.active)
+  const previous = projectRecoveryRelease(record.previous)
+  const phase =
+    record.phase === 'stable' ||
+    record.phase === 'verifying' ||
+    record.phase === 'rolled_back'
+      ? record.phase
+      : undefined
+  return {
+    available: integrity !== 'unavailable' && Boolean(active),
+    integrity,
+    source,
+    diagnostics,
+    ...(phase ? { phase } : {}),
+    ...(typeof record.updatedAt === 'string'
+      ? { updatedAt: record.updatedAt }
+      : {}),
+    ...(typeof record.lastFailure === 'string' && record.lastFailure.trim()
+      ? {
+          lastFailure: record.lastFailure.slice(
+            0,
+            maximumRecoveryDiagnosticLength,
+          ),
+        }
+      : {}),
+    ...(active ? { active } : {}),
+    ...(previous ? { previous } : {}),
+  }
+}
+
+function projectRecoveryRelease(
+  value: unknown,
+): RecoveryReleaseProjection | undefined {
+  if (!isRecord(value) || typeof value.id !== 'string') return undefined
+  const compatibility = isRecord(value.compatibility)
+    ? value.compatibility
+    : undefined
+  const minimumSchema = compatibility?.minimumSchema
+  const maximumSchema = compatibility?.maximumSchema
+  return {
+    id: value.id,
+    ...(typeof value.commit === 'string' ? { commit: value.commit } : {}),
+    createdAt: typeof value.createdAt === 'string' ? value.createdAt : '',
+    ...(typeof minimumSchema === 'number' && typeof maximumSchema === 'number'
+      ? { compatibility: { minimumSchema, maximumSchema } }
+      : {}),
+  }
 }
 
 export function createControlPlane(options: ControlPlaneOptions): Server {
@@ -1046,6 +1192,27 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         return sendJson(response, 200, {
           nodes: options.store.listExecutionNodes(),
         })
+      }
+
+      const recoveryStatusPath = new URL(request.url ?? '/', 'http://localhost')
+        .pathname
+      if (recoveryStatusPath === '/v1/recovery/status') {
+        if (request.method !== 'GET') {
+          return sendJson(response, 405, { error: 'method_not_allowed' })
+        }
+        if (!options.recoveryStatus) {
+          return sendJson(response, 200, {
+            available: false,
+            integrity: 'unavailable',
+            source: 'none',
+            diagnostics: ['未配置独立恢复平面（PEGAS_RECOVERY_BASE_URL）。'],
+          } satisfies RecoveryStatusProjection)
+        }
+        return sendJson(
+          response,
+          200,
+          await fetchRecoveryStatus(options.recoveryStatus),
+        )
       }
 
       if (request.url?.startsWith('/v1/usage') && request.method === 'GET') {

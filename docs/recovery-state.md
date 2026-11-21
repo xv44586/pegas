@@ -22,6 +22,16 @@ Supervisor 的主状态损坏或写入中断时，Pegas 不会把未知状态误
 - 回滚到 `maximumSchema < 19` 的 Release 前，最终检查发现 pending/processing 的 `collaboration.*` 事件或 pending/active 关系时拒绝切换；Recovery API 只在停机后复核和切换均成功后返回 202。
 - 回滚到 `maximumSchema < 20` 的 Release 前，最终检查发现活跃 Automation schedule 或 pending/processing 的 `automation.*` 事件时拒绝切换；暂停/取消并结算 Event 后才允许回滚。
 
+## Control Plane 只读状态代理与 Web 展示（2026-11-21）
+
+- Control Plane 提供 `GET /v1/recovery/status`（实例 bearer 鉴权，非 GET 返回 405），把独立恢复平面的 `/v1/recovery/status` 投影给封板 Web「设置 → 数据与恢复」。
+- 配置：`PEGAS_RECOVERY_BASE_URL`（默认 `http://127.0.0.1:4318`）与可选 `PEGAS_RECOVERY_TOKEN`；token 只在服务端使用，绝不下发浏览器。未显式配置 base URL 时代理返回诚实的 `available:false`（`source:'none'`），不猜测本机 Supervisor。
+- 投影为白名单字段：active/previous 的 `id`/`commit`/`createdAt`/`compatibility`（剥离 `root` 文件系统路径）、`integrity`/`source` 枚举、上限 20 条 × 300 字符的 `diagnostics`、可选 `phase`/`updatedAt`/`lastFailure`；接受上游 200 与 503（unavailable）。
+- 上游不可达/超时（默认 3s）返回 unavailable 与「无法连接独立恢复平面；Supervisor 可能未运行。」；上游 401 提示检查 `PEGAS_RECOVERY_TOKEN`。
+- 代理只覆盖状态读取：restart/rollback/candidates 等破坏性端点不经 Control Plane 暴露（404），仍只能在恢复平面本体上带其独立 token 执行。
+- Web 端进入「数据与恢复」分类才懒加载状态；完好/降级/不可用分别以徽标 + 元数据 + 诊断如实展示，读取失败就地报错并可重试；导出数据按钮禁用（HTTP API 未提供，在线备份走服务端 `pnpm backup`），清除本机数据禁用（需专门审批设计）。
+- 证据：`test/recovery-status-proxy.test.ts`（8 测试）与 `web/src/App.test.tsx` 恢复状态 4 回归；真实恢复平面三态联调实拍见 `output/feature-review/live-evidence-recovery/`（本地证据）。
+
 ## 验收条件
 
 1. 截断的主状态可以从 last-known-good 读取，并在 Recovery API 标记 `degraded`。

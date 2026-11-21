@@ -36,6 +36,7 @@ import type {
   ModelUsageReport,
   NotificationPreferences,
   NotificationPreferencesUpdate,
+  RecoveryStatus,
   RuntimeSettings,
   RewriteSettingsDraft,
   SettingsResponse,
@@ -76,6 +77,8 @@ interface SettingsPageProps {
   notificationPreferencesError?: string
   executionNodes?: ExecutionNode[]
   executionNodesError?: string
+  recoveryStatus?: RecoveryStatus
+  recoveryStatusError?: string
   usage?: ModelUsageReport
   usageError?: string
   agentModels?: DshModelCatalog
@@ -90,6 +93,7 @@ interface SettingsPageProps {
   onReloadUsage: () => void
   onReloadNotifications?: () => void
   onReloadExecutionNodes?: () => void
+  onReloadRecovery?: () => void
   onSaveNotifications?: (update: NotificationPreferencesUpdate) => Promise<void>
   onBack: () => void
   onSectionChange?: (section: SettingsSection) => void
@@ -135,6 +139,8 @@ export function SettingsPage({
   notificationPreferencesError,
   executionNodes,
   executionNodesError,
+  recoveryStatus,
+  recoveryStatusError,
   usage,
   usageError,
   agentModels,
@@ -144,6 +150,7 @@ export function SettingsPage({
   onReloadUsage,
   onReloadNotifications,
   onReloadExecutionNodes,
+  onReloadRecovery,
   onSaveNotifications,
   onBack,
   onSectionChange,
@@ -374,7 +381,13 @@ export function SettingsPage({
                     usage={usage}
                   />
                 )}
-                {section === 'recovery' && <RecoverySettings />}
+                {section === 'recovery' && (
+                  <RecoverySettings
+                    error={recoveryStatusError}
+                    onReload={onReloadRecovery}
+                    status={recoveryStatus}
+                  />
+                )}
                 {section === 'about' && <AboutSettings />}
               </>
             )}
@@ -2136,17 +2149,33 @@ function UsageSettings({
   )
 }
 
-function RecoverySettings() {
+function recoveryIntegrityLabel(status: RecoveryStatus): string {
+  if (status.integrity === 'ok') return '状态完好'
+  if (status.integrity === 'degraded') return '降级运行'
+  return '状态不可用'
+}
+
+function recoveryPhaseLabel(phase: NonNullable<RecoveryStatus['phase']>) {
+  if (phase === 'stable') return '稳定'
+  if (phase === 'verifying') return '验证中'
+  return '已回滚'
+}
+
+function RecoverySettings({
+  error,
+  onReload,
+  status,
+}: {
+  error?: string
+  onReload?: () => void
+  status?: RecoveryStatus
+}) {
   return (
     <div className="settings-pane">
       <SettingsHeading
         title="数据与恢复"
-        description="查看本机数据、导出和独立恢复入口。"
+        description="查看本机数据与独立恢复平面的真实状态。"
       />
-      <div className="info-banner">
-        <LockKeyhole size={16} />
-        导出与恢复状态 API 尚未提供；当前操作不可用。
-      </div>
       <div className="settings-card">
         <div className="card-title">
           <Database size={20} />
@@ -2154,10 +2183,13 @@ function RecoverySettings() {
             <h3>本地数据库</h3>
             <p>Conversation、Task 与 Run 的服务端权威记录。</p>
           </div>
-          <span className="health-badge">状态未提供</span>
         </div>
+        <p className="settings-help">
+          在线备份目前通过服务端命令执行：<code>pnpm backup</code>；导出数据的
+          HTTP API 尚未提供，这里不伪装成可点击操作。
+        </p>
         <button className="secondary-button" disabled type="button">
-          导出数据
+          导出数据（待服务端 API）
         </button>
       </div>
       <div className="settings-card">
@@ -2167,14 +2199,129 @@ function RecoverySettings() {
             <h3>恢复平面</h3>
             <p>独立 Supervisor 提供状态、重启与回滚生命线。</p>
           </div>
+          {status && (
+            <span
+              className={
+                status.integrity === 'ok'
+                  ? 'health-badge is-good'
+                  : 'health-badge'
+              }
+            >
+              {recoveryIntegrityLabel(status)}
+            </span>
+          )}
         </div>
-        <button className="secondary-button" disabled type="button">
-          查看恢复状态
-        </button>
+        {error ? (
+          <div className="page-error" role="alert">
+            {error}
+            {onReload && (
+              <button
+                className="secondary-button"
+                onClick={onReload}
+                type="button"
+              >
+                <RotateCw size={15} />
+                重新读取
+              </button>
+            )}
+          </div>
+        ) : !status ? (
+          <p className="page-loading">正在读取恢复状态…</p>
+        ) : (
+          <>
+            {status.active ? (
+              <div className="metadata-list recovery-release-list">
+                <dl>
+                  <div>
+                    <dt>当前版本</dt>
+                    <dd>
+                      {status.active.id}
+                      {status.active.commit
+                        ? ` · ${status.active.commit.slice(0, 8)}`
+                        : ''}
+                    </dd>
+                  </div>
+                  {status.phase && (
+                    <div>
+                      <dt>阶段</dt>
+                      <dd>{recoveryPhaseLabel(status.phase)}</dd>
+                    </div>
+                  )}
+                  {status.active.compatibility && (
+                    <div>
+                      <dt>兼容 schema</dt>
+                      <dd>
+                        v{String(status.active.compatibility.minimumSchema)}–v
+                        {String(status.active.compatibility.maximumSchema)}
+                      </dd>
+                    </div>
+                  )}
+                  {status.updatedAt && (
+                    <div>
+                      <dt>最近更新</dt>
+                      <dd>{formatRelativeTime(status.updatedAt)}</dd>
+                    </div>
+                  )}
+                  <div>
+                    <dt>可回滚版本</dt>
+                    <dd>
+                      {status.previous
+                        ? `${status.previous.id}${
+                            status.previous.commit
+                              ? ` · ${status.previous.commit.slice(0, 8)}`
+                              : ''
+                          }`
+                        : '没有可回滚的上一个版本'}
+                    </dd>
+                  </div>
+                  {status.integrity === 'degraded' && (
+                    <div>
+                      <dt>状态来源</dt>
+                      <dd>last-known-good 备份（主状态文件损坏）</dd>
+                    </div>
+                  )}
+                  {status.lastFailure && (
+                    <div>
+                      <dt>最近失败</dt>
+                      <dd>{status.lastFailure}</dd>
+                    </div>
+                  )}
+                </dl>
+              </div>
+            ) : (
+              <p className="settings-help">
+                恢复平面当前不可用；这不影响本机数据，只表示独立 Supervisor
+                生命线暂时无法读取。
+              </p>
+            )}
+            {status.diagnostics.length > 0 && (
+              <ul className="recovery-diagnostics">
+                {status.diagnostics.map(diagnostic => (
+                  <li key={diagnostic}>{diagnostic}</li>
+                ))}
+              </ul>
+            )}
+            {onReload && (
+              <button
+                className="secondary-button"
+                onClick={onReload}
+                type="button"
+              >
+                <RotateCw size={15} />
+                刷新恢复状态
+              </button>
+            )}
+          </>
+        )}
+      </div>
+      <div className="info-banner">
+        <LockKeyhole size={16} />
+        这里只读展示恢复状态；重启与回滚仍需在服务端恢复平面执行，Web
+        不提供破坏性操作入口。
       </div>
       <button className="danger-button" disabled type="button">
         <Trash2 size={16} />
-        清除本机数据
+        清除本机数据（需专门审批设计）
       </button>
     </div>
   )
