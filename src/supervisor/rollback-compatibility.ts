@@ -3,6 +3,7 @@ import { DatabaseSync } from 'node:sqlite'
 
 const collaborationSchemaVersion = 19
 const automationSchemaVersion = 20
+const memorySchemaVersion = 21
 
 export class RollbackCompatibilityError extends Error {}
 
@@ -64,6 +65,19 @@ export function assertRollbackCompatible(
       if (activeAutomation || liveAutomationEvent) {
         throw new RollbackCompatibilityError(
           'Rollback is unsafe while Automation schedules or events are active',
+        )
+      }
+    }
+    if (
+      currentVersion >= memorySchemaVersion &&
+      targetMaximumSchema < memorySchemaVersion
+    ) {
+      const liveMemory = database
+        .prepare('SELECT 1 FROM memories LIMIT 1')
+        .get()
+      if (liveMemory) {
+        throw new RollbackCompatibilityError(
+          'Rollback is unsafe while user Memory records exist',
         )
       }
     }

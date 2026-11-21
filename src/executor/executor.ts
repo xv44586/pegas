@@ -3,6 +3,7 @@ import type {
   Mandate,
   ModelUsageSample,
 } from '../core/domain.js'
+import type { MemoryContextEntry } from '../memory/memory.js'
 
 export interface ExecutorInput {
   runId: string
@@ -13,6 +14,7 @@ export interface ExecutorInput {
   executionContext?: ExecutionContext
   executionContractVersion?: number
   mandate?: Mandate
+  memories?: readonly MemoryContextEntry[]
   actionCapability?: {
     baseUrl: string
     claimToken: string

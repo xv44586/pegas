@@ -533,7 +533,7 @@ GET /v1/channels/search?userId=owner&q=Telegram&status=started,completed&ended=f
 | `CHANNEL-003`  | 按 ID/对话搜索，并按创建/结束时间和状态排序过滤                                         | `CHANNEL-002`                                                      | Usable   |
 | `NOTIFY-003`   | Web Outbox 提供列表、详情、已读和来源 Channel 跳转                                      | `NOTIFY-001`, `CHANNEL-001`                                        | Usable   |
 | `USAGE-001`    | 按 Worker、Channel、Run 记录供应商真实 token、cache、延迟和费用来源                     | `WORKER-001`, `CHANNEL-002`                                        | Usable   |
-| `MEMORY-001`   | 全局、Worker 范围和 Channel 局部记忆可查看、纠正和删除                                  | `WORKER-001`, `CHANNEL-001`                                        | Planned  |
+| `MEMORY-001`   | 全局、Worker 范围和 Channel 局部记忆可查看、纠正和删除                                  | `WORKER-001`, `CHANNEL-001`                                        | Partial  |
 | `SCHEDULE-001` | Automation 独立保存；Invocation 经 Event Inbox 唤醒当前或新 Channel                     | `CHANNEL-001`, `WORKER-001`                                        | Planned  |
 
 推荐交付顺序：

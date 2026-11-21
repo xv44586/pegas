@@ -365,6 +365,10 @@ export async function executeClaimedRun(
   let result
   try {
     const inputEventId = store.resolveRunInputEventId(claimed.run.id)
+    const memories = store.memoryContextEntriesForTask(
+      claimed.task.userId,
+      claimed.task.id,
+    )
     result = await executor.execute({
       runId: claimed.run.id,
       taskId: claimed.task.id,
@@ -374,6 +378,7 @@ export async function executeClaimedRun(
       executionContext: claimed.run.executionContext,
       executionContractVersion: claimed.run.executionContractVersion,
       mandate: claimed.task.mandate,
+      ...(memories.length > 0 ? { memories } : {}),
       actionCapability: {
         baseUrl: controlPlaneBaseUrl,
         claimToken: claimed.claimToken,

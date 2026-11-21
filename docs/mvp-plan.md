@@ -57,7 +57,7 @@
 - [x] Scheduler 事务性写入 Event Inbox；
 - [x] Approval 持久等待、释放 Worker 和事件恢复；
 - [x] Action idempotency 与未知副作用处理（已接入协议的 Executor；通用 DSH tool-call 代理待补）；
-- [ ] Memory 来源、修正、删除和按需加载；
+- [x] Memory 来源、修正、删除和按需加载（服务端闭环；自动抽取与 Web 写操作待补）；
 - [ ] SQLite 备份、校验与恢复演练；
 - [ ] Worker、网络和数据库故障注入测试；
 - [ ] Outbox 的重试、合并、静默时段和未知投递处理。

@@ -66,6 +66,19 @@ import type {
   RuntimeSettingsSelection,
 } from '../settings/runtime-settings.js'
 import {
+  memoryFingerprint,
+  toMemoryContext,
+  type MemoryCategory,
+  type MemoryCreateCommand,
+  type MemoryDeleteCommand,
+  type MemoryDeletion,
+  type MemoryListOptions,
+  type MemoryRecord,
+  type MemoryScope,
+  type MemorySource,
+  type MemoryUpdateCommand,
+} from '../memory/memory.js'
+import {
   modelProviderPreset,
   type ModelProviderId,
   type ModelProviderProtocol,
@@ -268,6 +281,78 @@ CREATE TABLE automation_invocations (
 
 CREATE INDEX automation_invocations_by_automation
 ON automation_invocations (automation_id, scheduled_for DESC);
+`
+
+const migration21 = `
+CREATE TABLE memories (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  scope TEXT NOT NULL CHECK (scope IN ('global', 'worker', 'channel')),
+  scope_task_id TEXT REFERENCES tasks(id),
+  category TEXT NOT NULL CHECK (category IN (
+    'preference', 'fact', 'context', 'experience', 'procedure',
+    'sensitive_reference'
+  )),
+  content TEXT NOT NULL,
+  source_kind TEXT NOT NULL CHECK (source_kind IN (
+    'user_confirmation', 'task', 'run', 'artifact'
+  )),
+  source_id TEXT,
+  revision INTEGER NOT NULL CHECK (revision > 0),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  last_used_at TEXT,
+  CHECK (
+    (scope = 'global' AND scope_task_id IS NULL)
+    OR (scope IN ('worker', 'channel') AND scope_task_id IS NOT NULL)
+  ),
+  CHECK (
+    (source_kind = 'user_confirmation' AND source_id IS NULL)
+    OR (source_kind != 'user_confirmation' AND source_id IS NOT NULL)
+  )
+);
+
+CREATE INDEX memories_by_user_updated
+ON memories (user_id, updated_at DESC, id DESC);
+
+CREATE INDEX memories_by_task_scope
+ON memories (user_id, scope_task_id, scope, updated_at DESC);
+
+CREATE TRIGGER memories_scope_task_owner_insert
+BEFORE INSERT ON memories
+WHEN NEW.scope_task_id IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM tasks
+    WHERE id = NEW.scope_task_id AND user_id = NEW.user_id
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'Memory scope Task does not belong to owner');
+END;
+
+CREATE TRIGGER memories_scope_task_owner_update
+BEFORE UPDATE OF user_id, scope_task_id ON memories
+WHEN NEW.scope_task_id IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM tasks
+    WHERE id = NEW.scope_task_id AND user_id = NEW.user_id
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'Memory scope Task does not belong to owner');
+END;
+
+CREATE TABLE memory_commands (
+  user_id TEXT NOT NULL,
+  command_id TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  operation TEXT NOT NULL CHECK (operation IN ('create', 'update', 'delete')),
+  memory_id TEXT NOT NULL,
+  response_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, command_id)
+);
+
+CREATE INDEX memory_commands_by_memory
+ON memory_commands (memory_id);
 `
 
 const migration2 = `
@@ -1404,6 +1489,28 @@ interface AutomationInvocationRow {
   updated_at: string
 }
 
+interface MemoryRow {
+  id: string
+  user_id: string
+  scope: MemoryScope
+  scope_task_id: string | null
+  category: MemoryCategory
+  content: string
+  source_kind: MemorySource['kind']
+  source_id: string | null
+  revision: number
+  created_at: string
+  updated_at: string
+  last_used_at: string | null
+}
+
+interface MemoryCommandRow {
+  fingerprint: string
+  operation: 'create' | 'update' | 'delete'
+  memory_id: string
+  response_json: string
+}
+
 interface ChannelRelationRow {
   id: string
   command_id: string
@@ -1749,6 +1856,18 @@ export class AutomationNotFoundError extends Error {}
 
 export class AutomationTargetUnavailableError extends Error {}
 
+export class MemoryCommandConflictError extends Error {}
+
+export class MemoryRevisionConflictError extends Error {}
+
+export class MemoryNotFoundError extends Error {}
+
+export class MemorySourceUnavailableError extends Error {}
+
+export class MemoryTargetUnavailableError extends Error {}
+
+export class MemoryLimitError extends Error {}
+
 export class TaskActionBlockedError extends Error {
   readonly taskId: string
   readonly actionStatus: string
@@ -1798,6 +1917,7 @@ export class PegasStore {
     this.#migrate(18, migration18)
     this.#migrate(19, migration19)
     this.#migrate(20, migration20)
+    this.#migrate(21, migration21)
   }
 
   #backfillWorkerIconIds(): void {
@@ -3011,6 +3131,379 @@ export class PegasStore {
     if (!row)
       throw new Error(`Automation invocation ${invocationId} does not exist`)
     return toAutomationInvocation(row)
+  }
+
+  listMemories(
+    userId: string,
+    limit = 50,
+    cursor?: string,
+    options: MemoryListOptions = {},
+  ): CursorPage<MemoryRecord> {
+    if (!Number.isSafeInteger(limit) || limit <= 0 || limit > 200)
+      throw new Error('Memory limit must be between 1 and 200')
+    const cursorRow = cursor
+      ? (this.#database
+          .prepare('SELECT rowid FROM memories WHERE id = ? AND user_id = ?')
+          .get(cursor, userId) as { rowid: number } | undefined)
+      : undefined
+    if (cursor && !cursorRow) throw new Error('Memory cursor is invalid')
+    const rows = this.#database
+      .prepare(
+        `SELECT * FROM memories
+         WHERE user_id = ?
+           AND (? IS NULL OR scope = ?)
+           AND (? IS NULL OR scope_task_id = ?)
+           AND (? IS NULL OR category = ?)
+           AND (? IS NULL OR rowid < ?)
+         ORDER BY rowid DESC LIMIT ?`,
+      )
+      .all(
+        userId,
+        options.scope ?? null,
+        options.scope ?? null,
+        options.taskId ?? null,
+        options.taskId ?? null,
+        options.category ?? null,
+        options.category ?? null,
+        cursorRow?.rowid ?? null,
+        cursorRow?.rowid ?? null,
+        limit + 1,
+      ) as unknown as MemoryRow[]
+    return cursorPage(rows, limit, toMemoryRecord)
+  }
+
+  findMemory(memoryId: string, userId: string): MemoryRecord | undefined {
+    const row = this.#database
+      .prepare('SELECT * FROM memories WHERE id = ? AND user_id = ?')
+      .get(memoryId, userId) as unknown as MemoryRow | undefined
+    return row ? toMemoryRecord(row) : undefined
+  }
+
+  createMemory(command: MemoryCreateCommand): MemoryRecord {
+    const nowIso = this.#clock.now().toISOString()
+    const fingerprint = memoryFingerprint({
+      operation: 'create',
+      memory: command.memory,
+    })
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const replay = this.#memoryCommandReplay(
+        command.userId,
+        command.commandId,
+        'create',
+        fingerprint,
+      )
+      if (replay) {
+        this.#database.exec('COMMIT')
+        return JSON.parse(replay.response_json) as MemoryRecord
+      }
+      this.#assertMemoryDraft(command.userId, command.memory)
+      const count = this.#database
+        .prepare('SELECT COUNT(*) AS count FROM memories WHERE user_id = ?')
+        .get(command.userId) as { count: number }
+      if (count.count >= 500) throw new MemoryLimitError()
+      const id = randomUUID()
+      this.#database
+        .prepare(
+          `INSERT INTO memories
+            (id, user_id, scope, scope_task_id, category, content, source_kind,
+             source_id, revision, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+        )
+        .run(
+          id,
+          command.userId,
+          command.memory.scope,
+          command.memory.taskId ?? null,
+          command.memory.category,
+          command.memory.content,
+          command.memory.source.kind,
+          command.memory.source.kind === 'user_confirmation'
+            ? null
+            : command.memory.source.id,
+          nowIso,
+          nowIso,
+        )
+      const memory = this.#memoryById(id)
+      this.#saveMemoryCommand(
+        command.userId,
+        command.commandId,
+        'create',
+        fingerprint,
+        memory.id,
+        memory,
+        nowIso,
+      )
+      this.#database.exec('COMMIT')
+      return memory
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  updateMemory(memoryId: string, command: MemoryUpdateCommand): MemoryRecord {
+    const nowIso = this.#clock.now().toISOString()
+    const fingerprint = memoryFingerprint({
+      operation: 'update',
+      memoryId,
+      expectedRevision: command.expectedRevision,
+      memory: command.memory,
+    })
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const replay = this.#memoryCommandReplay(
+        command.userId,
+        command.commandId,
+        'update',
+        fingerprint,
+      )
+      if (replay) {
+        if (replay.memory_id !== memoryId)
+          throw new MemoryCommandConflictError()
+        this.#database.exec('COMMIT')
+        return JSON.parse(replay.response_json) as MemoryRecord
+      }
+      const current = this.#memoryByIdForUser(memoryId, command.userId)
+      if (current.revision !== command.expectedRevision)
+        throw new MemoryRevisionConflictError()
+      this.#assertMemoryDraft(command.userId, command.memory)
+      const result = this.#database
+        .prepare(
+          `UPDATE memories
+           SET scope = ?, scope_task_id = ?, category = ?, content = ?,
+               source_kind = ?, source_id = ?, revision = revision + 1,
+               updated_at = ?
+           WHERE id = ? AND user_id = ? AND revision = ?`,
+        )
+        .run(
+          command.memory.scope,
+          command.memory.taskId ?? null,
+          command.memory.category,
+          command.memory.content,
+          command.memory.source.kind,
+          command.memory.source.kind === 'user_confirmation'
+            ? null
+            : command.memory.source.id,
+          nowIso,
+          memoryId,
+          command.userId,
+          command.expectedRevision,
+        )
+      if (result.changes !== 1) throw new MemoryRevisionConflictError()
+      const memory = this.#memoryById(memoryId)
+      this.#saveMemoryCommand(
+        command.userId,
+        command.commandId,
+        'update',
+        fingerprint,
+        memory.id,
+        memory,
+        nowIso,
+      )
+      this.#database.exec('COMMIT')
+      return memory
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  deleteMemory(memoryId: string, command: MemoryDeleteCommand): MemoryDeletion {
+    const nowIso = this.#clock.now().toISOString()
+    const fingerprint = memoryFingerprint({
+      operation: 'delete',
+      memoryId,
+      expectedRevision: command.expectedRevision,
+    })
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const replay = this.#memoryCommandReplay(
+        command.userId,
+        command.commandId,
+        'delete',
+        fingerprint,
+      )
+      if (replay) {
+        if (replay.memory_id !== memoryId)
+          throw new MemoryCommandConflictError()
+        this.#database.exec('COMMIT')
+        return JSON.parse(replay.response_json) as MemoryDeletion
+      }
+      const current = this.#memoryByIdForUser(memoryId, command.userId)
+      if (current.revision !== command.expectedRevision)
+        throw new MemoryRevisionConflictError()
+      const result = this.#database
+        .prepare('DELETE FROM memories WHERE id = ? AND user_id = ?')
+        .run(memoryId, command.userId)
+      if (result.changes !== 1) throw new MemoryNotFoundError()
+      const deletion: MemoryDeletion = {
+        id: memoryId,
+        deleted: true,
+        deletedAt: nowIso,
+      }
+      this.#database
+        .prepare(
+          `UPDATE memory_commands SET response_json = ?
+           WHERE memory_id = ? AND user_id = ? AND operation != 'delete'`,
+        )
+        .run(JSON.stringify(deletion), memoryId, command.userId)
+      this.#saveMemoryCommand(
+        command.userId,
+        command.commandId,
+        'delete',
+        fingerprint,
+        memoryId,
+        deletion,
+        nowIso,
+      )
+      this.#database.exec('COMMIT')
+      return deletion
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  memoryContextForTask(
+    userId: string,
+    taskId: string,
+    limit = 50,
+  ): MemoryRecord[] {
+    const task = this.#taskById(taskId)
+    if (task.userId !== userId) throw new MemoryNotFoundError()
+    if (!Number.isSafeInteger(limit) || limit <= 0 || limit > 200)
+      throw new Error('Memory limit must be between 1 and 200')
+    const now = this.#clock.now().toISOString()
+    const rows = this.#database
+      .prepare(
+        `SELECT * FROM memories
+         WHERE user_id = ? AND (scope = 'global' OR scope_task_id = ?)
+         ORDER BY CASE scope WHEN 'channel' THEN 0 WHEN 'worker' THEN 1 ELSE 2 END,
+                  updated_at DESC, rowid DESC
+         LIMIT ?`,
+      )
+      .all(userId, taskId, limit) as unknown as MemoryRow[]
+    const selected: MemoryRow[] = []
+    let characters = 0
+    for (const row of rows) {
+      const size = Array.from(row.content).length + 200
+      if (selected.length > 0 && characters + size > 24_000) break
+      selected.push(row)
+      characters += size
+    }
+    if (selected.length > 0) {
+      const placeholders = selected.map(() => '?').join(',')
+      this.#database
+        .prepare(
+          `UPDATE memories SET last_used_at = ?
+           WHERE user_id = ? AND id IN (${placeholders})`,
+        )
+        .run(now, userId, ...selected.map(row => row.id))
+    }
+    return selected.map(row => toMemoryRecord({ ...row, last_used_at: now }))
+  }
+
+  memoryContextEntriesForTask(
+    userId: string,
+    taskId: string,
+    limit = 50,
+  ): ReturnType<typeof toMemoryContext>[] {
+    return this.memoryContextForTask(userId, taskId, limit).map(toMemoryContext)
+  }
+
+  #memoryById(memoryId: string): MemoryRecord {
+    const row = this.#database
+      .prepare('SELECT * FROM memories WHERE id = ?')
+      .get(memoryId) as unknown as MemoryRow | undefined
+    if (!row) throw new MemoryNotFoundError()
+    return toMemoryRecord(row)
+  }
+
+  #memoryByIdForUser(memoryId: string, userId: string): MemoryRecord {
+    const row = this.#database
+      .prepare('SELECT * FROM memories WHERE id = ? AND user_id = ?')
+      .get(memoryId, userId) as unknown as MemoryRow | undefined
+    if (!row) throw new MemoryNotFoundError()
+    return toMemoryRecord(row)
+  }
+
+  #assertMemoryDraft(
+    userId: string,
+    memory: MemoryCreateCommand['memory'],
+  ): void {
+    if (memory.scope !== 'global' && memory.taskId) {
+      const task = this.findTask(memory.taskId, userId)
+      if (!task) throw new MemoryTargetUnavailableError()
+    }
+    if (memory.source.kind === 'user_confirmation') return
+    if (memory.source.kind === 'task') {
+      if (!this.findTask(memory.source.id, userId))
+        throw new MemorySourceUnavailableError()
+      return
+    }
+    if (memory.source.kind === 'run') {
+      const run = this.#database
+        .prepare('SELECT task_id FROM runs WHERE id = ?')
+        .get(memory.source.id) as { task_id: string } | undefined
+      if (!run || !this.findTask(run.task_id, userId))
+        throw new MemorySourceUnavailableError()
+      return
+    }
+    const artifact = this.#database
+      .prepare('SELECT task_id FROM task_artifacts WHERE id = ?')
+      .get(memory.source.id) as { task_id: string } | undefined
+    if (!artifact || !this.findTask(artifact.task_id, userId))
+      throw new MemorySourceUnavailableError()
+  }
+
+  #memoryCommandReplay(
+    userId: string,
+    commandId: string,
+    operation: MemoryCommandRow['operation'],
+    fingerprint: string,
+  ): MemoryCommandRow | undefined {
+    const row = this.#database
+      .prepare(
+        `SELECT fingerprint, operation, memory_id, response_json
+         FROM memory_commands WHERE user_id = ? AND command_id = ?`,
+      )
+      .get(userId, commandId) as unknown as MemoryCommandRow | undefined
+    if (!row) return undefined
+    if (row.operation !== operation || row.fingerprint !== fingerprint)
+      throw new MemoryCommandConflictError()
+    if (operation !== 'delete') {
+      const response = JSON.parse(row.response_json) as { deleted?: boolean }
+      if (response.deleted === true) throw new MemoryNotFoundError()
+    }
+    return row
+  }
+
+  #saveMemoryCommand(
+    userId: string,
+    commandId: string,
+    operation: MemoryCommandRow['operation'],
+    fingerprint: string,
+    memoryId: string,
+    response: MemoryRecord | MemoryDeletion,
+    createdAt: string,
+  ): void {
+    this.#database
+      .prepare(
+        `INSERT INTO memory_commands
+          (user_id, command_id, fingerprint, operation, memory_id,
+           response_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        userId,
+        commandId,
+        fingerprint,
+        operation,
+        memoryId,
+        JSON.stringify(response),
+        createdAt,
+      )
   }
 
   initializeSpeechConnection(connection: SpeechConnection): void {
@@ -7980,6 +8473,28 @@ function toAutomationInvocation(
     ...(row.last_error ? { lastError: row.last_error } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  }
+}
+
+function toMemoryRecord(row: MemoryRow): MemoryRecord {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    scope: row.scope,
+    ...(row.scope_task_id ? { taskId: row.scope_task_id } : {}),
+    category: row.category,
+    content: row.content,
+    source:
+      row.source_kind === 'user_confirmation'
+        ? { kind: 'user_confirmation' }
+        : {
+            kind: row.source_kind,
+            id: row.source_id ?? '',
+          },
+    revision: row.revision,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    ...(row.last_used_at ? { lastUsedAt: row.last_used_at } : {}),
   }
 }
 

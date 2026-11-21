@@ -51,6 +51,13 @@ import {
   type SettingsCapabilities,
 } from '../settings/runtime-settings.js'
 import {
+  parseMemoryCategory,
+  parseMemoryCreate,
+  parseMemoryDelete,
+  parseMemoryScope,
+  parseMemoryUpdate,
+} from '../memory/memory.js'
+import {
   parseAutomationCreate,
   parseAutomationStatusCommand,
   parseAutomationUpdate,
@@ -71,6 +78,12 @@ import {
   CollaborationFanoutLimitError,
   CollaborationReconciliationRequiredError,
   CollaborationTargetUnavailableError,
+  MemoryCommandConflictError,
+  MemoryLimitError,
+  MemoryNotFoundError,
+  MemoryRevisionConflictError,
+  MemorySourceUnavailableError,
+  MemoryTargetUnavailableError,
   RunClaimError,
   SettingsRevisionConflictError,
   WorkerProfileReadOnlyError,
@@ -333,6 +346,74 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
       }
 
       const taskResourceUrl = new URL(request.url ?? '/', 'http://localhost')
+      if (
+        taskResourceUrl.pathname === '/v1/memories' &&
+        request.method === 'GET'
+      ) {
+        const userId = requiredQuery(taskResourceUrl, 'userId')
+        const page = pageRequest(taskResourceUrl)
+        const scopeValue = optionalQuery(taskResourceUrl, 'scope')
+        const categoryValue = optionalQuery(taskResourceUrl, 'category')
+        const taskId = optionalQuery(taskResourceUrl, 'taskId')
+        const scope = scopeValue ? parseMemoryScope(scopeValue) : undefined
+        if (scope === 'global' && taskId)
+          throw new Error('Global Memory cannot be filtered by taskId')
+        if ((scope === 'worker' || scope === 'channel') && !taskId)
+          throw new Error(`${scope} Memory requires taskId`)
+        const result = options.store.listMemories(
+          userId,
+          page.limit,
+          page.cursor,
+          {
+            ...(scope ? { scope } : {}),
+            ...(taskId ? { taskId } : {}),
+            ...(categoryValue
+              ? { category: parseMemoryCategory(categoryValue) }
+              : {}),
+          },
+        )
+        return sendJson(response, 200, {
+          memories: result.items,
+          ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
+        })
+      }
+      if (
+        taskResourceUrl.pathname === '/v1/memories' &&
+        request.method === 'POST'
+      ) {
+        const memory = options.store.createMemory(
+          parseMemoryCreate(await readJson(request)),
+        )
+        return sendJson(response, 201, { memory })
+      }
+      const memoryResourceMatch =
+        /^\/v1\/memories\/([^/]+)(?:\/(delete))?$/.exec(
+          taskResourceUrl.pathname,
+        )
+      if (memoryResourceMatch) {
+        const memoryId = decodeURIComponent(memoryResourceMatch[1] ?? '')
+        const action = memoryResourceMatch[2]
+        if (!action && request.method === 'GET') {
+          const userId = requiredQuery(taskResourceUrl, 'userId')
+          const memory = options.store.findMemory(memoryId, userId)
+          if (!memory) return sendJson(response, 404, { error: 'not_found' })
+          return sendJson(response, 200, { memory })
+        }
+        if (!action && request.method === 'PUT') {
+          const memory = options.store.updateMemory(
+            memoryId,
+            parseMemoryUpdate(await readJson(request)),
+          )
+          return sendJson(response, 200, { memory })
+        }
+        if (action === 'delete' && request.method === 'POST') {
+          const deletion = options.store.deleteMemory(
+            memoryId,
+            parseMemoryDelete(await readJson(request)),
+          )
+          return sendJson(response, 200, { deletion })
+        }
+      }
       if (
         taskResourceUrl.pathname === '/v1/automations' &&
         request.method === 'GET'
@@ -1105,6 +1186,24 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
           error: 'collaboration_target_unavailable',
           message: error.message,
         })
+      if (error instanceof MemoryCommandConflictError)
+        return sendJson(response, 409, {
+          error: 'memory_command_conflict',
+        })
+      if (error instanceof MemoryRevisionConflictError)
+        return sendJson(response, 409, { error: 'memory_conflict' })
+      if (error instanceof MemoryNotFoundError)
+        return sendJson(response, 404, { error: 'not_found' })
+      if (error instanceof MemorySourceUnavailableError)
+        return sendJson(response, 409, {
+          error: 'memory_source_unavailable',
+        })
+      if (error instanceof MemoryTargetUnavailableError)
+        return sendJson(response, 409, {
+          error: 'memory_target_unavailable',
+        })
+      if (error instanceof MemoryLimitError)
+        return sendJson(response, 409, { error: 'memory_limit' })
       if (error instanceof RunClaimError)
         return sendJson(response, 403, {
           error: 'run_claim_invalid',

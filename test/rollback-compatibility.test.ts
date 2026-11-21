@@ -68,6 +68,37 @@ describe('durable state rollback compatibility', () => {
       rmSync(directory, { recursive: true, force: true })
     }
   })
+
+  it('blocks a v20 rollback while Memory exists and allows it after deletion', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'pegas-rollback-'))
+    const path = join(directory, 'pegas.sqlite')
+    const store = new PegasStore(path)
+    try {
+      const memory = store.createMemory({
+        userId: 'owner',
+        commandId: 'rollback-memory',
+        memory: {
+          scope: 'global',
+          category: 'preference',
+          content: '默认使用中文回复',
+          source: { kind: 'user_confirmation' },
+        },
+      })
+      expect(() => assertRollbackCompatible(path, 20)).toThrow(
+        RollbackCompatibilityError,
+      )
+      expect(() => assertRollbackCompatible(path, 21)).not.toThrow()
+      store.deleteMemory(memory.id, {
+        userId: 'owner',
+        commandId: 'delete-for-rollback',
+        expectedRevision: memory.revision,
+      })
+      expect(() => assertRollbackCompatible(path, 20)).not.toThrow()
+    } finally {
+      store.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
 })
 
 function createClaimedTask(

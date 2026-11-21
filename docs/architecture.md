@@ -265,6 +265,8 @@ Memory 为 Pegas 提供跨任务的长期认知，但不替代 Task 数据库。
 
 每条长期记忆需要包含来源、可见范围、更新时间和删除路径。Task 的当前状态、deadline 和审批不能只保存在 Memory 中。
 
+schema v21 与 `MEMORY-001` 实现第一版分层记忆：Memory 按 owner 隔离，作用域为 global、worker（绑定事情执行配置）与 channel（绑定事情），类别覆盖偏好、事实、情境、经验、过程与受保护引用，来源必须是用户确认或同 owner 的 Task/Run/Artifact。创建、纠正、删除支持稳定 command ID 与乐观 revision；删除永久移除正文并清除历史 command 冻结响应中的内容。Worker 执行 Run 时按 channel → worker → global 顺序有界装载适用记忆并更新最近使用时间，注入 Executor 的记忆声明为数据而非指令，不能扩大 Mandate 或权限，正文标签字符被转义防止提示注入。完整合同见 `docs/memory.md`。
+
 ### 6. Scheduler
 
 Scheduler 管理：
