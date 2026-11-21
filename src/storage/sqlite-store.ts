@@ -6643,6 +6643,12 @@ export class PegasStore {
             runId,
             reviewPackId: reviewPack.id,
             text: draft.summary,
+            review: this.#reviewPackPreview(
+              task.id,
+              task.userId,
+              reviewPack,
+              evidence,
+            ),
           },
         })
         this.#settleInboundCollaborations(
@@ -8999,6 +9005,75 @@ export class PegasStore {
       .get(reviewPackId)
     if (!row) throw new Error(`Review Pack ${reviewPackId} does not exist`)
     return toReviewPack(row as unknown as ReviewPackRow)
+  }
+
+  /**
+   * Bounded user-facing preview attached to the review.ready Outbox item:
+   * per-criterion status with explanations and limitations, compact evidence
+   * previews (including visual Artifact references), remaining risks, rollback
+   * and the audit entry. Execution logs never enter this projection.
+   */
+  #reviewPackPreview(
+    taskId: string,
+    userId: string,
+    reviewPack: ReviewPack,
+    evidence: EvidenceRef[],
+  ): Record<string, unknown> {
+    const referencedIds = new Set(
+      reviewPack.criteria.flatMap(criterion => criterion.evidenceRefs),
+    )
+    const referenced = evidence.filter(item => referencedIds.has(item.id))
+    const artifactIds = [
+      ...new Set(
+        referenced.flatMap(item => (item.artifactId ? [item.artifactId] : [])),
+      ),
+    ]
+    const artifacts = new Map(
+      this.artifactsByIds(taskId, userId, artifactIds).map(artifact => [
+        artifact.id,
+        artifact,
+      ]),
+    )
+    const evidencePreviews = referenced.slice(0, 20).map(item => {
+      const artifact = item.artifactId
+        ? artifacts.get(item.artifactId)
+        : undefined
+      return {
+        evidenceId: item.id,
+        criterionId: item.criterionId,
+        kind: item.kind,
+        verification: item.verification.result,
+        ...(artifact
+          ? {
+              artifact: {
+                id: artifact.id,
+                name: artifact.name,
+                kind: artifact.kind,
+                revision: artifact.revision,
+                ...(artifact.mimeType ? { mimeType: artifact.mimeType } : {}),
+                ...(artifact.uri ? { uri: artifact.uri } : {}),
+              },
+            }
+          : {}),
+        presentation: item.presentation,
+        limitations: item.limitations,
+      }
+    })
+    return {
+      finalOutcome: reviewPack.finalOutcome,
+      goalRevision: reviewPack.goalRevision,
+      criteria: reviewPack.criteria.map(criterion => ({
+        criterionId: criterion.criterionId,
+        completionStatus: criterion.completionStatus,
+        explanation: criterion.explanation,
+        limitations: criterion.limitations,
+        evidenceCount: criterion.evidenceRefs.length,
+      })),
+      evidence: evidencePreviews,
+      remainingRisks: reviewPack.remainingRisks,
+      ...(reviewPack.rollback ? { rollback: reviewPack.rollback } : {}),
+      auditLink: reviewPack.auditLink,
+    }
   }
 
   #workerReportById(reportId: string): WorkerReport {

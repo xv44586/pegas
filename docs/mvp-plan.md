@@ -45,7 +45,7 @@
 - [x] 第一版 DSH headless Executor Adapter；
 - [x] Run 与 DSH session 映射及租约过期恢复；
 - [x] Outbox dispatcher 与一个真实投递渠道；
-- [ ] Outbox Review Pack：按完成条件聚合结果 evidence、限制、风险、回滚和审计入口；
+- [x] Outbox Review Pack：按完成条件聚合结果 evidence、限制、风险、回滚和审计入口（服务端 `review.ready` 投影已含完整预览；Web 卡片渲染待 DESIGN-002 补齐）；
 - [ ] 图片、视频、UI 和排版变化的最终视觉 evidence 预览；
 - [x] Activity/Task 只读视图；
 - [ ] 结构化日志、指标和错误追踪。
