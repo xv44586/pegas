@@ -14,7 +14,6 @@ import {
   RotateCw,
   Search,
   ShieldCheck,
-  Sparkles,
   Trash2,
   X,
   Zap,
@@ -38,6 +37,7 @@ import type {
 } from '../types'
 import { useVoiceDictation } from '../useVoiceDictation'
 import { PegasAgentIcon } from '../PegasAgentIcon'
+import { PegasMascot } from './PegasMascot'
 import { EmptyCapability, PageToolbar } from './Shell'
 import {
   attentionKind,
@@ -427,9 +427,7 @@ export function ConversationPage({
         <div className="conversation-flow">
           {messages.length === 0 ? (
             <section className="conversation-welcome">
-              <span>
-                <Sparkles size={23} />
-              </span>
+              <PegasMascot size={148} />
               <h2>今天想一起完成什么？</h2>
               <p>告诉我目标。我会整理事情、推进执行，并在需要你决定时回来。</p>
             </section>
@@ -600,6 +598,12 @@ export function ConversationPage({
               </button>
             </div>
             <div className="composer-actions">
+              {sending && (
+                <span className="composer-working">
+                  <PegasMascot pose="waiting" size={30} />
+                  正在整理…
+                </span>
+              )}
               <ComposerModelPicker
                 models={models}
                 onSelect={onSelectModel}
@@ -908,7 +912,7 @@ export function AttentionPage({
           })
         ) : (
           <EmptyCapability
-            icon={Check}
+            mascot="celebrate"
             title="现在没有待处理项"
             description="需要确认、补充信息或处理失败时，Pegas 会把它放在这里。"
           />

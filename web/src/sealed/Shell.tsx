@@ -19,6 +19,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ChannelSearchResult, WorkChannel } from '../types'
 import { PegasAgentSprite } from '../PegasAgentIcon'
 import { PegasMark } from './PegasMark'
+import { PegasMascot, type PegasMascotPose } from './PegasMascot'
 import type { AppPage } from './types'
 
 const navItems: readonly {
@@ -376,17 +377,23 @@ export function EmptyCapability({
   title,
   description,
   availabilityLabel,
+  mascot,
 }: {
   icon?: typeof Bot
   title: string
   description: string
   availabilityLabel?: string
+  mascot?: PegasMascotPose
 }) {
   return (
     <div className="empty-capability">
-      <span>
-        <Icon size={24} />
-      </span>
+      {mascot ? (
+        <PegasMascot pose={mascot} size={104} />
+      ) : (
+        <span>
+          <Icon size={24} />
+        </span>
+      )}
       <h2>{title}</h2>
       <p>{description}</p>
       {availabilityLabel && <small>{availabilityLabel}</small>}

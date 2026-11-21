@@ -14,7 +14,7 @@
     "build:desktop": "tsc -p desktop/tsconfig.json",
     "build:server": "tsc -p tsconfig.build.json",
     "build:web": "vite build --config web/vite.config.ts",
-    "check": "pnpm format:check && pnpm icons:check && pnpm lint && pnpm typecheck && pnpm deadcode && pnpm test:coverage && pnpm build",
+    "check": "pnpm format:check && pnpm icons:check && pnpm brand:check && pnpm lint && pnpm typecheck && pnpm deadcode && pnpm test:coverage && pnpm build",
     "deadcode": "knip --treat-config-hints-as-errors",
     "dev": "tsx src/control-plane/main.ts",
     "dev:web": "vite --config web/vite.config.ts",
@@ -46,7 +46,9 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit && tsc -p web/tsconfig.json --noEmit && tsc -p web/tsconfig.node.json --noEmit && tsc -p desktop/tsconfig.json --noEmit",
-    "a11y:review": "node scripts/a11y-review.mjs"
+    "a11y:review": "node scripts/a11y-review.mjs",
+    "brand:generate": "node scripts/generate-brand-icons.mjs",
+    "brand:check": "node scripts/generate-brand-icons.mjs --check"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
