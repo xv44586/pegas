@@ -25,6 +25,8 @@ import type {
   OutboxResolutionDraft,
   TaskStatus,
 } from '../core/domain.js'
+import type { Logger } from '../observability/logger.js'
+import type { MetricsRegistry } from '../observability/metrics.js'
 import type {
   ChannelSearchSort,
   ChannelSearchOptions,
@@ -129,6 +131,8 @@ export interface ControlPlaneOptions {
   modelTimeoutMs?: number
   speechTimeoutMs?: number
   privacyHmacKey?: string
+  logger?: Logger
+  metrics?: MetricsRegistry
 }
 
 export function createControlPlane(options: ControlPlaneOptions): Server {
@@ -136,10 +140,53 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
     options.agentModelCatalog,
     options.agentModelCatalogTtlMs,
   )
+  const logger = options.logger
+  const metrics = options.metrics
   return createServer(async (request, response) => {
+    const startedAt = performance.now()
+    const method = request.method ?? 'GET'
+    const path = request.url
+      ? new URL(request.url, 'http://localhost').pathname
+      : '/'
+    response.on('finish', () => {
+      const statusCode = response.statusCode
+      if (!metrics || path === '/metrics' || path === '/healthz') return
+      if (!path.startsWith('/v1/') && path !== '/readyz') return
+      const route = metricRoute(path)
+      metrics.increment('pegas_http_requests_total', {
+        method,
+        route,
+        status: String(statusCode),
+      })
+      metrics.observe(
+        'pegas_http_request_duration_seconds',
+        (performance.now() - startedAt) / 1000,
+        { method, route },
+      )
+      if (statusCode >= 500) {
+        metrics.increment('pegas_errors_total', {
+          component: 'control-plane',
+          kind: 'http_5xx',
+        })
+      }
+    })
     try {
       if (request.url === '/healthz' && request.method === 'GET') {
         return sendJson(response, 200, { status: 'ok' })
+      }
+
+      if (request.url === '/metrics' && request.method === 'GET') {
+        if (!isAuthorized(request, options.apiToken)) {
+          return sendJson(response, 401, { error: 'unauthorized' })
+        }
+        if (!metrics) {
+          return sendJson(response, 404, { error: 'metrics_unavailable' })
+        }
+        response.writeHead(200, {
+          'content-type': 'text/plain; version=0.0.4; charset=utf-8',
+        })
+        response.end(metrics.render())
+        return
       }
 
       if (request.url === '/readyz' && request.method === 'GET') {
@@ -1452,9 +1499,27 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
           message: error.message,
         })
       const message = error instanceof Error ? error.message : 'Unknown error'
+      logger?.error('http.request_failed', error, {
+        method,
+        route: metricRoute(path),
+      })
+      metrics?.increment('pegas_errors_total', {
+        component: 'control-plane',
+        kind: 'request_error',
+      })
       return sendJson(response, 400, { error: 'bad_request', message })
     }
   })
+}
+
+/** Normalizes dynamic path segments so metrics stay low-cardinality. */
+function metricRoute(path: string): string {
+  return path
+    .split('/')
+    .map(segment =>
+      segment.length > 24 || /^\d+$/.test(segment) ? ':id' : segment,
+    )
+    .join('/')
 }
 
 function cachedAgentModelCatalog(
@@ -1753,12 +1818,16 @@ async function transcribeVoiceRequest(
     })
     return { transcript, provider }
   } catch (error) {
-    console.error('Speech recognition failed', {
+    options.logger?.error('speech.recognition_failed', undefined, {
       errorType: error instanceof Error ? error.name : 'unknown',
       providerStatus:
         error instanceof Error
           ? /Speech provider returned (\d{3})/.exec(error.message)?.[1]
           : undefined,
+    })
+    options.metrics?.increment('pegas_errors_total', {
+      component: 'control-plane',
+      kind: 'speech_provider',
     })
     sendJson(response, 502, {
       error: 'speech_provider_failed',

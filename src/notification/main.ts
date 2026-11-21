@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
 
 import { loadConfig } from '../core/config.js'
+import { createLogger } from '../observability/logger.js'
+import { MetricsRegistry } from '../observability/metrics.js'
 import { PegasStore } from '../storage/sqlite-store.js'
 import { OutboxDispatcher } from './dispatcher.js'
 import { WebhookNotificationChannel } from './webhook-channel.js'
@@ -11,6 +13,8 @@ if (config.pushMode !== 'webhook' || !config.pushWebhookUrl) {
 }
 
 const store = new PegasStore(config.databasePath)
+const logger = createLogger({ service: 'notification' })
+const metrics = new MetricsRegistry()
 const dispatcherId = `dispatcher-${randomUUID()}`
 const channel = new WebhookNotificationChannel({
   url: config.pushWebhookUrl,
@@ -21,6 +25,8 @@ const dispatcher = new OutboxDispatcher({
   channel,
   dispatcherId,
   maxAttempts: config.outboxMaxAttempts,
+  logger,
+  metrics,
 })
 const lifecycle = { stopping: false }
 const shutdown = new AbortController()
@@ -28,9 +34,10 @@ const shutdown = new AbortController()
 process.on('SIGINT', requestStop)
 process.on('SIGTERM', requestStop)
 
-console.log(
-  `Pegas notification dispatcher ${dispatcherId} started with webhook`,
-)
+logger.info('service.started', {
+  dispatcherId,
+  message: `Pegas notification dispatcher ${dispatcherId} started with webhook`,
+})
 
 while (!lifecycle.stopping) {
   const dispatched = await dispatcher.dispatchNext(shutdown.signal)

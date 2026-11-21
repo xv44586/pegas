@@ -10,6 +10,7 @@ import {
 } from './candidate-manifest.js'
 import { verifyCandidateReleaseTree } from '../self-change/candidate-builder.js'
 import { createRecoveryServer } from './recovery-server.js'
+import { createLogger } from '../observability/logger.js'
 import {
   assertMigrationApproval,
   liveSchemaVersion,
@@ -52,6 +53,7 @@ if (!isLoopback(recoveryHost) && !recoveryToken) {
   )
 }
 
+const logger = createLogger({ service: 'supervisor' })
 const state = new ReleaseStateStore(statePath)
 const initialRelease: ReleaseRef = {
   id: process.env.PEGAS_RELEASE_ID ?? 'development',
@@ -64,10 +66,10 @@ const initialRelease: ReleaseRef = {
 try {
   state.ensure(initialRelease)
 } catch (error) {
-  console.error(
-    'Supervisor release state is unavailable; recovery API will remain online',
-    error,
-  )
+  logger.error('supervisor.state_unavailable', error, {
+    message:
+      'Supervisor release state is unavailable; recovery API will remain online',
+  })
 }
 
 let children: ChildProcess[] = []
@@ -140,9 +142,11 @@ const recoveryServer = createRecoveryServer({
 })
 
 recoveryServer.listen(recoveryPort, recoveryHost, () => {
-  console.log(
-    `Pegas recovery API listening on http://${recoveryHost}:${String(recoveryPort)}`,
-  )
+  logger.info('recovery.listening', {
+    host: recoveryHost,
+    port: recoveryPort,
+    message: `Pegas recovery API listening on http://${recoveryHost}:${String(recoveryPort)}`,
+  })
 })
 
 process.on('SIGINT', () => requestStop('SIGINT'))
@@ -161,7 +165,10 @@ while (!lifecycle.stopRequested) {
     continue
   }
   const release = inspection.state.active
-  console.log(`Starting Pegas release ${release.id} from ${release.root}`)
+  logger.info('release.starting', {
+    releaseId: release.id,
+    message: `Starting Pegas release ${release.id} from ${release.root}`,
+  })
 
   // A restart must never bypass the dedicated destructive-migration
   // approval, even if the state file was staged by an older Supervisor.
@@ -172,9 +179,11 @@ while (!lifecycle.stopRequested) {
       targetMaximumSchema,
     )
     if (destructive.length > 0) {
-      console.error(
-        `Release ${release.id} requires unapproved destructive migrations: ${destructive.join(', ')}`,
-      )
+      logger.error('release.migration_approval_missing', undefined, {
+        releaseId: release.id,
+        versions: destructive,
+        message: `Release ${release.id} requires unapproved destructive migrations: ${destructive.join(', ')}`,
+      })
       await stopChildren()
       await recoverFromFailure(
         `Release ${release.id} requires a dedicated migration approval`,
@@ -190,9 +199,13 @@ while (!lifecycle.stopRequested) {
         databasePath,
         resolve(process.env.PEGAS_BACKUP_DIR ?? join(dataDir, 'backups')),
       )
-      console.log(`Pre-start database backup verified: ${created.path}`)
+      logger.info('backup.verified', {
+        message: `Pre-start database backup verified: ${created.path}`,
+      })
     } catch (error) {
-      console.error('Pre-start database backup failed; continuing', error)
+      logger.error('backup.failed', error, {
+        message: 'Pre-start database backup failed; continuing',
+      })
     }
   }
 
@@ -240,7 +253,10 @@ while (!lifecycle.stopRequested) {
       continue
     }
     state.confirm()
-    console.log(`Release ${release.id} passed stabilization`)
+    logger.info('release.stabilized', {
+      releaseId: release.id,
+      message: `Release ${release.id} passed stabilization`,
+    })
   }
 
   await Promise.race(children.map(child => onceExited(child)))
@@ -329,16 +345,23 @@ async function recoverFromFailure(reason: string): Promise<void> {
     try {
       assertRollbackAllowed()
       const rolledBack = state.rollback(reason)
-      console.error(`${reason}; rolling back to ${rolledBack.active.id}`)
+      logger.error('release.rolling_back', undefined, {
+        releaseId: rolledBack.active.id,
+        message: `${reason}; rolling back to ${rolledBack.active.id}`,
+      })
     } catch (error) {
       state.recordFailure(
         `${reason}; rollback blocked: ${error instanceof Error ? error.message : String(error)}`,
       )
-      console.error(`${reason}; rollback was blocked`, error)
+      logger.error('release.rollback_blocked', error, {
+        message: `${reason}; rollback was blocked`,
+      })
     }
   } else {
     state.recordFailure(reason)
-    console.error(`${reason}; restarting the active release`)
+    logger.error('release.restarting', undefined, {
+      message: `${reason}; restarting the active release`,
+    })
   }
   await Promise.resolve()
 }
@@ -374,7 +397,10 @@ function onceExited(child: ChildProcess): Promise<void> {
 }
 
 function requestStop(signal: string): void {
-  console.log(`Received ${signal}; stopping supervisor`)
+  logger.info('service.stopping', {
+    signal,
+    message: `Received ${signal}; stopping supervisor`,
+  })
   lifecycle.stopRequested = true
   void stopChildren()
 }

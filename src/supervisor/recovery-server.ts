@@ -66,7 +66,9 @@ export function createRecoveryServer(options: RecoveryServerOptions): Server {
       response.writeHead(202, { 'content-type': 'application/json' })
       response.end(JSON.stringify({ status: 'restarting' }))
       void options.onRestart().catch((error: unknown) => {
-        console.error('Recovery restart failed', error)
+        process.stdout.write(
+          `${JSON.stringify({ ts: new Date().toISOString(), level: 'error', service: 'supervisor', event: 'recovery.restart_failed', error: { message: error instanceof Error ? error.message : String(error) } })}\n`,
+        )
       })
       return
     }

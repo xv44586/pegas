@@ -5,6 +5,8 @@ import type {
   Task,
 } from '../core/domain.js'
 import type { RunExecutor } from '../executor/executor.js'
+import type { Logger } from '../observability/logger.js'
+import type { MetricsRegistry } from '../observability/metrics.js'
 import type { TaskRouter } from '../router/router.js'
 import {
   EventClaimError,
@@ -302,6 +304,7 @@ export async function processNextEvent(
   store: PegasStore,
   handler: EventHandler,
   workerId: string,
+  telemetry?: { logger?: Logger; metrics?: MetricsRegistry },
 ): Promise<boolean> {
   const event = store.claimNextEvent(workerId)
   if (!event) return false
@@ -310,7 +313,14 @@ export async function processNextEvent(
     try {
       store.renewEventLease(event.id, workerId)
     } catch (error) {
-      console.error(`Failed to renew event ${event.id} lease`, error)
+      telemetry?.logger?.error('event.lease_renew_failed', error, {
+        eventId: event.id,
+        workerId,
+      })
+      telemetry?.metrics?.increment('pegas_errors_total', {
+        component: 'worker',
+        kind: 'event_lease_renew',
+      })
     }
   }, 10_000)
   leaseHeartbeat.unref()
@@ -318,19 +328,40 @@ export async function processNextEvent(
   try {
     await handler.handle(event, store)
     store.completeEvent(event.id, workerId)
+    telemetry?.metrics?.increment('pegas_events_processed_total', {
+      outcome: 'processed',
+    })
   } catch (error) {
     if (error instanceof EventClaimError) {
-      console.error(
-        `Event ${event.id} claim was lost before write-back; the takeover worker owns it`,
-      )
+      telemetry?.logger?.warn('event.claim_lost', {
+        eventId: event.id,
+        workerId,
+      })
+      telemetry?.metrics?.increment('pegas_events_processed_total', {
+        outcome: 'claim_lost',
+      })
       return true
     }
     if (error instanceof TaskActionBlockedError) {
       store.parkEventForBlockedAction(event.id, workerId, error.taskId)
+      telemetry?.metrics?.increment('pegas_events_processed_total', {
+        outcome: 'parked',
+      })
       return true
     }
     const message = error instanceof Error ? error.message : String(error)
     store.failEvent(event.id, workerId, message)
+    telemetry?.logger?.error('event.processing_failed', error, {
+      eventId: event.id,
+      workerId,
+    })
+    telemetry?.metrics?.increment('pegas_events_processed_total', {
+      outcome: 'failed',
+    })
+    telemetry?.metrics?.increment('pegas_errors_total', {
+      component: 'worker',
+      kind: 'event_processing',
+    })
   } finally {
     clearInterval(leaseHeartbeat)
   }
@@ -345,7 +376,17 @@ export async function executeClaimedRun(
   workingDirectory: string,
   signal: AbortSignal,
   controlPlaneBaseUrl: string,
+  telemetry?: { logger?: Logger; metrics?: MetricsRegistry },
 ): Promise<void> {
+  const runStartedAt = performance.now()
+  const observeRun = (outcome: string) => {
+    telemetry?.metrics?.increment('pegas_runs_total', { outcome })
+    telemetry?.metrics?.observe(
+      'pegas_run_duration_seconds',
+      (performance.now() - runStartedAt) / 1000,
+      { outcome },
+    )
+  }
   if (claimed.phase === 'report') {
     const goalRevision = claimed.run.goalRevision
     if (goalRevision === undefined) return
@@ -385,7 +426,14 @@ export async function executeClaimedRun(
         runAbort.abort(new Error('Run steering requested'))
       }
     } catch (error) {
-      console.error(`Failed to renew run ${claimed.run.id} lease`, error)
+      telemetry?.logger?.error('run.lease_renew_failed', error, {
+        runId: claimed.run.id,
+        workerId,
+      })
+      telemetry?.metrics?.increment('pegas_errors_total', {
+        component: 'worker',
+        kind: 'run_lease_renew',
+      })
       runAbort.abort(error)
     }
   }, 10_000)
@@ -443,6 +491,7 @@ export async function executeClaimedRun(
     signal.removeEventListener('abort', abortRun)
     if (steeringState.pending && store.ownsRun(claimed.run.id, workerId)) {
       store.supersedeRunForSteering(claimed.run.id, workerId)
+      observeRun('steered')
       return
     }
     // A Worker Runtime is replaceable. Preserve its durable Run and lease so
@@ -451,6 +500,16 @@ export async function executeClaimedRun(
     if (!store.ownsRun(claimed.run.id, workerId)) return
     const message = error instanceof Error ? error.message : String(error)
     store.failRun(claimed.run.id, workerId, message)
+    telemetry?.logger?.error('run.execution_failed', error, {
+      runId: claimed.run.id,
+      taskId: claimed.task.id,
+      workerId,
+    })
+    telemetry?.metrics?.increment('pegas_errors_total', {
+      component: 'worker',
+      kind: 'run_execution',
+    })
+    observeRun('failed')
     return
   }
 
@@ -462,9 +521,11 @@ export async function executeClaimedRun(
     // interrupted attempt and queue a successor that resumes the same
     // session with the correction; the old claim can no longer report.
     store.supersedeRunForSteering(claimed.run.id, workerId)
+    observeRun('steered')
     return
   }
   store.completeRun(claimed.run.id, workerId, result)
+  observeRun('completed')
   const persistedRun = store
     .listRuns(claimed.task.id)
     .find(run => run.id === claimed.run.id)

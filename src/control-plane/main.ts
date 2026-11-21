@@ -11,9 +11,13 @@ import {
 } from '../settings/runtime-settings.js'
 import { resolveInitialModelName } from '../settings/initial-model.js'
 import { PegasStore } from '../storage/sqlite-store.js'
+import { createLogger } from '../observability/logger.js'
+import { MetricsRegistry } from '../observability/metrics.js'
 import { createControlPlane } from './server.js'
 
 const config = loadConfig()
+const logger = createLogger({ service: 'control-plane' })
+const metrics = new MetricsRegistry()
 const store = new PegasStore(config.databasePath)
 const modelCredentialVault = loadModelCredentialVault(
   config.modelCredentialKeyPath,
@@ -46,6 +50,8 @@ store.initializeSpeechConnection({
 const server = createControlPlane({
   store,
   webRoot: resolve('dist/web'),
+  logger,
+  metrics,
   ...(config.apiToken ? { apiToken: config.apiToken } : {}),
   maximumAudioBytes: config.speechMaxAudioBytes,
   speechTimeoutMs: config.speechTimeoutMs,
@@ -61,13 +67,18 @@ const server = createControlPlane({
 })
 
 server.listen(config.apiPort, config.apiHost, () => {
-  console.log(
-    `Pegas control plane listening on http://${config.apiHost}:${String(config.apiPort)}`,
-  )
+  logger.info('service.started', {
+    host: config.apiHost,
+    port: config.apiPort,
+    message: `Pegas control plane listening on http://${config.apiHost}:${String(config.apiPort)}`,
+  })
 })
 
 function shutdown(signal: string): void {
-  console.log(`Received ${signal}; stopping control plane`)
+  logger.info('service.stopping', {
+    signal,
+    message: `Received ${signal}; stopping control plane`,
+  })
   server.close(() => {
     store.close()
     process.exit(0)

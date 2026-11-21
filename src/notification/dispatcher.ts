@@ -2,6 +2,8 @@ import {
   DeliveryOutcomeUnknownError,
   type NotificationChannel,
 } from './channel.js'
+import type { Logger } from '../observability/logger.js'
+import type { MetricsRegistry } from '../observability/metrics.js'
 import type { PegasStore } from '../storage/sqlite-store.js'
 
 export interface OutboxDispatcherOptions {
@@ -11,6 +13,8 @@ export interface OutboxDispatcherOptions {
   maxAttempts?: number
   leaseMs?: number
   retryBaseMs?: number
+  logger?: Logger
+  metrics?: MetricsRegistry
 }
 
 export class OutboxDispatcher {
@@ -20,6 +24,8 @@ export class OutboxDispatcher {
   readonly #maxAttempts: number
   readonly #leaseMs: number
   readonly #retryBaseMs: number
+  readonly #logger?: Logger
+  readonly #metrics?: MetricsRegistry
 
   constructor(options: OutboxDispatcherOptions) {
     this.#store = options.store
@@ -28,6 +34,8 @@ export class OutboxDispatcher {
     this.#maxAttempts = options.maxAttempts ?? 8
     this.#leaseMs = options.leaseMs ?? 30_000
     this.#retryBaseMs = options.retryBaseMs ?? 1000
+    this.#logger = options.logger
+    this.#metrics = options.metrics
   }
 
   async dispatchNext(signal?: AbortSignal): Promise<boolean> {
@@ -40,12 +48,26 @@ export class OutboxDispatcher {
     try {
       await this.#channel.deliver(message, signal)
       this.#store.markOutboxSent(message.id, this.#dispatcherId)
+      this.#metrics?.increment('pegas_outbox_deliveries_total', {
+        outcome: 'sent',
+      })
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
       if (error instanceof DeliveryOutcomeUnknownError) {
         // The receiver may already have the message; never auto-retry an
         // unknown outcome. It waits for an explicit human resolution.
         this.#store.markOutboxUnknown(message.id, this.#dispatcherId, detail)
+        this.#logger?.warn('outbox.delivery_unknown', {
+          messageId: message.id,
+          dispatcherId: this.#dispatcherId,
+        })
+        this.#metrics?.increment('pegas_outbox_deliveries_total', {
+          outcome: 'unknown',
+        })
+        this.#metrics?.increment('pegas_errors_total', {
+          component: 'notification',
+          kind: 'delivery_unknown',
+        })
         return true
       }
       const retryMs = Math.min(
@@ -59,6 +81,14 @@ export class OutboxDispatcher {
         new Date(Date.now() + retryMs),
         this.#maxAttempts,
       )
+      this.#logger?.warn('outbox.delivery_retry', {
+        messageId: message.id,
+        attempts: message.attempts,
+        retryMs,
+      })
+      this.#metrics?.increment('pegas_outbox_deliveries_total', {
+        outcome: 'retry',
+      })
     }
     return true
   }

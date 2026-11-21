@@ -48,7 +48,7 @@
 - [x] Outbox Review Pack：按完成条件聚合结果 evidence、限制、风险、回滚和审计入口（服务端 `review.ready` 投影已含完整预览；Web 卡片渲染待 DESIGN-002 补齐）；
 - [ ] 图片、视频、UI 和排版变化的最终视觉 evidence 预览；
 - [x] Activity/Task 只读视图；
-- [ ] 结构化日志、指标和错误追踪。
+- [x] 结构化日志、指标和错误追踪（OBS-001：JSON 行日志 + /metrics Prometheus 指标 + 结构化错误记录与错误计数；外部聚合与告警待补）。
 
 ## 长期运行闭环
 

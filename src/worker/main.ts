@@ -32,6 +32,8 @@ import {
   SettingsAwareTaskRouter,
 } from '../settings/settings-aware-runtime.js'
 import { PegasStore } from '../storage/sqlite-store.js'
+import { createLogger } from '../observability/logger.js'
+import { MetricsRegistry } from '../observability/metrics.js'
 import { SelfChangeExecutor } from '../self-change/self-change-executor.js'
 import { SelfChangeRoutingExecutor } from '../self-change/routing-executor.js'
 import {
@@ -46,6 +48,9 @@ import {
 } from './run-execution-snapshot.js'
 
 const config = loadConfig()
+const logger = createLogger({ service: 'worker' })
+const metrics = new MetricsRegistry()
+const telemetry = { logger, metrics }
 const controlPlaneBaseUrl = localControlPlaneBaseUrl(
   config.apiHost,
   config.apiPort,
@@ -131,7 +136,11 @@ const nodeHeartbeat = setInterval(() => {
       capabilities: nodeCapabilities,
     })
   } catch (error) {
-    console.error('Failed to refresh the execution node heartbeat', error)
+    logger.error('node.heartbeat_failed', error, { nodeId: config.nodeId })
+    metrics.increment('pegas_errors_total', {
+      component: 'worker',
+      kind: 'node_heartbeat',
+    })
   }
 }, 30_000)
 nodeHeartbeat.unref()
@@ -139,10 +148,19 @@ nodeHeartbeat.unref()
 process.on('SIGINT', requestStop)
 process.on('SIGTERM', requestStop)
 
-console.log(`Pegas worker ${workerId} started with ${baseExecutor.name}`)
+logger.info('service.started', {
+  workerId,
+  executor: baseExecutor.name,
+  message: `Pegas worker ${workerId} started with ${baseExecutor.name}`,
+})
 
 while (!lifecycle.stopping) {
-  const routed = await processNextEvent(store, eventHandler, workerId)
+  const routed = await processNextEvent(
+    store,
+    eventHandler,
+    workerId,
+    telemetry,
+  )
 
   // The signal callback may change stopping while a run is being awaited.
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
@@ -157,9 +175,17 @@ while (!lifecycle.stopping) {
       config.workspaceRoot,
       shutdown.signal,
       controlPlaneBaseUrl,
+      telemetry,
     )
       .catch((error: unknown) => {
-        console.error(`Run ${claimed.run.id} persistence failed`, error)
+        logger.error('run.persistence_failed', error, {
+          runId: claimed.run.id,
+          workerId,
+        })
+        metrics.increment('pegas_errors_total', {
+          component: 'worker',
+          kind: 'run_persistence',
+        })
       })
       .finally(() => activeRuns.delete(execution))
     activeRuns.add(execution)
