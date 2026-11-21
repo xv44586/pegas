@@ -422,6 +422,8 @@ Pegas 的一个不可变构建版本，包含 Git commit、构建产物校验值
 
 可以承载 Control Plane 或 Run 的执行节点。Node 记录能力、位置、心跳、当前版本和租约；手机客户端不是状态事实来源，也不是执行节点。
 
+第一版实现（EXEC-004）：schema v28 `execution_nodes` 持久注册与心跳；Worker 启动注册（`PEGAS_NODE_ID`/`PEGAS_NODE_LABEL`，默认 hostname）并每 30s 刷新，在线状态由心跳年龄推导（默认 90s）。Run 在路由事务内把 `executionContext.nodeId` 写入执行快照；`claimNextRun` 只允许绑定节点领取对应 Run，lease 过期也只能由同节点 Worker 触发 retry。节点离线时绑定事情保持排队等待，其他事情不受阻塞；`GET /v1/nodes` 返回节点与在线状态。
+
 ## Task、Run 与 Session 的关系
 
 ```text

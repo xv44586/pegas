@@ -961,6 +961,16 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         })
       }
 
+      if (
+        new URL(request.url ?? '/', 'http://localhost').pathname ===
+          '/v1/nodes' &&
+        request.method === 'GET'
+      ) {
+        return sendJson(response, 200, {
+          nodes: options.store.listExecutionNodes(),
+        })
+      }
+
       if (request.url?.startsWith('/v1/usage') && request.method === 'GET') {
         const url = new URL(request.url, 'http://localhost')
         const userId = url.searchParams.get('userId')

@@ -34,6 +34,7 @@ import type {
   ClaimedRun,
   EventAttachment,
   ExecutionContext,
+  ExecutionNode,
   InboxEvent,
   ModelUsageRecord,
   ModelUsageReport,
@@ -453,6 +454,16 @@ CREATE TABLE IF NOT EXISTS event_attachments (
 
 const migration27 = `
 ALTER TABLE evidence_refs ADD COLUMN artifact_storage_path TEXT;
+`
+
+const migration28 = `
+CREATE TABLE IF NOT EXISTS execution_nodes (
+  id TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  capabilities_json TEXT NOT NULL DEFAULT '[]',
+  last_heartbeat_at TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
 `
 
 const migration2 = `
@@ -1559,6 +1570,14 @@ interface EventAttachmentRow {
   created_at: string
 }
 
+interface ExecutionNodeRow {
+  id: string
+  label: string
+  capabilities_json: string
+  last_heartbeat_at: string
+  created_at: string
+}
+
 interface TaskRow {
   id: string
   user_id: string
@@ -2067,6 +2086,7 @@ export class PegasStore {
     this.#migrate(25, migration25)
     this.#migrate(26, migration26)
     this.#migrate(27, migration27)
+    this.#migrate(28, migration28)
   }
 
   #backfillWorkerIconIds(): void {
@@ -7655,7 +7675,66 @@ export class PegasStore {
     }
   }
 
-  claimNextRun(workerId: string, leaseMs = 30_000): ClaimedRun | undefined {
+  /**
+   * Registers or refreshes an execution node heartbeat. Workers on the same
+   * machine share one node identity; the Control Plane derives online state
+   * from the heartbeat age, never from a stored boolean.
+   */
+  registerExecutionNode(input: {
+    id: string
+    label: string
+    capabilities?: string[]
+  }): ExecutionNode {
+    const now = this.#clock.now().toISOString()
+    this.#database
+      .prepare(
+        `INSERT INTO execution_nodes
+          (id, label, capabilities_json, last_heartbeat_at, created_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           label = excluded.label,
+           capabilities_json = excluded.capabilities_json,
+           last_heartbeat_at = excluded.last_heartbeat_at`,
+      )
+      .run(
+        input.id,
+        input.label,
+        JSON.stringify(input.capabilities ?? []),
+        now,
+        now,
+      )
+    const node = this.executionNode(input.id)
+    if (!node) throw new Error('Failed to register the execution node')
+    return node
+  }
+
+  executionNode(nodeId: string): ExecutionNode | undefined {
+    const row = this.#database
+      .prepare('SELECT * FROM execution_nodes WHERE id = ?')
+      .get(nodeId) as unknown as ExecutionNodeRow | undefined
+    return row ? toExecutionNode(row) : undefined
+  }
+
+  listExecutionNodes(onlineWithinMs = 90_000): (ExecutionNode & {
+    online: boolean
+  })[] {
+    const cutoff = new Date(
+      this.#clock.now().getTime() - onlineWithinMs,
+    ).toISOString()
+    const rows = this.#database
+      .prepare('SELECT * FROM execution_nodes ORDER BY created_at ASC, id ASC')
+      .all() as unknown as ExecutionNodeRow[]
+    return rows.map(row => ({
+      ...toExecutionNode(row),
+      online: row.last_heartbeat_at > cutoff,
+    }))
+  }
+
+  claimNextRun(
+    workerId: string,
+    leaseMs = 30_000,
+    nodeId?: string,
+  ): ClaimedRun | undefined {
     const now = this.#clock.now()
     const leaseUntil = new Date(now.getTime() + leaseMs).toISOString()
     const claimToken = randomUUID()
@@ -7667,6 +7746,8 @@ export class PegasStore {
           `SELECT * FROM runs
            WHERE task_id IN (SELECT id FROM tasks WHERE status NOT IN ('completed','cancelled'))
            AND execution_contract_version <= 2
+           AND (json_extract(execution_context_json, '$.nodeId') IS NULL
+             OR json_extract(execution_context_json, '$.nodeId') = ?)
            AND ((status = 'queued' AND NOT EXISTS (
              SELECT 1 FROM runs AS active WHERE active.task_id = runs.task_id AND active.status = 'running'
            ) AND NOT EXISTS (
@@ -7681,8 +7762,11 @@ export class PegasStore {
              )))
            ORDER BY created_at ASC, rowid ASC LIMIT 1`,
         )
-        .get(now.toISOString(), now.toISOString()) as unknown as
-        RunRow | undefined
+        .get(
+          nodeId ?? null,
+          now.toISOString(),
+          now.toISOString(),
+        ) as unknown as RunRow | undefined
       if (!row) {
         this.#database.exec('COMMIT')
         return undefined
@@ -9763,6 +9847,16 @@ function toEventAttachment(row: EventAttachmentRow): EventAttachment {
     mediaType: row.media_type,
     byteSize: row.byte_size,
     sha256: row.sha256,
+    createdAt: row.created_at,
+  }
+}
+
+function toExecutionNode(row: ExecutionNodeRow): ExecutionNode {
+  return {
+    id: row.id,
+    label: row.label,
+    capabilities: JSON.parse(row.capabilities_json) as string[],
+    lastHeartbeatAt: row.last_heartbeat_at,
     createdAt: row.created_at,
   }
 }

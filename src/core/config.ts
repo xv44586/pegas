@@ -1,3 +1,4 @@
+import { hostname } from 'node:os'
 import { resolve } from 'node:path'
 
 import {
@@ -22,6 +23,8 @@ export interface PegasConfig {
   dshTimeoutMs: number
   workspaceRoot: string
   workerConcurrency: number
+  nodeId: string
+  nodeLabel: string
   routerMode: 'rules' | 'model'
   modelProvider: ModelProviderId
   modelBaseUrl?: string
@@ -143,6 +146,8 @@ export function loadConfig(
       2,
       'PEGAS_WORKER_CONCURRENCY',
     ),
+    nodeId: nonemptyOr(environment.PEGAS_NODE_ID, hostname()),
+    nodeLabel: nonemptyOr(environment.PEGAS_NODE_LABEL, hostname()),
     routerMode,
     modelProvider: modelProvider as ModelProviderId,
     ...(modelBaseUrl ? { modelBaseUrl } : {}),
@@ -223,6 +228,12 @@ function commaSeparatedPaths(value: string | undefined): string[] {
     .map(path => path.trim())
     .filter(Boolean)
     .map(path => resolve(path))
+}
+
+function nonemptyOr(value: string | undefined, fallback: string): string {
+  const trimmed = value?.trim()
+  if (trimmed === undefined || trimmed === '') return fallback
+  return trimmed
 }
 
 function parsePositiveInteger(

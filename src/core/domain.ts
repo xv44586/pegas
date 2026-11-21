@@ -37,6 +37,8 @@ export interface ExecutionContext {
   executor: string
   executorProfile?: string
   workspace?: string
+  /** Execution node this Run is pinned to; only that node may claim it. */
+  nodeId?: string
   model?: string
   modelMode?: 'profile' | 'override'
   modelProvider?: string
@@ -87,6 +89,14 @@ export interface EventAttachment {
   mediaType: string
   byteSize: number
   sha256: string
+  createdAt: string
+}
+
+export interface ExecutionNode {
+  id: string
+  label: string
+  capabilities: string[]
+  lastHeartbeatAt: string
   createdAt: string
 }
 

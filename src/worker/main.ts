@@ -85,7 +85,7 @@ const selfChangeExecutor = config.selfChangeEnabled
       recoveryBaseUrl: config.recoveryBaseUrl,
       ...(config.recoveryToken ? { recoveryToken: config.recoveryToken } : {}),
       editor: executor,
-      compatibility: { minimumSchema: 1, maximumSchema: 27 },
+      compatibility: { minimumSchema: 1, maximumSchema: 28 },
       reviewer: 'pegas-self-change-gate',
       controlPlaneBaseUrl,
     })
@@ -100,6 +100,7 @@ const eventHandler = new RoutingEventHandler(router, executor.name, task => {
     executor: executor.name,
     executorProfile: config.dshProfile,
     workspace: config.workspaceRoot,
+    nodeId: config.nodeId,
     permissions: JSON.stringify({
       mode: 'workspace-write',
       approvalPolicy: 'never',
@@ -113,6 +114,28 @@ const lifecycle = { stopping: false }
 const shutdown = new AbortController()
 const activeRuns = new Set<Promise<void>>()
 
+const nodeCapabilities = [
+  'dsh',
+  ...(config.selfChangeEnabled ? ['self-change'] : []),
+]
+store.registerExecutionNode({
+  id: config.nodeId,
+  label: config.nodeLabel,
+  capabilities: nodeCapabilities,
+})
+const nodeHeartbeat = setInterval(() => {
+  try {
+    store.registerExecutionNode({
+      id: config.nodeId,
+      label: config.nodeLabel,
+      capabilities: nodeCapabilities,
+    })
+  } catch (error) {
+    console.error('Failed to refresh the execution node heartbeat', error)
+  }
+}, 30_000)
+nodeHeartbeat.unref()
+
 process.on('SIGINT', requestStop)
 process.on('SIGTERM', requestStop)
 
@@ -124,7 +147,7 @@ while (!lifecycle.stopping) {
   // The signal callback may change stopping while a run is being awaited.
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
   while (!lifecycle.stopping && activeRuns.size < config.workerConcurrency) {
-    const claimed = store.claimNextRun(workerId)
+    const claimed = store.claimNextRun(workerId, 30_000, config.nodeId)
     if (!claimed) break
     const execution = executeClaimedRun(
       store,
@@ -150,6 +173,7 @@ store.close()
 
 function requestStop(): void {
   lifecycle.stopping = true
+  clearInterval(nodeHeartbeat)
   shutdown.abort()
 }
 
