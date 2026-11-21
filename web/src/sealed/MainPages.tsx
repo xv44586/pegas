@@ -598,6 +598,12 @@ export function ConversationPage({
               </button>
             </div>
             <div className="composer-actions">
+              {sending && (
+                <span className="composer-working">
+                  <PegasMascot pose="waiting" size={30} />
+                  正在整理…
+                </span>
+              )}
               <ComposerModelPicker
                 models={models}
                 onSelect={onSelectModel}
@@ -918,7 +924,7 @@ export function AttentionPage({
           })
         ) : (
           <EmptyCapability
-            icon={Check}
+            mascot="celebrate"
             title="现在没有待处理项"
             description="需要确认、补充信息或处理失败时，Pegas 会把它放在这里。"
           />

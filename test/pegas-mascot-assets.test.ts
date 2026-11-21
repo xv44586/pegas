@@ -24,4 +24,15 @@ describe('pegas mascot assets', () => {
     const details = await stat(assetPath)
     expect(details.size).toBeGreaterThan(10_000)
   })
+
+  it.each(['waiting', 'celebrate', 'blocked'])(
+    'ships the %s pose webp with a bounded size',
+    async pose => {
+      const assetPath = path.join(brandDirectory, `pegas-mascot-${pose}.webp`)
+      await expect(access(assetPath)).resolves.toBeUndefined()
+      const details = await stat(assetPath)
+      expect(details.size).toBeGreaterThan(10_000)
+      expect(details.size).toBeLessThan(200_000)
+    },
+  )
 })

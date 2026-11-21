@@ -27,4 +27,21 @@ describe('PegasMascot', () => {
     expect(image?.getAttribute('height')).toBe('112')
     expect(image?.getAttribute('src')).toBe('/brand/pegas-mascot.webp')
   })
+
+  it.each([
+    ['waiting', '/brand/pegas-mascot-waiting.webp', 480, 445],
+    ['celebrate', '/brand/pegas-mascot-celebrate.webp', 480, 443],
+    ['blocked', '/brand/pegas-mascot-blocked.webp', 480, 437],
+  ] as const)(
+    'serves the %s pose with its own aspect ratio',
+    (pose, src, width, height) => {
+      const { container } = render(<PegasMascot pose={pose} size={96} />)
+      const image = container.querySelector('img.pegas-mascot')
+      expect(image?.getAttribute('src')).toBe(src)
+      expect(image?.getAttribute('data-pose')).toBe(pose)
+      expect(image?.getAttribute('height')).toBe(
+        String(Math.round((96 * height) / width)),
+      )
+    },
+  )
 })

@@ -11,6 +11,9 @@ Pegas 拥有自己的动漫风格形象：一个圆润、安静的白色支援�
 对话页空状态欢迎区和设置「关于」页，让用户面对的始终是这个长期搭档，
 而不是通用的闪光图标或第三方角色。
 
+形象拥有四个姿态（idle / waiting / celebrate / blocked），并统一派生为
+favicon、apple-touch-icon 与 macOS 桌面图标，替换旧的抽象 P/翼形标志。
+
 ## 设计决策
 
 - **原型**：致敬《宇宙骑士 BLADE》中支援机器人柏卡斯的角色定位——承接意图、
@@ -32,8 +35,18 @@ Pegas 拥有自己的动漫风格形象：一个圆润、安静的白色支援�
   传入 `label` 时成为具名 `role="img"`；显式宽高避免布局偏移）。
 - 位图：`web/public/brand/pegas-mascot.webp`（640×449，约 31KB，运行时引用）
   与 `pegas-mascot.png`（同源无损版本，供后续图标/印刷派生）。
+- 姿态位图：`pegas-mascot-{waiting,celebrate,blocked}.webp`（480 宽，
+  各约 26–37KB）与同源 PNG；`PegasMascot` 通过 `pose` 属性选择资产并按
+  各自宽高比占位。
 - 出现位置：对话欢迎区（`MainPages.tsx`，148px）、关于页
-  （`SettingsPage.tsx`，168px，具名图像）。
+  （`SettingsPage.tsx`，168px，具名图像）、发送中 composer 等待指示
+  （waiting，30px + 「正在整理…」文字）、待你处理空状态（celebrate，
+  104px）。blocked 姿态已入库，供后续阻塞/审批界面使用。
+- 应用图标派生：`scripts/generate-brand-icons.mjs`（`pnpm brand:generate` /
+  `pnpm brand:check`，已串入 `pnpm check`）。以 idle 姿态合成 1024 品牌蓝
+  圆角底板，派生 `web/public/favicon.svg`（矢量简化脸）、`favicon-32.png`、
+  `apple-touch-icon.png`、`desktop/icon.svg`（自包含 data URI）与
+  `desktop/Pegas.icns`（手写 ICNS 容器，PNG payload，含 16–1024 全尺寸）。
 - 原始生成图（1536×1024，含透明通道）保存在本地
   `research/pegas-mascot/`，不提交。
 
@@ -44,26 +57,33 @@ Pegas 拥有自己的动漫风格形象：一个圆润、安静的白色支援�
 3. 形象在已命名按钮外默认装饰性；独立展示时有可访问名称。
 4. 位图带透明通道、显式宽高，加载不引起布局偏移；WebP 体积 < 200KB。
 5. 三主题（light/warm/dark）下无需滤镜即可读。
+6. 发送中显示 waiting 姿态与文字；待你处理空状态显示 celebrate 姿态。
+7. favicon / touch icon / 桌面 icns 与形象同源；`pnpm brand:check` 防漂移。
 
 ## 非目标
 
-- 不替换 favicon、`PegasMark` 抽象标志或桌面 `Pegas.icns`（后续缺口）。
-- 不引入多姿态、动画或表情包（等待 BRAND-002 扩展）。
+- 不替换 `PegasMark` 抽象标志（侧栏 lockup 仍用，后续可统一）。
+- 不引入动画或表情包；blocked 姿态暂不在界面挂载。
 - 不让形象承担状态表达；Channel 状态仍由徽记与文字表达（BRAND-001）。
 
 ## 数据、权限与恢复边界
 
 纯静态前端资产，无外部请求、无用户数据。回滚本 commit 即恢复原
 Sparkles 欢迎图标与关于页标志；无 schema 或 API 变化。
+应用图标回滚即恢复旧 favicon/icns；`brand:check` 保证产物可重建。
 
 ## 验证证据
 
 - `web/src/sealed/PegasMascot.test.tsx`：装饰/具名可访问性、宽高占位
-  （160→112）与运行时引用路径。
+  （160→112）、运行时引用路径与三姿态资产/宽高比。
 - `web/src/sealed/ConversationWelcome.test.tsx`：空状态欢迎区渲染形象、
-  不再渲染通用 SVG 图标，标题文案保持不变。
+  不再渲染通用 SVG 图标，标题文案保持不变；发送中 waiting 姿态出现与
+  消失；待你处理空状态 celebrate 姿态。
 - `test/pegas-mascot-assets.test.ts`：WebP/PNG 资产存在，WebP 体积在
-  10KB–200KB 区间。
+  10KB–200KB 区间（含三姿态）。
+- `test/brand-icons.test.ts`：ICNS 容器完整性与全尺寸、favicon/touch
+  icon 链接与产物、desktop/icon.svg 自包含。
+- `pnpm brand:check`：五个应用图标产物与生成器一致。
 - 浏览器截图：light/dark 欢迎区与关于页（`output/feature-review/media/
 desktop-settings-about.png` 及本地探针截图）。
 - 完整门禁：`pnpm check`、`pnpm smoke`（见 Feature Map 与提交说明）。
