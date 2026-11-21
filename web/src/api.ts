@@ -174,7 +174,11 @@ export class PegasApi {
     }))
   }
 
-  async sendMessage(text: string, taskId?: string): Promise<InboxEvent> {
+  async sendMessage(
+    text: string,
+    taskId?: string,
+    sourceTaskId?: string,
+  ): Promise<InboxEvent> {
     const response = await fetch('/v1/events', {
       method: 'POST',
       headers: this.#headers(true),
@@ -183,7 +187,11 @@ export class PegasApi {
         type: 'user.message',
         source: 'web',
         dedupeKey: crypto.randomUUID(),
-        payload: { text, ...(taskId ? { taskId } : {}) },
+        payload: {
+          text,
+          ...(taskId ? { taskId } : {}),
+          ...(sourceTaskId ? { sourceTaskId } : {}),
+        },
       }),
     })
     if (!response.ok) await throwResponse(response)

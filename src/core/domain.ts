@@ -321,6 +321,7 @@ export type RoutingDecision =
       input: string
       reason: string
       targetResource?: 'pegas_repository'
+      sourceContext?: TaskSourceContext
     }
   | {
       kind: 'reply'
@@ -344,6 +345,25 @@ export type RoutingDecision =
       taskId: string
       reason: string
     }
+
+/**
+ * COLLAB-001 (PLAN-001 P5): terminal facts handed from a finished or stopped
+ * source Task into a new Task's first Run input. This is a factual handoff,
+ * not a context note and not an authorization: it never resumes the source
+ * session and never expands the new Task's mandate. The Control Plane
+ * derives every field from authoritative rows; clients only reference the
+ * source Task.
+ */
+export interface TaskSourceContext {
+  sourceTaskId: string
+  relationId?: string
+  sourceTitle: string
+  sourceStatus: 'completed' | 'cancelled'
+  summary: string
+  keyDecisions: string[]
+  artifactRefs: { id: string; name: string; kind: string; uri?: string }[]
+  reviewPackId?: string
+}
 
 export interface OutboxMessage {
   id: string

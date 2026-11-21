@@ -331,7 +331,9 @@ export function ConversationPage({
   onSelectModel,
   onAnswerClarification,
   continuationChannel,
+  sourceContextChannel,
   onClearContinuation,
+  onClearSourceContext,
   draft,
   onDraftChange,
   speechEnabled,
@@ -347,7 +349,9 @@ export function ConversationPage({
   onSelectModel: (model: DshModelCatalogItem) => Promise<void>
   onAnswerClarification: (channel: Snapshot['channels'][number]) => void
   continuationChannel?: Snapshot['channels'][number]
+  sourceContextChannel?: Snapshot['channels'][number]
   onClearContinuation: () => void
+  onClearSourceContext: () => void
   draft: string
   onDraftChange: (draft: string) => void
   speechEnabled: boolean
@@ -429,7 +433,11 @@ export function ConversationPage({
     setSending(true)
     setError('')
     try {
-      const event = await api.sendMessage(text, continuationChannel?.id)
+      const event = await api.sendMessage(
+        text,
+        sourceContextChannel ? undefined : continuationChannel?.id,
+        sourceContextChannel?.id,
+      )
       if (attachment) {
         try {
           await api.uploadEventAttachment(event.id, attachment)
@@ -442,6 +450,7 @@ export function ConversationPage({
       setAttachment(undefined)
       onDraftChange('')
       onClearContinuation()
+      onClearSourceContext()
       await onSent()
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '发送失败，请重试。')
@@ -672,6 +681,21 @@ export function ConversationPage({
             <button
               aria-label="取消继续当前事情"
               onClick={onClearContinuation}
+              type="button"
+            >
+              <X size={15} />
+            </button>
+          </div>
+        )}
+        {sourceContextChannel && (
+          <div className="composer-context" role="status">
+            <span>
+              新建相关事情，携带终态摘要：
+              <strong>{sourceContextChannel.title}</strong>
+            </span>
+            <button
+              aria-label="取消携带来源事情摘要"
+              onClick={onClearSourceContext}
               type="button"
             >
               <X size={15} />

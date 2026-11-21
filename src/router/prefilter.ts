@@ -25,6 +25,7 @@ export function prefilterDecision(
   const rawText = event.payload.text
   if (typeof rawText !== 'string' || !rawText.trim()) return undefined
   if (event.payload.taskId !== undefined) return undefined
+  if (event.payload.sourceTaskId !== undefined) return undefined
   const text = rawText.trim()
 
   const stopTarget = stopCommandTarget(text)

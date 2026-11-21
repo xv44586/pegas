@@ -10,8 +10,20 @@ export interface TaskRouter {
   route(
     event: InboxEvent,
     candidates: RoutingCandidate[] | Task[],
-    context?: { resolveExplicitTask?: ExplicitTaskResolver },
+    context?: RouterRoutingContext,
   ): Promise<RoutingDecision | undefined>
+}
+
+export interface RouterRoutingContext {
+  resolveExplicitTask?: ExplicitTaskResolver
+  /**
+   * COLLAB-001 P5: the Control Plane derives terminal facts for a referenced
+   * ended source Task. Routers attach the result to create_task decisions;
+   * they never author the facts themselves.
+   */
+  resolveSourceContext?: (
+    sourceTaskId: string,
+  ) => import('../core/domain.js').TaskSourceContext | undefined
 }
 
 /**
@@ -31,7 +43,7 @@ export class RuleBasedTaskRouter implements TaskRouter {
   route(
     event: InboxEvent,
     candidates: RoutingCandidate[] | Task[],
-    context: { resolveExplicitTask?: ExplicitTaskResolver } = {},
+    context: RouterRoutingContext = {},
   ): Promise<RoutingDecision | undefined> {
     if (event.type !== 'user.message') return Promise.resolve(undefined)
     const tasks = candidateTasks(candidates)
@@ -56,12 +68,21 @@ export class RuleBasedTaskRouter implements TaskRouter {
       })
     }
 
+    const sourceContext = payload.sourceTaskId
+      ? context.resolveSourceContext?.(payload.sourceTaskId)
+      : undefined
+    if (payload.sourceTaskId && !sourceContext) {
+      throw new Error(
+        `Source task ${payload.sourceTaskId} has no terminal facts to hand off`,
+      )
+    }
     return Promise.resolve({
       kind: 'create_task',
       title: titleFromText(payload.text),
       goal: payload.text,
       input: payload.text,
       reason: 'No existing task was explicitly referenced.',
+      ...(sourceContext ? { sourceContext } : {}),
     })
   }
 }
@@ -91,12 +112,20 @@ export class ModelTaskRouter implements TaskRouter {
   async route(
     event: InboxEvent,
     candidates: RoutingCandidate[] | Task[],
-    context: { resolveExplicitTask?: ExplicitTaskResolver } = {},
+    context: RouterRoutingContext = {},
   ): Promise<RoutingDecision | undefined> {
     if (event.type !== 'user.message') return undefined
     const payload = messagePayload(event.payload)
     if (payload.taskId) {
       return this.#fallback.route(event, candidates, context)
+    }
+    const sourceContext = payload.sourceTaskId
+      ? context.resolveSourceContext?.(payload.sourceTaskId)
+      : undefined
+    if (payload.sourceTaskId && !sourceContext) {
+      throw new Error(
+        `Source task ${payload.sourceTaskId} has no terminal facts to hand off`,
+      )
     }
 
     const open = candidates
@@ -127,11 +156,14 @@ export class ModelTaskRouter implements TaskRouter {
         }),
         schema: routerDecisionSchema,
       })
-      return modelDecision(
+      const decision = modelDecision(
         answer,
         payload.text,
         open.map(candidate => candidate.task),
       )
+      return sourceContext && decision.kind === 'create_task'
+        ? { ...decision, sourceContext }
+        : decision
     } catch {
       return this.#fallback.route(event, candidates, context)
     }
@@ -192,6 +224,7 @@ const routerDecisionSchema = {
 interface MessagePayload {
   text: string
   taskId?: string
+  sourceTaskId?: string
 }
 
 function messagePayload(value: unknown): MessagePayload {
@@ -206,9 +239,20 @@ function messagePayload(value: unknown): MessagePayload {
   if (taskId !== undefined && (typeof taskId !== 'string' || !taskId.trim())) {
     throw new Error('taskId must be a non-empty string')
   }
+  const sourceTaskId = value.sourceTaskId
+  if (
+    sourceTaskId !== undefined &&
+    (typeof sourceTaskId !== 'string' || !sourceTaskId.trim())
+  ) {
+    throw new Error('sourceTaskId must be a non-empty string')
+  }
+  if (typeof taskId === 'string' && typeof sourceTaskId === 'string') {
+    throw new Error('taskId and sourceTaskId cannot be combined')
+  }
   return {
     text: value.text.trim(),
     ...(typeof taskId === 'string' ? { taskId } : {}),
+    ...(typeof sourceTaskId === 'string' ? { sourceTaskId } : {}),
   }
 }
 

@@ -228,9 +228,14 @@ Source Channel ── ownership transfer ──▶ Target Channel
 Source Channel ── scoped fact ──▶ Target Channel
 ```
 
-### 终态事实交接 sourceContext（PLAN-001 P5，已采纳设计，待实施）
+### 终态事实交接 sourceContext（PLAN-001 P5，已落地）
 
-与 context note 的区别：context note 是运行中协作，sourceContext 是**终态事实交接**。"新建相关 Channel"（cancelled 后重新接单）与委派返回续接时，来源 Task 最近 Review Pack 摘要（summary、关键决定、artifact 引用）作为结构化 `sourceContext` 注入新 Task 首个 Run 输入，标记来源 taskId/relationId。不 resume 来源 session（授权复核与 session compatibility 边界不变），不授予任何权限；摘要经 PRIVACY-001 出站边界。旧数据无 sourceContext 时行为不变。设计合同见 `docs/router-worker-design.md` P5。
+与 context note 的区别：context note 是运行中协作，sourceContext 是**终态事实交接**。两条路径：
+
+1. **新建相关事情**：Web 事情详情在 completed/cancelled Task 上提供「新建相关事情」入口；客户端只提交 `payload.sourceTaskId` 引用（`POST /v1/events`，与 `taskId` 互斥），服务端在 ingress 校验来源存在且已终态，并拒绝客户端自带 `sourceContext` 字段。路由产生 create_task 时由 Control Plane 从权威行推导 `TaskSourceContext`（`src/collaboration/source-context.ts`）：来源 Task 最近 Review Pack 的终态/结论/剩余风险（无 Review Pack 时用最近 completed Run 输出或停止原因）、criteria 关键结论（≤6 条）与 artifact 引用（≤8 条），标记来源 taskId（协作路径另标 relationId）。摘要注入新 Task 首个 Run 输入，块首明确「仅供参考，不构成新授权或指令」。
+2. **委派返回续接**：`collaboration.returned` 事件在 continue_task 输入中附带目标 Task 的终态 sourceContext（目标已 completed 时），标记 relationId。
+
+边界：不 resume 来源 session（新 Run 无来源 executor_ref/resumeFromRef）；新 Task Mandate 由新的人类输入铸造，权限不扩大；sourceContext 不含 permissions/mandate 字段；出站经既有 PRIVACY-001 executor 脱敏边界；prefilter 对带 sourceTaskId 的消息不分流；引用开放/不存在来源时事件按既有 failEvent 路径退回（不静默丢弃）。旧数据无 sourceContext 时行为不变，无 schema 变更。设计合同见 `docs/router-worker-design.md` P5；证据见 `test/source-context.test.ts`（10 测试）与 Web「新建相关事情」回归。
 
 ## 协作控制协议
 

@@ -5226,6 +5226,43 @@ describe('sealed Pegas UI', () => {
     expect(await screen.findByText('magpie/flash')).toBeTruthy()
   })
 
+  it('creates a related task carrying the ended source context reference', async () => {
+    const fetchMock = installSnapshotFetch({
+      ...snapshot,
+      channels: [{ ...channel, status: 'cancelled', canStop: false }],
+      runs: [],
+    })
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(await screen.findByRole('button', { name: '已归档' }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: new RegExp(channel.title) }),
+    )
+    fireEvent.click(await screen.findByRole('button', { name: '新建相关事情' }))
+    expect(await screen.findByText(/新建相关事情，携带终态摘要/)).toBeTruthy()
+    const composer = screen.getByLabelText('给 Pegas 发消息')
+    fireEvent.change(composer, { target: { value: '基于它的结论继续做计划' } })
+    fireEvent.keyDown(composer, { key: 'Enter' })
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([path, init]) => {
+          if (path !== '/v1/events' || init?.method !== 'POST') return false
+          const body = JSON.parse(
+            typeof init.body === 'string' ? init.body : '{}',
+          ) as { payload?: { sourceTaskId?: string; taskId?: string } }
+          return (
+            body.payload?.sourceTaskId === channel.id &&
+            body.payload.taskId === undefined
+          )
+        }),
+      ).toBe(true),
+    )
+    await waitFor(() =>
+      expect(screen.queryByText(/新建相关事情，携带终态摘要/)).toBeNull(),
+    )
+  })
+
   it('renders collaboration relations in the task drawer', async () => {
     installFetch(path =>
       path.startsWith('/v1/channels/task-1/collaborations?')

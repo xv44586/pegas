@@ -555,6 +555,16 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
           if (task.status === 'cancelled')
             throw new Error('Task was stopped by the user')
         }
+        const sourceTaskId = sourceContextTaskId(input)
+        if (sourceTaskId) {
+          const source = options.store.findTask(sourceTaskId, input.userId)
+          if (!source)
+            throw new Error(`Task ${sourceTaskId} does not exist for user`)
+          if (source.status !== 'completed' && source.status !== 'cancelled')
+            throw new Error(
+              'sourceTaskId must reference a completed or cancelled Task',
+            )
+        }
         const result = options.store.enqueueEvent(input)
         return sendJson(response, result.inserted ? 202 : 200, result)
       }
@@ -1866,6 +1876,31 @@ function explicitTaskId(input: NewInboxEvent): string | undefined {
     return undefined
   const taskId = input.payload.taskId
   return typeof taskId === 'string' && taskId.trim() ? taskId : undefined
+}
+
+function sourceContextTaskId(input: NewInboxEvent): string | undefined {
+  if (
+    input.type !== 'user.message' ||
+    !input.payload ||
+    typeof input.payload !== 'object' ||
+    Array.isArray(input.payload)
+  )
+    return undefined
+  if ('sourceContext' in input.payload)
+    throw new Error(
+      'sourceContext facts are derived by the server and cannot be submitted',
+    )
+  if (!('sourceTaskId' in input.payload)) return undefined
+  const sourceTaskId = input.payload.sourceTaskId
+  if (typeof sourceTaskId !== 'string' || !sourceTaskId.trim())
+    throw new Error('sourceTaskId must be a non-empty string')
+  if (
+    'taskId' in input.payload &&
+    typeof input.payload.taskId === 'string' &&
+    input.payload.taskId.trim()
+  )
+    throw new Error('taskId and sourceTaskId cannot be combined')
+  return sourceTaskId
 }
 
 function modelProbeConnection(

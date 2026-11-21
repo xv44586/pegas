@@ -53,6 +53,7 @@ export function DetailDrawer({
   onOpenView,
   onRetry,
   onContinue,
+  onCreateRelated,
   onStop,
   onDecideApproval,
   onReconcileAction,
@@ -65,6 +66,9 @@ export function DetailDrawer({
   onOpenView?: (view: DrawerView) => void
   onRetry: (run: Run) => Promise<void>
   onContinue?: (
+    channel: Extract<DrawerView, { kind: 'task' }>['channel'],
+  ) => void
+  onCreateRelated?: (
     channel: Extract<DrawerView, { kind: 'task' }>['channel'],
   ) => void
   onStop?: (
@@ -157,6 +161,7 @@ export function DetailDrawer({
             delivery={view.delivery}
             deliveryError={view.deliveryError}
             onContinue={onContinue}
+            onCreateRelated={onCreateRelated}
             onOpenEvidence={
               onOpenView
                 ? evidence => onOpenView(evidencePreviewView(evidence))
@@ -821,6 +826,7 @@ function TaskDetail({
   onOpenView,
   onRetry,
   onContinue,
+  onCreateRelated,
   onStop,
 }: {
   api?: PegasApi
@@ -841,6 +847,9 @@ function TaskDetail({
   onOpenView?: (view: DrawerView) => void
   onRetry: (run: Run) => Promise<void>
   onContinue?: (
+    channel: Extract<DrawerView, { kind: 'task' }>['channel'],
+  ) => void
+  onCreateRelated?: (
     channel: Extract<DrawerView, { kind: 'task' }>['channel'],
   ) => void
   onStop?: (
@@ -1179,6 +1188,16 @@ function TaskDetail({
         {channel.status === 'cancelled' && (
           <span className="drawer-footnote">等待服务端返回下一步条件。</span>
         )}
+        {(channel.status === 'cancelled' || channel.status === 'completed') &&
+          onCreateRelated && (
+            <button
+              className="primary-button"
+              onClick={() => onCreateRelated(channel)}
+              type="button"
+            >
+              新建相关事情
+            </button>
+          )}
       </footer>
     </div>
   )

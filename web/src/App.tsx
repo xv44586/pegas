@@ -68,6 +68,7 @@ export function App() {
   const [page, setPage] = useState<AppPage>(() => pageFromLocation())
   const [drawer, setDrawer] = useState<DrawerView>()
   const [continuationTaskId, setContinuationTaskId] = useState<string>()
+  const [sourceContextTaskId, setSourceContextTaskId] = useState<string>()
   const [composerDraft, setComposerDraft] = useState('')
   const [settingsSection, setSettingsSection] = useState<SettingsSection>(() =>
     settingsSectionFromLocation(),
@@ -1112,6 +1113,7 @@ export function App() {
   }
   function continueChannel(channelId: string) {
     setContinuationTaskId(channelId)
+    setSourceContextTaskId(undefined)
     const url = new URL(window.location.href)
     url.searchParams.delete('channel')
     url.searchParams.delete('task')
@@ -1191,11 +1193,19 @@ export function App() {
             actions={actions}
             api={api}
             continuationChannel={continuationChannel}
+            sourceContextChannel={
+              sourceContextTaskId
+                ? data.snapshot.channels.find(
+                    channel => channel.id === sourceContextTaskId,
+                  )
+                : undefined
+            }
             draft={composerDraft}
             modelProvider={selectedAgentProvider}
             models={availableAgentModels}
             onAnswerClarification={channel => continueChannel(channel.id)}
             onClearContinuation={() => setContinuationTaskId(undefined)}
+            onClearSourceContext={() => setSourceContextTaskId(undefined)}
             onConfigureVoice={() => {
               setSettingsSection('voice')
               navigate('settings', 'voice')
@@ -1406,6 +1416,12 @@ export function App() {
           onClose={closeDrawer}
           onOpenView={openNestedDrawer}
           onContinue={channel => continueChannel(channel.id)}
+          onCreateRelated={channel => {
+            setSourceContextTaskId(channel.id)
+            setContinuationTaskId(undefined)
+            setDrawer(undefined)
+            navigate('conversation')
+          }}
           onResolveOutbox={resolveOutbox}
           onDecideApproval={async (approvalId, optionId, rationale) => {
             approvalProjectionRequestRef.current += 1

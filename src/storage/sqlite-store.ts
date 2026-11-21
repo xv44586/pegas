@@ -19,6 +19,7 @@ import {
   type CollaborationStatus,
   type WorkerCollaborationRequest,
 } from '../collaboration/collaboration.js'
+import { sourceContextInput } from '../collaboration/source-context.js'
 import type {
   ActionOutcomeDraft,
   ActionReconciliation,
@@ -5742,6 +5743,10 @@ export class PegasStore {
           .get(task.id) as { revision: number | null }
       ).revision
       const runId = randomUUID()
+      const runInput =
+        decision.kind === 'create_task' && decision.sourceContext
+          ? sourceContextInput(decision.input, decision.sourceContext)
+          : decision.input
       this.#database
         .prepare(
           `INSERT INTO runs
@@ -5756,7 +5761,7 @@ export class PegasStore {
           executor,
           compatible ? previous.executor_ref : null,
           goalRevision,
-          JSON.stringify(decision.input),
+          JSON.stringify(runInput),
           JSON.stringify(resolvedExecutionContext),
           executionContractVersion,
           now,

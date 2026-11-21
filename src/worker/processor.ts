@@ -10,6 +10,10 @@ import type { MetricsRegistry } from '../observability/metrics.js'
 import type { TaskRouter } from '../router/router.js'
 import { prefilterDecision } from '../router/prefilter.js'
 import {
+  deriveTaskSourceContext,
+  sourceContextInput,
+} from '../collaboration/source-context.js'
+import {
   EventClaimError,
   TaskActionBlockedError,
   type PegasStore,
@@ -67,15 +71,18 @@ export class RoutingEventHandler implements EventHandler {
       return
     }
     const candidates = store.listRoutingCandidates(event.userId)
+    const routingContext = {
+      resolveExplicitTask: (taskId: string) =>
+        store.findTask(taskId, event.userId),
+      resolveSourceContext: (sourceTaskId: string) =>
+        deriveTaskSourceContext(store, sourceTaskId, event.userId),
+    }
     const decision =
       prefilterDecision(event, candidates, {
         chatLaneEnabled:
           store.hasRuntimeSettings() &&
           store.getRuntimeSettings().chatLaneEnabled === true,
-      }) ??
-      (await this.#router.route(event, candidates, {
-        resolveExplicitTask: taskId => store.findTask(taskId, event.userId),
-      }))
+      }) ?? (await this.#router.route(event, candidates, routingContext))
     if (!decision) return
     if (decision.kind === 'steer_task' || decision.kind === 'cancel_task') {
       store.applyControlIntent(event, decision)
@@ -271,12 +278,27 @@ export class RoutingEventHandler implements EventHandler {
         source.status === 'cancelled'
       )
         return
+      const targetTaskId = optionalPayloadString(payload, 'targetTaskId')
+      const sourceContext =
+        event.type === 'collaboration.returned' && targetTaskId
+          ? deriveTaskSourceContext(
+              store,
+              targetTaskId,
+              event.userId,
+              relationId,
+            )
+          : undefined
       store.applyRoutingDecision(
         event,
         {
           kind: 'continue_task',
           taskId: source.id,
-          input: collaborationInput(event.type, payload),
+          input: sourceContext
+            ? sourceContextInput(
+                collaborationInput(event.type, payload),
+                sourceContext,
+              )
+            : collaborationInput(event.type, payload),
           reason: `Control Plane delivered ${event.type}.`,
         },
         this.#executorName,
