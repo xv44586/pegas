@@ -99,6 +99,18 @@ export interface EvidenceVerification {
   verifiedAt?: string
 }
 
+/**
+ * Identity of an in-process trusted verifier. Only the Control Plane can
+ * construct attestations under these identities; HTTP clients never supply
+ * the verification object for a passed result.
+ */
+export const trustedVerifierIdentity = 'pegas-control-plane-verifier'
+export const trustedVerifierVersion = 'v1'
+
+export function isTrustedVerifier(identity: string): boolean {
+  return identity === trustedVerifierIdentity
+}
+
 interface ObservationSnapshot {
   observedValue: unknown
   sourceObjectId: string

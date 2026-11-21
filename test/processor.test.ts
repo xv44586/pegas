@@ -307,7 +307,7 @@ describe('event and run processing', () => {
       },
       verification: {
         method: 'deterministic-check',
-        verifierIdentity: 'control-plane',
+        verifierIdentity: 'pegas-control-plane-verifier',
         verifierVersion: 'v1',
         result: 'passed',
         verifiedAt: '2026-11-20T00:00:00.000Z',
@@ -692,7 +692,7 @@ function processorEvidence(goalRevision: number, sourceObjectId: string) {
     },
     verification: {
       method: 'deterministic-check',
-      verifierIdentity: 'control-plane',
+      verifierIdentity: 'pegas-control-plane-verifier',
       verifierVersion: 'v1',
       result: 'passed' as const,
       verifiedAt: '2026-11-20T00:00:00.000Z',

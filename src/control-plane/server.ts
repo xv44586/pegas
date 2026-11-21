@@ -32,6 +32,7 @@ import {
   parseGoalContractDraft,
   parseWorkerReportDraft,
 } from '../goal/goal-delivery.js'
+import { verifyVisualEvidence } from '../goal/trusted-verifier.js'
 import { AnthropicProvider } from '../model/anthropic-provider.js'
 import {
   discoverModelCatalog,
@@ -1163,6 +1164,12 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
             'confirmedForCapture must be true to record an unverified user claim',
           )
         const claim = parseEvidenceClaimDraft(body.evidence)
+        const artifactBytes =
+          typeof body.artifactBase64 === 'string'
+            ? Buffer.from(body.artifactBase64, 'base64')
+            : undefined
+        if (artifactBytes && artifactBytes.byteLength > maximumBodyBytes)
+          throw new Error('Artifact bytes are too large')
         const evidence = options.store.createEvidenceRef(
           decodeURIComponent(runEvidenceMatch[1] ?? ''),
           userId,
@@ -1177,8 +1184,26 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
               result: 'pending',
             },
           },
+          artifactBytes ? { artifactBytes } : {},
         )
         return sendJson(response, 201, { evidence })
+      }
+
+      const evidenceVerifyMatch = /^\/v1\/evidence\/([^/]+)\/verify$/.exec(
+        taskResourceUrl.pathname,
+      )
+      if (evidenceVerifyMatch && request.method === 'POST') {
+        const body = await readJson(request)
+        if (!isRecord(body)) throw new Error('Request body must be an object')
+        const userId = requiredString(body.userId, 'userId')
+        const commandId = requiredString(body.commandId, 'commandId')
+        const evidence = options.store.verifyEvidenceWithTrustedVerifier(
+          decodeURIComponent(evidenceVerifyMatch[1] ?? ''),
+          userId,
+          commandId,
+          verifyVisualEvidence,
+        )
+        return sendJson(response, 200, { evidence })
       }
 
       const runReportMatch = /^\/v1\/runs\/([^/]+)\/reports$/.exec(

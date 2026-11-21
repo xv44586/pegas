@@ -58,6 +58,11 @@ import type {
   WorkerReportDraft,
 } from '../goal/goal-delivery.js'
 import {
+  isTrustedVerifier,
+  trustedVerifierIdentity,
+  trustedVerifierVersion,
+} from '../goal/goal-delivery.js'
+import {
   createMandate,
   revalidateMandate,
   sameExecutionContext,
@@ -444,6 +449,10 @@ CREATE TABLE IF NOT EXISTS event_attachments (
   storage_path TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+`
+
+const migration27 = `
+ALTER TABLE evidence_refs ADD COLUMN artifact_storage_path TEXT;
 `
 
 const migration2 = `
@@ -1785,6 +1794,7 @@ interface EvidenceRefRow {
   presentation_json: string
   sensitivity: string
   limitations_json: string
+  artifact_storage_path: string | null
 }
 
 interface EvidenceVerificationEventRow {
@@ -2056,6 +2066,7 @@ export class PegasStore {
     this.#migrate(24, migration24)
     this.#migrate(25, migration25)
     this.#migrate(26, migration26)
+    this.#migrate(27, migration27)
   }
 
   #backfillWorkerIconIds(): void {
@@ -5718,7 +5729,9 @@ export class PegasStore {
     userId: string,
     commandId: string,
     draft: EvidenceRefDraft,
+    options: { artifactBytes?: Buffer } = {},
   ): EvidenceRef {
+    const artifactBytes = options.artifactBytes
     this.#database.exec('BEGIN IMMEDIATE')
     try {
       const run = this.#runById(runId)
@@ -5781,6 +5794,13 @@ export class PegasStore {
         draft.verification.verifierIdentity === draft.producerIdentity
       )
         throw new Error('Evidence producer cannot be its sole verifier')
+      if (
+        draft.verification.result === 'passed' &&
+        !isTrustedVerifier(draft.verification.verifierIdentity)
+      )
+        throw new Error(
+          'Passed evidence requires an in-process trusted verifier',
+        )
 
       const id = randomUUID()
       const capturedAt = this.#clock.now().toISOString()
@@ -5790,6 +5810,32 @@ export class PegasStore {
       const sourceKey = artifact
         ? `artifact:${artifact.revision}:${artifact.contentHash}`
         : `observation:${contentHash}`
+      // Persist the attested bytes next to the evidence so the trusted
+      // verifier can re-check the exact content later, independent of the
+      // producer's original file.
+      let artifactStoragePath: string | null = null
+      if (artifactBytes) {
+        if (!artifact)
+          throw new Error('Artifact bytes require an Artifact reference')
+        if (!this.#attachmentRoot)
+          throw new EventAttachmentsUnsupportedError(
+            'Artifact bytes require a persistent database',
+          )
+        const byteDigest = createHash('sha256')
+          .update(artifactBytes)
+          .digest('hex')
+        if (byteDigest !== artifact.contentHash)
+          throw new Error('Artifact bytes do not match the Artifact digest')
+        mkdirSync(this.#attachmentRoot, { recursive: true })
+        artifactStoragePath = join(
+          this.#attachmentRoot,
+          `evidence-${id}-${byteDigest}`,
+        )
+        writeFileSync(artifactStoragePath, artifactBytes, {
+          flag: 'wx',
+          mode: 0o600,
+        })
+      }
       const semanticDuplicate = this.#database
         .prepare(
           `SELECT * FROM evidence_refs
@@ -5832,8 +5878,8 @@ export class PegasStore {
              capture_mechanism, trust_class, content_hash, artifact_revision,
              observation_snapshot_json, verification_json, captured_at,
              environment_json, presentation_json, sensitivity,
-             limitations_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             limitations_json, artifact_storage_path)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           id,
@@ -5860,6 +5906,7 @@ export class PegasStore {
           JSON.stringify(draft.presentation),
           draft.sensitivity,
           JSON.stringify(draft.limitations),
+          artifactStoragePath,
         )
       const evidence = this.#evidenceById(id)
       this.#database
@@ -5923,6 +5970,13 @@ export class PegasStore {
         verification.verifierIdentity === evidence.producerIdentity
       )
         throw new Error('Evidence producer cannot be its sole verifier')
+      if (
+        verification.result === 'passed' &&
+        !isTrustedVerifier(verification.verifierIdentity)
+      )
+        throw new Error(
+          'Passed verification requires an in-process trusted verifier',
+        )
       const createdAt = this.#clock.now().toISOString()
       this.#database
         .prepare(
@@ -5948,6 +6002,75 @@ export class PegasStore {
       this.#database.exec('ROLLBACK')
       throw error
     }
+  }
+
+  /**
+   * In-process trusted verification entry point. The Control Plane reads the
+   * attested bytes itself, runs the deterministic verifier and appends the
+   * verification event under its own identity; callers never supply a
+   * verification object. Only pending evidence can be verified this way.
+   */
+  verifyEvidenceWithTrustedVerifier(
+    evidenceId: string,
+    userId: string,
+    commandId: string,
+    verifier: (input: {
+      evidence: EvidenceRef
+      artifact?: TaskArtifact
+      artifactBytes?: Buffer
+    }) => { result: 'passed' | 'failed'; method: string },
+  ): EvidenceRef {
+    // Command replay must return the frozen result even after the evidence
+    // has left the pending state.
+    const replay = this.#database
+      .prepare(
+        'SELECT evidence_id FROM evidence_verification_events WHERE command_id = ?',
+      )
+      .get(commandId) as { evidence_id: string } | undefined
+    if (replay) {
+      if (replay.evidence_id !== evidenceId)
+        throw new Error('Command ID is already used')
+      const replayed = this.#evidenceById(evidenceId)
+      const replayTask = this.#taskById(replayed.taskId)
+      if (replayTask.userId !== userId)
+        throw new Error('Task belongs to another user')
+      return replayed
+    }
+    const evidence = this.#evidenceById(evidenceId)
+    const task = this.#taskById(evidence.taskId)
+    if (task.userId !== userId) throw new Error('Task belongs to another user')
+    if (evidence.verification.result !== 'pending')
+      throw new Error('Only pending evidence accepts trusted verification')
+    const artifact = evidence.artifactId
+      ? this.#artifactById(evidence.artifactId)
+      : undefined
+    const storagePath = this.#evidenceStoragePath(evidenceId)
+    let artifactBytes: Buffer | undefined
+    if (storagePath) {
+      artifactBytes = readFileSync(storagePath)
+      const digest = createHash('sha256').update(artifactBytes).digest('hex')
+      if (digest !== evidence.contentHash)
+        throw new Error('Stored evidence bytes do not match the content hash')
+    }
+    const outcome = verifier({
+      evidence,
+      ...(artifact ? { artifact } : {}),
+      ...(artifactBytes ? { artifactBytes } : {}),
+    })
+    return this.recordEvidenceVerification(evidenceId, userId, commandId, {
+      method: outcome.method,
+      verifierIdentity: trustedVerifierIdentity,
+      verifierVersion: trustedVerifierVersion,
+      result: outcome.result,
+      verifiedAt: this.#clock.now().toISOString(),
+    })
+  }
+
+  #evidenceStoragePath(evidenceId: string): string | undefined {
+    const row = this.#database
+      .prepare('SELECT artifact_storage_path FROM evidence_refs WHERE id = ?')
+      .get(evidenceId) as { artifact_storage_path: string | null } | undefined
+    return row?.artifact_storage_path ?? undefined
   }
 
   listEvidenceRefs(

@@ -496,7 +496,7 @@ describe('GOAL-001 delivery contracts', () => {
         ...observationEvidence(1, 'passed'),
         verification: {
           method: 'deterministic-check',
-          verifierIdentity: 'control-plane',
+          verifierIdentity: 'pegas-control-plane-verifier',
           verifierVersion: 'v1',
           result: 'passed',
         },
@@ -1028,7 +1028,7 @@ describe('GOAL-001 delivery contracts', () => {
     expect(() =>
       store.createEvidenceRef(seeded.runId, 'owner', 'self-verified-evidence', {
         ...observationEvidence(second.revision, 'passed'),
-        producerIdentity: 'control-plane',
+        producerIdentity: 'pegas-control-plane-verifier',
       }),
     ).toThrow('cannot be its sole verifier')
     expect(() =>
@@ -1775,7 +1775,7 @@ function evidenceClaim(
 function verification(result: 'passed' | 'pending' | 'failed') {
   return {
     method: 'deterministic-check',
-    verifierIdentity: 'control-plane',
+    verifierIdentity: 'pegas-control-plane-verifier',
     verifierVersion: 'v1',
     result,
     verifiedAt: '2026-11-20T00:00:00.000Z',

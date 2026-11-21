@@ -149,6 +149,14 @@ EvidenceRef
 
 Control Plane 对 EvidenceRef 的结构校验只证明引用完整，不能证明 criterion 已满足。每种 `kind` 必须在 evidence plan 中指定语义验证方法和允许的 trust class；高风险 criterion 使用确定性验证器、独立主体签名或用户明确接受，不能让执行该动作的 Worker 同时成为唯一验证者。验证器的身份、版本和结果随 evidence 持久化。
 
+### 进程内可信验证器（2026-11-21 实现）
+
+- `passed` 结果只能由进程内可信验证器签发：`createEvidenceRef` 与 `recordEvidenceVerification` 拒绝任何非 `pegas-control-plane-verifier` 身份的 `passed` attestation；`failed`/`pending` 仍可由其他主体追加为审计事实。HTTP 用户主张始终只保存为 `pending`。
+- 取证时可随 `createEvidenceRef(..., { artifactBytes })`（HTTP 为 `artifactBase64`）提交被证明的产物字节：服务端先校验字节 SHA-256 与 Artifact `contentHash` 一致，再以 `wx` 独占写入数据目录 `attachments/evidence-<id>-<hash>`（schema v27 `evidence_refs.artifact_storage_path`）。验证时服务端重读字节并重验 digest，篡改即拒绝。
+- `POST /v1/evidence/:evidenceId/verify { userId, commandId }` 触发进程内验证：服务端以自身身份运行确定性验证器并追加 append-only verification event；命令幂等重放返回冻结结果，跨 owner 拒绝。客户端不能提交 verification 对象。
+- 第一个确定性验证器 `verifyVisualEvidence`（`src/goal/trusted-verifier.ts`）：要求 `screenshot/render/keyframe` + `control-plane` trust class + 已存证字节；校验 PNG/GIF/JPEG/WebP 容器签名与声明 MIME 一致，并从容器读取固有像素尺寸，必须与取证照明的 capture viewport 完全一致；任何不满足即 `failed`。语义级“截图内容正确”仍需后续独立验证器或用户明确接受。
+- 自动化证据：`test/trusted-verifier.test.ts`（身份门禁、字节存证/篡改、视口/容器不匹配、四种图片格式解析、命令重放、HTTP 取证→验证→完成→delivery 闭环）。
+
 外部对象可能变化或消失，因此 `externalRef` 只作为导航。支持验收的事实必须保存不可变 `observationSnapshot`，包含观察值、外部对象 ID、可获得的版本/ETag、签发者、观察时间和内容哈希；无法形成可复核快照时明确标记 limitation。
 
 Agent 总结、自由文本 `ready`、单独的退出码和“已执行”过程不能独立满足 success criterion。无法获得充分证据时，该条件必须是 `unverified`、`partial` 或 `failed`，不能由模型补写成成功。

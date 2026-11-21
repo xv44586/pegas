@@ -372,7 +372,7 @@ describe('APPROVAL-001 human action reconciliation', () => {
         },
         verification: {
           method: 'deterministic-check',
-          verifierIdentity: 'control-plane',
+          verifierIdentity: 'pegas-control-plane-verifier',
           verifierVersion: 'v1',
           result: 'passed',
           verifiedAt: '2026-11-21T00:00:00.000Z',
