@@ -228,6 +228,10 @@ Source Channel ── ownership transfer ──▶ Target Channel
 Source Channel ── scoped fact ──▶ Target Channel
 ```
 
+### 终态事实交接 sourceContext（PLAN-001 P5，已采纳设计，待实施）
+
+与 context note 的区别：context note 是运行中协作，sourceContext 是**终态事实交接**。"新建相关 Channel"（cancelled 后重新接单）与委派返回续接时，来源 Task 最近 Review Pack 摘要（summary、关键决定、artifact 引用）作为结构化 `sourceContext` 注入新 Task 首个 Run 输入，标记来源 taskId/relationId。不 resume 来源 session（授权复核与 session compatibility 边界不变），不授予任何权限；摘要经 PRIVACY-001 出站边界。旧数据无 sourceContext 时行为不变。设计合同见 `docs/router-worker-design.md` P5。
+
 ## 协作控制协议
 
 Worker 只能提出结构化意图，不能直接创建或私聊另一个 Worker：
