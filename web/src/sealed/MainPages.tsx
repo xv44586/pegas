@@ -25,6 +25,7 @@ import { MarkdownMessage } from '../MarkdownMessage'
 import type {
   Automation,
   AutomationDraft,
+  AutomationInvocation,
   DshModelCatalogItem,
   MemoryCategory,
   MemoryDraft,
@@ -41,6 +42,7 @@ import { EmptyCapability, PageToolbar } from './Shell'
 import {
   attentionKind,
   formatRelativeTime,
+  isReconciliationMessage,
   latestRunForTask,
   statusLabel,
   textFromPayload,
@@ -789,6 +791,8 @@ function attentionAction(message: OutboxMessage): {
 } {
   const kind = attentionKind(message)
   if (kind === 'failed') return { label: '查看原因', icon: RotateCw }
+  if (isReconciliationMessage(message))
+    return { label: '去核对', icon: ShieldCheck }
   if (kind === 'approval') return { label: '查看内容', icon: ShieldCheck }
   return { label: '打开事情', icon: ArrowRight }
 }
@@ -930,6 +934,7 @@ export function AutomationPage({
   channels,
   error,
   onCreate,
+  onLoadInvocations,
   onReload,
   onSetStatus,
   onUpdate,
@@ -939,6 +944,9 @@ export function AutomationPage({
   channels: WorkChannel[]
   error: string
   onCreate: (draft: AutomationDraft) => Promise<void>
+  onLoadInvocations?: (
+    automation: Automation,
+  ) => Promise<AutomationInvocation[]>
   onReload: () => void
   onSetStatus: (
     automation: Automation,
@@ -952,6 +960,40 @@ export function AutomationPage({
   const [busyId, setBusyId] = useState('')
   const [confirmCancelId, setConfirmCancelId] = useState<string>()
   const [actionError, setActionError] = useState('')
+  const [historyId, setHistoryId] = useState<string>()
+  const [invocations, setInvocations] = useState<AutomationInvocation[]>()
+  const [historyError, setHistoryError] = useState('')
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const historyRequestRef = useRef(0)
+  async function toggleHistory(automation: Automation) {
+    if (!onLoadInvocations) return
+    if (historyId === automation.id) {
+      historyRequestRef.current += 1
+      setHistoryId(undefined)
+      setInvocations(undefined)
+      setHistoryError('')
+      setHistoryLoading(false)
+      return
+    }
+    const requestId = historyRequestRef.current + 1
+    historyRequestRef.current = requestId
+    setHistoryId(automation.id)
+    setInvocations(undefined)
+    setHistoryError('')
+    setHistoryLoading(true)
+    try {
+      const next = await onLoadInvocations(automation)
+      if (requestId !== historyRequestRef.current) return
+      setInvocations(next)
+    } catch (caught) {
+      if (requestId !== historyRequestRef.current) return
+      setHistoryError(
+        caught instanceof Error ? caught.message : '读取触发记录失败，请重试。',
+      )
+    } finally {
+      if (requestId === historyRequestRef.current) setHistoryLoading(false)
+    }
+  }
   const activeCount =
     automations?.filter(item => item.status === 'active').length ?? 0
   const pausedCount =
@@ -1069,6 +1111,16 @@ export function AutomationPage({
                 {automationStatusLabel(automation.status)}
               </span>
               <div className="record-actions">
+                {onLoadInvocations && (
+                  <button
+                    aria-expanded={historyId === automation.id}
+                    className="quiet-button"
+                    onClick={() => void toggleHistory(automation)}
+                    type="button"
+                  >
+                    触发记录
+                  </button>
+                )}
                 {(automation.status === 'active' ||
                   automation.status === 'paused') && (
                   <button
@@ -1131,6 +1183,55 @@ export function AutomationPage({
                     </button>
                   ))}
               </div>
+              {historyId === automation.id && (
+                <div className="record-history">
+                  {historyLoading && <small>正在读取触发记录…</small>}
+                  {historyError && (
+                    <small className="record-history-error" role="alert">
+                      {historyError}
+                      <button
+                        className="inline-link"
+                        onClick={() => {
+                          setHistoryId(undefined)
+                          void toggleHistory(automation)
+                        }}
+                        type="button"
+                      >
+                        重试
+                      </button>
+                    </small>
+                  )}
+                  {!historyLoading &&
+                    !historyError &&
+                    invocations &&
+                    (invocations.length ? (
+                      <ul aria-label="触发记录">
+                        {invocations.map(invocation => (
+                          <li key={invocation.id}>
+                            <span
+                              className={`invocation-status is-${invocation.status}`}
+                            >
+                              {invocationStatusLabel(invocation.status)}
+                            </span>
+                            <span>
+                              计划 {formatDateTime(invocation.scheduledFor)}
+                            </span>
+                            {invocation.attempts > 1 && (
+                              <span>尝试 {invocation.attempts} 次</span>
+                            )}
+                            {invocation.lastError && (
+                              <span className="invocation-error">
+                                {invocation.lastError}
+                              </span>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <small>还没有触发记录</small>
+                    ))}
+                </div>
+              )}
             </article>
           ))}
         </section>
@@ -1373,6 +1474,13 @@ function automationStatusLabel(status: Automation['status']): string {
   if (status === 'paused') return '已暂停'
   if (status === 'completed') return '已完成'
   return '已结束'
+}
+
+function invocationStatusLabel(status: AutomationInvocation['status']): string {
+  if (status === 'pending') return '待触发'
+  if (status === 'processing') return '处理中'
+  if (status === 'dispatched') return '已派发'
+  return '失败'
 }
 
 function formatDateTime(value: string): string {

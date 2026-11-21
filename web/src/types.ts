@@ -299,6 +299,35 @@ export interface AutomationDraft {
   target: AutomationTarget
 }
 
+type AutomationInvocationStatus =
+  'pending' | 'processing' | 'dispatched' | 'failed'
+
+export interface AutomationInvocation {
+  id: string
+  automationId: string
+  userId: string
+  scheduledFor: string
+  eventId: string
+  status: AutomationInvocationStatus
+  attempts: number
+  lastError?: string
+  createdAt: string
+  updatedAt: string
+}
+
+interface ChannelSearchMatch {
+  channelId: string
+  sourceKind: string
+  sourceId: string
+  snippet: string
+}
+
+export interface ChannelSearchResult {
+  channels: WorkChannel[]
+  matches: ChannelSearchMatch[]
+  nextCursor?: string
+}
+
 export type MemoryScope = 'global' | 'worker' | 'channel'
 
 export type MemoryCategory =
