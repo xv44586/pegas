@@ -1,8 +1,23 @@
 import type { CSSProperties } from 'react'
 
+import { agentIconSprite } from './agent-icon-sprite'
 import type { TaskStatus, WorkerIconId } from './types'
 
 type PegasAgentIconId = 'bot' | WorkerIconId
+
+const spriteElementId = 'pegas-agent-sprite'
+
+export function PegasAgentSprite() {
+  return (
+    <div
+      aria-hidden="true"
+      className="pegas-agent-sprite"
+      dangerouslySetInnerHTML={{ __html: agentIconSprite }}
+      id={spriteElementId}
+      style={{ display: 'none' }}
+    />
+  )
+}
 
 interface PegasAgentIconProps {
   iconId: PegasAgentIconId
@@ -44,7 +59,7 @@ export function PegasAgentIcon({
         width={size}
         height={size}
       >
-        <use href={`/icons/agents/pegas-agents.svg#pegas-agent-${iconId}`} />
+        <use href={`#pegas-agent-${iconId}`} />
       </svg>
       {status && (
         <span
