@@ -7,13 +7,14 @@
 
 ## 架构决定
 
-macOS 第一版是封板 Web UI 的安全桌面适配层，不是第二套产品。Electron 主进程启动现有 Control Plane 与 Worker；Renderer 通过本机 HTTP 使用相同 Conversation、Task、Run、Outbox、设置和恢复事实。桌面端不复制 Router、Executor 或数据库实现。
+macOS 第一版是封板 Web UI 的安全桌面适配层，不是第二套产品。Electron 主进程启动现有 Control Plane、Worker 与 Scheduler；Renderer 通过本机 HTTP 使用相同 Conversation、Task、Run、Outbox、设置、Automation 和恢复事实。桌面端不复制 Router、Executor 或数据库实现。
 
 ```text
 Electron main
 ├── BrowserWindow ── http://127.0.0.1:<ephemeral-port> ── sealed Web UI
 ├── Control Plane ── SQLite under app.getPath('userData')
-└── Worker ───────── same data directory and existing executor boundary
+├── Worker ───────── same data directory and existing executor boundary
+└── Scheduler ────── same SQLite and durable Event Inbox
 ```
 
 ## 安全与权限
@@ -36,12 +37,12 @@ Electron main
 
 ## 验证证据
 
-- 11 个桌面运行时自动化测试覆盖隔离环境、可信回环 origin 与 bearer 注入、回环端口、就绪等待、ASAR 服务路径、优雅退出、SIGKILL 升级、macOS 进程组信号、异常 leader 的残留执行器清理，以及首次设置遮罩下的 smoke 恢复路径。
+- 12 个桌面运行时自动化测试覆盖隔离环境、可信回环 origin 与 bearer 注入、回环端口、Control Plane ready 后的数据库写入进程启动顺序、ASAR 服务路径、优雅退出、SIGKILL 升级、macOS 进程组信号、异常 leader 的残留执行器清理，以及首次设置遮罩下的 smoke 恢复路径。
 - 开发态与打包态 Electron smoke 均通过 UI 提交 Task 并等待 Worker 完成 Run；随后终止 Worker，确认产品页立即撤下且不再接受输入，并在故障页出现后立刻退出，断言 Control Plane 与 Worker 进程组均已消失。
 - 两类 Electron smoke 同时验证窗口标题、无控制台错误，以及 `contextIsolation: true`、`sandbox: true`、`nodeIntegration: false`。
-- `pnpm check` 通过 33 个测试文件、327 个测试；独立 `pnpm smoke` 与 `pnpm smoke:desktop` 通过真实 Task→Run 闭环。
+- `pnpm check` 通过 46 个测试文件、450 个测试；独立 `pnpm smoke` 与 `pnpm smoke:desktop` 通过真实 Task→Run 闭环，后者还监督 Worker 与 Scheduler。
 - 主界面和服务失败截图分别保存为 `output/feature-review/media/desktop-electron-macos.png` 与 `output/feature-review/media/desktop-electron-service-failure.png`，均不提交到仓库。
 
 ## 失败与回滚
 
-主进程在 Control Plane 健康检查通过前不加载产品页。启动超时或子进程提前退出时展示本机错误页，不伪装为在线。Control Plane 与 Worker 分别运行在独立进程组中；应用退出时对整个组先发 SIGTERM，等待 7 秒（覆盖 DSH 内部 5 秒清理窗口）后再发 SIGKILL，服务主进程已经异常退出时也会清理组内残留执行器。删除 DESKTOP-001 提交即可回到纯 Web 构建；用户数据目录不随代码回滚删除。
+主进程在 Control Plane 健康检查通过前不加载产品页，并在健康检查通过后才启动 Worker 与 Scheduler，避免冷启动时多个进程同时迁移新数据库。启动超时或子进程提前退出时展示本机错误页，不伪装为在线。三个服务分别运行在独立进程组中；应用退出时对整个组先发 SIGTERM，等待 7 秒（覆盖 DSH 内部 5 秒清理窗口）后再发 SIGKILL，服务主进程已经异常退出时也会清理组内残留执行器。删除 DESKTOP-001 提交即可回到纯 Web 构建；用户数据目录不随代码回滚删除。

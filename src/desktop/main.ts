@@ -64,14 +64,23 @@ async function startDesktop(): Promise<void> {
       process.env.PEGAS_DESKTOP_DATA_DIR ??
       join(app.getPath('userData'), 'data')
     await mkdir(dataDir, { recursive: true })
-    startServices(port, dataDir, apiToken)
+    startServiceEntries(port, dataDir, apiToken, ['control-plane/main.js'])
     await waitForControlPlane(appUrl)
+    startServiceEntries(port, dataDir, apiToken, [
+      'worker/main.js',
+      'scheduler/main.js',
+    ])
   }
   configureSession(appUrl, apiToken)
   await createWindow(appUrl)
 }
 
-function startServices(port: number, dataDir: string, apiToken: string): void {
+function startServiceEntries(
+  port: number,
+  dataDir: string,
+  apiToken: string,
+  entries: string[],
+): void {
   const applicationRoot = desktopServiceRoot({
     isPackaged: app.isPackaged,
     appPath: app.getAppPath(),
@@ -83,7 +92,7 @@ function startServices(port: number, dataDir: string, apiToken: string): void {
     apiToken,
     testMode: process.env.PEGAS_DESKTOP_TEST === '1',
   })
-  for (const entry of ['control-plane/main.js', 'worker/main.js']) {
+  for (const entry of entries) {
     const child = spawn(
       process.execPath,
       [join(applicationRoot, 'dist', entry)],

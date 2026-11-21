@@ -45,11 +45,12 @@ pnpm build
 pnpm start:supervisor
 ```
 
-单独开发 Web 客户端时，分别启动 Control Plane、Worker 和 Vite：
+单独开发 Web 客户端时，分别启动 Control Plane、Worker、Scheduler 和 Vite：
 
 ```bash
 pnpm dev
 pnpm dev:worker
+pnpm dev:scheduler
 pnpm dev:web
 ```
 
@@ -76,7 +77,7 @@ Web 开发服务器默认位于 `http://127.0.0.1:4319`，并将 API 请求代�
 
 默认情况下 Control Plane 和 Recovery API 只监听本机回环地址。对外暴露任何接口前必须配置独立访问令牌。
 
-Worker 默认通过 DSH headless 执行 Run。自动化测试使用显式的 `PEGAS_EXECUTOR=echo`，不会调用模型；生产或人工验证不能使用该测试执行器。
+Worker 默认通过 DSH headless 执行 Run。Scheduler 独立运行并从 SQLite 读取到期 Automation，只把去重后的时间 Event 写入 Inbox，不直接调用模型。自动化测试使用显式的 `PEGAS_EXECUTOR=echo`，不会调用模型；生产或人工验证不能使用该测试执行器。
 
 Router 默认通过 Magpie 模型判断未指定 Channel 的输入应新建任务还是续接已有任务；显式 Channel/Task 引用仍按确定性路径处理，模型不可用或输出无效时安全降级为新建任务。可在 Web 设置页选择其他供应商、自托管服务或自定义兼容入口，并由 Pegas 保存连接：
 

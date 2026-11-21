@@ -179,6 +179,19 @@
 - Enforcement：尚未晋升为全仓规则；本轮已用服务端权威时间线接口、所有权校验、竞态响应丢弃和双 fixture 负向测试约束 CHANNEL-002。
 - Owner / next action：后续 Thread/协作关系/搜索结果详情开发沿用同一负向隔离矩阵；在三个独立日期复发时晋升为通用门禁。
 
+### LESSON-20261121-01：多进程冷启动先完成唯一 schema owner
+
+- Rule：Electron、Supervisor 或开发脚本启动共享同一 SQLite 的常驻写入进程时，必须先让 Control Plane 完成 schema 初始化和健康检查，再启动 Worker、Scheduler、Dispatcher 等后续写入进程。
+- Rule evidence：SCHEDULE-001 首次桌面 smoke 中，Control Plane、Worker 与新增 Scheduler 同时冷启动同一数据库，Worker 未完成提交的 Run；改为 Control Plane ready 后再启动后台进程，并把启动顺序加入桌面回归。
+- Why：多个进程并发执行 migration 会放大 SQLite 锁竞争，表现为偶发 worker 退出或任务永久 queued。用户看到产品页可输入，但提交不会执行。
+- Feature：DESKTOP-001、SCHEDULE-001、RECOVERY-001
+- Evidence：2026-11-21 首次 `pnpm smoke:desktop` 的 `Desktop Worker did not complete the submitted Run`；`src/desktop/main.ts` 的 health-first 启动顺序；`test/desktop-runtime.test.ts` 的顺序回归；随后 `pnpm smoke:desktop` 通过。
+- Seen：1（2026-11-21）
+- Severity：recovery
+- Status：Promoted
+- Enforcement：Electron 只先启动 Control Plane，`waitForControlPlane` 成功后才启动 Worker 与 Scheduler；桌面回归测试固定该顺序，真实 Electron smoke 继续覆盖 Task→Run。
+- Owner / next action：新增其他共享数据库的桌面子进程时必须复用同一 health-first 启动边界。
+
 <!--
 ### LESSON-YYYYMMDD-NN：简短标题
 

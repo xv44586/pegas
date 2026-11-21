@@ -124,11 +124,17 @@ while (!lifecycle.stopRequested) {
   }
 
   const worker = startProcess(release, 'worker/main.js')
+  const scheduler = startProcess(release, 'scheduler/main.js')
   const dispatcher =
     process.env.PEGAS_PUSH_MODE === 'webhook'
       ? startProcess(release, 'notification/main.js')
       : undefined
-  children = [controlPlane, worker, ...(dispatcher ? [dispatcher] : [])]
+  children = [
+    controlPlane,
+    worker,
+    scheduler,
+    ...(dispatcher ? [dispatcher] : []),
+  ]
 
   if (state.read().phase === 'verifying') {
     const stable = await staysAlive(children, stabilizationMs)

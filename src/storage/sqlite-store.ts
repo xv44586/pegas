@@ -81,6 +81,21 @@ import {
   type RewriteSettingsSummary,
 } from '../rewrite/rewrite-settings.js'
 import {
+  automationFingerprint,
+  firstAutomaticFireAt,
+  nextIntervalFireAt,
+  resumedFireAt,
+  type Automation,
+  type AutomationCreateCommand,
+  type AutomationInvocation,
+  type AutomationInvocationStatus,
+  type AutomationSchedule,
+  type AutomationStatus,
+  type AutomationStatusCommand,
+  type AutomationTarget,
+  type AutomationUpdateCommand,
+} from '../schedule/schedule.js'
+import {
   effectiveWorkerProfile,
   workerExecutionContext,
   workerProfileFingerprint,
@@ -203,6 +218,57 @@ const maximumCollaborationDepth = 4
 const maximumPendingContextNotesPerTarget = 4
 const maximumActiveCollaborationsPerOwner = 64
 const currentInboxContractVersion = 2
+
+const migration20 = `
+CREATE TABLE automations (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  schedule_json TEXT NOT NULL,
+  target_json TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('active', 'paused', 'completed', 'cancelled')),
+  next_fire_at TEXT,
+  last_fired_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX automations_by_user
+ON automations (user_id, updated_at DESC);
+
+CREATE INDEX automations_due
+ON automations (status, next_fire_at);
+
+CREATE TABLE automation_commands (
+  user_id TEXT NOT NULL,
+  command_id TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  operation TEXT NOT NULL,
+  automation_id TEXT NOT NULL REFERENCES automations(id),
+  response_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, command_id)
+);
+
+CREATE TABLE automation_invocations (
+  id TEXT PRIMARY KEY,
+  automation_id TEXT NOT NULL REFERENCES automations(id),
+  user_id TEXT NOT NULL,
+  scheduled_for TEXT NOT NULL,
+  event_id TEXT NOT NULL UNIQUE REFERENCES inbox_events(id),
+  status TEXT NOT NULL CHECK (status IN ('pending', 'processing', 'dispatched', 'failed')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (automation_id, scheduled_for)
+);
+
+CREATE INDEX automation_invocations_by_automation
+ON automation_invocations (automation_id, scheduled_for DESC);
+`
 
 const migration2 = `
 ALTER TABLE tasks ADD COLUMN goal TEXT NOT NULL DEFAULT '';
@@ -1310,6 +1376,34 @@ interface TaskRow {
   updated_at: string
 }
 
+interface AutomationRow {
+  id: string
+  user_id: string
+  revision: number
+  title: string
+  prompt: string
+  schedule_json: string
+  target_json: string
+  status: AutomationStatus
+  next_fire_at: string | null
+  last_fired_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+interface AutomationInvocationRow {
+  id: string
+  automation_id: string
+  user_id: string
+  scheduled_for: string
+  event_id: string
+  status: AutomationInvocationStatus
+  attempts: number
+  last_error: string | null
+  created_at: string
+  updated_at: string
+}
+
 interface ChannelRelationRow {
   id: string
   command_id: string
@@ -1645,6 +1739,16 @@ export class CollaborationActionPendingError extends Error {}
 
 export class CollaborationReconciliationRequiredError extends Error {}
 
+export class AutomationCommandConflictError extends Error {}
+
+export class AutomationRevisionConflictError extends Error {}
+
+export class AutomationReadOnlyError extends Error {}
+
+export class AutomationNotFoundError extends Error {}
+
+export class AutomationTargetUnavailableError extends Error {}
+
 export class TaskActionBlockedError extends Error {
   readonly taskId: string
   readonly actionStatus: string
@@ -1693,6 +1797,7 @@ export class PegasStore {
     this.#migrate(17, migration17)
     this.#migrate(18, migration18)
     this.#migrate(19, migration19)
+    this.#migrate(20, migration20)
   }
 
   #backfillWorkerIconIds(): void {
@@ -2451,6 +2556,463 @@ export class PegasStore {
     return rows.map(toTask)
   }
 
+  listAutomations(userId: string): Automation[] {
+    const rows = this.#database
+      .prepare(
+        `SELECT * FROM automations
+         WHERE user_id = ?
+         ORDER BY updated_at DESC, rowid DESC`,
+      )
+      .all(userId) as unknown as AutomationRow[]
+    return rows.map(toAutomation)
+  }
+
+  findAutomation(automationId: string, userId: string): Automation | undefined {
+    const row = this.#database
+      .prepare('SELECT * FROM automations WHERE id = ? AND user_id = ?')
+      .get(automationId, userId) as unknown as AutomationRow | undefined
+    return row ? toAutomation(row) : undefined
+  }
+
+  createAutomation(command: AutomationCreateCommand): Automation {
+    const now = this.#clock.now()
+    const nowIso = now.toISOString()
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const replay = this.#automationCommandReplay(
+        command.userId,
+        command.commandId,
+        automationFingerprint({
+          operation: 'create',
+          automation: command.automation,
+        }),
+      )
+      if (replay) {
+        this.#database.exec('COMMIT')
+        return replay
+      }
+      this.#assertAutomationTarget(command.userId, command.automation.target)
+      const nextFireAt = firstAutomaticFireAt(command.automation.schedule, now)
+      if (
+        command.automation.schedule.kind === 'once' &&
+        Date.parse(nextFireAt) <= now.getTime()
+      ) {
+        throw new Error('Once schedule must be in the future')
+      }
+      const id = randomUUID()
+      this.#database
+        .prepare(
+          `INSERT INTO automations
+            (id, user_id, revision, title, prompt, schedule_json, target_json,
+             status, next_fire_at, created_at, updated_at)
+           VALUES (?, ?, 1, ?, ?, ?, ?, 'active', ?, ?, ?)`,
+        )
+        .run(
+          id,
+          command.userId,
+          command.automation.title,
+          command.automation.prompt,
+          JSON.stringify(command.automation.schedule),
+          JSON.stringify(command.automation.target),
+          nextFireAt,
+          nowIso,
+          nowIso,
+        )
+      const automation = this.#automationById(id)
+      this.#saveAutomationCommand(
+        command.userId,
+        command.commandId,
+        automationFingerprint({
+          operation: 'create',
+          automation: command.automation,
+        }),
+        'create',
+        automation,
+        nowIso,
+      )
+      this.#database.exec('COMMIT')
+      return automation
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  updateAutomation(
+    automationId: string,
+    command: AutomationUpdateCommand,
+  ): Automation {
+    const now = this.#clock.now()
+    const nowIso = now.toISOString()
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const fingerprint = automationFingerprint({
+        operation: 'update',
+        automationId,
+        expectedRevision: command.expectedRevision,
+        automation: command.automation,
+      })
+      const replay = this.#automationCommandReplay(
+        command.userId,
+        command.commandId,
+        fingerprint,
+      )
+      if (replay) {
+        this.#database.exec('COMMIT')
+        return replay
+      }
+      const current = this.#automationByIdForUser(automationId, command.userId)
+      this.#assertAutomationWritable(current)
+      if (current.revision !== command.expectedRevision)
+        throw new AutomationRevisionConflictError()
+      this.#assertAutomationTarget(command.userId, command.automation.target)
+      const nextFireAt = firstAutomaticFireAt(command.automation.schedule, now)
+      if (
+        command.automation.schedule.kind === 'once' &&
+        Date.parse(nextFireAt) <= now.getTime()
+      ) {
+        throw new Error('Once schedule must be in the future')
+      }
+      const result = this.#database
+        .prepare(
+          `UPDATE automations
+           SET revision = revision + 1, title = ?, prompt = ?,
+               schedule_json = ?, target_json = ?, next_fire_at = ?,
+               updated_at = ?
+           WHERE id = ? AND user_id = ? AND revision = ?`,
+        )
+        .run(
+          command.automation.title,
+          command.automation.prompt,
+          JSON.stringify(command.automation.schedule),
+          JSON.stringify(command.automation.target),
+          nextFireAt,
+          nowIso,
+          automationId,
+          command.userId,
+          command.expectedRevision,
+        )
+      if (result.changes !== 1) throw new AutomationRevisionConflictError()
+      const automation = this.#automationById(automationId)
+      this.#saveAutomationCommand(
+        command.userId,
+        command.commandId,
+        fingerprint,
+        'update',
+        automation,
+        nowIso,
+      )
+      this.#database.exec('COMMIT')
+      return automation
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  pauseAutomation(
+    automationId: string,
+    command: AutomationStatusCommand,
+  ): Automation {
+    return this.#transitionAutomation(automationId, command, 'pause')
+  }
+
+  resumeAutomation(
+    automationId: string,
+    command: AutomationStatusCommand,
+  ): Automation {
+    return this.#transitionAutomation(automationId, command, 'resume')
+  }
+
+  cancelAutomation(
+    automationId: string,
+    command: AutomationStatusCommand,
+  ): Automation {
+    return this.#transitionAutomation(automationId, command, 'cancel')
+  }
+
+  listAutomationInvocations(
+    automationId: string,
+    userId: string,
+    limit = 100,
+  ): AutomationInvocation[] {
+    this.#automationByIdForUser(automationId, userId)
+    if (!Number.isSafeInteger(limit) || limit <= 0 || limit > 200)
+      throw new Error('Invocation limit must be between 1 and 200')
+    const rows = this.#database
+      .prepare(
+        `SELECT * FROM automation_invocations
+         WHERE automation_id = ? AND user_id = ?
+         ORDER BY scheduled_for DESC, rowid DESC LIMIT ?`,
+      )
+      .all(automationId, userId, limit) as unknown as AutomationInvocationRow[]
+    return rows.map(toAutomationInvocation)
+  }
+
+  automationInvocationForEvent(
+    eventId: string,
+    userId: string,
+  ): AutomationInvocation | undefined {
+    const row = this.#database
+      .prepare(
+        `SELECT * FROM automation_invocations
+         WHERE event_id = ? AND user_id = ?`,
+      )
+      .get(eventId, userId) as unknown as AutomationInvocationRow | undefined
+    return row ? toAutomationInvocation(row) : undefined
+  }
+
+  fireDueAutomations(
+    limit = 100,
+  ): { automation: Automation; invocation: AutomationInvocation }[] {
+    if (!Number.isSafeInteger(limit) || limit <= 0 || limit > 1000)
+      throw new Error('Scheduler batch size must be between 1 and 1000')
+    const now = this.#clock.now()
+    const nowIso = now.toISOString()
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const rows = this.#database
+        .prepare(
+          `SELECT * FROM automations
+           WHERE status = 'active' AND next_fire_at IS NOT NULL
+             AND next_fire_at <= ?
+           ORDER BY next_fire_at ASC, rowid ASC LIMIT ?`,
+        )
+        .all(nowIso, limit) as unknown as AutomationRow[]
+      const fired: {
+        automation: Automation
+        invocation: AutomationInvocation
+      }[] = []
+      for (const row of rows) {
+        const scheduledFor = row.next_fire_at
+        if (!scheduledFor) continue
+        const schedule = JSON.parse(row.schedule_json) as AutomationSchedule
+        const target = JSON.parse(row.target_json) as AutomationTarget
+        const invocationId = randomUUID()
+        const eventId = randomUUID()
+        this.enqueueEvent({
+          id: eventId,
+          userId: row.user_id,
+          type: 'automation.due',
+          source: 'automation',
+          dedupeKey: `automation:${row.id}:${scheduledFor}`,
+          payload: {
+            automationId: row.id,
+            invocationId,
+            scheduledFor,
+            title: row.title,
+            prompt: row.prompt,
+            target,
+          },
+        })
+        this.#database
+          .prepare(
+            `INSERT INTO automation_invocations
+              (id, automation_id, user_id, scheduled_for, event_id, status,
+               attempts, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?)`,
+          )
+          .run(
+            invocationId,
+            row.id,
+            row.user_id,
+            scheduledFor,
+            eventId,
+            nowIso,
+            nowIso,
+          )
+        const nextFireAt =
+          schedule.kind === 'once'
+            ? null
+            : nextIntervalFireAt(schedule, scheduledFor, now)
+        const nextStatus = schedule.kind === 'once' ? 'completed' : 'active'
+        const update = this.#database
+          .prepare(
+            `UPDATE automations
+             SET status = ?, next_fire_at = ?, last_fired_at = ?,
+                 updated_at = ?
+             WHERE id = ? AND user_id = ? AND status = 'active'
+               AND next_fire_at = ?`,
+          )
+          .run(
+            nextStatus,
+            nextFireAt,
+            scheduledFor,
+            nowIso,
+            row.id,
+            row.user_id,
+            scheduledFor,
+          )
+        if (update.changes !== 1)
+          throw new Error('Automation changed during dispatch')
+        const automation = this.#automationById(row.id)
+        const invocation = this.#automationInvocationById(invocationId)
+        fired.push({ automation, invocation })
+      }
+      this.#database.exec('COMMIT')
+      return fired
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  #transitionAutomation(
+    automationId: string,
+    command: AutomationStatusCommand,
+    operation: 'pause' | 'resume' | 'cancel',
+  ): Automation {
+    const now = this.#clock.now()
+    const nowIso = now.toISOString()
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const fingerprint = automationFingerprint({
+        operation,
+        automationId,
+        expectedRevision: command.expectedRevision,
+      })
+      const replay = this.#automationCommandReplay(
+        command.userId,
+        command.commandId,
+        fingerprint,
+      )
+      if (replay) {
+        this.#database.exec('COMMIT')
+        return replay
+      }
+      const current = this.#automationByIdForUser(automationId, command.userId)
+      if (current.revision !== command.expectedRevision)
+        throw new AutomationRevisionConflictError()
+      this.#assertAutomationWritable(current)
+      let status: AutomationStatus
+      let nextFireAt: string | null
+      if (operation === 'pause') {
+        if (current.status !== 'active') throw new AutomationReadOnlyError()
+        status = 'paused'
+        nextFireAt = null
+      } else if (operation === 'resume') {
+        if (current.status !== 'paused') throw new AutomationReadOnlyError()
+        status = 'active'
+        nextFireAt = resumedFireAt(current.schedule, now)
+      } else {
+        status = 'cancelled'
+        nextFireAt = null
+      }
+      const result = this.#database
+        .prepare(
+          `UPDATE automations
+           SET revision = revision + 1, status = ?, next_fire_at = ?,
+               updated_at = ?
+           WHERE id = ? AND user_id = ? AND revision = ?`,
+        )
+        .run(
+          status,
+          nextFireAt,
+          nowIso,
+          automationId,
+          command.userId,
+          command.expectedRevision,
+        )
+      if (result.changes !== 1) throw new AutomationRevisionConflictError()
+      const automation = this.#automationById(automationId)
+      this.#saveAutomationCommand(
+        command.userId,
+        command.commandId,
+        fingerprint,
+        operation,
+        automation,
+        nowIso,
+      )
+      this.#database.exec('COMMIT')
+      return automation
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  #assertAutomationTarget(userId: string, target: AutomationTarget): void {
+    if (target.kind === 'new_task') return
+    const task = this.findTask(target.taskId, userId)
+    if (!task || task.status === 'completed' || task.status === 'cancelled') {
+      throw new AutomationTargetUnavailableError()
+    }
+  }
+
+  #assertAutomationWritable(automation: Automation): void {
+    if (automation.status === 'cancelled' || automation.status === 'completed')
+      throw new AutomationReadOnlyError()
+  }
+
+  #automationCommandReplay(
+    userId: string,
+    commandId: string,
+    fingerprint: string,
+  ): Automation | undefined {
+    const row = this.#database
+      .prepare(
+        `SELECT fingerprint, response_json FROM automation_commands
+         WHERE user_id = ? AND command_id = ?`,
+      )
+      .get(userId, commandId) as
+      { fingerprint: string; response_json: string } | undefined
+    if (!row) return undefined
+    if (row.fingerprint !== fingerprint)
+      throw new AutomationCommandConflictError()
+    return JSON.parse(row.response_json) as Automation
+  }
+
+  #saveAutomationCommand(
+    userId: string,
+    commandId: string,
+    fingerprint: string,
+    operation: string,
+    automation: Automation,
+    createdAt: string,
+  ): void {
+    this.#database
+      .prepare(
+        `INSERT INTO automation_commands
+          (user_id, command_id, fingerprint, operation, automation_id,
+           response_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        userId,
+        commandId,
+        fingerprint,
+        operation,
+        automation.id,
+        JSON.stringify(automation),
+        createdAt,
+      )
+  }
+
+  #automationById(automationId: string): Automation {
+    const row = this.#database
+      .prepare('SELECT * FROM automations WHERE id = ?')
+      .get(automationId) as unknown as AutomationRow | undefined
+    if (!row) throw new Error(`Automation ${automationId} does not exist`)
+    return toAutomation(row)
+  }
+
+  #automationByIdForUser(automationId: string, userId: string): Automation {
+    const row = this.#database
+      .prepare('SELECT * FROM automations WHERE id = ? AND user_id = ?')
+      .get(automationId, userId) as unknown as AutomationRow | undefined
+    if (!row) throw new AutomationNotFoundError()
+    return toAutomation(row)
+  }
+
+  #automationInvocationById(invocationId: string): AutomationInvocation {
+    const row = this.#database
+      .prepare('SELECT * FROM automation_invocations WHERE id = ?')
+      .get(invocationId) as unknown as AutomationInvocationRow | undefined
+    if (!row)
+      throw new Error(`Automation invocation ${invocationId} does not exist`)
+    return toAutomationInvocation(row)
+  }
+
   initializeSpeechConnection(connection: SpeechConnection): void {
     this.#database
       .prepare(
@@ -2815,6 +3377,13 @@ export class PegasStore {
            WHERE id = ?`,
         )
         .run(workerId, leaseUntil, supportedContractVersion, row.id)
+      this.#database
+        .prepare(
+          `UPDATE automation_invocations
+           SET status = 'processing', attempts = attempts + 1, updated_at = ?
+           WHERE event_id = ?`,
+        )
+        .run(now.toISOString(), row.id)
       this.#database.exec('COMMIT')
 
       return {
@@ -2831,23 +3400,40 @@ export class PegasStore {
   }
 
   completeEvent(eventId: string, workerId: string): void {
-    const result = this.#database
-      .prepare(
-        `UPDATE inbox_events
-         SET status = 'processed', processed_at = ?, lease_until = NULL, last_error = NULL
-         WHERE id = ? AND status = 'processing' AND claimed_by = ?`,
-      )
-      .run(this.#clock.now().toISOString(), eventId, workerId)
-    if (result.changes !== 1) {
-      const settled = this.#database
+    const now = this.#clock.now().toISOString()
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const result = this.#database
         .prepare(
-          `SELECT 1 FROM inbox_events
-           WHERE id = ? AND source = 'collaboration'
-             AND status IN ('processed','failed')`,
+          `UPDATE inbox_events
+           SET status = 'processed', processed_at = ?, lease_until = NULL, last_error = NULL
+           WHERE id = ? AND status = 'processing' AND claimed_by = ?`,
         )
-        .get(eventId)
-      if (!settled)
-        throw new Error(`Worker ${workerId} does not own event ${eventId}`)
+        .run(now, eventId, workerId)
+      if (result.changes !== 1) {
+        const settled = this.#database
+          .prepare(
+            `SELECT 1 FROM inbox_events
+             WHERE id = ? AND source = 'collaboration'
+               AND status IN ('processed','failed')`,
+          )
+          .get(eventId)
+        if (!settled)
+          throw new Error(`Worker ${workerId} does not own event ${eventId}`)
+        this.#database.exec('COMMIT')
+        return
+      }
+      this.#database
+        .prepare(
+          `UPDATE automation_invocations
+           SET status = 'dispatched', last_error = NULL, updated_at = ?
+           WHERE event_id = ?`,
+        )
+        .run(now, eventId)
+      this.#database.exec('COMMIT')
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
     }
   }
 
@@ -2889,6 +3475,18 @@ export class PegasStore {
            WHERE id = ? AND status = 'processing' AND claimed_by = ?`,
         )
         .run(nextStatus, error, eventId, workerId)
+      this.#database
+        .prepare(
+          `UPDATE automation_invocations
+           SET status = ?, last_error = ?, updated_at = ?
+           WHERE event_id = ?`,
+        )
+        .run(
+          nextStatus === 'failed' ? 'failed' : 'pending',
+          error,
+          this.#clock.now().toISOString(),
+          eventId,
+        )
       if (nextStatus === 'failed') {
         this.#failTerminalCollaborationEvent(eventId, error)
       }
@@ -7349,6 +7947,40 @@ function isSqliteBusy(error: unknown): boolean {
     'errcode' in error &&
     error.errcode === 5
   )
+}
+
+function toAutomation(row: AutomationRow): Automation {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    revision: row.revision,
+    title: row.title,
+    prompt: row.prompt,
+    schedule: JSON.parse(row.schedule_json) as AutomationSchedule,
+    target: JSON.parse(row.target_json) as AutomationTarget,
+    status: row.status,
+    ...(row.next_fire_at ? { nextFireAt: row.next_fire_at } : {}),
+    ...(row.last_fired_at ? { lastFiredAt: row.last_fired_at } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
+function toAutomationInvocation(
+  row: AutomationInvocationRow,
+): AutomationInvocation {
+  return {
+    id: row.id,
+    automationId: row.automation_id,
+    userId: row.user_id,
+    scheduledFor: row.scheduled_for,
+    eventId: row.event_id,
+    status: row.status,
+    attempts: row.attempts,
+    ...(row.last_error ? { lastError: row.last_error } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
 }
 
 function toInboxEvent(row: InboxRow): InboxEvent {

@@ -923,7 +923,7 @@ describe('PegasStore', () => {
           .prepare('SELECT version FROM schema_migrations ORDER BY version')
           .all() as { version: number }[]
         expect(versions.map(row => row.version)).toEqual([
-          1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+          1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
         ])
         expect(
           db
@@ -932,6 +932,13 @@ describe('PegasStore', () => {
             )
             .get(),
         ).toEqual({ name: 'channel_relations' })
+        expect(
+          db
+            .prepare(
+              "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'automations'",
+            )
+            .get(),
+        ).toEqual({ name: 'automations' })
         expect(
           (
             db

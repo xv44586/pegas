@@ -50,11 +50,21 @@ import {
   parseRuntimeSettingsUpdate,
   type SettingsCapabilities,
 } from '../settings/runtime-settings.js'
+import {
+  parseAutomationCreate,
+  parseAutomationStatusCommand,
+  parseAutomationUpdate,
+} from '../schedule/schedule.js'
 import type {
   SpeechRecognitionProvider,
   SpeechTranscript,
 } from '../speech/provider.js'
 import {
+  AutomationCommandConflictError,
+  AutomationNotFoundError,
+  AutomationReadOnlyError,
+  AutomationRevisionConflictError,
+  AutomationTargetUnavailableError,
   CollaborationActionPendingError,
   CollaborationBudgetLimitError,
   CollaborationCommandConflictError,
@@ -323,6 +333,89 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
       }
 
       const taskResourceUrl = new URL(request.url ?? '/', 'http://localhost')
+      if (
+        taskResourceUrl.pathname === '/v1/automations' &&
+        request.method === 'GET'
+      ) {
+        const userId = requiredQuery(taskResourceUrl, 'userId')
+        return sendJson(response, 200, {
+          automations: options.store.listAutomations(userId),
+        })
+      }
+      if (
+        taskResourceUrl.pathname === '/v1/automations' &&
+        request.method === 'POST'
+      ) {
+        const command = parseAutomationCreate(await readJson(request))
+        try {
+          const automation = options.store.createAutomation(command)
+          return sendJson(response, 201, { automation })
+        } catch (error) {
+          return sendAutomationError(response, error)
+        }
+      }
+      const automationResourceMatch =
+        /^\/v1\/automations\/([^/]+)(?:\/(pause|resume|cancel|invocations))?$/.exec(
+          taskResourceUrl.pathname,
+        )
+      if (automationResourceMatch) {
+        const automationId = decodeURIComponent(
+          automationResourceMatch[1] ?? '',
+        )
+        const action = automationResourceMatch[2]
+        if (!action && request.method === 'GET') {
+          const userId = requiredQuery(taskResourceUrl, 'userId')
+          const automation = options.store.findAutomation(automationId, userId)
+          if (!automation)
+            return sendJson(response, 404, { error: 'not_found' })
+          return sendJson(response, 200, { automation })
+        }
+        if (!action && request.method === 'PUT') {
+          const command = parseAutomationUpdate(await readJson(request))
+          try {
+            const automation = options.store.updateAutomation(
+              automationId,
+              command,
+            )
+            return sendJson(response, 200, { automation })
+          } catch (error) {
+            return sendAutomationError(response, error)
+          }
+        }
+        if (action && action !== 'invocations' && request.method === 'POST') {
+          const command = parseAutomationStatusCommand(await readJson(request))
+          try {
+            const automation =
+              action === 'pause'
+                ? options.store.pauseAutomation(automationId, command)
+                : action === 'resume'
+                  ? options.store.resumeAutomation(automationId, command)
+                  : options.store.cancelAutomation(automationId, command)
+            return sendJson(response, 200, { automation })
+          } catch (error) {
+            return sendAutomationError(response, error)
+          }
+        }
+        if (action === 'invocations' && request.method === 'GET') {
+          const userId = requiredQuery(taskResourceUrl, 'userId')
+          const requestedLimit = optionalQuery(taskResourceUrl, 'limit')
+          const limit =
+            requestedLimit === undefined
+              ? 100
+              : Number.parseInt(requestedLimit, 10)
+          try {
+            return sendJson(response, 200, {
+              invocations: options.store.listAutomationInvocations(
+                automationId,
+                userId,
+                limit,
+              ),
+            })
+          } catch (error) {
+            return sendAutomationError(response, error)
+          }
+        }
+      }
       const runCollaborationMatch =
         /^\/v1\/runs\/([^/]+)\/collaborations$/.exec(taskResourceUrl.pathname)
       if (runCollaborationMatch && request.method === 'POST') {
@@ -1647,7 +1740,9 @@ function parseNewInboxEvent(value: unknown): NewInboxEvent {
     type === 'approval.decided' ||
     source === 'approval' ||
     type.startsWith('collaboration.') ||
-    source === 'collaboration'
+    source === 'collaboration' ||
+    type.startsWith('automation.') ||
+    source === 'automation'
   ) {
     throw new Error(
       'Control Plane event types and sources are reserved and cannot be submitted directly',
@@ -1670,6 +1765,25 @@ function parseNewInboxEvent(value: unknown): NewInboxEvent {
     ...(dedupeKey ? { dedupeKey } : {}),
     payload: value.payload,
   }
+}
+
+function sendAutomationError(response: ServerResponse, error: unknown): void {
+  if (error instanceof AutomationCommandConflictError) {
+    return sendJson(response, 409, { error: 'automation_command_conflict' })
+  }
+  if (error instanceof AutomationRevisionConflictError) {
+    return sendJson(response, 409, { error: 'automation_conflict' })
+  }
+  if (error instanceof AutomationReadOnlyError) {
+    return sendJson(response, 409, { error: 'automation_read_only' })
+  }
+  if (error instanceof AutomationTargetUnavailableError) {
+    return sendJson(response, 409, { error: 'automation_target_unavailable' })
+  }
+  if (error instanceof AutomationNotFoundError) {
+    return sendJson(response, 404, { error: 'not_found' })
+  }
+  throw error
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

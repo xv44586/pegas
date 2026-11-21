@@ -280,6 +280,8 @@ Trigger 属于 Pegas Task，而不是某个临时 session。更换 Run 或 sessi
 
 Scheduler 不直接调用 Agent。它在事务中推进 Trigger 的下一次时间，并向 Event Inbox 写入稳定、可去重的唤醒事件。
 
+schema v20 与 `SCHEDULE-001` 实现第一版 Automation 闭环：Automation 独立保存 owner、revision、提示词、一次性/固定间隔 schedule 和目标；Scheduler 在 SQLite 写事务中同时创建 Invocation、Inbox Event 并推进下一次触发。Automation Event 由 Control Plane 校验 Invocation provenance 后确定性创建新 Task 或续接仍开放的已有 Task，不交给 Router 重新判断归属。暂停阻止新的出队，恢复从当前时间计算后续时刻，取消保留审计历史但永久结束 Automation。周期任务错过多个窗口时只投递一次，避免重启风暴。完整合同见 `docs/automation-scheduling.md`。
+
 ### 7. Policy & Approval Engine
 
 模型可以提出动作，Policy Engine 决定动作是否可以执行。

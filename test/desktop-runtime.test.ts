@@ -19,10 +19,23 @@ const desktopSmoke = readFileSync(
   new URL('../scripts/smoke-desktop.mjs', import.meta.url),
   'utf8',
 )
+const desktopMain = readFileSync(
+  new URL('../src/desktop/main.ts', import.meta.url),
+  'utf8',
+)
 
 describe('desktop runtime', () => {
   it('clears first-run setup before exercising the composer', () => {
     expect(desktopSmoke).toContain("name: '稍后设置'")
+  })
+
+  it('starts database writers only after the Control Plane is ready', () => {
+    const controlPlane = desktopMain.indexOf("['control-plane/main.js']")
+    const ready = desktopMain.indexOf('await waitForControlPlane(appUrl)')
+    const background = desktopMain.indexOf("'worker/main.js'")
+    expect(controlPlane).toBeGreaterThanOrEqual(0)
+    expect(controlPlane).toBeLessThan(ready)
+    expect(ready).toBeLessThan(background)
   })
 
   it('builds an isolated loopback service environment', () => {

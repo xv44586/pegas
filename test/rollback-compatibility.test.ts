@@ -11,7 +11,7 @@ import {
   RollbackCompatibilityError,
 } from '../src/supervisor/rollback-compatibility.js'
 
-describe('collaboration rollback compatibility', () => {
+describe('durable state rollback compatibility', () => {
   it('blocks a v17 rollback while collaboration is live and allows it after settlement', () => {
     const directory = mkdtempSync(join(tmpdir(), 'pegas-rollback-'))
     const path = join(directory, 'pegas.sqlite')
@@ -33,6 +33,36 @@ describe('collaboration rollback compatibility', () => {
 
       store.stopTask(target.task.id, 'owner', 'settle-target')
       expect(() => assertRollbackCompatible(path, 17)).not.toThrow()
+    } finally {
+      store.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('blocks a v19 rollback while an Automation is active and allows it after cancellation', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'pegas-rollback-'))
+    const path = join(directory, 'pegas.sqlite')
+    const store = new PegasStore(path)
+    try {
+      const automation = store.createAutomation({
+        userId: 'owner',
+        commandId: 'rollback-automation',
+        automation: {
+          title: 'Future task',
+          prompt: 'Run later',
+          schedule: { kind: 'once', at: '2030-01-01T00:00:00.000Z' },
+          target: { kind: 'new_task' },
+        },
+      })
+      expect(() => assertRollbackCompatible(path, 19)).toThrow(
+        RollbackCompatibilityError,
+      )
+      store.cancelAutomation(automation.id, {
+        userId: 'owner',
+        commandId: 'cancel-for-rollback',
+        expectedRevision: automation.revision,
+      })
+      expect(() => assertRollbackCompatible(path, 19)).not.toThrow()
     } finally {
       store.close()
       rmSync(directory, { recursive: true, force: true })

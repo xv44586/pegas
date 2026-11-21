@@ -19,6 +19,7 @@ describe('loadConfig', () => {
       privacyMode: 'disabled',
       rewriteMode: 'disabled',
       routerMode: 'model',
+      schedulerPollMs: 500,
       speechBaseUrl: 'http://127.0.0.1:18081/v1',
       speechModel: 'Qwen/Qwen3-ASR-0.6B',
       speechProvider: 'openai-compatible',

@@ -49,6 +49,10 @@ export class RoutingEventHandler implements EventHandler {
       store.applyApprovalDecision(event)
       return
     }
+    if (event.source === 'automation') {
+      this.#handleAutomationEvent(event, store)
+      return
+    }
     if (event.source === 'collaboration') {
       await this.#handleCollaborationEvent(event, store)
       return
@@ -60,6 +64,64 @@ export class RoutingEventHandler implements EventHandler {
     if (!decision) return
     store.applyRoutingDecision(event, decision, this.#executorName, task =>
       this.#executionContext(task),
+    )
+  }
+
+  #handleAutomationEvent(event: InboxEvent, store: PegasStore): void {
+    if (event.type !== 'automation.due') {
+      throw new Error(`Unsupported automation event type: ${event.type}`)
+    }
+    const invocation = store.automationInvocationForEvent(
+      event.id,
+      event.userId,
+    )
+    if (!invocation)
+      throw new Error('Automation event has no durable invocation')
+    const payload = recordPayload(event.payload, 'Automation event')
+    const automationId = requiredPayloadString(payload, 'automationId')
+    const invocationId = requiredPayloadString(payload, 'invocationId')
+    if (
+      automationId !== invocation.automationId ||
+      invocationId !== invocation.id
+    ) {
+      throw new Error('Automation event provenance does not match invocation')
+    }
+    const prompt = requiredPayloadString(payload, 'prompt')
+    const title = requiredPayloadString(payload, 'title')
+    const target = recordPayload(payload.target, 'Automation target')
+    const targetKind = requiredPayloadString(target, 'kind')
+    if (targetKind === 'new_task') {
+      store.applyRoutingDecision(
+        event,
+        {
+          kind: 'create_task',
+          title,
+          goal: prompt,
+          input: prompt,
+          reason: `Automation ${automationId} fired.`,
+        },
+        this.#executorName,
+        task => this.#executionContext(task),
+      )
+      return
+    }
+    if (targetKind !== 'existing_task')
+      throw new Error('Automation target kind is invalid')
+    const taskId = requiredPayloadString(target, 'taskId')
+    const task = store.findTask(taskId, event.userId)
+    if (!task || task.status === 'completed' || task.status === 'cancelled') {
+      throw new Error('Automation target Task is not open')
+    }
+    store.applyRoutingDecision(
+      event,
+      {
+        kind: 'continue_task',
+        taskId,
+        input: prompt,
+        reason: `Automation ${automationId} fired.`,
+      },
+      this.#executorName,
+      targetTask => this.#executionContext(targetTask),
     )
   }
 
@@ -149,6 +211,12 @@ export class RoutingEventHandler implements EventHandler {
     if (event.type === 'collaboration.completed') return
     throw new Error(`Unsupported collaboration event type: ${event.type}`)
   }
+}
+
+function recordPayload(value: unknown, field: string): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw new Error(`${field} must be an object`)
+  return value as Record<string, unknown>
 }
 
 function collaborationPayload(value: unknown): Record<string, unknown> {

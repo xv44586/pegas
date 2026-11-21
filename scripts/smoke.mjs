@@ -32,6 +32,7 @@ const environment = {
   PEGAS_API_TOKEN: apiToken,
   PEGAS_DATA_DIR: dataDirectory,
   PEGAS_EVENT_POLL_MS: '25',
+  PEGAS_SCHEDULER_POLL_MS: '25',
   PEGAS_EXECUTOR: 'echo',
   PEGAS_ROUTER: 'rules',
   PEGAS_PUSH_MODE: 'webhook',
@@ -48,6 +49,10 @@ const children = [
     stdio: 'inherit',
   }),
   spawn(process.execPath, [resolve('dist/notification/main.js')], {
+    env: environment,
+    stdio: 'inherit',
+  }),
+  spawn(process.execPath, [resolve('dist/scheduler/main.js')], {
     env: environment,
     stdio: 'inherit',
   }),
@@ -99,6 +104,7 @@ try {
     throw new Error('Completion was not delivered with its idempotency key')
   if (completionDelivery.body?.payload?.type !== 'run.completed')
     throw new Error('Webhook did not receive the completion payload')
+  await verifyScheduledAutomation(port)
   console.log(`Smoke test passed with task ${task.id} and run ${run.id}`)
 } finally {
   for (const child of children) child.kill('SIGTERM')
@@ -194,6 +200,61 @@ async function waitForSentOutbox(apiPort) {
     await wait(50)
   }
   throw new Error('Dispatcher did not deliver an outbox message')
+}
+
+async function verifyScheduledAutomation(apiPort) {
+  const firesAt = new Date(Date.now() + 1000).toISOString()
+  const response = await fetch(
+    `http://127.0.0.1:${String(apiPort)}/v1/automations`,
+    {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${apiToken}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        userId: 'smoke-schedule-user',
+        commandId: 'smoke-automation-create',
+        automation: {
+          title: 'Scheduled smoke task',
+          prompt: 'Verify the durable scheduler loop',
+          schedule: { kind: 'once', at: firesAt },
+          target: { kind: 'new_task' },
+        },
+      }),
+    },
+  )
+  if (response.status !== 201)
+    throw new Error(`Unexpected Automation status ${response.status}`)
+  const automation = await response.json()
+  const deadline = Date.now() + 7000
+  while (Date.now() < deadline) {
+    const tasksResponse = await fetch(
+      `http://127.0.0.1:${String(apiPort)}/v1/tasks?userId=smoke-schedule-user`,
+      { headers: { authorization: `Bearer ${apiToken}` } },
+    )
+    const tasks = await tasksResponse.json()
+    const task = tasks.tasks?.find(
+      value => value.title === 'Scheduled smoke task',
+    )
+    if (task) {
+      const invocationsResponse = await fetch(
+        `http://127.0.0.1:${String(apiPort)}/v1/automations/${encodeURIComponent(automation.automation.id)}/invocations?userId=smoke-schedule-user`,
+        { headers: { authorization: `Bearer ${apiToken}` } },
+      )
+      const invocations = await invocationsResponse.json()
+      if (
+        invocations.invocations?.some(
+          invocation =>
+            invocation.status === 'dispatched' &&
+            invocation.scheduledFor === firesAt,
+        )
+      )
+        return
+    }
+    await wait(50)
+  }
+  throw new Error('Scheduler did not dispatch the durable Automation')
 }
 
 function availablePort() {
