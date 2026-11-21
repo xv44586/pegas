@@ -1979,6 +1979,8 @@ export class WorkerProfileReadOnlyError extends Error {
 
 export class RunClaimError extends Error {}
 
+export class EventClaimError extends Error {}
+
 export class EventAttachmentConflictError extends Error {}
 
 export class EventAttachmentsUnsupportedError extends Error {}
@@ -4076,7 +4078,49 @@ export class PegasStore {
     }
   }
 
+  renewEventLease(eventId: string, workerId: string, leaseMs = 30_000): void {
+    const now = this.#clock.now()
+    const result = this.#database
+      .prepare(
+        `UPDATE inbox_events SET lease_until = ?
+         WHERE id = ? AND status = 'processing' AND claimed_by = ?`,
+      )
+      .run(new Date(now.getTime() + leaseMs).toISOString(), eventId, workerId)
+    if (result.changes !== 1) {
+      this.#assertEventClaim(eventId, workerId)
+      throw new EventClaimError(
+        `Worker ${workerId} cannot renew event ${eventId}`,
+      )
+    }
+  }
+
+  #assertEventClaim(eventId: string, workerId: string): void {
+    const row = this.#database
+      .prepare(`SELECT status, claimed_by FROM inbox_events WHERE id = ?`)
+      .get(eventId) as { status: string; claimed_by: string | null } | undefined
+    if (row?.status !== 'processing' || row.claimed_by !== workerId) {
+      throw new EventClaimError(
+        `Worker ${workerId} does not hold the claim for event ${eventId}`,
+      )
+    }
+  }
+
+  #settledCollaborationEvent(eventId: string): boolean {
+    return (
+      this.#database
+        .prepare(
+          `SELECT 1 FROM inbox_events
+           WHERE id = ? AND source = 'collaboration'
+             AND status IN ('processed','failed')`,
+        )
+        .get(eventId) !== undefined
+    )
+  }
+
   completeEvent(eventId: string, workerId: string): void {
+    if (!this.#settledCollaborationEvent(eventId)) {
+      this.#assertEventClaim(eventId, workerId)
+    }
     const now = this.#clock.now().toISOString()
     this.#database.exec('BEGIN IMMEDIATE')
     try {
@@ -4120,6 +4164,9 @@ export class PegasStore {
     error: string,
     maxAttempts = 5,
   ): void {
+    if (!this.#settledCollaborationEvent(eventId)) {
+      this.#assertEventClaim(eventId, workerId)
+    }
     this.#database.exec('BEGIN IMMEDIATE')
     try {
       const row = this.#database
@@ -4179,6 +4226,7 @@ export class PegasStore {
     workerId: string,
     taskId: string,
   ): 'parked' | 'released' | 'failed' {
+    this.#assertEventClaim(eventId, workerId)
     const now = this.#clock.now().toISOString()
     this.#database.exec('BEGIN IMMEDIATE')
     try {
@@ -4537,6 +4585,7 @@ export class PegasStore {
       if (event.source === 'collaboration') {
         throw new Error('Control intents require direct user routing')
       }
+      this.#fenceRoutingWriteInTransaction(event)
       const task = this.#applyControlIntentInTransaction(event, decision)
       this.#database.exec('COMMIT')
       return { task }
@@ -4544,6 +4593,11 @@ export class PegasStore {
       this.#database.exec('ROLLBACK')
       throw error
     }
+  }
+
+  #fenceRoutingWriteInTransaction(event: InboxEvent): void {
+    if (event.claimedBy === undefined) return
+    this.#assertEventClaim(event.id, event.claimedBy)
   }
 
   #applyTaskRoutingDecision(
@@ -4558,6 +4612,7 @@ export class PegasStore {
   ): { task: Task; run: Run } {
     this.#database.exec('BEGIN IMMEDIATE')
     try {
+      this.#fenceRoutingWriteInTransaction(event)
       const collaboration = options.collaborationRelationId
         ? this.#collaborationForDispatch(options.collaborationRelationId, event)
         : undefined
@@ -7436,6 +7491,7 @@ export class PegasStore {
   applyApprovalDecision(event: InboxEvent): Run | undefined {
     this.#database.exec('BEGIN IMMEDIATE')
     try {
+      this.#fenceRoutingWriteInTransaction(event)
       const successor = this.#applyApprovalDecisionInTransaction(event)
       this.#database.exec('COMMIT')
       return successor

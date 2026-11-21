@@ -142,7 +142,7 @@ Recovery API 第一阶段只提供状态、重启和回滚，不提供任意命�
 
 事件一旦写入便不应被原地改写。更正和撤销通过新的事件表达。
 
-所有唤醒来源先写入 Durable Event Inbox。Inbox 使用稳定事件 ID、来源去重键、领取租约和失败次数；Worker 崩溃后，过期租约可以被其他 Worker 重新领取。同一用户的 Router 归属需要单写者或 fencing token，不同 Task 在归属后可以并行执行。
+所有唤醒来源先写入 Durable Event Inbox。Inbox 使用稳定事件 ID、来源去重键、领取租约和失败次数；Worker 崩溃后，过期租约可以被其他 Worker 重新领取。同一用户的 Router 归属由事件 claim fencing 保证单写者：Worker 在路由期间每 10 秒续租事件 lease（默认 30 秒），`applyRoutingDecision`、`applyControlIntent` 与 `applyApprovalDecision` 在同一事务内校验事件仍由当前 claim 持有（`ROUTE-002`）；lease 过期被接管后，旧 Worker 的路由写入与 complete/fail 写回都被拒绝，接管者的结果保持权威，不产生重复 Task 或重复副作用。已被目标关闭结算的协作事件保留幂等 no-op 写回。不同 Task 在归属后可以并行执行。
 
 ### 3. Intent / Task Router
 

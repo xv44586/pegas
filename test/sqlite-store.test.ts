@@ -186,7 +186,7 @@ describe('PegasStore', () => {
 
     expect(event?.status).toBe('processing')
     expect(() => store.completeEvent(event?.id ?? '', 'worker-2')).toThrow(
-      /does not own/,
+      /does not hold the claim/,
     )
     store.completeEvent(event?.id ?? '', 'worker-1')
     expect(store.claimNextEvent('worker-1')).toBeUndefined()

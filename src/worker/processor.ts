@@ -7,6 +7,7 @@ import type {
 import type { RunExecutor } from '../executor/executor.js'
 import type { TaskRouter } from '../router/router.js'
 import {
+  EventClaimError,
   TaskActionBlockedError,
   type PegasStore,
 } from '../storage/sqlite-store.js'
@@ -305,16 +306,33 @@ export async function processNextEvent(
   const event = store.claimNextEvent(workerId)
   if (!event) return false
 
+  const leaseHeartbeat = setInterval(() => {
+    try {
+      store.renewEventLease(event.id, workerId)
+    } catch (error) {
+      console.error(`Failed to renew event ${event.id} lease`, error)
+    }
+  }, 10_000)
+  leaseHeartbeat.unref()
+
   try {
     await handler.handle(event, store)
     store.completeEvent(event.id, workerId)
   } catch (error) {
+    if (error instanceof EventClaimError) {
+      console.error(
+        `Event ${event.id} claim was lost before write-back; the takeover worker owns it`,
+      )
+      return true
+    }
     if (error instanceof TaskActionBlockedError) {
       store.parkEventForBlockedAction(event.id, workerId, error.taskId)
       return true
     }
     const message = error instanceof Error ? error.message : String(error)
     store.failEvent(event.id, workerId, message)
+  } finally {
+    clearInterval(leaseHeartbeat)
   }
   return true
 }
