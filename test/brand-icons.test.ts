@@ -36,9 +36,9 @@ describe('unified brand application icons', () => {
       path.join(repositoryRoot, 'web/index.html'),
       'utf8',
     )
-    expect(html).toContain('href="/favicon.svg"')
-    expect(html).toContain('href="/favicon-32.png"')
-    expect(html).toContain('href="/apple-touch-icon.png"')
+    expect(html).toContain('href="/favicon.svg?v=2"')
+    expect(html).toContain('href="/favicon-32.png?v=2"')
+    expect(html).toContain('href="/apple-touch-icon.png?v=2"')
     for (const file of [
       'favicon.svg',
       'favicon-32.png',

@@ -39,7 +39,7 @@ Tabler Icons outline 几何（24×24 网格、描边 2），经统一
 - 服务端分配：`src/brand/agent-icon.ts`, `src/storage/sqlite-store.ts`
 - Channel 投影：`src/channel/work-channel.ts`
 - Web 渲染：`web/src/PegasAgentIcon.tsx`, `web/src/agent-icon-id.ts`
-- 静态产物：`web/public/icons/agents/pegas-{bot,car,camera,computer,phone}.svg`, `pegas-agents.svg`
+- 产物：`web/src/agent-icon-sprite.ts`（运行时内联 sprite）与 `web/src/pegas-agents.svg`（参考 sprite，不对外服务）。旧 `web/public/icons/agents/` 下五个手绘独立 SVG 与静态 sprite 已删除。
 
 图标路径由生成器中的 `iconDefinitions` 定义。每个图标只声明自身的白色符号；背景、可访问名称和主题变量由统一模板生成。
 Worker 符号使用生成器内的 `tablerGlyph` 辅助函数声明 Tabler 源路径；修改几何时必须同步
@@ -78,7 +78,7 @@ pnpm icons:check
 
 ## 验证证据
 
-- `pnpm icons:check`：五个独立 SVG、一个 sprite 与内联 sprite 模块与生成器完全一致。
+- `pnpm icons:check`：内联 sprite 模块与参考 sprite 与生成器完全一致。
 - `web/src/PegasAgentIcon.test.tsx`：sprite 单例内联、五个 symbol 齐全、`<use>` 指向文档内 fragment。
 - `test/agent-icon-assets.test.ts`：四个 Worker 图标逐路径锁定 Tabler 源几何与缩放变换，`bot` 保持自有几何。
 - 自动化覆盖确定性分配、非法第三方 ID、历史数据回填、API 投影、旧服务兼容、固定蓝色身份与 UI 状态徽记。
@@ -109,5 +109,5 @@ main 即可复现，属既有问题。本变更把 sprite 内联进文档根治�
 产出 `web/src/agent-icon-sprite.ts`（字符串模块，`.prettierignore` 排除），
 `PegasAgentSprite` 在 `AppShell` 根部挂载一次隐藏 SVG，`PegasAgentIcon`
 的 `<use>` 改为文档内 fragment（`#pegas-agent-<id>`），首帧即有几何，
-不再依赖网络解码。静态 `pegas-agents.svg` 仍生成，供外部消费者使用。
+不再依赖网络解码。参考 `pegas-agents.svg` 仍生成于 `web/src/`，仅作几何审查用途。
 修复后 `review:ui` 首帧截图图标列像素验证非空（蓝色像素 2367）。

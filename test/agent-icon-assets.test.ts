@@ -4,9 +4,9 @@ import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
 
-const assetsDirectory = path.resolve(
+const spriteModuleDirectory = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
-  '../web/public/icons/agents',
+  '../web/src',
 )
 
 const tablerSourcePaths = {
@@ -33,19 +33,19 @@ const tablerSourcePaths = {
 } as const
 
 async function readAsset(fileName: string) {
-  return readFile(path.join(assetsDirectory, fileName), 'utf8')
+  return readFile(path.join(spriteModuleDirectory, fileName), 'utf8')
 }
 
 describe('worker icon assets adapt Tabler outline geometry', () => {
   it.each(Object.entries(tablerSourcePaths))(
     'renders %s from the unmodified Tabler source paths',
     async (name, sourcePaths) => {
-      const [standalone, sprite] = await Promise.all([
-        readAsset(`pegas-${name}.svg`),
+      const [spriteModule, sprite] = await Promise.all([
+        readAsset('agent-icon-sprite.ts'),
         readAsset('pegas-agents.svg'),
       ])
 
-      for (const document of [standalone, sprite]) {
+      for (const document of [spriteModule.replaceAll('\\"', '"'), sprite]) {
         expect(document).toContain(
           'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" transform="translate(8 8) scale(2)"',
         )
@@ -57,10 +57,16 @@ describe('worker icon assets adapt Tabler outline geometry', () => {
   )
 
   it('keeps the Pegas bot identity on its own geometry', async () => {
-    const bot = await readAsset('pegas-bot.svg')
+    const bot = (await readAsset('agent-icon-sprite.ts')).replaceAll('\\"', '"')
 
-    expect(bot).toContain('<path d="M32 18V11"/>')
-    expect(bot).toContain('<rect x="17" y="18" width="30" height="27" rx="6"/>')
-    expect(bot).not.toContain('translate(8 8) scale(2)')
+    const botSymbol = bot.slice(
+      bot.indexOf('id="pegas-agent-bot"'),
+      bot.indexOf('</symbol>'),
+    )
+    expect(botSymbol).toContain('<path d="M32 18V11"/>')
+    expect(botSymbol).toContain(
+      '<rect x="17" y="18" width="30" height="27" rx="6"/>',
+    )
+    expect(botSymbol).not.toContain('translate(8 8) scale(2)')
   })
 })
