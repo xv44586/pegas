@@ -81,6 +81,8 @@ import {
   CollaborationFanoutLimitError,
   CollaborationReconciliationRequiredError,
   CollaborationTargetUnavailableError,
+  EventAttachmentConflictError,
+  EventAttachmentsUnsupportedError,
   GoalProposalCommandConflictError,
   MemoryCommandConflictError,
   MemoryLimitError,
@@ -103,6 +105,7 @@ const maximumBodyBytes = 1024 * 1024
 const defaultPageLimit = 50
 const maximumPageLimit = 200
 const defaultMaximumAudioBytes = 25 * 1024 * 1024
+const maximumAttachmentBytes = 25 * 1024 * 1024
 
 export interface ControlPlaneOptions {
   store: PegasStore
@@ -343,13 +346,64 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         return sendJson(response, result.inserted ? 202 : 200, result)
       }
 
-      if (request.url?.startsWith('/v1/events') && request.method === 'GET') {
-        const url = new URL(request.url, 'http://localhost')
+      const eventsGetUrl = new URL(request.url ?? '/', 'http://localhost')
+      if (eventsGetUrl.pathname === '/v1/events' && request.method === 'GET') {
+        const url = eventsGetUrl
         const userId = url.searchParams.get('userId')
         if (!userId) throw new Error('userId is required')
+        const cursor = url.searchParams.get('cursor') ?? undefined
+        if (cursor) {
+          const rawLimit = url.searchParams.get('limit')
+          const page = options.store.pageEventsAfter(
+            userId,
+            rawLimit ? Number(rawLimit) : 50,
+            cursor,
+          )
+          return sendJson(response, 200, {
+            events: page.events,
+            ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+          })
+        }
         return sendJson(response, 200, {
           events: options.store.listEvents(userId),
         })
+      }
+
+      const eventResourceUrl = new URL(request.url ?? '/', 'http://localhost')
+      const attachmentMatch = /^\/v1\/events\/([^/]+)\/attachments$/.exec(
+        eventResourceUrl.pathname,
+      )
+      if (attachmentMatch) {
+        const eventId = decodeURIComponent(attachmentMatch[1] ?? '')
+        if (request.method === 'POST') {
+          const userId = requiredQuery(eventResourceUrl, 'userId')
+          const fileName = requiredQuery(eventResourceUrl, 'fileName')
+          if (Array.from(fileName).length > 255)
+            throw new Error('fileName must contain at most 255 characters')
+          const mediaType =
+            headerValue(request, 'content-type') ?? 'application/octet-stream'
+          const bytes = await readBytes(request, maximumAttachmentBytes)
+          if (bytes.byteLength === 0)
+            throw new Error('Attachment body is required')
+          const attachment = options.store.attachEventFile(eventId, userId, {
+            fileName,
+            mediaType,
+            bytes,
+          })
+          return sendJson(response, 201, { attachment })
+        }
+        if (request.method === 'GET') {
+          const userId = requiredQuery(eventResourceUrl, 'userId')
+          const stored = options.store.readEventAttachmentBytes(eventId, userId)
+          if (!stored) return sendJson(response, 404, { error: 'not_found' })
+          response.writeHead(200, {
+            'content-type': stored.attachment.mediaType,
+            'content-length': String(stored.attachment.byteSize),
+            'x-pegas-attachment-sha256': stored.attachment.sha256,
+            'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(stored.attachment.fileName)}`,
+          })
+          return response.end(stored.bytes)
+        }
       }
 
       const taskResourceUrl = new URL(request.url ?? '/', 'http://localhost')
@@ -1275,6 +1329,16 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
           error: 'run_claim_invalid',
           message: error.message,
         })
+      if (error instanceof EventAttachmentConflictError)
+        return sendJson(response, 409, {
+          error: 'attachment_conflict',
+          message: error.message,
+        })
+      if (error instanceof EventAttachmentsUnsupportedError)
+        return sendJson(response, 409, {
+          error: 'attachments_unsupported',
+          message: error.message,
+        })
       const message = error instanceof Error ? error.message : 'Unknown error'
       return sendJson(response, 400, { error: 'bad_request', message })
     }
@@ -1915,6 +1979,9 @@ function parseNewInboxEvent(value: unknown): NewInboxEvent {
     )
   }
   const dedupeKey = optionalString(value.dedupeKey, 'dedupeKey')
+  const deviceId = optionalString(value.deviceId, 'deviceId')
+  if (deviceId && Array.from(deviceId).length > 128)
+    throw new Error('deviceId must contain at most 128 characters')
   if (!Object.hasOwn(value, 'payload')) throw new Error('payload is required')
   const authenticatedActor =
     type === 'user.message' && (source === 'web' || source === 'mobile')
@@ -1928,6 +1995,7 @@ function parseNewInboxEvent(value: unknown): NewInboxEvent {
     type,
     source,
     ...(authenticatedActor ? { authenticatedActor } : {}),
+    ...(deviceId ? { deviceId } : {}),
     ...(dedupeKey ? { dedupeKey } : {}),
     payload: value.payload,
   }

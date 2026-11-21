@@ -1,6 +1,6 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
-import { mkdirSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
 import { systemClock, type Clock } from '../core/clock.js'
@@ -32,6 +32,7 @@ import type {
 } from '../approval/approval.js'
 import type {
   ClaimedRun,
+  EventAttachment,
   ExecutionContext,
   InboxEvent,
   ModelUsageRecord,
@@ -427,6 +428,22 @@ WHEN OLD.target_resource IS NOT NULL
 BEGIN
   SELECT RAISE(ABORT, 'Task target resource is immutable');
 END;
+`
+
+const migration26 = `
+ALTER TABLE inbox_events ADD COLUMN device_id TEXT;
+
+CREATE TABLE IF NOT EXISTS event_attachments (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  event_id TEXT NOT NULL UNIQUE REFERENCES inbox_events(id),
+  file_name TEXT NOT NULL,
+  media_type TEXT NOT NULL,
+  byte_size INTEGER NOT NULL CHECK (byte_size >= 0),
+  sha256 TEXT NOT NULL,
+  storage_path TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
 `
 
 const migration2 = `
@@ -1507,6 +1524,7 @@ interface InboxRow {
   type: string
   source: string
   authenticated_actor: 'human' | null
+  device_id: string | null
   dedupe_key: string | null
   payload_json: string
   status: InboxEvent['status']
@@ -1518,6 +1536,18 @@ interface InboxRow {
   last_error: string | null
   required_contract_version: number
   claimed_contract_version: number | null
+}
+
+interface EventAttachmentRow {
+  id: string
+  user_id: string
+  event_id: string
+  file_name: string
+  media_type: string
+  byte_size: number
+  sha256: string
+  storage_path: string
+  created_at: string
 }
 
 interface TaskRow {
@@ -1920,6 +1950,10 @@ export class WorkerProfileReadOnlyError extends Error {
 
 export class RunClaimError extends Error {}
 
+export class EventAttachmentConflictError extends Error {}
+
+export class EventAttachmentsUnsupportedError extends Error {}
+
 export class CollaborationCommandConflictError extends Error {}
 
 export class CollaborationFanoutLimitError extends Error {}
@@ -1978,10 +2012,13 @@ export class TaskActionBlockedError extends Error {
 export class PegasStore {
   readonly #database: DatabaseSync
   readonly #clock: Clock
+  readonly #attachmentRoot: string | undefined
 
   constructor(path: string, options: { clock?: Clock } = {}) {
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true })
     this.#clock = options.clock ?? systemClock
+    this.#attachmentRoot =
+      path === ':memory:' ? undefined : resolve(dirname(path), 'attachments')
     this.#database = new DatabaseSync(path)
     // Apply the lock wait before any WAL/schema statement so multiple Pegas
     // processes can safely perform a cold start against the same database.
@@ -2018,6 +2055,7 @@ export class PegasStore {
     this.#migrate(23, migration23)
     this.#migrate(24, migration24)
     this.#migrate(25, migration25)
+    this.#migrate(26, migration26)
   }
 
   #backfillWorkerIconIds(): void {
@@ -3904,9 +3942,9 @@ export class PegasStore {
     const result = this.#database
       .prepare(
         `INSERT OR IGNORE INTO inbox_events
-          (id, user_id, type, source, authenticated_actor, dedupe_key,
+          (id, user_id, type, source, authenticated_actor, device_id, dedupe_key,
            payload_json, status, required_contract_version, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
       )
       .run(
         id,
@@ -3914,6 +3952,7 @@ export class PegasStore {
         input.type,
         input.source,
         input.authenticatedActor ?? null,
+        input.deviceId ?? null,
         input.dedupeKey ?? null,
         JSON.stringify(input.payload),
         input.source === 'collaboration' ? 2 : 1,
@@ -4782,6 +4821,151 @@ export class PegasStore {
       )
       .all(userId)
     return rows.map(row => toInboxEvent(row as unknown as InboxRow))
+  }
+
+  /**
+   * Incremental cross-device sync: events strictly after the cursor event in
+   * (created_at, id) order. Clients on any device resume from the last event
+   * they have seen; the server clock is the single ordering authority.
+   */
+  pageEventsAfter(
+    userId: string,
+    limit: number,
+    cursor?: string,
+  ): { events: InboxEvent[]; nextCursor?: string } {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
+      throw new Error('Pagination limit must be between 1 and 200')
+    }
+    let cursorCreatedAt: string | null = null
+    let cursorId: string | null = null
+    if (cursor) {
+      const cursorRow = this.#database
+        .prepare(
+          'SELECT created_at, id FROM inbox_events WHERE id = ? AND user_id = ?',
+        )
+        .get(cursor, userId) as { created_at: string; id: string } | undefined
+      if (!cursorRow) throw new Error('Pagination cursor is invalid')
+      cursorCreatedAt = cursorRow.created_at
+      cursorId = cursorRow.id
+    }
+    const rows = this.#database
+      .prepare(
+        `SELECT * FROM inbox_events
+         WHERE user_id = ?
+           AND (? IS NULL OR created_at > ?
+             OR (created_at = ? AND id > ?))
+         ORDER BY created_at ASC, id ASC LIMIT ?`,
+      )
+      .all(
+        userId,
+        cursorCreatedAt,
+        cursorCreatedAt,
+        cursorCreatedAt,
+        cursorId,
+        limit + 1,
+      ) as unknown as InboxRow[]
+    const hasMore = rows.length > limit
+    const pageRows = hasMore ? rows.slice(0, limit) : rows
+    const nextCursor = hasMore ? pageRows.at(-1)?.id : undefined
+    return {
+      events: pageRows.map(toInboxEvent),
+      ...(nextCursor ? { nextCursor } : {}),
+    }
+  }
+
+  /**
+   * Persists one immutable attachment for an existing durable event. Bytes
+   * are content-addressed by SHA-256 inside the data directory; replaying the
+   * exact upload returns the stored record, a different payload for the same
+   * event is rejected.
+   */
+  attachEventFile(
+    eventId: string,
+    userId: string,
+    input: { fileName: string; mediaType: string; bytes: Buffer },
+  ): EventAttachment {
+    if (!this.#attachmentRoot) {
+      throw new EventAttachmentsUnsupportedError(
+        'Attachments require a persistent database',
+      )
+    }
+    const event = this.#database
+      .prepare('SELECT id FROM inbox_events WHERE id = ? AND user_id = ?')
+      .get(eventId, userId) as { id: string } | undefined
+    if (!event) throw new Error('Event does not exist for user')
+    const sha256 = createHash('sha256').update(input.bytes).digest('hex')
+    const existing = this.#attachmentRow(eventId, userId)
+    if (existing) {
+      if (
+        existing.sha256 !== sha256 ||
+        existing.file_name !== input.fileName ||
+        existing.media_type !== input.mediaType ||
+        existing.byte_size !== input.bytes.byteLength
+      ) {
+        throw new EventAttachmentConflictError(
+          'Event already has a different attachment',
+        )
+      }
+      return toEventAttachment(existing)
+    }
+    const id = randomUUID()
+    const storagePath = join(this.#attachmentRoot, `${sha256}-${id}`)
+    mkdirSync(this.#attachmentRoot, { recursive: true })
+    writeFileSync(storagePath, input.bytes, { flag: 'wx', mode: 0o600 })
+    this.#database
+      .prepare(
+        `INSERT INTO event_attachments
+          (id, user_id, event_id, file_name, media_type, byte_size, sha256,
+           storage_path, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        id,
+        userId,
+        eventId,
+        input.fileName,
+        input.mediaType,
+        input.bytes.byteLength,
+        sha256,
+        storagePath,
+        this.#clock.now().toISOString(),
+      )
+    const stored = this.#attachmentRow(eventId, userId)
+    if (!stored) throw new Error('Failed to persist the attachment')
+    return toEventAttachment(stored)
+  }
+
+  getEventAttachment(
+    eventId: string,
+    userId: string,
+  ): EventAttachment | undefined {
+    const row = this.#attachmentRow(eventId, userId)
+    return row ? toEventAttachment(row) : undefined
+  }
+
+  readEventAttachmentBytes(
+    eventId: string,
+    userId: string,
+  ): { attachment: EventAttachment; bytes: Buffer } | undefined {
+    const row = this.#attachmentRow(eventId, userId)
+    if (!row) return undefined
+    const bytes = readFileSync(row.storage_path)
+    const digest = createHash('sha256').update(bytes).digest('hex')
+    if (digest !== row.sha256) {
+      throw new Error('Attachment bytes do not match the stored digest')
+    }
+    return { attachment: toEventAttachment(row), bytes }
+  }
+
+  #attachmentRow(
+    eventId: string,
+    userId: string,
+  ): EventAttachmentRow | undefined {
+    return this.#database
+      .prepare(
+        'SELECT * FROM event_attachments WHERE event_id = ? AND user_id = ?',
+      )
+      .get(eventId, userId) as unknown as EventAttachmentRow | undefined
   }
 
   listChannelEvents(taskId: string, userId: string): InboxEvent[] {
@@ -9434,6 +9618,7 @@ function toInboxEvent(row: InboxRow): InboxEvent {
     ...(row.authenticated_actor
       ? { authenticatedActor: row.authenticated_actor }
       : {}),
+    ...(row.device_id ? { deviceId: row.device_id } : {}),
     ...(row.dedupe_key ? { dedupeKey: row.dedupe_key } : {}),
     payload: JSON.parse(row.payload_json) as unknown,
     status: row.status,
@@ -9443,6 +9628,19 @@ function toInboxEvent(row: InboxRow): InboxEvent {
     createdAt: row.created_at,
     ...(row.processed_at ? { processedAt: row.processed_at } : {}),
     ...(row.last_error ? { lastError: row.last_error } : {}),
+  }
+}
+
+function toEventAttachment(row: EventAttachmentRow): EventAttachment {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    eventId: row.event_id,
+    fileName: row.file_name,
+    mediaType: row.media_type,
+    byteSize: row.byte_size,
+    sha256: row.sha256,
+    createdAt: row.created_at,
   }
 }
 

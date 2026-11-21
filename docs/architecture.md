@@ -121,6 +121,8 @@ Recovery API 第一阶段只提供状态、重启和回滚，不提供任意命�
 
 渠道只负责收发消息，不保存 Task 的权威状态。
 
+第一版实现（CONV-001）：`POST /v1/events` 接受可选 `deviceId` 并随事件持久化（schema v26）；`GET /v1/events?cursor=<eventId>` 按服务端 `(created_at, id)` 顺序增量返回后续事件，供任意设备从上次位置恢复同步；`POST/GET /v1/events/:id/attachments` 提供单附件的内容寻址上传与下载（SHA-256 校验、同内容幂等、跨 owner 隔离），字节保存在数据目录 `attachments/`，不进入事件 payload 或全文索引。设备登录会话管理与多附件属后续缺口。
+
 语音是 Channel 输入适配，不是新的任务类型。Web 输入器使用浏览器 `MediaRecorder` 捕获一段用户主动发起的录音，Control Plane 通过可替换的 `SpeechRecognitionProvider` 调用独立模型服务。听写接口只把最终文字返回输入器供用户校对；用户明确发送后，文字才作为普通 `user.message` 进入 Durable Event Inbox。无输入器客户端也可使用幂等的直接语音消息接口。音频和流式 partial transcript 默认不持久化，ASR 失败时不能创建半成品用户消息。模型服务与 Pegas 进程分离，以便独立选择运行节点、升级模型和控制 GPU 资源。
 
 ### 2. Conversation Event Stream

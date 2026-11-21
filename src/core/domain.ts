@@ -56,6 +56,7 @@ export interface InboxEvent {
   type: string
   source: string
   authenticatedActor?: 'human'
+  deviceId?: string
   dedupeKey?: string
   payload: unknown
   status: EventStatus
@@ -73,8 +74,20 @@ export interface NewInboxEvent {
   type: string
   source: string
   authenticatedActor?: 'human'
+  deviceId?: string
   dedupeKey?: string
   payload: unknown
+}
+
+export interface EventAttachment {
+  id: string
+  userId: string
+  eventId: string
+  fileName: string
+  mediaType: string
+  byteSize: number
+  sha256: string
+  createdAt: string
 }
 
 export interface Task {

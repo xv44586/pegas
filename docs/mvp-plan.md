@@ -35,7 +35,7 @@
 
 ## 第一条真实产品闭环
 
-- [ ] Channel & Identity Gateway；
+- [x] Channel & Identity Gateway（统一事件入口、设备身份、单附件与跨端游标已实现；多渠道回复地址与投递偏好待补）；
 - [ ] 单用户认证和移动端设备登录；
 - [ ] 同一用户的 Router lease / fencing；
 - [x] 新建、补充、纠正和取消 Task 的完整路由（steer/cancel 控制意图、心跳中止与 session 后继已实现；Idea/Trigger 意图待补）；
@@ -79,7 +79,7 @@
 
 - [ ] 响应式 Web/PWA 或第一种消息渠道；
 - [x] 可靠主动通知（Webhook；iOS APNs 待接入）；
-- [ ] 对话、任务状态和审批跨设备一致；
+- [x] 对话、任务状态和审批跨设备一致（服务端权威状态 + 事件增量游标；移动端 UI 属 MOBILE-001）；
 - [ ] Mac 执行节点注册、心跳和离线状态；
 - [ ] Remote Sandbox 执行节点；
 - [ ] 独立 Recovery API 的移动端状态、重启和回滚界面；
