@@ -77,6 +77,15 @@ chat 车道的并发预算独立于重任务：`PEGAS_CHAT_CONCURRENCY`（默认
 领取 conversation Run 的数量，不进入运行设置单例。Web 设置页开关属后续缺口，当前
 经环境变量（首次启动）或设置 API 启停。
 
+执行池（PLAN-001 P3 第一阶段，WORKER-002）在“Pegas”页 Agent 模型区配置：
+fast/balanced/deep 三池各指向一个已配置的 provider/model，允许只配 1–3 个，
+未配置的池按 fast→balanced→全局 Agent 默认降级，降级原因记入 Run 快照；
+三池全空且无全局默认时显式拒绝执行，不静默换模型。事情详情在“继承全局设置”
+模式下可为单个 Task 选择执行池与推理 effort，与模型覆盖互斥；effort 仅在
+存在生效模型时随 DSH patch 透传。保存省略 `executionPools` 字段时保留现值。
+密钥/权限/模型不存在类 Provider 错误首次即停放 Task（awaiting_provider_condition）
+并通知用户，修正模型连接或池设置后再继续；限流与服务故障仍走既有重试链。
+
 ## 保存、失败与恢复
 
 - PUT 使用客户端读到的 `revision` 做乐观并发控制；revision 不一致返回冲突，避免旧

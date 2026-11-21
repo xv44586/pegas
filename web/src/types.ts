@@ -214,6 +214,10 @@ export interface RuntimeSettings {
   agentModelName: string
   privacyMode: 'disabled' | 'mask'
   rewriteMode: 'disabled' | 'light'
+  chatLaneEnabled?: boolean
+  executionPools?: Partial<
+    Record<'fast' | 'balanced' | 'deep', { provider: string; model: string }>
+  >
   updatedAt: string
 }
 

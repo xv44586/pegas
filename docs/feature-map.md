@@ -83,7 +83,16 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - **失败与恢复**：崩溃点 marker 保证每场景只崩溃一次；错误恢复实现会因重复副作用、重复完成或 Run 未结算而使 smoke 失败。
 - **当前证据（2026-11-21）**：`pnpm smoke:crash` 两次通过（event-claim/tool-call/write-back 三 Task 全部恰好完成一次、副作用计数 1、session 恢复 marker 命中、完成 Outbox 恰好一条）。完整门禁通过 65 个测试文件、574 个测试（statement 84.5%、branch 77.76%、function 88.87%、line 87.37%）；`pnpm check`、`pnpm smoke`、`pnpm smoke:desktop` 均通过。
 
-### PLAN-001 P2：路由降本（2026-11-22）
+### WORKER-002：执行资源分级第一阶段（2026-11-22）
+
+- **用户结果**：用户在设置页为 fast/balanced/deep 三池各选一个已配置 provider/model（可只配 1–3 个），在事情详情为单个 Task 选执行池与推理 effort；缺省池按 fast→balanced→全局默认降级且降级原因可见；密钥/权限/模型不存在类 Provider 错误首次即停放 Task 并告知用户，不空耗重试预算。
+- **验收条件**：schema v34——`runtime_settings.execution_pools_json`（默认 `{}`，保存省略时 COALESCE 保留现值）、`worker_profiles.pool`（CHECK fast/balanced/deep）与 `effort` 可空列；`resolveExecutionPool` 纯函数降级链 fast→[fast,balanced]→全局默认、balanced→[balanced]→全局默认、deep→[deep]→全局默认，降级/拒绝必记 `downgradeReason`，完全不可解析时显式拒绝执行（不静默换模型）；WorkerProfile 解析拒绝 pool 与模型 override 同用；`effectiveWorkerProfile` 池分支产出 EffectiveWorkerProfile（source=task、poolResolution）；Run 快照 v2 与 legacy 解码携带 `executionPool/requestedPool/poolDowngradeReason/reasoningEffort`（effort 仅在 agentModel 存在时透传，DSH patch 需要 provider+model 成对）；session 兼容性指纹包含 pool/effort；`isTerminalProviderError` 只把 401/403/404、invalid_api_key、Missing API key、model not found 归为终态（429/5xx/超时仍走既有重试链）；`failRun` 终态分支置 Task `status_reason='awaiting_provider_condition'` 并 Outbox `run.provider_terminal`（dedupeKey `provider-terminal:<runId>` 幂等），不创建 retry 后继；conversation Task 与已记录 Action 结果的 Run 不走终态停放分支；Web 设置页 Pegas 模型页三池选择、事情详情继承模式下池/effort 选择与生效档位展示；Worker maximumSchema 34。
+- **非目标**：自动难度分级与有界升级（第二阶段，评测达标后）；按池独立并发预算；池级成本报表；真实 DSH 只读裁剪。
+- **数据与权限边界**：池只映射到已在服务端配置的 provider/model，凭证仍走加密连接存储，不新增权限面；Task 级池选择经既有 WorkerProfile revision 乐观并发；终态停放不改变 Mandate/审批边界，恢复须用户修正连接或池设置后继续。
+- **失败与恢复**：降级必留痕（快照 requestedPool/actual/downgradeReason）；不可解析池显式报错而非静默换池；终态错误零重试直接停放 + 用户通知；旧 WorkerProfile 行 pool/effort 为 NULL 时行为与单模型现状完全一致；回滚代码即可，v34 可空列与默认 `{}` 对旧 Release 读取无影响（Worker maximumSchema 随代码回退）。
+- **当前证据（2026-11-22）**：`test/execution-pools.test.ts` 16 个测试（解析/降级/拒绝、池+override 互斥、持久化与重放、快照字段与 effort-only-with-model、旧 profile 兼容、session 兼容含 pool/effort、effective profile、终态分类边界、终态停放零重试、瞬态错误仍走重试链）；`web/src/App.test.tsx` 新增池/effort 保存回归；`test/sqlite-store.test.ts` 迁移列表 +34。完整门禁 `pnpm check` 80 个测试文件、753 个测试（statement 85.12%、branch 78.12%、function 90.07%、line 88.23%）；`pnpm smoke`、`pnpm smoke:crash` 通过。
+- **剩余风险**：真实 DSH 三池执行与 reasoningEffort patch 未在真实供应商上实测（echo/fixture 覆盖合同）；终态错误分类基于错误文本模式，供应商文案变化可能漏判（漏判只回落重试链，不误停）；effort 取值为自由文本，未与具体模型的合法档位表校验。
+- **状态说明**：标 Partial 而非 Usable——合同路径全部自动化验证，但三池真实执行链路未实测，且自动分级（Feature 结果的另一半）尚未实施。
 
 - **用户结果**：问候/致谢在 chat 车道开启时零模型调用直达 reply；"停掉 X"精确唯一匹配 started 任务标题时零模型调用直达 cancel（仍走同一控制事务与人类认证）；连发消息合并为一次路由输入；Router/改写模型调用消耗在设置页可查。
 - **验收条件**：`src/router/prefilter.ts` 纯规则前置分流（决策 4）——控制命令唯一匹配才旁路，歧义/缺失/机器输入/显式 taskId 100% 进模型；问候白名单整条匹配且仅在 chatLaneEnabled 时生效；`processNextEvent` 收集窗口（`PEGAS_ROUTE_COLLECT_WINDOW_MS` 默认 400ms，0 关闭）在领取侧合并同用户连续普通 user.message（payload 原文不动，逐条保留 durable 行与终态），steer/cancel 候选与显式引用永不延迟（`releaseEventClaim` 归还非合并事件且不消耗 attempts）；schema v33 `router_usage_records` 以 `component:eventId:modelRef` 为幂等键，OpenAI/Anthropic usage 桶按供应商上报解析（无上报记 unavailable，失败记 error），经 `MeteredJsonModelProvider` 包裹 Router 与改写 Provider（PrivacyMaskingProvider 透传 usage）；`GET /v1/usage`（无 taskId 时）附 `router` 报告，设置页新增"路由与改写用量"表。
@@ -92,6 +101,8 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - **失败与恢复**：分流规则不确定即回落模型路由；合并窗口内 Worker 崩溃时成员事件 lease 过期各自重放（origin-event 幂等兜底）；计量写失败静默跳过不阻塞路由；回滚代码即可，v33 表可保留。
 - **当前证据（2026-11-22）**：`test/routing-cost.test.ts` 11 个测试（唯一匹配 cancel、歧义/缺失不分流、白名单随开关、机器/显式/automation 不分流、端到端零模型 cancel、3 连发 1 次路由且 3 事件全 processed、控制命令零延迟且后续事件归还 pending、OpenAI 计量幂等与 owner 隔离、失败 error 不造 token、Anthropic usage 桶、无 usage 支持 unavailable）；`web/src/App.test.tsx` 路由用量表渲染回归。完整门禁 `pnpm check` 79 个测试文件、736 个测试（statement 85.17%、branch 77.93%、function 90.17%、line 88.28%）；`pnpm smoke` 通过。
 - **剩余风险**：合并窗口给普通消息引入固定 ~400ms 延迟（可配置/关闭）；白名单覆盖有限（保守设计，未命中进模型）；真实供应商 usage 字段覆盖未实测；分流命中率/误判尚未接指标。
+
+### PLAN-001 P2：路由降本（2026-11-22）
 
 ### ROUTE-004 + EXEC-005：即时应答车道（2026-11-22）
 
@@ -411,5 +422,5 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 
 无用文件、依赖和导出由 Knip 阻断。确有动态加载或外部入口时，应在配置中写出最窄的显式例外，并在变更说明中解释原因。
 | EXEC-005 | 常驻对话执行单元以只读工具面即时应答，正文零确认；需要副作用时经 suggest_task 升级回完整 Task 门禁 | Partial | `src/executor/conversation-executor.ts`, `src/worker/processor.ts`（executeConversationRun）, `src/worker/main.ts`（lane 分池）, `src/core/config.ts`（chatConcurrency、chatLaneEnabled）, `src/supervisor/rollback-compatibility.ts`（schema 32 guard）, `docs/router-worker-design.md` P1 | `test/chat-lane.test.ts` 16 测试（见 ROUTE-004）：滚动 session resume、崩溃后 lease 过期 retry 携带同一 session、chatConcurrency 与 workerConcurrency 分池 claim、只读权限快照、无 actionCapability、suggest_task 经 Inbox 升级、零确认 fixture；`pnpm check`、`pnpm smoke`、`pnpm smoke:crash` | 真实 DSH 只读工具面（查任务状态/记忆的只读工具）未接线，当前只读靠 permission-mode 与 prompt 合同；空闲回收只关 runtime 留 session 未实现；真实模型对零确认与升级标记遵守度未评测 |
-| WORKER-002 | 执行资源按 fast/balanced/deep 池与 effort 分级，池可缺省优雅降级且不静默换池；Provider 终态错误首次即停放不撞重试预算 | Planned | 设计见 `docs/router-worker-design.md` P3；权威实现落 `src/core/config.ts`, `src/worker/*`, `src/executor/*`, RuntimeSettings | 暂无（pool/effort 进 Run 快照与 session 兼容性检查；terminal 错误不产生重试后继；单模型用户行为不变） | 实施 P3 第一阶段手动三池；自动分级押后至评测达标（≥2 池、成功率降幅 ≤5pp 且成本更低） |
+| WORKER-002 | 执行资源按 fast/balanced/deep 池与 effort 分级，池可缺省优雅降级且不静默换池；Provider 终态错误首次即停放不撞重试预算 | Partial | `src/worker/execution-pools.ts`, `src/worker/worker-profile.ts`, `src/worker/provider-errors.ts`, `src/storage/sqlite-store.ts`(v34), `src/worker/run-execution-snapshot.ts`, `src/executor/dsh-cli-executor.ts`, RuntimeSettings 与 Web 设置 | `test/execution-pools.test.ts` 16 测试 + Web 池/effort 保存回归；check 80 文件/753 测试；smoke + smoke:crash 通过 | 真实 DSH 三池执行与 effort 透传未实测；自动分级押后至评测达标（≥2 池、成功率降幅 ≤5pp 且成本更低） |
 | NOTIFY-006 | Run 终态与用户可见通知之间有欠账对账视图；四类对账 finding 只读告警，修复仍走既有恢复链 | Planned | 设计见 `docs/router-worker-design.md` P4；权威实现落 `src/storage/sqlite-store.ts`, `src/observability/*`, `src/notification/*` | 暂无（Unreported/NeverStarted/Stranded/StaleWaiting 各有故障注入测试；对账进程崩溃不影响主链路） | 实施 P4；对账只读，不新增自动修复路径 |

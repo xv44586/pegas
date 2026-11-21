@@ -52,6 +52,10 @@ export interface ExecutionContext {
   workerProfileRevision?: number
   workerProfileSource?: 'global' | 'task'
   authoritySourceRunId?: string
+  executionPool?: 'fast' | 'balanced' | 'deep'
+  requestedPool?: 'fast' | 'balanced' | 'deep'
+  poolDowngradeReason?: string
+  reasoningEffort?: string
 }
 
 export interface InboxEvent {

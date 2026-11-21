@@ -5161,6 +5161,71 @@ describe('sealed Pegas UI', () => {
     ).toBeGreaterThan(0)
   })
 
+  it('saves a task-level execution pool and effort selection', async () => {
+    let submitted: unknown
+    installFetch((path, init) => {
+      if (
+        path === '/v1/tasks/task-1/worker-profile' &&
+        init?.method === 'PUT'
+      ) {
+        submitted = JSON.parse(typeof init.body === 'string' ? init.body : '{}')
+        const draft = submitted as {
+          expectedRevision: number
+          modelMode: 'inherit' | 'override'
+          pool?: string
+          effort?: string
+        }
+        const profile = {
+          id: 'worker-profile-1',
+          taskId: 'task-1',
+          revision: draft.expectedRevision + 1,
+          modelMode: draft.modelMode,
+          ...(draft.pool ? { pool: draft.pool } : {}),
+          ...(draft.effort ? { effort: draft.effort } : {}),
+          createdAt: '2026-11-19T08:00:00.000Z',
+          updatedAt: '2026-11-22T00:00:00.000Z',
+        }
+        return Response.json({
+          profile,
+          effective: {
+            profile,
+            source: 'task',
+            modelMode: 'override',
+            modelProvider: 'magpie',
+            modelName: 'flash',
+            modelRef: 'magpie/flash',
+            ...(draft.pool ? { pool: draft.pool } : {}),
+            ...(draft.effort ? { effort: draft.effort } : {}),
+          },
+        })
+      }
+      return undefined
+    })
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(screen.getByRole('button', { name: /安全自更新流程/ }))
+    expect(await screen.findByText('事情级执行设置')).toBeTruthy()
+    fireEvent.change(await screen.findByLabelText('执行池'), {
+      target: { value: 'fast' },
+    })
+    fireEvent.change(
+      screen.getByLabelText('推理档位（可选，如 low / high / max）'),
+      { target: { value: 'low' } },
+    )
+    fireEvent.click(screen.getByRole('button', { name: '保存执行设置' }))
+    expect(
+      await screen.findByText('执行设置已保存，对后续运行生效。'),
+    ).toBeTruthy()
+    expect(submitted).toMatchObject({
+      userId: 'owner',
+      modelMode: 'inherit',
+      pool: 'fast',
+      effort: 'low',
+    })
+    expect(await screen.findByText('magpie/flash')).toBeTruthy()
+  })
+
   it('renders collaboration relations in the task drawer', async () => {
     installFetch(path =>
       path.startsWith('/v1/channels/task-1/collaborations?')

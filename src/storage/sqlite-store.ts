@@ -50,6 +50,10 @@ import type {
   Task,
 } from '../core/domain.js'
 import type { ExecutorResult } from '../executor/executor.js'
+import {
+  parseExecutionPools,
+  type ExecutionPools,
+} from '../worker/execution-pools.js'
 import type {
   ArtifactDraft,
   EvidenceVerification,
@@ -700,6 +704,13 @@ CREATE TABLE router_usage_records (
 
 CREATE INDEX router_usage_by_user_time
 ON router_usage_records (user_id, observed_at DESC);
+`
+
+const migration34 = `
+ALTER TABLE runtime_settings ADD COLUMN execution_pools_json TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE worker_profiles ADD COLUMN pool TEXT
+CHECK (pool IN ('fast', 'balanced', 'deep'));
+ALTER TABLE worker_profiles ADD COLUMN effort TEXT;
 `
 
 const migration32 = `
@@ -2295,6 +2306,7 @@ interface RuntimeSettingsRow {
   revision: number
   router_mode: RuntimeSettings['routerMode']
   chat_lane_enabled?: number | null
+  execution_pools_json?: string | null
   model_provider: string
   model_connection_id: string | null
   model_name: string
@@ -2313,6 +2325,8 @@ interface WorkerProfileRow {
   model_mode: WorkerProfile['modelMode']
   model_provider: string | null
   model_name: string | null
+  pool: WorkerProfile['pool'] | null
+  effort: string | null
   created_at: string
   updated_at: string
 }
@@ -2495,6 +2509,7 @@ export class PegasStore {
     this.#migrate(31, migration31)
     this.#migrate(32, migration32)
     this.#migrate(33, migration33)
+    this.#migrate(34, migration34)
   }
 
   #backfillWorkerIconIds(): void {
@@ -2610,8 +2625,8 @@ export class PegasStore {
         `INSERT OR IGNORE INTO runtime_settings
           (id, revision, router_mode, model_provider, model_connection_id, model_name,
            agent_model_mode, agent_model_provider, agent_model_name,
-           privacy_mode, rewrite_mode, chat_lane_enabled, updated_at)
-         VALUES (1, 1, ?, 'openai-compatible', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           privacy_mode, rewrite_mode, chat_lane_enabled, execution_pools_json, updated_at)
+         VALUES (1, 1, ?, 'openai-compatible', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         defaults.routerMode,
@@ -2623,6 +2638,7 @@ export class PegasStore {
         defaults.privacyMode,
         defaults.rewriteMode,
         defaults.chatLaneEnabled ? 1 : 0,
+        JSON.stringify(defaults.executionPools ?? {}),
         now,
       )
     return this.getRuntimeSettings()
@@ -2706,20 +2722,24 @@ export class PegasStore {
       const unchanged =
         current.modelMode === update.modelMode &&
         current.modelProvider === update.modelProvider &&
-        current.modelName === update.modelName
+        current.modelName === update.modelName &&
+        current.pool === update.pool &&
+        current.effort === update.effort
       const now = this.#clock.now().toISOString()
       if (!unchanged) {
         this.#database
           .prepare(
             `UPDATE worker_profiles
              SET revision = revision + 1, model_mode = ?, model_provider = ?,
-                 model_name = ?, updated_at = ?
+                 model_name = ?, pool = ?, effort = ?, updated_at = ?
              WHERE task_id = ? AND revision = ?`,
           )
           .run(
             update.modelMode,
             update.modelProvider ?? null,
             update.modelName ?? null,
+            update.pool ?? null,
+            update.effort ?? null,
             now,
             taskId,
             update.expectedRevision,
@@ -4674,7 +4694,9 @@ export class PegasStore {
              model_provider = 'openai-compatible', model_connection_id = ?,
              model_name = ?, agent_model_mode = ?, agent_model_provider = ?,
              agent_model_name = ?, privacy_mode = ?, rewrite_mode = ?,
-             chat_lane_enabled = COALESCE(?, chat_lane_enabled), updated_at = ?
+             chat_lane_enabled = COALESCE(?, chat_lane_enabled),
+             execution_pools_json = COALESCE(?, execution_pools_json),
+             updated_at = ?
          WHERE id = 1 AND revision = ?`,
       )
       .run(
@@ -4691,6 +4713,9 @@ export class PegasStore {
           : settings.chatLaneEnabled
             ? 1
             : 0,
+        settings.executionPools === undefined
+          ? null
+          : JSON.stringify(settings.executionPools),
         this.#clock.now().toISOString(),
         expectedRevision,
       )
@@ -4841,7 +4866,9 @@ export class PegasStore {
                model_provider = 'openai-compatible', model_connection_id = ?,
                model_name = ?, agent_model_mode = ?, agent_model_provider = ?,
                agent_model_name = ?, privacy_mode = ?, rewrite_mode = ?,
-               chat_lane_enabled = COALESCE(?, chat_lane_enabled), updated_at = ?
+               chat_lane_enabled = COALESCE(?, chat_lane_enabled),
+               execution_pools_json = COALESCE(?, execution_pools_json),
+               updated_at = ?
            WHERE id = 1 AND revision = ?`,
         )
         .run(
@@ -4858,6 +4885,9 @@ export class PegasStore {
             : settings.chatLaneEnabled
               ? 1
               : 0,
+          settings.executionPools === undefined
+            ? null
+            : JSON.stringify(settings.executionPools),
           now,
           expectedRevision,
         )
@@ -9408,7 +9438,12 @@ export class PegasStore {
     return { summary: summarizeRouterUsage(records), records }
   }
 
-  failRun(runId: string, workerId: string, error: string): void {
+  failRun(
+    runId: string,
+    workerId: string,
+    error: string,
+    options: { terminalProvider?: boolean } = {},
+  ): void {
     const now = this.#clock.now().toISOString()
     this.#database.exec('BEGIN IMMEDIATE')
     try {
@@ -9417,6 +9452,16 @@ export class PegasStore {
         throw new Error(`Worker ${workerId} does not own run ${runId}`)
       }
       const task = this.#taskById(run.taskId)
+      const terminalProvider =
+        options.terminalProvider === true &&
+        task.kind !== 'conversation' &&
+        !this.#database
+          .prepare(
+            `SELECT 1 FROM actions WHERE resume_run_id = ?
+             AND protocol_version = 1
+             AND status IN ('authorized','succeeded','failed','unknown')`,
+          )
+          .get(runId)
       const resumedActionRow = this.#database
         .prepare(
           `SELECT * FROM actions WHERE resume_run_id = ?
@@ -9450,13 +9495,15 @@ export class PegasStore {
            WHERE id = ?`,
         )
         .run(
-          actionStatus === 'unknown'
-            ? 'action_outcome_unknown'
-            : actionStatus === 'failed'
-              ? 'action_failed'
-              : actionStatus === 'succeeded'
-                ? 'action_resume_interrupted'
-                : 'last_run_failed',
+          terminalProvider
+            ? 'awaiting_provider_condition'
+            : actionStatus === 'unknown'
+              ? 'action_outcome_unknown'
+              : actionStatus === 'failed'
+                ? 'action_failed'
+                : actionStatus === 'succeeded'
+                  ? 'action_resume_interrupted'
+                  : 'last_run_failed',
           now,
           task.id,
         )
@@ -9465,16 +9512,24 @@ export class PegasStore {
         userId: task.userId,
         taskId: task.id,
         channel: 'conversation',
-        dedupeKey:
-          actionStatus === 'unknown'
+        dedupeKey: terminalProvider
+          ? `provider-terminal:${runId}`
+          : actionStatus === 'unknown'
             ? `action-outcome-unknown:${actionId ?? runId}`
             : actionStatus === 'failed'
               ? `action-failed:${actionId ?? runId}`
               : actionStatus === 'succeeded'
                 ? `action-reconciliation-required:${actionId ?? runId}`
                 : `run-failed:${runId}`,
-        payload:
-          actionStatus === 'unknown'
+        payload: terminalProvider
+          ? {
+              type: 'run.provider_terminal',
+              taskId: task.id,
+              runId,
+              text: '模型服务拒绝了这次执行（密钥、权限或模型配置问题）。重试不会自愈：请修正模型连接或执行池设置后再继续。',
+              error,
+            }
+          : actionStatus === 'unknown'
             ? {
                 type: 'action.outcome_unknown',
                 taskId: task.id,
@@ -11397,6 +11452,7 @@ function toRuntimeSettings(row: RuntimeSettingsRow): RuntimeSettings {
     privacyMode: row.privacy_mode,
     rewriteMode: row.rewrite_mode,
     chatLaneEnabled: row.chat_lane_enabled === 1,
+    executionPools: parseStoredExecutionPools(row.execution_pools_json),
     updatedAt: row.updated_at,
   }
 }
@@ -11409,8 +11465,21 @@ function toWorkerProfile(row: WorkerProfileRow): WorkerProfile {
     modelMode: row.model_mode,
     ...(row.model_provider ? { modelProvider: row.model_provider } : {}),
     ...(row.model_name ? { modelName: row.model_name } : {}),
+    ...(row.pool ? { pool: row.pool } : {}),
+    ...(row.effort ? { effort: row.effort } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  }
+}
+
+function parseStoredExecutionPools(
+  value: string | null | undefined,
+): ExecutionPools {
+  if (!value) return {}
+  try {
+    return parseExecutionPools(JSON.parse(value))
+  } catch {
+    return {}
   }
 }
 

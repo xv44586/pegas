@@ -463,6 +463,8 @@ export class PegasApi {
       modelMode: 'inherit' | 'override'
       modelProvider?: string
       modelName?: string
+      pool?: 'fast' | 'balanced' | 'deep'
+      effort?: string
     },
   ): Promise<WorkerProfileResponse> {
     const response = await fetch(
@@ -817,6 +819,12 @@ export class PegasApi {
         agentModelName: settings.agentModelName,
         privacyMode: settings.privacyMode,
         rewriteMode: settings.rewriteMode,
+        ...(settings.chatLaneEnabled === undefined
+          ? {}
+          : { chatLaneEnabled: settings.chatLaneEnabled }),
+        ...(settings.executionPools === undefined
+          ? {}
+          : { executionPools: settings.executionPools }),
         provider,
         ...(speech ? { speech } : {}),
         ...(rewrite ? { rewrite } : {}),

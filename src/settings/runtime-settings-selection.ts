@@ -1,4 +1,5 @@
 import type { ModelProviderId } from '../model/provider-catalog.js'
+import type { ExecutionPools } from '../worker/execution-pools.js'
 
 type RouterMode = 'model' | 'rules'
 type PrivacyMode = 'disabled' | 'mask'
@@ -16,4 +17,6 @@ export interface RuntimeSettingsSelection {
   rewriteMode: RewriteMode
   /** Defaults to false when omitted (rollback switch, PLAN-001 P1). */
   chatLaneEnabled?: boolean
+  /** Optional fast/balanced/deep pool mapping (PLAN-001 P3). */
+  executionPools?: ExecutionPools
 }

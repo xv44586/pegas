@@ -768,6 +768,59 @@ function PegasSettings({
             凭证由 Pegas 的模型服务或隔离的 DSH profile 提供，不读取个人默认
             profile。
           </p>
+          <h3>执行池（可选）</h3>
+          <p className="field-hint">
+            为事情级执行设置提供 fast / balanced / deep 档位。留空的池按
+            fast→balanced→全局默认 显式降级，绝不静默换池。
+          </p>
+          {(['fast', 'balanced', 'deep'] as const).map(poolKey => {
+            const poolModel = draft.executionPools?.[poolKey]
+            const value = poolModel
+              ? `${poolModel.provider}::${poolModel.model}`
+              : ''
+            return (
+              <label className="field-label" key={poolKey}>
+                {poolKey} 池模型
+                <select
+                  value={value}
+                  onChange={event => {
+                    if (!event.target.value) {
+                      const next = Object.fromEntries(
+                        Object.entries(draft.executionPools ?? {}).filter(
+                          ([key]) => key !== poolKey,
+                        ),
+                      )
+                      onChange({ ...draft, executionPools: next })
+                      return
+                    }
+                    const model = models.find(
+                      item =>
+                        `${item.provider}::${item.id}` === event.target.value,
+                    )
+                    if (!model) return
+                    const next = {
+                      ...(draft.executionPools ?? {}),
+                      [poolKey]: {
+                        provider: model.provider,
+                        model: model.id,
+                      },
+                    }
+                    onChange({ ...draft, executionPools: next })
+                  }}
+                >
+                  <option value="">未配置（按降级链处理）</option>
+                  {models.map(model => (
+                    <option
+                      key={`${model.provider}/${model.id}`}
+                      value={`${model.provider}::${model.id}`}
+                    >
+                      {model.name} · {model.provider}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )
+          })}
         </div>
       )}
       {tab === 'behavior' && (

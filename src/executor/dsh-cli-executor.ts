@@ -18,6 +18,7 @@ export interface DshCliExecutorOptions {
   maximumEventBytes?: number
   maximumStderrBytes?: number
   agentModel?: { provider: string; model: string }
+  reasoningEffort?: string
 }
 
 interface DshSessionEvent {
@@ -68,6 +69,7 @@ export class DshCliExecutor implements RunExecutor {
   readonly #maximumEventBytes: number
   readonly #maximumStderrBytes: number
   readonly #agentModel?: { provider: string; model: string }
+  readonly #reasoningEffort?: string
 
   constructor(options: DshCliExecutorOptions = {}) {
     this.#command = options.command ?? 'dsh'
@@ -80,6 +82,7 @@ export class DshCliExecutor implements RunExecutor {
     this.#maximumEventBytes = options.maximumEventBytes ?? 8 * 1024 * 1024
     this.#maximumStderrBytes = options.maximumStderrBytes ?? 64 * 1024
     this.#agentModel = options.agentModel
+    this.#reasoningEffort = options.reasoningEffort
   }
 
   async execute(input: ExecutorInput): Promise<ExecutorResult> {
@@ -104,7 +107,7 @@ export class DshCliExecutor implements RunExecutor {
     const startedAt = performance.now()
     const patch =
       !input.resumeSessionId && this.#agentModel
-        ? createAgentModelPatch(this.#agentModel)
+        ? createAgentModelPatch(this.#agentModel, this.#reasoningEffort)
         : undefined
     const arguments_ = [
       '--profile',
@@ -313,7 +316,10 @@ function isWorkspaceSessionMismatch(message: string): boolean {
   )
 }
 
-function createAgentModelPatch(model: { provider: string; model: string }): {
+function createAgentModelPatch(
+  model: { provider: string; model: string },
+  reasoningEffort: string | undefined,
+): {
   path: string
   remove: () => void
 } {
@@ -324,7 +330,11 @@ function createAgentModelPatch(model: { provider: string; model: string }): {
     JSON.stringify([
       {
         id: 'agent-default-model',
-        config: { provider: model.provider, model: model.model },
+        config: {
+          provider: model.provider,
+          model: model.model,
+          ...(reasoningEffort ? { reasoningEffort } : {}),
+        },
       },
     ]),
     { mode: 0o600 },

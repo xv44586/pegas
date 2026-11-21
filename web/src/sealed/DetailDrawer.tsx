@@ -2030,12 +2030,14 @@ function WorkerProfileSection({
   const [catalogError, setCatalogError] = useState('')
   const [modelMode, setModelMode] = useState<'inherit' | 'override'>('inherit')
   const [modelKey, setModelKey] = useState('')
+  const [pool, setPool] = useState<'' | 'fast' | 'balanced' | 'deep'>('')
+  const [effort, setEffort] = useState('')
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
   const [saveNotice, setSaveNotice] = useState('')
   const current = response ?? profile
   const profileKey = current
-    ? `${current.profile.id}:${String(current.profile.revision)}:${current.profile.modelMode}:${current.profile.modelProvider ?? ''}:${current.profile.modelName ?? ''}`
+    ? `${current.profile.id}:${String(current.profile.revision)}:${current.profile.modelMode}:${current.profile.modelProvider ?? ''}:${current.profile.modelName ?? ''}:${current.profile.pool ?? ''}:${current.profile.effort ?? ''}`
     : ''
   useEffect(() => {
     setResponse(undefined)
@@ -2044,12 +2046,25 @@ function WorkerProfileSection({
   }, [channel.id])
   useEffect(() => {
     if (!profileKey) return
-    const [, , mode = 'inherit', provider = '', name = ''] =
-      profileKey.split(':')
+    const [
+      ,
+      ,
+      mode = 'inherit',
+      provider = '',
+      name = '',
+      savedPool = '',
+      savedEffort = '',
+    ] = profileKey.split(':')
     setModelMode(mode === 'override' ? 'override' : 'inherit')
     setModelKey(
       mode === 'override' && provider && name ? `${provider}/${name}` : '',
     )
+    setPool(
+      savedPool === 'fast' || savedPool === 'balanced' || savedPool === 'deep'
+        ? savedPool
+        : '',
+    )
+    setEffort(savedEffort)
   }, [profileKey])
   const readOnly = channel.status === 'cancelled'
   if (!current && !profileError) return null
@@ -2094,6 +2109,8 @@ function WorkerProfileSection({
               modelName: selectedModel.id,
             }
           : {}),
+        ...(modelMode === 'inherit' && pool ? { pool } : {}),
+        ...(effort.trim() ? { effort: effort.trim() } : {}),
       })
       setResponse(saved)
       setSaveNotice('执行设置已保存，对后续运行生效。')
@@ -2141,6 +2158,12 @@ function WorkerProfileSection({
                 label="设置版本"
                 value={`v${String(current.profile.revision)}`}
               />
+              {current.effective.pool && (
+                <Meta label="执行池" value={current.effective.pool} />
+              )}
+              {current.effective.effort && (
+                <Meta label="推理档位" value={current.effective.effort} />
+              )}
             </dl>
           </div>
           {readOnly || !api ? (
@@ -2167,6 +2190,39 @@ function WorkerProfileSection({
                   <option value="inherit">跟随 Pegas 全局设置</option>
                   <option value="override">为这件事情指定模型</option>
                 </select>
+              </label>
+              {modelMode === 'inherit' && (
+                <label className="field-label">
+                  执行池
+                  <select
+                    disabled={saving}
+                    onChange={event =>
+                      setPool(
+                        event.target.value === 'fast' ||
+                          event.target.value === 'balanced' ||
+                          event.target.value === 'deep'
+                          ? event.target.value
+                          : '',
+                      )
+                    }
+                    value={pool}
+                  >
+                    <option value="">不指定（全局默认）</option>
+                    <option value="fast">fast · 轻快省</option>
+                    <option value="balanced">balanced · 均衡</option>
+                    <option value="deep">deep · 深度</option>
+                  </select>
+                </label>
+              )}
+              <label className="field-label">
+                推理档位（可选，如 low / high / max）
+                <input
+                  disabled={saving}
+                  onChange={event => setEffort(event.target.value)}
+                  placeholder="留空跟随模型默认"
+                  type="text"
+                  value={effort}
+                />
               </label>
               {modelMode === 'override' && (
                 <label className="field-label">

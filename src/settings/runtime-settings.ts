@@ -8,6 +8,7 @@ import {
   type ModelProviderProtocol,
 } from '../model/provider-catalog.js'
 import type { RuntimeSettingsSelection } from './runtime-settings-selection.js'
+import { parseExecutionPools } from '../worker/execution-pools.js'
 
 export type { RuntimeSettingsSelection } from './runtime-settings-selection.js'
 
@@ -202,6 +203,9 @@ export function parseRuntimeSettingsUpdate(
     ...(typeof value.chatLaneEnabled === 'boolean'
       ? { chatLaneEnabled: value.chatLaneEnabled }
       : {}),
+    ...(value.executionPools === undefined
+      ? {}
+      : { executionPools: parseExecutionPools(value.executionPools) }),
   }
   const hasApiKey = provider.apiKey
     ? true

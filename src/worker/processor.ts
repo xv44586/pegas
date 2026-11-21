@@ -15,6 +15,7 @@ import {
   type PegasStore,
 } from '../storage/sqlite-store.js'
 import { runExecutionWorkspace } from './run-execution-snapshot.js'
+import { isTerminalProviderError } from './provider-errors.js'
 
 export interface EventHandler {
   handle(event: InboxEvent, store: PegasStore): Promise<void>
@@ -779,7 +780,9 @@ export async function executeClaimedRun(
     if (signal.aborted) return
     if (!store.ownsRun(claimed.run.id, workerId)) return
     const message = error instanceof Error ? error.message : String(error)
-    store.failRun(claimed.run.id, workerId, message)
+    store.failRun(claimed.run.id, workerId, message, {
+      terminalProvider: isTerminalProviderError(message),
+    })
     telemetry?.logger?.error('run.execution_failed', error, {
       runId: claimed.run.id,
       taskId: claimed.task.id,
