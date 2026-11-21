@@ -14,9 +14,9 @@ import {
   X,
   Zap,
 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
-import type { WorkChannel } from '../types'
+import type { ChannelSearchResult, WorkChannel } from '../types'
 import { PegasMark } from './PegasMark'
 import type { AppPage } from './types'
 
@@ -179,21 +179,70 @@ export function GlobalSearch({
   channels,
   onClose,
   onOpen,
+  onSearch,
 }: {
   channels: WorkChannel[]
   onClose: () => void
   onOpen: (channel: WorkChannel) => void
+  onSearch?: (query: string) => Promise<ChannelSearchResult>
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
   const dialogRef = useRef<HTMLElement>(null)
   const [query, setQuery] = useState('')
-  const visibleChannels = channels
+  const [result, setResult] = useState<ChannelSearchResult>()
+  const [searching, setSearching] = useState(false)
+  const [searchError, setSearchError] = useState('')
+  const searchRequestRef = useRef(0)
+  const trimmedQuery = query.trim()
+  const runSearch = useCallback(
+    (searchQuery: string) => {
+      if (!onSearch) return
+      const requestId = searchRequestRef.current + 1
+      searchRequestRef.current = requestId
+      setSearching(true)
+      onSearch(searchQuery)
+        .then(next => {
+          if (requestId !== searchRequestRef.current) return
+          setResult(next)
+          setSearchError('')
+          setSearching(false)
+        })
+        .catch((caught: unknown) => {
+          if (requestId !== searchRequestRef.current) return
+          setSearchError(
+            caught instanceof Error ? caught.message : '搜索失败，请重试。',
+          )
+          setSearching(false)
+        })
+    },
+    [onSearch],
+  )
+  useEffect(() => {
+    if (!onSearch) return
+    if (!trimmedQuery) {
+      searchRequestRef.current += 1
+      setResult(undefined)
+      setSearching(false)
+      setSearchError('')
+      return
+    }
+    const timer = window.setTimeout(() => runSearch(trimmedQuery), 200)
+    return () => window.clearTimeout(timer)
+  }, [onSearch, runSearch, trimmedQuery])
+  const localChannels = channels
     .filter(channel =>
       `${channel.title} ${channel.goal}`
         .toLowerCase()
-        .includes(query.toLowerCase()),
+        .includes(trimmedQuery.toLowerCase()),
     )
     .slice(0, 5)
+  const visibleChannels =
+    onSearch && trimmedQuery ? (result?.channels ?? []) : localChannels
+  const snippetFor = (channelId: string) =>
+    result?.matches.find(
+      match => match.channelId === channelId && match.sourceKind !== 'channel',
+    )?.snippet ??
+    result?.matches.find(match => match.channelId === channelId)?.snippet
   const resultRefs = useRef<(HTMLButtonElement | null)[]>([])
   resultRefs.current = []
   function focusResult(index: number) {
@@ -254,8 +303,25 @@ export function GlobalSearch({
           />
           <kbd>ESC</kbd>
         </div>
-        <p className="command-section-label">最近</p>
-        {visibleChannels.length ? (
+        <p className="command-section-label">
+          {trimmedQuery ? '搜索结果' : '最近'}
+        </p>
+        {searchError && (
+          <div className="command-empty" role="alert">
+            {searchError}
+            <button
+              className="inline-link"
+              onClick={() => runSearch(trimmedQuery)}
+              type="button"
+            >
+              重试
+            </button>
+          </div>
+        )}
+        {searching && !searchError && (
+          <div className="command-empty">正在搜索…</div>
+        )}
+        {!searching && !searchError && visibleChannels.length ? (
           visibleChannels.map((channel, index) => (
             <button
               key={channel.id}
@@ -278,16 +344,18 @@ export function GlobalSearch({
               <Clock3 size={17} />
               <span>
                 <strong>{channel.title}</strong>
-                <small>{channel.goal}</small>
+                <small>{snippetFor(channel.id) ?? channel.goal}</small>
               </span>
               <ChevronRight size={16} />
             </button>
           ))
-        ) : (
+        ) : !searching && !searchError ? (
           <div className="command-empty">
-            {channels.length ? '没有匹配的事情' : '还没有可搜索的事情'}
+            {trimmedQuery || channels.length
+              ? '没有匹配的事情'
+              : '还没有可搜索的事情'}
           </div>
-        )}
+        ) : null}
         <button
           aria-label="关闭搜索"
           className="command-close"

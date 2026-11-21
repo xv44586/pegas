@@ -2,6 +2,8 @@ import type {
   Approval,
   Automation,
   AutomationDraft,
+  AutomationInvocation,
+  ChannelSearchResult,
   InboxEvent,
   ChannelTimeline,
   DurableAction,
@@ -300,6 +302,30 @@ export class PegasApi {
     return ((await response.json()) as { automation: Automation }).automation
   }
 
+  async automationInvocations(
+    automationId: string,
+  ): Promise<AutomationInvocation[]> {
+    const user = encodeURIComponent(this.#userId)
+    const response = await this.#get<{
+      invocations: AutomationInvocation[]
+    }>(
+      `/v1/automations/${encodeURIComponent(automationId)}/invocations?userId=${user}&limit=50`,
+    )
+    return response.invocations
+  }
+
+  async searchChannels(query: string): Promise<ChannelSearchResult> {
+    const params = new URLSearchParams({
+      userId: this.#userId,
+      limit: '8',
+      sort: 'updated',
+    })
+    if (query.trim()) params.set('q', query.trim())
+    return this.#get<ChannelSearchResult>(
+      `/v1/channels/search?${params.toString()}`,
+    )
+  }
+
   async memories(options?: {
     scope?: MemoryScope
     taskId?: string
@@ -383,6 +409,28 @@ export class PegasApi {
       `/v1/actions/${encodeURIComponent(actionId)}?userId=${user}`,
     )
     return response.action
+  }
+
+  async reconcileAction(
+    actionId: string,
+    resolution: 'succeeded' | 'failed',
+    note: string,
+  ): Promise<DurableAction> {
+    const response = await fetch(
+      `/v1/actions/${encodeURIComponent(actionId)}/reconcile`,
+      {
+        method: 'POST',
+        headers: this.#headers(true),
+        body: JSON.stringify({
+          userId: this.#userId,
+          commandId: crypto.randomUUID(),
+          resolution,
+          note,
+        }),
+      },
+    )
+    if (!response.ok) await throwResponse(response)
+    return ((await response.json()) as { action: DurableAction }).action
   }
 
   async decideApproval(

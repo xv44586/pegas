@@ -15,7 +15,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
-import type { Run } from '../types'
+import type { DurableAction, Run } from '../types'
 import {
   formatRelativeTime,
   runStatusLabel,
@@ -31,6 +31,7 @@ export function DetailDrawer({
   onContinue,
   onStop,
   onDecideApproval,
+  onReconcileAction,
 }: {
   view: DrawerView
   onClose: () => void
@@ -46,6 +47,11 @@ export function DetailDrawer({
     approvalId: string,
     optionId: string,
     rationale?: string,
+  ) => Promise<void>
+  onReconcileAction?: (
+    actionId: string,
+    resolution: 'succeeded' | 'failed',
+    note: string,
   ) => Promise<void>
 }) {
   const closeRef = useRef<HTMLButtonElement>(null)
@@ -128,7 +134,15 @@ export function DetailDrawer({
           <ApprovalDetail
             key={`${view.approval.id}:${view.approval.decision?.id ?? view.approval.status}`}
             onDecide={onDecideApproval}
+            onReconcile={onReconcileAction}
             view={view}
+          />
+        )}
+        {view.kind === 'reconciliation' && (
+          <ReconciliationDetail
+            key={`${view.action.id}:${view.action.reconciliation?.id ?? view.action.status}`}
+            action={view.action}
+            onReconcile={onReconcileAction}
           />
         )}
         {view.kind === 'runtime' && <RuntimeDetail run={view.run} />}
@@ -143,6 +157,7 @@ function drawerEyebrow(view: DrawerView): string {
   if (view.kind === 'task') return '工作详情'
   if (view.kind === 'message') return '待你处理'
   if (view.kind === 'approval') return '需要确认'
+  if (view.kind === 'reconciliation') return '需要核对'
   if (view.kind === 'runtime') return 'Pegas'
   if (view.kind === 'rule') return '行为与规则'
   return '内容预览'
@@ -151,6 +166,7 @@ function drawerTitle(view: DrawerView): string {
   if (view.kind === 'task') return view.channel.title
   if (view.kind === 'message') return 'Pegas 消息'
   if (view.kind === 'approval') return view.approval.prompt.summary
+  if (view.kind === 'reconciliation') return '核对动作的真实结果'
   if (view.kind === 'runtime') return '执行环境详情'
   if (view.kind === 'rule') return view.title
   return view.title
@@ -159,12 +175,18 @@ function drawerTitle(view: DrawerView): string {
 function ApprovalDetail({
   view,
   onDecide,
+  onReconcile,
 }: {
   view: Extract<DrawerView, { kind: 'approval' }>
   onDecide?: (
     approvalId: string,
     optionId: string,
     rationale?: string,
+  ) => Promise<void>
+  onReconcile?: (
+    actionId: string,
+    resolution: 'succeeded' | 'failed',
+    note: string,
   ) => Promise<void>
 }) {
   const pending = view.approval.status === 'pending'
@@ -179,6 +201,10 @@ function ApprovalDetail({
   )
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
+  const needsReconciliation =
+    Boolean(onReconcile) &&
+    !view.action.reconciliation &&
+    (view.action.status === 'unknown' || view.action.status === 'failed')
 
   async function submitDecision() {
     if (!onDecide || !pending || submitting) return
@@ -213,7 +239,11 @@ function ApprovalDetail({
             {JSON.stringify(view.action.result, null, 2)}
           </pre>
         )}
+        <ReconciliationRecord action={view.action} />
       </section>
+      {needsReconciliation && onReconcile && (
+        <ReconciliationForm action={view.action} onReconcile={onReconcile} />
+      )}
       <section className="detail-section">
         <fieldset className="approval-options">
           <legend>你的决定</legend>
@@ -283,9 +313,179 @@ function approvalFootnote(
   return '决定已记录，正在恢复执行状态。'
 }
 
-function actionStatus(
-  status: Extract<DrawerView, { kind: 'approval' }>['action']['status'],
-): string {
+function ReconciliationRecord({ action }: { action: DurableAction }) {
+  if (!action.reconciliation) return null
+  return (
+    <div className="reconciliation-record">
+      <strong>
+        人工核对：
+        {action.reconciliation.resolution === 'succeeded'
+          ? '确认已成功'
+          : '确认已失败'}
+      </strong>
+      <p>{action.reconciliation.note}</p>
+      <small>
+        核对前状态：
+        {action.reconciliation.previousStatus === 'unknown'
+          ? '结果未知'
+          : '执行失败'}
+      </small>
+    </div>
+  )
+}
+
+function ReconciliationForm({
+  action,
+  onReconcile,
+}: {
+  action: DurableAction
+  onReconcile: (
+    actionId: string,
+    resolution: 'succeeded' | 'failed',
+    note: string,
+  ) => Promise<void>
+}) {
+  const [resolution, setResolution] = useState<'succeeded' | 'failed'>(
+    'succeeded',
+  )
+  const [note, setNote] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState('')
+
+  async function submit() {
+    if (submitting || !note.trim()) return
+    setSubmitting(true)
+    setError('')
+    try {
+      await onReconcile(action.id, resolution, note.trim())
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : '提交核对结论失败，请重试。',
+      )
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <section className="detail-section">
+      <fieldset className="approval-options">
+        <legend>人工核对结论</legend>
+        <p className="reconciliation-hint">
+          这个动作的外部结果
+          {action.status === 'unknown' ? '未知' : '被记录为失败'}
+          。请先在外部系统核实真实结果，再选择结论；结论会永久记录并决定是否允许继续。
+        </p>
+        <label className="approval-option">
+          <input
+            checked={resolution === 'succeeded'}
+            disabled={submitting}
+            name={`reconcile-${action.id}`}
+            onChange={() => setResolution('succeeded')}
+            type="radio"
+          />
+          <span>
+            <strong>确认已成功</strong>
+            <small>外部副作用实际已发生，允许 Pegas 继续后续工作</small>
+          </span>
+        </label>
+        <label className="approval-option">
+          <input
+            checked={resolution === 'failed'}
+            disabled={submitting}
+            name={`reconcile-${action.id}`}
+            onChange={() => setResolution('failed')}
+            type="radio"
+          />
+          <span>
+            <strong>确认已失败</strong>
+            <small>外部副作用没有发生，保持失败事实并继续阻塞重试</small>
+          </span>
+        </label>
+      </fieldset>
+      <label className="approval-rationale">
+        <span>核对依据（必填）</span>
+        <textarea
+          disabled={submitting}
+          maxLength={2000}
+          onChange={event => setNote(event.target.value)}
+          placeholder="例如：已在银行 App 查到转账记录，金额与时间一致"
+          value={note}
+        />
+      </label>
+      {error && (
+        <p className="settings-error" role="alert">
+          {error}
+        </p>
+      )}
+      <button
+        className="primary-button"
+        disabled={submitting || !note.trim()}
+        onClick={() => void submit()}
+        type="button"
+      >
+        {submitting ? '正在提交…' : '提交核对结论'}
+      </button>
+    </section>
+  )
+}
+
+function ReconciliationDetail({
+  action,
+  onReconcile,
+}: {
+  action: DurableAction
+  onReconcile?: (
+    actionId: string,
+    resolution: 'succeeded' | 'failed',
+    note: string,
+  ) => Promise<void>
+}) {
+  const needsReconciliation =
+    Boolean(onReconcile) &&
+    !action.reconciliation &&
+    (action.status === 'unknown' || action.status === 'failed')
+  return (
+    <div className="drawer-body">
+      <section className="approval-card">
+        <header>
+          <ShieldCheck size={20} />
+          <strong>高风险动作需要人工核对</strong>
+        </header>
+        <p>
+          Pegas 已记录这个动作的执行结果，但无法确定外部系统的真实状态。
+          请核实后提交结论，Pegas 才会决定是否继续。
+        </p>
+        <dl>
+          <Meta label="动作类型" value={action.kind} />
+          <Meta label="Action" value={actionStatus(action.status)} />
+          <Meta label="Run" value={action.requestRunId} />
+        </dl>
+        <pre className="approval-result">
+          {JSON.stringify(action.request, null, 2)}
+        </pre>
+        {action.result && (
+          <pre className="approval-result">
+            {JSON.stringify(action.result, null, 2)}
+          </pre>
+        )}
+        <ReconciliationRecord action={action} />
+      </section>
+      {needsReconciliation && onReconcile && (
+        <ReconciliationForm action={action} onReconcile={onReconcile} />
+      )}
+      {!needsReconciliation && !action.reconciliation && (
+        <footer className="drawer-footer">
+          <span className="drawer-footnote">
+            当前状态无需人工核对；如有疑问请查看事情详情。
+          </span>
+        </footer>
+      )}
+    </div>
+  )
+}
+
+function actionStatus(status: DurableAction['status']): string {
   const labels = {
     awaiting_approval: '等待授权',
     authorized: '已授权，等待结果',
@@ -294,10 +494,7 @@ function actionStatus(
     failed: '执行失败',
     unknown: '结果未知，需核对',
     reconciled: '已人工核对',
-  } satisfies Record<
-    Extract<DrawerView, { kind: 'approval' }>['action']['status'],
-    string
-  >
+  } satisfies Record<DurableAction['status'], string>
   return labels[status]
 }
 
