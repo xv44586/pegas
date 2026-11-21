@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -6,8 +6,22 @@ const repositoryRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   '..',
 )
-const outputDirectory = path.join(repositoryRoot, 'web/public/icons/agents')
+const spriteModuleDirectory = path.join(repositoryRoot, 'web/src')
 const checkOnly = process.argv.includes('--check')
+
+// The car, camera, computer and phone glyphs adapt outline geometry from
+// Tabler Icons (https://github.com/tabler/tabler-icons), MIT licensed,
+// Copyright (c) 2020-2026 Paweł Kuna. See THIRD_PARTY_NOTICES.md.
+// Source paths use a 24x24 grid with stroke width 2; the shared transform
+// scales them onto the 64x64 brand grid with an 8px safe margin, keeping
+// the historical 4px stroke weight.
+const tablerGlyphTransform = 'translate(8 8) scale(2)'
+
+function tablerGlyph(paths) {
+  return `  <g fill="none" stroke="var(--pegas-icon-foreground)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" transform="${tablerGlyphTransform}">
+${paths.map(pathData => `    <path d="${pathData}"/>`).join('\n')}
+  </g>`
+}
 
 const iconDefinitions = [
   {
@@ -27,64 +41,44 @@ const iconDefinitions = [
     name: 'car',
     title: 'Car Agent',
     description: 'A minimal white car symbol on a blue rounded square.',
-    content: `  <g fill="none" stroke="var(--pegas-icon-foreground)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
-    <path d="m16 39 5-12c1-2 3-3 6-3h10c3 0 5 1 6 3l5 12"/>
-    <rect x="10" y="37" width="44" height="16" rx="5"/>
-    <path d="M23 37l3-8h12l3 8"/>
-  </g>
-  <circle cx="19" cy="48" r="2.5" fill="var(--pegas-icon-foreground)"/>
-  <circle cx="45" cy="48" r="2.5" fill="var(--pegas-icon-foreground)"/>`,
+    content: tablerGlyph([
+      'M5 17a2 2 0 1 0 4 0a2 2 0 1 0 -4 0',
+      'M15 17a2 2 0 1 0 4 0a2 2 0 1 0 -4 0',
+      'M5 17h-2v-6l2 -5h9l4 5h1a2 2 0 0 1 2 2v4h-2m-4 0h-6m-6 -6h15m-6 0v-5',
+    ]),
   },
   {
     name: 'camera',
     title: 'Camera Agent',
     description: 'A minimal white camera symbol on a blue rounded square.',
-    content: `  <g fill="none" stroke="var(--pegas-icon-foreground)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
-    <path d="m23 21 4-6h10l4 6"/>
-    <rect x="10" y="20" width="44" height="32" rx="6"/>
-    <circle cx="32" cy="36" r="9"/>
-  </g>
-  <circle cx="46" cy="27" r="2.25" fill="var(--pegas-icon-foreground)"/>`,
+    content: tablerGlyph([
+      'M5 7h1a2 2 0 0 0 2 -2a1 1 0 0 1 1 -1h6a1 1 0 0 1 1 1a2 2 0 0 0 2 2h1a2 2 0 0 1 2 2v9a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-9a2 2 0 0 1 2 -2',
+      'M9 13a3 3 0 1 0 6 0a3 3 0 0 0 -6 0',
+    ]),
   },
   {
     name: 'computer',
     title: 'Computer Agent',
     description:
       'A minimal white desktop monitor symbol on a blue rounded square.',
-    content: `  <g fill="none" stroke="var(--pegas-icon-foreground)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
-    <rect x="9" y="12" width="46" height="34" rx="6"/>
-    <path d="M32 46v8M23 55h18"/>
-  </g>`,
+    content: tablerGlyph([
+      'M3 5a1 1 0 0 1 1 -1h16a1 1 0 0 1 1 1v10a1 1 0 0 1 -1 1h-16a1 1 0 0 1 -1 -1v-10',
+      'M7 20h10',
+      'M9 16v4',
+      'M15 16v4',
+    ]),
   },
   {
     name: 'phone',
     title: 'Phone Agent',
     description: 'A minimal white smartphone symbol on a blue rounded square.',
-    content: `  <g fill="none" stroke="var(--pegas-icon-foreground)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
-    <rect x="20" y="7" width="24" height="50" rx="7"/>
-    <path d="M28 14h8M29 50h6"/>
-  </g>`,
+    content: tablerGlyph([
+      'M6 5a2 2 0 0 1 2 -2h8a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-8a2 2 0 0 1 -2 -2v-14',
+      'M11 4h2',
+      'M12 17v.01',
+    ]),
   },
 ]
-
-function renderIcon(definition) {
-  const titleId = `pegas-${definition.name}-title`
-  const descriptionId = `pegas-${definition.name}-desc`
-
-  return `<svg class="pegas-agent-icon pegas-agent-icon--${definition.name}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="${titleId} ${descriptionId}">
-  <title id="${titleId}">${definition.title}</title>
-  <desc id="${descriptionId}">${definition.description}</desc>
-  <style>
-    .pegas-agent-icon {
-      --pegas-icon-background: #4d6bfe;
-      --pegas-icon-foreground: #ffffff;
-    }
-  </style>
-  <rect width="64" height="64" rx="14" fill="var(--pegas-icon-background)"/>
-${definition.content}
-</svg>
-`
-}
 
 function renderSprite() {
   const symbols = iconDefinitions
@@ -107,14 +101,14 @@ ${symbols}
 
 function generatedFiles() {
   return [
-    ...iconDefinitions.map(definition => ({
-      fileName: `pegas-${definition.name}.svg`,
-      content: renderIcon(definition),
-    })),
-    { fileName: 'pegas-agents.svg', content: renderSprite() },
+    {
+      fileName: 'pegas-agents.svg',
+      directory: spriteModuleDirectory,
+      content: renderSprite(),
+    },
     {
       fileName: 'agent-icon-sprite.ts',
-      directory: path.join(repositoryRoot, 'web/src'),
+      directory: spriteModuleDirectory,
       content: `// Generated by scripts/generate-agent-icons.mjs; do not edit.
 // Run \`pnpm icons:generate\` to refresh.
 export const agentIconSprite = ${JSON.stringify(renderSprite())}
@@ -129,7 +123,7 @@ async function checkGeneratedIcons() {
   for (const generated of generatedFiles()) {
     const { fileName } = generated
     const outputPath = path.join(
-      generated.directory ?? outputDirectory,
+      generated.directory ?? spriteModuleDirectory,
       fileName,
     )
     const expected = generated.content
@@ -166,17 +160,19 @@ async function checkGeneratedIcons() {
 }
 
 async function generateIcons() {
-  await mkdir(outputDirectory, { recursive: true })
   await Promise.all(
     generatedFiles().map(generated =>
       writeFile(
-        path.join(generated.directory ?? outputDirectory, generated.fileName),
+        path.join(
+          generated.directory ?? spriteModuleDirectory,
+          generated.fileName,
+        ),
         generated.content,
       ),
     ),
   )
   console.log(
-    `Generated ${generatedFiles().length} Agent icon files in ${path.relative(repositoryRoot, outputDirectory)}.`,
+    `Generated ${generatedFiles().length} Agent icon artifacts (inline sprite module + reference sprite).`,
   )
 }
 

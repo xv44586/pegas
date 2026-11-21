@@ -3,13 +3,19 @@
 > Feature：BRAND-001
 >
 > 状态：Usable
-> 更新日期：2026-11-19
+> 更新日期：2026-11-21
 
 ## 用户结果
 
 Pegas 使用自己的图标系统替代 DS Bot 鲸鱼形象。主入口固定为 Pegas
 机器人；每个新 Channel 由服务端自动分配并持久化一个 Worker 图标，用户不能指定或修改
 `workerIconId`。Worker 图标本体始终使用 Pegas 蓝；Channel 状态由独立的小徽记、文字和既有进度元素表达，不再改变 Worker 身份色。
+
+`car`、`camera`、`computer`、`phone` 四个 Worker 符号改编自 MIT 许可的
+Tabler Icons outline 几何（24×24 网格、描边 2），经统一
+`translate(8 8) scale(2)` 变换映射到 64×64 品牌网格，保持 4px 等效描边与
+8px 安全边距。蓝色圆角底板、品牌变量与 `bot` 主入口机器人仍为 Pegas 自有设计。
+来源与许可证见 `THIRD_PARTY_NOTICES.md`。
 
 ## 验收条件
 
@@ -33,9 +39,11 @@ Pegas 使用自己的图标系统替代 DS Bot 鲸鱼形象。主入口固定为
 - 服务端分配：`src/brand/agent-icon.ts`, `src/storage/sqlite-store.ts`
 - Channel 投影：`src/channel/work-channel.ts`
 - Web 渲染：`web/src/PegasAgentIcon.tsx`, `web/src/agent-icon-id.ts`
-- 静态产物：`web/public/icons/agents/pegas-{bot,car,camera,computer,phone}.svg`, `pegas-agents.svg`
+- 产物：`web/src/agent-icon-sprite.ts`（运行时内联 sprite）与 `web/src/pegas-agents.svg`（参考 sprite，不对外服务）。旧 `web/public/icons/agents/` 下五个手绘独立 SVG 与静态 sprite 已删除。
 
 图标路径由生成器中的 `iconDefinitions` 定义。每个图标只声明自身的白色符号；背景、可访问名称和主题变量由统一模板生成。
+Worker 符号使用生成器内的 `tablerGlyph` 辅助函数声明 Tabler 源路径；修改几何时必须同步
+`test/agent-icon-assets.test.ts` 中的源路径快照与第三方声明。
 
 ## 生成与检查
 
@@ -70,8 +78,9 @@ pnpm icons:check
 
 ## 验证证据
 
-- `pnpm icons:check`：五个独立 SVG、一个 sprite 与内联 sprite 模块与生成器完全一致。
+- `pnpm icons:check`：内联 sprite 模块与参考 sprite 与生成器完全一致。
 - `web/src/PegasAgentIcon.test.tsx`：sprite 单例内联、五个 symbol 齐全、`<use>` 指向文档内 fragment。
+- `test/agent-icon-assets.test.ts`：四个 Worker 图标逐路径锁定 Tabler 源几何与缩放变换，`bot` 保持自有几何。
 - 自动化覆盖确定性分配、非法第三方 ID、历史数据回填、API 投影、旧服务兼容、固定蓝色身份与 UI 状态徽记。
 - 浏览器截图覆盖 Pegas 固定机器人、Channel 多形状、五状态徽记和收缩侧栏。
 - 完整门禁：`pnpm check`, `pnpm smoke`。
@@ -100,5 +109,5 @@ main 即可复现，属既有问题。本变更把 sprite 内联进文档根治�
 产出 `web/src/agent-icon-sprite.ts`（字符串模块，`.prettierignore` 排除），
 `PegasAgentSprite` 在 `AppShell` 根部挂载一次隐藏 SVG，`PegasAgentIcon`
 的 `<use>` 改为文档内 fragment（`#pegas-agent-<id>`），首帧即有几何，
-不再依赖网络解码。静态 `pegas-agents.svg` 仍生成，供外部消费者使用。
+不再依赖网络解码。参考 `pegas-agents.svg` 仍生成于 `web/src/`，仅作几何审查用途。
 修复后 `review:ui` 首帧截图图标列像素验证非空（蓝色像素 2367）。
