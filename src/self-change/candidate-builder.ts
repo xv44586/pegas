@@ -23,6 +23,7 @@ import {
   createReviewReport,
   writeReviewReport,
 } from '../quality/review-evidence.js'
+import { destructiveMigrationVersions } from '../storage/migration-policy.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -35,7 +36,11 @@ export interface SelfChangeCandidateRequest {
   outputRoot: string
   releaseId: string
   featureIds: string[]
-  compatibility: { minimumSchema: number; maximumSchema: number }
+  compatibility: {
+    minimumSchema: number
+    maximumSchema: number
+    destructiveMigrations?: number[]
+  }
   /** Runs the repository quality gate inside the worktree. */
   runGate?: (worktree: string) => Promise<GateResult>
   /**
@@ -163,7 +168,16 @@ export async function buildSelfChangeCandidate(
         commit,
         createdAt: now,
       },
-      compatibility: request.compatibility,
+      compatibility: {
+        ...request.compatibility,
+        // The registry is authoritative: a candidate cannot hide a
+        // destructive migration by omitting it from its own declaration.
+        destructiveMigrations: destructiveMigrationVersions.filter(
+          version =>
+            version > request.compatibility.minimumSchema &&
+            version <= request.compatibility.maximumSchema,
+        ),
+      },
       verification: {
         testedCommit: commit,
         ci: request.ci ?? {

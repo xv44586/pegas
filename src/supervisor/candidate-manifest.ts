@@ -27,6 +27,7 @@ export interface CandidateManifest {
   compatibility: {
     minimumSchema: number
     maximumSchema: number
+    destructiveMigrations?: number[]
   }
   verification: {
     testedCommit: string
@@ -215,12 +216,27 @@ function isArtifact(value: unknown): value is CandidateManifest['artifact'] {
 function isCompatibility(
   value: unknown,
 ): value is CandidateManifest['compatibility'] {
-  return (
+  if (
     isRecord(value) &&
     nonnegativeInteger(value.minimumSchema) &&
     nonnegativeInteger(value.maximumSchema) &&
     value.minimumSchema <= value.maximumSchema
-  )
+  ) {
+    const minimum = value.minimumSchema
+    const maximum = value.maximumSchema
+    if (value.destructiveMigrations === undefined) return true
+    return (
+      Array.isArray(value.destructiveMigrations) &&
+      value.destructiveMigrations.every(
+        version =>
+          nonnegativeInteger(version) &&
+          typeof version === 'number' &&
+          version > minimum &&
+          version <= maximum,
+      )
+    )
+  }
+  return false
 }
 
 function isVerification(

@@ -7801,6 +7801,7 @@ export class PegasStore {
           risk: action.risk,
           request: action.request,
           recoveryPoint: action.recoveryPoint,
+          approvalId: approval.id,
         },
       }
       this.#database
@@ -10367,7 +10368,7 @@ export class PegasStore {
   }
 }
 
-function initializeSchema(database: DatabaseSync): void {
+export function initializeSchema(database: DatabaseSync): void {
   for (let attempt = 1; attempt <= schemaInitializationAttempts; attempt += 1) {
     try {
       database.exec(schema)

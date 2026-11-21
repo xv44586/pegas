@@ -73,7 +73,7 @@
 - [x] Candidate readiness 和关键路径 smoke test（`/readyz` 携带 releaseId；`pnpm smoke:self-change` 验证接管前后 Task 闭环）；
 - [x] Supervisor 原子切换、观察期和自动回滚（`POST /v1/recovery/candidates` staging→verifying→confirm/rollback；MVP 场景 5/6 真实进程验证）；
 - [x] 发布后从持久 Task 恢复并向用户汇报（审批后继 Run 记录 Action outcome，Run 完成进入 Outbox；回滚后 Task 数据完好续跑）；
-- [ ] 破坏性 migration 的单独审批。
+- [x] 破坏性 migration 的单独审批（SELF-001：登记表 + manifest 强制声明；Supervisor staging/启动双重校验专用 `self_change.migration` critical Approval，切换前备份副本演练迁移；Executor 双重审批闭环）。
 
 ## 手机长期使用闭环
 

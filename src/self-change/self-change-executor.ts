@@ -12,6 +12,7 @@ import {
   buildSelfChangeCandidate,
   type SelfChangeCandidateRequest,
 } from './candidate-builder.js'
+import { MigrationApprovalRequiredError } from '../supervisor/recovery-server.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -39,6 +40,7 @@ export interface SelfChangeExecutorOptions {
     manifestPath: string
     artifactPath: string
     reviewReportPath: string
+    migrationApproval?: { actionId: string; approvalId: string }
   }) => Promise<void>
   /** Test hook: skip waiting for the switched release to become ready. */
   awaitRelease?: (releaseId: string) => Promise<void>
@@ -50,7 +52,11 @@ interface ApprovalDecisionContext {
   type: 'approval.decision'
   actionId: string
   decision: string
-  action: { kind: string; request: Record<string, unknown> }
+  action: {
+    kind: string
+    request: Record<string, unknown>
+    approvalId?: string
+  }
 }
 
 /**
@@ -196,7 +202,10 @@ export class SelfChangeExecutor implements RunExecutor {
   ): Promise<ExecutorResult> {
     const capability = this.#capability(input)
     const executorRef = input.resumeSessionId ?? `self-change-${input.runId}`
-    if (decision.action.kind !== 'self_change.publish') {
+    if (
+      decision.action.kind !== 'self_change.publish' &&
+      decision.action.kind !== 'self_change.migration'
+    ) {
       throw new Error('Self-change executor received an unrelated Action')
     }
     if (decision.decision !== 'approve') {
@@ -209,8 +218,18 @@ export class SelfChangeExecutor implements RunExecutor {
     }
     const request = decision.action.request
     const releaseId = requiredString(request.releaseId, 'releaseId')
+    const migrationGrant =
+      decision.action.kind === 'self_change.migration'
+        ? {
+            actionId: decision.actionId,
+            approvalId: requiredString(
+              decision.action.approvalId,
+              'approvalId',
+            ),
+          }
+        : undefined
     try {
-      await (this.#options.stageCandidate ?? stageViaRecoveryApi)({
+      const stageInput = {
         recoveryBaseUrl: this.#options.recoveryBaseUrl,
         ...(this.#options.recoveryToken
           ? { recoveryToken: this.#options.recoveryToken }
@@ -221,7 +240,41 @@ export class SelfChangeExecutor implements RunExecutor {
           request.reviewReportPath,
           'reviewReportPath',
         ),
-      })
+        ...(migrationGrant ? { migrationApproval: migrationGrant } : {}),
+      }
+      try {
+        await (this.#options.stageCandidate ?? stageViaRecoveryApi)(stageInput)
+      } catch (error) {
+        if (
+          !(error instanceof MigrationApprovalRequiredError) ||
+          migrationGrant
+        )
+          throw error
+        // The publish approval never covers destructive migrations. Record
+        // the publish outcome, then park the Run behind a dedicated
+        // migration Approval bound to this exact release and migration set.
+        await this.#recordOutcome(capability, input, decision.actionId, {
+          commandId: `self-change-outcome:${decision.actionId}`,
+          status: 'succeeded',
+          result: {
+            releaseId,
+            summary:
+              'Candidate verified; destructive migration approval required',
+            stagingDeferred: 'migration_approval_required',
+          },
+        })
+        await this.#requestMigrationApproval(
+          capability,
+          input,
+          releaseId,
+          request,
+          error.versions,
+        )
+        return {
+          executorRef,
+          output: `候选版本 ${releaseId} 包含破坏性数据迁移（schema ${error.versions.join('、')}），需要你单独批准后才会切换。`,
+        }
+      }
       if (this.#options.awaitRelease) {
         await this.#options.awaitRelease(releaseId)
       } else if (this.#options.controlPlaneBaseUrl) {
@@ -241,6 +294,19 @@ export class SelfChangeExecutor implements RunExecutor {
         output: `候选版本 ${releaseId} 已提交 Supervisor 验证并接管服务；失败会自动回滚。`,
       }
     } catch (error) {
+      if (decision.action.kind === 'self_change.migration') {
+        // The migration itself was rejected or failed before any switch;
+        // record a definite failure so the Task is not left blocked.
+        await this.#recordOutcome(capability, input, decision.actionId, {
+          commandId: `self-change-outcome:${decision.actionId}`,
+          status: 'failed',
+          result: {
+            reason: 'migration_staging_failed',
+            detail: error instanceof Error ? error.message : String(error),
+          },
+        })
+        throw error
+      }
       await this.#recordOutcome(capability, input, decision.actionId, {
         commandId: `self-change-outcome:${decision.actionId}`,
         status: 'unknown',
@@ -281,6 +347,59 @@ export class SelfChangeExecutor implements RunExecutor {
     }
   }
 
+  async #requestMigrationApproval(
+    capability: { baseUrl: string; claimToken: string },
+    input: ExecutorInput,
+    releaseId: string,
+    publishRequest: Record<string, unknown>,
+    versions: number[],
+  ): Promise<void> {
+    const requested = await fetch(
+      `${capability.baseUrl}/v1/runs/${input.runId}/approvals`,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-pegas-run-claim-token': capability.claimToken,
+        },
+        body: JSON.stringify({
+          action: {
+            kind: 'self_change.migration',
+            risk: 'critical',
+            idempotencyKey: `self-change-migration:${input.taskId}:${releaseId}`,
+            request: {
+              releaseId,
+              destructiveMigrations: versions,
+              manifestPath: publishRequest.manifestPath,
+              artifactPath: publishRequest.artifactPath,
+              reviewReportPath: publishRequest.reviewReportPath,
+            },
+            recoveryPoint: {
+              step: 'before_destructive_migration',
+              previousReleaseRetained: true,
+              backupVerifiedBeforeSwitch: true,
+            },
+            approval: {
+              summary: `批准破坏性数据迁移（schema ${versions.join('、')}）`,
+              impact:
+                '候选版本会重建持久数据表结构。Supervisor 切换前会先完成已验证备份并在副本上演练迁移；失败自动回滚上一版本。',
+              recommendedOptionId: 'approve',
+              options: [
+                { id: 'approve', label: '批准迁移并切换', kind: 'approve' },
+                { id: 'reject', label: '不迁移', kind: 'reject' },
+              ],
+            },
+          },
+        }),
+      },
+    )
+    if (!requested.ok) {
+      throw new Error(
+        `Self-change migration approval request failed with ${String(requested.status)}`,
+      )
+    }
+  }
+
   #capability(input: ExecutorInput): { baseUrl: string; claimToken: string } {
     if (!input.actionCapability) {
       throw new Error('Self-change execution requires its Run claim capability')
@@ -295,6 +414,7 @@ async function stageViaRecoveryApi(input: {
   manifestPath: string
   artifactPath: string
   reviewReportPath: string
+  migrationApproval?: { actionId: string; approvalId: string }
 }): Promise<void> {
   const response = await fetch(
     `${input.recoveryBaseUrl}/v1/recovery/candidates`,
@@ -310,12 +430,28 @@ async function stageViaRecoveryApi(input: {
         manifestPath: input.manifestPath,
         artifactPath: input.artifactPath,
         reviewReportPath: input.reviewReportPath,
+        ...(input.migrationApproval
+          ? { migrationApproval: input.migrationApproval }
+          : {}),
       }),
     },
   )
   if (response.status !== 202) {
     const body = (await response.json().catch(() => ({}))) as {
       message?: string
+      error?: string
+      versions?: number[]
+    }
+    if (
+      response.status === 409 &&
+      body.error === 'migration_approval_required' &&
+      Array.isArray(body.versions)
+    ) {
+      throw new MigrationApprovalRequiredError(
+        body.versions.filter(
+          (version): version is number => typeof version === 'number',
+        ),
+      )
     }
     throw new Error(
       `Supervisor rejected the candidate (${String(response.status)}): ${body.message ?? 'unknown'}`,

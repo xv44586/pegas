@@ -16,7 +16,19 @@ export interface RecoveryServerOptions {
     manifestPath: string
     artifactPath: string
     reviewReportPath: string
+    migrationApproval?: { actionId: string; approvalId: string }
   }): Promise<void>
+}
+
+export class MigrationApprovalRequiredError extends Error {
+  readonly versions: number[]
+
+  constructor(versions: number[]) {
+    super(
+      `Destructive migrations require a dedicated approval: ${versions.join(', ')}`,
+    )
+    this.versions = versions
+  }
 }
 
 export function createRecoveryServer(options: RecoveryServerOptions): Server {
@@ -113,6 +125,16 @@ export function createRecoveryServer(options: RecoveryServerOptions): Server {
       try {
         await options.onStage(input)
       } catch (error) {
+        if (error instanceof MigrationApprovalRequiredError) {
+          response.writeHead(409, { 'content-type': 'application/json' })
+          return response.end(
+            JSON.stringify({
+              error: 'migration_approval_required',
+              versions: error.versions,
+              message: error.message,
+            }),
+          )
+        }
         response.writeHead(409, { 'content-type': 'application/json' })
         return response.end(
           JSON.stringify({
@@ -180,6 +202,7 @@ function stageInput(value: unknown):
       manifestPath: string
       artifactPath: string
       reviewReportPath: string
+      migrationApproval?: { actionId: string; approvalId: string }
     }
   | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value))
@@ -196,10 +219,29 @@ function stageInput(value: unknown):
     )
   )
     return undefined
+  let migrationApproval: { actionId: string; approvalId: string } | undefined
+  if (record.migrationApproval !== undefined) {
+    const grant = record.migrationApproval
+    if (
+      !grant ||
+      typeof grant !== 'object' ||
+      Array.isArray(grant) ||
+      typeof (grant as Record<string, unknown>).actionId !== 'string' ||
+      typeof (grant as Record<string, unknown>).approvalId !== 'string' ||
+      !(grant as Record<string, unknown>).actionId ||
+      !(grant as Record<string, unknown>).approvalId
+    )
+      return undefined
+    migrationApproval = {
+      actionId: (grant as Record<string, unknown>).actionId as string,
+      approvalId: (grant as Record<string, unknown>).approvalId as string,
+    }
+  }
   return {
     manifestPath: record.manifestPath as string,
     artifactPath: record.artifactPath as string,
     reviewReportPath: record.reviewReportPath as string,
+    ...(migrationApproval ? { migrationApproval } : {}),
   }
 }
 

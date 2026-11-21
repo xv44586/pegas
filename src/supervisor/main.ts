@@ -10,6 +10,12 @@ import {
 } from './candidate-manifest.js'
 import { verifyCandidateReleaseTree } from '../self-change/candidate-builder.js'
 import { createRecoveryServer } from './recovery-server.js'
+import {
+  assertMigrationApproval,
+  liveSchemaVersion,
+  rehearseMigrations,
+} from './migration-approval.js'
+import { pendingDestructiveMigrations } from '../storage/migration-policy.js'
 import { ReleaseStateStore } from './release-state.js'
 import {
   assertRollbackCompatible,
@@ -76,7 +82,7 @@ const recoveryServer = createRecoveryServer({
       lifecycle.restartRequested = true
       await stopChildren()
     }),
-  onStage: input =>
+  onStage: async input =>
     lifecycleTransitions.begin(async () => {
       const manifest = readCandidateManifest(input.manifestPath)
       verifyCandidateManifest(
@@ -94,6 +100,27 @@ const recoveryServer = createRecoveryServer({
         throw new Error(
           'Candidate minimum schema exceeds the active release compatibility',
         )
+      }
+      const destructive = assertMigrationApproval({
+        databasePath,
+        releaseId: manifest.release.id,
+        targetMaximumSchema: manifest.compatibility.maximumSchema,
+        ...(manifest.compatibility.destructiveMigrations
+          ? {
+              declaredMigrations: manifest.compatibility.destructiveMigrations,
+            }
+          : {}),
+        ...(input.migrationApproval ? { grant: input.migrationApproval } : {}),
+      })
+      if (destructive.length > 0) {
+        // Prove the migration on a verified copy and keep a fresh backup
+        // before the switch; the live database is not touched here.
+        await rehearseMigrations({
+          databasePath,
+          backupDirectory: resolve(
+            process.env.PEGAS_BACKUP_DIR ?? join(dataDir, 'backups'),
+          ),
+        })
       }
       lifecycle.restartRequested = true
       await stopChildren()
@@ -135,6 +162,27 @@ while (!lifecycle.stopRequested) {
   }
   const release = inspection.state.active
   console.log(`Starting Pegas release ${release.id} from ${release.root}`)
+
+  // A restart must never bypass the dedicated destructive-migration
+  // approval, even if the state file was staged by an older Supervisor.
+  const targetMaximumSchema = release.compatibility?.maximumSchema
+  if (targetMaximumSchema !== undefined) {
+    const destructive = pendingDestructiveMigrations(
+      liveSchemaVersion(databasePath),
+      targetMaximumSchema,
+    )
+    if (destructive.length > 0) {
+      console.error(
+        `Release ${release.id} requires unapproved destructive migrations: ${destructive.join(', ')}`,
+      )
+      await stopChildren()
+      await recoverFromFailure(
+        `Release ${release.id} requires a dedicated migration approval`,
+      )
+      await wait(1000)
+      continue
+    }
+  }
 
   if (existsSync(databasePath)) {
     try {
