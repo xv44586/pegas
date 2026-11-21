@@ -413,6 +413,7 @@ GET /v1/channels/search?userId=owner&q=Telegram&status=started,completed&ended=f
 - `sort` 为 `updated`、`created` 或 `ended`，并以 Channel ID 做稳定次级排序；`cursor` 是上一页最后一个 Channel ID。
 - 响应返回 `channels`、最多 50 条 `matches` 片段和可选 `nextCursor`。片段标明 `sourceKind`、`sourceId` 与 `channelId`，不返回隐藏指令或原始工具参数。
 - schema v18 使用 SQLite FTS5 trigram 索引标题、目标、用户输入、Run 输出、Worker Report、Artifact 名称和用户可见 Outbox 文本。事务触发器覆盖待路由的显式 Channel 输入；迁移时回填既有可见事实。
+- 1–2 字符短查询走大小写不敏感的 `instr` 子串匹配（trigram FTS 需要 ≥3 字符），主查询与 snippet 查询的参数绑定与 SQL 分支一致；回归覆盖英文与中文短查询。
 - 读取始终先按 `userId` 过滤。其他用户的 Channel、索引片段、游标和待处理状态不会出现在响应中。
 - 按 WorkerProfile 与委派来源筛选依赖后续 `WORKER-001` 编辑器和 `COLLAB-001` 关系投影；Web 目前仍使用内存搜索，接入此 API 属 DESIGN-002 的后续交互工作。
 

@@ -91,6 +91,38 @@ describe('CHANNEL-003 Channel search', () => {
     store.close()
   })
 
+  it('returns snippets for one- and two-character queries without a datatype mismatch', () => {
+    const store = new PegasStore(':memory:')
+    const event = store.enqueueEvent({
+      userId: 'owner',
+      type: 'user.message',
+      source: 'web',
+      payload: { text: '整理 Telegram 产品方案' },
+    }).event
+    const task = store.applyRoutingDecision(
+      event,
+      {
+        kind: 'create_task',
+        title: 'Telegram 产品方案',
+        goal: '整理 Telegram 产品方案',
+        input: '整理 Telegram 产品方案',
+        reason: 'separate work',
+      },
+      'test',
+    ).task
+
+    for (const query of ['T', 'Te', '方案']) {
+      const result = store.searchChannels('owner', { query, limit: 20 })
+      expect(result.channels.map(channel => channel.id)).toEqual([task.id])
+      const match = result.matches.find(item => item.channelId === task.id)
+      expect(match?.snippet.toLowerCase()).toContain(query.toLowerCase())
+    }
+    const missing = store.searchChannels('owner', { query: '缺', limit: 20 })
+    expect(missing.channels).toEqual([])
+    expect(missing.matches).toEqual([])
+    store.close()
+  })
+
   it('indexes pending explicit Channel inputs before routing', () => {
     const store = new PegasStore(':memory:')
     const origin = store.enqueueEvent({
@@ -194,6 +226,15 @@ describe('CHANNEL-003 Channel search', () => {
 
     expect(response.status).toBe(200)
     expect(await response.json()).toMatchObject({
+      channels: [{ id: task.id, title: 'Weekly reporting' }],
+      matches: [{ channelId: task.id }],
+    })
+
+    const short = await fetch(
+      `${base}/v1/channels/search?userId=owner&q=we&sort=created`,
+    )
+    expect(short.status).toBe(200)
+    expect(await short.json()).toMatchObject({
       channels: [{ id: task.id, title: 'Weekly reporting' }],
       matches: [{ channelId: task.id }],
     })

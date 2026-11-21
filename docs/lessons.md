@@ -192,6 +192,18 @@
 - Enforcement：Electron 只先启动 Control Plane，`waitForControlPlane` 成功后才启动 Worker 与 Scheduler；桌面回归测试固定该顺序，真实 Electron smoke 继续覆盖 Task→Run。
 - Owner / next action：新增其他共享数据库的桌面子进程时必须复用同一 health-first 启动边界。
 
+### LESSON-20261121-02：条件拼接 SQL 的分支占位符必须与参数构造同步
+
+- Rule：按查询长度、筛选开关等条件拼接 SQL 分支时，每个分支引入的占位符必须在参数构造处有对应绑定；新增或修改分支必须同时覆盖各分支的自动化回归。
+- Why：CHANNEL-003 短查询（<3 字符）EXISTS 分支需要一个原始 query 绑定，但参数构造只在 FTS 分支追加第二个参数，LIMIT 绑到字符串、query 绑到 task_id，1–2 字符搜索全部 400 `datatype mismatch`；已有测试只覆盖长查询，缺陷由 UI 联调发现而非门禁拦截。
+- Feature：CHANNEL-003
+- Evidence：2026-11-21 DESIGN-002 搜索接线时发现并登记；`fix/CHANNEL-003-short-query` 修复 `searchChannels` 参数构造，`test/channel-search.test.ts` 新增 1/2 字符与中文短查询 store 回归及 HTTP 合同短查询断言，先复现失败再修复通过。
+- Seen：1（2026-11-21）
+- Severity：normal
+- Status：Observed
+- Enforcement：尚未晋升为全仓规则；本次以短查询回归测试约束该分支。
+- Owner / next action：后续给 `searchChannels` 或其他条件拼接查询增加分支时，必须为每个分支补参数绑定回归；同类问题在三个独立日期出现后晋升为门禁。
+
 <!--
 ### LESSON-YYYYMMDD-NN：简短标题
 

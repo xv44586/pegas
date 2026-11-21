@@ -4987,7 +4987,11 @@ export class PegasStore {
     if (statuses) params.push(...statuses)
     if (query) {
       params.push(query)
-      if (Array.from(query).length >= 3) params.push(ftsTrigramQuery(query))
+      // The short-query EXISTS branch also binds the raw query; keep the
+      // parameter order aligned with the SQL placeholder order.
+      params.push(
+        Array.from(query).length >= 3 ? ftsTrigramQuery(query) : query,
+      )
     }
     if (options.workerIconId) params.push(options.workerIconId)
     if (cursorValue !== undefined && options.cursor) {
