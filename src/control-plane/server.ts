@@ -788,9 +788,20 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         const taskId = decodeURIComponent(channelTimelineMatch[1] ?? '')
         const task = options.store.findTask(taskId, userId)
         if (!task) return sendJson(response, 404, { error: 'not_found' })
+        const rawLimit = channelTimelineUrl?.searchParams.get('limit')
+        const cursor =
+          channelTimelineUrl?.searchParams.get('cursor') ?? undefined
+        const page = options.store.pageChannelEvents(
+          taskId,
+          userId,
+          rawLimit ? Number(rawLimit) : 50,
+          cursor,
+        )
         return sendJson(response, 200, {
           channel: projectWorkChannel(task),
-          events: options.store.listChannelEvents(taskId, userId),
+          events: page.events,
+          ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+          routing: options.store.listChannelRoutingDecisions(taskId, userId),
           runs: options.store.listRuns(taskId),
           messages: options.store.listOutbox(userId, taskId),
         })

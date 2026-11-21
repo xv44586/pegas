@@ -4403,6 +4403,32 @@ export class PegasStore {
   }
 
   listChannelEvents(taskId: string, userId: string): InboxEvent[] {
+    const events: InboxEvent[] = []
+    let cursor: string | undefined
+    do {
+      const page = this.pageChannelEvents(taskId, userId, 200, cursor)
+      events.push(...page.events)
+      cursor = page.nextCursor
+    } while (cursor)
+    return events
+  }
+
+  pageChannelEvents(
+    taskId: string,
+    userId: string,
+    limit = 50,
+    cursor?: string,
+  ): { events: InboxEvent[]; nextCursor?: string } {
+    if (!Number.isSafeInteger(limit) || limit <= 0 || limit > 200)
+      throw new Error('Timeline limit must be an integer between 1 and 200')
+    const cursorRow = cursor
+      ? (this.#database
+          .prepare(
+            'SELECT rowid FROM inbox_events WHERE id = ? AND user_id = ?',
+          )
+          .get(cursor, userId) as { rowid: number } | undefined)
+      : undefined
+    if (cursor && !cursorRow) throw new Error('Timeline cursor is invalid')
     const rows = this.#database
       .prepare(
         `SELECT * FROM (
@@ -4425,10 +4451,62 @@ export class PegasStore {
                WHERE task_events.event_id = inbox_events.id
              )
          )
-         ORDER BY created_at ASC, event_rowid ASC`,
+         WHERE (? IS NULL OR event_rowid > ?)
+         ORDER BY event_rowid ASC LIMIT ?`,
       )
-      .all(taskId, userId, taskId, userId, userId, taskId)
-    return rows.map(row => toInboxEvent(row as unknown as InboxRow))
+      .all(
+        taskId,
+        userId,
+        taskId,
+        userId,
+        userId,
+        taskId,
+        cursorRow?.rowid ?? null,
+        cursorRow?.rowid ?? null,
+        limit + 1,
+      ) as unknown as (InboxRow & { event_rowid: number })[]
+    const hasMore = rows.length > limit
+    const pageRows = hasMore ? rows.slice(0, limit) : rows
+    const nextCursor = hasMore ? pageRows.at(-1)?.id : undefined
+    return {
+      events: pageRows.map(row => toInboxEvent(row)),
+      ...(nextCursor ? { nextCursor } : {}),
+    }
+  }
+
+  listChannelRoutingDecisions(
+    taskId: string,
+    userId: string,
+  ): {
+    eventId: string
+    kind: string
+    taskId: string
+    reason: string
+    createdAt: string
+  }[] {
+    const task = this.findTask(taskId, userId)
+    if (!task) throw new Error('Task does not exist for user')
+    const rows = this.#database
+      .prepare(
+        `SELECT routing_decisions.* FROM routing_decisions
+         INNER JOIN inbox_events ON inbox_events.id = routing_decisions.event_id
+         WHERE routing_decisions.task_id = ? AND inbox_events.user_id = ?
+         ORDER BY routing_decisions.created_at ASC, inbox_events.rowid ASC`,
+      )
+      .all(taskId, userId) as unknown as {
+      event_id: string
+      kind: string
+      task_id: string
+      reason: string
+      created_at: string
+    }[]
+    return rows.map(row => ({
+      eventId: row.event_id,
+      kind: row.kind,
+      taskId: row.task_id,
+      reason: row.reason,
+      createdAt: row.created_at,
+    }))
   }
 
   listTasks(userId?: string): Task[] {

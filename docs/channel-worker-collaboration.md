@@ -512,8 +512,16 @@ GET /v1/channels/search?userId=owner&q=Telegram&status=started,completed&ended=f
 非目标：
 
 - 本阶段不新增完整 ChannelEvent schema，不伪造尚未由 Executor 持久化的工具调用。
-- 不实现跨 Channel 协作卡、全文搜索、游标、数据迁移或历史回填。
+- 不实现跨 Channel 协作卡、全文搜索、数据迁移或历史回填（协作卡、搜索与游标分页由后续 Feature 独立实现）。
 - 不改变 Pegas 主对话的信息降噪策略，也不把 Outbox 投递状态作为 Channel 权威状态。
+
+### CHANNEL-002 第二阶段：游标分页与路由原因（2026-11-21）
+
+- `GET /v1/channels/:channelId/timeline?userId=…&limit=…&cursor=…` 返回按 Event 插入序稳定分页的 `events` 与可选 `nextCursor`；`limit` 为 1–200，默认 50。cursor 是上一页最后一个 Event ID，必须属于同一 owner，否则 `400`。
+- 响应新增 `routing` 数组：该 Channel 全部持久化 Routing Decision（`eventId`、`kind`、`taskId`、`reason`、`createdAt`），按 owner 校验后返回；用户可以看到每条输入被创建或归入事情的原因。
+- `runs` 与 `messages` 仍返回全量投影；Web 客户端当前请求 `limit=200` 保持既有语义，增量加载 UI 是后续变更。
+- `listChannelEvents` 兼容入口内部按页聚合，不再截断长历史。
+- 证据：`test/channel-timeline.test.ts` 覆盖稳定游标无丢失/重复、非法 limit/cursor、跨 owner cursor 拒绝、路由原因投影与 HTTP 分页合同。
 
 数据、权限与失败边界：
 
@@ -527,7 +535,7 @@ GET /v1/channels/search?userId=owner&q=Telegram&status=started,completed&ended=f
 | -------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | -------- |
 | `CHANNEL-001`  | 服务端 Task 以 WorkChannel 投影供 Web 使用；主入口与 Channel 直接对话边界明确           | `TASK-001`, `CONV-002`                                             | Usable   |
 | `TASK-002`     | completed Channel 可经授权复核恢复；用户停止后原 Channel 永久关闭；Run/Runtime 独立结束 | `TASK-001`, `CHANNEL-001`, `EXEC-003`, `WORKER-001` 的执行快照边界 | Partial  |
-| `CHANNEL-002`  | Channel 时间线显示结构化输入、路由、Run、工具摘要和结果                                 | `CHANNEL-001`, `EXEC-001`                                          | Partial  |
+| `CHANNEL-002`  | Channel 时间线显示结构化输入、路由原因、Run 和结果，支持稳定游标分页                    | `CHANNEL-001`, `EXEC-001`                                          | Partial  |
 | `WORKER-001`   | 事情继承全局模型并支持显式覆盖、配置快照和受控 Session rollover                         | `CHANNEL-001`, `SETTINGS-001`                                      | Partial  |
 | `COLLAB-001`   | 委派、交接、context note、handback 和结果回送形成持久闭环                               | `CHANNEL-002`, `WORKER-001`, `ROUTE-002`                           | Partial  |
 | `CHANNEL-003`  | 按 ID/对话搜索，并按创建/结束时间和状态排序过滤                                         | `CHANNEL-002`                                                      | Usable   |

@@ -58,7 +58,7 @@ export class PegasApi {
         this.#get<{ messages: OutboxMessage[] }>(`/v1/outbox?userId=${user}`),
         channelId
           ? this.#get<unknown>(
-              `/v1/channels/${encodeURIComponent(channelId)}/timeline?userId=${user}`,
+              `/v1/channels/${encodeURIComponent(channelId)}/timeline?userId=${user}&limit=200`,
             )
           : Promise.resolve(undefined),
       ])
