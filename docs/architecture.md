@@ -157,7 +157,9 @@ Router 不直接回答任务内容，不判断某个工具是否存在，也不�
 
 Router 默认使用模型进行归属判断，但结果必须写入结构化数据。已有 Task 的执行单元也可以把不属于自身目标的消息退回 Router 重新分配。
 
-第一版提供两级策略：显式 `taskId` 始终按确定性路径续接；未指定 Task 的输入默认交给 Model Router，在受限候选集中判断 `create_task` 或引用候选 ID 的 `continue_task`。默认连接 Magpie 的指定 Router 模型；输出无法解析、引用越权或 Provider 不可用时自动退回确定性新建策略，不能阻塞 Durable Inbox。
+第一版提供两级策略：显式 `taskId` 始终按确定性路径续接；未指定 Task 的输入默认交给 Model Router，在受限候选集中判断 `create_task`、`continue_task`、`steer_task` 或 `cancel_task`。默认连接 Magpie 的指定 Router 模型；输出无法解析、引用越权或 Provider 不可用时自动退回确定性新建策略，不能阻塞 Durable Inbox。
+
+控制意图与归属判断共用同一条持久 Routing Decision 合同（`ROUTE-001`）。`steer_task` 只允许指向 `started` 状态的候选 Task：目标 Run 仍在排队时，纠正文字在同一事务内合并进 Run 输入；目标 Run 正在执行时，纠正作为持久 steering 指令挂在该 Run 上，Worker 心跳在同一事务中续租并检测到指令后中止当前 Executor，把旧 Run 停放为 `superseded_by_steering` 并创建复用同一 Executor session 的后继 Run。带未消费 steering 的 Run 不能提交完成，防止旧方向的执行结果静默覆盖用户纠正；等待审批等阻塞 Action 时 steering 与普通输入一样被停放，不绕过 Action Policy。`cancel_task` 复用用户停止的同一事务语义：human/stopped ended、取消未终结 Run 与 pending Approval、authorized Action 转 unknown 并要求人工核对、结算协作关系。两种控制意图都只接受已认证的人类 `user.message`，机器事件与协作 handback 不能铸造控制命令；同一事件的决策幂等重放，冲突决策拒绝。schema v24 为 Run 增加 steering 载荷与 `steering_of_run_id` 后继链，存在未消费 steering 时回滚到旧 Release 被 Guard 拒绝。
 
 Pegas 的 Model Provider 是小型控制面边界，不依赖本机 Agent 客户端或其登录态。第一版提供常见厂商、聚合网关、本地模型服务和自定义连接目录，通过 OpenAI Chat Completions 或 Anthropic Messages 协议完成结构化判断。Provider API key 由服务端实例密钥加密保存，读取接口只暴露是否已配置；它不承载工具调用和长期执行。DSH Runtime 的凭证和 Provider 仍保持在 DSH profile 内；Pegas 只读取 profile 暴露的模型目录，并可通过临时 patch 为新 session 选择默认 Agent 模型，不复制 DSH 凭证，也不改变恢复中 session 的模型。
 

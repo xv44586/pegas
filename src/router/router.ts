@@ -106,14 +106,22 @@ const routerSystemPrompt = `You route one user message into durable personal-age
 Return one JSON object only.
 If the message clearly continues exactly one listed task, return:
 {"kind":"continue_task","taskId":"listed id","title":"","goal":"","reason":"short reason"}
+If the message redirects, narrows or corrects work that is currently executing on exactly one listed task (its status is "started"), return:
+{"kind":"steer_task","taskId":"listed id","title":"","goal":"","reason":"short reason"}
+If the message clearly asks to stop or cancel exactly one listed task, return:
+{"kind":"cancel_task","taskId":"listed id","title":"","goal":"","reason":"short reason"}
 Otherwise return:
 {"kind":"create_task","taskId":"","title":"concise title","goal":"complete user goal","reason":"short reason"}
-Never invent a task id. Prefer create_task when uncertain or when the message introduces an independent idea.`
+Never invent a task id. Prefer create_task when uncertain or when the message introduces an independent idea.
+You only classify ownership and control intent. Never answer the task content, never judge tool availability, and never use steer_task or cancel_task without an explicit user instruction targeting that task.`
 
 const routerDecisionSchema = {
   type: 'object',
   properties: {
-    kind: { type: 'string', enum: ['create_task', 'continue_task'] },
+    kind: {
+      type: 'string',
+      enum: ['create_task', 'continue_task', 'steer_task', 'cancel_task'],
+    },
     taskId: { type: 'string' },
     title: { type: 'string' },
     goal: { type: 'string' },
@@ -165,6 +173,20 @@ function modelDecision(
       throw new Error('Router model selected an unknown task')
     }
     return { kind: 'continue_task', taskId, input, reason }
+  }
+  if (value.kind === 'steer_task') {
+    const taskId = requiredString(value.taskId, 'taskId')
+    const target = candidates.find(task => task.id === taskId)
+    if (!target) throw new Error('Router model selected an unknown task')
+    if (target.status !== 'started')
+      throw new Error('Router model can only steer a started task')
+    return { kind: 'steer_task', taskId, input, reason }
+  }
+  if (value.kind === 'cancel_task') {
+    const taskId = requiredString(value.taskId, 'taskId')
+    const target = candidates.find(task => task.id === taskId)
+    if (!target) throw new Error('Router model selected an unknown task')
+    return { kind: 'cancel_task', taskId, reason }
   }
   if (value.kind === 'create_task') {
     const title = titleFromText(requiredString(value.title, 'title'))

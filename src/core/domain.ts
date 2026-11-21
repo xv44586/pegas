@@ -100,6 +100,7 @@ export interface Run {
   taskId: string
   originEventId?: string
   retryOfRunId?: string
+  steeringOfRunId?: string
   executor: string
   executorRef?: string
   resumeFromRef?: string
@@ -197,6 +198,17 @@ export type RoutingDecision =
       kind: 'continue_task'
       taskId: string
       input: string
+      reason: string
+    }
+  | {
+      kind: 'steer_task'
+      taskId: string
+      input: string
+      reason: string
+    }
+  | {
+      kind: 'cancel_task'
+      taskId: string
       reason: string
     }
 

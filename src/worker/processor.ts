@@ -62,6 +62,10 @@ export class RoutingEventHandler implements EventHandler {
       store.listTasks(event.userId),
     )
     if (!decision) return
+    if (decision.kind === 'steer_task' || decision.kind === 'cancel_task') {
+      store.applyControlIntent(event, decision)
+      return
+    }
     store.applyRoutingDecision(event, decision, this.#executorName, task =>
       this.#executionContext(task),
     )
@@ -166,6 +170,9 @@ export class RoutingEventHandler implements EventHandler {
         candidates,
       )
       if (!decision) throw new Error('Router did not classify handback input')
+      if (decision.kind === 'steer_task' || decision.kind === 'cancel_task') {
+        throw new Error('Handback routing cannot mint control intents')
+      }
       if (
         decision.kind === 'continue_task' &&
         !candidates.some(task => task.id === decision.taskId)
@@ -352,9 +359,13 @@ export async function executeClaimedRun(
   const abortRun = () => runAbort.abort(signal.reason)
   if (signal.aborted) abortRun()
   else signal.addEventListener('abort', abortRun, { once: true })
+  const steeringState = { pending: false }
   const leaseHeartbeat = setInterval(() => {
     try {
-      store.renewRunLease(claimed.run.id, workerId)
+      if (store.renewRunLeaseAndCheckSteering(claimed.run.id, workerId)) {
+        steeringState.pending = true
+        runAbort.abort(new Error('Run steering requested'))
+      }
     } catch (error) {
       console.error(`Failed to renew run ${claimed.run.id} lease`, error)
       runAbort.abort(error)
@@ -412,6 +423,10 @@ export async function executeClaimedRun(
   } catch (error) {
     clearInterval(leaseHeartbeat)
     signal.removeEventListener('abort', abortRun)
+    if (steeringState.pending && store.ownsRun(claimed.run.id, workerId)) {
+      store.supersedeRunForSteering(claimed.run.id, workerId)
+      return
+    }
     // A Worker Runtime is replaceable. Preserve its durable Run and lease so
     // another runtime can recover it through the existing lease-expiry path.
     if (signal.aborted) return
@@ -424,6 +439,13 @@ export async function executeClaimedRun(
   clearInterval(leaseHeartbeat)
   signal.removeEventListener('abort', abortRun)
   if (!store.ownsRun(claimed.run.id, workerId)) return
+  if (store.listPendingRunSteering(claimed.run.id, workerId).length > 0) {
+    // The user redirected this work before the Executor finished. Park the
+    // interrupted attempt and queue a successor that resumes the same
+    // session with the correction; the old claim can no longer report.
+    store.supersedeRunForSteering(claimed.run.id, workerId)
+    return
+  }
   store.completeRun(claimed.run.id, workerId, result)
   const persistedRun = store
     .listRuns(claimed.task.id)

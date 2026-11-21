@@ -6,6 +6,7 @@ const automationSchemaVersion = 20
 const memorySchemaVersion = 21
 const goalProposalSchemaVersion = 22
 const actionReconciliationSchemaVersion = 23
+const steeringSchemaVersion = 24
 
 export class RollbackCompatibilityError extends Error {}
 
@@ -115,6 +116,24 @@ export function assertRollbackCompatible(
       if (reconciledAction) {
         throw new RollbackCompatibilityError(
           'Rollback is unsafe while reconciled Action outcomes exist',
+        )
+      }
+    }
+    if (
+      currentVersion >= steeringSchemaVersion &&
+      targetMaximumSchema < steeringSchemaVersion
+    ) {
+      const pendingSteering = database
+        .prepare(
+          `SELECT 1 FROM runs
+           WHERE steering_json IS NOT NULL
+             AND status IN ('queued','running','waiting')
+           LIMIT 1`,
+        )
+        .get()
+      if (pendingSteering) {
+        throw new RollbackCompatibilityError(
+          'Rollback is unsafe while unconsumed steering directives exist',
         )
       }
     }

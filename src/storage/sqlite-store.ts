@@ -410,6 +410,13 @@ BEGIN
 END;
 `
 
+const migration24 = `
+ALTER TABLE runs ADD COLUMN steering_json TEXT;
+ALTER TABLE runs ADD COLUMN steering_of_run_id TEXT REFERENCES runs(id);
+CREATE UNIQUE INDEX runs_by_steering_source
+ON runs (steering_of_run_id) WHERE steering_of_run_id IS NOT NULL;
+`
+
 const migration2 = `
 ALTER TABLE tasks ADD COLUMN goal TEXT NOT NULL DEFAULT '';
 
@@ -1593,6 +1600,8 @@ interface ChannelRelationRow {
 interface RunRow {
   id: string
   retry_of_run_id: string | null
+  steering_of_run_id?: string | null
+  steering_json?: string | null
   task_id: string
   origin_event_id: string | null
   executor: string
@@ -1994,6 +2003,7 @@ export class PegasStore {
     this.#migrate(21, migration21)
     this.#migrate(22, migration22)
     this.#migrate(23, migration23)
+    this.#migrate(24, migration24)
   }
 
   #backfillWorkerIconIds(): void {
@@ -4192,6 +4202,227 @@ export class PegasStore {
     return toTask(row)
   }
 
+  #controlDecisionEvent(eventId: string): InboxEvent | undefined {
+    const row = this.#database
+      .prepare(
+        `SELECT inbox_events.* FROM routing_decisions
+         INNER JOIN inbox_events ON inbox_events.id = routing_decisions.event_id
+         WHERE routing_decisions.event_id = ?
+           AND routing_decisions.kind IN ('steer_task','cancel_task')`,
+      )
+      .get(eventId) as unknown as InboxRow | undefined
+    return row ? toInboxEvent(row) : undefined
+  }
+
+  #applyControlIntentInTransaction(
+    event: InboxEvent,
+    decision: Extract<RoutingDecision, { kind: 'steer_task' | 'cancel_task' }>,
+  ): Task {
+    if (event.type !== 'user.message' || event.authenticatedActor !== 'human') {
+      throw new Error('Control intents require authenticated human input')
+    }
+    const replay = this.#controlDecisionEvent(event.id)
+    if (replay) {
+      const recorded = this.#database
+        .prepare(
+          'SELECT kind, task_id FROM routing_decisions WHERE event_id = ?',
+        )
+        .get(event.id) as { kind: string; task_id: string }
+      if (
+        recorded.kind !== decision.kind ||
+        recorded.task_id !== decision.taskId
+      )
+        throw new Error('Event already routed with a different decision')
+      return this.#taskById(decision.taskId)
+    }
+    const task = this.#taskById(decision.taskId)
+    if (task.userId !== event.userId)
+      throw new Error('Task belongs to another user')
+    const now = this.#clock.now().toISOString()
+
+    if (decision.kind === 'cancel_task') {
+      if (task.status === 'cancelled') {
+        this.#recordControlDecisionInTransaction(event, decision, now)
+        return task
+      }
+      if (task.status === 'completed') throw new Error('Task already ended')
+      this.#stopTaskInTransaction(task, 'stopped_by_user', decision.reason)
+      this.#recordControlDecisionInTransaction(event, decision, now)
+      return this.#taskById(task.id)
+    }
+
+    if (task.status === 'cancelled')
+      throw new Error('Task was stopped by the user')
+    if (task.status === 'completed')
+      throw new Error('A completed Task must resume through continuation')
+    const blockingAction = this.#database
+      .prepare(
+        `SELECT status FROM actions
+         WHERE task_id = ? AND protocol_version = 1
+           AND status IN ('awaiting_approval','authorized','failed','unknown')
+         ORDER BY updated_at DESC, id DESC LIMIT 1`,
+      )
+      .get(task.id) as { status: string } | undefined
+    if (blockingAction)
+      throw new TaskActionBlockedError(task.id, blockingAction.status)
+    const activeRun = this.#database
+      .prepare(
+        `SELECT id, status FROM runs
+         WHERE task_id = ? AND status IN ('queued','running')
+         ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+      )
+      .get(task.id) as { id: string; status: string } | undefined
+    if (!activeRun) throw new Error('Steering requires a queued or running Run')
+    const directive = { eventId: event.id, text: decision.input, at: now }
+    if (activeRun.status === 'queued') {
+      const run = this.#runById(activeRun.id)
+      this.#database
+        .prepare('UPDATE runs SET input_json = ?, updated_at = ? WHERE id = ?')
+        .run(
+          JSON.stringify(
+            `${run.input}\n\n[用户纠正] 用户在执行开始前补充了以下要求，必须与原始目标合并处理：\n${decision.input}`,
+          ),
+          now,
+          activeRun.id,
+        )
+    } else {
+      const row = this.#database
+        .prepare('SELECT steering_json FROM runs WHERE id = ?')
+        .get(activeRun.id) as { steering_json: string | null }
+      const directives = row.steering_json
+        ? (JSON.parse(row.steering_json) as (typeof directive)[])
+        : []
+      directives.push(directive)
+      this.#database
+        .prepare(
+          'UPDATE runs SET steering_json = ?, updated_at = ? WHERE id = ?',
+        )
+        .run(JSON.stringify(directives), now, activeRun.id)
+    }
+    this.#recordControlDecisionInTransaction(event, decision, now)
+    return this.#taskById(task.id)
+  }
+
+  #recordControlDecisionInTransaction(
+    event: InboxEvent,
+    decision: Extract<RoutingDecision, { kind: 'steer_task' | 'cancel_task' }>,
+    now: string,
+  ): void {
+    this.#database
+      .prepare(
+        `INSERT INTO task_events (event_id, task_id, relation, created_at)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .run(
+        event.id,
+        decision.taskId,
+        decision.kind === 'steer_task' ? 'steering' : 'control',
+        now,
+      )
+    this.#database
+      .prepare(
+        `INSERT INTO routing_decisions (event_id, kind, task_id, reason, created_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(event.id, decision.kind, decision.taskId, decision.reason, now)
+  }
+
+  listPendingRunSteering(
+    runId: string,
+    workerId: string,
+  ): { eventId: string; text: string; at: string }[] {
+    const row = this.#database
+      .prepare(
+        `SELECT steering_json FROM runs
+         WHERE id = ? AND status = 'running' AND claimed_by = ?`,
+      )
+      .get(runId, workerId) as { steering_json: string | null } | undefined
+    if (!row) throw new Error(`Worker ${workerId} does not own run ${runId}`)
+    return row.steering_json
+      ? (JSON.parse(row.steering_json) as {
+          eventId: string
+          text: string
+          at: string
+        }[])
+      : []
+  }
+
+  supersedeRunForSteering(runId: string, workerId: string): Run {
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const row = this.#database
+        .prepare(
+          `SELECT * FROM runs
+           WHERE id = ? AND status = 'running' AND claimed_by = ?`,
+        )
+        .get(runId, workerId) as unknown as RunRow | undefined
+      if (!row) throw new Error(`Worker ${workerId} does not own run ${runId}`)
+      if (!row.steering_json)
+        throw new Error('Run has no pending steering directives')
+      const task = this.#taskById(row.task_id)
+      if (task.status === 'completed' || task.status === 'cancelled')
+        throw new Error('Task is closed')
+      const existing = this.#database
+        .prepare(`SELECT * FROM runs WHERE steering_of_run_id = ? LIMIT 1`)
+        .get(runId) as unknown as RunRow | undefined
+      if (existing) {
+        this.#database
+          .prepare(
+            `UPDATE runs SET steering_json = NULL, updated_at = ? WHERE id = ?`,
+          )
+          .run(this.#clock.now().toISOString(), runId)
+        const successor = toRun(existing)
+        this.#database.exec('COMMIT')
+        return successor
+      }
+      const directives = JSON.parse(row.steering_json) as {
+        eventId: string
+        text: string
+        at: string
+      }[]
+      const now = this.#clock.now().toISOString()
+      const steeringText = directives
+        .map(directive => directive.text)
+        .join('\n')
+      const successorId = randomUUID()
+      this.#database
+        .prepare(
+          `INSERT INTO runs
+            (id, task_id, origin_event_id, steering_of_run_id, executor, resume_from_ref, goal_revision, status,
+             input_json, execution_context_json, execution_contract_version, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          successorId,
+          row.task_id,
+          directives.at(-1)?.eventId ?? row.origin_event_id,
+          runId,
+          row.executor,
+          row.executor_ref ?? row.resume_from_ref,
+          row.goal_revision,
+          JSON.stringify(
+            `${JSON.parse(row.input_json) as string}\n\n[用户纠正] 用户在执行过程中发来了新的指示。请在已完成工作的基础上调整方向，不要重复已完成的副作用：\n${steeringText}`,
+          ),
+          row.execution_context_json,
+          row.execution_contract_version,
+          now,
+          now,
+        )
+      this.#database
+        .prepare(
+          `UPDATE runs SET status = 'cancelled', claimed_by = NULL, lease_until = NULL,
+           steering_json = NULL, last_error = ?, updated_at = ? WHERE id = ?`,
+        )
+        .run(`superseded_by_steering:${successorId}`, now, runId)
+      const successor = this.#runById(successorId)
+      this.#database.exec('COMMIT')
+      return successor
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
   applyRoutingDecision(
     event: InboxEvent,
     decision: RoutingDecision,
@@ -4200,6 +4431,46 @@ export class PegasStore {
       executor,
     },
     options: { collaborationRelationId?: string } = {},
+  ): { task: Task; run: Run } {
+    if (decision.kind === 'steer_task' || decision.kind === 'cancel_task') {
+      throw new Error('Control intents must use applyControlIntent')
+    }
+    return this.#applyTaskRoutingDecision(
+      event,
+      decision,
+      executor,
+      executionContext,
+      options,
+    )
+  }
+
+  applyControlIntent(
+    event: InboxEvent,
+    decision: Extract<RoutingDecision, { kind: 'steer_task' | 'cancel_task' }>,
+  ): { task: Task } {
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      if (event.source === 'collaboration') {
+        throw new Error('Control intents require direct user routing')
+      }
+      const task = this.#applyControlIntentInTransaction(event, decision)
+      this.#database.exec('COMMIT')
+      return { task }
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  #applyTaskRoutingDecision(
+    event: InboxEvent,
+    decision: Extract<
+      RoutingDecision,
+      { kind: 'create_task' | 'continue_task' }
+    >,
+    executor: string,
+    executionContext: ExecutionContext | ((task: Task) => ExecutionContext),
+    options: { collaborationRelationId?: string },
   ): { task: Task; run: Run } {
     this.#database.exec('BEGIN IMMEDIATE')
     try {
@@ -7252,6 +7523,36 @@ export class PegasStore {
       throw new Error(`Worker ${workerId} does not own run ${runId}`)
   }
 
+  renewRunLeaseAndCheckSteering(
+    runId: string,
+    workerId: string,
+    leaseMs = 30_000,
+  ): boolean {
+    const now = this.#clock.now()
+    this.#database.exec('BEGIN IMMEDIATE')
+    let row: { steering_json: string | null } | undefined
+    try {
+      row = this.#database
+        .prepare(
+          `UPDATE runs SET lease_until = ?, updated_at = ?
+           WHERE id = ? AND status = 'running' AND claimed_by = ?
+           RETURNING steering_json`,
+        )
+        .get(
+          new Date(now.getTime() + leaseMs).toISOString(),
+          now.toISOString(),
+          runId,
+          workerId,
+        ) as { steering_json: string | null } | undefined
+      this.#database.exec('COMMIT')
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+    if (!row) throw new Error(`Worker ${workerId} does not own run ${runId}`)
+    return row.steering_json !== null
+  }
+
   recordExecutorRef(
     runId: string,
     workerId: string,
@@ -7275,6 +7576,15 @@ export class PegasStore {
       const run = this.#runById(runId)
       if (run.claimedBy !== workerId || run.status !== 'running') {
         throw new Error(`Worker ${workerId} does not own run ${runId}`)
+      }
+      const pendingSteering = this.#database
+        .prepare('SELECT steering_json FROM runs WHERE id = ?')
+        .get(runId) as { steering_json: string | null }
+      if (pendingSteering.steering_json) {
+        // A user correction arrived while the Executor was finishing. Do not
+        // complete the Task on stale instructions; the Worker parks this
+        // attempt and a successor resumes the session with the correction.
+        throw new Error('Run has pending steering directives')
       }
       const task = this.#taskById(run.taskId)
       const resumedAction = this.#database
@@ -7736,6 +8046,33 @@ export class PegasStore {
         return task
       }
       if (task.status === 'completed') throw new Error('Task already ended')
+      const trimmedReason = reason?.trim() ? reason.trim() : undefined
+      const stopped = this.#stopTaskInTransaction(
+        task,
+        trimmedReason ?? 'stopped_by_user',
+        trimmedReason,
+      )
+      this.#database
+        .prepare(
+          `INSERT INTO task_commands (command_id, task_id, kind, created_at)
+           VALUES (?, ?, 'stop', ?)`,
+        )
+        .run(commandId, taskId, this.#clock.now().toISOString())
+      this.#database.exec('COMMIT')
+      return stopped
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  #stopTaskInTransaction(
+    task: Task,
+    statusReason: string,
+    endedReason: string | undefined,
+  ): Task {
+    const taskId = task.id
+    {
       const now = this.#clock.now().toISOString()
       const cancelledApprovals = this.#database
         .prepare(
@@ -7755,14 +8092,14 @@ export class PegasStore {
         at: now,
         by: 'human' as const,
         outcome: 'stopped' as const,
-        ...(reason ? { reason } : {}),
+        ...(endedReason ? { reason: endedReason } : {}),
       }
       this.#database
         .prepare(
           `UPDATE tasks SET status = 'cancelled', status_reason = ?, ended_json = ?, updated_at = ?
            WHERE id = ?`,
         )
-        .run(reason ?? 'stopped_by_user', JSON.stringify(ended), now, taskId)
+        .run(statusReason, JSON.stringify(ended), now, taskId)
       this.#database
         .prepare(
           `UPDATE runs SET status = 'cancelled', claimed_by = NULL, lease_until = NULL,
@@ -7821,7 +8158,7 @@ export class PegasStore {
             taskId: task.id,
             actionId: action.id,
             ...(action.resume_run_id ? { runId: action.resume_run_id } : {}),
-            reason: reason ?? 'stopped_by_user',
+            reason: endedReason ?? 'stopped_by_user',
             text: '任务已停止，但高风险动作的最终结果未知，需要人工核对。',
           },
         })
@@ -7839,28 +8176,18 @@ export class PegasStore {
       this.#settleInboundCollaborations(
         taskId,
         'cancelled',
-        reason?.trim() ?? 'Target Task was stopped by the user.',
+        endedReason ?? 'Target Task was stopped by the user.',
         undefined,
         now,
       )
       this.#failUndeliveredContextNotes(
         taskId,
         'cancelled',
-        reason?.trim() ?? 'Target Task was stopped before delivery.',
+        endedReason ?? 'Target Task was stopped before delivery.',
         now,
       )
-      this.#database
-        .prepare(
-          `INSERT INTO task_commands (command_id, task_id, kind, created_at)
-           VALUES (?, ?, 'stop', ?)`,
-        )
-        .run(commandId, taskId, now)
       const stopped = this.#taskById(taskId)
-      this.#database.exec('COMMIT')
       return stopped
-    } catch (error) {
-      this.#database.exec('ROLLBACK')
-      throw error
     }
   }
 
@@ -9224,6 +9551,9 @@ function toRun(row: RunRow): Run {
     taskId: row.task_id,
     ...(row.origin_event_id ? { originEventId: row.origin_event_id } : {}),
     ...(row.retry_of_run_id ? { retryOfRunId: row.retry_of_run_id } : {}),
+    ...(row.steering_of_run_id
+      ? { steeringOfRunId: row.steering_of_run_id }
+      : {}),
     executor: row.executor,
     ...(row.executor_ref ? { executorRef: row.executor_ref } : {}),
     ...(row.resume_from_ref ? { resumeFromRef: row.resume_from_ref } : {}),
