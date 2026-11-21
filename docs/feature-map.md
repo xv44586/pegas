@@ -157,6 +157,13 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - **破坏性 migration 单独审批（2026-11-21 增补）**：`src/storage/migration-policy.ts` 维护破坏性迁移登记表（当前 v30 outbox 表重建）；Candidate Manifest `compatibility.destructiveMigrations` 由构建器按登记表强制写入，候选无法隐瞒。Supervisor staging 时按 live `schema_migrations` 计算待执行破坏性迁移：无专用批准返回 409 `migration_approval_required`（携带 versions）；批准必须是同一 durable 数据库中 `self_change.migration`（critical）Action 的 approved Approval，且 request 绑定精确 releaseId 与迁移集合，普通 publish 批准不能替代；有批准时先在已验证备份副本上演练真实迁移代码并通过 integrity_check，再切换。启动路径同样校验，重启不能绕过。Executor 在 publish 批准后收到 409 时记录 publish outcome（succeeded，stagingDeferred），创建专用迁移 Approval 停放 Run；迁移批准后携带 `{actionId, approvalId}` grant 重新 staging；拒绝或 granted staging 失败记录确定性 failed outcome。证据：`test/migration-approval.test.ts` 7 个测试（pending 计算、无 grant/伪造 grant/拒绝 grant 拒绝、releaseId 绑定、declared 越界拒绝、v29 副本演练不动 live 文件、Recovery API 409 合同与 grant 透传、publish→迁移双重审批真实 HTTP 闭环、granted 失败确定性 outcome）。rebase 至含 BRAND-001 Tabler glyphs 的 main 后，完整门禁通过 70 个测试文件、614 个测试（statement 84.89%、branch 78.18%、function 89.11%、line 87.71%）；`pnpm check`、`pnpm smoke`、`pnpm smoke:desktop`、`pnpm smoke:self-change` 均通过。
 - **为什么是 Usable**：目标场景（隔离修改→门禁→审批→接管→失败回滚→恢复汇报）全部有真实进程自动化验证；真实 DSH editor 驱动的自我修改演练与签名为登记在下一缺口的加固项，不阻塞本闭环使用。
 
+### 服务端第一版收尾（2026-11-21）
+
+- mvp-plan 服务端范围全部落地：单用户认证 + 设备身份/游标（CONV-001）、完整路由/Goal/Evidence/Review Pack、通知策略与外部脱敏投影（NOTIFY-004/005）、自动化与 Follow-up（SCHEDULE-001）、节点绑定（EXEC-004）、备份恢复、自我修改与破坏性迁移审批（SELF-001）、结构化遥测与主机级外部健康检查（OBS-001）。
+- 视觉 evidence 闭环：最终修订守卫 + 可信视口验证 + 所有者内容 API + 预览投影 + 外部脱敏（GOAL-001 / NOTIFY-004）。
+- 剩余未勾选项均为客户端或已声明非目标：响应式 Web/PWA 完整壳层（DESIGN-002）、iOS 登录/APNs/恢复界面（MOBILE-001）、Remote Sandbox 节点（EXEC-004 非目标）。
+- 收尾门禁：74 个测试文件、650 个测试（statement 85.04%、branch 78.34%、function 89.11%、line 87.83%）；`pnpm check`、`pnpm smoke`、`pnpm smoke:desktop`、`pnpm smoke:healthcheck` 均通过；主分支合并后重建并复跑 smoke。
+
 ### GOAL-001：目标形成与证据化交付（2026-11-21）
 
 - **用户结果**：用户可以用不完整的愿望、问题、例子或语音开始；实际 Executor 帮助其澄清期望结果、关键上下文、前置条件、权限和完成标准。交付时，用户在 Outbox 按 success criteria 审查 evidence，而不是阅读代码、工具调用或处理过程。

@@ -1,7 +1,7 @@
 # Pegas MVP 计划
 
-> 状态：In Progress
-> 更新日期：2026-11-20
+> 状态：服务端第一版完成（DONE_WITH_CONCERNS，剩余项为客户端与已声明非目标）
+> 更新日期：2026-11-21
 
 ## MVP 验证目标
 
@@ -36,7 +36,7 @@
 ## 第一条真实产品闭环
 
 - [x] Channel & Identity Gateway（统一事件入口、设备身份、单附件与跨端游标已实现；多渠道回复地址与投递偏好待补）；
-- [ ] 单用户认证和移动端设备登录；
+- [x] 单用户认证和移动端设备登录（服务端：实例 bearer token 全 API 鉴权 + userId 所有者隔离 + 事件 deviceId 身份与跨端游标（CONV-001）；手机经同一 HTTP API 认证接入，专用 iOS 登录会话管理属 MOBILE-001 后续）；
 - [x] 同一用户的 Router lease / fencing（事件 claim 续租 + 路由/控制/审批写入与写回的 claim fence，过期接管后旧 Worker 写入被拒绝）；
 - [x] 新建、补充、纠正和取消 Task 的完整路由（steer/cancel 控制意图、心跳中止与 session 后继已实现；Idea/Trigger 意图待补）；
 - [x] 从自由文本或语音形成带 revision 的 Goal Contract，只追问会改变结果、权限、成本或风险的关键未知项；Executor 提案 API 与 blocking 澄清停放已实现，Web 澄清卡片待接入；
