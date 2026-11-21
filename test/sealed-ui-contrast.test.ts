@@ -83,6 +83,7 @@ describe('sealed UI status color contrast', () => {
   const themes: [string, Map<string, string>][] = [
     ['light', base],
     ['warm', tokens(":root[data-theme='warm']")],
+    ['dark', tokens(":root[data-theme='dark']")],
   ]
 
   it.each(themes)(
@@ -105,6 +106,9 @@ describe('sealed UI status color contrast', () => {
       expect(contrast(accentInk, read('accent-soft'))).toBeGreaterThanOrEqual(
         4.5,
       )
+      expect(
+        contrast(read('caution-badge-ink'), read('caution-badge')),
+      ).toBeGreaterThanOrEqual(4.5)
     },
   )
 })

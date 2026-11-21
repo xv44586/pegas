@@ -53,6 +53,11 @@ export type DrawerView =
       message: OutboxMessage
       decisionError?: string
     }
+  | {
+      kind: 'reconciliation'
+      action: DurableAction
+      message: OutboxMessage
+    }
   | { kind: 'rule'; title: string }
   | {
       kind: 'preview'
@@ -181,6 +186,21 @@ export function approvalIdFromMessage(
   return typeof approvalId === 'string' && approvalId.trim()
     ? approvalId
     : undefined
+}
+
+export function actionIdFromMessage(
+  message: OutboxMessage,
+): string | undefined {
+  if (!message.payload || typeof message.payload !== 'object') return undefined
+  const actionId = (message.payload as Record<string, unknown>).actionId
+  return typeof actionId === 'string' && actionId.trim() ? actionId : undefined
+}
+
+export function isReconciliationMessage(message: OutboxMessage): boolean {
+  return (
+    payloadType(message.payload) === 'action.reconciliation_required' &&
+    Boolean(actionIdFromMessage(message))
+  )
 }
 
 export function latestRunForTask(

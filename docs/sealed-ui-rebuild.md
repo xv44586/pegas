@@ -127,4 +127,14 @@
 - 设置“记忆”分类显示真实条数（全局 N 条 · Worker/事情 N 条）并提供“管理记忆”跳转到记忆页。
 - 状态色对比度修正：`--positive:#22754f`、`--caution:#965e0e`、暖色 `--accent-ink:#2f49de`，由 `test/sealed-ui-contrast.test.ts` 固化为回归门禁。
 - 证据：`pnpm check`（52 文件 / 499 测试）、`pnpm smoke`、`pnpm review:ui -- --force`（57 张截图，自动化/记忆含真实种子数据）；真实 Control Plane 联调覆盖自动化 interval/once 创建、暂停、恢复、结束与记忆创建、编辑、删除；axe 三主题 × 两页及 390px 移动端 0 违例。详见 `docs/feature-map.md` DESIGN-002 接入小节。
-- 仍缺：全局搜索接 CHANNEL-003、Invocation 触发历史展示，以及 Artifact、规则、通知偏好、恢复与协作占位启用。
+- 仍缺：Artifact、规则、通知偏好、恢复与协作占位启用（搜索与触发历史已于 §11 接入）。
+
+## 11. 搜索/触发历史/人工核对接入（2026-11-21）
+
+- 全局搜索接入 `GET /v1/channels/search`：200ms 防抖、过期响应丢弃、错误就地重试；空查询显示最近事情，有查询时显示「搜索结果」与命中摘要（优先输入/结果来源而非标题重复）；保留方向键导航与焦点约束。
+- 自动化页每条自动化提供「触发记录」展开区：按需读取 `GET /v1/automations/:id/invocations`（limit 50），展示状态（待触发/处理中/已派发/失败）、计划时间、尝试次数与失败原因；可折叠、失败可重试。
+- 待你处理页对 `action.reconciliation_required` 通知显示「去核对」，打开核对抽屉：展示动作类型、请求与已记录结果，必填核对依据（≤2000 字符），结论二选一（确认已成功/确认已失败）并说明后果；提交 `POST /v1/actions/:id/reconcile`（commandId 幂等）；已核对动作展示只读核对记录。审批抽屉内 unknown/failed Action 复用同一表单。
+- 状态色修正：待处理角标改用 `--caution-badge`/`--caution-badge-ink`（深色 8.66:1），对比度回归扩展到深色主题。
+- 证据：`pnpm check`（53 文件 / 518 测试）、`pnpm smoke`、`pnpm review:ui -- --force`（57 张截图）；真实 Control Plane+Worker+Scheduler（bearer 模式）联调覆盖搜索摘要、真实触发记录与两条核对路径；axe 三主题 × 搜索/触发记录/核对抽屉/待处理页及 390px 移动端 0 违例。详见 `docs/feature-map.md` DESIGN-002 对应小节。
+- 已知服务端缺陷（待独立 fix，未在本变更修改）：短查询（<3 字符）snippet SQL 参数绑定顺序错误导致 400 `datatype mismatch`，UI 就地展示错误；详见 Feature Map CHANNEL-003。
+- 仍缺：搜索状态/时间筛选与分页 UI，以及 Artifact、规则、通知偏好、恢复与协作占位启用。

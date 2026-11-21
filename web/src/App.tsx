@@ -17,7 +17,9 @@ import { AppShell, GlobalSearch } from './sealed/Shell'
 import { type ReviewFixture, UiReviewHarness } from './sealed/UiReviewHarness'
 import {
   emptySnapshot,
+  actionIdFromMessage,
   approvalIdFromMessage,
+  isReconciliationMessage,
   latestRunForTask,
   runIdFromMessage,
   unresolvedAttentionMessages,
@@ -461,6 +463,32 @@ export function App() {
 
   const openDrawerChannelId = drawer?.kind === 'task' ? drawer.channel.id : ''
   const openApprovalId = drawer?.kind === 'approval' ? drawer.approval.id : ''
+  const openReconciliationActionId =
+    drawer?.kind === 'reconciliation' ? drawer.action.id : ''
+  useEffect(() => {
+    if (!openReconciliationActionId) return
+    let cancelled = false
+    const refresh = async () => {
+      try {
+        const action = await api.action(openReconciliationActionId)
+        if (cancelled) return
+        setDrawer(current =>
+          current?.kind === 'reconciliation' &&
+          current.action.id === openReconciliationActionId &&
+          Date.parse(action.updatedAt) >= Date.parse(current.action.updatedAt)
+            ? { ...current, action }
+            : current,
+        )
+      } catch {
+        return
+      }
+    }
+    const interval = window.setInterval(() => void refresh(), 5_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
+  }, [api, openReconciliationActionId])
   useEffect(() => {
     if (!openDrawerChannelId) return
     const interval = window.setInterval(
@@ -663,6 +691,28 @@ export function App() {
     message: OutboxMessage,
     requestId: number,
   ): Promise<boolean> {
+    if (isReconciliationMessage(message)) {
+      const actionId = actionIdFromMessage(message)
+      if (actionId) {
+        try {
+          const action = await api.action(actionId)
+          if (requestId !== attentionRequestRef.current) return false
+          setDrawer({ kind: 'reconciliation', action, message })
+          return true
+        } catch (caught) {
+          if (requestId !== attentionRequestRef.current) return false
+          if (caught instanceof ApiError && caught.status === 401)
+            setUnauthorized(true)
+          else
+            setError(
+              caught instanceof Error
+                ? caught.message
+                : '读取待核对动作失败，请重试。',
+            )
+          return false
+        }
+      }
+    }
     const approvalId = approvalIdFromMessage(message)
     if (approvalId) {
       try {
@@ -862,6 +912,9 @@ export function App() {
               await api.createAutomation(draft)
               await loadAutomations()
             }}
+            onLoadInvocations={automation =>
+              api.automationInvocations(automation.id)
+            }
             onReload={() => void loadAutomations()}
             onSetStatus={async (automation, action) => {
               await api.setAutomationStatus(
@@ -949,6 +1002,7 @@ export function App() {
         <GlobalSearch
           channels={data.snapshot.channels}
           onClose={closeSearch}
+          onSearch={query => api.searchChannels(query)}
           onOpen={channel => {
             setSearchOpen(false)
             openDrawer(
@@ -1102,6 +1156,38 @@ export function App() {
           onStop={async channel => {
             await api.stopChannel(channel.id, 'Stopped from the Pegas UI')
             await Promise.all([loadSnapshot(), loadTaskDrawer(channel.id)])
+          }}
+          onReconcileAction={async (actionId, resolution, note) => {
+            approvalProjectionRequestRef.current += 1
+            const action = await api.reconcileAction(actionId, resolution, note)
+            const approvalId =
+              drawer?.kind === 'approval' && drawer.action.id === actionId
+                ? drawer.approval.id
+                : undefined
+            setDrawer(current =>
+              current?.kind === 'approval' && current.action.id === actionId
+                ? { ...current, action, decisionError: undefined }
+                : current?.kind === 'reconciliation' &&
+                    current.action.id === actionId
+                  ? { ...current, action }
+                  : current,
+            )
+            if (approvalId) {
+              const requestId = approvalProjectionRequestRef.current
+              try {
+                const approval = await api.approval(approvalId)
+                if (requestId !== approvalProjectionRequestRef.current) return
+                setDrawer(current =>
+                  current?.kind === 'approval' && current.action.id === actionId
+                    ? { ...current, approval }
+                    : current,
+                )
+              } catch {
+                void loadSnapshot().catch(handleAttentionError)
+                return
+              }
+            }
+            await loadSnapshot()
           }}
           view={resolvedDrawer}
         />

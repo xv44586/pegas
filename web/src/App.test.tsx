@@ -195,6 +195,26 @@ function installFetch(
     if (overridden) return Promise.resolve(overridden)
     if (path.startsWith('/v1/events?'))
       return Promise.resolve(Response.json({ events: snapshot.events }))
+    if (path.startsWith('/v1/channels/search?')) {
+      const query =
+        new URL(path, 'http://localhost').searchParams.get('q') ?? ''
+      const matched = snapshot.channels.filter(item =>
+        `${item.title} ${item.goal}`
+          .toLowerCase()
+          .includes(query.toLowerCase()),
+      )
+      return Promise.resolve(
+        Response.json({
+          channels: matched,
+          matches: matched.map(item => ({
+            channelId: item.id,
+            sourceKind: 'title',
+            sourceId: item.id,
+            snippet: `服务端命中：${item.title}`,
+          })),
+        }),
+      )
+    }
     if (path.startsWith('/v1/channels?'))
       return Promise.resolve(Response.json({ channels: snapshot.channels }))
     if (path.startsWith('/v1/channels/task-1/timeline?'))
@@ -426,13 +446,13 @@ describe('sealed Pegas UI', () => {
       within(dialog).getByRole('textbox', { name: '搜索事情' }),
       { target: { value: '不存在' } },
     )
-    expect(within(dialog).getByText('没有匹配的事情')).toBeTruthy()
+    expect(await within(dialog).findByText('没有匹配的事情')).toBeTruthy()
     fireEvent.change(
       within(dialog).getByRole('textbox', { name: '搜索事情' }),
       { target: { value: '安全' } },
     )
     fireEvent.click(
-      within(dialog).getByRole('button', { name: /安全自更新流程/ }),
+      await within(dialog).findByRole('button', { name: /安全自更新流程/ }),
     )
     expect(screen.getByLabelText('工作详情')).toBeTruthy()
     expect(await screen.findByText('搜索入口的 Channel 时间线')).toBeTruthy()
@@ -4089,5 +4109,336 @@ describe('sealed Pegas UI', () => {
     expect(
       await screen.findByRole('heading', { name: '记忆', level: 1 }),
     ).toBeTruthy()
+  })
+
+  it('searches channels on the server and shows the match snippet', async () => {
+    const fetchMock = installFetch()
+    render(<App />)
+    const trigger = await screen.findByRole('button', { name: '全局搜索' })
+    fireEvent.click(trigger)
+    const dialog = screen.getByRole('dialog', { name: '全局搜索' })
+    fireEvent.change(
+      within(dialog).getByRole('textbox', { name: '搜索事情' }),
+      { target: { value: '安全' } },
+    )
+    expect(await within(dialog).findByText('搜索结果')).toBeTruthy()
+    const result = await within(dialog).findByRole('button', {
+      name: /安全自更新流程/,
+    })
+    expect(within(result).getByText(/服务端命中：/)).toBeTruthy()
+    expect(
+      fetchMock.mock.calls.some(
+        ([path]) =>
+          typeof path === 'string' && path.startsWith('/v1/channels/search?'),
+      ),
+    ).toBe(true)
+    const searchCall = fetchMock.mock.calls.find(
+      ([path]) =>
+        typeof path === 'string' && path.startsWith('/v1/channels/search?'),
+    )
+    const searchUrl = new URL(
+      typeof searchCall?.[0] === 'string' ? searchCall[0] : '',
+      'http://localhost',
+    )
+    expect(searchUrl.searchParams.get('q')).toBe('安全')
+    expect(searchUrl.searchParams.get('userId')).toBe('owner')
+  })
+
+  it('shows a retryable error when server search fails', async () => {
+    let failures = 0
+    installFetch(path => {
+      if (path.startsWith('/v1/channels/search?')) {
+        failures += 1
+        if (failures === 1)
+          return Response.json({ message: '搜索暂时不可用' }, { status: 500 })
+        return Response.json({
+          channels: snapshot.channels,
+          matches: [],
+        })
+      }
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '全局搜索' }))
+    const dialog = screen.getByRole('dialog', { name: '全局搜索' })
+    fireEvent.change(
+      within(dialog).getByRole('textbox', { name: '搜索事情' }),
+      { target: { value: '安全' } },
+    )
+    const alert = await within(dialog).findByRole('alert')
+    fireEvent.click(within(alert).getByRole('button', { name: '重试' }))
+    expect(
+      await within(dialog).findByRole('button', { name: /安全自更新流程/ }),
+    ).toBeTruthy()
+    expect(failures).toBe(2)
+  })
+
+  it('expands automation invocation history from the server', async () => {
+    const automation = {
+      id: 'auto-history',
+      userId: 'owner',
+      revision: 2,
+      title: '晨间简报',
+      prompt: '整理今天需要处理的事情。',
+      schedule: { kind: 'interval', everySeconds: 3600 },
+      target: { kind: 'new_task' },
+      status: 'active',
+      createdAt: '2026-11-21T08:00:00.000Z',
+      updatedAt: '2026-11-21T09:00:00.000Z',
+    }
+    const fetchMock = installSnapshotFetch(snapshot, path => {
+      if (path === '/v1/automations?userId=owner')
+        return Response.json({ automations: [automation] })
+      if (path.startsWith('/v1/automations/auto-history/invocations?'))
+        return Response.json({
+          invocations: [
+            {
+              id: 'inv-2',
+              automationId: automation.id,
+              userId: 'owner',
+              scheduledFor: '2026-11-21T09:00:00.000Z',
+              eventId: 'event-2',
+              status: 'failed',
+              attempts: 3,
+              lastError: '目标事情已停止',
+              createdAt: '2026-11-21T09:00:00.000Z',
+              updatedAt: '2026-11-21T09:00:05.000Z',
+            },
+            {
+              id: 'inv-1',
+              automationId: automation.id,
+              userId: 'owner',
+              scheduledFor: '2026-11-21T08:00:00.000Z',
+              eventId: 'event-1',
+              status: 'dispatched',
+              attempts: 1,
+              createdAt: '2026-11-21T08:00:00.000Z',
+              updatedAt: '2026-11-21T08:00:02.000Z',
+            },
+          ],
+        })
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: '自动化',
+      }),
+    )
+    fireEvent.click(await screen.findByRole('button', { name: '触发记录' }))
+    const history = await screen.findByLabelText('触发记录')
+    expect(within(history).getByText('已派发')).toBeTruthy()
+    expect(within(history).getByText('失败')).toBeTruthy()
+    expect(within(history).getByText('目标事情已停止')).toBeTruthy()
+    expect(within(history).getByText('尝试 3 次')).toBeTruthy()
+    expect(
+      fetchMock.mock.calls.some(
+        ([path]) =>
+          typeof path === 'string' &&
+          path.startsWith('/v1/automations/auto-history/invocations?'),
+      ),
+    ).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: '触发记录' }))
+    expect(screen.queryByLabelText('触发记录')).toBeNull()
+  })
+
+  it('reconciles an unknown action with a required note', async () => {
+    const sourceMessage = snapshot.messages[0]
+    if (!sourceMessage) throw new Error('Expected an outbox message fixture')
+    const approval: Approval = {
+      ...approvalFixture('approval-reconcile'),
+      status: 'approved',
+      resolvedAt: '2026-11-21T00:02:00.000Z',
+    }
+    let action: DurableAction = {
+      ...actionFixture(approval),
+      status: 'unknown',
+      result: { reason: '进程在网络请求后崩溃' },
+    }
+    let submitted: unknown
+    const approvalMessage = {
+      ...sourceMessage,
+      payload: { type: 'approval.required', approvalId: approval.id },
+    }
+    installSnapshotFetch(
+      { ...snapshot, messages: [approvalMessage] },
+      (path, init) => {
+        if (path.startsWith(`/v1/approvals/${approval.id}?`))
+          return Response.json({ approval })
+        if (path.startsWith(`/v1/actions/${approval.actionId}?`))
+          return Response.json({ action })
+        if (
+          path === `/v1/actions/${approval.actionId}/reconcile` &&
+          init?.method === 'POST'
+        ) {
+          submitted = JSON.parse(
+            typeof init.body === 'string' ? init.body : '{}',
+          )
+          const draft = submitted as {
+            commandId: string
+            resolution: 'succeeded' | 'failed'
+            note: string
+          }
+          action = {
+            ...action,
+            status: 'reconciled',
+            result: { resolution: draft.resolution, note: draft.note },
+            reconciliation: {
+              id: 'recon-1',
+              actionId: action.id,
+              commandId: draft.commandId,
+              resolution: draft.resolution,
+              note: draft.note,
+              previousStatus: 'unknown',
+              reconciledBy: 'owner',
+              createdAt: '2026-11-21T00:05:00.000Z',
+            },
+          }
+          return Response.json({ action }, { status: 201 })
+        }
+        if (path.endsWith('/read'))
+          return Response.json({
+            message: { ...approvalMessage, readAt: '2026-11-21T00:01:00.000Z' },
+          })
+        return undefined
+      },
+    )
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '查看内容' }))
+    expect(await screen.findByText('结果未知，需核对')).toBeTruthy()
+    const submit = screen.getByRole('button', { name: '提交核对结论' })
+    expect(submit.hasAttribute('disabled')).toBe(true)
+    fireEvent.click(screen.getByRole('radio', { name: /确认已失败/ }))
+    fireEvent.change(screen.getByLabelText('核对依据（必填）'), {
+      target: { value: '已在外部系统核实：转账没有发生。' },
+    })
+    fireEvent.click(submit)
+    await waitFor(() => expect(submitted).toBeTruthy())
+    const command = submitted as {
+      userId: string
+      commandId: string
+      resolution: string
+      note: string
+    }
+    expect(command.userId).toBe('owner')
+    expect(command.commandId).toBeTruthy()
+    expect(command.resolution).toBe('failed')
+    expect(command.note).toBe('已在外部系统核实：转账没有发生。')
+    expect(await screen.findByText('人工核对：确认已失败')).toBeTruthy()
+    expect(screen.getByText('核对前状态：结果未知')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '提交核对结论' })).toBeNull()
+  })
+
+  it('does not offer reconciliation for a succeeded action', async () => {
+    const sourceMessage = snapshot.messages[0]
+    if (!sourceMessage) throw new Error('Expected an outbox message fixture')
+    const approval: Approval = {
+      ...approvalFixture('approval-succeeded'),
+      status: 'approved',
+      resolvedAt: '2026-11-21T00:02:00.000Z',
+    }
+    const approvalMessage = {
+      ...sourceMessage,
+      payload: { type: 'approval.required', approvalId: approval.id },
+    }
+    installSnapshotFetch({ ...snapshot, messages: [approvalMessage] }, path => {
+      if (path.startsWith(`/v1/approvals/${approval.id}?`))
+        return Response.json({ approval })
+      if (path.startsWith(`/v1/actions/${approval.actionId}?`))
+        return Response.json({
+          action: { ...actionFixture(approval), status: 'succeeded' },
+        })
+      if (path.endsWith('/read'))
+        return Response.json({
+          message: { ...approvalMessage, readAt: '2026-11-21T00:01:00.000Z' },
+        })
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '查看内容' }))
+    expect(await screen.findByText('执行成功')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '提交核对结论' })).toBeNull()
+    expect(screen.queryByText('人工核对结论')).toBeNull()
+  })
+
+  it('opens the reconciliation drawer from an action notice and submits', async () => {
+    const sourceMessage = snapshot.messages[0]
+    if (!sourceMessage) throw new Error('Expected an outbox message fixture')
+    let action: DurableAction = {
+      ...actionFixture(approvalFixture('approval-notice')),
+      status: 'unknown',
+      result: { providerRequestId: 'req-unknown' },
+    }
+    const notice = {
+      ...sourceMessage,
+      id: 'notice-reconcile',
+      payload: {
+        type: 'action.reconciliation_required',
+        actionId: action.id,
+      },
+    }
+    let submitted: unknown
+    installSnapshotFetch({ ...snapshot, messages: [notice] }, (path, init) => {
+      if (path.startsWith(`/v1/actions/${action.id}?`))
+        return Response.json({ action })
+      if (
+        path === `/v1/actions/${action.id}/reconcile` &&
+        init?.method === 'POST'
+      ) {
+        submitted = JSON.parse(typeof init.body === 'string' ? init.body : '{}')
+        const draft = submitted as {
+          commandId: string
+          resolution: 'succeeded' | 'failed'
+          note: string
+        }
+        action = {
+          ...action,
+          status: 'reconciled',
+          reconciliation: {
+            id: 'recon-notice',
+            actionId: action.id,
+            commandId: draft.commandId,
+            resolution: draft.resolution,
+            note: draft.note,
+            previousStatus: 'unknown',
+            reconciledBy: 'owner',
+            createdAt: '2026-11-21T00:06:00.000Z',
+          },
+        }
+        return Response.json({ action }, { status: 201 })
+      }
+      if (path.endsWith('/read'))
+        return Response.json({
+          message: { ...notice, readAt: '2026-11-21T00:01:00.000Z' },
+        })
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '去核对' }))
+    expect(await screen.findByText('高风险动作需要人工核对')).toBeTruthy()
+    expect(screen.getByText('结果未知，需核对')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('核对依据（必填）'), {
+      target: { value: '供应商后台确认请求已成功落地。' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '提交核对结论' }))
+    await waitFor(() => expect(submitted).toBeTruthy())
+    expect((submitted as { resolution: string }).resolution).toBe('succeeded')
+    expect(await screen.findByText('人工核对：确认已成功')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '提交核对结论' })).toBeNull()
   })
 })
