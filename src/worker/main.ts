@@ -6,6 +6,7 @@ import { DshCliExecutor } from '../executor/dsh-cli-executor.js'
 import { EchoExecutor } from '../executor/echo-executor.js'
 import type { ExecutorInput, RunExecutor } from '../executor/executor.js'
 import { loadModelCredentialVault } from '../model/model-credential-vault.js'
+import { MeteredJsonModelProvider } from '../model/metered-provider.js'
 import {
   createConfiguredModelProvider,
   createRewriteModelProvider,
@@ -91,7 +92,7 @@ const selfChangeExecutor = config.selfChangeEnabled
       recoveryBaseUrl: config.recoveryBaseUrl,
       ...(config.recoveryToken ? { recoveryToken: config.recoveryToken } : {}),
       editor: executor,
-      compatibility: { minimumSchema: 1, maximumSchema: 32 },
+      compatibility: { minimumSchema: 1, maximumSchema: 33 },
       reviewer: 'pegas-self-change-gate',
       controlPlaneBaseUrl,
     })
@@ -107,7 +108,8 @@ const laneExecutor: RunExecutor = {
       ? conversationExecutor.execute(input)
       : runExecutor.execute(input),
 }
-const router = new SettingsAwareTaskRouter(store, createRouter)
+const settingsRouter = new SettingsAwareTaskRouter(store, createRouter)
+const router: TaskRouter = settingsRouter
 const eventHandler = new RoutingEventHandler(router, executor.name, task => {
   const settings = store.getRuntimeSettings()
   return store.resolveWorkerExecutionContext(task.id, task.userId, {
@@ -170,6 +172,7 @@ while (!lifecycle.stopping) {
     eventHandler,
     workerId,
     telemetry,
+    { collectWindowMs: config.routeCollectWindowMs },
   )
 
   // The signal callback may change stopping while a run is being awaited.
@@ -258,29 +261,47 @@ function required(value: string | undefined, name: string): string {
 }
 
 function createRouter(settings: RuntimeSettings): TaskRouter {
-  let provider: JsonModelProvider | undefined
   const baseRouter: TaskRouter =
     settings.routerMode === 'model'
       ? new ModelTaskRouter({
-          provider: (provider = createModelProvider(settings)),
+          provider: metered(createModelProvider(settings), 'router'),
         })
       : new RuleBasedTaskRouter()
   if (settings.rewriteMode === 'disabled') return baseRouter
   const rewriteConnection = store.getRewriteConnection()
-  if (rewriteConnection.mode === 'custom') {
-    const independent = createRewriteModelProvider(
-      rewriteConnection,
-      modelCredentialVault,
-      config.modelTimeoutMs,
-    )
-    provider =
-      settings.privacyMode === 'mask'
-        ? new PrivacyMaskingProvider(independent, createPrivacyMasker())
-        : independent
-  } else {
-    provider ??= createModelProvider(settings)
-  }
-  return new RewritingTaskRouter(baseRouter, new ModelInputRewriter(provider))
+  const rewriteProvider: JsonModelProvider =
+    rewriteConnection.mode === 'custom'
+      ? withPrivacy(
+          createRewriteModelProvider(
+            rewriteConnection,
+            modelCredentialVault,
+            config.modelTimeoutMs,
+          ),
+          settings,
+        )
+      : createModelProvider(settings)
+  return new RewritingTaskRouter(
+    baseRouter,
+    new ModelInputRewriter(metered(rewriteProvider, 'rewrite')),
+  )
+}
+
+function withPrivacy(
+  provider: JsonModelProvider,
+  settings: RuntimeSettings,
+): JsonModelProvider {
+  return settings.privacyMode === 'mask'
+    ? new PrivacyMaskingProvider(provider, createPrivacyMasker())
+    : provider
+}
+
+function metered(
+  provider: JsonModelProvider,
+  component: 'router' | 'rewrite',
+): JsonModelProvider {
+  return new MeteredJsonModelProvider(provider, store, component, () =>
+    settingsRouter.meteringContext(),
+  )
 }
 
 function createExecutor(

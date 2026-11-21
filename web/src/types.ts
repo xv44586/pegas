@@ -168,6 +168,40 @@ interface ModelUsageSummary {
 export interface ModelUsageReport {
   summary: ModelUsageSummary
   records: ModelUsageRecord[]
+  router?: RouterUsageReport
+}
+
+interface RouterUsageRecord {
+  callId: string
+  userId: string
+  component: 'router' | 'rewrite'
+  eventId?: string
+  modelRef: string
+  completeness: 'complete' | 'unavailable'
+  tokenSource?: 'provider_reported'
+  inputTokens?: number
+  outputTokens?: number
+  totalTokens?: number
+  cacheReadTokens?: number
+  cacheWriteTokens?: number
+  reasoningTokens?: number
+  durationMs: number
+  latencySource: 'pegas_observed'
+  outcome: 'ok' | 'error'
+  observedAt: string
+}
+
+interface RouterUsageReport {
+  summary: {
+    calls: number
+    okCalls: number
+    errorCalls: number
+    reportedCalls: number
+    inputTokens: number
+    outputTokens: number
+    durationMs: number
+  }
+  records: RouterUsageRecord[]
 }
 
 export interface RuntimeSettings {

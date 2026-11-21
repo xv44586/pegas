@@ -2938,6 +2938,76 @@ describe('sealed Pegas UI', () => {
     ).toBeTruthy()
   })
 
+  it('shows router and rewrite metering with honest unreported tokens', async () => {
+    installFetch(path => {
+      if (!path.startsWith('/v1/usage?')) return undefined
+      return Response.json({
+        summary: {
+          records: 0,
+          completeRecords: 0,
+          partialRecords: 0,
+          unavailableRecords: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          durationMs: 0,
+        },
+        records: [],
+        router: {
+          summary: {
+            calls: 2,
+            okCalls: 1,
+            errorCalls: 1,
+            reportedCalls: 1,
+            inputTokens: 100,
+            outputTokens: 20,
+            durationMs: 900,
+          },
+          records: [
+            {
+              callId: 'router:event-1:openai/router-model',
+              userId: 'owner',
+              component: 'router',
+              eventId: 'event-1',
+              modelRef: 'openai/router-model',
+              completeness: 'complete',
+              tokenSource: 'provider_reported',
+              inputTokens: 100,
+              outputTokens: 20,
+              durationMs: 500,
+              latencySource: 'pegas_observed',
+              outcome: 'ok',
+              observedAt: '2026-11-22T00:00:00.000Z',
+            },
+            {
+              callId: 'rewrite:event-2:openai/router-model',
+              userId: 'owner',
+              component: 'rewrite',
+              eventId: 'event-2',
+              modelRef: 'openai/router-model',
+              completeness: 'unavailable',
+              durationMs: 400,
+              latencySource: 'pegas_observed',
+              outcome: 'error',
+              observedAt: '2026-11-22T00:00:01.000Z',
+            },
+          ],
+        },
+      })
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /模型用量/ }))
+    expect(await screen.findByText('路由与改写用量')).toBeTruthy()
+    expect(screen.getByText('成功 1 · 失败 1')).toBeTruthy()
+    expect(screen.getByText('路由 · 事件 event-1')).toBeTruthy()
+    expect(screen.getByText('改写 · 事件 event-2')).toBeTruthy()
+    expect(screen.getByText('120')).toBeTruthy()
+  })
+
   it('shows the shell as offline when the authoritative snapshot fails', async () => {
     installFetch(path =>
       path.startsWith('/v1/events?')

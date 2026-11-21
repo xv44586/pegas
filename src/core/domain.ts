@@ -229,6 +229,48 @@ export interface ModelUsageReport {
   records: ModelUsageRecord[]
 }
 
+export interface RouterUsageRecord {
+  callId: string
+  userId: string
+  component: 'router' | 'rewrite'
+  eventId?: string
+  modelRef: string
+  usage?: {
+    inputTokens?: number
+    outputTokens?: number
+    totalTokens?: number
+    cacheReadTokens?: number
+    cacheWriteTokens?: number
+    reasoningTokens?: number
+  }
+  durationMs: number
+  outcome: 'ok' | 'error'
+}
+
+export interface RouterUsageReport {
+  summary: {
+    calls: number
+    okCalls: number
+    errorCalls: number
+    reportedCalls: number
+    inputTokens: number
+    outputTokens: number
+    durationMs: number
+  }
+  records: (Omit<RouterUsageRecord, 'usage'> & {
+    completeness: 'complete' | 'unavailable'
+    tokenSource?: 'provider_reported'
+    inputTokens?: number
+    outputTokens?: number
+    totalTokens?: number
+    cacheReadTokens?: number
+    cacheWriteTokens?: number
+    reasoningTokens?: number
+    latencySource: 'pegas_observed'
+    observedAt: string
+  })[]
+}
+
 export type RoutingDecision =
   | {
       kind: 'create_task'

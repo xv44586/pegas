@@ -44,6 +44,8 @@ import type {
   OutboxResolutionDraft,
   RoutingDecision,
   RoutingCandidate,
+  RouterUsageRecord,
+  RouterUsageReport,
   Run,
   Task,
 } from '../core/domain.js'
@@ -673,6 +675,31 @@ CREATE TABLE behavior_preferences (
   revision INTEGER NOT NULL DEFAULT 1,
   updated_at TEXT NOT NULL
 );
+`
+
+const migration33 = `
+CREATE TABLE router_usage_records (
+  call_id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  component TEXT NOT NULL CHECK (component IN ('router', 'rewrite')),
+  event_id TEXT,
+  model_ref TEXT NOT NULL,
+  completeness TEXT NOT NULL CHECK (completeness IN ('complete', 'unavailable')),
+  token_source TEXT CHECK (token_source IN ('provider_reported')),
+  input_tokens INTEGER CHECK (input_tokens >= 0),
+  output_tokens INTEGER CHECK (output_tokens >= 0),
+  total_tokens INTEGER CHECK (total_tokens >= 0),
+  cache_read_tokens INTEGER CHECK (cache_read_tokens >= 0),
+  cache_write_tokens INTEGER CHECK (cache_write_tokens >= 0),
+  reasoning_tokens INTEGER CHECK (reasoning_tokens >= 0),
+  duration_ms INTEGER CHECK (duration_ms >= 0),
+  latency_source TEXT CHECK (latency_source IN ('pegas_observed')),
+  outcome TEXT NOT NULL CHECK (outcome IN ('ok', 'error')),
+  observed_at TEXT NOT NULL
+);
+
+CREATE INDEX router_usage_by_user_time
+ON router_usage_records (user_id, observed_at DESC);
 `
 
 const migration32 = `
@@ -2244,6 +2271,26 @@ interface ModelUsageRow {
   run_updated_at: string
 }
 
+interface RouterUsageRow {
+  call_id: string
+  user_id: string
+  component: 'router' | 'rewrite'
+  event_id: string | null
+  model_ref: string
+  completeness: 'complete' | 'unavailable'
+  token_source: 'provider_reported' | null
+  input_tokens: number | null
+  output_tokens: number | null
+  total_tokens: number | null
+  cache_read_tokens: number | null
+  cache_write_tokens: number | null
+  reasoning_tokens: number | null
+  duration_ms: number
+  latency_source: 'pegas_observed'
+  outcome: 'ok' | 'error'
+  observed_at: string
+}
+
 interface RuntimeSettingsRow {
   revision: number
   router_mode: RuntimeSettings['routerMode']
@@ -2447,6 +2494,7 @@ export class PegasStore {
     this.#migrate(30, migration30)
     this.#migrate(31, migration31)
     this.#migrate(32, migration32)
+    this.#migrate(33, migration33)
   }
 
   #backfillWorkerIconIds(): void {
@@ -4945,6 +4993,19 @@ export class PegasStore {
         `Worker ${workerId} cannot renew event ${eventId}`,
       )
     }
+  }
+
+  releaseEventClaim(eventId: string, workerId: string): void {
+    this.#assertEventClaim(eventId, workerId)
+    this.#database
+      .prepare(
+        `UPDATE inbox_events
+         SET status = 'pending', claimed_by = NULL, lease_until = NULL,
+             claimed_contract_version = NULL,
+             attempts = CASE WHEN attempts > 0 THEN attempts - 1 ELSE 0 END
+         WHERE id = ? AND status = 'processing' AND claimed_by = ?`,
+      )
+      .run(eventId, workerId)
   }
 
   #assertEventClaim(eventId: string, workerId: string): void {
@@ -9303,6 +9364,50 @@ export class PegasStore {
     return { summary: summarizeModelUsage(records), records }
   }
 
+  recordRouterUsage(record: RouterUsageRecord): void {
+    this.#database
+      .prepare(
+        `INSERT INTO router_usage_records
+          (call_id, user_id, component, event_id, model_ref, completeness,
+           token_source, input_tokens, output_tokens, total_tokens,
+           cache_read_tokens, cache_write_tokens, reasoning_tokens,
+           duration_ms, latency_source, outcome, observed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(call_id) DO NOTHING`,
+      )
+      .run(
+        record.callId,
+        record.userId,
+        record.component,
+        record.eventId ?? null,
+        record.modelRef,
+        record.usage ? 'complete' : 'unavailable',
+        record.usage ? 'provider_reported' : null,
+        record.usage?.inputTokens ?? null,
+        record.usage?.outputTokens ?? null,
+        record.usage?.totalTokens ?? null,
+        record.usage?.cacheReadTokens ?? null,
+        record.usage?.cacheWriteTokens ?? null,
+        record.usage?.reasoningTokens ?? null,
+        record.durationMs,
+        'pegas_observed',
+        record.outcome,
+        this.#clock.now().toISOString(),
+      )
+  }
+
+  listRouterUsage(userId: string): RouterUsageReport {
+    const rows = this.#database
+      .prepare(
+        `SELECT * FROM router_usage_records
+         WHERE user_id = ?
+         ORDER BY observed_at DESC, call_id DESC`,
+      )
+      .all(userId) as unknown as RouterUsageRow[]
+    const records = rows.map(toRouterUsageRecord)
+    return { summary: summarizeRouterUsage(records), records }
+  }
+
   failRun(runId: string, workerId: string, error: string): void {
     const now = this.#clock.now().toISOString()
     this.#database.exec('BEGIN IMMEDIATE')
@@ -11925,6 +12030,57 @@ function summarizeModelUsage(
   addKnownUsageTotal(summary, records, 'reasoningTokens')
   addKnownUsageTotal(summary, records, 'costUsd')
   return summary
+}
+
+function toRouterUsageRecord(
+  row: RouterUsageRow,
+): RouterUsageReport['records'][number] {
+  return {
+    callId: row.call_id,
+    userId: row.user_id,
+    component: row.component,
+    ...(row.event_id ? { eventId: row.event_id } : {}),
+    modelRef: row.model_ref,
+    completeness: row.completeness,
+    ...(row.token_source ? { tokenSource: row.token_source } : {}),
+    ...(row.input_tokens === null ? {} : { inputTokens: row.input_tokens }),
+    ...(row.output_tokens === null ? {} : { outputTokens: row.output_tokens }),
+    ...(row.total_tokens === null ? {} : { totalTokens: row.total_tokens }),
+    ...(row.cache_read_tokens === null
+      ? {}
+      : { cacheReadTokens: row.cache_read_tokens }),
+    ...(row.cache_write_tokens === null
+      ? {}
+      : { cacheWriteTokens: row.cache_write_tokens }),
+    ...(row.reasoning_tokens === null
+      ? {}
+      : { reasoningTokens: row.reasoning_tokens }),
+    durationMs: row.duration_ms,
+    latencySource: row.latency_source,
+    outcome: row.outcome,
+    observedAt: row.observed_at,
+  }
+}
+
+function summarizeRouterUsage(
+  records: RouterUsageReport['records'],
+): RouterUsageReport['summary'] {
+  return {
+    calls: records.length,
+    okCalls: records.filter(record => record.outcome === 'ok').length,
+    errorCalls: records.filter(record => record.outcome === 'error').length,
+    reportedCalls: records.filter(record => record.completeness === 'complete')
+      .length,
+    inputTokens: records.reduce(
+      (total, record) => total + (record.inputTokens ?? 0),
+      0,
+    ),
+    outputTokens: records.reduce(
+      (total, record) => total + (record.outputTokens ?? 0),
+      0,
+    ),
+    durationMs: records.reduce((total, record) => total + record.durationMs, 0),
+  }
 }
 
 function addKnownUsageTotal(

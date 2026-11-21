@@ -28,6 +28,7 @@ export interface PegasConfig {
   routerMode: 'rules' | 'model'
   chatLaneEnabled: boolean
   chatConcurrency: number
+  routeCollectWindowMs: number
   modelProvider: ModelProviderId
   modelBaseUrl?: string
   modelApiKey?: string
@@ -157,6 +158,11 @@ export function loadConfig(
       1,
       'PEGAS_CHAT_CONCURRENCY',
     ),
+    routeCollectWindowMs: parseNonNegativeInteger(
+      environment.PEGAS_ROUTE_COLLECT_WINDOW_MS,
+      400,
+      'PEGAS_ROUTE_COLLECT_WINDOW_MS',
+    ),
     modelProvider: modelProvider as ModelProviderId,
     ...(modelBaseUrl ? { modelBaseUrl } : {}),
     ...(environment.PEGAS_MODEL_API_KEY
@@ -252,6 +258,17 @@ function parsePositiveInteger(
   const parsed = value === undefined ? fallback : Number(value)
   if (!Number.isSafeInteger(parsed) || parsed <= 0)
     throw new Error(`${name} must be a positive integer`)
+  return parsed
+}
+
+function parseNonNegativeInteger(
+  value: string | undefined,
+  fallback: number,
+  name: string,
+): number {
+  const parsed = value === undefined ? fallback : Number(value)
+  if (!Number.isSafeInteger(parsed) || parsed < 0)
+    throw new Error(`${name} must be a non-negative integer`)
   return parsed
 }
 

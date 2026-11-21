@@ -8,6 +8,7 @@ import type { RunExecutor } from '../executor/executor.js'
 import type { Logger } from '../observability/logger.js'
 import type { MetricsRegistry } from '../observability/metrics.js'
 import type { TaskRouter } from '../router/router.js'
+import { prefilterDecision } from '../router/prefilter.js'
 import {
   EventClaimError,
   TaskActionBlockedError,
@@ -64,13 +65,16 @@ export class RoutingEventHandler implements EventHandler {
       this.#handleConversationSuggestion(event, store)
       return
     }
-    const decision = await this.#router.route(
-      event,
-      store.listRoutingCandidates(event.userId),
-      {
+    const candidates = store.listRoutingCandidates(event.userId)
+    const decision =
+      prefilterDecision(event, candidates, {
+        chatLaneEnabled:
+          store.hasRuntimeSettings() &&
+          store.getRuntimeSettings().chatLaneEnabled === true,
+      }) ??
+      (await this.#router.route(event, candidates, {
         resolveExplicitTask: taskId => store.findTask(taskId, event.userId),
-      },
-    )
+      }))
     if (!decision) return
     if (decision.kind === 'steer_task' || decision.kind === 'cancel_task') {
       store.applyControlIntent(event, decision)
@@ -479,13 +483,22 @@ export async function processNextEvent(
   handler: EventHandler,
   workerId: string,
   telemetry?: { logger?: Logger; metrics?: MetricsRegistry },
+  options: { collectWindowMs?: number } = {},
 ): Promise<boolean> {
   const event = store.claimNextEvent(workerId)
   if (!event) return false
 
+  const batch = await collectMessageBatch(
+    store,
+    event,
+    workerId,
+    options.collectWindowMs ?? 0,
+  )
+  const routedEvent = batch.merged ?? event
   const leaseHeartbeat = setInterval(() => {
     try {
-      store.renewEventLease(event.id, workerId)
+      for (const member of batch.events)
+        store.renewEventLease(member.id, workerId)
     } catch (error) {
       telemetry?.logger?.error('event.lease_renew_failed', error, {
         eventId: event.id,
@@ -500,8 +513,8 @@ export async function processNextEvent(
   leaseHeartbeat.unref()
 
   try {
-    await handler.handle(event, store)
-    store.completeEvent(event.id, workerId)
+    await handler.handle(routedEvent, store)
+    for (const member of batch.events) store.completeEvent(member.id, workerId)
     telemetry?.metrics?.increment('pegas_events_processed_total', {
       outcome: 'processed',
     })
@@ -517,14 +530,19 @@ export async function processNextEvent(
       return true
     }
     if (error instanceof TaskActionBlockedError) {
-      store.parkEventForBlockedAction(event.id, workerId, error.taskId)
+      store.parkEventForBlockedAction(routedEvent.id, workerId, error.taskId)
+      for (const member of batch.events) {
+        if (member.id !== routedEvent.id)
+          store.completeEvent(member.id, workerId)
+      }
       telemetry?.metrics?.increment('pegas_events_processed_total', {
         outcome: 'parked',
       })
       return true
     }
     const message = error instanceof Error ? error.message : String(error)
-    store.failEvent(event.id, workerId, message)
+    for (const member of batch.events)
+      store.failEvent(member.id, workerId, message)
     telemetry?.logger?.error('event.processing_failed', error, {
       eventId: event.id,
       workerId,
@@ -540,6 +558,78 @@ export async function processNextEvent(
     clearInterval(leaseHeartbeat)
   }
   return true
+}
+
+interface MessageBatch {
+  events: InboxEvent[]
+  merged?: InboxEvent
+}
+
+/**
+ * PLAN-001 P2: a short claim-side collect window merges consecutive plain
+ * user messages from the same authenticated human into one routing input.
+ * Explicit taskId references, control-command candidates and any
+ * non-message events are never delayed or merged. Event persistence is
+ * unchanged: every member keeps its own durable row and terminal state.
+ */
+async function collectMessageBatch(
+  store: PegasStore,
+  first: InboxEvent,
+  workerId: string,
+  windowMs: number,
+): Promise<MessageBatch> {
+  if (windowMs <= 0 || !mergeableMessage(first)) return { events: [first] }
+  const events = [first]
+  const deadline = performance.now() + windowMs
+  while (performance.now() < deadline) {
+    const next = store.claimNextEvent(workerId)
+    if (!next) {
+      await new Promise(resolve =>
+        setTimeout(
+          resolve,
+          Math.min(25, Math.max(1, deadline - performance.now())),
+        ),
+      )
+      continue
+    }
+    if (!mergeableMessage(next) || next.userId !== first.userId) {
+      store.releaseEventClaim(next.id, workerId)
+      break
+    }
+    events.push(next)
+  }
+  if (events.length === 1) return { events }
+  const texts = events.map(member => messageText(member))
+  return {
+    events,
+    merged: {
+      ...first,
+      payload: { text: texts.join('\n') },
+    },
+  }
+}
+
+function mergeableMessage(event: InboxEvent): boolean {
+  if (event.type !== 'user.message') return false
+  if (event.authenticatedActor !== 'human') return false
+  if (event.source === 'collaboration' || event.source === 'automation')
+    return false
+  if (!isRecordPayload(event.payload)) return false
+  if (event.payload.taskId !== undefined) return false
+  const text = event.payload.text
+  if (typeof text !== 'string' || !text.trim()) return false
+  return !/^(?:停掉|停止|取消)\s*\S/.test(text.trim())
+}
+
+function messageText(event: InboxEvent): string {
+  const payload = event.payload
+  if (isRecordPayload(payload) && typeof payload.text === 'string')
+    return payload.text.trim()
+  throw new Error('user.message payload requires non-empty text')
+}
+
+function isRecordPayload(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 export async function executeClaimedRun(

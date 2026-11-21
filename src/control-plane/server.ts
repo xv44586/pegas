@@ -1311,11 +1311,11 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         const userId = url.searchParams.get('userId')
         if (!userId) throw new Error('userId is required')
         const taskId = url.searchParams.get('taskId') ?? undefined
-        return sendJson(
-          response,
-          200,
-          options.store.listModelUsage(userId, taskId),
-        )
+        const report = options.store.listModelUsage(userId, taskId)
+        return sendJson(response, 200, {
+          ...report,
+          ...(taskId ? {} : { router: options.store.listRouterUsage(userId) }),
+        })
       }
 
       const stopChannelMatch = request.url?.match(

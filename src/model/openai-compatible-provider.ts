@@ -1,4 +1,9 @@
-import type { JsonModelProvider, JsonModelRequest } from './provider.js'
+import type {
+  JsonModelProvider,
+  JsonModelRequest,
+  JsonModelResult,
+  ModelCallUsage,
+} from './provider.js'
 
 export interface OpenAiCompatibleProviderOptions {
   baseUrl: string
@@ -25,6 +30,12 @@ export class OpenAiCompatibleProvider implements JsonModelProvider {
   }
 
   async generateJson(request: JsonModelRequest): Promise<unknown> {
+    return (await this.generateJsonWithUsage(request)).value
+  }
+
+  async generateJsonWithUsage(
+    request: JsonModelRequest,
+  ): Promise<JsonModelResult> {
     const timeoutSignal = AbortSignal.timeout(this.#timeoutMs)
     const signal = request.signal
       ? AbortSignal.any([request.signal, timeoutSignal])
@@ -57,11 +68,45 @@ export class OpenAiCompatibleProvider implements JsonModelProvider {
     const body: unknown = await response.json()
     const content = extractContent(body)
     try {
-      return JSON.parse(content) as unknown
+      return {
+        value: JSON.parse(content) as unknown,
+        ...(extractUsage(body) ? { usage: extractUsage(body) } : {}),
+      }
     } catch {
       throw new Error('Model provider did not return valid JSON')
     }
   }
+}
+
+function extractUsage(value: unknown): ModelCallUsage | undefined {
+  if (!isRecord(value) || !isRecord(value.usage)) return undefined
+  const usage = value.usage
+  const prompt = nonNegative(usage.prompt_tokens)
+  const completion = nonNegative(usage.completion_tokens)
+  if (prompt === undefined && completion === undefined) return undefined
+  const details = isRecord(usage.prompt_tokens_details)
+    ? usage.prompt_tokens_details
+    : undefined
+  const completionDetails = isRecord(usage.completion_tokens_details)
+    ? usage.completion_tokens_details
+    : undefined
+  const cacheRead = nonNegative(details?.cached_tokens)
+  const reasoning = nonNegative(completionDetails?.reasoning_tokens)
+  return {
+    ...(prompt === undefined ? {} : { inputTokens: prompt }),
+    ...(completion === undefined ? {} : { outputTokens: completion }),
+    ...(prompt !== undefined && completion !== undefined
+      ? { totalTokens: prompt + completion }
+      : {}),
+    ...(cacheRead === undefined ? {} : { cacheReadTokens: cacheRead }),
+    ...(reasoning === undefined ? {} : { reasoningTokens: reasoning }),
+  }
+}
+
+function nonNegative(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0
+    ? value
+    : undefined
 }
 
 function extractContent(value: unknown): string {
