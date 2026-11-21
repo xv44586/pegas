@@ -362,3 +362,71 @@ import type {
   Approval as ServerApproval,
   DurableAction as ServerDurableAction,
 } from '../../src/approval/approval'
+import type {
+  GoalContract as ServerGoalContract,
+  ReviewPack as ServerReviewPack,
+  TaskArtifact as ServerTaskArtifact,
+} from '../../src/goal/goal-delivery'
+
+export type GoalContract = ServerGoalContract
+export type ReviewPack = ServerReviewPack
+export type TaskArtifact = ServerTaskArtifact
+
+export interface ReviewEvidencePreview {
+  evidenceId: string
+  criterionId: string
+  kind: string
+  verification: 'passed' | 'pending' | 'failed'
+  sensitivity: string
+  capturedAt: string
+  contentHash: string
+  artifactRevision?: string
+  viewport?: { width: number; height: number }
+  timecode?: number
+  hasContent: boolean
+  artifact?: {
+    id: string
+    name: string
+    kind: string
+    revision: string
+    mimeType?: string
+    uri?: string
+  }
+  presentation: Record<string, unknown>
+  limitations: string[]
+}
+
+export interface ReviewCriterionPreview {
+  criterionId: string
+  completionStatus: 'satisfied' | 'partial' | 'unverified' | 'failed'
+  explanation: string
+  limitations: string[]
+  evidenceCount: number
+}
+
+export interface ReviewProjection {
+  finalOutcome: 'completed' | 'partial' | 'failed'
+  goalRevision: number
+  criteria: ReviewCriterionPreview[]
+  evidence: ReviewEvidencePreview[]
+  remainingRisks: string[]
+  rollback?: Record<string, unknown>
+  auditLink: string
+}
+
+export interface TaskDelivery {
+  goal?: GoalContract
+  artifacts: TaskArtifact[]
+  evidence: {
+    id: string
+    criterionId: string
+    kind: string
+    artifactId?: string
+    verification: { result: 'passed' | 'pending' | 'failed' }
+    sensitivity: string
+    capturedAt: string
+    presentation: Record<string, unknown>
+    limitations: string[]
+  }[]
+  reviewPack?: ReviewPack
+}

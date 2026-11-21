@@ -19,8 +19,10 @@ import {
   emptySnapshot,
   actionIdFromMessage,
   approvalIdFromMessage,
+  clarificationQuestions,
   isReconciliationMessage,
   latestRunForTask,
+  reviewProjection,
   runIdFromMessage,
   unresolvedAttentionMessages,
   type AppData,
@@ -362,6 +364,30 @@ export function App() {
     async (channelId: string) => {
       const requestId = (taskDrawerRequestRef.current.get(channelId) ?? 0) + 1
       taskDrawerRequestRef.current.set(channelId, requestId)
+      void api
+        .taskDelivery(channelId)
+        .then(delivery => {
+          if (taskDrawerRequestRef.current.get(channelId) !== requestId) return
+          setDrawer(current =>
+            current?.kind === 'task' && current.channel.id === channelId
+              ? { ...current, delivery, deliveryError: undefined }
+              : current,
+          )
+        })
+        .catch((caught: unknown) => {
+          if (taskDrawerRequestRef.current.get(channelId) !== requestId) return
+          setDrawer(current =>
+            current?.kind === 'task' && current.channel.id === channelId
+              ? {
+                  ...current,
+                  deliveryError:
+                    caught instanceof Error
+                      ? caught.message
+                      : '读取交付审查数据失败。',
+                }
+              : current,
+          )
+        })
       try {
         const scoped = await api.snapshot(channelId)
         if (taskDrawerRequestRef.current.get(channelId) !== requestId) return
@@ -420,6 +446,7 @@ export function App() {
   }
   function closeDrawer() {
     attentionRequestRef.current += 1
+    drawerReturnRef.current = undefined
     const url = new URL(window.location.href)
     if (url.searchParams.has('channel') || url.searchParams.has('task')) {
       url.searchParams.delete('channel')
@@ -432,6 +459,43 @@ export function App() {
     }
     setDrawer(undefined)
     restoreFocus()
+  }
+  const drawerReturnRef = useRef<DrawerView | undefined>(undefined)
+  function openNestedDrawer(view: DrawerView) {
+    if (drawer) drawerReturnRef.current = drawer
+    setDrawer(view)
+    if (view.kind === 'task') void loadTaskDrawer(view.channel.id)
+    if (view.kind === 'review' && !view.goal) loadReviewGoal(view)
+  }
+  function loadReviewGoal(view: Extract<DrawerView, { kind: 'review' }>) {
+    void api
+      .taskDelivery(view.channel.id)
+      .then(delivery => {
+        setDrawer(current =>
+          current?.kind === 'review' &&
+          current.message.id === view.message.id &&
+          delivery.goal
+            ? { ...current, goal: delivery.goal }
+            : current,
+        )
+      })
+      .catch(() => undefined)
+  }
+  function changeDrawer(view: DrawerView) {
+    if (
+      drawer?.kind === 'preview' &&
+      drawer.backLabel &&
+      view.kind === 'preview' &&
+      view.contentUrl === drawer.contentUrl &&
+      drawerReturnRef.current
+    ) {
+      const parent = drawerReturnRef.current
+      drawerReturnRef.current = undefined
+      setDrawer(parent)
+      if (parent.kind === 'task') void loadTaskDrawer(parent.channel.id)
+      return
+    }
+    setDrawer(view)
   }
   function openSearch() {
     rememberFocus()
@@ -691,6 +755,33 @@ export function App() {
     message: OutboxMessage,
     requestId: number,
   ): Promise<boolean> {
+    const review = reviewProjection(message)
+    const questions = clarificationQuestions(message)
+    if (review ?? questions) {
+      const channel = data.snapshot.channels.find(
+        item => item.id === message.taskId,
+      )
+      if (channel) {
+        if (requestId !== attentionRequestRef.current) return false
+        if (review) {
+          const reviewView = {
+            kind: 'review',
+            review,
+            channel,
+            message,
+          } as const
+          setDrawer(reviewView)
+          loadReviewGoal(reviewView)
+        } else
+          setDrawer({
+            kind: 'clarification',
+            questions: questions ?? [],
+            channel,
+            message,
+          })
+        return true
+      }
+    }
     if (isReconciliationMessage(message)) {
       const actionId = actionIdFromMessage(message)
       if (actionId) {
@@ -806,6 +897,22 @@ export function App() {
     isDark,
     onOpenDrawer: openDrawer,
   }
+  function continueChannel(channelId: string) {
+    setContinuationTaskId(channelId)
+    const url = new URL(window.location.href)
+    url.searchParams.delete('channel')
+    url.searchParams.delete('task')
+    window.history.replaceState(
+      {},
+      '',
+      `${url.pathname}${url.search}${url.hash}`,
+    )
+    setDrawer(undefined)
+    navigate('conversation')
+    window.setTimeout(() =>
+      document.querySelector<HTMLTextAreaElement>('#pegas-message')?.focus(),
+    )
+  }
   const unreadCount = unresolvedAttentionMessages(
     data.snapshot.messages,
   ).filter(message => !message.readAt).length
@@ -874,6 +981,7 @@ export function App() {
             draft={composerDraft}
             modelProvider={selectedAgentProvider}
             models={availableAgentModels}
+            onAnswerClarification={channel => continueChannel(channel.id)}
             onClearContinuation={() => setContinuationTaskId(undefined)}
             onConfigureVoice={() => {
               setSettingsSection('voice')
@@ -1018,28 +1126,10 @@ export function App() {
       )}
       {resolvedDrawer && (
         <DetailDrawer
-          onChange={setDrawer}
+          onChange={changeDrawer}
           onClose={closeDrawer}
-          onContinue={channel => {
-            setContinuationTaskId(channel.id)
-            const url = new URL(window.location.href)
-            url.searchParams.delete('channel')
-            url.searchParams.delete('task')
-            window.history.replaceState(
-              {},
-              '',
-              `${url.pathname}${url.search}${url.hash}`,
-            )
-            setDrawer(undefined)
-            navigate('conversation')
-            window.setTimeout(() =>
-              document
-                .querySelector<HTMLTextAreaElement>(
-                  '[aria-label="给 Pegas 发消息"]',
-                )
-                ?.focus(),
-            )
-          }}
+          onOpenView={openNestedDrawer}
+          onContinue={channel => continueChannel(channel.id)}
           onDecideApproval={async (approvalId, optionId, rationale) => {
             approvalProjectionRequestRef.current += 1
             let approval: Approval
