@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -57,5 +58,21 @@ describe('unified brand application icons', () => {
     )
     expect(svg).toContain('data:image/png;base64,')
     expect(svg).toContain('viewBox="0 0 1024 1024"')
+  })
+
+  it('manifest hashes match the committed artifacts without Pillow', async () => {
+    const manifest = JSON.parse(
+      await readFile(
+        path.join(repositoryRoot, 'scripts/brand-icons-manifest.json'),
+        'utf8',
+      ),
+    ) as Record<string, string>
+    expect(Object.keys(manifest).length).toBe(5)
+    for (const [relativePath, expectedHash] of Object.entries(manifest)) {
+      const content = await readFile(path.join(repositoryRoot, relativePath))
+      expect(createHash('sha256').update(content).digest('hex')).toBe(
+        expectedHash,
+      )
+    }
   })
 })
