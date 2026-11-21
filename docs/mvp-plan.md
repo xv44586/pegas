@@ -59,7 +59,7 @@
 - [x] Action idempotency 与未知副作用处理（已接入协议的 Executor；通用 DSH tool-call 代理待补）；
 - [x] Memory 来源、修正、删除和按需加载（服务端闭环；自动抽取与 Web 写操作待补）；
 - [x] SQLite 备份、校验与恢复演练（在线备份、SHA-256/integrity 校验、空环境恢复续跑回归）；
-- [ ] Worker、网络和数据库故障注入测试；
+- [x] Worker、网络和数据库故障注入测试（Worker 三崩溃点真实进程注入 `pnpm smoke:crash`；网络/数据库故障由确定性 lease/DSH stream fault/备份恢复回归覆盖）；
 - [ ] Outbox 的重试、合并、静默时段和未知投递处理。
 
 ## 自我修改闭环

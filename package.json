@@ -33,6 +33,7 @@
     "review:evidence": "tsx scripts/generate-review-evidence.ts",
     "review:ui": "node scripts/capture-ui-review.mjs",
     "smoke": "node scripts/smoke.mjs",
+    "smoke:crash": "pnpm build && node scripts/smoke-crash-recovery.mjs",
     "smoke:self-change": "pnpm build && node scripts/smoke-self-change.mjs",
     "smoke:desktop": "pnpm build && node scripts/smoke-desktop.mjs",
     "smoke:desktop:packaged": "PEGAS_DESKTOP_EXECUTABLE=releases/desktop/mac-arm64/Pegas.app/Contents/MacOS/Pegas node scripts/smoke-desktop.mjs",
