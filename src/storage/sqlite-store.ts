@@ -21,6 +21,8 @@ import {
 } from '../collaboration/collaboration.js'
 import type {
   ActionOutcomeDraft,
+  ActionReconciliation,
+  ActionReconciliationDraft,
   ActionRequestDraft,
   Approval,
   ApprovalDecision,
@@ -366,6 +368,46 @@ CREATE TABLE goal_proposal_commands (
   created_at TEXT NOT NULL,
   PRIMARY KEY (run_id, command_id)
 );
+`
+
+const migration23 = `
+CREATE TABLE action_reconciliations (
+  id TEXT PRIMARY KEY,
+  action_id TEXT NOT NULL UNIQUE REFERENCES actions(id),
+  command_id TEXT NOT NULL UNIQUE,
+  resolution TEXT NOT NULL CHECK (resolution IN ('succeeded','failed')),
+  note TEXT NOT NULL,
+  previous_status TEXT NOT NULL CHECK (previous_status IN ('failed','unknown')),
+  previous_result_json TEXT,
+  request_fingerprint TEXT NOT NULL,
+  reconciled_by TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TRIGGER action_reconciliations_immutable
+BEFORE UPDATE ON action_reconciliations
+BEGIN
+  SELECT RAISE(ABORT, 'Action reconciliation records are immutable');
+END;
+
+CREATE TRIGGER action_reconciliations_delete_guard
+BEFORE DELETE ON action_reconciliations
+BEGIN
+  SELECT RAISE(ABORT, 'Action reconciliation records are immutable');
+END;
+
+CREATE TRIGGER action_reconciliations_action_guard
+BEFORE INSERT ON action_reconciliations
+WHEN (
+  SELECT protocol_version FROM actions WHERE id = NEW.action_id
+) <> 1 OR (
+  SELECT status FROM actions WHERE id = NEW.action_id
+) NOT IN ('failed','unknown') OR NEW.previous_status <> (
+  SELECT status FROM actions WHERE id = NEW.action_id
+)
+BEGIN
+  SELECT RAISE(ABORT, 'Only a failed or unknown Action can be reconciled');
+END;
 `
 
 const migration2 = `
@@ -1590,6 +1632,19 @@ interface ActionRow {
   updated_at: string
 }
 
+interface ActionReconciliationRow {
+  id: string
+  action_id: string
+  command_id: string
+  resolution: 'succeeded' | 'failed'
+  note: string
+  previous_status: 'failed' | 'unknown'
+  previous_result_json: string | null
+  request_fingerprint: string
+  reconciled_by: string
+  created_at: string
+}
+
 interface ApprovalRow {
   id: string
   user_id: string | null
@@ -1873,6 +1928,10 @@ export class MemoryCommandConflictError extends Error {}
 
 export class GoalProposalCommandConflictError extends Error {}
 
+export class ActionNotFoundError extends Error {}
+
+export class ActionReconciliationConflictError extends Error {}
+
 export class MemoryRevisionConflictError extends Error {}
 
 export class MemoryNotFoundError extends Error {}
@@ -1934,6 +1993,7 @@ export class PegasStore {
     this.#migrate(20, migration20)
     this.#migrate(21, migration21)
     this.#migrate(22, migration22)
+    this.#migrate(23, migration23)
   }
 
   #backfillWorkerIconIds(): void {
@@ -2256,6 +2316,20 @@ export class PegasStore {
       if (blockingAction) {
         throw new CollaborationReconciliationRequiredError(
           'Reconcile the failed or unknown Action before collaborating',
+        )
+      }
+      const confirmedFailedAction = this.#database
+        .prepare(
+          `SELECT 1 FROM action_reconciliations
+           INNER JOIN actions ON actions.id = action_reconciliations.action_id
+           WHERE actions.task_id = ?
+             AND action_reconciliations.resolution = 'failed'
+           LIMIT 1`,
+        )
+        .get(source.id)
+      if (confirmedFailedAction) {
+        throw new CollaborationReconciliationRequiredError(
+          'A human-confirmed failed Action blocks collaboration on this Task',
         )
       }
       const references =
@@ -4804,6 +4878,20 @@ export class PegasStore {
         `Goal cannot be revised until the ${unreconciledAction.status} Action outcome is reconciled`,
       )
     }
+    const confirmedFailedAction = this.#database
+      .prepare(
+        `SELECT 1 FROM action_reconciliations
+         INNER JOIN actions ON actions.id = action_reconciliations.action_id
+         WHERE actions.task_id = ?
+           AND action_reconciliations.resolution = 'failed'
+         LIMIT 1`,
+      )
+      .get(taskId)
+    if (confirmedFailedAction) {
+      throw new Error(
+        'Goal cannot be revised while a human-confirmed failed Action is unresolved',
+      )
+    }
     const revisionRow = this.#database
       .prepare(
         'SELECT COALESCE(MAX(revision), 0) + 1 AS revision FROM goal_contracts WHERE task_id = ?',
@@ -5788,17 +5876,49 @@ export class PegasStore {
             .all(task.id) as unknown as ActionRow[]
         ).map(row => {
           const action = toDurableAction(row)
+          const reconciliation =
+            action.status === 'reconciled'
+              ? (this.#database
+                  .prepare(
+                    'SELECT resolution, note, previous_status FROM action_reconciliations WHERE action_id = ?',
+                  )
+                  .get(action.id) as
+                  | {
+                      resolution: 'succeeded' | 'failed'
+                      note: string
+                      previous_status: 'failed' | 'unknown'
+                    }
+                  | undefined)
+              : undefined
           return {
             actionId: action.id,
             kind: action.kind,
             status: action.status,
             ...(action.result ? { result: action.result } : {}),
+            ...(reconciliation
+              ? {
+                  reconciliation: {
+                    resolution: reconciliation.resolution,
+                    note: reconciliation.note,
+                    previousStatus: reconciliation.previous_status,
+                  },
+                }
+              : {}),
           }
         })
-        const sideEffectsSatisfied = sideEffects.every(
-          action =>
-            action.status === 'succeeded' || action.status === 'rejected',
-        )
+        const sideEffectsSatisfied = sideEffects.every(action => {
+          if (action.status === 'succeeded' || action.status === 'rejected')
+            return true
+          const reconciliation = (
+            action as {
+              reconciliation?: { resolution: 'succeeded' | 'failed' }
+            }
+          ).reconciliation
+          return (
+            action.status === 'reconciled' &&
+            reconciliation?.resolution === 'succeeded'
+          )
+        })
         completed =
           draft.status === 'ready' &&
           sideEffectsSatisfied &&
@@ -6174,6 +6294,20 @@ export class PegasStore {
           `Action outcome must be reconciled before requesting another Approval (${unresolvedPriorAction.status})`,
         )
       }
+      const confirmedFailedAction = this.#database
+        .prepare(
+          `SELECT 1 FROM action_reconciliations
+           INNER JOIN actions ON actions.id = action_reconciliations.action_id
+           WHERE actions.task_id = ?
+             AND action_reconciliations.resolution = 'failed'
+           LIMIT 1`,
+        )
+        .get(task.id)
+      if (confirmedFailedAction) {
+        throw new Error(
+          'A human-confirmed failed Action blocks new Approvals on this Task',
+        )
+      }
       const now = this.#clock.now().toISOString()
       const actionId = randomUUID()
       const approvalId = randomUUID()
@@ -6338,7 +6472,157 @@ export class PegasStore {
            AND actions.protocol_version = 1`,
       )
       .get(actionId, userId) as unknown as ActionRow | undefined
-    return row ? toDurableAction(row) : undefined
+    return row ? this.#actionWithReconciliation(row) : undefined
+  }
+
+  reconcileAction(
+    actionId: string,
+    userId: string,
+    draft: ActionReconciliationDraft,
+  ): DurableAction {
+    const fingerprint = createHash('sha256')
+      .update(stableJson(draft))
+      .digest('hex')
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const replay = this.#database
+        .prepare(
+          `SELECT action_id, request_fingerprint FROM action_reconciliations
+           WHERE command_id = ?`,
+        )
+        .get(draft.commandId) as
+        { action_id: string; request_fingerprint: string } | undefined
+      if (replay) {
+        if (replay.request_fingerprint !== fingerprint)
+          throw new ActionReconciliationConflictError(
+            'Reconciliation command ID is already used with a different payload',
+          )
+        const replayed = this.getAction(replay.action_id, userId)
+        if (replayed?.id !== actionId)
+          throw new ActionNotFoundError('Action not found')
+        this.#database.exec('COMMIT')
+        return replayed
+      }
+      const row = this.#database
+        .prepare(
+          `SELECT actions.* FROM actions
+           INNER JOIN tasks ON tasks.id = actions.task_id
+           WHERE actions.id = ? AND tasks.user_id = ?
+             AND actions.protocol_version = 1`,
+        )
+        .get(actionId, userId) as unknown as ActionRow | undefined
+      if (!row) throw new ActionNotFoundError('Action not found')
+      const existingForAction = this.#database
+        .prepare('SELECT 1 FROM action_reconciliations WHERE action_id = ?')
+        .get(actionId)
+      if (existingForAction)
+        throw new ActionReconciliationConflictError(
+          'Action already has a reconciliation record',
+        )
+      if (row.status !== 'failed' && row.status !== 'unknown')
+        throw new Error('Only a failed or unknown Action can be reconciled')
+      const now = this.#clock.now().toISOString()
+      this.#database
+        .prepare(
+          `INSERT INTO action_reconciliations
+            (id, action_id, command_id, resolution, note, previous_status,
+             previous_result_json, request_fingerprint, reconciled_by, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          randomUUID(),
+          actionId,
+          draft.commandId,
+          draft.resolution,
+          draft.note,
+          row.status,
+          row.result_json,
+          fingerprint,
+          userId,
+          now,
+        )
+      // The original outcome stays auditable in the reconciliation record;
+      // the Action itself now carries the human-confirmed external fact.
+      this.#database
+        .prepare(
+          `UPDATE actions SET status = 'reconciled', result_json = ?,
+           updated_at = ? WHERE id = ?`,
+        )
+        .run(
+          JSON.stringify({
+            resolution: draft.resolution,
+            note: draft.note,
+            previousStatus: row.status,
+            ...(row.result_json
+              ? {
+                  previousResult: JSON.parse(row.result_json) as unknown,
+                }
+              : {}),
+          }),
+          now,
+          actionId,
+        )
+      if (draft.resolution === 'succeeded') {
+        this.#wakeBlockedTaskEvents(row.task_id, now)
+      }
+      const task = this.#taskById(row.task_id)
+      if (task.status !== 'completed' && task.status !== 'cancelled') {
+        const stillBlocked = this.#database
+          .prepare(
+            `SELECT 1 FROM actions
+             WHERE task_id = ? AND protocol_version = 1
+               AND status IN ('awaiting_approval','authorized','failed','unknown')
+             LIMIT 1`,
+          )
+          .get(task.id)
+        if (!stillBlocked) {
+          this.#database
+            .prepare(
+              `UPDATE tasks SET status_reason = ?, updated_at = ? WHERE id = ?`,
+            )
+            .run(
+              draft.resolution === 'succeeded'
+                ? 'action_reconciled'
+                : 'action_failed',
+              now,
+              task.id,
+            )
+        }
+      }
+      this.enqueueOutbox({
+        userId,
+        taskId: row.task_id,
+        channel: 'conversation',
+        dedupeKey: `action-reconciled:${actionId}`,
+        payload: {
+          type: 'action.reconciled',
+          taskId: row.task_id,
+          actionId,
+          resolution: draft.resolution,
+          text:
+            draft.resolution === 'succeeded'
+              ? '已人工核对：动作确认成功，事情可以继续。'
+              : '已人工核对：动作确认失败，外部状态已记录。',
+        },
+      })
+      const reconciled = this.getAction(actionId, userId)
+      if (!reconciled) throw new ActionNotFoundError('Action not found')
+      this.#database.exec('COMMIT')
+      return reconciled
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  #actionWithReconciliation(row: ActionRow): DurableAction {
+    const action = toDurableAction(row)
+    const reconciliation = this.#database
+      .prepare('SELECT * FROM action_reconciliations WHERE action_id = ?')
+      .get(row.id) as unknown as ActionReconciliationRow | undefined
+    return reconciliation
+      ? { ...action, reconciliation: toActionReconciliation(reconciliation) }
+      : action
   }
 
   pageApprovals(
@@ -7392,6 +7676,20 @@ export class PegasStore {
       ) {
         throw new Error('Action outcome must be reconciled before retrying')
       }
+      const unreconciledResolution = this.#database
+        .prepare(
+          `SELECT 1 FROM action_reconciliations
+           INNER JOIN actions ON actions.id = action_reconciliations.action_id
+           WHERE actions.task_id = ?
+             AND action_reconciliations.resolution = 'failed'
+           LIMIT 1`,
+        )
+        .get(task.id)
+      if (unreconciledResolution) {
+        throw new Error(
+          'A human-confirmed failed Action blocks retrying this Task',
+        )
+      }
       const now = this.#clock.now().toISOString()
       const run = this.#createRetry(row, now)
       this.#database
@@ -7973,7 +8271,7 @@ export class PegasStore {
       .prepare('SELECT * FROM actions WHERE id = ?')
       .get(actionId)
     if (!row) throw new Error(`Action ${actionId} does not exist`)
-    return toDurableAction(row as unknown as ActionRow)
+    return this.#actionWithReconciliation(row as unknown as ActionRow)
   }
 
   #approvalById(approvalId: string): Approval {
@@ -8970,6 +9268,29 @@ function toDurableAction(row: ActionRow): DurableAction {
       : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  }
+}
+
+function toActionReconciliation(
+  row: ActionReconciliationRow,
+): ActionReconciliation {
+  return {
+    id: row.id,
+    actionId: row.action_id,
+    commandId: row.command_id,
+    resolution: row.resolution,
+    note: row.note,
+    previousStatus: row.previous_status,
+    ...(row.previous_result_json
+      ? {
+          previousResult: JSON.parse(row.previous_result_json) as Record<
+            string,
+            unknown
+          >,
+        }
+      : {}),
+    reconciledBy: row.reconciled_by,
+    createdAt: row.created_at,
   }
 }
 

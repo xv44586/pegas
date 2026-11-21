@@ -6,6 +6,7 @@ type ActionStatus =
   | 'succeeded'
   | 'failed'
   | 'unknown'
+  | 'reconciled'
 
 export const approvalStatuses = [
   'pending',
@@ -43,6 +44,24 @@ export interface ActionRequestDraft {
   approval: ApprovalPrompt
 }
 
+export interface ActionReconciliationDraft {
+  commandId: string
+  resolution: 'succeeded' | 'failed'
+  note: string
+}
+
+export interface ActionReconciliation {
+  id: string
+  actionId: string
+  commandId: string
+  resolution: 'succeeded' | 'failed'
+  note: string
+  previousStatus: 'failed' | 'unknown'
+  previousResult?: Record<string, unknown>
+  reconciledBy: string
+  createdAt: string
+}
+
 export interface DurableAction {
   id: string
   taskId: string
@@ -55,6 +74,7 @@ export interface DurableAction {
   request: Record<string, unknown>
   recoveryPoint: Record<string, unknown>
   result?: Record<string, unknown>
+  reconciliation?: ActionReconciliation
   createdAt: string
   updatedAt: string
 }
@@ -145,6 +165,25 @@ export function parseActionOutcomeDraft(value: unknown): ActionOutcomeDraft {
     commandId: requiredString(input.commandId, 'commandId'),
     status,
     result: record(input.result, 'result'),
+  }
+}
+
+export function parseActionReconciliationDraft(
+  value: unknown,
+): ActionReconciliationDraft {
+  const input = record(value, 'reconciliation')
+  const resolution = requiredString(input.resolution, 'resolution')
+  if (resolution !== 'succeeded' && resolution !== 'failed') {
+    throw new Error('resolution must be succeeded or failed')
+  }
+  const note = requiredString(input.note, 'note').trim()
+  if (note.length > 2000) {
+    throw new Error('note must be at most 2000 characters')
+  }
+  return {
+    commandId: requiredString(input.commandId, 'commandId'),
+    resolution,
+    note,
   }
 }
 

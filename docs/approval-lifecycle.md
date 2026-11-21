@@ -48,6 +48,19 @@ Run capability 的 HTTP 传输固定使用 loopback。`PEGAS_API_HOST` 为 `0.0.
 - `POST /v1/approvals/:approvalId/decisions`：owner 提交一次结构化决定并写入 Inbox。
 - `GET /v1/actions/:actionId?userId=`：owner 读取 Action 的授权与最终 outcome。
 - `POST /v1/actions/:actionId/outcomes`：恢复后的 Run 用自己的 claim 记录 Action outcome。
+- `POST /v1/actions/:actionId/reconcile`：owner 人工核对 `failed`/`unknown` outcome。请求体为 `{userId, commandId, resolution, note}`；`resolution` 只能是 `succeeded` 或 `failed`，`note` 必填且不超过 2000 字符。
+
+### 人工核对（reconciliation）
+
+`failed` 或 `unknown` outcome 会阻塞 continuation、retry、Goal revision、协作与新 Approval。用户在外部系统核实真实结果后，通过 reconcile API 提交一次性结论：
+
+- 核对记录 append-only：`action_reconciliations` 保存 resolution、note、核对前的 status 与 result 快照、核对人和时间；数据库 trigger 拒绝改写或删除。每个 Action 只允许一条核对记录，重复提交返回 `409 action_reconciliation_conflict`。
+- 相同 `commandId` 加相同 payload 幂等重放当前 Action 投影；不同 payload 复用 command 返回 409。不存在和跨 owner 一律 `404 not_found`。
+- Action 状态变为 `reconciled`，`result` 保存 `{resolution, note, previousStatus, previousResult?}`；原始 outcome 在核对记录中保持可审计。
+- `resolution=succeeded`：解除该 Action 的阻塞，唤醒停放的 continuation，Task 等待原因更新为 `action_reconciled`；failed Run 可以 retry；Review Pack 把该 side effect 视为已满足并附带核对信息。
+- `resolution=failed`：外部失败成为人工确认的事实。Task 保持开放并显示 `action_failed`，但 retry、Goal revision、协作与新 Approval 仍被拒绝——确认失败不等于问题已解决，后续处理需要用户显式停止或新的产品级恢复路径。Review Pack 不会把该 side effect 计为成功。
+- Task 停止后仍允许核对已 `unknown` 的 Action（外部副作用审计不随 Task 结束消失），但不再改写 ended Task 的状态。
+- 写入核对记录、Action 状态、Task 原因、唤醒事件与 `action.reconciled` Outbox 在同一事务提交。
 
 创建 Action 的 `idempotencyKey`、决定的 `commandId` 和 outcome 的 `commandId` 都是幂等键。相同键和相同 payload 返回已有对象；相同键配不同 payload 会拒绝，不会悄悄覆盖审计事实。Run claim token 只保存 SHA-256 digest，不通过 API 或 Outbox 回显。
 
@@ -124,4 +137,8 @@ X-Pegas-Run-Claim-Token: <successor-capability>
 
 ## 当前限制
 
-第一版已经提供持久对象、策略边界、API、Web 决策与恢复协议，但仍标记为 `Partial`：DSH 的通用 tool-call 代理尚未把所有真实工具自动接入 Action Policy；当前只有接入本协议的 Executor/工具适配器会被强制拦截。组织级 RBAC、多人会签、超时策略、可配置风险阈值和 unknown outcome 对账属于后续 Feature。
+第一版已经提供持久对象、策略边界、API、Web 决策、恢复协议与人工核对闭环，但仍标记为 `Partial`：DSH 的通用 tool-call 代理尚未把所有真实工具自动接入 Action Policy；当前只有接入本协议的 Executor/工具适配器会被强制拦截。Web 待处理页尚未提供核对表单（当前只能通过 API 提交）。组织级 RBAC、多人会签、超时策略、可配置风险阈值和自动对账（由验证器主动探测外部状态）属于后续 Feature。
+
+## 回滚
+
+schema v23 只新增 `action_reconciliations` 表与 trigger。存在 `status='reconciled'` 的 Action 时，回滚到不支持 v23 的 Release 会被 Rollback Guard 以 `rollback_incompatible` 拒绝：旧版本不认识该状态，会把人工确认过的外部事实误判为仍在等待或允许绕过。未核对的 `failed`/`unknown` Action 在旧版本中仍被原有 fence 阻塞，可以安全回滚。

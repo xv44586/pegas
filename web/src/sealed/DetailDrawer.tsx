@@ -293,6 +293,7 @@ function actionStatus(
     succeeded: '执行成功',
     failed: '执行失败',
     unknown: '结果未知，需核对',
+    reconciled: '已人工核对',
   } satisfies Record<
     Extract<DrawerView, { kind: 'approval' }>['action']['status'],
     string

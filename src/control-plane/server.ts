@@ -15,6 +15,7 @@ import { parseWorkerCollaborationRequest } from '../collaboration/collaboration.
 import {
   approvalStatuses,
   parseActionOutcomeDraft,
+  parseActionReconciliationDraft,
   parseActionRequestDraft,
   parseApprovalDecisionDraft,
   type ApprovalStatus,
@@ -67,6 +68,8 @@ import type {
   SpeechTranscript,
 } from '../speech/provider.js'
 import {
+  ActionNotFoundError,
+  ActionReconciliationConflictError,
   AutomationCommandConflictError,
   AutomationNotFoundError,
   AutomationReadOnlyError,
@@ -1055,6 +1058,23 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
           : sendJson(response, 404, { error: 'not_found' })
       }
 
+      const actionReconcileMatch = /^\/v1\/actions\/([^/]+)\/reconcile$/.exec(
+        taskResourceUrl.pathname,
+      )
+      if (actionReconcileMatch && request.method === 'POST') {
+        if (!options.apiToken || !isAuthorized(request, options.apiToken)) {
+          return sendJson(response, 401, { error: 'unauthorized' })
+        }
+        const body = await readJson(request)
+        if (!isRecord(body)) throw new Error('Request body must be an object')
+        const action = options.store.reconcileAction(
+          decodeURIComponent(actionReconcileMatch[1] ?? ''),
+          requiredString(body.userId, 'userId'),
+          parseActionReconciliationDraft(body),
+        )
+        return sendJson(response, 201, { action })
+      }
+
       const actionOutcomeMatch = /^\/v1\/actions\/([^/]+)\/outcomes$/.exec(
         taskResourceUrl.pathname,
       )
@@ -1187,6 +1207,13 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
 
       return sendJson(response, 404, { error: 'not_found' })
     } catch (error) {
+      if (error instanceof ActionNotFoundError)
+        return sendJson(response, 404, { error: 'not_found' })
+      if (error instanceof ActionReconciliationConflictError)
+        return sendJson(response, 409, {
+          error: 'action_reconciliation_conflict',
+          message: error.message,
+        })
       if (error instanceof GoalProposalCommandConflictError)
         return sendJson(response, 409, {
           error: 'goal_proposal_command_conflict',

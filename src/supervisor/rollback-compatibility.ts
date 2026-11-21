@@ -5,6 +5,7 @@ const collaborationSchemaVersion = 19
 const automationSchemaVersion = 20
 const memorySchemaVersion = 21
 const goalProposalSchemaVersion = 22
+const actionReconciliationSchemaVersion = 23
 
 export class RollbackCompatibilityError extends Error {}
 
@@ -97,6 +98,23 @@ export function assertRollbackCompatible(
       if (parkedClarification) {
         throw new RollbackCompatibilityError(
           'Rollback is unsafe while a Task is awaiting Goal clarification',
+        )
+      }
+    }
+    if (
+      currentVersion >= actionReconciliationSchemaVersion &&
+      targetMaximumSchema < actionReconciliationSchemaVersion
+    ) {
+      const reconciledAction = database
+        .prepare(
+          `SELECT 1 FROM actions
+           WHERE protocol_version = 1 AND status = 'reconciled'
+           LIMIT 1`,
+        )
+        .get()
+      if (reconciledAction) {
+        throw new RollbackCompatibilityError(
+          'Rollback is unsafe while reconciled Action outcomes exist',
         )
       }
     }

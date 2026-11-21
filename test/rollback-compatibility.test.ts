@@ -125,6 +125,60 @@ describe('durable state rollback compatibility', () => {
       rmSync(directory, { recursive: true, force: true })
     }
   })
+
+  it('blocks a v22 rollback while a reconciled Action outcome exists', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'pegas-rollback-'))
+    const path = join(directory, 'pegas.sqlite')
+    const store = new PegasStore(path)
+    try {
+      const claimed = createClaimedTask(store, 'owner', '发布', 'reconcile')
+      const requested = store.requestApproval(
+        claimed.run.id,
+        claimed.claimToken,
+        {
+          kind: 'publish.release',
+          risk: 'high',
+          idempotencyKey: 'rollback-reconcile-publish',
+          request: { release: 'v1' },
+          recoveryPoint: { step: 'before_publish' },
+          approval: {
+            summary: '发布 v1',
+            impact: '对外可见',
+            recommendedOptionId: 'approve',
+            options: [
+              { id: 'approve', label: '发布', kind: 'approve' },
+              { id: 'reject', label: '不发布', kind: 'reject' },
+            ],
+          },
+        },
+      )
+      store.decideApproval(requested.approval.id, 'owner', {
+        commandId: 'rollback-reconcile-approve',
+        optionId: 'approve',
+      })
+      const resumed = store.claimNextRun('reconcile-resumed')
+      if (!resumed) throw new Error('Expected resumed Run')
+      store.recordActionOutcome(requested.action.id, resumed.claimToken, {
+        commandId: 'rollback-reconcile-outcome',
+        status: 'unknown',
+        result: { providerRequestId: 'request-1' },
+      })
+      // An unreconciled unknown outcome is representable in v22.
+      expect(() => assertRollbackCompatible(path, 22)).not.toThrow()
+      store.reconcileAction(requested.action.id, 'owner', {
+        commandId: 'rollback-reconcile-command',
+        resolution: 'succeeded',
+        note: '人工确认成功',
+      })
+      expect(() => assertRollbackCompatible(path, 22)).toThrow(
+        RollbackCompatibilityError,
+      )
+      expect(() => assertRollbackCompatible(path, 23)).not.toThrow()
+    } finally {
+      store.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
 })
 
 function clarificationGoalDraft(
