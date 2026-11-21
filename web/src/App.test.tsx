@@ -3852,4 +3852,242 @@ describe('sealed Pegas UI', () => {
     expect((await screen.findAllByText('已配置')).length).toBeGreaterThan(0)
     expect(screen.queryByText('连接正常')).toBeNull()
   })
+
+  it('lists server automations with truthful metrics and pauses them', async () => {
+    let automation = {
+      id: 'auto-1',
+      userId: 'owner',
+      revision: 1,
+      title: '晨间简报',
+      prompt: '整理今天需要处理的事情。',
+      schedule: { kind: 'interval', everySeconds: 3600 },
+      target: { kind: 'new_task' },
+      status: 'active',
+      nextFireAt: '2026-11-21T09:00:00.000Z',
+      createdAt: '2026-11-21T08:00:00.000Z',
+      updatedAt: '2026-11-21T08:00:00.000Z',
+    }
+    const fetchMock = installSnapshotFetch(snapshot, (path, init) => {
+      if (path === '/v1/automations?userId=owner')
+        return Response.json({ automations: [automation] })
+      if (path === '/v1/automations/auto-1/pause' && init?.method === 'POST') {
+        const body = JSON.parse(
+          typeof init.body === 'string' ? init.body : '{}',
+        ) as {
+          expectedRevision: number
+        }
+        expect(body.expectedRevision).toBe(1)
+        automation = { ...automation, status: 'paused', revision: 2 }
+        return Response.json({ automation })
+      }
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: '自动化',
+      }),
+    )
+    expect(await screen.findByText('晨间简报')).toBeTruthy()
+    expect(screen.queryByText('自动化能力正在建设')).toBeNull()
+    const metric = (label: string) =>
+      [...document.querySelectorAll('.metric-strip span')]
+        .find(element => element.textContent.includes(label))
+        ?.querySelector('b')?.textContent
+    expect(metric('已启用')).toBe('1')
+    fireEvent.click(screen.getByRole('button', { name: '暂停' }))
+    await waitFor(() => expect(metric('已暂停')).toBe('1'))
+    expect(
+      fetchMock.mock.calls.some(
+        ([path]) => path === '/v1/automations/auto-1/pause',
+      ),
+    ).toBe(true)
+  })
+
+  it('creates an automation through the server command contract', async () => {
+    let created: unknown
+    const automations: unknown[] = []
+    const fetchMock = installSnapshotFetch(snapshot, (path, init) => {
+      if (path === '/v1/automations?userId=owner')
+        return Response.json({ automations })
+      if (path === '/v1/automations' && init?.method === 'POST') {
+        created = JSON.parse(typeof init.body === 'string' ? init.body : '{}')
+        const automation = {
+          id: 'auto-new',
+          userId: 'owner',
+          revision: 1,
+          title: '每周回顾',
+          prompt: '回顾本周完成的事情。',
+          schedule: { kind: 'interval', everySeconds: 3600 },
+          target: { kind: 'new_task' },
+          status: 'active',
+          createdAt: '2026-11-21T08:00:00.000Z',
+          updatedAt: '2026-11-21T08:00:00.000Z',
+        }
+        automations.push(automation)
+        return Response.json({ automation }, { status: 201 })
+      }
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: '自动化',
+      }),
+    )
+    fireEvent.click(await screen.findByRole('button', { name: /新建自动化/ }))
+    const dialog = screen.getByRole('dialog', { name: '新建自动化' })
+    fireEvent.change(within(dialog).getByLabelText('名称'), {
+      target: { value: '每周回顾' },
+    })
+    fireEvent.change(within(dialog).getByLabelText('意图'), {
+      target: { value: '回顾本周完成的事情。' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(created).toBeTruthy())
+    const command = created as {
+      userId: string
+      commandId: string
+      automation: { title: string; schedule: { everySeconds: number } }
+    }
+    expect(command.userId).toBe('owner')
+    expect(command.commandId).toBeTruthy()
+    expect(command.automation.title).toBe('每周回顾')
+    expect(command.automation.schedule.everySeconds).toBe(3600)
+    expect(await screen.findByText('每周回顾')).toBeTruthy()
+    expect(fetchMock).toBeTruthy()
+  })
+
+  it('lists server memories with scope filters and deletes with revision', async () => {
+    let memories: unknown[] = [
+      {
+        id: 'mem-1',
+        userId: 'owner',
+        scope: 'global',
+        category: 'preference',
+        content: '我喜欢安静、白底的界面。',
+        source: { kind: 'user_confirmation' },
+        revision: 3,
+        createdAt: '2026-11-21T08:00:00.000Z',
+        updatedAt: '2026-11-21T08:00:00.000Z',
+        lastUsedAt: '2026-11-21T08:30:00.000Z',
+      },
+    ]
+    let deleted: unknown
+    installSnapshotFetch(snapshot, (path, init) => {
+      if (path.startsWith('/v1/memories?')) return Response.json({ memories })
+      if (path === '/v1/memories/mem-1/delete' && init?.method === 'POST') {
+        deleted = JSON.parse(typeof init.body === 'string' ? init.body : '{}')
+        memories = []
+        return Response.json({
+          deletion: { id: 'mem-1', deleted: true, deletedAt: 'now' },
+        })
+      }
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: '记忆',
+      }),
+    )
+    expect(await screen.findByText('我喜欢安静、白底的界面。')).toBeTruthy()
+    expect(screen.queryByText('记忆能力正在建设')).toBeNull()
+    expect(screen.getByText(/来源：用户确认/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('tab', { name: '事情' }))
+    expect(screen.getByText('该范围下还没有记忆')).toBeTruthy()
+    fireEvent.click(screen.getByRole('tab', { name: '全部' }))
+    fireEvent.click(screen.getByRole('button', { name: /删除/ }))
+    fireEvent.click(screen.getByRole('button', { name: '确认删除' }))
+    await waitFor(() => expect(deleted).toBeTruthy())
+    expect((deleted as { expectedRevision: number }).expectedRevision).toBe(3)
+    expect(await screen.findByText('还没有记忆')).toBeTruthy()
+  })
+
+  it('creates a global memory from the memory page form', async () => {
+    let created: unknown
+    const memories: unknown[] = []
+    installSnapshotFetch(snapshot, (path, init) => {
+      if (path.startsWith('/v1/memories?')) return Response.json({ memories })
+      if (path === '/v1/memories' && init?.method === 'POST') {
+        created = JSON.parse(typeof init.body === 'string' ? init.body : '{}')
+        const memory = {
+          id: 'mem-new',
+          userId: 'owner',
+          scope: 'global',
+          category: 'fact',
+          content: '我的工作时间是上午。',
+          source: { kind: 'user_confirmation' },
+          revision: 1,
+          createdAt: '2026-11-21T08:00:00.000Z',
+          updatedAt: '2026-11-21T08:00:00.000Z',
+        }
+        memories.push(memory)
+        return Response.json({ memory }, { status: 201 })
+      }
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: '记忆',
+      }),
+    )
+    fireEvent.click(await screen.findByRole('button', { name: /添加记忆/ }))
+    const dialog = screen.getByRole('dialog', { name: '添加记忆' })
+    fireEvent.change(within(dialog).getByLabelText('内容'), {
+      target: { value: '我的工作时间是上午。' },
+    })
+    fireEvent.change(within(dialog).getByLabelText('类别'), {
+      target: { value: 'fact' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(created).toBeTruthy())
+    const command = created as {
+      memory: { scope: string; category: string; source: { kind: string } }
+    }
+    expect(command.memory.scope).toBe('global')
+    expect(command.memory.category).toBe('fact')
+    expect(command.memory.source.kind).toBe('user_confirmation')
+    expect(await screen.findByText('我的工作时间是上午。')).toBeTruthy()
+  })
+
+  it('shows memory counts in settings and links to the memory page', async () => {
+    installSnapshotFetch(snapshot, path => {
+      if (path.startsWith('/v1/memories?'))
+        return Response.json({
+          memories: [
+            {
+              id: 'mem-1',
+              userId: 'owner',
+              scope: 'global',
+              category: 'preference',
+              content: '白底优先。',
+              source: { kind: 'user_confirmation' },
+              revision: 1,
+              createdAt: '2026-11-21T08:00:00.000Z',
+              updatedAt: '2026-11-21T08:00:00.000Z',
+            },
+          ],
+        })
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: '设置',
+      }),
+    )
+    fireEvent.click(
+      within(screen.getByLabelText('设置分类')).getByRole('button', {
+        name: '记忆',
+      }),
+    )
+    expect(await screen.findByText(/全局 1 条/)).toBeTruthy()
+    expect(screen.queryByText('记忆服务尚未启用')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '管理记忆' }))
+    expect(
+      await screen.findByRole('heading', { name: '记忆', level: 1 }),
+    ).toBeTruthy()
+  })
 })

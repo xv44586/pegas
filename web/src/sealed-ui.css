@@ -28,9 +28,9 @@
   --faint: #a7a7a1;
   --line: #e8e8e4;
   --line-strong: #d8d8d3;
-  --positive: #26835b;
+  --positive: #22754f;
   --positive-soft: #eaf7ef;
-  --caution: #a86a14;
+  --caution: #965e0e;
   --caution-soft: #fff7e7;
   --critical: #c74652;
   --critical-soft: #fff0f1;
@@ -55,6 +55,7 @@
   --muted: #6f675c;
   --line: #e7ded1;
   --line-strong: #d8ccbd;
+  --accent-ink: #2f49de;
   --accent-soft: #e2e7ff;
 }
 
@@ -411,6 +412,120 @@ a {
 .standard-page {
   height: 100%;
   overflow: auto;
+}
+.page-header-action {
+  white-space: nowrap;
+}
+.page-error {
+  align-items: center;
+  background: var(--critical-soft);
+  border: 1px solid var(--critical);
+  border-radius: 10px;
+  color: var(--critical);
+  display: flex;
+  font-size: 13px;
+  gap: 10px;
+  margin: 0 0 16px;
+  padding: 10px 14px;
+}
+.page-error .inline-link {
+  color: inherit;
+  margin-top: 0;
+}
+.page-loading {
+  color: var(--muted);
+  margin: 24px 0;
+}
+.record-list {
+  margin-bottom: 40px;
+}
+.record-list article {
+  align-items: start;
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  gap: 14px;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  padding: 16px 10px;
+}
+.record-icon {
+  align-items: center;
+  background: var(--accent-soft);
+  border-radius: 50%;
+  color: var(--accent-ink, var(--accent));
+  display: flex;
+  height: 38px;
+  justify-content: center;
+  width: 38px;
+}
+.record-icon.is-paused {
+  background: var(--caution-soft);
+  color: var(--caution);
+}
+.record-icon.is-completed,
+.record-icon.is-cancelled {
+  background: var(--surface);
+  color: var(--muted);
+}
+.record-copy {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+.record-copy strong {
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+.record-copy small {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.record-meta {
+  font-size: 12px;
+}
+.record-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  grid-column: 2 / -1;
+  justify-content: flex-end;
+}
+.record-form {
+  display: flex;
+  flex-direction: column;
+  max-height: min(720px, 86dvh);
+}
+.record-form-header {
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  justify-content: space-between;
+  padding: 14px 18px;
+}
+.record-form-header h2 {
+  font-size: 16px;
+  margin: 0;
+}
+.record-form-header button {
+  align-items: center;
+  background: transparent;
+  border-radius: 8px;
+  color: var(--muted);
+  display: flex;
+  height: 32px;
+  justify-content: center;
+  width: 32px;
+}
+.record-form-body {
+  overflow: auto;
+  padding: 16px 18px;
+}
+.record-form-footer {
+  border-top: 1px solid var(--line);
+  display: flex;
+  gap: 9px;
+  justify-content: flex-end;
+  padding: 12px 18px;
 }
 .standard-page > :not(.page-header) {
   margin-left: 42px;
@@ -2990,6 +3105,16 @@ kbd {
   .standard-page > :not(.page-header) {
     margin-left: 20px;
     margin-right: 20px;
+  }
+  .record-list article {
+    grid-template-columns: 34px minmax(0, 1fr);
+  }
+  .record-list .status-text {
+    grid-column: 2;
+  }
+  .record-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
   }
   .conversation-scroll {
     padding: 14px 18px 0;

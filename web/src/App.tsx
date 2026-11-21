@@ -29,8 +29,10 @@ import {
 } from './sealed/types'
 import type {
   Approval,
+  Automation,
   DshModelCatalog,
   DshModelCatalogItem,
+  MemoryRecord,
   ModelProviderDraft,
   OutboxMessage,
   RuntimeSettings,
@@ -61,6 +63,11 @@ export function App() {
     settingsSectionFromLocation(),
   )
   const [searchOpen, setSearchOpen] = useState(false)
+  const [automations, setAutomations] = useState<Automation[]>()
+  const [automationsError, setAutomationsError] = useState('')
+  const [memories, setMemories] = useState<MemoryRecord[]>()
+  const [memoriesError, setMemoriesError] = useState('')
+  const [memoriesTruncated, setMemoriesTruncated] = useState(false)
   const [theme, setTheme] = useState<ThemeChoice>(() => readTheme())
   const [systemDark, setSystemDark] = useState(() => systemPrefersDark())
   const [loading, setLoading] = useState(true)
@@ -81,6 +88,8 @@ export function App() {
   const taskDrawerRequestRef = useRef(new Map<string, number>())
   const attentionRequestRef = useRef(0)
   const approvalProjectionRequestRef = useRef(0)
+  const automationsRequestRef = useRef(0)
+  const memoriesRequestRef = useRef(0)
 
   const loadSnapshot = useCallback(async () => {
     const requestId = snapshotRequestRef.current + 1
@@ -122,6 +131,59 @@ export function App() {
       }))
     }
   }, [api])
+
+  const loadAutomations = useCallback(async () => {
+    const requestId = automationsRequestRef.current + 1
+    automationsRequestRef.current = requestId
+    try {
+      const items = await api.automations()
+      if (requestId !== automationsRequestRef.current) return
+      setAutomations(items)
+      setAutomationsError('')
+    } catch (caught) {
+      if (requestId !== automationsRequestRef.current) return
+      setAutomationsError(
+        caught instanceof Error ? caught.message : '无法读取自动化。',
+      )
+    }
+  }, [api])
+
+  const loadMemories = useCallback(async () => {
+    const requestId = memoriesRequestRef.current + 1
+    memoriesRequestRef.current = requestId
+    try {
+      const items: MemoryRecord[] = []
+      let cursor: string | undefined
+      let truncated = false
+      for (let page = 0; page < 3; page += 1) {
+        const result = await api.memories({
+          ...(cursor ? { cursor } : {}),
+        })
+        items.push(...result.memories)
+        cursor = result.nextCursor
+        if (!cursor) break
+        truncated = true
+      }
+      if (requestId !== memoriesRequestRef.current) return
+      setMemories(items)
+      setMemoriesTruncated(truncated)
+      setMemoriesError('')
+    } catch (caught) {
+      if (requestId !== memoriesRequestRef.current) return
+      setMemoriesError(
+        caught instanceof Error ? caught.message : '无法读取记忆。',
+      )
+    }
+  }, [api])
+
+  useEffect(() => {
+    if (page === 'automation') void loadAutomations()
+    if (
+      page === 'memory' ||
+      (page === 'settings' && settingsSection === 'memory')
+    )
+      void loadMemories()
+  }, [page, settingsSection, loadAutomations, loadMemories])
 
   const loadConfiguration = useCallback(
     async (preserveSettings = false) => {
@@ -193,12 +255,16 @@ export function App() {
   useEffect(() => {
     const shell = document.querySelector<HTMLElement>('.app-shell')
     if (!shell) return
-    const modalOpen = Boolean(drawer) || searchOpen || setupOpen
+    const modalOpen =
+      Boolean(drawer) ||
+      searchOpen ||
+      setupOpen ||
+      Boolean(document.querySelector('.modal-backdrop'))
     shell.inert = modalOpen
     return () => {
       shell.inert = false
     }
-  }, [drawer, searchOpen, setupOpen])
+  }, [drawer, searchOpen, setupOpen, page])
 
   useEffect(() => {
     const titles: Record<AppPage, string> = {
@@ -786,17 +852,69 @@ export function App() {
             snapshot={data.snapshot}
           />
         )}
-        {page === 'automation' && <AutomationPage actions={actions} />}
-        {page === 'memory' && <MemoryPage actions={actions} />}
+        {page === 'automation' && (
+          <AutomationPage
+            actions={actions}
+            automations={automations}
+            channels={data.snapshot.channels}
+            error={automationsError}
+            onCreate={async draft => {
+              await api.createAutomation(draft)
+              await loadAutomations()
+            }}
+            onReload={() => void loadAutomations()}
+            onSetStatus={async (automation, action) => {
+              await api.setAutomationStatus(
+                automation.id,
+                automation.revision,
+                action,
+              )
+              await loadAutomations()
+            }}
+            onUpdate={async (automation, draft) => {
+              await api.updateAutomation(
+                automation.id,
+                automation.revision,
+                draft,
+              )
+              await loadAutomations()
+            }}
+          />
+        )}
+        {page === 'memory' && (
+          <MemoryPage
+            actions={actions}
+            channels={data.snapshot.channels}
+            error={memoriesError}
+            memories={memories}
+            onCreate={async draft => {
+              await api.createMemory(draft)
+              await loadMemories()
+            }}
+            onDelete={async memory => {
+              await api.deleteMemory(memory.id, memory.revision)
+              await loadMemories()
+            }}
+            onReload={() => void loadMemories()}
+            onUpdate={async (memory, draft) => {
+              await api.updateMemory(memory.id, memory.revision, draft)
+              await loadMemories()
+            }}
+            truncated={memoriesTruncated}
+          />
+        )}
         {page === 'settings' && (
           <SettingsPage
             agentModels={agentModels}
             initialSection={settingsSection}
+            memories={memories}
+            memoriesError={memoriesError}
             onBack={() => navigate('conversation')}
             onDiscoverModels={(provider, model, draft) =>
               api.discoverModels(provider, model, draft)
             }
             onOpenDrawer={openDrawer}
+            onOpenMemory={() => navigate('memory')}
             onReloadUsage={() => void loadUsage()}
             onSectionChange={nextSection => {
               setSettingsSection(nextSection)
