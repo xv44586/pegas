@@ -1,9 +1,26 @@
-import type { InboxEvent, RoutingDecision, Task } from '../core/domain.js'
+import type {
+  InboxEvent,
+  RoutingCandidate,
+  RoutingDecision,
+  Task,
+} from '../core/domain.js'
 import type { JsonModelProvider } from '../model/provider.js'
 
 export interface TaskRouter {
-  route(event: InboxEvent, tasks: Task[]): Promise<RoutingDecision | undefined>
+  route(
+    event: InboxEvent,
+    candidates: RoutingCandidate[] | Task[],
+    context?: { resolveExplicitTask?: ExplicitTaskResolver },
+  ): Promise<RoutingDecision | undefined>
 }
+
+/**
+ * ROUTE-003: explicit task references stay deterministic even when the
+ * target is outside the open candidate set (for example a completed Task
+ * resuming through its mandate-revalidated path). The store remains the
+ * authorization boundary for such continuations.
+ */
+export type ExplicitTaskResolver = (taskId: string) => Task | undefined
 
 /**
  * Deterministic first-pass routing. Explicit task references are honored and
@@ -13,12 +30,15 @@ export interface TaskRouter {
 export class RuleBasedTaskRouter implements TaskRouter {
   route(
     event: InboxEvent,
-    tasks: Task[],
+    candidates: RoutingCandidate[] | Task[],
+    context: { resolveExplicitTask?: ExplicitTaskResolver } = {},
   ): Promise<RoutingDecision | undefined> {
     if (event.type !== 'user.message') return Promise.resolve(undefined)
+    const tasks = candidateTasks(candidates)
     const payload = messagePayload(event.payload)
     const explicitTask = payload.taskId
-      ? tasks.find(task => task.id === payload.taskId)
+      ? (tasks.find(task => task.id === payload.taskId) ??
+        context.resolveExplicitTask?.(payload.taskId))
       : undefined
 
     if (payload.taskId && !explicitTask) {
@@ -70,14 +90,22 @@ export class ModelTaskRouter implements TaskRouter {
 
   async route(
     event: InboxEvent,
-    tasks: Task[],
+    candidates: RoutingCandidate[] | Task[],
+    context: { resolveExplicitTask?: ExplicitTaskResolver } = {},
   ): Promise<RoutingDecision | undefined> {
     if (event.type !== 'user.message') return undefined
     const payload = messagePayload(event.payload)
-    if (payload.taskId) return this.#fallback.route(event, tasks)
+    if (payload.taskId) {
+      return this.#fallback.route(event, candidates, context)
+    }
 
-    const candidates = tasks
-      .filter(task => task.status !== 'cancelled')
+    const open = candidates
+      .map(toRoutingCandidate)
+      .filter(
+        candidate =>
+          candidate.task.status !== 'completed' &&
+          candidate.task.status !== 'cancelled',
+      )
       .slice(0, this.#maximumCandidateTasks)
 
     try {
@@ -85,21 +113,38 @@ export class ModelTaskRouter implements TaskRouter {
         system: routerSystemPrompt,
         input: JSON.stringify({
           message: payload.text,
-          tasks: candidates.map(task => ({
-            id: task.id,
-            title: task.title,
-            goal: task.goal,
-            status: task.status,
-            statusReason: task.statusReason ?? null,
+          tasks: open.map(candidate => ({
+            id: candidate.task.id,
+            title: candidate.task.title,
+            goal: candidate.task.goal,
+            status: candidate.task.status,
+            statusReason: candidate.task.statusReason ?? null,
+            awaiting: candidate.awaiting ?? null,
+            lastDelivery: candidate.lastDelivery ?? null,
+            recentInput: candidate.recentInput ?? null,
           })),
         }),
         schema: routerDecisionSchema,
       })
-      return modelDecision(answer, payload.text, candidates)
+      return modelDecision(
+        answer,
+        payload.text,
+        open.map(candidate => candidate.task),
+      )
     } catch {
-      return this.#fallback.route(event, tasks)
+      return this.#fallback.route(event, candidates, context)
     }
   }
+}
+
+function toRoutingCandidate(value: RoutingCandidate | Task): RoutingCandidate {
+  return 'task' in value ? value : { task: value }
+}
+
+function candidateTasks(candidates: RoutingCandidate[] | Task[]): Task[] {
+  return candidates.map(candidate =>
+    'task' in candidate ? candidate.task : candidate,
+  )
 }
 
 const routerSystemPrompt = `You route one user message into durable personal-agent tasks.
@@ -114,6 +159,7 @@ Otherwise return:
 {"kind":"create_task","taskId":"","title":"concise title","goal":"complete user goal","reason":"short reason"}
 When the new task asks to change, fix or extend Pegas itself (its own code, UI, prompts or behavior), also set "targetResource":"pegas_repository" on the create_task decision; otherwise set "targetResource":"".
 Never invent a task id. Prefer create_task when uncertain or when the message introduces an independent idea.
+When a candidate has a non-empty "awaiting" question and the message directly answers that question, prefer continue_task for that candidate.
 You only classify ownership and control intent. Never answer the task content, never judge tool availability, and never use steer_task or cancel_task without an explicit user instruction targeting that task.`
 
 const routerDecisionSchema = {

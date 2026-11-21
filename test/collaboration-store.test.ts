@@ -1040,7 +1040,9 @@ describe('durable collaboration store', () => {
               type: 'user.message',
               payload: { text: 'Source' },
             })
-            observedCandidateIds = tasks.map(task => task.id)
+            observedCandidateIds = tasks.map(candidate =>
+              'task' in candidate ? candidate.task.id : candidate.id,
+            )
             return Promise.resolve({
               kind: 'create_task',
               title: 'Reclassified source input',

@@ -117,6 +117,20 @@ export interface Task {
   updatedAt: string
 }
 
+/**
+ * ROUTE-003: one routing candidate plus authoritative summary facts derived
+ * by the Control Plane. Workers never supply these fields as free text.
+ */
+export interface RoutingCandidate {
+  task: Task
+  /** Latest pending question the user is expected to answer, if any. */
+  awaiting?: string
+  /** First line of the most recent completed Run output. */
+  lastDelivery?: string
+  /** First line of the most recent user input attached to this Task. */
+  recentInput?: string
+}
+
 type RunStatus =
   'queued' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled'
 

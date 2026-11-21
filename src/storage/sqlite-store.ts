@@ -43,6 +43,7 @@ import type {
   OutboxMessage,
   OutboxResolutionDraft,
   RoutingDecision,
+  RoutingCandidate,
   Run,
   Task,
 } from '../core/domain.js'
@@ -3148,15 +3149,118 @@ export class PegasStore {
     excludeTaskId: string,
     limit = 20,
   ): Task[] {
+    return this.listRoutingCandidates(userId, { excludeTaskId, limit }).map(
+      candidate => candidate.task,
+    )
+  }
+
+  /**
+   * ROUTE-003: the single open-task candidate query shared by main
+   * conversation routing and collaboration handback. Completed and cancelled
+   * Tasks never enter default candidates; explicit completed-task resume
+   * keeps its own mandate-revalidated path in applyRoutingDecision.
+   */
+  listRoutingCandidates(
+    userId: string,
+    options: { excludeTaskId?: string; limit?: number } = {},
+  ): RoutingCandidate[] {
+    const limit = options.limit ?? 20
     const rows = this.#database
       .prepare(
         `SELECT * FROM tasks
-         WHERE user_id = ? AND id <> ?
-           AND status NOT IN ('completed','cancelled')
-         ORDER BY updated_at DESC LIMIT ?`,
+         WHERE user_id = ? AND (? IS NULL OR id <> ?)
+           AND status IN ('backlog','unstarted','started')
+         ORDER BY
+           CASE WHEN status_reason IN (
+             'awaiting_approval','awaiting_goal_clarification',
+             'awaiting_user_input','awaiting_user_review'
+           ) THEN 0 ELSE 1 END,
+           updated_at DESC
+         LIMIT ?`,
       )
-      .all(userId, excludeTaskId, limit) as unknown as TaskRow[]
-    return rows.map(toTask)
+      .all(
+        userId,
+        options.excludeTaskId ?? null,
+        options.excludeTaskId ?? null,
+        limit,
+      ) as unknown as TaskRow[]
+    return rows.map(row => this.#routingCandidate(toTask(row)))
+  }
+
+  #routingCandidate(task: Task): RoutingCandidate {
+    const candidate: RoutingCandidate = { task }
+    const awaiting = this.#taskAwaitingSummary(task)
+    if (awaiting) candidate.awaiting = awaiting
+    const delivery = this.#database
+      .prepare(
+        `SELECT output_json FROM runs
+         WHERE task_id = ? AND status = 'completed' AND output_json IS NOT NULL
+         ORDER BY updated_at DESC, rowid DESC LIMIT 1`,
+      )
+      .get(task.id) as { output_json: string } | undefined
+    if (delivery) {
+      const output = JSON.parse(delivery.output_json) as string
+      const firstLine = firstSummaryLine(output, 120)
+      if (firstLine) candidate.lastDelivery = firstLine
+    }
+    const input = this.#database
+      .prepare(
+        `SELECT e.payload_json FROM task_events te
+         JOIN inbox_events e ON e.id = te.event_id
+         WHERE te.task_id = ? AND e.type = 'user.message'
+         ORDER BY te.created_at DESC, te.rowid DESC LIMIT 1`,
+      )
+      .get(task.id) as { payload_json: string } | undefined
+    if (input) {
+      const payload = JSON.parse(input.payload_json) as { text?: unknown }
+      if (typeof payload.text === 'string') {
+        const firstLine = firstSummaryLine(payload.text, 120)
+        if (firstLine) candidate.recentInput = firstLine
+      }
+    }
+    return candidate
+  }
+
+  #taskAwaitingSummary(task: Task): string | undefined {
+    const approval = this.#database
+      .prepare(
+        `SELECT prompt_json FROM approvals
+         WHERE task_id = ? AND status = 'pending' AND protocol_version = 1
+         ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+      )
+      .get(task.id) as { prompt_json: string } | undefined
+    if (approval) {
+      const prompt = JSON.parse(approval.prompt_json) as ApprovalPrompt
+      return firstSummaryLine(prompt.summary, 160)
+    }
+    const steering = this.#database
+      .prepare(
+        `SELECT steering_json FROM runs
+         WHERE task_id = ? AND steering_json IS NOT NULL
+         ORDER BY updated_at DESC, rowid DESC LIMIT 1`,
+      )
+      .get(task.id) as { steering_json: string } | undefined
+    if (steering) {
+      const directives = JSON.parse(steering.steering_json) as {
+        text: string
+      }[]
+      const latest = directives.at(-1)
+      if (latest) return firstSummaryLine(latest.text, 160)
+    }
+    if (task.statusReason === 'awaiting_goal_clarification') {
+      const contract = this.#database
+        .prepare(
+          `SELECT contract_json FROM goal_contracts
+           WHERE task_id = ? ORDER BY revision DESC LIMIT 1`,
+        )
+        .get(task.id) as { contract_json: string } | undefined
+      if (contract) {
+        const draft = JSON.parse(contract.contract_json) as GoalContractDraft
+        const question = draft.unknowns.find(unknown => unknown.blocking)
+        if (question) return firstSummaryLine(question.question, 160)
+      }
+    }
+    return undefined
   }
 
   listAutomations(userId: string): Automation[] {
@@ -11106,6 +11210,15 @@ function toModelProviderConnection(
       : {}),
     updatedAt: row.updated_at,
   }
+}
+
+function firstSummaryLine(value: string, limit: number): string | undefined {
+  const line = value
+    .split('\n')
+    .map(part => part.trim())
+    .find(part => part.length > 0)
+  if (!line) return undefined
+  return Array.from(line).slice(0, limit).join('')
 }
 
 function toTask(row: TaskRow): Task {

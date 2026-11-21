@@ -62,7 +62,10 @@ export class RoutingEventHandler implements EventHandler {
     }
     const decision = await this.#router.route(
       event,
-      store.listTasks(event.userId),
+      store.listRoutingCandidates(event.userId),
+      {
+        resolveExplicitTask: taskId => store.findTask(taskId, event.userId),
+      },
     )
     if (!decision) return
     if (decision.kind === 'steer_task' || decision.kind === 'cancel_task') {
@@ -170,7 +173,9 @@ export class RoutingEventHandler implements EventHandler {
       )
       const decision = await this.#router.route(
         { ...event, type: 'user.message', payload: { text } },
-        candidates,
+        store.listRoutingCandidates(event.userId, {
+          excludeTaskId: sourceTaskId,
+        }),
       )
       if (!decision) throw new Error('Router did not classify handback input')
       if (decision.kind === 'steer_task' || decision.kind === 'cancel_task') {
