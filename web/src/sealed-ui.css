@@ -553,15 +553,11 @@ a {
   max-width: 520px;
   text-align: center;
 }
-.conversation-welcome > span {
-  align-items: center;
-  background: var(--accent-soft);
-  border-radius: 14px;
-  color: var(--accent-ink, var(--accent));
-  display: inline-flex;
-  height: 48px;
-  justify-content: center;
-  width: 48px;
+.pegas-mascot {
+  display: inline-block;
+  height: auto;
+  max-width: 100%;
+  user-select: none;
 }
 .conversation-welcome h2 {
   font-size: 25px;

@@ -39,6 +39,7 @@ import type {
 } from '../types'
 import { useVoiceDictation } from '../useVoiceDictation'
 import { PegasMark } from './PegasMark'
+import { PegasMascot } from './PegasMascot'
 import {
   settingsSections,
   type DrawerView,
@@ -1988,7 +1989,7 @@ function RecoverySettings() {
 function AboutSettings() {
   return (
     <div className="settings-pane about-pane">
-      <PegasMark size={58} />
+      <PegasMascot label="Pegas 形象" size={168} />
       <h2>Pegas</h2>
       <p>一个以对话为入口、以持久事情为核心的私人智能伙伴。</p>
       <dl>
