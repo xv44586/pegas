@@ -598,6 +598,7 @@ function PegasSettings({
       </div>
       <div className="settings-tabs" role="tablist">
         <button
+          aria-pressed={tab === 'model'}
           aria-selected={tab === 'model'}
           onClick={() => setTab('model')}
           role="tab"
@@ -606,6 +607,7 @@ function PegasSettings({
           执行模型
         </button>
         <button
+          aria-pressed={tab === 'behavior'}
           aria-selected={tab === 'behavior'}
           onClick={() => setTab('behavior')}
           role="tab"
@@ -614,6 +616,7 @@ function PegasSettings({
           行为与规则
         </button>
         <button
+          aria-pressed={tab === 'autonomy'}
           aria-selected={tab === 'autonomy'}
           onClick={() => setTab('autonomy')}
           role="tab"
@@ -911,7 +914,7 @@ function ModelServices({
                   <strong>{provider.name}</strong>
                   <small className={provider.available ? 'is-good' : ''}>
                     {provider.available
-                      ? '连接正常'
+                      ? '已配置'
                       : (provider.reason ?? '未配置')}
                   </small>
                 </span>

@@ -2,8 +2,10 @@ import {
   ArrowUp,
   ArrowRight,
   Check,
+  CheckCircle2,
   ChevronDown,
   CircleAlert,
+  CircleQuestionMark,
   FileText,
   Mic,
   PauseCircle,
@@ -337,6 +339,7 @@ export function ConversationPage({
     () => new Set(),
   )
   const scrollRef = useRef<HTMLDivElement>(null)
+  const stickToBottomRef = useRef(true)
   const messages = useMemo(() => {
     const user = snapshot.events
       .filter(event => event.type === 'user.message')
@@ -360,16 +363,18 @@ export function ConversationPage({
   }, [snapshot.events, snapshot.messages])
   useEffect(() => {
     const area = scrollRef.current
-    if (area) area.scrollTop = area.scrollHeight
-  }, [messages.length])
+    if (area && stickToBottomRef.current) area.scrollTop = area.scrollHeight
+  }, [messages])
   const dictation = useVoiceDictation({
     transcribe: blob => api.transcribeVoice(blob),
     onTranscript: text => onDraftChange(`${draft}${draft ? ' ' : ''}${text}`),
   })
   const dictationBusy = dictation.state !== 'idle'
-  const latestChannel = snapshot.channels[0]
-  const latestRun = latestChannel
-    ? latestRunForTask(snapshot.runs, latestChannel.id)
+  const summaryChannel =
+    snapshot.channels.find(item => item.id === continuationChannel?.id) ??
+    snapshot.channels[0]
+  const summaryRun = summaryChannel
+    ? latestRunForTask(snapshot.runs, summaryChannel.id)
     : undefined
 
   async function send() {
@@ -396,7 +401,15 @@ export function ConversationPage({
         description="你的私人智能工作伙伴"
         title="Pegas"
       />
-      <div className="conversation-scroll" ref={scrollRef}>
+      <div
+        className="conversation-scroll"
+        onScroll={event => {
+          const area = event.currentTarget
+          stickToBottomRef.current =
+            area.scrollHeight - area.scrollTop - area.clientHeight < 48
+        }}
+        ref={scrollRef}
+      >
         <div className="conversation-flow">
           {messages.length === 0 ? (
             <section className="conversation-welcome">
@@ -441,7 +454,9 @@ export function ConversationPage({
                     >
                       {expandedMessages.has(message.id)
                         ? '收起回复'
-                        : '展开完整回复'}
+                        : message.role === 'user'
+                          ? '展开完整消息'
+                          : '展开完整回复'}
                     </button>
                   )}
                   {message.role === 'pegas' && message.taskId && (
@@ -468,28 +483,28 @@ export function ConversationPage({
             ))
           )}
 
-          {latestChannel && latestRun && (
+          {summaryChannel && summaryRun && (
             <button
               className="run-summary"
               onClick={() =>
                 actions.onOpenDrawer({
                   kind: 'task',
-                  channel: latestChannel,
-                  run: latestRun,
+                  channel: summaryChannel,
+                  run: summaryRun,
                 })
               }
               type="button"
             >
-              <i data-status={latestRun.status} />
+              <i data-status={summaryRun.status} />
               <span>
                 <strong>
-                  {statusLabel(latestChannel, latestRun)} ·{' '}
-                  {latestChannel.title}
+                  {statusLabel(summaryChannel, summaryRun)} ·{' '}
+                  {summaryChannel.title}
                 </strong>
                 <small>
-                  {latestRun.status === 'running'
+                  {summaryRun.status === 'running'
                     ? 'Pegas 正在推进这件事'
-                    : `${(latestRun.output ?? latestChannel.goal).slice(0, 160)}${(latestRun.output ?? latestChannel.goal).length > 160 ? '…' : ''}`}
+                    : `${(summaryRun.output ?? summaryChannel.goal).slice(0, 160)}${(summaryRun.output ?? summaryChannel.goal).length > 160 ? '…' : ''}`}
                 </small>
               </span>
               <ArrowRight size={18} />
@@ -623,8 +638,8 @@ export function WorkPage({
   actions: PageActions
 }) {
   const [filter, setFilter] = useState<
-    'active' | 'waiting' | 'completed' | 'archived'
-  >('active')
+    'all' | 'active' | 'waiting' | 'completed' | 'archived'
+  >('all')
   const [query, setQuery] = useState('')
   const visible = snapshot.channels.filter(channel => {
     const run = latestRunForTask(snapshot.runs, channel.id)
@@ -635,6 +650,7 @@ export function WorkPage({
         .includes(query.toLowerCase())
     )
       return false
+    if (filter === 'all') return true
     if (filter === 'completed') return channel.status === 'completed'
     if (filter === 'archived') return channel.status === 'cancelled'
     if (
@@ -671,6 +687,7 @@ export function WorkPage({
       <div className="filter-row" role="tablist">
         {(
           [
+            ['all', '全部'],
             ['active', '进行中'],
             ['waiting', '等待中'],
             ['completed', '已完成'],
@@ -678,6 +695,7 @@ export function WorkPage({
           ] as const
         ).map(([id, label]) => (
           <button
+            aria-pressed={filter === id}
             aria-selected={filter === id}
             key={id}
             onClick={() => setFilter(id)}
@@ -731,8 +749,14 @@ export function WorkPage({
         ) : (
           <EmptyCapability
             icon={FileText}
-            title="这里还没有事情"
-            description="在对话中告诉 Pegas 一个目标，事情会自动出现在这里。"
+            title={
+              snapshot.channels.length ? '当前筛选下没有事情' : '这里还没有事情'
+            }
+            description={
+              snapshot.channels.length
+                ? '切换其他筛选，或清除搜索词后再看看。'
+                : '在对话中告诉 Pegas 一个目标，事情会自动出现在这里。'
+            }
           />
         )}
       </section>
@@ -768,9 +792,9 @@ export function AttentionPage({
   actions: PageActions
   onOpen: (message: OutboxMessage) => Promise<void>
 }) {
-  const [filter, setFilter] = useState<'all' | 'approval' | 'input' | 'failed'>(
-    'all',
-  )
+  const [filter, setFilter] = useState<
+    'all' | 'approval' | 'input' | 'failed' | 'result'
+  >('all')
   const attentionMessages = unresolvedAttentionMessages(
     snapshot.messages,
   ).toSorted(
@@ -789,6 +813,7 @@ export function AttentionPage({
       />
       <div className="filter-row" role="tablist">
         <button
+          aria-pressed={filter === 'all'}
           aria-selected={filter === 'all'}
           onClick={() => setFilter('all')}
           role="tab"
@@ -797,6 +822,7 @@ export function AttentionPage({
           全部 {attentionMessages.length}
         </button>
         <button
+          aria-pressed={filter === 'approval'}
           aria-selected={filter === 'approval'}
           onClick={() => setFilter('approval')}
           role="tab"
@@ -805,6 +831,7 @@ export function AttentionPage({
           需要确认
         </button>
         <button
+          aria-pressed={filter === 'input'}
           aria-selected={filter === 'input'}
           onClick={() => setFilter('input')}
           role="tab"
@@ -813,12 +840,22 @@ export function AttentionPage({
           需要补充
         </button>
         <button
+          aria-pressed={filter === 'failed'}
           aria-selected={filter === 'failed'}
           onClick={() => setFilter('failed')}
           role="tab"
           type="button"
         >
           失败
+        </button>
+        <button
+          aria-pressed={filter === 'result'}
+          aria-selected={filter === 'result'}
+          onClick={() => setFilter('result')}
+          role="tab"
+          type="button"
+        >
+          重要结果
         </button>
       </div>
       <section className="attention-list">
@@ -829,10 +866,19 @@ export function AttentionPage({
             )
             const action = attentionAction(message)
             const Icon = action.icon
+            const kind = attentionKind(message)
             return (
               <article key={message.id}>
-                <span className="attention-icon">
-                  <CircleAlert size={20} />
+                <span className={`attention-icon is-${kind}`}>
+                  {kind === 'result' ? (
+                    <CheckCircle2 size={20} />
+                  ) : kind === 'failed' ? (
+                    <CircleAlert size={20} />
+                  ) : kind === 'approval' ? (
+                    <ShieldCheck size={20} />
+                  ) : (
+                    <CircleQuestionMark size={20} />
+                  )}
                 </span>
                 <div>
                   <strong>

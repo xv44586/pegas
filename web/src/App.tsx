@@ -190,6 +190,28 @@ export function App() {
     return () => window.removeEventListener('keydown', listener)
   }, [drawer, searchOpen, setupOpen])
 
+  useEffect(() => {
+    const shell = document.querySelector<HTMLElement>('.app-shell')
+    if (!shell) return
+    const modalOpen = Boolean(drawer) || searchOpen || setupOpen
+    shell.inert = modalOpen
+    return () => {
+      shell.inert = false
+    }
+  }, [drawer, searchOpen, setupOpen])
+
+  useEffect(() => {
+    const titles: Record<AppPage, string> = {
+      conversation: '对话',
+      work: '所有事情',
+      attention: '待你处理',
+      automation: '自动化',
+      memory: '记忆',
+      settings: '设置',
+    }
+    document.title = `${titles[page]} · Pegas`
+  }, [page])
+
   function rememberFocus() {
     if (document.activeElement instanceof HTMLElement)
       returnFocusRef.current = document.activeElement

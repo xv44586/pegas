@@ -19,7 +19,12 @@
   --surface-hover: #f2f2ef;
   --ink: #171716;
   --ink-soft: #3f3f3b;
-  --muted: #757570;
+  --muted: #6e6e69;
+  --text: var(--ink);
+  --text-muted: var(--muted);
+  --text-soft: var(--muted);
+  --surface-subtle: var(--surface);
+  --accent-contrast: #fff;
   --faint: #a7a7a1;
   --line: #e8e8e4;
   --line-strong: #d8d8d3;
@@ -47,16 +52,17 @@
   --surface-hover: #eee7dc;
   --ink: #24211d;
   --ink-soft: #4a443c;
-  --muted: #7c7469;
+  --muted: #6f675c;
   --line: #e7ded1;
   --line-strong: #d8ccbd;
-  --accent-soft: #e9ecff;
+  --accent-soft: #e2e7ff;
 }
 
 :root[data-theme='dark'] {
   color-scheme: dark;
-  --accent: #7889ff;
-  --accent-hover: #8f9cff;
+  --accent: #5668f0;
+  --accent-hover: #4a5be0;
+  --accent-ink: #96a2ff;
   --accent-soft: #262c52;
   --accent-softer: #1d2138;
   --canvas: #151615;
@@ -83,8 +89,9 @@
 @media (prefers-color-scheme: dark) {
   :root[data-theme='system'] {
     color-scheme: dark;
-    --accent: #7889ff;
-    --accent-hover: #8f9cff;
+    --accent: #5668f0;
+    --accent-hover: #4a5be0;
+    --accent-ink: #96a2ff;
     --accent-soft: #262c52;
     --accent-softer: #1d2138;
     --canvas: #151615;
@@ -120,6 +127,21 @@
   position: absolute !important;
   white-space: nowrap !important;
   width: 1px !important;
+}
+.skip-link {
+  background: var(--surface-raised);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  color: var(--ink);
+  left: 12px;
+  padding: 8px 14px;
+  position: fixed;
+  top: 12px;
+  transform: translateY(-200%);
+  z-index: 100;
+}
+.skip-link:focus-visible {
+  transform: none;
 }
 html,
 body,
@@ -187,7 +209,7 @@ select:focus-visible,
   outline-offset: 2px;
 }
 a {
-  color: var(--accent);
+  color: var(--accent-ink, var(--accent));
 }
 
 .app-shell {
@@ -277,7 +299,7 @@ a {
 }
 .nav-item.is-active {
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-ink, var(--accent));
   position: relative;
 }
 .nav-item.is-active::before {
@@ -420,7 +442,7 @@ a {
   align-items: center;
   background: var(--accent-soft);
   border-radius: 14px;
-  color: var(--accent);
+  color: var(--accent-ink, var(--accent));
   display: inline-flex;
   height: 48px;
   justify-content: center;
@@ -453,6 +475,9 @@ a {
   border-radius: 18px;
   color: var(--canvas);
   padding: 12px 18px;
+}
+.message-row.is-user .message-delivery {
+  color: color-mix(in srgb, var(--canvas) 78%, var(--ink));
 }
 
 .message-delivery {
@@ -508,7 +533,7 @@ a {
 .inline-link {
   align-items: center;
   background: transparent;
-  color: var(--accent);
+  color: var(--accent-ink, var(--accent));
   display: inline-flex;
   font-weight: 600;
   gap: 5px;
@@ -916,7 +941,7 @@ a {
 .filter-row button[aria-selected='true'] {
   background: var(--accent-softer);
   border-color: var(--accent);
-  color: var(--accent);
+  color: var(--accent-ink, var(--accent));
 }
 .filter-row .sort-button {
   margin-left: auto;
@@ -1032,6 +1057,18 @@ a {
   justify-content: center;
   width: 38px;
 }
+.attention-icon.is-result {
+  background: var(--positive-soft);
+  color: var(--positive);
+}
+.attention-icon.is-failed {
+  background: var(--critical-soft);
+  color: var(--critical);
+}
+.attention-icon.is-approval {
+  background: var(--accent-soft);
+  color: var(--accent-ink, var(--accent));
+}
 .attention-list article > div {
   display: grid;
   gap: 5px;
@@ -1043,7 +1080,7 @@ a {
   align-items: center;
   background: var(--accent);
   border-radius: 8px;
-  color: white;
+  color: var(--accent-contrast);
   display: inline-flex;
   gap: 6px;
   min-height: 34px;
@@ -1180,6 +1217,25 @@ kbd {
   color: var(--muted);
 }
 .command-close {
+  align-items: center;
+  background: transparent;
+  border-radius: 8px;
+  color: var(--muted);
+  display: flex;
+  height: 32px;
+  justify-content: center;
+  position: absolute;
+  right: 12px;
+  top: 12px;
+  width: 32px;
+}
+.command-close:hover {
+  background: var(--surface);
+}
+.command-input {
+  padding-right: 52px;
+}
+.command-input kbd {
   display: none;
 }
 .command-empty {
@@ -1233,7 +1289,7 @@ kbd {
 }
 .settings-nav button.is-active {
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-ink, var(--accent));
   font-weight: 600;
 }
 .settings-content {
@@ -1311,7 +1367,7 @@ kbd {
   align-items: center;
   background: var(--accent-soft);
   border-radius: 8px;
-  color: color-mix(in srgb, var(--accent) 78%, var(--ink));
+  color: color-mix(in srgb, var(--accent-ink, var(--accent)) 78%, var(--ink));
   display: flex;
   font-size: 12px;
   gap: 8px;
@@ -1345,7 +1401,7 @@ kbd {
 }
 .settings-tabs button[aria-selected='true'] {
   border-color: var(--accent);
-  color: var(--accent);
+  color: var(--accent-ink, var(--accent));
   font-weight: 600;
 }
 .setting-section {
@@ -1422,7 +1478,7 @@ kbd {
 .segmented button.is-active {
   background: var(--accent-soft);
   border-color: var(--accent);
-  color: var(--accent);
+  color: var(--accent-ink, var(--accent));
 }
 .rule-list {
   border: 1px solid var(--line);
@@ -1478,7 +1534,7 @@ kbd {
   background: transparent;
   border: 1px solid var(--accent);
   border-radius: var(--control-radius);
-  color: var(--accent);
+  color: var(--accent-ink, var(--accent));
   display: inline-flex;
   gap: 7px;
   min-height: var(--control-height-compact);
@@ -1509,7 +1565,7 @@ kbd {
 }
 .primary-button {
   background: var(--accent);
-  color: white;
+  color: var(--accent-contrast);
 }
 .primary-button:hover {
   background: var(--accent-hover);
@@ -1884,7 +1940,7 @@ kbd {
   align-items: center;
   background: var(--accent-soft);
   border-radius: 7px;
-  color: var(--accent);
+  color: var(--accent-ink, var(--accent));
   display: flex;
   font-size: 12px;
   gap: 7px;
@@ -2135,10 +2191,10 @@ kbd {
   padding: 16px;
 }
 .state-hero > span {
-  color: var(--accent);
+  color: var(--accent-ink, var(--accent));
 }
 .state-hero small {
-  color: var(--accent);
+  color: var(--accent-ink, var(--accent));
   font-weight: 600;
 }
 .state-hero h3 {
@@ -2651,7 +2707,7 @@ kbd {
   align-items: center;
   background: var(--accent-soft);
   border-radius: 15px;
-  color: var(--accent);
+  color: var(--accent-ink, var(--accent));
   display: inline-flex;
   height: 54px;
   justify-content: center;
@@ -2899,7 +2955,7 @@ kbd {
     min-width: 0;
   }
   .mobile-nav button.is-active {
-    color: var(--accent);
+    color: var(--accent-ink, var(--accent));
   }
   .app-shell.is-settings {
     padding-bottom: 0;
@@ -2910,6 +2966,16 @@ kbd {
   .page-header {
     padding: 22px 20px 16px;
   }
+  .page-header:has(.page-search) {
+    flex-wrap: wrap;
+  }
+  .page-header:has(.page-search) .page-header-actions {
+    flex-wrap: wrap;
+    width: 100%;
+  }
+  .page-header:has(.page-search) .page-toolbar {
+    margin-left: auto;
+  }
   .page-header h1 {
     font-size: 23px;
   }
@@ -2917,7 +2983,9 @@ kbd {
     font-size: 12px;
   }
   .page-header-actions .page-search {
-    display: none;
+    flex: 1 1 100%;
+    min-width: 0;
+    order: 3;
   }
   .standard-page > :not(.page-header) {
     margin-left: 20px;
@@ -2965,7 +3033,7 @@ kbd {
     width: auto;
   }
   .composer textarea {
-    font-size: 15px;
+    font-size: 16px;
     min-block-size: 46px;
     padding-top: 5px;
   }
@@ -3008,6 +3076,7 @@ kbd {
     border-right: 0;
     display: flex;
     gap: 5px;
+    mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
     overflow-x: auto;
     padding: 12px 14px;
     white-space: nowrap;
@@ -3183,6 +3252,9 @@ kbd {
   select {
     min-height: 44px;
   }
+  .filter-row button {
+    min-height: 44px;
+  }
   .page-toolbar button {
     min-width: 44px;
   }
@@ -3199,6 +3271,13 @@ kbd {
   .composer .send-button {
     height: 44px;
     width: 44px;
+  }
+  .command-close {
+    height: 44px;
+    width: 44px;
+  }
+  .command-input {
+    padding-right: 64px;
   }
 }
 
