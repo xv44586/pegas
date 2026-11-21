@@ -3,6 +3,7 @@ import type {
   Automation,
   AutomationDraft,
   AutomationInvocation,
+  BehaviorPreferences,
   ChannelEvidencePage,
   ChannelRelation,
   ChannelSearchFilters,
@@ -35,6 +36,8 @@ import type {
   TaskDelivery,
   WorkChannel,
   WorkerProfileResponse,
+  WorkRuleDraft,
+  WorkRuleRecord,
 } from './types'
 import { fallbackWorkerIconId, isWorkerIconId } from './agent-icon-id'
 
@@ -642,6 +645,91 @@ export class PegasApi {
       },
     )
     if (!response.ok) await throwResponse(response)
+  }
+
+  async workRules(): Promise<{ rules: WorkRuleRecord[]; nextCursor?: string }> {
+    const params = new URLSearchParams({ userId: this.#userId, limit: '200' })
+    return this.#get<{ rules: WorkRuleRecord[]; nextCursor?: string }>(
+      `/v1/rules?${params.toString()}`,
+    )
+  }
+
+  async createWorkRule(draft: WorkRuleDraft): Promise<WorkRuleRecord> {
+    const response = await fetch('/v1/rules', {
+      method: 'POST',
+      headers: this.#headers(true),
+      body: JSON.stringify({
+        userId: this.#userId,
+        commandId: crypto.randomUUID(),
+        rule: draft,
+      }),
+    })
+    if (!response.ok) await throwResponse(response)
+    return ((await response.json()) as { rule: WorkRuleRecord }).rule
+  }
+
+  async updateWorkRule(
+    ruleId: string,
+    expectedRevision: number,
+    draft: WorkRuleDraft,
+  ): Promise<WorkRuleRecord> {
+    const response = await fetch(`/v1/rules/${encodeURIComponent(ruleId)}`, {
+      method: 'PUT',
+      headers: this.#headers(true),
+      body: JSON.stringify({
+        userId: this.#userId,
+        commandId: crypto.randomUUID(),
+        expectedRevision,
+        rule: draft,
+      }),
+    })
+    if (!response.ok) await throwResponse(response)
+    return ((await response.json()) as { rule: WorkRuleRecord }).rule
+  }
+
+  async deleteWorkRule(
+    ruleId: string,
+    expectedRevision: number,
+  ): Promise<void> {
+    const response = await fetch(
+      `/v1/rules/${encodeURIComponent(ruleId)}/delete`,
+      {
+        method: 'POST',
+        headers: this.#headers(true),
+        body: JSON.stringify({
+          userId: this.#userId,
+          commandId: crypto.randomUUID(),
+          expectedRevision,
+        }),
+      },
+    )
+    if (!response.ok) await throwResponse(response)
+  }
+
+  async behaviorPreferences(): Promise<BehaviorPreferences> {
+    const user = encodeURIComponent(this.#userId)
+    const response = await this.#get<{ preferences: BehaviorPreferences }>(
+      `/v1/settings/behavior?userId=${user}`,
+    )
+    return response.preferences
+  }
+
+  async saveBehaviorPreferences(
+    expectedRevision: number,
+    customInstructions: string,
+  ): Promise<BehaviorPreferences> {
+    const response = await fetch('/v1/settings/behavior', {
+      method: 'PUT',
+      headers: this.#headers(true),
+      body: JSON.stringify({
+        userId: this.#userId,
+        expectedRevision,
+        customInstructions,
+      }),
+    })
+    if (!response.ok) await throwResponse(response)
+    return ((await response.json()) as { preferences: BehaviorPreferences })
+      .preferences
   }
 
   async approval(approvalId: string): Promise<Approval> {

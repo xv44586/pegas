@@ -1,6 +1,7 @@
 import {
   AlertTriangle,
   CheckCircle2,
+  CircleHelp,
   Clock3,
   ExternalLink,
   FileText,
@@ -254,7 +255,7 @@ export function DetailDrawer({
             run={view.run}
           />
         )}
-        {view.kind === 'rule' && <RuleDetail title={view.title} />}
+        {view.kind === 'rule' && <RuleDetail api={api} view={view} />}
         {view.kind === 'preview' && (
           <PreviewDetail
             onBack={view.backLabel ? () => onChange(view) : undefined}
@@ -2357,24 +2358,142 @@ function RuntimeDetail({
   )
 }
 
-function RuleDetail({ title }: { title: string }) {
+function RuleDetail({
+  api,
+  view,
+}: {
+  api?: PegasApi
+  view: Extract<DrawerView, { kind: 'rule' }>
+}) {
+  const editing = view.rule
+  const [title, setTitle] = useState(editing?.title ?? '')
+  const [content, setContent] = useState(editing?.content ?? '')
+  const [enabled, setEnabled] = useState(editing?.enabled ?? true)
+  const [saving, setSaving] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const valid = title.trim().length > 0 && content.trim().length > 0
+  async function save() {
+    if (!api || saving || !valid) return
+    setSaving(true)
+    setError('')
+    setNotice('')
+    try {
+      const draft = {
+        title: title.trim(),
+        content: content.trim(),
+        enabled,
+      }
+      if (editing) await api.updateWorkRule(editing.id, editing.revision, draft)
+      else await api.createWorkRule(draft)
+      setNotice('规则已保存，对后续执行生效。')
+      view.onSaved?.()
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 409)
+        setError(
+          '保存冲突：这条规则已在别处更新或删除。请关闭后重新打开最新状态。',
+        )
+      else setError(caught instanceof Error ? caught.message : '保存规则失败。')
+    } finally {
+      setSaving(false)
+    }
+  }
+  async function remove() {
+    if (!api || !editing || deleting) return
+    setDeleting(true)
+    setError('')
+    try {
+      await api.deleteWorkRule(editing.id, editing.revision)
+      view.onSaved?.()
+      setNotice('规则已删除。')
+      setConfirmDelete(false)
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 409)
+        setError('删除冲突：这条规则已在别处更新。请关闭后重新打开最新状态。')
+      else setError(caught instanceof Error ? caught.message : '删除规则失败。')
+    } finally {
+      setDeleting(false)
+    }
+  }
   return (
     <div className="drawer-body">
       <div className="info-banner">
-        <LockKeyhole size={16} />
-        规则服务尚未提供服务端事实来源；此界面仅展示封板结构。
+        <CircleHelp size={16} />
+        规则以持久偏好的形式注入每次执行，不授予新权限，也不能绕过高风险动作确认。
       </div>
+      {!api && (
+        <div className="page-error" role="alert">
+          未连接服务端，无法保存规则。
+        </div>
+      )}
       <label className="field-label">
         规则名称
-        <input disabled value={title} />
+        <input
+          disabled={saving || deleting}
+          onChange={event => setTitle(event.target.value)}
+          placeholder="例如：发布前先说明回滚路径"
+          value={title}
+        />
       </label>
       <label className="field-label">
         规则内容
-        <textarea disabled placeholder="服务端未提供" rows={7} />
+        <textarea
+          disabled={saving || deleting}
+          onChange={event => setContent(event.target.value)}
+          placeholder="描述你希望执行 Agent 持续遵守的工作方式。"
+          rows={7}
+          value={content}
+        />
       </label>
+      <label className="switch-row">
+        启用这条规则
+        <input
+          checked={enabled}
+          disabled={saving || deleting}
+          onChange={event => setEnabled(event.target.checked)}
+          type="checkbox"
+        />
+      </label>
+      {error && (
+        <div className="page-error" role="alert">
+          {error}
+        </div>
+      )}
+      {notice && (
+        <p className="field-hint" role="status">
+          {notice}
+        </p>
+      )}
       <footer className="drawer-footer">
-        <button className="primary-button" disabled type="button">
-          保存规则
+        {editing &&
+          (confirmDelete ? (
+            <button
+              className="danger-button"
+              disabled={deleting}
+              onClick={() => void remove()}
+              type="button"
+            >
+              {deleting ? '删除中…' : '确认删除'}
+            </button>
+          ) : (
+            <button
+              className="quiet-button"
+              disabled={saving || deleting}
+              onClick={() => setConfirmDelete(true)}
+              type="button"
+            >
+              删除规则
+            </button>
+          ))}
+        <button
+          className="primary-button"
+          disabled={!api || saving || deleting || !valid}
+          onClick={() => void save()}
+          type="button"
+        >
+          {saving ? '保存中…' : '保存规则'}
         </button>
       </footer>
     </div>

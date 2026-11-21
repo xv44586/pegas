@@ -188,6 +188,9 @@ try {
   await page.getByRole('heading', { name: 'Pegas', exact: true }).waitFor()
   await capture(page, 'desktop-settings-pegas.png', 'desktop-settings-pegas')
   await page.getByRole('tab', { name: '行为与规则' }).click()
+  await page
+    .getByText('产品设计优先给出具体界面方案', { exact: true })
+    .waitFor()
   await capture(
     page,
     'desktop-settings-behavior.png',
@@ -544,6 +547,48 @@ async function seedConversation(apiPort) {
   )
   if (memoryResponse.status !== 201)
     throw new Error('Unable to seed UI review memory')
+  for (const [index, rule] of [
+    {
+      title: '产品设计优先给出具体界面方案',
+      content: '涉及产品设计时，优先给出具体界面方案，而不是只给抽象建议。',
+      enabled: true,
+    },
+    {
+      title: '发布前先说明回滚路径',
+      content: '涉及发布操作时，先列出回滚路径。',
+      enabled: false,
+    },
+  ].entries()) {
+    const ruleResponse = await fetch(
+      `http://127.0.0.1:${String(apiPort)}/v1/rules`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          userId: 'owner',
+          commandId: `feature-review-rule-${String(index)}`,
+          rule,
+        }),
+      },
+    )
+    if (ruleResponse.status !== 201)
+      throw new Error('Unable to seed UI review work rule')
+  }
+  const behaviorResponse = await fetch(
+    `http://127.0.0.1:${String(apiPort)}/v1/settings/behavior`,
+    {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        userId: 'owner',
+        expectedRevision: 0,
+        customInstructions:
+          '涉及产品设计时，优先给出具体界面方案；涉及发布操作时，先列出回滚路径。',
+      }),
+    },
+  )
+  if (behaviorResponse.status !== 200)
+    throw new Error('Unable to seed UI review behavior preferences')
 }
 
 async function capture(page, name, label) {

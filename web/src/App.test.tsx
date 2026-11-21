@@ -5861,6 +5861,226 @@ describe('sealed Pegas UI', () => {
     expect(failures).toBe(2)
   })
 
+  it('lists server work rules and toggles them with revision', async () => {
+    let rules: unknown[] = [
+      {
+        id: 'rule-1',
+        userId: 'owner',
+        title: '发布前先说明回滚路径',
+        content: '涉及发布操作时，先列出回滚路径。',
+        enabled: true,
+        revision: 2,
+        createdAt: '2026-11-21T08:00:00.000Z',
+        updatedAt: '2026-11-21T08:00:00.000Z',
+      },
+    ]
+    let toggled: unknown
+    installSnapshotFetch(snapshot, (path, init) => {
+      if (path.startsWith('/v1/rules?')) return Response.json({ rules })
+      if (path.startsWith('/v1/settings/behavior?'))
+        return Response.json({
+          preferences: {
+            userId: 'owner',
+            customInstructions: '',
+            revision: 0,
+            updatedAt: '2026-11-21T08:00:00.000Z',
+          },
+        })
+      if (path === '/v1/rules/rule-1' && init?.method === 'PUT') {
+        toggled = JSON.parse(typeof init.body === 'string' ? init.body : '{}')
+        rules = rules.map(rule => ({
+          ...(rule as Record<string, unknown>),
+          enabled: false,
+          revision: 3,
+        }))
+        return Response.json({ rule: rules[0] })
+      }
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(await screen.findByRole('tab', { name: '行为与规则' }))
+    expect(await screen.findByText('发布前先说明回滚路径')).toBeTruthy()
+    expect(screen.getByText('高风险外部操作必须确认')).toBeTruthy()
+    expect(screen.queryByText(/规则服务尚未建立/)).toBeNull()
+    fireEvent.click(screen.getByLabelText('停用规则：发布前先说明回滚路径'))
+    await waitFor(() => expect(toggled).toBeTruthy())
+    const command = toggled as {
+      expectedRevision: number
+      rule: { enabled: boolean }
+    }
+    expect(command.expectedRevision).toBe(2)
+    expect(command.rule.enabled).toBe(false)
+    expect(await screen.findByText('全局 · 停用')).toBeTruthy()
+  })
+
+  it('creates a work rule from the drawer and saves custom instructions', async () => {
+    let created: unknown
+    let behaviorSaved: unknown
+    const rules: unknown[] = []
+    let preferences = {
+      userId: 'owner',
+      customInstructions: '',
+      revision: 0,
+      updatedAt: '2026-11-21T08:00:00.000Z',
+    }
+    installSnapshotFetch(snapshot, (path, init) => {
+      if (path.startsWith('/v1/rules?')) return Response.json({ rules })
+      if (path.startsWith('/v1/settings/behavior?'))
+        return Response.json({ preferences })
+      if (path === '/v1/rules' && init?.method === 'POST') {
+        created = JSON.parse(typeof init.body === 'string' ? init.body : '{}')
+        const rule = {
+          id: 'rule-new',
+          userId: 'owner',
+          title: '产品设计优先给出具体界面方案',
+          content: '涉及产品设计时，优先给出具体界面方案。',
+          enabled: true,
+          revision: 1,
+          createdAt: '2026-11-21T08:00:00.000Z',
+          updatedAt: '2026-11-21T08:00:00.000Z',
+        }
+        rules.push(rule)
+        return Response.json({ rule }, { status: 201 })
+      }
+      if (path === '/v1/settings/behavior' && init?.method === 'PUT') {
+        behaviorSaved = JSON.parse(
+          typeof init.body === 'string' ? init.body : '{}',
+        )
+        preferences = {
+          ...preferences,
+          customInstructions: (behaviorSaved as { customInstructions: string })
+            .customInstructions,
+          revision: 1,
+        }
+        return Response.json({ preferences })
+      }
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(await screen.findByRole('tab', { name: '行为与规则' }))
+    fireEvent.click(await screen.findByRole('button', { name: /添加规则/ }))
+    const dialog = screen.getByRole('dialog')
+    fireEvent.change(within(dialog).getByLabelText('规则名称'), {
+      target: { value: '产品设计优先给出具体界面方案' },
+    })
+    fireEvent.change(within(dialog).getByLabelText('规则内容'), {
+      target: { value: '涉及产品设计时，优先给出具体界面方案。' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存规则' }))
+    await waitFor(() => expect(created).toBeTruthy())
+    expect((created as { rule: { enabled: boolean } }).rule.enabled).toBe(true)
+    expect(await screen.findByText('规则已保存，对后续执行生效。')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '关闭详情' }))
+    expect(await screen.findByText('产品设计优先给出具体界面方案')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('自定义指令'), {
+      target: { value: '发布前先列出回滚路径。' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '保存自定义指令' }))
+    await waitFor(() => expect(behaviorSaved).toBeTruthy())
+    expect(
+      (behaviorSaved as { expectedRevision: number }).expectedRevision,
+    ).toBe(0)
+    expect(
+      await screen.findByText('自定义指令已保存，对后续执行生效。'),
+    ).toBeTruthy()
+  })
+
+  it('recovers from a rule revision conflict by reloading the latest state', async () => {
+    let conflictHits = 0
+    installSnapshotFetch(snapshot, (path, init) => {
+      if (path.startsWith('/v1/rules?'))
+        return Response.json({
+          rules: [
+            {
+              id: 'rule-1',
+              userId: 'owner',
+              title: '发布前先说明回滚路径',
+              content: '涉及发布操作时，先列出回滚路径。',
+              enabled: conflictHits === 0,
+              revision: conflictHits > 0 ? 5 : 2,
+              createdAt: '2026-11-21T08:00:00.000Z',
+              updatedAt: '2026-11-21T08:00:00.000Z',
+            },
+          ],
+        })
+      if (path.startsWith('/v1/settings/behavior?'))
+        return Response.json({
+          preferences: {
+            userId: 'owner',
+            customInstructions: '',
+            revision: 0,
+            updatedAt: '2026-11-21T08:00:00.000Z',
+          },
+        })
+      if (path === '/v1/rules/rule-1' && init?.method === 'PUT') {
+        conflictHits += 1
+        return Response.json({ error: 'rule_conflict' }, { status: 409 })
+      }
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(await screen.findByRole('tab', { name: '行为与规则' }))
+    fireEvent.click(
+      await screen.findByLabelText('停用规则：发布前先说明回滚路径'),
+    )
+    expect(
+      await screen.findByText(/更新冲突：这条规则已在别处更新/),
+    ).toBeTruthy()
+    expect(conflictHits).toBe(1)
+    expect(await screen.findByText('全局 · 停用')).toBeTruthy()
+  })
+
+  it('shows an honest error and retry when work rules fail to load', async () => {
+    let failures = 0
+    installSnapshotFetch(snapshot, path => {
+      if (path.startsWith('/v1/rules?')) {
+        failures += 1
+        if (failures === 1)
+          return Response.json({ message: '规则读取失败' }, { status: 500 })
+        return Response.json({ rules: [] })
+      }
+      if (path.startsWith('/v1/settings/behavior?'))
+        return Response.json({
+          preferences: {
+            userId: 'owner',
+            customInstructions: '',
+            revision: 0,
+            updatedAt: '2026-11-21T08:00:00.000Z',
+          },
+        })
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(await screen.findByRole('tab', { name: '行为与规则' }))
+    const alerts = await screen.findAllByRole('alert')
+    const alert = alerts[0]
+    if (!alert) throw new Error('Expected a work rules error alert')
+    expect(within(alert).getByText(/规则读取失败/)).toBeTruthy()
+    fireEvent.click(within(alert).getByRole('button', { name: '重新读取' }))
+    await waitFor(() => expect(failures).toBe(2))
+    expect(await screen.findByText(/还没有自定义工作规则/)).toBeTruthy()
+  })
+
   it('uploads a selected attachment after sending the message', async () => {
     const fetchMock = installFetch((path, init) => {
       if (

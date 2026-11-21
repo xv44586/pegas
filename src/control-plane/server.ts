@@ -67,6 +67,12 @@ import {
   parseMemoryUpdate,
 } from '../memory/memory.js'
 import {
+  parseCustomInstructions,
+  parseWorkRuleCreate,
+  parseWorkRuleDelete,
+  parseWorkRuleUpdate,
+} from '../rules/rules.js'
+import {
   parseAutomationCreate,
   parseAutomationStatusCommand,
   parseAutomationUpdate,
@@ -84,6 +90,7 @@ import {
   AutomationReadOnlyError,
   AutomationRevisionConflictError,
   AutomationTargetUnavailableError,
+  BehaviorPreferencesConflictError,
   CollaborationActionPendingError,
   CollaborationBudgetLimitError,
   CollaborationCommandConflictError,
@@ -106,6 +113,10 @@ import {
   SettingsRevisionConflictError,
   WorkerProfileReadOnlyError,
   WorkerProfileRevisionConflictError,
+  WorkRuleCommandConflictError,
+  WorkRuleLimitError,
+  WorkRuleNotFoundError,
+  WorkRuleRevisionConflictError,
   type PegasStore,
 } from '../storage/sqlite-store.js'
 import {
@@ -685,6 +696,85 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         return sendJson(response, 200, {
           automations: options.store.listAutomations(userId),
         })
+      }
+      if (
+        taskResourceUrl.pathname === '/v1/rules' &&
+        request.method === 'GET'
+      ) {
+        const userId = requiredQuery(taskResourceUrl, 'userId')
+        const page = pageRequest(taskResourceUrl)
+        const result = options.store.listWorkRules(
+          userId,
+          page.limit,
+          page.cursor,
+        )
+        return sendJson(response, 200, {
+          rules: result.items,
+          ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
+        })
+      }
+      if (
+        taskResourceUrl.pathname === '/v1/rules' &&
+        request.method === 'POST'
+      ) {
+        const rule = options.store.createWorkRule(
+          parseWorkRuleCreate(await readJson(request)),
+        )
+        return sendJson(response, 201, { rule })
+      }
+      const ruleResourceMatch = /^\/v1\/rules\/([^/]+)(?:\/(delete))?$/.exec(
+        taskResourceUrl.pathname,
+      )
+      if (ruleResourceMatch) {
+        const ruleId = decodeURIComponent(ruleResourceMatch[1] ?? '')
+        const action = ruleResourceMatch[2]
+        if (!action && request.method === 'GET') {
+          const userId = requiredQuery(taskResourceUrl, 'userId')
+          const rule = options.store.findWorkRule(ruleId, userId)
+          if (!rule) return sendJson(response, 404, { error: 'not_found' })
+          return sendJson(response, 200, { rule })
+        }
+        if (!action && request.method === 'PUT') {
+          const rule = options.store.updateWorkRule(
+            ruleId,
+            parseWorkRuleUpdate(await readJson(request)),
+          )
+          return sendJson(response, 200, { rule })
+        }
+        if (action === 'delete' && request.method === 'POST') {
+          const deletion = options.store.deleteWorkRule(
+            ruleId,
+            parseWorkRuleDelete(await readJson(request)),
+          )
+          return sendJson(response, 200, { deletion })
+        }
+      }
+      if (
+        taskResourceUrl.pathname === '/v1/settings/behavior' &&
+        (request.method === 'GET' || request.method === 'PUT')
+      ) {
+        if (request.method === 'GET') {
+          return sendJson(response, 200, {
+            preferences: options.store.getBehaviorPreferences(
+              requiredQuery(taskResourceUrl, 'userId'),
+            ),
+          })
+        }
+        const body = await readJson(request)
+        if (!isRecord(body)) throw new Error('Request body must be an object')
+        const preferences = options.store.updateBehaviorPreferences(
+          requiredString(body.userId, 'userId'),
+          {
+            expectedRevision: nonnegativeInteger(
+              body.expectedRevision,
+              'expectedRevision',
+            ),
+            customInstructions: parseCustomInstructions(
+              body.customInstructions,
+            ),
+          },
+        )
+        return sendJson(response, 200, { preferences })
       }
       if (
         taskResourceUrl.pathname === '/v1/automations' &&
@@ -1679,6 +1769,18 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         })
       if (error instanceof MemoryLimitError)
         return sendJson(response, 409, { error: 'memory_limit' })
+      if (error instanceof WorkRuleCommandConflictError)
+        return sendJson(response, 409, {
+          error: 'rule_command_conflict',
+        })
+      if (error instanceof WorkRuleRevisionConflictError)
+        return sendJson(response, 409, { error: 'rule_conflict' })
+      if (error instanceof WorkRuleNotFoundError)
+        return sendJson(response, 404, { error: 'not_found' })
+      if (error instanceof WorkRuleLimitError)
+        return sendJson(response, 409, { error: 'rule_limit' })
+      if (error instanceof BehaviorPreferencesConflictError)
+        return sendJson(response, 409, { error: 'behavior_conflict' })
       if (error instanceof RunClaimError)
         return sendJson(response, 403, {
           error: 'run_claim_invalid',
@@ -2456,6 +2558,12 @@ function requiredString(value: unknown, field: string): string {
 function optionalString(value: unknown, field: string): string | undefined {
   if (value === undefined) return undefined
   return requiredString(value, field)
+}
+
+function nonnegativeInteger(value: unknown, field: string): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0)
+    throw new Error(`${field} must be a non-negative integer`)
+  return value
 }
 
 function parseApprovalStatus(value: string): ApprovalStatus {
