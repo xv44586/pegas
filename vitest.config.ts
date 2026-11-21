@@ -1,7 +1,13 @@
 import { defineConfig } from 'vitest/config'
 
+export const testInclude = [
+  'test/**/*.test.ts',
+  'web/src/**/*.test.{ts,tsx}',
+] as const
+
 export default defineConfig({
   test: {
+    include: [...testInclude],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json-summary', 'html'],
