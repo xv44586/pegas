@@ -417,6 +417,18 @@ CREATE UNIQUE INDEX runs_by_steering_source
 ON runs (steering_of_run_id) WHERE steering_of_run_id IS NOT NULL;
 `
 
+const migration25 = `
+ALTER TABLE tasks ADD COLUMN target_resource TEXT;
+
+CREATE TRIGGER tasks_target_resource_guard
+BEFORE UPDATE OF target_resource ON tasks
+WHEN OLD.target_resource IS NOT NULL
+  AND NEW.target_resource IS NOT OLD.target_resource
+BEGIN
+  SELECT RAISE(ABORT, 'Task target resource is immutable');
+END;
+`
+
 const migration2 = `
 ALTER TABLE tasks ADD COLUMN goal TEXT NOT NULL DEFAULT '';
 
@@ -1517,6 +1529,7 @@ interface TaskRow {
   status: Task['status']
   worker_icon_id: string | null
   status_reason: string | null
+  target_resource?: string | null
   mandate_json: string | null
   ended_json: string | null
   created_at: string
@@ -2004,6 +2017,7 @@ export class PegasStore {
     this.#migrate(22, migration22)
     this.#migrate(23, migration23)
     this.#migrate(24, migration24)
+    this.#migrate(25, migration25)
   }
 
   #backfillWorkerIconIds(): void {
@@ -4506,11 +4520,17 @@ export class PegasStore {
         const mandate = collaboration
           ? this.#taskById(collaboration.source_task_id).mandate
           : createMandate(event, decision.goal, 'router')
+        if (
+          decision.targetResource === 'pegas_repository' &&
+          (collaboration || event.authenticatedActor !== 'human')
+        ) {
+          throw new Error('Self-change Tasks require authenticated human input')
+        }
         this.#database
           .prepare(
             `INSERT INTO tasks
-              (id, user_id, origin_event_id, title, goal, status, worker_icon_id, mandate_json, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, 'unstarted', ?, ?, ?, ?)`,
+              (id, user_id, origin_event_id, title, goal, status, worker_icon_id, target_resource, mandate_json, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, 'unstarted', ?, ?, ?, ?, ?)`,
           )
           .run(
             taskId,
@@ -4519,6 +4539,7 @@ export class PegasStore {
             decision.title,
             decision.goal,
             workerIconId,
+            decision.targetResource ?? null,
             JSON.stringify(mandate),
             now,
             now,
@@ -9511,6 +9532,9 @@ function toTask(row: TaskRow): Task {
     status: row.status,
     workerIconId,
     ...(row.status_reason ? { statusReason: row.status_reason } : {}),
+    ...(row.target_resource === 'pegas_repository'
+      ? { targetResource: 'pegas_repository' as const }
+      : {}),
     mandate: JSON.parse(row.mandate_json ?? '{}') as Task['mandate'],
     ...(row.ended_json
       ? { ended: JSON.parse(row.ended_json) as NonNullable<Task['ended']> }

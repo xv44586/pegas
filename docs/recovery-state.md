@@ -31,6 +31,7 @@ Supervisor 的主状态损坏或写入中断时，Pegas 不会把未知状态误
 5. 完整质量门禁和 smoke test 通过。
 6. 无 Previous Release 返回 `409 rollback_unavailable`；存在活跃 schema v19 协作状态或 schema v20 Automation 状态返回 `409 rollback_incompatible`；已有回滚正在进行时返回 `409 rollback_in_progress`；数据库或检查器故障返回不泄露内部路径的 `503 rollback_check_failed`。
 7. 手动回滚的顺序固定为受控重启标记、停止全部子进程、最终兼容检查、切换 Release；检查失败不得启动旧 Release，也不得把当前 Release 留在永久停机状态。
+8. Candidate staging（`POST /v1/recovery/candidates`，SELF-001）需要 Bearer 鉴权和绝对路径；manifest、目录 attestation、commit 一致性与 schema 兼容全部通过才进入 verifying 并受控重启；无 `onStage` 支持返回 `409 staging_unavailable`，已有转换进行中返回 `409 transition_in_progress`，校验失败返回 `409 candidate_rejected` 且 active Release 不变。
 
 ## 非目标与回滚
 

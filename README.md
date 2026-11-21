@@ -119,6 +119,20 @@ PEGAS_SPEECH_MODEL=Qwen/Qwen3-ASR-0.6B
 
 仓库内的 Qwen3-ASR GPU 服务、远程 SSH 转发和验证方式见 [services/asr/README.md](services/asr/README.md)，听写数据与失败边界见 [docs/voice-input.md](docs/voice-input.md)。
 
+用户要求 Pegas 修改自身时，可开启自我修改执行器。Pegas 会在隔离 worktree 中修改并通过完整门禁，
+构建不可变 Candidate，经用户高风险审批后由独立 Supervisor 验证接管；失败自动回滚，Recovery API 全程在线：
+
+```bash
+PEGAS_SELF_CHANGE=enabled
+PEGAS_SELF_CHANGE_REPO=/path/to/pegas        # 默认当前目录
+PEGAS_SELF_CHANGE_ROOT=/path/to/data/self-change
+PEGAS_RECOVERY_BASE_URL=http://127.0.0.1:4318
+PEGAS_RECOVERY_TOKEN=replace-me              # 与 Supervisor 一致
+```
+
+发布闭环与故障恢复见 `docs/architecture.md` 的“自我修改与发布”；`pnpm smoke:self-change`
+以真实 Supervisor 进程验证候选接管与自动回滚（MVP 场景 5/6）。
+
 受认证的客户端或 Agent 也可以向 `POST /v1/outbox` 写入带稳定 `dedupeKey` 的消息。Dispatcher 会以租约领取、失败重试并携带 `Idempotency-Key` 投递；未来 iOS/APNs 只需实现新的 Notification Channel，不改变任务和 Outbox 语义。
 
 ## 最重要的产品判断

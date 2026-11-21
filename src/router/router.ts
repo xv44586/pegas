@@ -112,6 +112,7 @@ If the message clearly asks to stop or cancel exactly one listed task, return:
 {"kind":"cancel_task","taskId":"listed id","title":"","goal":"","reason":"short reason"}
 Otherwise return:
 {"kind":"create_task","taskId":"","title":"concise title","goal":"complete user goal","reason":"short reason"}
+When the new task asks to change, fix or extend Pegas itself (its own code, UI, prompts or behavior), also set "targetResource":"pegas_repository" on the create_task decision; otherwise set "targetResource":"".
 Never invent a task id. Prefer create_task when uncertain or when the message introduces an independent idea.
 You only classify ownership and control intent. Never answer the task content, never judge tool availability, and never use steer_task or cancel_task without an explicit user instruction targeting that task.`
 
@@ -126,6 +127,7 @@ const routerDecisionSchema = {
     title: { type: 'string' },
     goal: { type: 'string' },
     reason: { type: 'string' },
+    targetResource: { type: 'string', enum: ['', 'pegas_repository'] },
   },
   required: ['kind', 'taskId', 'title', 'goal', 'reason'],
   additionalProperties: false,
@@ -191,7 +193,16 @@ function modelDecision(
   if (value.kind === 'create_task') {
     const title = titleFromText(requiredString(value.title, 'title'))
     const goal = requiredString(value.goal, 'goal').slice(0, 4000)
-    return { kind: 'create_task', title, goal, input, reason }
+    return {
+      kind: 'create_task',
+      title,
+      goal,
+      input,
+      reason,
+      ...(value.targetResource === 'pegas_repository'
+        ? { targetResource: 'pegas_repository' as const }
+        : {}),
+    }
   }
   throw new Error('Router model returned an unsupported decision')
 }

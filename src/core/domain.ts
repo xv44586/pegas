@@ -86,6 +86,7 @@ export interface Task {
   status: TaskStatus
   workerIconId: WorkerIconId
   statusReason?: string
+  targetResource?: 'pegas_repository'
   mandate: Mandate
   ended?: TaskEnd
   createdAt: string
@@ -193,6 +194,7 @@ export type RoutingDecision =
       goal: string
       input: string
       reason: string
+      targetResource?: 'pegas_repository'
     }
   | {
       kind: 'continue_task'

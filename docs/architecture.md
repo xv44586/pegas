@@ -538,6 +538,15 @@ SelfChange Task
 
 Pegas 可以生成和验证候选版本，但不能绕过这些门禁，也不能直接修改 Supervisor 的授权策略。
 
+### 权威实现（SELF-001）
+
+- `src/self-change/candidate-builder.ts`：从隔离 worktree 的 exact commit 构建只读 Release，生成目录 SHA-256 attestation、Feature Review 报告与 Candidate Manifest；默认在 worktree 内运行 `pnpm check` + `pnpm smoke` 作为本地 CI attestation。
+- `src/self-change/self-change-executor.ts`：两阶段 Executor。Phase 1 创建 `self-change/<taskId>` worktree、要求内层 editor 提交精确 commit、构建 Candidate 并创建 `self_change.publish` 高风险 Action；Phase 2 在审批后继 Run 中经 Recovery API staging、等待 `/readyz` 报告新 releaseId、以 Run claim capability 记录 Action outcome。
+- `src/self-change/routing-executor.ts`：仅将 `targetResource === 'pegas_repository'` 的 Run 分派给 SelfChangeExecutor，其余走默认 Executor。
+- Recovery API `POST /v1/recovery/candidates`：Bearer 鉴权、绝对路径校验、manifest/目录 digest/commit 一致性/schema 兼容检查，与 restart/rollback 经同一转换屏障互斥；接受后进入 verifying 并受控重启。
+- `/readyz` 返回当前进程的 `PEGAS_RELEASE_ID`，供发布方确认接管完成。
+- 端到端证据：`pnpm smoke:self-change`（`scripts/smoke-self-change.mjs`）以真实 Supervisor 进程验证 MVP 场景 5（候选接管）与场景 6（运行时损坏候选自动回滚、Recovery API 全程在线）。
+
 ### 数据与 migration
 
 - 发布前创建可验证备份并记录恢复点；

@@ -32,6 +32,8 @@ import {
   SettingsAwareTaskRouter,
 } from '../settings/settings-aware-runtime.js'
 import { PegasStore } from '../storage/sqlite-store.js'
+import { SelfChangeExecutor } from '../self-change/self-change-executor.js'
+import { SelfChangeRoutingExecutor } from '../self-change/routing-executor.js'
 import {
   executeClaimedRun,
   localControlPlaneBaseUrl,
@@ -76,6 +78,21 @@ const executor = new SettingsAwareExecutor(
   baseExecutor.name,
   createExecutor,
 )
+const selfChangeExecutor = config.selfChangeEnabled
+  ? new SelfChangeExecutor({
+      repositoryRoot: config.selfChangeRepositoryRoot,
+      selfChangeRoot: config.selfChangeRoot,
+      recoveryBaseUrl: config.recoveryBaseUrl,
+      ...(config.recoveryToken ? { recoveryToken: config.recoveryToken } : {}),
+      editor: executor,
+      compatibility: { minimumSchema: 1, maximumSchema: 25 },
+      reviewer: 'pegas-self-change-gate',
+      controlPlaneBaseUrl,
+    })
+  : undefined
+const runExecutor: RunExecutor = selfChangeExecutor
+  ? new SelfChangeRoutingExecutor(store, executor, selfChangeExecutor)
+  : executor
 const router = new SettingsAwareTaskRouter(store, createRouter)
 const eventHandler = new RoutingEventHandler(router, executor.name, task => {
   const settings = store.getRuntimeSettings()
@@ -111,7 +128,7 @@ while (!lifecycle.stopping) {
     if (!claimed) break
     const execution = executeClaimedRun(
       store,
-      executor,
+      runExecutor,
       claimed,
       workerId,
       config.workspaceRoot,

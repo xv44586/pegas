@@ -12,10 +12,16 @@ export interface RecoveryServerOptions {
   token?: string
   onRollback(reason: string): Promise<void>
   onRestart(): Promise<void>
+  onStage?(input: {
+    manifestPath: string
+    artifactPath: string
+    reviewReportPath: string
+  }): Promise<void>
 }
 
 export function createRecoveryServer(options: RecoveryServerOptions): Server {
   let rollbackInFlight = false
+  let stageInFlight = false
   return createServer(async (request, response) => {
     if (request.url === '/healthz' && request.method === 'GET') {
       response.writeHead(200, { 'content-type': 'application/json' })
@@ -50,6 +56,75 @@ export function createRecoveryServer(options: RecoveryServerOptions): Server {
       void options.onRestart().catch((error: unknown) => {
         console.error('Recovery restart failed', error)
       })
+      return
+    }
+
+    if (
+      request.url === '/v1/recovery/candidates' &&
+      request.method === 'POST'
+    ) {
+      if (!options.onStage) {
+        response.writeHead(409, { 'content-type': 'application/json' })
+        return response.end(
+          JSON.stringify({
+            error: 'staging_unavailable',
+            message: 'This supervisor does not accept candidate staging',
+          }),
+        )
+      }
+      if (stageInFlight || rollbackInFlight) {
+        response.writeHead(409, { 'content-type': 'application/json' })
+        return response.end(
+          JSON.stringify({
+            error: 'transition_in_progress',
+            message: 'Another lifecycle transition is already in progress',
+          }),
+        )
+      }
+      let body: unknown
+      try {
+        const chunks: Buffer[] = []
+        let size = 0
+        for await (const chunk of request) {
+          const buffer = Buffer.isBuffer(chunk)
+            ? chunk
+            : Buffer.from(chunk as string)
+          size += buffer.length
+          if (size > 64 * 1024) throw new Error('Request body is too large')
+          chunks.push(buffer)
+        }
+        body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+      } catch {
+        response.writeHead(400, { 'content-type': 'application/json' })
+        return response.end(JSON.stringify({ error: 'invalid_body' }))
+      }
+      const input = stageInput(body)
+      if (!input) {
+        response.writeHead(400, { 'content-type': 'application/json' })
+        return response.end(
+          JSON.stringify({
+            error: 'invalid_candidate_request',
+            message:
+              'manifestPath, artifactPath and reviewReportPath are required absolute paths',
+          }),
+        )
+      }
+      stageInFlight = true
+      try {
+        await options.onStage(input)
+      } catch (error) {
+        response.writeHead(409, { 'content-type': 'application/json' })
+        return response.end(
+          JSON.stringify({
+            error: 'candidate_rejected',
+            message: error instanceof Error ? error.message : 'Staging failed',
+          }),
+        )
+      } finally {
+        stageInFlight = false
+      }
+      response.writeHead(202, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ status: 'verifying' }))
       return
     }
 
@@ -98,6 +173,34 @@ export function createRecoveryServer(options: RecoveryServerOptions): Server {
     response.writeHead(404, { 'content-type': 'application/json' })
     response.end(JSON.stringify({ error: 'not_found' }))
   })
+}
+
+function stageInput(value: unknown):
+  | {
+      manifestPath: string
+      artifactPath: string
+      reviewReportPath: string
+    }
+  | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    return undefined
+  const record = value as Record<string, unknown>
+  const paths = [
+    record.manifestPath,
+    record.artifactPath,
+    record.reviewReportPath,
+  ]
+  if (
+    paths.some(
+      path => typeof path !== 'string' || !path.startsWith('/') || !path.trim(),
+    )
+  )
+    return undefined
+  return {
+    manifestPath: record.manifestPath as string,
+    artifactPath: record.artifactPath as string,
+    reviewReportPath: record.reviewReportPath as string,
+  }
 }
 
 function isAuthorized(

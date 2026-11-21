@@ -96,6 +96,8 @@ X-Pegas-Run-Claim-Token: <capability>
 
 首次成功返回 `201 { action, approval }`；同 capability、幂等键和 payload 的重放返回同一对象。
 
+自我修改发布使用同一契约：`SelfChangeExecutor` 创建 `kind: "self_change.publish"`、`risk: "high"` 的 Action（幂等键 `self-change:<taskId>:<head>`），批准后的后继 Run 经 Recovery API staging 并以 `POST /v1/actions/{actionId}/outcomes` 记录结果；staging 请求发出后失败记 `unknown` 并走对账路径。
+
 提交决定：
 
 ```json

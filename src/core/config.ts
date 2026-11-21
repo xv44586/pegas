@@ -43,6 +43,11 @@ export interface PegasConfig {
   pushWebhookToken?: string
   outboxPollMs: number
   outboxMaxAttempts: number
+  selfChangeEnabled: boolean
+  selfChangeRepositoryRoot: string
+  selfChangeRoot: string
+  recoveryBaseUrl: string
+  recoveryToken?: string
 }
 
 export function loadConfig(
@@ -190,6 +195,18 @@ export function loadConfig(
       8,
       'PEGAS_OUTBOX_MAX_ATTEMPTS',
     ),
+    selfChangeEnabled: environment.PEGAS_SELF_CHANGE === 'enabled',
+    selfChangeRepositoryRoot: resolve(
+      environment.PEGAS_SELF_CHANGE_REPO ?? '.',
+    ),
+    selfChangeRoot: resolve(
+      environment.PEGAS_SELF_CHANGE_ROOT ?? resolve(dataDir, 'self-change'),
+    ),
+    recoveryBaseUrl:
+      environment.PEGAS_RECOVERY_BASE_URL ?? 'http://127.0.0.1:4318',
+    ...(environment.PEGAS_RECOVERY_TOKEN
+      ? { recoveryToken: environment.PEGAS_RECOVERY_TOKEN }
+      : {}),
   }
 }
 

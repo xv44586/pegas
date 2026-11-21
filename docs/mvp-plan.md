@@ -64,15 +64,15 @@
 
 ## 自我修改闭环
 
-- [ ] SelfChange Task 类型与风险策略；
-- [ ] 隔离 worktree / sandbox 创建和清理；
-- [ ] Pegas 生成修改后强制运行完整 CI；
-- [ ] 将 commit 构建成不可变 Release；
-- [ ] Release manifest、产物校验值和 schema 兼容范围（Candidate evidence 校验已完成，artifact 打包与签名待实现）；
+- [x] SelfChange Task 类型与风险策略（`targetResource: pegas_repository`，schema v25 不可变；发布走 high-risk Approval）；
+- [x] 隔离 worktree / sandbox 创建和清理（`self-change/<taskId>` worktree；自动清理策略待补）；
+- [x] Pegas 生成修改后强制运行完整 CI（候选 worktree 内 `pnpm check`+`pnpm smoke`；远程 GitHub Actions 强制与签名待补）；
+- [x] 将 commit 构建成不可变 Release（exact commit 复制、只读冻结、目录 SHA-256 attestation）；
+- [x] Release manifest、产物校验值和 schema 兼容范围（staging 前重验 manifest/tree/commit/schema；artifact 签名待实现）；
 - [x] 发布前自动备份（Supervisor 启动 Release 前执行已验证备份）；
-- [ ] Candidate readiness 和关键路径 smoke test；
-- [ ] Supervisor 原子切换、观察期和自动回滚；
-- [ ] 发布后从持久 Task 恢复并向用户汇报；
+- [x] Candidate readiness 和关键路径 smoke test（`/readyz` 携带 releaseId；`pnpm smoke:self-change` 验证接管前后 Task 闭环）；
+- [x] Supervisor 原子切换、观察期和自动回滚（`POST /v1/recovery/candidates` staging→verifying→confirm/rollback；MVP 场景 5/6 真实进程验证）；
+- [x] 发布后从持久 Task 恢复并向用户汇报（审批后继 Run 记录 Action outcome，Run 完成进入 Outbox；回滚后 Task 数据完好续跑）；
 - [ ] 破坏性 migration 的单独审批。
 
 ## 手机长期使用闭环

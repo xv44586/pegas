@@ -4,6 +4,11 @@ import { join, resolve } from 'node:path'
 
 import type { ReleaseRef } from '../core/domain.js'
 import { createDatabaseBackup } from '../storage/backup.js'
+import {
+  readCandidateManifest,
+  verifyCandidateManifest,
+} from './candidate-manifest.js'
+import { verifyCandidateReleaseTree } from '../self-change/candidate-builder.js'
 import { createRecoveryServer } from './recovery-server.js'
 import { ReleaseStateStore } from './release-state.js'
 import {
@@ -70,6 +75,29 @@ const recoveryServer = createRecoveryServer({
     lifecycleTransitions.begin(async () => {
       lifecycle.restartRequested = true
       await stopChildren()
+    }),
+  onStage: input =>
+    lifecycleTransitions.begin(async () => {
+      const manifest = readCandidateManifest(input.manifestPath)
+      verifyCandidateManifest(
+        manifest,
+        input.artifactPath,
+        input.reviewReportPath,
+      )
+      verifyCandidateReleaseTree(manifest.release.root, input.artifactPath)
+      const current = state.read()
+      const currentMaximum = current.active.compatibility?.maximumSchema
+      if (
+        currentMaximum !== undefined &&
+        manifest.compatibility.minimumSchema > currentMaximum
+      ) {
+        throw new Error(
+          'Candidate minimum schema exceeds the active release compatibility',
+        )
+      }
+      lifecycle.restartRequested = true
+      await stopChildren()
+      state.stage(manifest, input.artifactPath, input.reviewReportPath)
     }),
   onRollback: reason =>
     lifecycleTransitions.begin(() =>
@@ -194,7 +222,11 @@ function startProcess(release: ReleaseRef, entrypoint: string): ChildProcess {
     [resolve(release.root, 'dist', entrypoint)],
     {
       cwd: release.root,
-      env: { ...process.env, PEGAS_DATA_DIR: dataDir },
+      env: {
+        ...process.env,
+        PEGAS_DATA_DIR: dataDir,
+        PEGAS_RELEASE_ID: release.id,
+      },
       stdio: 'inherit',
     },
   )

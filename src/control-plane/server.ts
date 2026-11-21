@@ -133,6 +133,9 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
       if (request.url === '/readyz' && request.method === 'GET') {
         return sendJson(response, options.store.ready() ? 200 : 503, {
           status: options.store.ready() ? 'ready' : 'not_ready',
+          ...(process.env.PEGAS_RELEASE_ID
+            ? { releaseId: process.env.PEGAS_RELEASE_ID }
+            : {}),
         })
       }
 
