@@ -59,6 +59,10 @@ const server = createControlPlane({
   modelCredentialVault,
   modelTimeoutMs: config.modelTimeoutMs,
   ...(config.privacyHmacKey ? { privacyHmacKey: config.privacyHmacKey } : {}),
+  recoveryStatus: {
+    baseUrl: config.recoveryBaseUrl,
+    ...(config.recoveryToken ? { token: config.recoveryToken } : {}),
+  },
   agentModelCatalog: () =>
     loadDshModelCatalog({
       command: config.dshCommand,

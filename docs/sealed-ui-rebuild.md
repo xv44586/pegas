@@ -170,4 +170,11 @@
 - 「目标与交付」历史修订中每个目标修订新增「查看证据记录 vN」：`GET /v1/tasks/:id/evidence?goalRevision=N&limit=20&cursor=` 按修订独立展开/缓存/续页，条目展示类型、验证结论（已通过/待验证/未通过）、完成标准、敏感级、相对时间与局限；空修订如实提示「这个修订还没有证据记录」，读取失败按修订隔离报错并可重试；切换事情时历史与证据状态整体重置。
 - 协作记录升级为层级树 + 跳转：按 `parentRelationId` 把子协作嵌套渲染在父卡片下（左侧竖线缩进，parent 缺席时按根渲染）；带 `targetTaskId` 的卡片提供「打开目标事情」，经新增 `api.channelTimeline`（单请求 `GET /v1/channels/:id/timeline`，校验投影完整性并兜底 workerIconId）打开目标事情详情抽屉并触发既有 delivery/协作/时间线加载；目标不存在或读取失败在协作区就地报错，按钮恢复可再试。
 - 证据：`pnpm check`（74 文件 / 676 测试，App.test.tsx 新增 8 条回归）、`pnpm smoke`、`pnpm review:ui -- --force`（57 张截图）；真实 Control Plane（store 级 seed：双修订 Goal + 22 条证据 + 真实 depth0/depth1 委派链 + 10 个填充事情）联调覆盖筛选参数、排序切换、8→14 续页、v2 证据 20→22 续页与 v1 隔离、协作两级跳转；axe 三主题 × 搜索对话框/证据/协作抽屉 0 违例；实拍 12 张见 `output/feature-review/live-evidence-wrapup/`。详见 `docs/feature-map.md` DESIGN-002「搜索筛选分页、按修订证据列表与协作跳转收尾」小节。
-- 仍缺：规则与数据恢复占位、协作发起/取消入口（owner 侧服务端契约未提供）、validity 失效事件；语音直发待真实 ASR 供应商联调；「所有事情」页服务端排序/筛选属 CHANNEL-003 后续。
+- 仍缺：规则占位、协作发起/取消入口（owner 侧服务端契约未提供）、validity 失效事件；语音直发待真实 ASR 供应商联调；「所有事情」页服务端排序/筛选属 CHANNEL-003 后续（数据恢复占位已在 §15 接入只读状态）。
+
+## 15. 数据与恢复页接入只读恢复状态（2026-11-21，RECOVERY-001）
+
+- 「设置 → 数据与恢复」从占位改为真实视图：本地数据库卡片如实说明在线备份走服务端 `pnpm backup` 命令（等宽 code 样式），导出数据按钮禁用并标注「待服务端 API」；恢复平面卡片展示只读状态徽标（状态完好/降级运行/状态不可用）、当前版本与 commit（8 位）、阶段、兼容 schema 区间、最近更新相对时间、可回滚版本；降级时额外展示状态来源（last-known-good 备份）与诊断列表；不可用时如实说明不影响本机数据并提供「刷新恢复状态」重试。
+- 数据链路：Control Plane 新增 `GET /v1/recovery/status` 只读代理（实例 bearer；上游恢复平面 token 只在服务端；白名单投影剥离 `root` 路径；默认 3s 超时；未配置/不可达/401 分别映射诚实 unavailable 诊断）；Web 进入该分类才懒加载，读取失败 page-error + 「重新读取」。restart/rollback/candidates 不经代理暴露，破坏性操作仍只能在服务端恢复平面执行；「清除本机数据」保持禁用（需专门审批设计）。
+- 证据：`pnpm check`（75 文件 / 688 测试，server 8 + Web 4 新增）、`pnpm smoke`、`pnpm review:ui -- --force`（57 张截图，recovery 面板确定性等待不可用态）；真实恢复平面联调三态（完好含可回滚版本 / 截断主状态降级 / 停止恢复平面不可用），实拍 5 张见 `output/feature-review/live-evidence-recovery/`；axe color-contrast 三主题 × 三态 0 违例。详见 `docs/feature-map.md` RECOVERY-001「恢复状态只读代理与封板 Web 接入」小节与 `docs/recovery-state.md` 代理节。
+- 仍缺：数据导出 HTTP API 与 Web 导出交互、清除本机数据的审批设计、恢复平面写操作（重启/回滚）的产品化入口。

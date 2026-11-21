@@ -66,6 +66,7 @@ process.stdout.write(\`- id: agent-default-model
 )
 chmodSync(dshFixture, 0o755)
 const port = await availablePort()
+const recoveryPort = await availablePort()
 const environment = {
   ...process.env,
   PEGAS_API_HOST: '127.0.0.1',
@@ -74,6 +75,7 @@ const environment = {
   PEGAS_DSH_COMMAND: dshFixture,
   PEGAS_EVENT_POLL_MS: '25',
   PEGAS_EXECUTOR: 'echo',
+  PEGAS_RECOVERY_BASE_URL: `http://127.0.0.1:${String(recoveryPort)}`,
   PEGAS_SPEECH_PROVIDER: 'disabled',
   PEGAS_PUSH_MODE: 'disabled',
 }
@@ -254,6 +256,11 @@ try {
       .click()
     if (slug === 'about') await page.locator('.about-pane').waitFor()
     else await page.getByRole('heading', { name: label, exact: true }).waitFor()
+    if (slug === 'recovery')
+      await page
+        .locator('.health-badge')
+        .filter({ hasText: '状态不可用' })
+        .waitFor()
     await capture(
       page,
       `desktop-settings-${slug}.png`,

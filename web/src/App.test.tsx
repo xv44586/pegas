@@ -5708,6 +5708,159 @@ describe('sealed Pegas UI', () => {
     expect(screen.getByText(/工具授权清单 API 尚未提供/)).toBeTruthy()
   })
 
+  it('shows real recovery status with active and previous releases', async () => {
+    const fetchMock = installFetch(path =>
+      path === '/v1/recovery/status'
+        ? Response.json({
+            available: true,
+            integrity: 'ok',
+            source: 'primary',
+            diagnostics: [],
+            phase: 'stable',
+            updatedAt: new Date().toISOString(),
+            active: {
+              id: 'release-2026-11-21',
+              commit: '2ef1eac999',
+              createdAt: '2026-11-21T00:00:00.000Z',
+              compatibility: { minimumSchema: 1, maximumSchema: 30 },
+            },
+            previous: {
+              id: 'release-2026-11-20',
+              createdAt: '2026-11-20T00:00:00.000Z',
+            },
+          })
+        : undefined,
+    )
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(
+      within(screen.getByLabelText('设置分类')).getByRole('button', {
+        name: '数据与恢复',
+      }),
+    )
+    expect(await screen.findByText('状态完好')).toBeTruthy()
+    expect(screen.getByText(/release-2026-11-21 · 2ef1eac9/)).toBeTruthy()
+    expect(screen.getByText('稳定')).toBeTruthy()
+    expect(screen.getByText('v1–v30')).toBeTruthy()
+    expect(screen.getByText('release-2026-11-20')).toBeTruthy()
+    expect(screen.getByText(/pnpm backup/)).toBeTruthy()
+    expect(
+      screen.getByRole('button', { name: /导出数据（待服务端 API）/ }),
+    ).toHaveProperty('disabled', true)
+    expect(screen.getByRole('button', { name: /清除本机数据/ })).toHaveProperty(
+      'disabled',
+      true,
+    )
+    fireEvent.click(screen.getByRole('button', { name: '刷新恢复状态' }))
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.filter(([path]) => path === '/v1/recovery/status')
+          .length,
+      ).toBeGreaterThanOrEqual(2),
+    )
+  })
+
+  it('shows degraded recovery state from the last-known-good backup', async () => {
+    installFetch(path =>
+      path === '/v1/recovery/status'
+        ? Response.json({
+            available: true,
+            integrity: 'degraded',
+            source: 'backup',
+            diagnostics: ['主状态文件校验失败，已使用备份。'],
+            phase: 'stable',
+            active: {
+              id: 'release-good',
+              createdAt: '2026-11-20T00:00:00.000Z',
+            },
+          })
+        : undefined,
+    )
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(
+      within(screen.getByLabelText('设置分类')).getByRole('button', {
+        name: '数据与恢复',
+      }),
+    )
+    expect(await screen.findByText('降级运行')).toBeTruthy()
+    expect(
+      screen.getByText('last-known-good 备份（主状态文件损坏）'),
+    ).toBeTruthy()
+    expect(screen.getByText('主状态文件校验失败，已使用备份。')).toBeTruthy()
+    expect(screen.getByText('没有可回滚的上一个版本')).toBeTruthy()
+  })
+
+  it('shows honest unavailable recovery diagnostics without fake actions', async () => {
+    installFetch(path =>
+      path === '/v1/recovery/status'
+        ? Response.json({
+            available: false,
+            integrity: 'unavailable',
+            source: 'none',
+            diagnostics: ['无法连接独立恢复平面；Supervisor 可能未运行。'],
+          })
+        : undefined,
+    )
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(
+      within(screen.getByLabelText('设置分类')).getByRole('button', {
+        name: '数据与恢复',
+      }),
+    )
+    expect(await screen.findByText('状态不可用')).toBeTruthy()
+    expect(
+      screen.getByText('无法连接独立恢复平面；Supervisor 可能未运行。'),
+    ).toBeTruthy()
+    expect(screen.getByText(/恢复平面当前不可用/)).toBeTruthy()
+    expect(screen.queryByText('当前版本')).toBeNull()
+  })
+
+  it('offers a retry when the recovery status request fails', async () => {
+    let failures = 0
+    installFetch(path => {
+      if (path !== '/v1/recovery/status') return undefined
+      failures += 1
+      if (failures === 1)
+        return Response.json({ message: '恢复状态读取失败' }, { status: 500 })
+      return Response.json({
+        available: false,
+        integrity: 'unavailable',
+        source: 'none',
+        diagnostics: ['未配置独立恢复平面（PEGAS_RECOVERY_BASE_URL）。'],
+      })
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(
+      within(screen.getByLabelText('设置分类')).getByRole('button', {
+        name: '数据与恢复',
+      }),
+    )
+    const alert = await screen.findByRole('alert')
+    expect(within(alert).getByText(/恢复状态读取失败/)).toBeTruthy()
+    fireEvent.click(within(alert).getByRole('button', { name: '重新读取' }))
+    expect(await screen.findByText('状态不可用')).toBeTruthy()
+    expect(failures).toBe(2)
+  })
+
   it('uploads a selected attachment after sending the message', async () => {
     const fetchMock = installFetch((path, init) => {
       if (

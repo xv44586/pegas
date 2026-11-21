@@ -42,6 +42,7 @@ import type {
   NotificationPreferences,
   NotificationPreferencesUpdate,
   OutboxMessage,
+  RecoveryStatus,
   RuntimeSettings,
   RewriteSettingsDraft,
   SpeechSettingsDraft,
@@ -81,6 +82,8 @@ export function App() {
     useState('')
   const [executionNodes, setExecutionNodes] = useState<ExecutionNode[]>()
   const [executionNodesError, setExecutionNodesError] = useState('')
+  const [recoveryStatus, setRecoveryStatus] = useState<RecoveryStatus>()
+  const [recoveryStatusError, setRecoveryStatusError] = useState('')
   const [theme, setTheme] = useState<ThemeChoice>(() => readTheme())
   const [systemDark, setSystemDark] = useState(() => systemPrefersDark())
   const [loading, setLoading] = useState(true)
@@ -105,6 +108,7 @@ export function App() {
   const memoriesRequestRef = useRef(0)
   const notificationsRequestRef = useRef(0)
   const nodesRequestRef = useRef(0)
+  const recoveryRequestRef = useRef(0)
 
   const loadSnapshot = useCallback(async () => {
     const requestId = snapshotRequestRef.current + 1
@@ -223,6 +227,22 @@ export function App() {
     }
   }, [api])
 
+  const loadRecoveryStatus = useCallback(async () => {
+    const requestId = recoveryRequestRef.current + 1
+    recoveryRequestRef.current = requestId
+    try {
+      const status = await api.recoveryStatus()
+      if (requestId !== recoveryRequestRef.current) return
+      setRecoveryStatus(status)
+      setRecoveryStatusError('')
+    } catch (caught) {
+      if (requestId !== recoveryRequestRef.current) return
+      setRecoveryStatusError(
+        caught instanceof Error ? caught.message : '无法读取恢复状态。',
+      )
+    }
+  }, [api])
+
   useEffect(() => {
     if (page === 'automation') void loadAutomations()
     if (
@@ -234,6 +254,8 @@ export function App() {
       void loadNotificationPreferences()
     if (page === 'settings' && settingsSection === 'connections')
       void loadExecutionNodes()
+    if (page === 'settings' && settingsSection === 'recovery')
+      void loadRecoveryStatus()
   }, [
     page,
     settingsSection,
@@ -241,6 +263,7 @@ export function App() {
     loadMemories,
     loadNotificationPreferences,
     loadExecutionNodes,
+    loadRecoveryStatus,
   ])
 
   const loadConfiguration = useCallback(
@@ -1240,6 +1263,7 @@ export function App() {
             onOpenMemory={() => navigate('memory')}
             onReloadExecutionNodes={() => void loadExecutionNodes()}
             onReloadNotifications={() => void loadNotificationPreferences()}
+            onReloadRecovery={() => void loadRecoveryStatus()}
             onReloadUsage={() => void loadUsage()}
             onSaveNotifications={async (
               update: NotificationPreferencesUpdate,
@@ -1270,6 +1294,8 @@ export function App() {
               api.testSpeechConnection(audio, speech)
             }
             response={data.settings}
+            recoveryStatus={recoveryStatus}
+            recoveryStatusError={recoveryStatusError}
             systemDark={systemDark}
             theme={theme}
             usage={data.usage}
