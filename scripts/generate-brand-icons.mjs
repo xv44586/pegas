@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -9,6 +10,10 @@ const repositoryRoot = path.resolve(
 )
 const checkOnly = process.argv.includes('--check')
 const temporaryDirectory = path.join(repositoryRoot, 'output/brand-icons-tmp')
+const manifestPath = path.join(
+  repositoryRoot,
+  'scripts/brand-icons-manifest.json',
+)
 
 const tileSize = 1024
 const tileRadius = 224
@@ -148,16 +153,20 @@ async function buildArtifacts() {
 }
 
 async function main() {
-  const artifacts = await buildArtifacts()
   if (checkOnly) {
+    // Hash comparison keeps the gate runnable on CI without Python/Pillow;
+    // regeneration (brand:generate) is the only step that needs Pillow.
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
     const failures = []
-    for (const artifact of artifacts) {
+    for (const [relativePath, expectedHash] of Object.entries(manifest)) {
+      const outputPath = path.join(repositoryRoot, relativePath)
       try {
-        const actual = await readFile(artifact.outputPath)
-        if (!actual.equals(artifact.content))
-          failures.push(`${path.basename(artifact.outputPath)} differs`)
+        const actual = await readFile(outputPath)
+        const hash = createHash('sha256').update(actual).digest('hex')
+        if (hash !== expectedHash)
+          failures.push(`${relativePath} differs from the manifest`)
       } catch {
-        failures.push(`${path.basename(artifact.outputPath)} is missing`)
+        failures.push(`${relativePath} is missing`)
       }
     }
     if (failures.length) {
@@ -168,12 +177,24 @@ async function main() {
       return
     }
     console.log(
-      `Brand icon check passed: ${artifacts.length} artifacts are current.`,
+      `Brand icon check passed: ${Object.keys(manifest).length} artifacts match the manifest.`,
     )
     return
   }
+  const artifacts = await buildArtifacts()
   for (const artifact of artifacts)
     await writeFile(artifact.outputPath, artifact.content)
+  const manifest = {}
+  for (const artifact of artifacts) {
+    const relativePath = path.relative(repositoryRoot, artifact.outputPath)
+    manifest[relativePath] = createHash('sha256')
+      .update(artifact.content)
+      .digest('hex')
+  }
+  await writeFile(
+    manifestPath,
+    `${JSON.stringify(manifest, Object.keys(manifest).sort(), 2)}\n`,
+  )
   console.log(`Generated ${artifacts.length} brand icon artifacts.`)
 }
 

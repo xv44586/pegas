@@ -43,7 +43,9 @@ favicon、apple-touch-icon 与 macOS 桌面图标，替换旧的抽象 P/翼形�
   （waiting，30px + 「正在整理…」文字）、待你处理空状态（celebrate，
   104px）。blocked 姿态挂载于待确认审批卡头部（具名「Pegas 等待你的决定」，决定后移除）。
 - 应用图标派生：`scripts/generate-brand-icons.mjs`（`pnpm brand:generate` /
-  `pnpm brand:check`，已串入 `pnpm check`）。以 idle 姿态合成 1024 品牌蓝
+  `pnpm brand:check`，已串入 `pnpm check`）。generate 需要 python3 + Pillow；
+  check 只比对 `scripts/brand-icons-manifest.json` 的 sha256，纯 Node、
+  CI 无需 Pillow。以 idle 姿态合成 1024 品牌蓝
   圆角底板，派生 `web/public/favicon.svg`（矢量简化脸）、`favicon-32.png`、
   `apple-touch-icon.png`、`desktop/icon.svg`（自包含 data URI）与
   `desktop/Pegas.icns`（手写 ICNS 容器，PNG payload，含 16–1024 全尺寸）。
