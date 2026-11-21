@@ -355,6 +355,19 @@ CREATE INDEX memory_commands_by_memory
 ON memory_commands (memory_id);
 `
 
+const migration22 = `
+CREATE TABLE goal_proposal_commands (
+  run_id TEXT NOT NULL REFERENCES runs(id),
+  command_id TEXT NOT NULL,
+  request_claim_hash TEXT NOT NULL,
+  request_fingerprint TEXT NOT NULL,
+  contract_id TEXT NOT NULL REFERENCES goal_contracts(id),
+  response_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (run_id, command_id)
+);
+`
+
 const migration2 = `
 ALTER TABLE tasks ADD COLUMN goal TEXT NOT NULL DEFAULT '';
 
@@ -1858,6 +1871,8 @@ export class AutomationTargetUnavailableError extends Error {}
 
 export class MemoryCommandConflictError extends Error {}
 
+export class GoalProposalCommandConflictError extends Error {}
+
 export class MemoryRevisionConflictError extends Error {}
 
 export class MemoryNotFoundError extends Error {}
@@ -1918,6 +1933,7 @@ export class PegasStore {
     this.#migrate(19, migration19)
     this.#migrate(20, migration20)
     this.#migrate(21, migration21)
+    this.#migrate(22, migration22)
   }
 
   #backfillWorkerIconIds(): void {
@@ -4716,24 +4732,48 @@ export class PegasStore {
   ): GoalContract {
     this.#database.exec('BEGIN IMMEDIATE')
     try {
-      const task = this.#taskById(taskId)
-      if (task.userId !== userId)
-        throw new Error('Task belongs to another user')
-      const existing = this.#database
-        .prepare('SELECT * FROM goal_contracts WHERE command_id = ?')
-        .get(commandId) as unknown as GoalContractRow | undefined
-      if (existing) {
-        if (existing.task_id !== taskId)
-          throw new Error('Command ID is already used')
-        this.#database.exec('COMMIT')
-        return toGoalContract(existing)
-      }
-      if (task.status === 'completed' || task.status === 'cancelled')
-        throw new Error('Closed Task cannot accept a new Goal revision')
-      const sourcePlaceholders = draft.basedOnEventIds.map(() => '?').join(',')
-      const sourceRows = this.#database
-        .prepare(
-          `SELECT id FROM inbox_events
+      const contract = this.#createGoalContractInTransaction(
+        taskId,
+        userId,
+        commandId,
+        draft,
+      )
+      this.#database.exec('COMMIT')
+      return contract
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  #createGoalContractInTransaction(
+    taskId: string,
+    userId: string,
+    commandId: string,
+    draft: GoalContractDraft,
+  ): GoalContract {
+    const task = this.#taskById(taskId)
+    if (task.userId !== userId) throw new Error('Task belongs to another user')
+    const existing = this.#database
+      .prepare('SELECT * FROM goal_contracts WHERE command_id = ?')
+      .get(commandId) as unknown as GoalContractRow | undefined
+    if (existing) {
+      if (existing.task_id !== taskId)
+        throw new Error('Command ID is already used')
+      const replayDraft = JSON.parse(existing.contract_json) as unknown
+      if (
+        createHash('sha256').update(stableJson(replayDraft)).digest('hex') !==
+        createHash('sha256').update(stableJson(draft)).digest('hex')
+      )
+        throw new Error('Command ID is already used with a different Goal')
+      return toGoalContract(existing)
+    }
+    if (task.status === 'completed' || task.status === 'cancelled')
+      throw new Error('Closed Task cannot accept a new Goal revision')
+    const sourcePlaceholders = draft.basedOnEventIds.map(() => '?').join(',')
+    const sourceRows = this.#database
+      .prepare(
+        `SELECT id FROM inbox_events
            WHERE user_id = ? AND id IN (${sourcePlaceholders}) AND (
              id = ? OR EXISTS (
                SELECT 1 FROM task_events
@@ -4741,202 +4781,199 @@ export class PegasStore {
                  AND task_events.task_id = ?
              )
            )`,
-        )
-        .all(userId, ...draft.basedOnEventIds, task.originEventId, taskId) as {
-        id: string
-      }[]
-      const sourceIds = new Set(sourceRows.map(row => row.id))
-      const invalidSource = draft.basedOnEventIds.find(
-        eventId => !sourceIds.has(eventId),
       )
-      if (invalidSource)
-        throw new Error(`Event ${invalidSource} is not a source for this Task`)
-      const unreconciledAction = this.#database
-        .prepare(
-          `SELECT status FROM actions
+      .all(userId, ...draft.basedOnEventIds, task.originEventId, taskId) as {
+      id: string
+    }[]
+    const sourceIds = new Set(sourceRows.map(row => row.id))
+    const invalidSource = draft.basedOnEventIds.find(
+      eventId => !sourceIds.has(eventId),
+    )
+    if (invalidSource)
+      throw new Error(`Event ${invalidSource} is not a source for this Task`)
+    const unreconciledAction = this.#database
+      .prepare(
+        `SELECT status FROM actions
            WHERE task_id = ? AND protocol_version = 1
              AND status IN ('failed','unknown')
            ORDER BY updated_at DESC, id DESC LIMIT 1`,
-        )
-        .get(taskId) as { status: 'failed' | 'unknown' } | undefined
-      if (unreconciledAction) {
-        throw new Error(
-          `Goal cannot be revised until the ${unreconciledAction.status} Action outcome is reconciled`,
-        )
-      }
-      const revisionRow = this.#database
-        .prepare(
-          'SELECT COALESCE(MAX(revision), 0) + 1 AS revision FROM goal_contracts WHERE task_id = ?',
-        )
-        .get(taskId) as { revision: number }
-      const id = randomUUID()
-      const createdAt = this.#clock.now().toISOString()
-      this.#database
-        .prepare(
-          `INSERT INTO goal_contracts
+      )
+      .get(taskId) as { status: 'failed' | 'unknown' } | undefined
+    if (unreconciledAction) {
+      throw new Error(
+        `Goal cannot be revised until the ${unreconciledAction.status} Action outcome is reconciled`,
+      )
+    }
+    const revisionRow = this.#database
+      .prepare(
+        'SELECT COALESCE(MAX(revision), 0) + 1 AS revision FROM goal_contracts WHERE task_id = ?',
+      )
+      .get(taskId) as { revision: number }
+    const id = randomUUID()
+    const createdAt = this.#clock.now().toISOString()
+    this.#database
+      .prepare(
+        `INSERT INTO goal_contracts
             (id, task_id, revision, command_id, based_on_event_ids_json,
              desired_outcome, contract_json, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          id,
-          taskId,
-          revisionRow.revision,
-          commandId,
-          JSON.stringify(draft.basedOnEventIds),
-          draft.desiredOutcome,
-          JSON.stringify(draft),
-          createdAt,
-        )
-      this.#database
-        .prepare(
-          `UPDATE tasks SET goal = ?, status_reason = ?, updated_at = ?
+      )
+      .run(
+        id,
+        taskId,
+        revisionRow.revision,
+        commandId,
+        JSON.stringify(draft.basedOnEventIds),
+        draft.desiredOutcome,
+        JSON.stringify(draft),
+        createdAt,
+      )
+    this.#database
+      .prepare(
+        `UPDATE tasks SET goal = ?, status_reason = ?, updated_at = ?
            WHERE id = ?`,
-        )
-        .run(draft.desiredOutcome, 'goal_defined', createdAt, taskId)
-      const latestRun = this.#database
-        .prepare(
-          `SELECT * FROM runs WHERE task_id = ?
+      )
+      .run(draft.desiredOutcome, 'goal_defined', createdAt, taskId)
+    const latestRun = this.#database
+      .prepare(
+        `SELECT * FROM runs WHERE task_id = ?
            ORDER BY created_at DESC, rowid DESC LIMIT 1`,
-        )
-        .get(taskId) as unknown as RunRow | undefined
-      const latestAction = latestRun
-        ? (this.#database
-            .prepare(
-              `SELECT * FROM actions WHERE resume_run_id = ?
+      )
+      .get(taskId) as unknown as RunRow | undefined
+    const latestAction = latestRun
+      ? (this.#database
+          .prepare(
+            `SELECT * FROM actions WHERE resume_run_id = ?
                AND protocol_version = 1
                ORDER BY created_at DESC, id DESC LIMIT 1`,
-            )
-            .get(latestRun.id) as unknown as ActionRow | undefined)
-        : undefined
-      if (
-        latestRun?.status === 'running' &&
-        latestAction?.status === 'authorized'
-      ) {
-        throw new Error(
-          'Goal cannot be revised while an authorized Action is executing',
-        )
-      }
-      if (
-        latestRun &&
-        (latestRun.status === 'queued' || latestRun.goal_revision === null) &&
-        latestAction?.status !== 'authorized'
-      ) {
-        this.#database
-          .prepare(
-            `UPDATE runs SET goal_revision = ?, updated_at = ? WHERE id = ?`,
           )
-          .run(revisionRow.revision, createdAt, latestRun.id)
-      } else if (latestRun?.goal_revision !== revisionRow.revision) {
-        if (latestRun) {
-          const supersededApprovals = this.#database
-            .prepare(
-              `SELECT approvals.id, approvals.action_id FROM approvals
+          .get(latestRun.id) as unknown as ActionRow | undefined)
+      : undefined
+    if (
+      latestRun?.status === 'running' &&
+      latestAction?.status === 'authorized'
+    ) {
+      throw new Error(
+        'Goal cannot be revised while an authorized Action is executing',
+      )
+    }
+    if (
+      latestRun &&
+      (latestRun.status === 'queued' || latestRun.goal_revision === null) &&
+      latestAction?.status !== 'authorized'
+    ) {
+      // Rebind a Run that has no Goal snapshot yet (queued, or a running
+      // Run formed before any Goal existed). Bound active Runs roll to a
+      // successor revision instead of changing underneath the Executor.
+      this.#database
+        .prepare(
+          `UPDATE runs SET goal_revision = ?, updated_at = ? WHERE id = ?`,
+        )
+        .run(revisionRow.revision, createdAt, latestRun.id)
+    } else if (latestRun?.goal_revision !== revisionRow.revision) {
+      if (latestRun) {
+        const supersededApprovals = this.#database
+          .prepare(
+            `SELECT approvals.id, approvals.action_id FROM approvals
                INNER JOIN actions ON actions.id = approvals.action_id
                WHERE approvals.protocol_version = 1
                  AND approvals.status IN ('pending','decision_recorded')
                  AND actions.protocol_version = 1 AND actions.run_id = ?`,
-            )
-            .all(latestRun.id) as { id: string; action_id: string }[]
-          this.#database
-            .prepare(
-              `UPDATE approvals SET status = 'cancelled', resolved_at = ?
+          )
+          .all(latestRun.id) as { id: string; action_id: string }[]
+        this.#database
+          .prepare(
+            `UPDATE approvals SET status = 'cancelled', resolved_at = ?
                WHERE protocol_version = 1 AND status IN ('pending','decision_recorded')
                  AND action_id IN (
                    SELECT id FROM actions WHERE run_id = ? AND protocol_version = 1
                  )`,
-            )
-            .run(createdAt, latestRun.id)
+          )
+          .run(createdAt, latestRun.id)
+        this.#database
+          .prepare(
+            `UPDATE actions SET status = 'rejected', result_json = ?, updated_at = ?
+               WHERE protocol_version = 1 AND status = 'awaiting_approval'
+                 AND run_id = ?`,
+          )
+          .run(
+            JSON.stringify({ reason: 'superseded_by_goal_revision' }),
+            createdAt,
+            latestRun.id,
+          )
+        if (latestAction?.status === 'authorized') {
           this.#database
             .prepare(
               `UPDATE actions SET status = 'rejected', result_json = ?, updated_at = ?
-               WHERE protocol_version = 1 AND status = 'awaiting_approval'
-                 AND run_id = ?`,
-            )
-            .run(
-              JSON.stringify({ reason: 'superseded_by_goal_revision' }),
-              createdAt,
-              latestRun.id,
-            )
-          if (latestAction?.status === 'authorized') {
-            this.#database
-              .prepare(
-                `UPDATE actions SET status = 'rejected', result_json = ?, updated_at = ?
                  WHERE id = ? AND status = 'authorized'`,
-              )
-              .run(
-                JSON.stringify({
-                  reason: 'superseded_by_goal_revision_before_execution',
-                }),
-                createdAt,
-                latestAction.id,
-              )
-          }
-          for (const approval of supersededApprovals) {
-            this.enqueueOutbox({
-              userId: task.userId,
-              taskId: task.id,
-              channel: 'conversation',
-              dedupeKey: `approval-resolved:${approval.id}`,
-              payload: {
-                type: 'approval.resolved',
-                taskId: task.id,
-                approvalId: approval.id,
-                actionId: approval.action_id,
-                decision: 'cancelled',
-              },
-            })
-          }
-          this.#wakeBlockedTaskEvents(task.id, createdAt)
-        }
-        if (
-          latestRun &&
-          (latestRun.status === 'queued' ||
-            latestRun.status === 'running' ||
-            latestRun.status === 'waiting')
-        ) {
-          this.#database
-            .prepare(
-              `UPDATE runs SET status = 'cancelled', claimed_by = NULL,
-               lease_until = NULL, last_error = ?, updated_at = ? WHERE id = ?`,
             )
             .run(
-              `superseded_by_goal_revision:${String(revisionRow.revision)}`,
+              JSON.stringify({
+                reason: 'superseded_by_goal_revision_before_execution',
+              }),
               createdAt,
-              latestRun.id,
+              latestAction.id,
             )
         }
-        if (latestRun) {
-          this.#database
-            .prepare(
-              `INSERT INTO runs
+        for (const approval of supersededApprovals) {
+          this.enqueueOutbox({
+            userId: task.userId,
+            taskId: task.id,
+            channel: 'conversation',
+            dedupeKey: `approval-resolved:${approval.id}`,
+            payload: {
+              type: 'approval.resolved',
+              taskId: task.id,
+              approvalId: approval.id,
+              actionId: approval.action_id,
+              decision: 'cancelled',
+            },
+          })
+        }
+        this.#wakeBlockedTaskEvents(task.id, createdAt)
+      }
+      if (
+        latestRun &&
+        (latestRun.status === 'queued' ||
+          latestRun.status === 'running' ||
+          latestRun.status === 'waiting')
+      ) {
+        this.#database
+          .prepare(
+            `UPDATE runs SET status = 'cancelled', claimed_by = NULL,
+               lease_until = NULL, last_error = ?, updated_at = ? WHERE id = ?`,
+          )
+          .run(
+            `superseded_by_goal_revision:${String(revisionRow.revision)}`,
+            createdAt,
+            latestRun.id,
+          )
+      }
+      if (latestRun) {
+        this.#database
+          .prepare(
+            `INSERT INTO runs
                 (id, task_id, executor, resume_from_ref, retry_of_run_id,
                  goal_revision, status, input_json, execution_context_json,
                  execution_contract_version, created_at, updated_at)
                VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
-            )
-            .run(
-              randomUUID(),
-              taskId,
-              latestRun.executor,
-              latestRun.executor_ref ?? latestRun.resume_from_ref,
-              latestRun.id,
-              revisionRow.revision,
-              JSON.stringify(draft.desiredOutcome),
-              latestRun.execution_context_json,
-              latestRun.execution_contract_version,
-              createdAt,
-              createdAt,
-            )
-        }
+          )
+          .run(
+            randomUUID(),
+            taskId,
+            latestRun.executor,
+            latestRun.executor_ref ?? latestRun.resume_from_ref,
+            latestRun.id,
+            revisionRow.revision,
+            JSON.stringify(draft.desiredOutcome),
+            latestRun.execution_context_json,
+            latestRun.execution_contract_version,
+            createdAt,
+            createdAt,
+          )
       }
-      const contract = this.#goalContractById(id)
-      this.#database.exec('COMMIT')
-      return contract
-    } catch (error) {
-      this.#database.exec('ROLLBACK')
-      throw error
     }
+    return this.#goalContractById(id)
   }
 
   currentGoalContract(
@@ -5421,6 +5458,156 @@ export class PegasStore {
       const evidence = byId.get(id)
       return evidence ? [evidence] : []
     })
+  }
+
+  proposeGoalFromRun(
+    runId: string,
+    claimToken: string,
+    commandId: string,
+    draft: GoalContractDraft,
+  ): { contract: GoalContract; waitingOnClarification: boolean } {
+    const fingerprint = createHash('sha256')
+      .update(stableJson({ commandId, draft }))
+      .digest('hex')
+    const suppliedClaimHash = hashClaimToken(claimToken)
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const replay = this.#database
+        .prepare(
+          `SELECT contract_id, request_claim_hash, request_fingerprint, response_json
+           FROM goal_proposal_commands WHERE run_id = ? AND command_id = ?`,
+        )
+        .get(runId, commandId) as
+        | {
+            contract_id: string
+            request_claim_hash: string
+            request_fingerprint: string
+            response_json: string
+          }
+        | undefined
+      if (replay) {
+        if (!safeDigestEqual(suppliedClaimHash, replay.request_claim_hash))
+          throw new RunClaimError('Run claim capability is invalid or expired')
+        if (replay.request_fingerprint !== fingerprint)
+          throw new GoalProposalCommandConflictError(
+            'Goal proposal command ID is already used with a different Goal',
+          )
+        this.#database.exec('COMMIT')
+        return JSON.parse(replay.response_json) as {
+          contract: GoalContract
+          waitingOnClarification: boolean
+        }
+      }
+      this.#claimForCapability(runId, claimToken)
+      const run = this.#runById(runId)
+      if (run.status !== 'running') throw new Error('Run is not executing')
+      const task = this.#taskById(run.taskId)
+      if (task.status === 'completed' || task.status === 'cancelled')
+        throw new Error('Closed Task cannot accept a Goal proposal')
+      const beforeLatestRunId = (
+        this.#database
+          .prepare(
+            `SELECT id FROM runs WHERE task_id = ?
+             ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+          )
+          .get(task.id) as { id: string } | undefined
+      )?.id
+      const contract = this.#createGoalContractInTransaction(
+        task.id,
+        task.userId,
+        `goal-proposal:${runId}:${commandId}`,
+        draft,
+      )
+      // Contract creation timestamps share the transaction clock with the
+      // source Run, so identify the successor by identity, not created_at.
+      const successorRunId =
+        beforeLatestRunId === runId
+          ? (
+              this.#database
+                .prepare(
+                  `SELECT id FROM runs
+                   WHERE task_id = ? AND retry_of_run_id = ?
+                   ORDER BY rowid DESC LIMIT 1`,
+                )
+                .get(task.id, runId) as { id: string } | undefined
+            )?.id
+          : beforeLatestRunId
+      const now = this.#clock.now().toISOString()
+      const waitingOnClarification = draft.unknowns.some(
+        unknown => unknown.blocking,
+      )
+      if (waitingOnClarification) {
+        if (successorRunId) {
+          this.#database
+            .prepare(
+              `UPDATE runs SET status = 'cancelled', claimed_by = NULL,
+               lease_until = NULL, claim_token_hash = NULL, last_error = ?,
+               updated_at = ? WHERE id = ? AND status = 'queued'`,
+            )
+            .run('awaiting_goal_clarification', now, successorRunId)
+        }
+        this.#database
+          .prepare(
+            `UPDATE tasks SET status = 'started', status_reason = 'awaiting_goal_clarification',
+             ended_json = NULL, updated_at = ? WHERE id = ?`,
+          )
+          .run(now, task.id)
+        const questions = draft.unknowns.filter(unknown => unknown.blocking)
+        this.enqueueOutbox({
+          userId: task.userId,
+          taskId: task.id,
+          channel: 'conversation',
+          dedupeKey: `goal-clarification:${contract.id}`,
+          payload: {
+            type: 'goal.clarification_required',
+            taskId: task.id,
+            runId,
+            goalContractId: contract.id,
+            goalRevision: contract.revision,
+            questions: questions.map(unknown => unknown.question),
+            text: questions.map(unknown => unknown.question).join('\n'),
+          },
+        })
+      }
+      const response = { contract, waitingOnClarification }
+      this.#database
+        .prepare(
+          `INSERT INTO goal_proposal_commands
+            (run_id, command_id, request_claim_hash, request_fingerprint,
+             contract_id, response_json, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          runId,
+          commandId,
+          suppliedClaimHash,
+          fingerprint,
+          contract.id,
+          JSON.stringify(response),
+          now,
+        )
+      this.#database.exec('COMMIT')
+      return response
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  assertGoalProposalCapability(runId: string, claimToken: string): void {
+    const suppliedHash = hashClaimToken(claimToken)
+    const replayRows = this.#database
+      .prepare(
+        'SELECT request_claim_hash FROM goal_proposal_commands WHERE run_id = ?',
+      )
+      .all(runId) as { request_claim_hash: string }[]
+    if (
+      replayRows.some(row =>
+        safeDigestEqual(suppliedHash, row.request_claim_hash),
+      )
+    )
+      return
+    this.#claimForCapability(runId, claimToken)
   }
 
   submitWorkerReport(
@@ -6859,27 +7046,35 @@ export class PegasStore {
       const requiresEvidence = Boolean(
         this.currentGoalContract(task.id, task.userId),
       )
+      const awaitingClarification =
+        task.statusReason === 'awaiting_goal_clarification'
       const runStatus =
         actionStatus === 'failed'
           ? 'failed'
-          : actionBlocksCompletion || requiresEvidence
-            ? 'waiting'
-            : 'completed'
+          : awaitingClarification
+            ? 'cancelled'
+            : actionBlocksCompletion || requiresEvidence
+              ? 'waiting'
+              : 'completed'
       this.#database
         .prepare(
           `UPDATE runs
            SET status = ?, executor_ref = ?, output_json = ?,
-               claimed_by = ?, lease_until = ?, last_error = NULL, updated_at = ?
+               claimed_by = ?, lease_until = ?,
+               last_error = ?, updated_at = ?
            WHERE id = ?`,
         )
         .run(
           runStatus,
           result.executorRef,
           JSON.stringify(result.output),
-          requiresEvidence && !actionBlocksCompletion ? workerId : null,
-          requiresEvidence && !actionBlocksCompletion
+          requiresEvidence && !actionBlocksCompletion && !awaitingClarification
+            ? workerId
+            : null,
+          requiresEvidence && !actionBlocksCompletion && !awaitingClarification
             ? new Date(nowDate.getTime() + 30_000).toISOString()
             : null,
+          awaitingClarification ? 'awaiting_goal_clarification' : null,
           now,
           runId,
         )
@@ -6931,17 +7126,19 @@ export class PegasStore {
           actionBlocksCompletion || requiresEvidence || hasPendingWork
             ? 'started'
             : 'completed',
-          actionStatus === 'unknown'
-            ? 'action_outcome_unknown'
-            : actionStatus === 'failed'
-              ? 'action_failed'
-              : actionStatus === 'authorized'
-                ? 'action_outcome_pending'
-                : actionStatus === 'awaiting_approval'
-                  ? 'awaiting_approval'
-                  : requiresEvidence
-                    ? 'awaiting_evidence'
-                    : null,
+          awaitingClarification
+            ? 'awaiting_goal_clarification'
+            : actionStatus === 'unknown'
+              ? 'action_outcome_unknown'
+              : actionStatus === 'failed'
+                ? 'action_failed'
+                : actionStatus === 'authorized'
+                  ? 'action_outcome_pending'
+                  : actionStatus === 'awaiting_approval'
+                    ? 'awaiting_approval'
+                    : requiresEvidence
+                      ? 'awaiting_evidence'
+                      : null,
           actionBlocksCompletion || requiresEvidence || hasPendingWork
             ? null
             : JSON.stringify({
@@ -6956,8 +7153,9 @@ export class PegasStore {
         userId: task.userId,
         taskId: task.id,
         channel: 'conversation',
-        dedupeKey:
-          actionStatus === 'unknown'
+        dedupeKey: awaitingClarification
+          ? `goal-clarification-run-ended:${runId}`
+          : actionStatus === 'unknown'
             ? `action-outcome-unknown:${blockingAction?.id ?? runId}`
             : actionStatus === 'failed'
               ? `action-failed:${blockingAction?.id ?? runId}`
@@ -6969,8 +7167,9 @@ export class PegasStore {
                     ? `goal-report-required:${runId}`
                     : `run-completed:${runId}`,
         payload: {
-          type:
-            actionStatus === 'unknown'
+          type: awaitingClarification
+            ? 'goal.clarification_wait'
+            : actionStatus === 'unknown'
               ? 'action.outcome_unknown'
               : actionStatus === 'failed'
                 ? 'action.failed'

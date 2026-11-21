@@ -99,7 +99,71 @@ describe('durable state rollback compatibility', () => {
       rmSync(directory, { recursive: true, force: true })
     }
   })
+
+  it('blocks a v21 rollback while a Task awaits Goal clarification', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'pegas-rollback-'))
+    const path = join(directory, 'pegas.sqlite')
+    const store = new PegasStore(path)
+    try {
+      const claimed = createClaimedTask(store, 'owner', '模糊目标', 'goal')
+      const draft = clarificationGoalDraft(claimed.run.originEventId ?? '')
+      store.proposeGoalFromRun(
+        claimed.run.id,
+        claimed.claimToken,
+        'rollback-clarification',
+        draft,
+      )
+      expect(() => assertRollbackCompatible(path, 21)).toThrow(
+        RollbackCompatibilityError,
+      )
+      expect(() => assertRollbackCompatible(path, 22)).not.toThrow()
+
+      store.stopTask(claimed.task.id, 'owner', 'settle-clarification')
+      expect(() => assertRollbackCompatible(path, 21)).not.toThrow()
+    } finally {
+      store.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
 })
+
+function clarificationGoalDraft(
+  eventId: string,
+): import('../src/goal/goal-delivery.js').GoalContractDraft {
+  return {
+    basedOnEventIds: [eventId],
+    desiredOutcome: '澄清后的结果',
+    beneficiaries: ['owner'],
+    successCriteria: [
+      {
+        criterionId: 'result',
+        observableStatement: '结果可见且可验证',
+        required: true,
+        evidencePlanRef: 'plan-result',
+      },
+    ],
+    nonGoals: [],
+    constraints: [],
+    contextSources: [],
+    assumptions: [],
+    unknowns: [{ question: '交付到哪里？', blocking: true }],
+    prerequisites: [],
+    permissionBoundary: { externalWrites: false },
+    reviewCheckpoints: ['final'],
+    evidencePlan: [
+      {
+        id: 'plan-result',
+        criterionId: 'result',
+        acceptedKinds: ['observation'],
+        acceptedTrustClasses: ['control-plane', 'user'],
+        minimumCount: 1,
+        presentation: 'inline',
+      },
+    ],
+    failureAndRecovery: '等待用户澄清',
+    feedbackSignals: ['user_acceptance'],
+  }
+}
 
 function createClaimedTask(
   store: PegasStore,

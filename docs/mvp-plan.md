@@ -39,7 +39,7 @@
 - [ ] 单用户认证和移动端设备登录；
 - [ ] 同一用户的 Router lease / fencing；
 - [ ] 新建、补充、纠正和取消 Task 的完整路由；
-- [ ] 从自由文本或语音形成带 revision 的 Goal Contract，只追问会改变结果、权限、成本或风险的关键未知项；
+- [x] 从自由文本或语音形成带 revision 的 Goal Contract，只追问会改变结果、权限、成本或风险的关键未知项；Executor 提案 API 与 blocking 澄清停放已实现，Web 澄清卡片待接入；
 - [ ] Task 与 Run 完整状态迁移；
 - [x] success criteria、EvidenceRef 与 Control Plane 完成门禁；
 - [x] 第一版 DSH headless Executor Adapter；

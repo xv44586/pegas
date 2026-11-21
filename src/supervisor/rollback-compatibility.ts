@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite'
 const collaborationSchemaVersion = 19
 const automationSchemaVersion = 20
 const memorySchemaVersion = 21
+const goalProposalSchemaVersion = 22
 
 export class RollbackCompatibilityError extends Error {}
 
@@ -78,6 +79,24 @@ export function assertRollbackCompatible(
       if (liveMemory) {
         throw new RollbackCompatibilityError(
           'Rollback is unsafe while user Memory records exist',
+        )
+      }
+    }
+    if (
+      currentVersion >= goalProposalSchemaVersion &&
+      targetMaximumSchema < goalProposalSchemaVersion
+    ) {
+      const parkedClarification = database
+        .prepare(
+          `SELECT 1 FROM tasks
+           WHERE status NOT IN ('completed','cancelled')
+             AND status_reason = 'awaiting_goal_clarification'
+           LIMIT 1`,
+        )
+        .get()
+      if (parkedClarification) {
+        throw new RollbackCompatibilityError(
+          'Rollback is unsafe while a Task is awaiting Goal clarification',
         )
       }
     }

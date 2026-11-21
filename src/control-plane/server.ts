@@ -78,6 +78,7 @@ import {
   CollaborationFanoutLimitError,
   CollaborationReconciliationRequiredError,
   CollaborationTargetUnavailableError,
+  GoalProposalCommandConflictError,
   MemoryCommandConflictError,
   MemoryLimitError,
   MemoryNotFoundError,
@@ -511,6 +512,25 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
           parseWorkerCollaborationRequest(await readJson(request)),
         )
         return sendJson(response, 201, { relation })
+      }
+      const runGoalProposalMatch = /^\/v1\/runs\/([^/]+)\/goal-proposals$/.exec(
+        taskResourceUrl.pathname,
+      )
+      if (runGoalProposalMatch && request.method === 'POST') {
+        const claimToken = runClaimToken(request)
+        if (!claimToken)
+          return sendJson(response, 403, { error: 'run_claim_required' })
+        const runId = decodeURIComponent(runGoalProposalMatch[1] ?? '')
+        options.store.assertGoalProposalCapability(runId, claimToken)
+        const body = await readJson(request)
+        if (!isRecord(body)) throw new Error('Request body must be an object')
+        const result = options.store.proposeGoalFromRun(
+          runId,
+          claimToken,
+          requiredString(body.commandId, 'commandId'),
+          parseGoalContractDraft(body.goal),
+        )
+        return sendJson(response, 201, result)
       }
       const workerProfileMatch = /^\/v1\/tasks\/([^/]+)\/worker-profile$/.exec(
         taskResourceUrl.pathname,
@@ -1167,6 +1187,11 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
 
       return sendJson(response, 404, { error: 'not_found' })
     } catch (error) {
+      if (error instanceof GoalProposalCommandConflictError)
+        return sendJson(response, 409, {
+          error: 'goal_proposal_command_conflict',
+          message: error.message,
+        })
       if (error instanceof CollaborationCommandConflictError)
         return sendJson(response, 409, {
           error: 'collaboration_command_conflict',
@@ -1716,6 +1741,7 @@ function isRunCapabilityWrite(request: IncomingMessage): boolean {
   const pathname = new URL(request.url, 'http://localhost').pathname
   return (
     /^\/v1\/runs\/[^/]+\/(reports|approvals|collaborations)$/.test(pathname) ||
+    /^\/v1\/runs\/[^/]+\/goal-proposals$/.test(pathname) ||
     /^\/v1\/actions\/[^/]+\/outcomes$/.test(pathname)
   )
 }

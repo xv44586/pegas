@@ -102,6 +102,16 @@ console.log(JSON.stringify({
     expect(prompt).toContain('Research provider compatibility only')
   })
 
+  it('describes the goal-proposal API with blocking clarification semantics', () => {
+    const prompt = executorPrompt('帮我把方案想清楚')
+    expect(prompt).toContain('POST /v1/runs/:runId/goal-proposals')
+    expect(prompt).toContain('unknowns[].blocking=true')
+    expect(prompt).toContain('提交后应立即结束当前 turn 等待用户回答')
+    expect(prompt).toContain('不要为简单明确的低风险请求强行发起访谈')
+    expect(prompt).toContain('新 revision 而不是覆盖原始输入')
+    expect(prompt).toContain('PEGAS_INPUT_EVENT_ID')
+  })
+
   it('accepts only a completed final event and captures the session id', async () => {
     const command = fakeDsh(`
 console.log(JSON.stringify({ type: 'session', sessionId: 'session-test' }))

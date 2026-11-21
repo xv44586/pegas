@@ -272,7 +272,7 @@ Outbox 的产品已读、外部投递状态、用户是否接受结果、evidenc
 ## 计划中的实现顺序
 
 1. [x] 定义 Goal Contract revision、EvidenceRef、Review Pack 和 criterion 状态合同；
-2. 让 Executor 生成最小目标简报，并保存用户确认与修订；
+2. [x] 让 Executor 生成最小目标简报，并保存用户确认与修订；提案 API、blocking 澄清停放与用户回答后恢复已实现，Web 澄清卡片待接入；
 3. [x] 为结构化 Report 增加 evidence references，由 Control Plane 实施完成门禁；
 4. [~] 扩展 Artifact 与 Outbox API，支持 evidence 聚合、权限和预览；服务端元数据、聚合与所有者权限已完成，内容预览和外部渠道投影待实现；
 5. 实现 Web Review Pack、视觉 evidence 画廊和 Channel 审计下钻；
@@ -281,6 +281,8 @@ Outbox 的产品已读、外部投递状态、用户是否接受结果、evidenc
 ## 当前服务端 API（Partial）
 
 - `GET/POST /v1/tasks/:taskId/goals`：读取 revision 历史或以稳定 `commandId` 创建新 revision；来源事件必须属于当前用户和 Task。新 revision 会重绑定尚未开始的 Run，或原子终止旧 revision 的活动 Run 并创建绑定新 revision 的后继 Run。
+- `POST /v1/runs/:runId/goal-proposals`：实际 Executor 在检查真实工具与权限后提交 Goal Contract 草案。鉴权与协作 API 相同：先验证当前 Run 短期 claim（`x-pegas-run-claim-token`），再解析 body；请求体为 `{commandId, goal}`。命令在来源 Run 内以 `(runId, commandId)` 唯一，同一 payload 重放返回创建时冻结的 `{contract, waitingOnClarification}`，重放只接受创建该命令的 claim hash（Run 取消或 claim 轮换后仍可重试），不同 payload 复用 command 返回 `409 goal_proposal_command_conflict`。只有 running Run 可以创建新提案；closed Task、未认证 claim 和外来来源事件被拒绝。尚无 Goal 快照的 executing Run 原地绑定首个 revision；已绑定 Goal 的活动 Run 走既有 supersede/后继 Run 路径。
+- **blocking 澄清**：`goal.unknowns[].blocking=true` 时，服务端在同一事务内取消尚未开始的后继 queued Run（`last_error=awaiting_goal_clarification`）、把 Task 置为 `started/awaiting_goal_clarification`，并写入去重的 `goal.clarification_required` Outbox（含 questions 列表）。Executor 提交后结束 turn；`completeRun` 检测到该状态时把 Run 停放为 cancelled 而不是进入 evidence 报告阶段，不产生 `goal.report_required` 噪声。此时没有任何可领取 Run；用户经认证入口回答后，Router `continue_task` 创建绑定当前 revision 的新 Run 并清除等待原因。非 blocking 未知项只记录在合同中，不暂停执行。
 - `GET/POST /v1/tasks/:taskId/artifacts`：登记不可变 Artifact revision、SHA-256、媒体类型、敏感级别和可选 Run 归属。
 - `GET /v1/tasks/:taskId/evidence` 与 `POST /v1/runs/:runId/evidence`：按当前 Goal revision 和 Run 保存证据。HTTP 写入的 `confirmedForCapture: true` 只记录 `pending` 的用户主张，不能产生通过验证或完成 Task；自动验证只能由进程内可信验证器追加 verification event。语义重复 evidence 在同一 Run 内去重，重试 Run 可以对同一不可变来源重新取证；视觉 evidence 还必须绑定兼容的图片/渲染 Artifact、视口或时间码。
 - `GET/POST /v1/runs/:runId/reports`：保存有递增序号的结构化 Worker Report；HTTP 写入要求该次 Run claim 独有且可轮换的 capability，服务端从 capability 推导 Reporter，不能由请求体冒充 Worker。`ready` 只表达完成主张，不绕过 evidence plan。
@@ -293,3 +295,5 @@ Task、Run、Review Pack 和 `review.ready` OutboxItem 在同一个 SQLite 提�
 ## 回滚
 
 回滚服务端写路径时应停止创建新 Goal Contract/EvidenceRef/verification event/Review Pack，保留 schema v15 中已经持久化的历史记录为只读，并让尚未绑定 Goal 的旧 Task 继续使用兼容 Task/Run/Outbox 投影；不得删除用户输入、Artifact、审计记录或已产生的外部副作用。已绑定 Goal 的 Task 不得绕过 evidence 门禁直接改为 completed；应保持 `started/awaiting_evidence`，或在显式迁移审计后恢复执行。若回滚到不了解 claim capability 的版本，必须先停止 GOAL Report HTTP 写入，不能把 capability 降级为共享 Worker token。
+
+schema v22 只新增 `goal_proposal_commands` 重放表，旧 Release 会忽略该表。但存在 `started/awaiting_goal_clarification` 的开放 Task 时，回滚到不支持 v22 的 Release 会被 Rollback Guard 以 `rollback_incompatible` 拒绝：旧版本不认识该等待原因，会把停放的 Task 误投影为可继续状态。用户回答澄清或显式停止 Task 后允许回滚；历史提案命令与 Goal revision 保持只读保留。
