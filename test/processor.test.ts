@@ -41,6 +41,7 @@ describe('event and run processing', () => {
       userId: 'user-1',
       type: 'user.message',
       source: 'web',
+      authenticatedActor: 'human',
       payload: { text: 'Publish the protected release' },
     })
     await processNextEvent(
@@ -71,8 +72,10 @@ describe('event and run processing', () => {
     expect(executor.input).toMatchObject({
       runId: claimed.run.id,
       taskId: claimed.task.id,
+      inputEventId: claimed.run.originEventId,
       workingDirectory: '/snapshot-workspace',
       executionContext: claimed.run.executionContext,
+      mandate: claimed.task.mandate,
       actionCapability: {
         baseUrl: 'http://127.0.0.1:4317',
         claimToken: claimed.claimToken,
@@ -88,6 +91,7 @@ describe('event and run processing', () => {
       userId: 'user-1',
       type: 'user.message',
       source: 'web',
+      authenticatedActor: 'human',
       payload: { text: 'Run with the persisted permissions' },
     }).event
     const claimedEvent = store.claimNextEvent('router-v2')
@@ -140,12 +144,55 @@ describe('event and run processing', () => {
     store.close()
   })
 
+  it('preserves the authenticated external input Event across a retry Run', async () => {
+    const store = new PegasStore(':memory:')
+    const executor = new CapabilityCapturingExecutor()
+    const event = store.enqueueEvent({
+      userId: 'user-1',
+      type: 'user.message',
+      source: 'web',
+      authenticatedActor: 'human',
+      payload: { text: 'Retry and retain handback provenance' },
+    }).event
+    await processNextEvent(
+      store,
+      new RoutingEventHandler(new RuleBasedTaskRouter(), executor.name),
+      'retry-router',
+    )
+    const first = store.claimNextRun('retry-worker-1')
+    if (!first) throw new Error('Expected initial Run')
+    store.failRun(first.run.id, 'retry-worker-1', 'transient failure')
+    const retry = store.retryRun(first.run.id, 'user-1')
+    const claimedRetry = store.claimNextRun('retry-worker-2')
+    if (claimedRetry?.run.id !== retry.id) {
+      throw new Error('Expected retry Run')
+    }
+
+    await executeClaimedRun(
+      store,
+      executor,
+      claimedRetry,
+      'retry-worker-2',
+      process.cwd(),
+      new AbortController().signal,
+      'http://127.0.0.1:4317',
+    )
+
+    expect(executor.input).toMatchObject({
+      runId: retry.id,
+      inputEventId: event.id,
+    })
+    expect(claimedRetry.run.originEventId).toBeUndefined()
+    store.close()
+  })
+
   it('routes a user message through a durable run', async () => {
     const store = new PegasStore(':memory:')
     store.enqueueEvent({
       userId: 'user-1',
       type: 'user.message',
       source: 'mobile',
+      authenticatedActor: 'human',
       dedupeKey: 'message-1',
       payload: { text: 'Ship the first vertical slice' },
     })
@@ -199,6 +246,7 @@ describe('event and run processing', () => {
       userId: 'user-1',
       type: 'user.message',
       source: 'web',
+      authenticatedActor: 'human',
       payload: { text: 'Deliver a verified result' },
     }).event
     const executor = new EchoExecutor()
@@ -295,6 +343,7 @@ describe('event and run processing', () => {
       userId: 'user-1',
       type: 'user.message',
       source: 'web',
+      authenticatedActor: 'human',
       payload: { text: 'Deliver evidence captured during execution' },
     }).event
     const executor = new EchoExecutor()
@@ -348,6 +397,7 @@ describe('event and run processing', () => {
       userId: 'user-1',
       type: 'user.message',
       source: 'mobile',
+      authenticatedActor: 'human',
       dedupeKey: 'message-1',
       payload: { text: 'Create the first version' },
     })
@@ -372,6 +422,7 @@ describe('event and run processing', () => {
       userId: 'user-1',
       type: 'user.message',
       source: 'mobile',
+      authenticatedActor: 'human',
       dedupeKey: 'message-2',
       payload: { text: 'Now add recovery tests', taskId: task.id },
     })
@@ -396,6 +447,7 @@ describe('event and run processing', () => {
       userId: 'user-1',
       type: 'user.message',
       source: 'web',
+      authenticatedActor: 'human',
       payload: { text: 'Review the release workflow' },
     })
     await processNextEvent(
@@ -437,6 +489,7 @@ describe('event and run processing', () => {
       userId: 'user-1',
       type: 'user.message',
       source: 'web',
+      authenticatedActor: 'human',
       payload: { text: 'Measure the model Run' },
     })
     await processNextEvent(
@@ -484,6 +537,7 @@ describe('event and run processing', () => {
       userId: 'user-1',
       type: 'user.message',
       source: 'web',
+      authenticatedActor: 'human',
       payload: { text: 'Survive a worker restart' },
     })
     const executor = new AbortAwareExecutor()

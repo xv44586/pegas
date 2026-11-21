@@ -272,6 +272,47 @@ Control Plane 负责：
 
 不得让来源 Worker 指定目标 Executor Session、绕过目标 Channel 的输入队列，或把目标 Worker 的自由文本直接拼接进自己的隐藏上下文。
 
+### 第一阶段 API 与持久化合同
+
+Worker 通过当前 Run 的短期 capability 提交请求；实例 bearer 不能替代 Run claim：
+
+```http
+POST /v1/runs/run-123/collaborations
+X-Pegas-Run-Claim-Token: <current-run-capability>
+Content-Type: application/json
+```
+
+请求体使用上面的四种 union，并额外携带稳定 `commandId`。幂等键的作用域是来源 Run，其他 Run 或其他 owner 可以安全使用相同字符串。同一 Run、claim、`commandId` 与完全相同 payload 的网络重放始终返回创建时冻结的 201 关系快照，保证首次响应丢失后仍可恢复；历史 claim 不能通过重放读取后来写入的状态或 result，也不能提交新的 command。相同来源 Run 内以同一 `commandId` 提交不同 payload 返回 `409 collaboration_command_conflict`。每个来源 Task 同时最多保留 8 个 `pending` 或 `active` 的委派/交接关系，超限返回 `409 collaboration_fanout_limit`。
+
+所有者读取一件事情作为来源或目标参与的关系：
+
+```http
+GET /v1/channels/task-123/collaborations?userId=owner&limit=50&cursor=<relation-id>
+```
+
+关系按最新写入优先返回，默认 50、最大 200 条，更多结果通过 `nextCursor` 获取。查询 Task 不存在和跨 owner 均返回相同 `404 not_found`；context note 目标不存在、跨 owner、关闭或 self-target 均返回相同 `404 collaboration_target_unavailable`。普通 `/v1/events` 调用不能提交 `collaboration.*` 类型或 `collaboration` source；这些事件只能由 Control Plane 创建。
+
+schema v19 持久化 `channel_relations`。来源 Run、owner、kind、请求、冻结创建响应和 parent/root/depth provenance 写入后由数据库 trigger 保持不可变；状态、目标/返回 Event 和结果只能沿受控转换更新。委派和交接在一个 `BEGIN IMMEDIATE` 事务中创建关系、目标 Inbox Event、目标 Task 和独立 WorkerProfile；目标不继承来源 WorkerProfile、Executor Session 或 claim，但首次协作 Run 必须以来源 Run 的不可变执行快照作为模型、工作区、工具、权限、隐私与协议上界，并记录 `authoritySourceRunId`。context note 保留目标的模型和 profile，只有 Executor、协议、workspace 与 executor profile 兼容时才创建 Run，权限模式、审批策略、附加目录和隐私模式取来源与目标的最小权限交集；来源只作为 provenance，不能扩大目标授权。目标 WorkerProfile 仍为独立身份，后续由用户直接输入产生的 Run 才重新解析它自己的有效配置。context ref 必须解析到来源 Task 已有的 Event、Run、Artifact 或 Evidence；目标 ID、Session、Executor、模型、工具与权限不属于请求协议。
+
+目标 Run 创建、Task Event 写入和关系从 `pending` 切换到 `active/completed` 位于同一事务；任一步失败时不能留下孤立 Run。handoff 创建时即写入按 relation ID 去重的责任交接 Outbox。目标正常完成时，Control Plane 在完成事务内结算关系、写来源时间线和去重 Outbox。委派来源仍开放时，`collaboration.returned` 创建新的 Run，原等待 Run 以 `continued_by:<eventId>` 结束；来源已经 completed/cancelled 时，返回事件直接记为 processed，只保留审计与通知。嵌套 handoff 的中间 Task 在最终目标结算前保持 `waiting_on_dependency`，成功后沿 parent/root 链逐层完成；下游失败时中间 Task 收到可恢复的失败输入。handback 成功重新归类 `origin` 或 `resumed` 输入后，把只因该输入启动/恢复的来源 Task 软结束为 `completed/handed_back`；活跃 Task 上的普通 `continuation` 被退回时保留原 Task，避免丢失它此前未完成的责任。context note 与 handback 的投递失败属于非责任型失败，并把来源保留在可检查、可恢复状态；即使事件被重新领取也不能凭机器事件恢复来源 Task。目标停止结算为失败；尚未送达的 context note 同样明确失败。协作 target/return Event 达到最大重试次数时，Event、关系、来源等待状态、时间线和 Outbox 原子结算，不能留下 failed Event 对应 pending/active relation；目标关闭会同时退役 pending 或 processing 的保留事件。
+
+协作请求有持久上界：每个 owner 最多 64 条 pending/active 关系，每个来源 Run 最多 32 条命令，每个来源 Task 最多 8 个活跃委派/交接，每棵协作关系最多 32 条且深度最多 4，单个目标最多 4 条待投递 context note；self note 被拒绝。关系持久化 `parentRelationId/rootRelationId/depth`，数据库 trigger 验证真实父 Task、事件 kind、payload relation/task ID 和返回事件的来源 Task，不能把后代挂到另一棵 root 或借其他协作事件伪造关系。handback 只接受入口在认证后显式写入 `authenticatedActor=human` 的外部 `user.message`，不能根据 `source` 名称或文本内容推断人类授权；retry Run 沿 retry lineage 取回该 ID，新 Task 继承原 Mandate，内部协作/Approval/结果事件和未认证的自动化输入都不能被重新包装成用户授权。schema v19 不对历史事件追溯补写人类证明，因此迁移前的输入不能直接 handback，需要用户重新发送或通过新的认证入口确认。持有 authorized Action successor capability 的 Worker 必须先记录 Action outcome；Action 已为 `failed/unknown` 时则必须先完成人工 reconciliation，不能通过协作清除 claim 和核对生命线。
+
+`collaboration.*` Inbox Event 使用消费契约 v2。新版 Worker 只领取自己支持的事件契约，数据库 trigger 会拒绝旧 Worker 的 v1 claim；保留事件的过期 owner 必须先显式释放并清空 claim contract，再由新版 Worker 重新领取，旧 Worker 不能继承上一次 v2 claim 的版本标记。回滚到不支持 schema v19 的 Release 时，Supervisor 先使当前子进程进入受控重启并等待其全部停止，再执行最终数据库检查；存在 pending/processing 协作事件或 pending/active 关系时以 `rollback_incompatible` 拒绝切换并重新启动当前 Release，排空或结算后才允许回滚。
+
+| 状态 | `error`                                 | 含义                                   |
+| ---- | --------------------------------------- | -------------------------------------- |
+| 201  | —                                       | 新关系创建或相同命令的冻结响应重放成功 |
+| 400  | `bad_request`                           | union、引用或字段无效                  |
+| 403  | `run_claim_required/invalid`            | 缺少、过期或错误的当前 Run capability  |
+| 404  | `not_found`                             | 查询的 Task 不存在或不属于调用用户     |
+| 404  | `collaboration_target_unavailable`      | note 目标不可用且不暴露存在性          |
+| 409  | `collaboration_command_conflict`        | command ID 已被不同请求使用            |
+| 409  | `collaboration_fanout_limit`            | 来源 Task 的活跃委派/交接已达到硬上限  |
+| 409  | `collaboration_budget_limit`            | owner/Run/root/depth/note 预算已达上限 |
+| 409  | `collaboration_action_outcome_required` | 必须先记录 authorized Action outcome   |
+| 409  | `collaboration_reconciliation_required` | failed/unknown Action 必须先人工核对   |
+
 ## Report、结果回传与 Watchdog
 
 正常状态的事实来源是 Worker 主动 Report，不是外围轮询。
@@ -488,7 +529,7 @@ GET /v1/channels/search?userId=owner&q=Telegram&status=started,completed&ended=f
 | `TASK-002`     | completed Channel 可经授权复核恢复；用户停止后原 Channel 永久关闭；Run/Runtime 独立结束 | `TASK-001`, `CHANNEL-001`, `EXEC-003`, `WORKER-001` 的执行快照边界 | Partial  |
 | `CHANNEL-002`  | Channel 时间线显示结构化输入、路由、Run、工具摘要和结果                                 | `CHANNEL-001`, `EXEC-001`                                          | Partial  |
 | `WORKER-001`   | 事情继承全局模型并支持显式覆盖、配置快照和受控 Session rollover                         | `CHANNEL-001`, `SETTINGS-001`                                      | Partial  |
-| `COLLAB-001`   | 委派、交接、context note、handback 和结果回送形成持久闭环                               | `CHANNEL-002`, `WORKER-001`, `ROUTE-002`                           | Planned  |
+| `COLLAB-001`   | 委派、交接、context note、handback 和结果回送形成持久闭环                               | `CHANNEL-002`, `WORKER-001`, `ROUTE-002`                           | Partial  |
 | `CHANNEL-003`  | 按 ID/对话搜索，并按创建/结束时间和状态排序过滤                                         | `CHANNEL-002`                                                      | Usable   |
 | `NOTIFY-003`   | Web Outbox 提供列表、详情、已读和来源 Channel 跳转                                      | `NOTIFY-001`, `CHANNEL-001`                                        | Usable   |
 | `USAGE-001`    | 按 Worker、Channel、Run 记录供应商真实 token、cache、延迟和费用来源                     | `WORKER-001`, `CHANNEL-002`                                        | Usable   |

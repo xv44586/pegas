@@ -47,6 +47,7 @@ export interface ExecutionContext {
   workerProfile?: string
   workerProfileRevision?: number
   workerProfileSource?: 'global' | 'task'
+  authoritySourceRunId?: string
 }
 
 export interface InboxEvent {
@@ -54,6 +55,7 @@ export interface InboxEvent {
   userId: string
   type: string
   source: string
+  authenticatedActor?: 'human'
   dedupeKey?: string
   payload: unknown
   status: EventStatus
@@ -70,6 +72,7 @@ export interface NewInboxEvent {
   userId: string
   type: string
   source: string
+  authenticatedActor?: 'human'
   dedupeKey?: string
   payload: unknown
 }
@@ -95,6 +98,7 @@ type RunStatus =
 export interface Run {
   id: string
   taskId: string
+  originEventId?: string
   retryOfRunId?: string
   executor: string
   executorRef?: string
@@ -220,6 +224,10 @@ export interface ReleaseRef {
   root: string
   commit?: string
   createdAt: string
+  compatibility?: {
+    minimumSchema: number
+    maximumSchema: number
+  }
 }
 
 export interface SupervisorState {

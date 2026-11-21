@@ -234,6 +234,10 @@ WorkerProfile 的角色和记忆范围必须服从 Pegas 的统一身份、Polic
 
 Worker 只能提交结构化协作请求。Control Plane 校验来源 Run、授权范围和 Policy，在同一事务中建立关系、写入目标输入并提交唤醒事件。目标完成后以关系 ID 和最终 Report ID 去重，把结果写入来源 Event Inbox；只有重要结果、问题、阻塞、失败或责任变化进入用户 Outbox。完整协议与 Web 合同见 `docs/channel-worker-collaboration.md`。
 
+schema v19 实现第一阶段 `ChannelRelation`：当前 Run capability 对结构化委派、交接、context note 与 handback 做 fencing；委派和交接的首次目标 Run 以来源 Run 的不可变 execution context 作为模型、工作区、工具、权限、隐私和协议上界，同时保留目标 Task 的独立 WorkerProfile。context note 不授予来源权限：它保留目标的模型/profile，只在同一 Executor、协议、workspace 和 profile 边界内取来源与目标权限的最小交集，并记录来源 Run。内部协作事件先于普通 Router 分流：明确目标的委派、交接和 note 直接进入目标 Task，handback 才重新经过 Router；Router 不选择 Executor 或工具，也不能把内部事件铸造成新的 explicit Mandate。目标 Run 创建和关系切换同事务提交；目标结束事务同时结算关系、来源事件、时间线与 Outbox，迟到结果不能自动恢复已经 completed/cancelled 的来源。
+
+协作事件使用 Inbox 消费契约 v2：新版 Worker 的 claim 声明支持版本，数据库拒绝旧 Worker 领取保留事件；过期 claim 先释放 owner 和版本标记再重新领取，旧 Worker 不能继承先前的 v2 标记。关系保存 parent/root/depth；数据库把父关系、来源/目标 Task、事件类型、payload relation ID、Task 映射和消费契约绑定为同一条因果链，并使来源、kind、请求、事件端点和父链 provenance 写入后不可变，应用层再限制来源 Run 总量、根关系总量、递归深度、活跃子关系和目标待处理 note。协作 `commandId` 只在来源 Run 内唯一；服务端持久化不可变的创建响应，历史 claim 只能对完全相同的命令重放该快照，不能读取后来写入的 result 或创建新命令。事件达到最大重试次数时，Event、关系、来源等待状态、时间线与 Outbox 在同一事务中失败结算；目标关闭也会退役已经被领取的协作事件。重试 Run 只沿 retry lineage 恢复入口显式认证为人类的外部输入 ID，不根据 source 名称推断授权，也不把内部事件、自动化输入或 schema v19 前没有证明的历史事件伪装成 handback 授权。嵌套 handoff 会让中间 Task 作为责任桥等待最终目标，成功后逐层结算，不留下 completed Task 上仍 active 的入站关系。Supervisor 把 Candidate 的 schema 兼容范围写入 ReleaseRef，并在自身目录把数据目录解析为传给全部 Candidate 的同一绝对路径；手动回滚先标记受控重启并停止所有写入进程，再对该权威数据库做最终兼容检查和 release 切换。Recovery API 串行化并发回滚请求，Supervisor 主循环在转换屏障释放前不能启动下一组子进程，回滚目标不支持 schema v19 且仍有活跃关系或待处理事件时，恢复 API 与自动回滚都 fail closed。
+
 #### Report 与 Watchdog
 
 当前正常状态以 Worker 主动提交的结构化 Report 为事实来源，至少区分 `started`、`progress`、`waiting`、`ready`、`blocked` 和 `failed`。当 Task 已有 Goal Contract 时，`ready` 流程已实施 GOAL-001 的 evidence 完成门禁；尚未接入结构化 Report 的旧 Task 继续沿用兼容完成路径，直到 Executor 适配完成。

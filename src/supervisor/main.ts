@@ -4,6 +4,13 @@ import { resolve } from 'node:path'
 import type { ReleaseRef } from '../core/domain.js'
 import { createRecoveryServer } from './recovery-server.js'
 import { ReleaseStateStore } from './release-state.js'
+import {
+  assertRollbackCompatible,
+  RollbackUnavailableError,
+} from './rollback-compatibility.js'
+import { LifecycleTransitionBarrier } from './lifecycle-transition.js'
+import { performRollbackTransition } from './rollback-transition.js'
+import { resolveSupervisorRuntimePaths } from './runtime-paths.js'
 
 const statePath = resolve(
   process.env.PEGAS_SUPERVISOR_STATE ?? './data/supervisor.json',
@@ -22,6 +29,9 @@ const stabilizationMs = positiveInteger(
 )
 const apiHost = process.env.PEGAS_API_HOST ?? '127.0.0.1'
 const apiPort = positiveInteger(process.env.PEGAS_API_PORT, 4317)
+const { dataDir, databasePath } = resolveSupervisorRuntimePaths(
+  process.env.PEGAS_DATA_DIR,
+)
 
 if (!isLoopback(recoveryHost) && !recoveryToken) {
   throw new Error(
@@ -49,19 +59,27 @@ try {
 
 let children: ChildProcess[] = []
 const lifecycle = { restartRequested: false, stopRequested: false }
+const lifecycleTransitions = new LifecycleTransitionBarrier()
 
 const recoveryServer = createRecoveryServer({
   state,
   ...(recoveryToken ? { token: recoveryToken } : {}),
-  onRestart: async () => {
-    lifecycle.restartRequested = true
-    await stopChildren()
-  },
-  onRollback: async reason => {
-    state.rollback(reason)
-    lifecycle.restartRequested = true
-    await stopChildren()
-  },
+  onRestart: () =>
+    lifecycleTransitions.begin(async () => {
+      lifecycle.restartRequested = true
+      await stopChildren()
+    }),
+  onRollback: reason =>
+    lifecycleTransitions.begin(() =>
+      performRollbackTransition({
+        stopChildren,
+        assertRollbackAllowed,
+        rollback: () => state.rollback(reason),
+        requestRestart: () => {
+          lifecycle.restartRequested = true
+        },
+      }).then(() => undefined),
+    ),
 })
 
 recoveryServer.listen(recoveryPort, recoveryHost, () => {
@@ -74,6 +92,11 @@ process.on('SIGINT', () => requestStop('SIGINT'))
 process.on('SIGTERM', () => requestStop('SIGTERM'))
 
 while (!lifecycle.stopRequested) {
+  await lifecycleTransitions.wait()
+  // A termination signal can arrive while a rollback/restart transition owns
+  // the barrier. Do not start another release after that transition finishes.
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+  if (lifecycle.stopRequested) break
   lifecycle.restartRequested = false
   const inspection = state.inspect()
   if (!inspection.state) {
@@ -88,6 +111,10 @@ while (!lifecycle.stopRequested) {
   const healthy = await waitForHealth(controlPlane, startupGraceMs)
 
   if (!healthy) {
+    if (restartWasRequested()) {
+      await lifecycleTransitions.wait()
+      continue
+    }
     await stopChildren()
     await recoverFromFailure(
       `Release ${release.id} failed its startup health check`,
@@ -106,6 +133,10 @@ while (!lifecycle.stopRequested) {
   if (state.read().phase === 'verifying') {
     const stable = await staysAlive(children, stabilizationMs)
     if (!stable) {
+      if (restartWasRequested()) {
+        await lifecycleTransitions.wait()
+        continue
+      }
       await stopChildren()
       await recoverFromFailure(
         `Release ${release.id} failed during stabilization`,
@@ -117,6 +148,10 @@ while (!lifecycle.stopRequested) {
   }
 
   await Promise.race(children.map(child => onceExited(child)))
+  if (restartWasRequested()) {
+    await lifecycleTransitions.wait()
+    continue
+  }
   // These flags can change in signal and recovery API callbacks while awaiting child exit.
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
   if (!lifecycle.stopRequested && !lifecycle.restartRequested) {
@@ -139,11 +174,16 @@ function startProcess(release: ReleaseRef, entrypoint: string): ChildProcess {
     [resolve(release.root, 'dist', entrypoint)],
     {
       cwd: release.root,
-      env: process.env,
+      env: { ...process.env, PEGAS_DATA_DIR: dataDir },
       stdio: 'inherit',
     },
   )
   return child
+}
+
+function restartWasRequested(): boolean {
+  // Recovery callbacks can mutate this flag while the main loop awaits I/O.
+  return lifecycle.restartRequested
 }
 
 async function waitForHealth(
@@ -186,13 +226,33 @@ async function staysAlive(
 async function recoverFromFailure(reason: string): Promise<void> {
   const current = state.read()
   if (current.phase === 'verifying' && current.previous) {
-    const rolledBack = state.rollback(reason)
-    console.error(`${reason}; rolling back to ${rolledBack.active.id}`)
+    try {
+      assertRollbackAllowed()
+      const rolledBack = state.rollback(reason)
+      console.error(`${reason}; rolling back to ${rolledBack.active.id}`)
+    } catch (error) {
+      state.recordFailure(
+        `${reason}; rollback blocked: ${error instanceof Error ? error.message : String(error)}`,
+      )
+      console.error(`${reason}; rollback was blocked`, error)
+    }
   } else {
     state.recordFailure(reason)
     console.error(`${reason}; restarting the active release`)
   }
   await Promise.resolve()
+}
+
+function assertRollbackAllowed(): void {
+  const current = state.read()
+  if (!current.previous)
+    throw new RollbackUnavailableError(
+      'No previous release is available for rollback',
+    )
+  assertRollbackCompatible(
+    databasePath,
+    current.previous.compatibility?.maximumSchema ?? 17,
+  )
 }
 
 async function stopChildren(): Promise<void> {
@@ -202,9 +262,9 @@ async function stopChildren(): Promise<void> {
     Promise.all(running.map(child => onceExited(child))),
     wait(5000),
   ])
-  for (const child of running) {
-    if (child.exitCode === null) child.kill('SIGKILL')
-  }
+  const stubborn = running.filter(child => child.exitCode === null)
+  for (const child of stubborn) child.kill('SIGKILL')
+  await Promise.all(stubborn.map(child => onceExited(child)))
   children = []
 }
 

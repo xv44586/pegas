@@ -8,6 +8,7 @@ import {
   DshCliExecutor,
   DshExecutionError,
   executorEnvironment,
+  executorPrompt,
 } from '../src/executor/dsh-cli-executor.js'
 
 const temporaryDirectories: string[] = []
@@ -33,6 +34,7 @@ describe('DshCliExecutor', () => {
         PEGAS_RUN_CLAIM_TOKEN: 'stale-run-claim',
         PEGAS_RUN_ID: 'stale-run',
         PEGAS_TASK_ID: 'stale-task',
+        PEGAS_INPUT_EVENT_ID: 'stale-input-event',
         PEGAS_CONTROL_PLANE_URL: 'http://stale.example',
       }),
     ).toEqual({ PATH: '/usr/bin', DSH_API_KEY: 'executor-owned' })
@@ -47,6 +49,7 @@ console.log(JSON.stringify({
     baseUrl: process.env.PEGAS_CONTROL_PLANE_URL,
     runId: process.env.PEGAS_RUN_ID,
     taskId: process.env.PEGAS_TASK_ID,
+    inputEventId: process.env.PEGAS_INPUT_EVENT_ID,
     claimToken: process.env.PEGAS_RUN_CLAIM_TOKEN,
     apiToken: process.env.PEGAS_API_TOKEN
   }),
@@ -58,6 +61,7 @@ console.log(JSON.stringify({
     const result = await executor.execute({
       runId: 'run-current',
       taskId: 'task-current',
+      inputEventId: 'event-current',
       prompt: 'perform a protected action',
       workingDirectory: process.cwd(),
       actionCapability: {
@@ -70,8 +74,32 @@ console.log(JSON.stringify({
       baseUrl: 'http://127.0.0.1:4317',
       runId: 'run-current',
       taskId: 'task-current',
+      inputEventId: 'event-current',
       claimToken: 'current-run-claim',
     })
+  })
+
+  it('describes the bounded collaboration API without granting target authority', () => {
+    const prompt = executorPrompt('delegate independent research', {
+      strength: 'explicit',
+      policyVersion: 'pegas-mandate-v1',
+      basis: {
+        source: 'web',
+        scope: { conversation: 'owner' },
+        via: 'router',
+      },
+      actor: { source: 'web', id: 'owner' },
+      scope: 'Research provider compatibility only',
+    })
+    expect(prompt).toContain('POST /v1/runs/:runId/collaborations')
+    expect(prompt).toContain('"kind":"delegate"')
+    expect(prompt).toContain('"kind":"handoff"')
+    expect(prompt).toContain('"kind":"context_note"')
+    expect(prompt).toContain('"kind":"handback"')
+    expect(prompt).toContain(
+      '不能指定目标 Executor、Session、模型、工作区、工具或权限',
+    )
+    expect(prompt).toContain('Research provider compatibility only')
   })
 
   it('accepts only a completed final event and captures the session id', async () => {

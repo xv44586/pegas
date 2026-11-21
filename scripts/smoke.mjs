@@ -68,7 +68,7 @@ try {
     body: JSON.stringify({
       userId: 'smoke-user',
       type: 'user.message',
-      source: 'smoke',
+      source: 'web',
       dedupeKey: 'smoke-message-1',
       payload: { text: 'Verify the durable task loop' },
     }),

@@ -88,11 +88,16 @@ export class ReleaseStateStore {
       manifest,
       artifactPath,
       reviewReportPath,
-    ).release
+    )
+    const release = candidate.release
+    const candidateRef: ReleaseRef = {
+      ...release,
+      compatibility: candidate.compatibility,
+    }
     const current = this.read()
-    if (candidate.id === current.active.id) return current
+    if (candidateRef.id === current.active.id) return current
     const next: SupervisorState = {
-      active: candidate,
+      active: candidateRef,
       previous: current.active,
       phase: 'verifying',
       updatedAt: new Date().toISOString(),
@@ -304,6 +309,13 @@ function isReleaseRef(value: unknown): value is ReleaseRef {
     typeof value.id === 'string' &&
     typeof value.root === 'string' &&
     (value.commit === undefined || typeof value.commit === 'string') &&
+    (value.compatibility === undefined ||
+      (isRecord(value.compatibility) &&
+        Number.isSafeInteger(value.compatibility.minimumSchema) &&
+        Number.isSafeInteger(value.compatibility.maximumSchema) &&
+        Number(value.compatibility.minimumSchema) >= 0 &&
+        Number(value.compatibility.minimumSchema) <=
+          Number(value.compatibility.maximumSchema))) &&
     typeof value.createdAt === 'string'
   )
 }

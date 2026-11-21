@@ -193,6 +193,31 @@ describe('PegasStore', () => {
     store.close()
   })
 
+  it('releases an expired reserved event before assigning a new v2 claim', () => {
+    const clock = new MutableClock('2026-11-19T09:00:00.000Z')
+    const store = new PegasStore(':memory:', { clock })
+    const event = store.enqueueEvent({
+      userId: 'owner',
+      type: 'collaboration.delegated',
+      source: 'collaboration',
+      payload: { relationId: 'reserved-retry' },
+    }).event
+
+    expect(store.claimNextEvent('v2-first', 1_000, 2)).toMatchObject({
+      id: event.id,
+      claimedBy: 'v2-first',
+    })
+    clock.set('2026-11-19T09:00:01.000Z')
+    expect(store.claimNextEvent('v1-worker', 1_000, 1)).toBeUndefined()
+    expect(store.claimNextEvent('v2-second', 1_000, 2)).toMatchObject({
+      id: event.id,
+      claimedBy: 'v2-second',
+      attempts: 2,
+    })
+
+    store.close()
+  })
+
   it('creates one task and one outbox message when an event is retried', () => {
     const store = new PegasStore(':memory:')
     const { event } = store.enqueueEvent({
@@ -898,8 +923,15 @@ describe('PegasStore', () => {
           .prepare('SELECT version FROM schema_migrations ORDER BY version')
           .all() as { version: number }[]
         expect(versions.map(row => row.version)).toEqual([
-          1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
+          1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
         ])
+        expect(
+          db
+            .prepare(
+              "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'channel_relations'",
+            )
+            .get(),
+        ).toEqual({ name: 'channel_relations' })
         expect(
           (
             db
@@ -930,6 +962,62 @@ describe('PegasStore', () => {
             'claimed_contract_version',
           ]),
         )
+        expect(
+          (
+            db.prepare('PRAGMA table_info(inbox_events)').all() as {
+              name: string
+            }[]
+          ).map(column => column.name),
+        ).toEqual(
+          expect.arrayContaining([
+            'required_contract_version',
+            'claimed_contract_version',
+          ]),
+        )
+        db.prepare(
+          "INSERT INTO inbox_events (id,user_id,type,source,payload_json,status,required_contract_version,created_at) VALUES ('future-event','owner','collaboration.delegated','collaboration','{}','pending',2,'2026-11-20')",
+        ).run()
+        expect(() =>
+          db
+            .prepare(
+              "UPDATE inbox_events SET status = 'processing', claimed_by = 'old-worker' WHERE id = 'future-event'",
+            )
+            .run(),
+        ).toThrow(/unsupported inbox event contract/)
+        db.prepare(
+          "UPDATE inbox_events SET status = 'processing', claimed_by = 'new-worker', claimed_contract_version = 2 WHERE id = 'future-event'",
+        ).run()
+        db.prepare(
+          "UPDATE inbox_events SET lease_until = '2026-11-19' WHERE id = 'future-event'",
+        ).run()
+        expect(() =>
+          db
+            .prepare(
+              "UPDATE inbox_events SET status = 'processing', claimed_by = 'old-retry-worker' WHERE id = 'future-event'",
+            )
+            .run(),
+        ).toThrow(/claim must be released before transfer/)
+        db.prepare(
+          "UPDATE inbox_events SET status = 'pending', claimed_by = NULL, lease_until = NULL WHERE id = 'future-event'",
+        ).run()
+        expect(
+          db
+            .prepare(
+              "SELECT claimed_contract_version FROM inbox_events WHERE id = 'future-event'",
+            )
+            .get(),
+        ).toEqual({ claimed_contract_version: null })
+        expect(() =>
+          db
+            .prepare(
+              "UPDATE inbox_events SET status = 'processing', claimed_by = 'old-worker' WHERE id = 'future-event'",
+            )
+            .run(),
+        ).toThrow(/unsupported inbox event contract/)
+        db.prepare(
+          "UPDATE inbox_events SET status = 'processing', claimed_by = 'new-retry-worker', claimed_contract_version = 2 WHERE id = 'future-event'",
+        ).run()
+        db.prepare("DELETE FROM inbox_events WHERE id = 'future-event'").run()
         db.prepare(
           "INSERT INTO inbox_events (id,user_id,type,source,payload_json,status,created_at) VALUES ('mixed-writer-event','owner','user.message','old-worker','{}','processed','2026-11-20')",
         ).run()
@@ -1284,6 +1372,85 @@ describe('PegasStore', () => {
       }),
     ).toThrow(/does not own/)
     store.close()
+  })
+
+  it('enforces collaboration ownership and Run linkage at the database boundary', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'pegas-relation-integrity-'))
+    const path = join(directory, 'pegas.sqlite')
+    const store = new PegasStore(path)
+    const sourceEvent = store.enqueueEvent({
+      userId: 'owner',
+      type: 'user.message',
+      source: 'web',
+      payload: { text: 'Source' },
+    }).event
+    const source = store.applyRoutingDecision(
+      sourceEvent,
+      {
+        kind: 'create_task',
+        title: 'Source',
+        goal: 'Source',
+        input: 'Source',
+        reason: 'test',
+      },
+      'echo',
+    )
+    const otherEvent = store.enqueueEvent({
+      userId: 'other',
+      type: 'user.message',
+      source: 'web',
+      payload: { text: 'Other' },
+    }).event
+    const other = store.applyRoutingDecision(
+      otherEvent,
+      {
+        kind: 'create_task',
+        title: 'Other',
+        goal: 'Other',
+        input: 'Other',
+        reason: 'test',
+      },
+      'echo',
+    )
+    store.close()
+
+    const db = new DatabaseSync(path)
+    db.exec('PRAGMA foreign_keys = ON')
+    const insert = db.prepare(
+      `INSERT INTO channel_relations
+       (id, command_id, command_fingerprint, request_claim_hash, user_id,
+        kind, status, source_task_id, source_run_id, root_relation_id, depth,
+        target_task_id, request_json, created_at, updated_at)
+       VALUES (?, ?, 'fingerprint', 'claim', ?, 'delegate', 'pending', ?, ?, ?, 0,
+        ?, '{}', '2026-11-20', '2026-11-20')`,
+    )
+    try {
+      expect(() =>
+        insert.run(
+          'bad-source',
+          'bad-source-command',
+          'owner',
+          other.task.id,
+          source.run.id,
+          'bad-source',
+          null,
+        ),
+      ).toThrow(/invalid collaboration source/)
+      expect(() =>
+        insert.run(
+          'bad-target',
+          'bad-target-command',
+          'owner',
+          source.task.id,
+          source.run.id,
+          'bad-target',
+          other.task.id,
+        ),
+      ).toThrow(/invalid collaboration target/)
+    } finally {
+      db.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
   })
 })
 

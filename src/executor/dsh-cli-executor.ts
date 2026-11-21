@@ -131,6 +131,9 @@ export class DshCliExecutor implements RunExecutor {
               PEGAS_CONTROL_PLANE_URL: input.actionCapability.baseUrl,
               PEGAS_RUN_ID: input.runId,
               PEGAS_TASK_ID: input.taskId,
+              ...(input.inputEventId
+                ? { PEGAS_INPUT_EVENT_ID: input.inputEventId }
+                : {}),
               PEGAS_RUN_CLAIM_TOKEN: input.actionCapability.claimToken,
             }
           : {}),
@@ -229,7 +232,7 @@ export class DshCliExecutor implements RunExecutor {
       }
     })
 
-    child.stdin.end(executorPrompt(input.prompt))
+    child.stdin.end(executorPrompt(input.prompt, input.mandate))
     let exit: { code: number | null; signal: NodeJS.Signals | null }
     try {
       exit = await waitForExit(child)
@@ -289,6 +292,7 @@ export function executorEnvironment(
     'PEGAS_CONTROL_PLANE_URL',
     'PEGAS_RUN_ID',
     'PEGAS_TASK_ID',
+    'PEGAS_INPUT_EVENT_ID',
     'PEGAS_RUN_CLAIM_TOKEN',
   ])
   return Object.fromEntries(
@@ -455,11 +459,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function executorPrompt(userInput: string): string {
+export function executorPrompt(
+  userInput: string,
+  mandate?: import('../core/domain.js').Mandate,
+): string {
   return `${userInput}
 
 <pegas_execution_contract>
 你是直接负责完成这项工作的执行 Agent。你能看到当前真实可用的工具、权限和工作区，能力判断必须以实际检查结果为准，不能由上游路由器代替判断。
+
+当前持久化 Mandate 的授权范围是：${mandate?.scope ?? '当前输入表达的目标'}。不得把委派、交接、上下文 note 或 Router 分类当成扩大该范围的新授权。
 
 如果任务需要调用工具，在第一次实质工具调用前，先用一句简短自然的中文确认你将处理的具体对象和预期结果。这句话会原样展示给用户；说完立即继续执行，不要等待用户再次确认。先检查已有工具和权限，不要仅凭猜测声称缺少工具或要求安装工具。
 
@@ -474,6 +483,13 @@ function executorPrompt(userInput: string): string {
 恢复上下文会给出 actionId 和用户决定；只有 decision 为 approve 才执行副作用。随后向 POST /v1/actions/:actionId/outcomes 发送新 Run 的 claim header，以及合法请求体：
 {"commandId":"stable-outcome-key","status":"succeeded","result":{"summary":"actual-result"}}
 status 只能是 succeeded、failed 或 unknown。idempotencyKey 和 commandId 是网络重试键：同一逻辑操作的每次重试必须保持原键和完全相同的 payload；不能因响应丢失生成新键。
+
+需要受控委派、交接、传递上下文或退回错误归类的输入时，使用同一组本机环境变量和 claim header 调用 POST /v1/runs/:runId/collaborations。当前输入的事件 ID（可用时）在 PEGAS_INPUT_EVENT_ID；请求体只能使用以下四种结构之一：
+{"commandId":"stable-key","kind":"delegate","goal":"目标事情","reason":"委派原因","expectedOutput":"预期结果","contextRefs":["当前 Task 中已有的 event/run/artifact/evidence id"]}
+{"commandId":"stable-key","kind":"handoff","goal":"目标事情","reason":"交接原因","contextRefs":[]}
+{"commandId":"stable-key","kind":"context_note","targetChannelId":"已有 Task id","text":"带来源的事实","sourceRefs":[]}
+{"commandId":"stable-key","kind":"handback","inputEventId":"当前 Task 已有输入 event id","reason":"不属于当前目标的原因"}
+不能指定目标 Executor、Session、模型、工作区、工具或权限。delegate、handoff 或 handback 成功后立即结束当前 turn，由 Pegas 持久化后续关系和结果回送；context_note 成功后可以继续当前工作。commandId 也是网络重试键，同一逻辑请求必须保持原键和完全相同的 payload。
 </pegas_execution_contract>`
 }
 

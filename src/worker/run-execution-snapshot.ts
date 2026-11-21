@@ -1,19 +1,13 @@
 import type { ExecutionContext, Run } from '../core/domain.js'
+import {
+  decodeExecutionPermissions,
+  decodeLegacyExecutionPermissions,
+  ExecutionPermissionsDecodeError,
+  type ExecutionPermissions,
+} from '../core/execution-permissions.js'
 import type { DshCliExecutorOptions } from '../executor/dsh-cli-executor.js'
 import type { ExecutorInput } from '../executor/executor.js'
 import type { RuntimeSettings } from '../settings/runtime-settings.js'
-
-const permissionModes = new Set([
-  'read-only',
-  'workspace-write',
-  'danger-full-access',
-])
-const permissionKeys = new Set([
-  'mode',
-  'approvalPolicy',
-  'additionalDirectories',
-  'privacyMode',
-])
 
 export interface DshExecutionDefaults {
   executorProfile: string
@@ -153,76 +147,34 @@ function legacyModelOverride(
   }
 }
 
-interface SnapshotPermissions {
-  mode: string
-  approvalPolicy: 'ask' | 'never'
-  additionalDirectories: string[]
-  privacyMode: RuntimeSettings['privacyMode']
-}
-
 function parsePermissions(
   value: string | undefined,
   strict: true,
-): SnapshotPermissions
+): ExecutionPermissions
 function parsePermissions(
   value: string | undefined,
   strict: false,
-): Partial<SnapshotPermissions> | undefined
+): Partial<ExecutionPermissions> | undefined
 function parsePermissions(
   value: string | undefined,
   strict: boolean,
-): SnapshotPermissions | Partial<SnapshotPermissions> | undefined {
-  if (!value) {
-    if (strict) throw new Error('Run execution contract v2 has no permissions')
-    return undefined
-  }
-  let parsed: unknown
+): ExecutionPermissions | Partial<ExecutionPermissions> | undefined {
+  if (!strict) return decodeLegacyExecutionPermissions(value)
   try {
-    parsed = JSON.parse(value) as unknown
-  } catch {
-    if (strict)
-      throw new Error('Run execution contract v2 permissions are malformed')
-    return undefined
-  }
-  if (!isRecord(parsed)) {
-    if (strict)
-      throw new Error('Run execution contract v2 permissions are invalid')
-    return undefined
-  }
-  if (strict && Object.keys(parsed).some(key => !permissionKeys.has(key)))
-    throw new Error(
-      'Run execution contract v2 permissions contain unknown fields',
-    )
-
-  const mode =
-    typeof parsed.mode === 'string' && permissionModes.has(parsed.mode)
-      ? parsed.mode
-      : undefined
-  const approvalPolicy =
-    parsed.approvalPolicy === 'ask' || parsed.approvalPolicy === 'never'
-      ? parsed.approvalPolicy
-      : undefined
-  const additionalDirectories =
-    Array.isArray(parsed.additionalDirectories) &&
-    parsed.additionalDirectories.every(
-      directory => typeof directory === 'string' && Boolean(directory.trim()),
-    )
-      ? parsed.additionalDirectories
-      : undefined
-  const privacyMode =
-    parsed.privacyMode === 'disabled' || parsed.privacyMode === 'mask'
-      ? parsed.privacyMode
-      : undefined
-  if (
-    strict &&
-    (!mode || !approvalPolicy || !additionalDirectories || !privacyMode)
-  )
-    throw new Error('Run execution contract v2 permissions are incomplete')
-  return {
-    ...(mode ? { mode } : {}),
-    ...(approvalPolicy ? { approvalPolicy } : {}),
-    ...(additionalDirectories ? { additionalDirectories } : {}),
-    ...(privacyMode ? { privacyMode } : {}),
+    return decodeExecutionPermissions(value)
+  } catch (error) {
+    if (!(error instanceof ExecutionPermissionsDecodeError)) throw error
+    const message =
+      error.issue === 'missing'
+        ? 'Run execution contract v2 has no permissions'
+        : error.issue === 'malformed'
+          ? 'Run execution contract v2 permissions are malformed'
+          : error.issue === 'invalid'
+            ? 'Run execution contract v2 permissions are invalid'
+            : error.issue === 'unknown_fields'
+              ? 'Run execution contract v2 permissions contain unknown fields'
+              : 'Run execution contract v2 permissions are incomplete'
+    throw new Error(message, { cause: error })
   }
 }
 
@@ -236,8 +188,4 @@ function positiveInteger(value: unknown, field: string): number {
   if (!Number.isInteger(value) || Number(value) <= 0)
     throw new Error(`Run execution contract v2 has an invalid ${field}`)
   return Number(value)
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

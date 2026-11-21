@@ -480,7 +480,7 @@ async function seedConversation(apiPort) {
         body: JSON.stringify({
           userId: 'owner',
           type: 'user.message',
-          source: 'feature-review',
+          source: 'web',
           dedupeKey: `feature-review-${String(index)}`,
           payload: { text },
         }),

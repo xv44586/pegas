@@ -11,6 +11,7 @@ import { extname, resolve, sep } from 'node:path'
 
 import { projectWorkChannel } from '../channel/work-channel.js'
 import { isWorkerIconId, type WorkerIconId } from '../brand/agent-icon.js'
+import { parseWorkerCollaborationRequest } from '../collaboration/collaboration.js'
 import {
   approvalStatuses,
   parseActionOutcomeDraft,
@@ -54,6 +55,12 @@ import type {
   SpeechTranscript,
 } from '../speech/provider.js'
 import {
+  CollaborationActionPendingError,
+  CollaborationBudgetLimitError,
+  CollaborationCommandConflictError,
+  CollaborationFanoutLimitError,
+  CollaborationReconciliationRequiredError,
+  CollaborationTargetUnavailableError,
   RunClaimError,
   SettingsRevisionConflictError,
   WorkerProfileReadOnlyError,
@@ -316,6 +323,21 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
       }
 
       const taskResourceUrl = new URL(request.url ?? '/', 'http://localhost')
+      const runCollaborationMatch =
+        /^\/v1\/runs\/([^/]+)\/collaborations$/.exec(taskResourceUrl.pathname)
+      if (runCollaborationMatch && request.method === 'POST') {
+        const claimToken = runClaimToken(request)
+        if (!claimToken)
+          return sendJson(response, 403, { error: 'run_claim_required' })
+        const runId = decodeURIComponent(runCollaborationMatch[1] ?? '')
+        options.store.assertCollaborationCapability(runId, claimToken)
+        const relation = options.store.createCollaboration(
+          runId,
+          claimToken,
+          parseWorkerCollaborationRequest(await readJson(request)),
+        )
+        return sendJson(response, 201, { relation })
+      }
       const workerProfileMatch = /^\/v1\/tasks\/([^/]+)\/worker-profile$/.exec(
         taskResourceUrl.pathname,
       )
@@ -640,6 +662,28 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         )
       }
 
+      const channelCollaborationMatch = channelTimelineUrl?.pathname.match(
+        /^\/v1\/channels\/([^/]+)\/collaborations$/,
+      )
+      if (channelCollaborationMatch && request.method === 'GET') {
+        const userId = channelTimelineUrl?.searchParams.get('userId')
+        if (!userId) throw new Error('userId is required')
+        const taskId = decodeURIComponent(channelCollaborationMatch[1] ?? '')
+        if (!options.store.findTask(taskId, userId))
+          return sendJson(response, 404, { error: 'not_found' })
+        const page = pageRequest(taskResourceUrl)
+        const relations = options.store.pageCollaborations(
+          taskId,
+          userId,
+          page.limit,
+          page.cursor,
+        )
+        return sendJson(response, 200, {
+          relations: relations.items,
+          ...(relations.nextCursor ? { nextCursor: relations.nextCursor } : {}),
+        })
+      }
+
       if (request.url?.startsWith('/v1/channels') && request.method === 'GET') {
         const url = new URL(request.url, 'http://localhost')
         const userId = url.searchParams.get('userId')
@@ -938,6 +982,36 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
 
       return sendJson(response, 404, { error: 'not_found' })
     } catch (error) {
+      if (error instanceof CollaborationCommandConflictError)
+        return sendJson(response, 409, {
+          error: 'collaboration_command_conflict',
+          message: error.message,
+        })
+      if (error instanceof CollaborationFanoutLimitError)
+        return sendJson(response, 409, {
+          error: 'collaboration_fanout_limit',
+          message: error.message,
+        })
+      if (error instanceof CollaborationBudgetLimitError)
+        return sendJson(response, 409, {
+          error: 'collaboration_budget_limit',
+          message: error.message,
+        })
+      if (error instanceof CollaborationActionPendingError)
+        return sendJson(response, 409, {
+          error: 'collaboration_action_outcome_required',
+          message: error.message,
+        })
+      if (error instanceof CollaborationReconciliationRequiredError)
+        return sendJson(response, 409, {
+          error: 'collaboration_reconciliation_required',
+          message: error.message,
+        })
+      if (error instanceof CollaborationTargetUnavailableError)
+        return sendJson(response, 404, {
+          error: 'collaboration_target_unavailable',
+          message: error.message,
+        })
       if (error instanceof RunClaimError)
         return sendJson(response, 403, {
           error: 'run_claim_invalid',
@@ -1173,6 +1247,7 @@ async function acceptVoiceMessage(
     userId,
     type: 'user.message',
     source,
+    authenticatedActor: 'human',
     dedupeKey,
     payload: {
       text: transcript.text,
@@ -1437,7 +1512,7 @@ function isRunCapabilityWrite(request: IncomingMessage): boolean {
   if (request.method !== 'POST' || !request.url) return false
   const pathname = new URL(request.url, 'http://localhost').pathname
   return (
-    /^\/v1\/runs\/[^/]+\/(reports|approvals)$/.test(pathname) ||
+    /^\/v1\/runs\/[^/]+\/(reports|approvals|collaborations)$/.test(pathname) ||
     /^\/v1\/actions\/[^/]+\/outcomes$/.test(pathname)
   )
 }
@@ -1568,17 +1643,30 @@ function parseNewInboxEvent(value: unknown): NewInboxEvent {
   const userId = requiredString(value.userId, 'userId')
   const type = requiredString(value.type, 'type')
   const source = requiredString(value.source, 'source')
-  if (type === 'approval.decided' || source === 'approval') {
+  if (
+    type === 'approval.decided' ||
+    source === 'approval' ||
+    type.startsWith('collaboration.') ||
+    source === 'collaboration'
+  ) {
     throw new Error(
-      'Approval decision events are reserved for the Control Plane',
+      'Control Plane event types and sources are reserved and cannot be submitted directly',
     )
   }
   const dedupeKey = optionalString(value.dedupeKey, 'dedupeKey')
   if (!Object.hasOwn(value, 'payload')) throw new Error('payload is required')
+  const authenticatedActor =
+    type === 'user.message' && (source === 'web' || source === 'mobile')
+      ? 'human'
+      : undefined
+  if (type === 'user.message' && !authenticatedActor) {
+    throw new Error('user.message requires an authenticated human ingress')
+  }
   return {
     userId,
     type,
     source,
+    ...(authenticatedActor ? { authenticatedActor } : {}),
     ...(dedupeKey ? { dedupeKey } : {}),
     payload: value.payload,
   }

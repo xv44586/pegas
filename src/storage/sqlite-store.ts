@@ -10,6 +10,15 @@ import {
   type ChannelSearchOptions,
   type ChannelSearchResult,
 } from '../channel/work-channel.js'
+import {
+  collaborationRequestFingerprint,
+  intersectContextNoteAuthority,
+  type ChannelRelation,
+  type CollaborationKind,
+  type CollaborationResult,
+  type CollaborationStatus,
+  type WorkerCollaborationRequest,
+} from '../collaboration/collaboration.js'
 import type {
   ActionOutcomeDraft,
   ActionRequestDraft,
@@ -187,6 +196,13 @@ CREATE TABLE IF NOT EXISTS outbox_messages (
 const schemaInitializationAttempts = 3
 const schemaRetryDelayMs = 100
 const workerProfileCommandRetention = 256
+const maximumActiveChildCollaborations = 8
+const maximumCollaborationsPerRun = 32
+const maximumCollaborationsPerRoot = 32
+const maximumCollaborationDepth = 4
+const maximumPendingContextNotesPerTarget = 4
+const maximumActiveCollaborationsPerOwner = 64
+const currentInboxContractVersion = 2
 
 const migration2 = `
 ALTER TABLE tasks ADD COLUMN goal TEXT NOT NULL DEFAULT '';
@@ -924,11 +940,348 @@ WHERE task_id IS NOT NULL
   AND json_type(payload_json, '$.text') = 'text';
 `
 
+const migration19 = `
+ALTER TABLE inbox_events ADD COLUMN required_contract_version INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE inbox_events ADD COLUMN claimed_contract_version INTEGER;
+ALTER TABLE inbox_events ADD COLUMN authenticated_actor TEXT CHECK (authenticated_actor IN ('human'));
+
+CREATE TABLE channel_relations (
+  id TEXT PRIMARY KEY,
+  command_id TEXT NOT NULL,
+  command_fingerprint TEXT NOT NULL,
+  request_claim_hash TEXT NOT NULL,
+  creation_response_json TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('delegate','handoff','context_note','handback')),
+  status TEXT NOT NULL CHECK (status IN ('pending','active','returned','completed','failed','cancelled')),
+  source_task_id TEXT NOT NULL REFERENCES tasks(id),
+  source_run_id TEXT NOT NULL REFERENCES runs(id),
+  parent_relation_id TEXT REFERENCES channel_relations(id),
+  root_relation_id TEXT NOT NULL,
+  depth INTEGER NOT NULL CHECK (depth >= 0),
+  target_task_id TEXT REFERENCES tasks(id),
+  target_event_id TEXT NOT NULL REFERENCES inbox_events(id),
+  return_event_id TEXT REFERENCES inbox_events(id),
+  request_json TEXT NOT NULL,
+  result_json TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  settled_at TEXT
+);
+
+CREATE INDEX channel_relations_by_source
+ON channel_relations (source_task_id, created_at DESC);
+
+CREATE UNIQUE INDEX channel_relations_source_command
+ON channel_relations (source_run_id, command_id);
+
+CREATE INDEX channel_relations_by_source_page
+ON channel_relations (user_id, source_task_id, created_at DESC, id DESC);
+
+CREATE INDEX channel_relations_by_target
+ON channel_relations (target_task_id, created_at DESC);
+
+CREATE INDEX channel_relations_by_target_page
+ON channel_relations (user_id, target_task_id, created_at DESC, id DESC);
+
+CREATE INDEX channel_relations_by_user_status
+ON channel_relations (user_id, status, created_at DESC);
+
+CREATE INDEX channel_relations_active_children
+ON channel_relations (source_task_id, kind)
+WHERE status IN ('pending','active') AND kind IN ('delegate','handoff');
+
+CREATE INDEX channel_relations_pending_notes
+ON channel_relations (target_task_id)
+WHERE status IN ('pending','active') AND kind = 'context_note';
+
+CREATE INDEX channel_relations_by_root
+ON channel_relations (root_relation_id, created_at DESC);
+
+CREATE UNIQUE INDEX channel_relations_target_event
+ON channel_relations (target_event_id) WHERE target_event_id IS NOT NULL;
+
+CREATE UNIQUE INDEX channel_relations_return_event
+ON channel_relations (return_event_id) WHERE return_event_id IS NOT NULL;
+
+CREATE INDEX actions_by_resume_run_status
+ON actions (resume_run_id, protocol_version, status, updated_at DESC);
+
+CREATE TRIGGER inbox_events_contract_claim_guard
+BEFORE UPDATE OF status ON inbox_events
+WHEN NEW.status = 'processing'
+  AND NEW.required_contract_version > COALESCE(NEW.claimed_contract_version, 1)
+BEGIN
+  SELECT RAISE(ABORT, 'unsupported inbox event contract');
+END;
+
+CREATE TRIGGER inbox_events_contract_transfer_guard
+BEFORE UPDATE OF claimed_by ON inbox_events
+WHEN OLD.required_contract_version > 1
+  AND OLD.status = 'processing'
+  AND OLD.claimed_by IS NOT NULL
+  AND NEW.status = 'processing'
+  AND NEW.claimed_by IS NOT OLD.claimed_by
+BEGIN
+  SELECT RAISE(ABORT, 'reserved inbox event claim must be released before transfer');
+END;
+
+CREATE TRIGGER inbox_events_clear_claimed_contract
+AFTER UPDATE OF claimed_by ON inbox_events
+WHEN NEW.claimed_by IS NULL AND NEW.claimed_contract_version IS NOT NULL
+BEGIN
+  UPDATE inbox_events SET claimed_contract_version = NULL WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER channel_relations_integrity_insert
+BEFORE INSERT ON channel_relations
+BEGIN
+  SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM runs
+    INNER JOIN tasks ON tasks.id = runs.task_id
+    WHERE runs.id = NEW.source_run_id
+      AND runs.task_id = NEW.source_task_id
+      AND tasks.user_id = NEW.user_id
+  ) THEN RAISE(ABORT, 'invalid collaboration source') END;
+  SELECT CASE WHEN NEW.target_task_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM tasks
+    WHERE tasks.id = NEW.target_task_id AND tasks.user_id = NEW.user_id
+  ) THEN RAISE(ABORT, 'invalid collaboration target') END;
+  SELECT CASE WHEN NEW.kind <> 'handback' AND NEW.target_task_id IS NULL
+    THEN RAISE(ABORT, 'invalid collaboration target shape') END;
+  SELECT CASE WHEN NEW.target_event_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM inbox_events
+    WHERE inbox_events.id = NEW.target_event_id
+      AND inbox_events.user_id = NEW.user_id
+      AND inbox_events.source = 'collaboration'
+      AND inbox_events.type = CASE NEW.kind
+        WHEN 'delegate' THEN 'collaboration.delegated'
+        WHEN 'handoff' THEN 'collaboration.handed_off'
+        WHEN 'context_note' THEN 'collaboration.context_note'
+        ELSE 'collaboration.handback'
+      END
+      AND json_valid(inbox_events.payload_json)
+      AND json_extract(inbox_events.payload_json, '$.relationId') = NEW.id
+      AND json_extract(inbox_events.payload_json, '$.sourceTaskId') = NEW.source_task_id
+      AND (
+        NEW.kind = 'handback' OR
+        json_extract(inbox_events.payload_json, '$.taskId') = NEW.target_task_id
+      )
+      AND (
+        NEW.target_task_id IS NULL OR EXISTS (
+          SELECT 1 FROM task_events
+          WHERE task_events.event_id = inbox_events.id
+            AND task_events.task_id = NEW.target_task_id
+        )
+      )
+  ) THEN RAISE(ABORT, 'invalid collaboration event') END;
+  SELECT CASE WHEN NEW.return_event_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM inbox_events
+    WHERE inbox_events.id = NEW.return_event_id
+      AND inbox_events.user_id = NEW.user_id
+      AND inbox_events.source = 'collaboration'
+      AND inbox_events.type IN (
+        'collaboration.returned', 'collaboration.completed',
+        'collaboration.failed'
+      )
+      AND json_valid(inbox_events.payload_json)
+      AND json_extract(inbox_events.payload_json, '$.relationId') = NEW.id
+      AND json_extract(inbox_events.payload_json, '$.sourceTaskId') = NEW.source_task_id
+      AND EXISTS (
+        SELECT 1 FROM task_events
+        WHERE task_events.event_id = inbox_events.id
+          AND task_events.task_id = NEW.source_task_id
+      )
+  ) THEN RAISE(ABORT, 'invalid collaboration return event') END;
+  SELECT CASE WHEN NEW.parent_relation_id IS NULL AND
+    (NEW.depth <> 0 OR NEW.root_relation_id <> NEW.id)
+    THEN RAISE(ABORT, 'invalid collaboration root') END;
+  SELECT CASE WHEN NEW.depth > ${String(maximumCollaborationDepth)}
+    THEN RAISE(ABORT, 'invalid collaboration depth') END;
+  SELECT CASE WHEN NEW.parent_relation_id IS NULL AND EXISTS (
+    SELECT 1 FROM channel_relations
+    WHERE channel_relations.target_task_id = NEW.source_task_id
+      AND channel_relations.kind IN ('delegate','handoff')
+  ) THEN RAISE(ABORT, 'missing collaboration parent') END;
+  SELECT CASE WHEN NEW.parent_relation_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM channel_relations
+    WHERE channel_relations.id = NEW.parent_relation_id
+      AND channel_relations.user_id = NEW.user_id
+      AND channel_relations.kind IN ('delegate','handoff')
+      AND channel_relations.target_task_id = NEW.source_task_id
+      AND channel_relations.root_relation_id = NEW.root_relation_id
+      AND channel_relations.depth + 1 = NEW.depth
+  ) THEN RAISE(ABORT, 'invalid collaboration parent') END;
+END;
+
+CREATE TRIGGER channel_relations_integrity_update
+BEFORE UPDATE OF source_task_id, source_run_id, user_id, parent_relation_id,
+  root_relation_id, depth,
+  target_task_id, target_event_id, return_event_id
+ON channel_relations
+BEGIN
+  SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM runs
+    INNER JOIN tasks ON tasks.id = runs.task_id
+    WHERE runs.id = NEW.source_run_id
+      AND runs.task_id = NEW.source_task_id
+      AND tasks.user_id = NEW.user_id
+  ) THEN RAISE(ABORT, 'invalid collaboration source') END;
+  SELECT CASE WHEN NEW.target_task_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM tasks
+    WHERE tasks.id = NEW.target_task_id AND tasks.user_id = NEW.user_id
+  ) THEN RAISE(ABORT, 'invalid collaboration target') END;
+  SELECT CASE WHEN NEW.kind <> 'handback' AND NEW.target_task_id IS NULL
+    THEN RAISE(ABORT, 'invalid collaboration target shape') END;
+  SELECT CASE WHEN NEW.target_event_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM inbox_events
+    WHERE inbox_events.id = NEW.target_event_id
+      AND inbox_events.user_id = NEW.user_id
+      AND inbox_events.source = 'collaboration'
+      AND inbox_events.type = CASE NEW.kind
+        WHEN 'delegate' THEN 'collaboration.delegated'
+        WHEN 'handoff' THEN 'collaboration.handed_off'
+        WHEN 'context_note' THEN 'collaboration.context_note'
+        ELSE 'collaboration.handback'
+      END
+      AND json_valid(inbox_events.payload_json)
+      AND json_extract(inbox_events.payload_json, '$.relationId') = NEW.id
+      AND json_extract(inbox_events.payload_json, '$.sourceTaskId') = NEW.source_task_id
+      AND (
+        NEW.kind = 'handback' OR
+        json_extract(inbox_events.payload_json, '$.taskId') = NEW.target_task_id
+      )
+      AND (
+        NEW.target_task_id IS NULL OR EXISTS (
+          SELECT 1 FROM task_events
+          WHERE task_events.event_id = inbox_events.id
+            AND task_events.task_id = NEW.target_task_id
+        )
+      )
+  ) THEN RAISE(ABORT, 'invalid collaboration event') END;
+  SELECT CASE WHEN NEW.return_event_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM inbox_events
+    WHERE inbox_events.id = NEW.return_event_id
+      AND inbox_events.user_id = NEW.user_id
+      AND inbox_events.source = 'collaboration'
+      AND inbox_events.type IN (
+        'collaboration.returned', 'collaboration.completed',
+        'collaboration.failed'
+      )
+      AND json_valid(inbox_events.payload_json)
+      AND json_extract(inbox_events.payload_json, '$.relationId') = NEW.id
+      AND json_extract(inbox_events.payload_json, '$.sourceTaskId') = NEW.source_task_id
+      AND EXISTS (
+        SELECT 1 FROM task_events
+        WHERE task_events.event_id = inbox_events.id
+          AND task_events.task_id = NEW.source_task_id
+      )
+  ) THEN RAISE(ABORT, 'invalid collaboration return event') END;
+  SELECT CASE WHEN NEW.parent_relation_id IS NULL AND
+    (NEW.depth <> 0 OR NEW.root_relation_id <> NEW.id)
+    THEN RAISE(ABORT, 'invalid collaboration root') END;
+  SELECT CASE WHEN NEW.depth > ${String(maximumCollaborationDepth)}
+    THEN RAISE(ABORT, 'invalid collaboration depth') END;
+  SELECT CASE WHEN NEW.parent_relation_id IS NULL AND EXISTS (
+    SELECT 1 FROM channel_relations
+    WHERE channel_relations.target_task_id = NEW.source_task_id
+      AND channel_relations.kind IN ('delegate','handoff')
+  ) THEN RAISE(ABORT, 'missing collaboration parent') END;
+  SELECT CASE WHEN NEW.parent_relation_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM channel_relations
+    WHERE channel_relations.id = NEW.parent_relation_id
+      AND channel_relations.user_id = NEW.user_id
+      AND channel_relations.kind IN ('delegate','handoff')
+      AND channel_relations.target_task_id = NEW.source_task_id
+      AND channel_relations.root_relation_id = NEW.root_relation_id
+      AND channel_relations.depth + 1 = NEW.depth
+  ) THEN RAISE(ABORT, 'invalid collaboration parent') END;
+END;
+
+CREATE TRIGGER channel_relations_provenance_immutable
+BEFORE UPDATE OF id, command_id, command_fingerprint, request_claim_hash,
+  creation_response_json, user_id, kind, source_task_id, source_run_id,
+  parent_relation_id, root_relation_id, depth, target_event_id, request_json,
+  created_at
+ON channel_relations
+WHEN OLD.id IS NOT NEW.id
+  OR OLD.command_id IS NOT NEW.command_id
+  OR OLD.command_fingerprint IS NOT NEW.command_fingerprint
+  OR OLD.request_claim_hash IS NOT NEW.request_claim_hash
+  OR OLD.creation_response_json IS NOT NEW.creation_response_json
+  OR OLD.user_id IS NOT NEW.user_id
+  OR OLD.kind IS NOT NEW.kind
+  OR OLD.source_task_id IS NOT NEW.source_task_id
+  OR OLD.source_run_id IS NOT NEW.source_run_id
+  OR OLD.parent_relation_id IS NOT NEW.parent_relation_id
+  OR OLD.root_relation_id IS NOT NEW.root_relation_id
+  OR OLD.depth IS NOT NEW.depth
+  OR OLD.target_event_id IS NOT NEW.target_event_id
+  OR OLD.request_json IS NOT NEW.request_json
+  OR OLD.created_at IS NOT NEW.created_at
+BEGIN
+  SELECT RAISE(ABORT, 'immutable collaboration provenance');
+END;
+
+CREATE TRIGGER channel_relations_endpoint_guard
+BEFORE UPDATE OF target_task_id, return_event_id ON channel_relations
+WHEN (
+  OLD.kind <> 'handback' AND OLD.target_task_id IS NOT NEW.target_task_id
+) OR (
+  OLD.kind = 'handback' AND OLD.target_task_id IS NOT NULL
+  AND OLD.target_task_id IS NOT NEW.target_task_id
+) OR (
+  OLD.return_event_id IS NOT NULL
+  AND OLD.return_event_id IS NOT NEW.return_event_id
+)
+BEGIN
+  SELECT RAISE(ABORT, 'immutable collaboration endpoint');
+END;
+
+CREATE TRIGGER channel_relation_events_immutable
+BEFORE UPDATE OF user_id, type, source, dedupe_key, payload_json,
+  required_contract_version, authenticated_actor
+ON inbox_events
+WHEN EXISTS (
+  SELECT 1 FROM channel_relations
+  WHERE target_event_id = OLD.id OR return_event_id = OLD.id
+)
+BEGIN
+  SELECT RAISE(ABORT, 'immutable collaboration event');
+END;
+
+CREATE TRIGGER channel_relation_task_event_immutable
+BEFORE UPDATE OF event_id, task_id, relation ON task_events
+WHEN EXISTS (
+  SELECT 1 FROM channel_relations
+  WHERE target_event_id = OLD.event_id OR return_event_id = OLD.event_id
+)
+AND (
+  OLD.event_id IS NOT NEW.event_id
+  OR OLD.task_id IS NOT NEW.task_id
+  OR OLD.relation IS NOT NEW.relation
+)
+BEGIN
+  SELECT RAISE(ABORT, 'immutable collaboration task event');
+END;
+
+CREATE TRIGGER channel_relation_task_event_delete_guard
+BEFORE DELETE ON task_events
+WHEN EXISTS (
+  SELECT 1 FROM channel_relations
+  WHERE target_event_id = OLD.event_id OR return_event_id = OLD.event_id
+)
+BEGIN
+  SELECT RAISE(ABORT, 'immutable collaboration task event');
+END;
+`
+
 interface InboxRow {
   id: string
   user_id: string
   type: string
   source: string
+  authenticated_actor: 'human' | null
   dedupe_key: string | null
   payload_json: string
   status: InboxEvent['status']
@@ -938,6 +1291,8 @@ interface InboxRow {
   created_at: string
   processed_at: string | null
   last_error: string | null
+  required_contract_version: number
+  claimed_contract_version: number | null
 }
 
 interface TaskRow {
@@ -955,10 +1310,35 @@ interface TaskRow {
   updated_at: string
 }
 
+interface ChannelRelationRow {
+  id: string
+  command_id: string
+  command_fingerprint: string
+  request_claim_hash: string
+  creation_response_json: string
+  user_id: string
+  kind: CollaborationKind
+  status: CollaborationStatus
+  source_task_id: string
+  source_run_id: string
+  parent_relation_id: string | null
+  root_relation_id: string
+  depth: number
+  target_task_id: string | null
+  target_event_id: string | null
+  return_event_id: string | null
+  request_json: string
+  result_json: string | null
+  created_at: string
+  updated_at: string
+  settled_at: string | null
+}
+
 interface RunRow {
   id: string
   retry_of_run_id: string | null
   task_id: string
+  origin_event_id: string | null
   executor: string
   executor_ref: string | null
   resume_from_ref: string | null
@@ -1249,6 +1629,22 @@ export class WorkerProfileReadOnlyError extends Error {
 
 export class RunClaimError extends Error {}
 
+export class CollaborationCommandConflictError extends Error {}
+
+export class CollaborationFanoutLimitError extends Error {}
+
+export class CollaborationTargetUnavailableError extends Error {
+  constructor() {
+    super('Collaboration target is unavailable')
+  }
+}
+
+export class CollaborationBudgetLimitError extends Error {}
+
+export class CollaborationActionPendingError extends Error {}
+
+export class CollaborationReconciliationRequiredError extends Error {}
+
 export class TaskActionBlockedError extends Error {
   readonly taskId: string
   readonly actionStatus: string
@@ -1296,6 +1692,7 @@ export class PegasStore {
     this.#migrate(16, migration16)
     this.#migrate(17, migration17)
     this.#migrate(18, migration18)
+    this.#migrate(19, migration19)
   }
 
   #backfillWorkerIconIds(): void {
@@ -1548,6 +1945,510 @@ export class PegasStore {
     )
       throw new Error('Worker Profile command ID is already used')
     return JSON.parse(replay.response_json) as WorkerProfile
+  }
+
+  createCollaboration(
+    runId: string,
+    claimToken: string,
+    request: WorkerCollaborationRequest,
+  ): ChannelRelation {
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const fingerprint = collaborationRequestFingerprint(request)
+      const suppliedClaimHash = hashClaimToken(claimToken)
+      const replay = this.#database
+        .prepare(
+          `SELECT * FROM channel_relations
+           WHERE source_run_id = ? AND command_id = ?`,
+        )
+        .get(runId, request.commandId) as unknown as
+        ChannelRelationRow | undefined
+      if (replay) {
+        if (!safeDigestEqual(suppliedClaimHash, replay.request_claim_hash)) {
+          throw new RunClaimError('Run claim capability is invalid or expired')
+        }
+        if (replay.command_fingerprint !== fingerprint) {
+          throw new CollaborationCommandConflictError(
+            'Collaboration command ID is already used',
+          )
+        }
+        this.#database.exec('COMMIT')
+        return JSON.parse(replay.creation_response_json) as ChannelRelation
+      }
+
+      const run = this.#runById(runId)
+      if (run.status !== 'running') {
+        throw new RunClaimError('Collaboration requires a running Run')
+      }
+      const claim = this.#claimForCapability(runId, claimToken)
+      if (run.claimedBy !== claim.workerId) {
+        throw new RunClaimError('Run claim capability is invalid or expired')
+      }
+      const source = this.#taskById(run.taskId)
+      if (source.status === 'completed' || source.status === 'cancelled') {
+        throw new Error('Closed Task cannot create collaboration')
+      }
+      const latest = this.#database
+        .prepare(
+          `SELECT id FROM runs WHERE task_id = ?
+           ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+        )
+        .get(source.id) as { id: string } | undefined
+      if (latest?.id !== runId) {
+        throw new Error('Only the latest Run can create collaboration')
+      }
+      const blockingAction = this.#database
+        .prepare(
+          `SELECT status FROM actions
+           WHERE resume_run_id = ? AND protocol_version = 1
+             AND status IN ('authorized','failed','unknown')
+           ORDER BY CASE status
+             WHEN 'unknown' THEN 0 WHEN 'failed' THEN 1 ELSE 2 END
+           LIMIT 1`,
+        )
+        .get(runId) as { status: string } | undefined
+      if (blockingAction?.status === 'authorized') {
+        throw new CollaborationActionPendingError(
+          'Record the authorized Action outcome before collaborating',
+        )
+      }
+      if (blockingAction) {
+        throw new CollaborationReconciliationRequiredError(
+          'Reconcile the failed or unknown Action before collaborating',
+        )
+      }
+      const references =
+        request.kind === 'delegate' || request.kind === 'handoff'
+          ? request.contextRefs
+          : request.kind === 'context_note'
+            ? request.sourceRefs
+            : [request.inputEventId]
+      this.#assertTaskReferences(source.id, references)
+
+      const ownerActiveCount = (
+        this.#database
+          .prepare(
+            `SELECT COUNT(*) AS count FROM channel_relations
+             WHERE user_id = ? AND status IN ('pending','active')`,
+          )
+          .get(source.userId) as { count: number }
+      ).count
+      if (ownerActiveCount >= maximumActiveCollaborationsPerOwner) {
+        throw new CollaborationBudgetLimitError(
+          'Owner active collaboration budget reached',
+        )
+      }
+
+      const sourceRunCount = (
+        this.#database
+          .prepare(
+            'SELECT COUNT(*) AS count FROM channel_relations WHERE source_run_id = ?',
+          )
+          .get(runId) as { count: number }
+      ).count
+      if (sourceRunCount >= maximumCollaborationsPerRun) {
+        throw new CollaborationBudgetLimitError(
+          'Run collaboration budget reached',
+        )
+      }
+
+      const parent = this.#database
+        .prepare(
+          `SELECT id, root_relation_id, depth FROM channel_relations
+           WHERE target_task_id = ? AND user_id = ?
+             AND kind IN ('delegate','handoff')
+           ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+        )
+        .get(source.id, source.userId) as
+        { id: string; root_relation_id: string; depth: number } | undefined
+      const relationId = randomUUID()
+      const rootRelationId = parent?.root_relation_id ?? relationId
+      const depth = parent ? parent.depth + 1 : 0
+      if (depth > maximumCollaborationDepth) {
+        throw new CollaborationBudgetLimitError(
+          'Collaboration depth limit reached',
+        )
+      }
+      if (parent) {
+        const rootCount = (
+          this.#database
+            .prepare(
+              'SELECT COUNT(*) AS count FROM channel_relations WHERE root_relation_id = ?',
+            )
+            .get(rootRelationId) as { count: number }
+        ).count
+        if (rootCount >= maximumCollaborationsPerRoot) {
+          throw new CollaborationBudgetLimitError(
+            'Root collaboration budget reached',
+          )
+        }
+      }
+
+      if (request.kind === 'delegate' || request.kind === 'handoff') {
+        const active = this.#database
+          .prepare(
+            `SELECT COUNT(*) AS count FROM channel_relations
+             WHERE source_task_id = ? AND kind IN ('delegate','handoff')
+               AND status IN ('pending','active')`,
+          )
+          .get(source.id) as { count: number }
+        if (active.count >= maximumActiveChildCollaborations) {
+          throw new CollaborationFanoutLimitError(
+            'Active child collaboration limit reached',
+          )
+        }
+      }
+
+      const now = this.#clock.now().toISOString()
+      let targetTaskId: string | undefined
+      let targetEventId: string | undefined
+      if (request.kind === 'delegate' || request.kind === 'handoff') {
+        targetEventId = randomUUID()
+        targetTaskId = randomUUID()
+        const title = request.goal.replaceAll(/\s+/g, ' ').slice(0, 120)
+        this.enqueueEvent({
+          id: targetEventId,
+          userId: source.userId,
+          source: 'collaboration',
+          type:
+            request.kind === 'delegate'
+              ? 'collaboration.delegated'
+              : 'collaboration.handed_off',
+          dedupeKey: `collaboration-target:${relationId}`,
+          payload: {
+            relationId,
+            taskId: targetTaskId,
+            sourceTaskId: source.id,
+            text: request.goal,
+            reason: request.reason,
+            ...(request.kind === 'delegate'
+              ? { expectedOutput: request.expectedOutput }
+              : {}),
+            contextRefs: request.contextRefs,
+          },
+        })
+        this.#database
+          .prepare(
+            `INSERT INTO tasks
+              (id, user_id, origin_event_id, title, goal, status, worker_icon_id,
+               mandate_json, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, 'backlog', ?, ?, ?, ?)`,
+          )
+          .run(
+            targetTaskId,
+            source.userId,
+            targetEventId,
+            title,
+            request.goal,
+            assignWorkerIconId(targetTaskId),
+            JSON.stringify(source.mandate),
+            now,
+            now,
+          )
+        this.#ensureWorkerProfile(targetTaskId, now)
+        this.#database
+          .prepare(
+            `INSERT INTO task_events (event_id, task_id, relation, created_at)
+             VALUES (?, ?, 'origin', ?)`,
+          )
+          .run(targetEventId, targetTaskId, now)
+      } else if (request.kind === 'context_note') {
+        if (request.targetChannelId === source.id) {
+          throw new CollaborationTargetUnavailableError()
+        }
+        const targetRow = this.#database
+          .prepare('SELECT * FROM tasks WHERE id = ? AND user_id = ?')
+          .get(request.targetChannelId, source.userId) as
+          (TaskRow & Record<string, unknown>) | undefined
+        if (!targetRow) throw new CollaborationTargetUnavailableError()
+        const target = toTask(targetRow)
+        if (target.status === 'completed' || target.status === 'cancelled') {
+          throw new CollaborationTargetUnavailableError()
+        }
+        const pendingNotes = (
+          this.#database
+            .prepare(
+              `SELECT COUNT(*) AS count FROM channel_relations
+               WHERE target_task_id = ?
+                 AND kind = 'context_note' AND status IN ('pending','active')`,
+            )
+            .get(target.id) as { count: number }
+        ).count
+        if (pendingNotes >= maximumPendingContextNotesPerTarget) {
+          throw new CollaborationBudgetLimitError(
+            'Pending context note budget reached',
+          )
+        }
+        targetTaskId = target.id
+        targetEventId = randomUUID()
+        this.enqueueEvent({
+          id: targetEventId,
+          userId: source.userId,
+          source: 'collaboration',
+          type: 'collaboration.context_note',
+          dedupeKey: `collaboration-target:${relationId}`,
+          payload: {
+            relationId,
+            taskId: target.id,
+            sourceTaskId: source.id,
+            text: request.text,
+            sourceRefs: request.sourceRefs,
+          },
+        })
+        this.#database
+          .prepare(
+            `INSERT INTO task_events (event_id, task_id, relation, created_at)
+             VALUES (?, ?, 'context_note', ?)`,
+          )
+          .run(targetEventId, target.id, now)
+      } else {
+        const original = this.#database
+          .prepare(
+            `SELECT inbox_events.payload_json FROM task_events
+             INNER JOIN inbox_events ON inbox_events.id = task_events.event_id
+             WHERE task_events.task_id = ? AND task_events.event_id = ?
+               AND inbox_events.type = 'user.message'
+               AND inbox_events.authenticated_actor = 'human'`,
+          )
+          .get(source.id, request.inputEventId) as
+          { payload_json: string } | undefined
+        if (!original) throw new Error('Handback input does not belong to Task')
+        const payload = JSON.parse(original.payload_json) as unknown
+        const text =
+          payload &&
+          typeof payload === 'object' &&
+          'text' in payload &&
+          typeof payload.text === 'string'
+            ? payload.text
+            : undefined
+        if (!text?.trim())
+          throw new Error('Handback input has no routable text')
+        targetEventId = randomUUID()
+        this.enqueueEvent({
+          id: targetEventId,
+          userId: source.userId,
+          source: 'collaboration',
+          type: 'collaboration.handback',
+          dedupeKey: `collaboration-target:${relationId}`,
+          payload: {
+            relationId,
+            sourceTaskId: source.id,
+            inputEventId: request.inputEventId,
+            text: text.trim(),
+            reason: request.reason,
+          },
+        })
+      }
+
+      const creationResponse: ChannelRelation = {
+        id: relationId,
+        commandId: request.commandId,
+        userId: source.userId,
+        kind: request.kind,
+        status: 'pending',
+        sourceTaskId: source.id,
+        sourceRunId: run.id,
+        ...(parent ? { parentRelationId: parent.id } : {}),
+        rootRelationId,
+        depth,
+        ...(targetTaskId ? { targetTaskId } : {}),
+        ...(targetEventId ? { targetEventId } : {}),
+        request,
+        createdAt: now,
+        updatedAt: now,
+      }
+      this.#database
+        .prepare(
+          `INSERT INTO channel_relations
+            (id, command_id, command_fingerprint, request_claim_hash,
+             creation_response_json, user_id, kind, status, source_task_id,
+             source_run_id, parent_relation_id, root_relation_id, depth,
+             target_task_id, target_event_id, request_json, created_at,
+             updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          relationId,
+          request.commandId,
+          fingerprint,
+          claim.claimTokenHash,
+          JSON.stringify(creationResponse),
+          source.userId,
+          request.kind,
+          source.id,
+          run.id,
+          parent?.id ?? null,
+          rootRelationId,
+          depth,
+          targetTaskId ?? null,
+          targetEventId,
+          JSON.stringify(request),
+          now,
+          now,
+        )
+
+      if (request.kind === 'delegate') {
+        this.#database
+          .prepare(
+            `UPDATE runs SET status = 'waiting', claimed_by = NULL,
+               lease_until = NULL, claim_token_hash = NULL,
+               last_error = 'waiting_on_dependency', updated_at = ?
+             WHERE id = ? AND status = 'running'`,
+          )
+          .run(now, run.id)
+        this.#database
+          .prepare(
+            `UPDATE tasks SET status = 'started', status_reason = 'waiting_on_dependency',
+               updated_at = ? WHERE id = ?`,
+          )
+          .run(now, source.id)
+      } else if (request.kind === 'handoff') {
+        const preservesInboundResponsibility = Boolean(
+          this.#database
+            .prepare(
+              `SELECT 1 FROM channel_relations
+               WHERE target_task_id = ? AND kind IN ('delegate','handoff')
+                 AND status IN ('pending','active') LIMIT 1`,
+            )
+            .get(source.id),
+        )
+        const ended = {
+          at: now,
+          by: 'executor' as const,
+          outcome: 'completed' as const,
+          reason: request.reason,
+        }
+        this.#database
+          .prepare(
+            `UPDATE runs SET status = 'cancelled', claimed_by = NULL,
+               lease_until = NULL, claim_token_hash = NULL,
+               last_error = 'handed_off', updated_at = ?
+             WHERE task_id = ? AND status IN ('queued','running','waiting')`,
+          )
+          .run(now, source.id)
+        this.#database
+          .prepare(
+            `UPDATE tasks SET status = ?, status_reason = ?,
+               ended_json = ?, updated_at = ? WHERE id = ?`,
+          )
+          .run(
+            preservesInboundResponsibility ? 'started' : 'completed',
+            preservesInboundResponsibility
+              ? 'waiting_on_dependency'
+              : 'handed_off',
+            preservesInboundResponsibility ? null : JSON.stringify(ended),
+            now,
+            source.id,
+          )
+        this.enqueueOutbox({
+          userId: source.userId,
+          taskId: source.id,
+          channel: 'conversation',
+          dedupeKey: `collaboration-handed-off:${relationId}`,
+          payload: {
+            type: 'collaboration.handed_off',
+            relationId,
+            sourceTaskId: source.id,
+            targetTaskId,
+            text: request.reason,
+          },
+        })
+      } else if (request.kind === 'handback') {
+        this.#database
+          .prepare(
+            `UPDATE runs SET status = 'cancelled', claimed_by = NULL,
+               lease_until = NULL, claim_token_hash = NULL,
+               last_error = 'handed_back', updated_at = ?
+             WHERE id = ? AND status = 'running'`,
+          )
+          .run(now, run.id)
+        this.#database
+          .prepare(
+            `UPDATE tasks SET status = 'started', status_reason = 'handed_back',
+               updated_at = ? WHERE id = ?`,
+          )
+          .run(now, source.id)
+      }
+
+      const relation = this.#relationById(relationId)
+      this.#database.exec('COMMIT')
+      return relation
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  listCollaborations(taskId: string, userId: string): ChannelRelation[] {
+    const task = this.#taskById(taskId)
+    if (task.userId !== userId) throw new Error('Task belongs to another user')
+    const rows = this.#database
+      .prepare(
+        `SELECT * FROM channel_relations
+         WHERE user_id = ? AND (source_task_id = ? OR target_task_id = ?)
+         ORDER BY created_at ASC, rowid ASC`,
+      )
+      .all(userId, taskId, taskId) as unknown as ChannelRelationRow[]
+    return rows.map(toChannelRelation)
+  }
+
+  pageCollaborations(
+    taskId: string,
+    userId: string,
+    limit: number,
+    cursor?: string,
+  ): CursorPage<ChannelRelation> {
+    const task = this.#taskById(taskId)
+    if (task.userId !== userId) throw new Error('Task belongs to another user')
+    const boundary = cursor
+      ? (this.#database
+          .prepare(
+            `SELECT created_at, id FROM channel_relations
+             WHERE id = ? AND user_id = ?
+               AND (source_task_id = ? OR target_task_id = ?)`,
+          )
+          .get(cursor, userId, taskId, taskId) as
+          { created_at: string; id: string } | undefined)
+      : undefined
+    if (cursor && !boundary) throw new Error('Pagination cursor is invalid')
+    const sourceRows = this.#collaborationPageBranch(
+      'source_task_id',
+      userId,
+      taskId,
+      limit + 1,
+      boundary,
+    )
+    const targetRows = this.#collaborationPageBranch(
+      'target_task_id',
+      userId,
+      taskId,
+      limit + 1,
+      boundary,
+    )
+    const rows = [...sourceRows, ...targetRows]
+      .sort((left, right) =>
+        left.created_at === right.created_at
+          ? right.id.localeCompare(left.id)
+          : right.created_at.localeCompare(left.created_at),
+      )
+      .slice(0, limit + 1)
+    return cursorPage(rows, limit, toChannelRelation)
+  }
+
+  listOpenTaskCandidates(
+    userId: string,
+    excludeTaskId: string,
+    limit = 20,
+  ): Task[] {
+    const rows = this.#database
+      .prepare(
+        `SELECT * FROM tasks
+         WHERE user_id = ? AND id <> ?
+           AND status NOT IN ('completed','cancelled')
+         ORDER BY updated_at DESC LIMIT ?`,
+      )
+      .all(userId, excludeTaskId, limit) as unknown as TaskRow[]
+    return rows.map(toTask)
   }
 
   initializeSpeechConnection(connection: SpeechConnection): void {
@@ -1834,16 +2735,19 @@ export class PegasStore {
     const result = this.#database
       .prepare(
         `INSERT OR IGNORE INTO inbox_events
-          (id, user_id, type, source, dedupe_key, payload_json, status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`,
+          (id, user_id, type, source, authenticated_actor, dedupe_key,
+           payload_json, status, required_contract_version, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
       )
       .run(
         id,
         input.userId,
         input.type,
         input.source,
+        input.authenticatedActor ?? null,
         input.dedupeKey ?? null,
         JSON.stringify(input.payload),
+        input.source === 'collaboration' ? 2 : 1,
         createdAt,
       )
 
@@ -1865,7 +2769,11 @@ export class PegasStore {
     }
   }
 
-  claimNextEvent(workerId: string, leaseMs = 30_000): InboxEvent | undefined {
+  claimNextEvent(
+    workerId: string,
+    leaseMs = 30_000,
+    supportedContractVersion = currentInboxContractVersion,
+  ): InboxEvent | undefined {
     const now = this.#clock.now()
     const leaseUntil = new Date(now.getTime() + leaseMs).toISOString()
     this.#database.exec('BEGIN IMMEDIATE')
@@ -1874,25 +2782,39 @@ export class PegasStore {
       const row = this.#database
         .prepare(
           `SELECT * FROM inbox_events
-           WHERE status = 'pending'
-              OR (status = 'processing' AND lease_until <= ?)
+           WHERE required_contract_version <= ? AND (
+             status = 'pending'
+             OR (status = 'processing' AND lease_until <= ?)
+           )
            ORDER BY created_at ASC
            LIMIT 1`,
         )
-        .get(now.toISOString()) as unknown as InboxRow | undefined
+        .get(supportedContractVersion, now.toISOString()) as unknown as
+        InboxRow | undefined
 
       if (!row) {
         this.#database.exec('COMMIT')
         return undefined
       }
 
+      if (row.status === 'processing') {
+        this.#database
+          .prepare(
+            `UPDATE inbox_events
+             SET status = 'pending', claimed_by = NULL, lease_until = NULL
+             WHERE id = ? AND status = 'processing' AND lease_until <= ?`,
+          )
+          .run(row.id, now.toISOString())
+      }
+
       this.#database
         .prepare(
           `UPDATE inbox_events
-           SET status = 'processing', claimed_by = ?, lease_until = ?, attempts = attempts + 1
+           SET status = 'processing', claimed_by = ?, lease_until = ?,
+               claimed_contract_version = ?, attempts = attempts + 1
            WHERE id = ?`,
         )
-        .run(workerId, leaseUntil, row.id)
+        .run(workerId, leaseUntil, supportedContractVersion, row.id)
       this.#database.exec('COMMIT')
 
       return {
@@ -1916,8 +2838,17 @@ export class PegasStore {
          WHERE id = ? AND status = 'processing' AND claimed_by = ?`,
       )
       .run(this.#clock.now().toISOString(), eventId, workerId)
-    if (result.changes !== 1)
-      throw new Error(`Worker ${workerId} does not own event ${eventId}`)
+    if (result.changes !== 1) {
+      const settled = this.#database
+        .prepare(
+          `SELECT 1 FROM inbox_events
+           WHERE id = ? AND source = 'collaboration'
+             AND status IN ('processed','failed')`,
+        )
+        .get(eventId)
+      if (!settled)
+        throw new Error(`Worker ${workerId} does not own event ${eventId}`)
+    }
   }
 
   failEvent(
@@ -1926,21 +2857,46 @@ export class PegasStore {
     error: string,
     maxAttempts = 5,
   ): void {
-    const row = this.#database
-      .prepare(
-        'SELECT attempts FROM inbox_events WHERE id = ? AND claimed_by = ?',
-      )
-      .get(eventId, workerId) as { attempts: number } | undefined
-    if (!row)
-      throw new Error(`Worker ${workerId} does not own event ${eventId}`)
-    const nextStatus = row.attempts >= maxAttempts ? 'failed' : 'pending'
-    this.#database
-      .prepare(
-        `UPDATE inbox_events
-         SET status = ?, claimed_by = NULL, lease_until = NULL, last_error = ?
-         WHERE id = ? AND claimed_by = ?`,
-      )
-      .run(nextStatus, error, eventId, workerId)
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const row = this.#database
+        .prepare(
+          `SELECT attempts FROM inbox_events
+           WHERE id = ? AND status = 'processing' AND claimed_by = ?`,
+        )
+        .get(eventId, workerId) as { attempts: number } | undefined
+      if (!row)
+        if (
+          this.#database
+            .prepare(
+              `SELECT 1 FROM inbox_events
+               WHERE id = ? AND source = 'collaboration'
+                 AND status IN ('processed','failed')`,
+            )
+            .get(eventId)
+        ) {
+          this.#database.exec('COMMIT')
+          return
+        } else {
+          throw new Error(`Worker ${workerId} does not own event ${eventId}`)
+        }
+      const nextStatus = row.attempts >= maxAttempts ? 'failed' : 'pending'
+      this.#database
+        .prepare(
+          `UPDATE inbox_events
+           SET status = ?, claimed_by = NULL, lease_until = NULL,
+               last_error = ?
+           WHERE id = ? AND status = 'processing' AND claimed_by = ?`,
+        )
+        .run(nextStatus, error, eventId, workerId)
+      if (nextStatus === 'failed') {
+        this.#failTerminalCollaborationEvent(eventId, error)
+      }
+      this.#database.exec('COMMIT')
+    } catch (failure) {
+      this.#database.exec('ROLLBACK')
+      throw failure
+    }
   }
 
   parkEventForBlockedAction(
@@ -1968,7 +2924,12 @@ export class PegasStore {
            VALUES (?, ?, 'blocked_action', ?)
            ON CONFLICT(event_id) DO UPDATE SET
              task_id = excluded.task_id,
-             relation = excluded.relation,
+             relation = CASE
+               WHEN task_events.relation IN (
+                 'context_note','collaboration_returned','collaboration_failed'
+               ) THEN task_events.relation
+               ELSE excluded.relation
+             END,
              created_at = excluded.created_at`,
         )
         .run(eventId, taskId, now)
@@ -2057,14 +3018,30 @@ export class PegasStore {
     executionContext: ExecutionContext | ((task: Task) => ExecutionContext) = {
       executor,
     },
+    options: { collaborationRelationId?: string } = {},
   ): { task: Task; run: Run } {
     this.#database.exec('BEGIN IMMEDIATE')
     try {
+      const collaboration = options.collaborationRelationId
+        ? this.#collaborationForDispatch(options.collaborationRelationId, event)
+        : undefined
+      if (event.source === 'collaboration' && !collaboration) {
+        throw new Error('Collaboration routing requires its durable relation')
+      }
       const existingRun = this.#database
         .prepare('SELECT * FROM runs WHERE origin_event_id = ?')
         .get(event.id) as unknown as RunRow | undefined
       if (existingRun) {
         const existingTask = this.#taskById(existingRun.task_id)
+        if (collaboration) {
+          if (collaboration.target_event_id === event.id) {
+            this.#markCollaborationDispatchedInTransaction(
+              collaboration,
+              event.id,
+              existingTask.id,
+            )
+          }
+        }
         this.#database.exec('COMMIT')
         return { task: existingTask, run: toRun(existingRun) }
       }
@@ -2074,7 +3051,9 @@ export class PegasStore {
       if (decision.kind === 'create_task') {
         const taskId = randomUUID()
         const workerIconId = assignWorkerIconId(taskId)
-        const mandate = createMandate(event, decision.goal, 'router')
+        const mandate = collaboration
+          ? this.#taskById(collaboration.source_task_id).mandate
+          : createMandate(event, decision.goal, 'router')
         this.#database
           .prepare(
             `INSERT INTO tasks
@@ -2106,13 +3085,28 @@ export class PegasStore {
         )
           throw new Error('Task mandate no longer authorizes resume')
       }
+      if (
+        collaboration?.target_event_id === event.id &&
+        collaboration.target_task_id &&
+        collaboration.target_task_id !== task.id
+      ) {
+        throw new Error('Collaboration target is already assigned')
+      }
 
       const resumed =
         decision.kind === 'continue_task' && task.status === 'completed'
-      const resolvedExecutionContext =
+      let resolvedExecutionContext =
         typeof executionContext === 'function'
           ? executionContext(task)
           : executionContext
+      if (collaboration) {
+        resolvedExecutionContext = this.#collaborationExecutionContext(
+          collaboration,
+          resolvedExecutionContext,
+          executor,
+          task.id,
+        )
+      }
       const executionContractVersion =
         resolvedExecutionContext.protocol === 'dsh-headless-v1' &&
         resolvedExecutionContext.workerProfile
@@ -2130,6 +3124,22 @@ export class PegasStore {
         throw new TaskActionBlockedError(task.id, blockingAction.status)
       }
 
+      const existingTaskEvent = this.#database
+        .prepare('SELECT relation FROM task_events WHERE event_id = ?')
+        .get(event.id) as { relation: string } | undefined
+      const taskEventRelation =
+        event.id === task.originEventId
+          ? 'origin'
+          : existingTaskEvent?.relation === 'context_note' ||
+              existingTaskEvent?.relation === 'collaboration_returned' ||
+              existingTaskEvent?.relation === 'collaboration_failed'
+            ? existingTaskEvent.relation
+            : decision.kind === 'create_task'
+              ? 'origin'
+              : resumed
+                ? 'resumed'
+                : 'continuation'
+
       this.#database
         .prepare(
           `INSERT INTO task_events (event_id, task_id, relation, created_at)
@@ -2139,16 +3149,7 @@ export class PegasStore {
              relation = excluded.relation,
              created_at = excluded.created_at`,
         )
-        .run(
-          event.id,
-          task.id,
-          decision.kind === 'create_task'
-            ? 'origin'
-            : resumed
-              ? 'resumed'
-              : 'continuation',
-          now,
-        )
+        .run(event.id, task.id, taskEventRelation, now)
       this.#database
         .prepare(
           `INSERT INTO routing_decisions (event_id, kind, task_id, reason, created_at)
@@ -2223,6 +3224,15 @@ export class PegasStore {
 
       const run = this.#runById(runId)
       task = this.#taskById(task.id)
+      if (collaboration) {
+        if (collaboration.target_event_id === event.id) {
+          this.#markCollaborationDispatchedInTransaction(
+            collaboration,
+            event.id,
+            task.id,
+          )
+        }
+      }
       this.#database.exec('COMMIT')
       return { task, run }
     } catch (error) {
@@ -2242,6 +3252,32 @@ export class PegasStore {
           .prepare('SELECT * FROM runs ORDER BY created_at ASC, rowid ASC')
           .all()
     return rows.map(row => toRun(row as unknown as RunRow))
+  }
+
+  resolveRunInputEventId(runId: string): string | undefined {
+    const row = this.#database
+      .prepare(
+        `WITH RECURSIVE lineage(id, origin_event_id, retry_of_run_id, depth) AS (
+           SELECT id, origin_event_id, retry_of_run_id, 0
+           FROM runs WHERE id = ?
+           UNION ALL
+           SELECT parent.id, parent.origin_event_id, parent.retry_of_run_id,
+                  lineage.depth + 1
+           FROM runs AS parent
+           INNER JOIN lineage ON parent.id = lineage.retry_of_run_id
+           WHERE lineage.depth < 64
+         )
+         SELECT lineage.origin_event_id AS event_id
+         FROM lineage
+         INNER JOIN inbox_events
+           ON inbox_events.id = lineage.origin_event_id
+         WHERE inbox_events.type = 'user.message'
+           AND inbox_events.authenticated_actor = 'human'
+         ORDER BY lineage.depth ASC
+         LIMIT 1`,
+      )
+      .get(runId) as { event_id: string } | undefined
+    return row?.event_id
   }
 
   listRunsForUser(userId: string, taskId?: string): Run[] {
@@ -3510,6 +4546,19 @@ export class PegasStore {
             text: draft.summary,
           },
         })
+        this.#settleInboundCollaborations(
+          task.id,
+          'completed',
+          draft.summary,
+          runId,
+          now,
+        )
+        this.#failUndeliveredContextNotes(
+          task.id,
+          'failed',
+          'Target Task completed before the context note was delivered.',
+          now,
+        )
       } else if (draft.status === 'failed') {
         this.#database
           .prepare(
@@ -3856,6 +4905,23 @@ export class PegasStore {
         `SELECT request_claim_hash FROM actions
          WHERE run_id = ? AND protocol_version = 1
            AND request_claim_hash IS NOT NULL`,
+      )
+      .all(runId) as { request_claim_hash: string }[]
+    if (
+      replayRows.some(row =>
+        safeDigestEqual(suppliedHash, row.request_claim_hash),
+      )
+    )
+      return
+    this.#claimForCapability(runId, claimToken)
+  }
+
+  assertCollaborationCapability(runId: string, claimToken: string): void {
+    const suppliedHash = hashClaimToken(claimToken)
+    const replayRows = this.#database
+      .prepare(
+        `SELECT request_claim_hash FROM channel_relations
+         WHERE source_run_id = ?`,
       )
       .all(runId) as { request_claim_hash: string }[]
     if (
@@ -4752,6 +5818,21 @@ export class PegasStore {
           text: result.output,
         },
       })
+      if (!actionBlocksCompletion && !requiresEvidence && !hasPendingWork) {
+        this.#settleInboundCollaborations(
+          task.id,
+          'completed',
+          result.output,
+          runId,
+          now,
+        )
+        this.#failUndeliveredContextNotes(
+          task.id,
+          'failed',
+          'Target Task completed before the context note was delivered.',
+          now,
+        )
+      }
       this.#database.exec('COMMIT')
     } catch (error) {
       this.#database.exec('ROLLBACK')
@@ -5089,6 +6170,19 @@ export class PegasStore {
            ) AND status = 'processing' AND last_error LIKE 'blocked_by_action:%'`,
         )
         .run(taskId)
+      this.#settleInboundCollaborations(
+        taskId,
+        'cancelled',
+        reason?.trim() ?? 'Target Task was stopped by the user.',
+        undefined,
+        now,
+      )
+      this.#failUndeliveredContextNotes(
+        taskId,
+        'cancelled',
+        reason?.trim() ?? 'Target Task was stopped before delivery.',
+        now,
+      )
       this.#database
         .prepare(
           `INSERT INTO task_commands (command_id, task_id, kind, created_at)
@@ -5436,6 +6530,36 @@ export class PegasStore {
     return (row as { rowid: number }).rowid
   }
 
+  #collaborationPageBranch(
+    column: 'source_task_id' | 'target_task_id',
+    userId: string,
+    taskId: string,
+    limit: number,
+    boundary?: { created_at: string; id: string },
+  ): ChannelRelationRow[] {
+    const query = boundary
+      ? `SELECT * FROM channel_relations
+         WHERE user_id = ? AND ${column} = ?
+           AND (created_at < ? OR (created_at = ? AND id < ?))
+         ORDER BY created_at DESC, id DESC LIMIT ?`
+      : `SELECT * FROM channel_relations
+         WHERE user_id = ? AND ${column} = ?
+         ORDER BY created_at DESC, id DESC LIMIT ?`
+    const values = boundary
+      ? [
+          userId,
+          taskId,
+          boundary.created_at,
+          boundary.created_at,
+          boundary.id,
+          limit,
+        ]
+      : [userId, taskId, limit]
+    return this.#database
+      .prepare(query)
+      .all(...values) as unknown as ChannelRelationRow[]
+  }
+
   #goalContractById(contractId: string): GoalContract {
     const row = this.#database
       .prepare('SELECT * FROM goal_contracts WHERE id = ?')
@@ -5562,6 +6686,625 @@ export class PegasStore {
     return toWorkerProfile(row)
   }
 
+  #settleInboundCollaborations(
+    targetTaskId: string,
+    outcome: CollaborationResult['outcome'],
+    summary: string,
+    targetRunId: string | undefined,
+    now: string,
+  ): void {
+    const rows = this.#database
+      .prepare(
+        `SELECT * FROM channel_relations
+         WHERE target_task_id = ? AND kind IN ('delegate','handoff')
+           AND status IN ('pending','active')
+         ORDER BY created_at ASC, rowid ASC`,
+      )
+      .all(targetTaskId) as unknown as ChannelRelationRow[]
+    for (const row of rows) {
+      const source = this.#taskById(row.source_task_id)
+      if (row.target_event_id) {
+        this.#database
+          .prepare(
+            `UPDATE inbox_events SET status = 'processed', processed_at = ?,
+               claimed_by = NULL, lease_until = NULL,
+               last_error = 'collaboration_target_ended_before_dispatch'
+             WHERE id = ? AND status IN ('pending','processing')`,
+          )
+          .run(now, row.target_event_id)
+      }
+      const successful = outcome === 'completed'
+      const status: CollaborationStatus = successful
+        ? row.kind === 'delegate'
+          ? 'returned'
+          : 'completed'
+        : 'failed'
+      const result: CollaborationResult = {
+        outcome,
+        summary,
+        ...(targetRunId ? { targetRunId } : {}),
+      }
+      const shouldResume =
+        (row.kind === 'delegate' || (row.kind === 'handoff' && !successful)) &&
+        source.status !== 'completed' &&
+        source.status !== 'cancelled'
+      const eventType =
+        row.kind === 'delegate'
+          ? successful
+            ? 'collaboration.returned'
+            : 'collaboration.failed'
+          : successful
+            ? 'collaboration.completed'
+            : 'collaboration.failed'
+      const returned = this.enqueueEvent({
+        userId: row.user_id,
+        source: 'collaboration',
+        type: eventType,
+        dedupeKey: `collaboration-result:${row.id}`,
+        payload: {
+          relationId: row.id,
+          sourceTaskId: source.id,
+          targetTaskId,
+          outcome,
+          text: summary,
+          ...(targetRunId ? { targetRunId } : {}),
+        },
+      }).event
+      this.#database
+        .prepare(
+          `INSERT INTO task_events (event_id, task_id, relation, created_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(event_id) DO UPDATE SET
+             task_id = excluded.task_id,
+             relation = excluded.relation,
+             created_at = excluded.created_at`,
+        )
+        .run(
+          returned.id,
+          source.id,
+          successful ? 'collaboration_returned' : 'collaboration_failed',
+          now,
+        )
+      if (shouldResume) {
+        this.#database
+          .prepare(
+            `UPDATE runs SET status = 'cancelled', claimed_by = NULL,
+               lease_until = NULL, claim_token_hash = NULL,
+               last_error = ?, updated_at = ?
+             WHERE id = ? AND status = 'waiting'`,
+          )
+          .run(`continued_by:${returned.id}`, now, row.source_run_id)
+        this.#database
+          .prepare(
+            `UPDATE tasks SET status = 'started', status_reason = ?,
+               updated_at = ? WHERE id = ?`,
+          )
+          .run(
+            successful ? 'collaboration_returned' : 'collaboration_failed',
+            now,
+            source.id,
+          )
+      } else {
+        this.#database
+          .prepare(
+            `UPDATE inbox_events SET status = 'processed', processed_at = ?,
+               claimed_by = NULL, lease_until = NULL, last_error = NULL
+             WHERE id = ? AND status IN ('pending','processing')`,
+          )
+          .run(now, returned.id)
+      }
+      this.#database
+        .prepare(
+          `UPDATE channel_relations
+           SET status = ?, return_event_id = ?, result_json = ?,
+               updated_at = ?, settled_at = ?
+           WHERE id = ? AND status IN ('pending','active')`,
+        )
+        .run(status, returned.id, JSON.stringify(result), now, now, row.id)
+      if (
+        row.kind === 'handoff' &&
+        successful &&
+        source.status !== 'completed' &&
+        source.status !== 'cancelled'
+      ) {
+        this.#database
+          .prepare(
+            `UPDATE tasks SET status = 'completed', status_reason = 'handed_off',
+               ended_json = ?, updated_at = ? WHERE id = ?`,
+          )
+          .run(
+            JSON.stringify({
+              at: now,
+              by: 'executor',
+              outcome: 'completed',
+              reason: summary,
+            }),
+            now,
+            source.id,
+          )
+        this.#settleInboundCollaborations(
+          source.id,
+          outcome,
+          summary,
+          targetRunId,
+          now,
+        )
+        this.#failUndeliveredContextNotes(
+          source.id,
+          'failed',
+          'Target Task completed after handing off its responsibility.',
+          now,
+        )
+      }
+      this.enqueueOutbox({
+        userId: row.user_id,
+        taskId: source.id,
+        channel: 'conversation',
+        dedupeKey: `collaboration-result:${row.id}`,
+        payload: {
+          type: eventType,
+          relationId: row.id,
+          sourceTaskId: source.id,
+          targetTaskId,
+          outcome,
+          text: summary,
+          ...(targetRunId ? { targetRunId } : {}),
+        },
+      })
+    }
+  }
+
+  #failUndeliveredContextNotes(
+    targetTaskId: string,
+    outcome: 'failed' | 'cancelled',
+    summary: string,
+    now: string,
+  ): void {
+    const rows = this.#database
+      .prepare(
+        `SELECT * FROM channel_relations
+         WHERE target_task_id = ? AND kind = 'context_note' AND status = 'pending'
+         ORDER BY created_at ASC, rowid ASC`,
+      )
+      .all(targetTaskId) as unknown as ChannelRelationRow[]
+    for (const row of rows) {
+      if (row.target_event_id) {
+        this.#database
+          .prepare(
+            `UPDATE inbox_events SET status = 'processed', processed_at = ?,
+               claimed_by = NULL, lease_until = NULL,
+               last_error = 'context_note_target_closed'
+             WHERE id = ? AND status IN ('pending','processing')`,
+          )
+          .run(now, row.target_event_id)
+      }
+      const source = this.#taskById(row.source_task_id)
+      const returned = this.enqueueEvent({
+        userId: row.user_id,
+        source: 'collaboration',
+        type: 'collaboration.failed',
+        dedupeKey: `collaboration-result:${row.id}`,
+        payload: {
+          relationId: row.id,
+          sourceTaskId: source.id,
+          targetTaskId,
+          outcome,
+          text: summary,
+        },
+      }).event
+      this.#database
+        .prepare(
+          `UPDATE inbox_events SET status = 'processed', processed_at = ?,
+             claimed_by = NULL, lease_until = NULL, last_error = NULL
+           WHERE id = ? AND status = 'pending'`,
+        )
+        .run(now, returned.id)
+      this.#database
+        .prepare(
+          `INSERT INTO task_events (event_id, task_id, relation, created_at)
+           VALUES (?, ?, 'collaboration_failed', ?)
+           ON CONFLICT(event_id) DO UPDATE SET
+             task_id = excluded.task_id,
+             relation = excluded.relation,
+             created_at = excluded.created_at`,
+        )
+        .run(returned.id, source.id, now)
+      const result: CollaborationResult = { outcome, summary }
+      this.#database
+        .prepare(
+          `UPDATE channel_relations SET status = 'failed', return_event_id = ?,
+             result_json = ?, updated_at = ?, settled_at = ?
+           WHERE id = ? AND status = 'pending'`,
+        )
+        .run(returned.id, JSON.stringify(result), now, now, row.id)
+      this.enqueueOutbox({
+        userId: row.user_id,
+        taskId: source.id,
+        channel: 'conversation',
+        dedupeKey: `collaboration-result:${row.id}`,
+        payload: {
+          type: 'collaboration.failed',
+          relationId: row.id,
+          sourceTaskId: source.id,
+          targetTaskId,
+          outcome,
+          text: summary,
+        },
+      })
+    }
+  }
+
+  #failTerminalCollaborationEvent(eventId: string, error: string): void {
+    const now = this.#clock.now().toISOString()
+    const targetRelation = this.#database
+      .prepare(
+        `SELECT * FROM channel_relations
+         WHERE target_event_id = ? AND status IN ('pending','active')`,
+      )
+      .get(eventId) as unknown as ChannelRelationRow | undefined
+    if (targetRelation) {
+      if (
+        (targetRelation.kind === 'delegate' ||
+          targetRelation.kind === 'handoff') &&
+        targetRelation.target_task_id
+      ) {
+        this.#database
+          .prepare(
+            `UPDATE tasks SET status = 'completed',
+               status_reason = 'collaboration_dispatch_failed',
+               ended_json = ?, updated_at = ?
+             WHERE id = ? AND status NOT IN ('completed','cancelled')`,
+          )
+          .run(
+            JSON.stringify({
+              at: now,
+              by: 'executor',
+              outcome: 'dropped',
+              reason: error,
+            }),
+            now,
+            targetRelation.target_task_id,
+          )
+        this.#settleInboundCollaborations(
+          targetRelation.target_task_id,
+          'failed',
+          `Collaboration dispatch failed: ${error}`,
+          undefined,
+          now,
+        )
+        this.#failUndeliveredContextNotes(
+          targetRelation.target_task_id,
+          'failed',
+          'Target Task could not be started.',
+          now,
+        )
+      } else {
+        this.#failNonResponsibilityRelation(
+          targetRelation,
+          `Collaboration delivery failed: ${error}`,
+          now,
+        )
+      }
+    }
+
+    const returnRelation = this.#database
+      .prepare(
+        `SELECT * FROM channel_relations
+         WHERE return_event_id = ? AND status IN ('returned','completed','failed')`,
+      )
+      .get(eventId) as unknown as ChannelRelationRow | undefined
+    if (!returnRelation) return
+    const summary = `Collaboration result delivery failed: ${error}`
+    const previous = returnRelation.result_json
+      ? (JSON.parse(returnRelation.result_json) as CollaborationResult)
+      : undefined
+    this.#database
+      .prepare(
+        `UPDATE channel_relations SET status = 'failed', result_json = ?,
+           updated_at = ?, settled_at = COALESCE(settled_at, ?)
+         WHERE id = ?`,
+      )
+      .run(
+        JSON.stringify({
+          outcome: 'failed',
+          summary,
+          ...(previous?.targetRunId
+            ? { targetRunId: previous.targetRunId }
+            : {}),
+        } satisfies CollaborationResult),
+        now,
+        now,
+        returnRelation.id,
+      )
+    this.#database
+      .prepare(
+        `UPDATE runs SET status = 'cancelled', claimed_by = NULL,
+           lease_until = NULL, claim_token_hash = NULL,
+           last_error = 'collaboration_delivery_failed', updated_at = ?
+         WHERE id = ? AND status = 'waiting'`,
+      )
+      .run(now, returnRelation.source_run_id)
+    this.#database
+      .prepare(
+        `UPDATE tasks SET status = 'started',
+           status_reason = 'collaboration_delivery_failed', updated_at = ?
+         WHERE id = ? AND status NOT IN ('completed','cancelled')`,
+      )
+      .run(now, returnRelation.source_task_id)
+    this.enqueueOutbox({
+      userId: returnRelation.user_id,
+      taskId: returnRelation.source_task_id,
+      channel: 'conversation',
+      dedupeKey: `collaboration-delivery-failed:${returnRelation.id}`,
+      payload: {
+        type: 'collaboration.delivery_failed',
+        relationId: returnRelation.id,
+        sourceTaskId: returnRelation.source_task_id,
+        text: summary,
+      },
+    })
+  }
+
+  #failNonResponsibilityRelation(
+    row: ChannelRelationRow,
+    summary: string,
+    now: string,
+  ): void {
+    const returned = this.enqueueEvent({
+      userId: row.user_id,
+      source: 'collaboration',
+      type: 'collaboration.failed',
+      dedupeKey: `collaboration-result:${row.id}`,
+      payload: {
+        relationId: row.id,
+        sourceTaskId: row.source_task_id,
+        ...(row.target_task_id ? { targetTaskId: row.target_task_id } : {}),
+        outcome: 'failed',
+        text: summary,
+      },
+    }).event
+    this.#database
+      .prepare(
+        `INSERT INTO task_events (event_id, task_id, relation, created_at)
+         VALUES (?, ?, 'collaboration_failed', ?)
+         ON CONFLICT(event_id) DO UPDATE SET
+           task_id = excluded.task_id,
+           relation = excluded.relation,
+           created_at = excluded.created_at`,
+      )
+      .run(returned.id, row.source_task_id, now)
+    this.#database
+      .prepare(
+        `UPDATE inbox_events SET status = 'processed', processed_at = ?,
+           claimed_by = NULL, lease_until = NULL, last_error = NULL
+         WHERE id = ? AND status = 'pending'`,
+      )
+      .run(now, returned.id)
+    this.#database
+      .prepare(
+        `UPDATE channel_relations SET status = 'failed', return_event_id = ?,
+           result_json = ?, updated_at = ?, settled_at = ?
+         WHERE id = ? AND status IN ('pending','active')`,
+      )
+      .run(
+        returned.id,
+        JSON.stringify({
+          outcome: 'failed',
+          summary,
+        } satisfies CollaborationResult),
+        now,
+        now,
+        row.id,
+      )
+    if (row.kind === 'handback') {
+      this.#database
+        .prepare(
+          `UPDATE tasks SET status_reason = 'handback_failed', updated_at = ?
+           WHERE id = ? AND status NOT IN ('completed','cancelled')`,
+        )
+        .run(now, row.source_task_id)
+    }
+    this.enqueueOutbox({
+      userId: row.user_id,
+      taskId: row.source_task_id,
+      channel: 'conversation',
+      dedupeKey: `collaboration-result:${row.id}`,
+      payload: {
+        type: 'collaboration.failed',
+        relationId: row.id,
+        sourceTaskId: row.source_task_id,
+        ...(row.target_task_id ? { targetTaskId: row.target_task_id } : {}),
+        outcome: 'failed',
+        text: summary,
+      },
+    })
+  }
+
+  #assertTaskReferences(taskId: string, references: string[]): void {
+    if (references.length === 0) return
+    const values = references.map(() => '(?)').join(',')
+    const rows = this.#database
+      .prepare(
+        `WITH requested(id) AS (VALUES ${values})
+         SELECT requested.id FROM requested
+         WHERE EXISTS (
+           SELECT 1 FROM task_events
+           WHERE task_id = ? AND event_id = requested.id
+         ) OR EXISTS (
+           SELECT 1 FROM runs
+           WHERE task_id = ? AND id = requested.id
+         ) OR EXISTS (
+           SELECT 1 FROM task_artifacts
+           WHERE task_id = ? AND id = requested.id
+         ) OR EXISTS (
+           SELECT 1 FROM evidence_refs
+           WHERE task_id = ? AND id = requested.id
+         )`,
+      )
+      .all(...references, taskId, taskId, taskId, taskId) as { id: string }[]
+    const found = new Set(rows.map(row => row.id))
+    const missing = references.find(reference => !found.has(reference))
+    if (missing) {
+      throw new Error(
+        `Collaboration reference ${missing} does not belong to source Task`,
+      )
+    }
+  }
+
+  #relationById(relationId: string): ChannelRelation {
+    const row = this.#database
+      .prepare('SELECT * FROM channel_relations WHERE id = ?')
+      .get(relationId)
+    if (!row) throw new Error(`Collaboration ${relationId} does not exist`)
+    return toChannelRelation(row as unknown as ChannelRelationRow)
+  }
+
+  #collaborationForDispatch(
+    relationId: string,
+    event: InboxEvent,
+  ): ChannelRelationRow {
+    const row = this.#database
+      .prepare('SELECT * FROM channel_relations WHERE id = ?')
+      .get(relationId) as unknown as ChannelRelationRow | undefined
+    if (
+      !row ||
+      event.source !== 'collaboration' ||
+      row.user_id !== event.userId ||
+      (row.target_event_id !== event.id && row.return_event_id !== event.id)
+    ) {
+      throw new Error('Collaboration dispatch does not match relation')
+    }
+    if (
+      event.type === 'collaboration.failed' &&
+      row.kind !== 'delegate' &&
+      row.kind !== 'handoff'
+    ) {
+      throw new Error(
+        'Non-responsibility collaboration failure cannot resume a Task',
+      )
+    }
+    return row
+  }
+
+  #markCollaborationDispatchedInTransaction(
+    row: ChannelRelationRow,
+    eventId: string,
+    targetTaskId: string,
+  ): void {
+    if (row.target_event_id !== eventId) {
+      throw new Error('Collaboration dispatch does not match relation')
+    }
+    const target = this.#taskById(targetTaskId)
+    if (target.userId !== row.user_id) {
+      throw new Error('Collaboration target belongs to another user')
+    }
+    if (row.target_task_id && row.target_task_id !== targetTaskId) {
+      throw new Error('Collaboration target is already assigned')
+    }
+    if (
+      row.status === 'returned' ||
+      row.status === 'failed' ||
+      row.status === 'cancelled' ||
+      (row.status === 'completed' &&
+        row.kind !== 'context_note' &&
+        row.kind !== 'handback')
+    ) {
+      return
+    }
+    const status =
+      row.kind === 'context_note' || row.kind === 'handback'
+        ? 'completed'
+        : 'active'
+    const now = this.#clock.now().toISOString()
+    this.#database
+      .prepare(
+        `UPDATE channel_relations
+         SET target_task_id = ?, status = ?, updated_at = ?,
+             settled_at = CASE WHEN ? = 'completed'
+               THEN COALESCE(settled_at, ?) ELSE settled_at END
+         WHERE id = ? AND status IN ('pending','active','completed')`,
+      )
+      .run(targetTaskId, status, now, status, now, row.id)
+
+    if (row.kind === 'handback' && row.status !== 'completed') {
+      const request = JSON.parse(row.request_json) as WorkerCollaborationRequest
+      if (request.kind !== 'handback') {
+        throw new Error('Handback relation contains an incompatible request')
+      }
+      const input = this.#database
+        .prepare(
+          `SELECT relation FROM task_events
+           WHERE task_id = ? AND event_id = ?`,
+        )
+        .get(row.source_task_id, request.inputEventId) as
+        { relation: string } | undefined
+      if (input?.relation === 'origin' || input?.relation === 'resumed') {
+        this.#database
+          .prepare(
+            `UPDATE tasks SET status = 'completed',
+               status_reason = 'handed_back', ended_json = ?, updated_at = ?
+             WHERE id = ? AND status = 'started'
+               AND status_reason = 'handed_back'`,
+          )
+          .run(
+            JSON.stringify({
+              at: now,
+              by: 'executor',
+              outcome: 'completed',
+              reason: request.reason,
+            }),
+            now,
+            row.source_task_id,
+          )
+      }
+    }
+  }
+
+  #collaborationExecutionContext(
+    relation: ChannelRelationRow,
+    targetContext: ExecutionContext,
+    executor: string,
+    targetTaskId: string,
+  ): ExecutionContext {
+    const sourceRun = this.#database
+      .prepare('SELECT * FROM runs WHERE id = ?')
+      .get(relation.source_run_id) as unknown as RunRow | undefined
+    if (!sourceRun) throw new Error('Collaboration source Run is unavailable')
+    const sourceContext = parseExecutionContext(
+      sourceRun.execution_context_json ??
+        JSON.stringify({ executor: sourceRun.executor }),
+    )
+    if (
+      sourceRun.executor !== executor ||
+      sourceContext.executor !== executor ||
+      targetContext.executor !== executor ||
+      sourceContext.protocol !== targetContext.protocol
+    ) {
+      throw new Error('Collaboration execution context is incompatible')
+    }
+    if (relation.kind === 'context_note') {
+      return intersectContextNoteAuthority(
+        sourceContext,
+        targetContext,
+        sourceRun.id,
+      )
+    }
+    const targetHasIndependentProfile = targetTaskId !== relation.source_task_id
+    return {
+      ...sourceContext,
+      ...(targetHasIndependentProfile && targetContext.workerProfile
+        ? { workerProfile: targetContext.workerProfile }
+        : {}),
+      ...(targetHasIndependentProfile && targetContext.workerProfileRevision
+        ? { workerProfileRevision: targetContext.workerProfileRevision }
+        : {}),
+      ...(targetHasIndependentProfile && targetContext.workerProfileSource
+        ? { workerProfileSource: targetContext.workerProfileSource }
+        : {}),
+      authoritySourceRunId: sourceRun.id,
+    }
+  }
+
   #runById(runId: string): Run {
     const row = this.#database
       .prepare('SELECT * FROM runs WHERE id = ?')
@@ -5614,6 +7357,9 @@ function toInboxEvent(row: InboxRow): InboxEvent {
     userId: row.user_id,
     type: row.type,
     source: row.source,
+    ...(row.authenticated_actor
+      ? { authenticatedActor: row.authenticated_actor }
+      : {}),
     ...(row.dedupe_key ? { dedupeKey: row.dedupe_key } : {}),
     payload: JSON.parse(row.payload_json) as unknown,
     status: row.status,
@@ -5655,6 +7401,33 @@ function toWorkerProfile(row: WorkerProfileRow): WorkerProfile {
     ...(row.model_name ? { modelName: row.model_name } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  }
+}
+
+function toChannelRelation(row: ChannelRelationRow): ChannelRelation {
+  return {
+    id: row.id,
+    commandId: row.command_id,
+    userId: row.user_id,
+    kind: row.kind,
+    status: row.status,
+    sourceTaskId: row.source_task_id,
+    sourceRunId: row.source_run_id,
+    ...(row.parent_relation_id
+      ? { parentRelationId: row.parent_relation_id }
+      : {}),
+    rootRelationId: row.root_relation_id,
+    depth: row.depth,
+    ...(row.target_task_id ? { targetTaskId: row.target_task_id } : {}),
+    ...(row.target_event_id ? { targetEventId: row.target_event_id } : {}),
+    ...(row.return_event_id ? { returnEventId: row.return_event_id } : {}),
+    request: JSON.parse(row.request_json) as WorkerCollaborationRequest,
+    ...(row.result_json
+      ? { result: JSON.parse(row.result_json) as CollaborationResult }
+      : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    ...(row.settled_at ? { settledAt: row.settled_at } : {}),
   }
 }
 
@@ -5727,6 +7500,7 @@ function toRun(row: RunRow): Run {
   return {
     id: row.id,
     taskId: row.task_id,
+    ...(row.origin_event_id ? { originEventId: row.origin_event_id } : {}),
     ...(row.retry_of_run_id ? { retryOfRunId: row.retry_of_run_id } : {}),
     executor: row.executor,
     ...(row.executor_ref ? { executorRef: row.executor_ref } : {}),
