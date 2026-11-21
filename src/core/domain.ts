@@ -139,6 +139,44 @@ export interface RoutingCandidate {
   recentInput?: string
 }
 
+/**
+ * NOTIFY-006: one owed user-visible delivery. A terminal Run stays on this
+ * ledger until its notification is confirmed sent (or human-resolved);
+ * delivery failure never settles the debt. Read-only projection.
+ */
+export interface OwedDelivery {
+  userId: string
+  taskId: string
+  taskTitle: string
+  runId: string
+  runStatus: 'completed' | 'failed'
+  runEndedAt: string
+  runError?: string
+  messageId: string
+  dedupeKey: string
+  deliveryStatus: OutboxMessage['status']
+  attempts: number
+  deliveryError?: string
+  messageCreatedAt: string
+  mergedIntoId?: string
+  mergedIntoStatus?: OutboxMessage['status']
+}
+
+/**
+ * NOTIFY-006: read-only reconciliation finding. Findings only alert; repair
+ * stays on the existing lease/retry/human-reconciliation paths (OBS-001
+ * boundary: the watchdog never writes product state).
+ */
+export interface ReconciliationFinding {
+  kind: 'unreported' | 'never_started' | 'stranded' | 'stale_waiting'
+  userId: string
+  taskId: string
+  runId?: string
+  nodeId?: string
+  since: string
+  detail: string
+}
+
 type RunStatus =
   'queued' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled'
 

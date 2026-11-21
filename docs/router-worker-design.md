@@ -4,7 +4,7 @@
 >
 > 决策日期：2026-11-21。本文是 Pegas 自有需求与架构决策的权威记录；调研过程与第三方样本分析保存在本地 `research/personal-agent-router/`（不入库），本文不依赖其存在。
 >
-> 实施进度：P0（ROUTE-003）已落地 Usable；P1（ROUTE-004 + EXEC-005）已落地 Partial（默认关闭，真实 DSH conversation 链路待实测）；P2 已落地（前置分流、400ms 收集窗口、Router/改写计量进 USAGE-001 账本）；P3 第一阶段（WORKER-002）已落地 Partial（手动三池 + effort + 终态错误停放，真实 DSH 三池执行待实测；自动分级押后）。证据与剩余风险见 Feature Map 对应小节。
+> 实施进度：P0（ROUTE-003）已落地 Usable；P1（ROUTE-004 + EXEC-005）已落地 Partial（默认关闭，真实 DSH conversation 链路待实测）；P2 已落地（前置分流、400ms 收集窗口、Router/改写计量进 USAGE-001 账本）；P3 第一阶段（WORKER-002）已落地 Partial（手动三池 + effort + 终态错误停放，真实 DSH 三池执行待实测；自动分级押后）；P4（NOTIFY-006）已落地 Usable（欠账视图 + 四类只读 finding + 独立 Watchdog 进程与 API）。证据与剩余风险见 Feature Map 对应小节。
 
 ## 1. 背景与问题
 

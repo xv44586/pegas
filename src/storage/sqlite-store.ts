@@ -42,6 +42,8 @@ import type {
   NotificationPreferences,
   OutboxMessage,
   OutboxResolutionDraft,
+  OwedDelivery,
+  ReconciliationFinding,
   RoutingDecision,
   RoutingCandidate,
   RouterUsageRecord,
@@ -10030,6 +10032,275 @@ export class PegasStore {
           )
           .all(userId)
     return rows.map(row => toOutboxMessage(row as unknown as OutboxRow))
+  }
+
+  /**
+   * NOTIFY-006: read-only owed-delivery ledger. Terminal Runs whose durable
+   * user-facing notification has not been confirmed sent (pending, sending,
+   * failed, unknown or merged into an unconfirmed message) remain owed.
+   * Delivery failure never settles the debt; only a sent confirmation or a
+   * human resolution does. This query never writes product state.
+   */
+  listOwedDeliveries(
+    userId?: string,
+    options: { limit?: number } = {},
+  ): OwedDelivery[] {
+    const limit = options.limit ?? 200
+    const rows = this.#database
+      .prepare(
+        `SELECT r.id AS run_id, r.task_id, r.status AS run_status,
+                r.updated_at AS run_updated_at, r.last_error,
+                t.user_id, t.title,
+                o.id AS message_id, o.dedupe_key, o.status AS delivery_status,
+                o.attempts, o.last_error AS delivery_error, o.created_at,
+                o.merged_into_id, m.status AS merged_status
+         FROM runs r
+         INNER JOIN tasks t ON t.id = r.task_id
+         INNER JOIN outbox_messages o
+           ON o.task_id = r.task_id
+          AND json_extract(o.payload_json, '$.runId') = r.id
+         LEFT JOIN outbox_messages m ON m.id = o.merged_into_id
+         WHERE r.status IN ('completed','failed')
+           AND (? IS NULL OR t.user_id = ?)
+           AND (o.status IN ('pending','sending','failed','unknown')
+             OR (o.status = 'merged'
+               AND (m.id IS NULL OR m.status <> 'sent')))
+         ORDER BY r.updated_at ASC, r.rowid ASC
+         LIMIT ?`,
+      )
+      .all(userId ?? null, userId ?? null, limit) as unknown as {
+      run_id: string
+      task_id: string
+      run_status: 'completed' | 'failed'
+      run_updated_at: string
+      last_error: string | null
+      user_id: string
+      title: string
+      message_id: string
+      dedupe_key: string
+      delivery_status: OutboxMessage['status']
+      attempts: number
+      delivery_error: string | null
+      created_at: string
+      merged_into_id: string | null
+      merged_status: OutboxMessage['status'] | null
+    }[]
+    return rows.map(row => ({
+      userId: row.user_id,
+      taskId: row.task_id,
+      taskTitle: row.title,
+      runId: row.run_id,
+      runStatus: row.run_status,
+      runEndedAt: row.run_updated_at,
+      ...(row.last_error ? { runError: row.last_error } : {}),
+      messageId: row.message_id,
+      dedupeKey: row.dedupe_key,
+      deliveryStatus: row.delivery_status,
+      attempts: row.attempts,
+      ...(row.delivery_error ? { deliveryError: row.delivery_error } : {}),
+      messageCreatedAt: row.created_at,
+      ...(row.merged_into_id
+        ? {
+            mergedIntoId: row.merged_into_id,
+            ...(row.merged_status
+              ? { mergedIntoStatus: row.merged_status }
+              : {}),
+          }
+        : {}),
+    }))
+  }
+
+  /**
+   * NOTIFY-006: read-only reconciliation findings, the second safety net
+   * behind the existing lease/retry recovery chain. Findings never trigger
+   * automatic repair; they surface durable identifiers for operators.
+   */
+  listReconciliationFindings(
+    options: {
+      unreportedAfterMs?: number
+      neverStartedAfterMs?: number
+      strandedAfterMs?: number
+      staleWaitingAfterMs?: number
+      nodeOnlineWithinMs?: number
+      limit?: number
+    } = {},
+  ): ReconciliationFinding[] {
+    const now = this.#clock.now()
+    const cutoff = (ms: number): string =>
+      new Date(now.getTime() - ms).toISOString()
+    const unreportedCutoff = cutoff(options.unreportedAfterMs ?? 300_000)
+    const neverStartedCutoff = cutoff(options.neverStartedAfterMs ?? 300_000)
+    const strandedCutoff = cutoff(options.strandedAfterMs ?? 120_000)
+    const staleWaitingCutoff = cutoff(options.staleWaitingAfterMs ?? 300_000)
+    const onlineCutoff = cutoff(options.nodeOnlineWithinMs ?? 90_000)
+    const limit = options.limit ?? 200
+    const findings: ReconciliationFinding[] = []
+
+    const unreported = this.#database
+      .prepare(
+        `SELECT r.id AS run_id, r.task_id, r.status AS run_status,
+                r.updated_at, t.user_id
+         FROM runs r
+         INNER JOIN tasks t ON t.id = r.task_id
+         WHERE r.status IN ('completed','failed')
+           AND r.updated_at <= ?
+           AND NOT EXISTS (
+             SELECT 1 FROM runs successor
+             WHERE successor.retry_of_run_id = r.id
+               OR successor.steering_of_run_id = r.id)
+           AND NOT EXISTS (
+             SELECT 1 FROM outbox_messages o
+             WHERE o.task_id = r.task_id
+               AND json_extract(o.payload_json, '$.runId') = r.id
+               AND (o.status = 'sent'
+                 OR (o.status = 'merged' AND EXISTS (
+                   SELECT 1 FROM outbox_messages m
+                   WHERE m.id = o.merged_into_id AND m.status = 'sent'))))
+         ORDER BY r.updated_at ASC, r.rowid ASC LIMIT ?`,
+      )
+      .all(unreportedCutoff, limit) as unknown as {
+      run_id: string
+      task_id: string
+      run_status: string
+      updated_at: string
+      user_id: string
+    }[]
+    for (const row of unreported)
+      findings.push({
+        kind: 'unreported',
+        userId: row.user_id,
+        taskId: row.task_id,
+        runId: row.run_id,
+        since: row.updated_at,
+        detail: `Run ${row.run_status} without a confirmed user delivery`,
+      })
+
+    const neverStarted = this.#database
+      .prepare(
+        `SELECT t.id, t.user_id, t.created_at
+         FROM tasks t
+         WHERE t.status IN ('backlog','unstarted','started')
+           AND t.kind = 'work'
+           AND t.created_at <= ?
+           AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.task_id = t.id)
+         ORDER BY t.created_at ASC, t.rowid ASC LIMIT ?`,
+      )
+      .all(neverStartedCutoff, limit) as unknown as {
+      id: string
+      user_id: string
+      created_at: string
+    }[]
+    for (const row of neverStarted)
+      findings.push({
+        kind: 'never_started',
+        userId: row.user_id,
+        taskId: row.id,
+        since: row.created_at,
+        detail: 'Open Task has no Run',
+      })
+
+    const stranded = this.#database
+      .prepare(
+        `SELECT r.id AS run_id, r.task_id, r.created_at, r.execution_context_json,
+                t.user_id
+         FROM runs r
+         INNER JOIN tasks t ON t.id = r.task_id
+         WHERE r.status = 'queued'
+           AND r.created_at <= ?
+           AND t.status NOT IN ('completed','cancelled')
+           AND EXISTS (
+             SELECT 1 FROM execution_nodes n
+             WHERE n.last_heartbeat_at > ?
+               AND (json_extract(r.execution_context_json, '$.nodeId') IS NULL
+                 OR json_extract(r.execution_context_json, '$.nodeId') = n.id))
+         ORDER BY r.created_at ASC, r.rowid ASC LIMIT ?`,
+      )
+      .all(strandedCutoff, onlineCutoff, limit) as unknown as {
+      run_id: string
+      task_id: string
+      created_at: string
+      execution_context_json: string | null
+      user_id: string
+    }[]
+    for (const row of stranded) {
+      const context = row.execution_context_json
+        ? parseExecutionContext(row.execution_context_json)
+        : undefined
+      findings.push({
+        kind: 'stranded',
+        userId: row.user_id,
+        taskId: row.task_id,
+        runId: row.run_id,
+        since: row.created_at,
+        detail:
+          'Queued Run unclaimed past the lease window while a node is online',
+        ...(context?.nodeId ? { nodeId: context.nodeId } : {}),
+      })
+    }
+
+    const staleWaiting = this.#database
+      .prepare(
+        `SELECT r.id AS run_id, r.task_id, r.updated_at, t.user_id,
+                'approval_resolved' AS condition
+         FROM runs r
+         INNER JOIN tasks t ON t.id = r.task_id
+         WHERE r.status = 'waiting' AND r.updated_at <= ?
+           AND t.status NOT IN ('completed','cancelled')
+           AND EXISTS (
+             SELECT 1 FROM actions a
+             INNER JOIN approvals ap ON ap.action_id = a.id
+             WHERE (a.run_id = r.id OR a.resume_run_id = r.id)
+               AND a.protocol_version = 1
+               AND ap.status IN ('approved','rejected','revision_requested'))
+         UNION ALL
+         SELECT r.id, r.task_id, r.updated_at, t.user_id,
+                'dependency_settled'
+         FROM runs r
+         INNER JOIN tasks t ON t.id = r.task_id
+         WHERE r.status = 'waiting' AND r.updated_at <= ?
+           AND t.status NOT IN ('completed','cancelled')
+           AND r.last_error = 'waiting_on_dependency'
+           AND NOT EXISTS (
+             SELECT 1 FROM channel_relations cr
+             WHERE cr.source_run_id = r.id AND cr.kind = 'delegate'
+               AND cr.status IN ('pending','active'))
+         UNION ALL
+         SELECT r.id, r.task_id, r.updated_at, t.user_id, 'user_input_arrived'
+         FROM runs r
+         INNER JOIN tasks t ON t.id = r.task_id
+         WHERE r.status = 'waiting' AND r.updated_at <= ?
+           AND t.status NOT IN ('completed','cancelled')
+           AND t.status_reason = 'awaiting_user_input'
+           AND EXISTS (
+             SELECT 1 FROM task_events te
+             INNER JOIN inbox_events e ON e.id = te.event_id
+             WHERE te.task_id = r.task_id AND e.type = 'user.message'
+               AND te.created_at > r.updated_at)
+         ORDER BY 3 ASC LIMIT ?`,
+      )
+      .all(
+        staleWaitingCutoff,
+        staleWaitingCutoff,
+        staleWaitingCutoff,
+        limit,
+      ) as unknown as {
+      run_id: string
+      task_id: string
+      updated_at: string
+      user_id: string
+      condition: string
+    }[]
+    for (const row of staleWaiting)
+      findings.push({
+        kind: 'stale_waiting',
+        userId: row.user_id,
+        taskId: row.task_id,
+        runId: row.run_id,
+        since: row.updated_at,
+        detail: `Waiting condition already satisfied: ${row.condition}`,
+      })
+
+    return findings.slice(0, limit)
   }
 
   markOutboxRead(messageId: string, userId: string): OutboxMessage {

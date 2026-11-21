@@ -1318,6 +1318,18 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         })
       }
 
+      if (
+        request.url?.startsWith('/v1/reconciliation') &&
+        request.method === 'GET'
+      ) {
+        const url = new URL(request.url, 'http://localhost')
+        const userId = url.searchParams.get('userId') ?? undefined
+        return sendJson(response, 200, {
+          owed: options.store.listOwedDeliveries(userId),
+          findings: options.store.listReconciliationFindings(),
+        })
+      }
+
       const stopChannelMatch = request.url?.match(
         /^\/v1\/channels\/([^/]+)\/stop$/,
       )
