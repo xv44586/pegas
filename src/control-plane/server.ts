@@ -20,7 +20,11 @@ import {
   parseApprovalDecisionDraft,
   type ApprovalStatus,
 } from '../approval/approval.js'
-import type { NewInboxEvent, TaskStatus } from '../core/domain.js'
+import type {
+  NewInboxEvent,
+  OutboxResolutionDraft,
+  TaskStatus,
+} from '../core/domain.js'
 import type {
   ChannelSearchSort,
   ChannelSearchOptions,
@@ -92,6 +96,9 @@ import {
   MemoryRevisionConflictError,
   MemorySourceUnavailableError,
   MemoryTargetUnavailableError,
+  NotificationPreferencesConflictError,
+  OutboxNotFoundError,
+  OutboxResolutionConflictError,
   RunClaimError,
   SettingsRevisionConflictError,
   WorkerProfileReadOnlyError,
@@ -1290,6 +1297,41 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         return sendJson(response, 202, { message })
       }
 
+      if (
+        request.url?.startsWith('/v1/settings/notifications') &&
+        (request.method === 'GET' || request.method === 'PUT')
+      ) {
+        const url = new URL(request.url, 'http://localhost')
+        if (request.method === 'GET') {
+          return sendJson(response, 200, {
+            preferences: options.store.getNotificationPreferences(
+              requiredQuery(url, 'userId'),
+            ),
+          })
+        }
+        const body = await readJson(request)
+        if (!isRecord(body)) throw new Error('Request body must be an object')
+        const preferences = options.store.updateNotificationPreferences(
+          requiredString(body.userId, 'userId'),
+          parseNotificationPreferencesUpdate(body),
+        )
+        return sendJson(response, 200, { preferences })
+      }
+
+      const resolveOutboxMatch = request.url?.match(
+        /^\/v1\/outbox\/([^/]+)\/resolve$/,
+      )
+      if (resolveOutboxMatch && request.method === 'POST') {
+        const body = await readJson(request)
+        if (!isRecord(body)) throw new Error('Request body must be an object')
+        const message = options.store.resolveOutboxMessage(
+          decodeURIComponent(resolveOutboxMatch[1] ?? ''),
+          requiredString(body.userId, 'userId'),
+          parseOutboxResolutionDraft(body),
+        )
+        return sendJson(response, 201, { message })
+      }
+
       const readOutboxMatch = request.url?.match(
         /^\/v1\/outbox\/([^/]+)\/read$/,
       )
@@ -1327,6 +1369,18 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
       if (error instanceof ActionReconciliationConflictError)
         return sendJson(response, 409, {
           error: 'action_reconciliation_conflict',
+          message: error.message,
+        })
+      if (error instanceof OutboxNotFoundError)
+        return sendJson(response, 404, { error: 'not_found' })
+      if (error instanceof OutboxResolutionConflictError)
+        return sendJson(response, 409, {
+          error: 'outbox_resolution_conflict',
+          message: error.message,
+        })
+      if (error instanceof NotificationPreferencesConflictError)
+        return sendJson(response, 409, {
+          error: 'notification_preferences_conflict',
           message: error.message,
         })
       if (error instanceof GoalProposalCommandConflictError)
@@ -1818,16 +1872,61 @@ function parseNewOutboxMessage(value: unknown): {
   channel: string
   dedupeKey: string
   payload: unknown
+  coalesceKey?: string
 } {
   if (!isRecord(value)) throw new Error('Request body must be an object')
   if (!Object.hasOwn(value, 'payload')) throw new Error('payload is required')
   const taskId = optionalString(value.taskId, 'taskId')
+  const coalesceKey = optionalString(value.coalesceKey, 'coalesceKey')
   return {
     userId: requiredString(value.userId, 'userId'),
     ...(taskId ? { taskId } : {}),
     channel: optionalString(value.channel, 'channel') ?? 'conversation',
     dedupeKey: requiredString(value.dedupeKey, 'dedupeKey'),
     payload: value.payload,
+    ...(coalesceKey ? { coalesceKey } : {}),
+  }
+}
+
+function parseNotificationPreferencesUpdate(value: Record<string, unknown>): {
+  expectedRevision: number
+  quietStart?: string
+  quietEnd?: string
+  utcOffsetMinutes: number
+} {
+  const expectedRevision = value.expectedRevision
+  if (
+    typeof expectedRevision !== 'number' ||
+    !Number.isInteger(expectedRevision) ||
+    expectedRevision < 0
+  )
+    throw new Error('expectedRevision must be a non-negative integer')
+  const utcOffsetMinutes = value.utcOffsetMinutes
+  if (typeof utcOffsetMinutes !== 'number')
+    throw new Error('utcOffsetMinutes must be a number')
+  const quietStart = optionalString(value.quietStart, 'quietStart')
+  const quietEnd = optionalString(value.quietEnd, 'quietEnd')
+  return {
+    expectedRevision,
+    ...(quietStart ? { quietStart } : {}),
+    ...(quietEnd ? { quietEnd } : {}),
+    utcOffsetMinutes,
+  }
+}
+
+function parseOutboxResolutionDraft(
+  value: Record<string, unknown>,
+): OutboxResolutionDraft {
+  const resolution = requiredString(value.resolution, 'resolution')
+  if (resolution !== 'sent' && resolution !== 'failed')
+    throw new Error('resolution must be sent or failed')
+  const note = requiredString(value.note, 'note').trim()
+  if (note.length > 2000)
+    throw new Error('note must be at most 2000 characters')
+  return {
+    commandId: requiredString(value.commandId, 'commandId'),
+    resolution,
+    note,
   }
 }
 

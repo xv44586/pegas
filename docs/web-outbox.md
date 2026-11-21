@@ -59,6 +59,16 @@
 - 数据库迁移只新增可空列和索引，旧行默认未读；回滚应用代码时该列可安全保留。
 - 回滚本 Feature 时移除 Web 入口和已读 API 即可；通知投递状态与已有 Outbox 数据无需回写。
 
+## 投递策略（NOTIFY-005，2026-11-21）
+
+服务端 Outbox 投递在既有指数退避重试之上增加三条策略，全部权威保存在服务端（schema v30）：
+
+- **静默时段**：`GET/PUT /v1/settings/notifications?userId=` 按用户维护 `quietStart`/`quietEnd`（HH:MM，须成对设置或清除）与 `utcOffsetMinutes`（-840..840），写入带 `expectedRevision` 乐观并发（冲突 409 `notification_preferences_conflict`）。Dispatcher 领取消息时按用户本地时间判断静默窗口（支持跨午夜），窗口内的 pending 消息不投递，`next_attempt_at` 顺延到窗口结束；已 sending 的过期 lease 恢复不受静默影响。窗口按用户隔离，不影响其他用户。
+- **待发送合并**：`POST /v1/outbox` 可选 `coalesceKey`。同一用户、同一 channel、同一 key 且尚未被领取（pending）的消息吸收新消息：保留原消息 id 与 dedupeKey（投递幂等键不变），payload 更新为最新内容并累加 `coalescedCount`；新行落为 `merged` 状态并记录 `mergedIntoId`，永不投递。sending/sent/failed/unknown 的消息不被合并；dedupeKey 重放仍幂等。
+- **未知投递处理**：Webhook 请求传输层失败（连接失败、超时、中断——请求可能已送达）抛 `DeliveryOutcomeUnknownError`，Dispatcher 将消息置为 `unknown`，不自动重试；明确的非 2xx HTTP 响应仍按既有退避重试至 `failed`。`failed`/`unknown` 消息只能由所有者通过 `POST /v1/outbox/:id/resolve`（`commandId`/`resolution: sent|failed`/`note`，bearer 鉴权）人工核对：命令幂等重放、异 payload 409 `outbox_resolution_conflict`、二次核对 409、跨 owner 404。核对记录 `outbox_resolutions` 不可变（UPDATE/DELETE 触发器拒绝），保留 `previousStatus`；数据库触发器保证终态消息只能经核对记录变更，`sent`/`merged` 不可回退。
+
+回滚：v30 重建 `outbox_messages` 以扩展 status CHECK（新增 `merged`），旧行原样迁移，索引与 channel 搜索触发器原定义重建；回滚应用代码时新列/新表可安全保留，`merged`/`unknown` 行对旧代码表现为不可领取状态，不会重复投递。
+
 ## 自动化证据
 
 - `test/sqlite-store.test.ts`：产品已读与投递状态分离、幂等和用户隔离、schema 12 迁移。

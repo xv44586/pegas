@@ -39,7 +39,9 @@ import type {
   ModelUsageRecord,
   ModelUsageReport,
   NewInboxEvent,
+  NotificationPreferences,
   OutboxMessage,
+  OutboxResolutionDraft,
   RoutingDecision,
   Run,
   Task,
@@ -474,6 +476,156 @@ BEGIN SELECT RAISE(ABORT, 'Invalid run status'); END;
 CREATE TRIGGER runs_status_update BEFORE UPDATE OF status ON runs
 WHEN NEW.status NOT IN ('queued','running','waiting','completed','failed','cancelled')
 BEGIN SELECT RAISE(ABORT, 'Invalid run status'); END;
+`
+
+const migration30 = `
+CREATE TABLE IF NOT EXISTS notification_preferences (
+  user_id TEXT PRIMARY KEY,
+  quiet_start TEXT,
+  quiet_end TEXT,
+  utc_offset_minutes INTEGER NOT NULL DEFAULT 0,
+  revision INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL
+);
+
+ALTER TABLE outbox_messages ADD COLUMN coalesce_key TEXT;
+ALTER TABLE outbox_messages ADD COLUMN coalesced_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE outbox_messages ADD COLUMN merged_into_id TEXT REFERENCES outbox_messages(id);
+CREATE INDEX outbox_coalesce ON outbox_messages (user_id, coalesce_key, status);
+
+-- SQLite cannot extend the legacy status CHECK in place, so the table is
+-- rebuilt with 'merged' added. Triggers and indexes that reference the table
+-- are recreated with their original definitions afterwards.
+PRAGMA legacy_alter_table = ON;
+ALTER TABLE outbox_messages RENAME TO outbox_messages_legacy_v30;
+PRAGMA legacy_alter_table = OFF;
+
+CREATE TABLE outbox_messages (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  task_id TEXT REFERENCES tasks(id),
+  channel TEXT NOT NULL,
+  dedupe_key TEXT NOT NULL UNIQUE,
+  payload_json TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'sending', 'sent', 'failed', 'unknown', 'merged')),
+  created_at TEXT NOT NULL,
+  sent_at TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  claimed_by TEXT,
+  lease_until TEXT,
+  next_attempt_at TEXT,
+  last_error TEXT,
+  updated_at TEXT,
+  read_at TEXT,
+  coalesce_key TEXT,
+  coalesced_count INTEGER NOT NULL DEFAULT 0,
+  merged_into_id TEXT REFERENCES outbox_messages(id)
+);
+
+DROP TRIGGER IF EXISTS channel_search_outbox_after_insert;
+DROP INDEX IF EXISTS outbox_messages_claim;
+DROP INDEX IF EXISTS outbox_messages_by_user_read;
+DROP INDEX IF EXISTS outbox_messages_by_user_task_time;
+DROP INDEX IF EXISTS outbox_by_task_read;
+DROP INDEX IF EXISTS outbox_coalesce;
+
+INSERT INTO outbox_messages
+  (id, user_id, task_id, channel, dedupe_key, payload_json, status,
+   created_at, sent_at, attempts, claimed_by, lease_until, next_attempt_at,
+   last_error, updated_at, read_at, coalesce_key, coalesced_count, merged_into_id)
+SELECT id, user_id, task_id, channel, dedupe_key, payload_json, status,
+   created_at, sent_at, attempts, claimed_by, lease_until, next_attempt_at,
+   last_error, updated_at, read_at, coalesce_key, coalesced_count, merged_into_id
+FROM outbox_messages_legacy_v30;
+
+DROP TABLE outbox_messages_legacy_v30;
+
+CREATE INDEX outbox_messages_claim
+ON outbox_messages (status, next_attempt_at, lease_until, created_at);
+CREATE INDEX outbox_messages_by_user_read
+ON outbox_messages (user_id, read_at, created_at DESC);
+CREATE INDEX outbox_messages_by_user_task_time
+ON outbox_messages (user_id, task_id, created_at);
+CREATE INDEX outbox_by_task_read
+ON outbox_messages (task_id, read_at);
+CREATE INDEX outbox_coalesce ON outbox_messages (user_id, coalesce_key, status);
+
+CREATE TRIGGER channel_search_outbox_after_insert
+AFTER INSERT ON outbox_messages
+WHEN NEW.task_id IS NOT NULL
+  AND json_valid(NEW.payload_json)
+  AND json_type(NEW.payload_json, '$.text') = 'text'
+BEGIN
+  INSERT OR REPLACE INTO channel_search_documents
+    (task_id, source_kind, source_id, text, updated_at)
+  VALUES
+    (NEW.task_id, 'outbox', NEW.id, json_extract(NEW.payload_json, '$.text'), NEW.created_at);
+END;
+
+CREATE TABLE IF NOT EXISTS outbox_resolutions (
+  id TEXT PRIMARY KEY,
+  message_id TEXT NOT NULL UNIQUE REFERENCES outbox_messages(id),
+  command_id TEXT NOT NULL UNIQUE,
+  resolution TEXT NOT NULL CHECK (resolution IN ('sent','failed')),
+  note TEXT NOT NULL,
+  previous_status TEXT NOT NULL CHECK (previous_status IN ('failed','unknown')),
+  request_fingerprint TEXT NOT NULL,
+  resolved_by TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TRIGGER outbox_resolutions_immutable
+BEFORE UPDATE ON outbox_resolutions
+BEGIN
+  SELECT RAISE(ABORT, 'Outbox resolution records are immutable');
+END;
+
+CREATE TRIGGER outbox_resolutions_delete_guard
+BEFORE DELETE ON outbox_resolutions
+BEGIN
+  SELECT RAISE(ABORT, 'Outbox resolution records are immutable');
+END;
+
+CREATE TRIGGER outbox_resolutions_message_guard
+BEFORE INSERT ON outbox_resolutions
+WHEN (
+  SELECT status FROM outbox_messages WHERE id = NEW.message_id
+) NOT IN ('failed','unknown') OR NEW.previous_status <> (
+  SELECT status FROM outbox_messages WHERE id = NEW.message_id
+)
+BEGIN
+  SELECT RAISE(ABORT, 'Only a failed or unknown Outbox message can be resolved');
+END;
+
+CREATE TRIGGER outbox_messages_merged_guard
+BEFORE UPDATE OF status ON outbox_messages
+WHEN NEW.status = 'merged' AND (
+  OLD.status <> 'pending' OR NEW.merged_into_id IS NULL
+  OR NEW.merged_into_id = OLD.id
+  OR (SELECT status FROM outbox_messages WHERE id = NEW.merged_into_id)
+     <> 'pending'
+)
+BEGIN
+  SELECT RAISE(ABORT, 'Only a pending message can merge into a pending message');
+END;
+
+CREATE TRIGGER outbox_messages_resolved_guard
+BEFORE UPDATE OF status ON outbox_messages
+WHEN (
+  OLD.status IN ('failed','unknown')
+    AND NEW.status IN ('sent','failed')
+    AND NOT EXISTS (
+      SELECT 1 FROM outbox_resolutions
+      WHERE message_id = OLD.id AND resolution = NEW.status
+    )
+) OR (
+  OLD.status IN ('sent','merged') AND NEW.status <> OLD.status
+) OR (
+  OLD.status = 'unknown' AND NEW.status NOT IN ('sent','failed')
+)
+BEGIN
+  SELECT RAISE(ABORT, 'Terminal Outbox states change only through a resolution record');
+END;
 `
 
 const migration2 = `
@@ -1891,6 +2043,27 @@ interface OutboxRow {
   updated_at: string | null
   sent_at: string | null
   read_at: string | null
+  coalesce_key: string | null
+  coalesced_count: number
+  merged_into_id: string | null
+}
+
+interface OutboxResolutionRow {
+  message_id: string
+  resolution: 'sent' | 'failed'
+  note: string
+  previous_status: 'failed' | 'unknown'
+  resolved_by: string
+  created_at: string
+}
+
+interface NotificationPreferencesRow {
+  user_id: string
+  quiet_start: string | null
+  quiet_end: string | null
+  utc_offset_minutes: number
+  revision: number
+  updated_at: string
 }
 
 interface ModelUsageRow {
@@ -2029,6 +2202,12 @@ export class ActionNotFoundError extends Error {}
 
 export class ActionReconciliationConflictError extends Error {}
 
+export class OutboxNotFoundError extends Error {}
+
+export class OutboxResolutionConflictError extends Error {}
+
+export class NotificationPreferencesConflictError extends Error {}
+
 export class MemoryRevisionConflictError extends Error {}
 
 export class MemoryNotFoundError extends Error {}
@@ -2054,6 +2233,7 @@ export class PegasStore {
   readonly #database: DatabaseSync
   readonly #clock: Clock
   readonly #attachmentRoot: string | undefined
+  #transactionDepth = 0
 
   constructor(path: string, options: { clock?: Clock } = {}) {
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true })
@@ -2100,6 +2280,7 @@ export class PegasStore {
     this.#migrate(27, migration27)
     this.#migrate(28, migration28)
     this.#migrate(29, migration29)
+    this.#migrate(30, migration30)
   }
 
   #backfillWorkerIconIds(): void {
@@ -2145,6 +2326,30 @@ export class PegasStore {
       this.#database.exec('COMMIT')
     } catch (error) {
       this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  // Nested store calls (for example enqueueOutbox inside reconcileAction)
+  // join the outer transaction through a savepoint instead of failing on a
+  // second BEGIN.
+  #runInTransaction<T>(work: () => T): T {
+    const nested = this.#transactionDepth > 0 || this.#database.isTransaction
+    const savepoint = `pegas_nested_${String(this.#transactionDepth)}`
+    this.#database.exec(nested ? `SAVEPOINT ${savepoint}` : 'BEGIN IMMEDIATE')
+    this.#transactionDepth += 1
+    try {
+      const result = work()
+      this.#transactionDepth -= 1
+      this.#database.exec(nested ? `RELEASE SAVEPOINT ${savepoint}` : 'COMMIT')
+      return result
+    } catch (error) {
+      this.#transactionDepth -= 1
+      this.#database.exec(
+        nested
+          ? `ROLLBACK TO SAVEPOINT ${savepoint}; RELEASE SAVEPOINT ${savepoint}`
+          : 'ROLLBACK',
+      )
       throw error
     }
   }
@@ -8836,32 +9041,73 @@ export class PegasStore {
     channel: string
     dedupeKey: string
     payload: unknown
+    coalesceKey?: string
   }): OutboxMessage {
     const id = randomUUID()
     const createdAt = this.#clock.now().toISOString()
-    this.#database
-      .prepare(
-        `INSERT OR IGNORE INTO outbox_messages
-          (id, user_id, task_id, channel, dedupe_key, payload_json, status,
-           created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
-      )
-      .run(
-        id,
-        input.userId,
-        input.taskId ?? null,
-        input.channel,
-        input.dedupeKey,
-        JSON.stringify(input.payload),
-        createdAt,
-        createdAt,
-      )
-    const row = this.#database
-      .prepare('SELECT * FROM outbox_messages WHERE dedupe_key = ?')
-      .get(input.dedupeKey)
-    if (!row)
-      throw new Error(`Failed to enqueue outbox message ${input.dedupeKey}`)
-    return toOutboxMessage(row as unknown as OutboxRow)
+    return this.#runInTransaction(() => {
+      this.#database
+        .prepare(
+          `INSERT OR IGNORE INTO outbox_messages
+            (id, user_id, task_id, channel, dedupe_key, payload_json, status,
+             created_at, updated_at, coalesce_key)
+           VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
+        )
+        .run(
+          id,
+          input.userId,
+          input.taskId ?? null,
+          input.channel,
+          input.dedupeKey,
+          JSON.stringify(input.payload),
+          createdAt,
+          createdAt,
+          input.coalesceKey ?? null,
+        )
+      const inserted = this.#database
+        .prepare('SELECT id FROM outbox_messages WHERE dedupe_key = ?')
+        .get(input.dedupeKey) as { id: string } | undefined
+      if (!inserted)
+        throw new Error(`Failed to enqueue outbox message ${input.dedupeKey}`)
+      if (inserted.id === id && input.coalesceKey) {
+        // A newer message with the same coalesce key supersedes any message
+        // that has not been claimed yet; the surviving row keeps the latest
+        // payload and counts how many updates it absorbed.
+        const target = this.#database
+          .prepare(
+            `SELECT id FROM outbox_messages
+             WHERE user_id = ? AND coalesce_key = ? AND channel = ?
+               AND status = 'pending' AND id <> ?
+             ORDER BY created_at ASC, rowid ASC LIMIT 1`,
+          )
+          .get(input.userId, input.coalesceKey, input.channel, id) as
+          { id: string } | undefined
+        if (target) {
+          this.#database
+            .prepare(
+              `UPDATE outbox_messages
+               SET payload_json = ?, task_id = COALESCE(?, task_id),
+                   coalesced_count = coalesced_count + 1, updated_at = ?
+               WHERE id = ?`,
+            )
+            .run(
+              JSON.stringify(input.payload),
+              input.taskId ?? null,
+              createdAt,
+              target.id,
+            )
+          this.#database
+            .prepare(
+              `UPDATE outbox_messages
+               SET status = 'merged', merged_into_id = ?, updated_at = ?
+               WHERE id = ?`,
+            )
+            .run(target.id, createdAt, id)
+          return this.#outboxById(target.id)
+        }
+      }
+      return this.#outboxById(inserted.id)
+    })
   }
 
   listOutbox(userId: string, taskId?: string): OutboxMessage[] {
@@ -8905,15 +9151,40 @@ export class PegasStore {
     const leaseUntil = new Date(now.getTime() + leaseMs).toISOString()
     this.#database.exec('BEGIN IMMEDIATE')
     try {
-      const row = this.#database
+      const rows = this.#database
         .prepare(
           `SELECT * FROM outbox_messages
            WHERE (status = 'pending' AND
                     (next_attempt_at IS NULL OR next_attempt_at <= ?))
               OR (status = 'sending' AND lease_until <= ?)
-           ORDER BY created_at ASC LIMIT 1`,
+           ORDER BY created_at ASC, rowid ASC`,
         )
-        .get(nowIso, nowIso) as unknown as OutboxRow | undefined
+        .all(nowIso, nowIso) as unknown as OutboxRow[]
+      let row: OutboxRow | undefined
+      for (const candidate of rows) {
+        const preferences = this.#notificationPreferencesRow(candidate.user_id)
+        if (
+          preferences &&
+          candidate.status === 'pending' &&
+          isWithinQuietWindow(preferences, now)
+        ) {
+          // Quiet hours defer delivery instead of dropping it: the message
+          // stays pending and becomes claimable when the window ends.
+          this.#database
+            .prepare(
+              `UPDATE outbox_messages SET next_attempt_at = ?, updated_at = ?
+               WHERE id = ? AND status = 'pending'`,
+            )
+            .run(
+              nextQuietWindowEnd(preferences, now).toISOString(),
+              nowIso,
+              candidate.id,
+            )
+          continue
+        }
+        row = candidate
+        break
+      }
       if (!row) {
         this.#database.exec('COMMIT')
         return undefined
@@ -8934,6 +9205,204 @@ export class PegasStore {
       this.#database.exec('ROLLBACK')
       throw error
     }
+  }
+
+  getNotificationPreferences(userId: string): NotificationPreferences {
+    const row = this.#database
+      .prepare('SELECT * FROM notification_preferences WHERE user_id = ?')
+      .get(userId) as unknown as NotificationPreferencesRow | undefined
+    return row
+      ? toNotificationPreferences(row)
+      : {
+          userId,
+          utcOffsetMinutes: 0,
+          revision: 0,
+          updatedAt: this.#clock.now().toISOString(),
+        }
+  }
+
+  updateNotificationPreferences(
+    userId: string,
+    update: {
+      expectedRevision: number
+      quietStart?: string
+      quietEnd?: string
+      utcOffsetMinutes: number
+    },
+  ): NotificationPreferences {
+    const hasStart = update.quietStart !== undefined
+    const hasEnd = update.quietEnd !== undefined
+    if (hasStart !== hasEnd)
+      throw new Error('quietStart and quietEnd must be set or cleared together')
+    if (update.quietStart !== undefined)
+      parseQuietTime(update.quietStart, 'quietStart')
+    if (update.quietEnd !== undefined)
+      parseQuietTime(update.quietEnd, 'quietEnd')
+    if (
+      !Number.isInteger(update.utcOffsetMinutes) ||
+      update.utcOffsetMinutes < -840 ||
+      update.utcOffsetMinutes > 840
+    )
+      throw new Error(
+        'utcOffsetMinutes must be an integer between -840 and 840',
+      )
+    return this.#runInTransaction(() => {
+      const current = this.getNotificationPreferences(userId)
+      if (current.revision !== update.expectedRevision)
+        throw new NotificationPreferencesConflictError(
+          'Notification preferences revision does not match',
+        )
+      const now = this.#clock.now().toISOString()
+      this.#database
+        .prepare(
+          `INSERT INTO notification_preferences
+            (user_id, quiet_start, quiet_end, utc_offset_minutes, revision, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT (user_id) DO UPDATE SET
+             quiet_start = excluded.quiet_start,
+             quiet_end = excluded.quiet_end,
+             utc_offset_minutes = excluded.utc_offset_minutes,
+             revision = excluded.revision,
+             updated_at = excluded.updated_at`,
+        )
+        .run(
+          userId,
+          update.quietStart ?? null,
+          update.quietEnd ?? null,
+          update.utcOffsetMinutes,
+          current.revision + 1,
+          now,
+        )
+      return this.getNotificationPreferences(userId)
+    })
+  }
+
+  #notificationPreferencesRow(
+    userId: string,
+  ): NotificationPreferences | undefined {
+    const row = this.#database
+      .prepare('SELECT * FROM notification_preferences WHERE user_id = ?')
+      .get(userId) as unknown as NotificationPreferencesRow | undefined
+    return row ? toNotificationPreferences(row) : undefined
+  }
+
+  markOutboxUnknown(
+    messageId: string,
+    dispatcherId: string,
+    error: string,
+  ): void {
+    const now = this.#clock.now().toISOString()
+    const result = this.#database
+      .prepare(
+        `UPDATE outbox_messages
+         SET status = 'unknown', claimed_by = NULL, lease_until = NULL,
+             next_attempt_at = NULL, last_error = ?, updated_at = ?
+         WHERE id = ? AND status = 'sending' AND claimed_by = ?`,
+      )
+      .run(error, now, messageId, dispatcherId)
+    if (result.changes !== 1)
+      throw new Error(
+        `Dispatcher ${dispatcherId} does not own message ${messageId}`,
+      )
+  }
+
+  resolveOutboxMessage(
+    messageId: string,
+    userId: string,
+    draft: OutboxResolutionDraft,
+  ): OutboxMessage {
+    const fingerprint = createHash('sha256')
+      .update(stableJson(draft))
+      .digest('hex')
+    return this.#runInTransaction(() => {
+      const replay = this.#database
+        .prepare(
+          `SELECT message_id, request_fingerprint FROM outbox_resolutions
+           WHERE command_id = ?`,
+        )
+        .get(draft.commandId) as
+        { message_id: string; request_fingerprint: string } | undefined
+      if (replay) {
+        if (replay.request_fingerprint !== fingerprint)
+          throw new OutboxResolutionConflictError(
+            'Resolution command ID is already used with a different payload',
+          )
+        if (replay.message_id !== messageId)
+          throw new OutboxNotFoundError('Outbox message not found')
+        return this.#outboxForUser(replay.message_id, userId)
+      }
+      const row = this.#database
+        .prepare('SELECT * FROM outbox_messages WHERE id = ? AND user_id = ?')
+        .get(messageId, userId) as unknown as OutboxRow | undefined
+      if (!row) throw new OutboxNotFoundError('Outbox message not found')
+      const existing = this.#database
+        .prepare('SELECT 1 FROM outbox_resolutions WHERE message_id = ?')
+        .get(messageId)
+      if (existing)
+        throw new OutboxResolutionConflictError(
+          'Outbox message already has a resolution record',
+        )
+      if (row.status !== 'failed' && row.status !== 'unknown')
+        throw new OutboxResolutionConflictError(
+          'Only a failed or unknown Outbox message can be resolved',
+        )
+      const now = this.#clock.now().toISOString()
+      this.#database
+        .prepare(
+          `INSERT INTO outbox_resolutions
+            (id, message_id, command_id, resolution, note, previous_status,
+             request_fingerprint, resolved_by, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          randomUUID(),
+          messageId,
+          draft.commandId,
+          draft.resolution,
+          draft.note,
+          row.status,
+          fingerprint,
+          userId,
+          now,
+        )
+      // The resolution record keeps the original outcome auditable; the
+      // message itself now carries the human-confirmed delivery fact.
+      this.#database
+        .prepare(
+          `UPDATE outbox_messages
+           SET status = ?, sent_at = ?, updated_at = ? WHERE id = ?`,
+        )
+        .run(
+          draft.resolution,
+          draft.resolution === 'sent' ? now : null,
+          now,
+          messageId,
+        )
+      return this.#outboxForUser(messageId, userId)
+    })
+  }
+
+  #outboxForUser(messageId: string, userId: string): OutboxMessage {
+    const row = this.#database
+      .prepare('SELECT * FROM outbox_messages WHERE id = ? AND user_id = ?')
+      .get(messageId, userId) as unknown as OutboxRow | undefined
+    if (!row) throw new OutboxNotFoundError('Outbox message not found')
+    const message = toOutboxMessage(row)
+    const resolution = this.#database
+      .prepare('SELECT * FROM outbox_resolutions WHERE message_id = ?')
+      .get(messageId) as unknown as OutboxResolutionRow | undefined
+    return resolution
+      ? {
+          ...message,
+          resolution: {
+            resolution: resolution.resolution,
+            note: resolution.note,
+            previousStatus: resolution.previous_status,
+            resolvedBy: resolution.resolved_by,
+            createdAt: resolution.created_at,
+          },
+        }
+      : message
   }
 
   markOutboxSent(messageId: string, dispatcherId: string): void {
@@ -10707,5 +11176,66 @@ function toOutboxMessage(row: OutboxRow): OutboxMessage {
     updatedAt: row.updated_at ?? row.created_at,
     ...(row.sent_at ? { sentAt: row.sent_at } : {}),
     ...(row.read_at ? { readAt: row.read_at } : {}),
+    ...(row.coalesce_key ? { coalesceKey: row.coalesce_key } : {}),
+    ...(row.coalesced_count > 0 ? { coalescedCount: row.coalesced_count } : {}),
+    ...(row.merged_into_id ? { mergedIntoId: row.merged_into_id } : {}),
   }
+}
+
+function toNotificationPreferences(
+  row: NotificationPreferencesRow,
+): NotificationPreferences {
+  return {
+    userId: row.user_id,
+    ...(row.quiet_start ? { quietStart: row.quiet_start } : {}),
+    ...(row.quiet_end ? { quietEnd: row.quiet_end } : {}),
+    utcOffsetMinutes: row.utc_offset_minutes,
+    revision: row.revision,
+    updatedAt: row.updated_at,
+  }
+}
+
+function parseQuietTime(value: string, label: string): number {
+  const match = /^(\d{2}):(\d{2})$/.exec(value)
+  if (!match) throw new Error(`${label} must use HH:MM format`)
+  const hours = Number(match[1])
+  const minutes = Number(match[2])
+  if (hours > 23 || minutes > 59)
+    throw new Error(`${label} must be a valid time of day`)
+  return hours * 60 + minutes
+}
+
+function isWithinQuietWindow(
+  preferences: NotificationPreferences,
+  now: Date,
+): boolean {
+  if (!preferences.quietStart || !preferences.quietEnd) return false
+  const start = parseQuietTime(preferences.quietStart, 'quietStart')
+  const end = parseQuietTime(preferences.quietEnd, 'quietEnd')
+  if (start === end) return false
+  const localMinutes =
+    (((Math.floor(now.getTime() / 60_000) + preferences.utcOffsetMinutes) %
+      1440) +
+      1440) %
+    1440
+  return start < end
+    ? localMinutes >= start && localMinutes < end
+    : localMinutes >= start || localMinutes < end
+}
+
+function nextQuietWindowEnd(
+  preferences: NotificationPreferences,
+  now: Date,
+): Date {
+  if (!preferences.quietStart || !preferences.quietEnd) return now
+  const start = parseQuietTime(preferences.quietStart, 'quietStart')
+  const end = parseQuietTime(preferences.quietEnd, 'quietEnd')
+  const localTotalMinutes =
+    Math.floor(now.getTime() / 60_000) + preferences.utcOffsetMinutes
+  const dayStartMinutes = Math.floor(localTotalMinutes / 1440) * 1440
+  let endMinutes = dayStartMinutes + end
+  if (endMinutes <= localTotalMinutes) endMinutes += 1440
+  else if (start > end && localTotalMinutes >= dayStartMinutes + start)
+    endMinutes = dayStartMinutes + 1440 + end
+  return new Date((endMinutes - preferences.utcOffsetMinutes) * 60_000)
 }

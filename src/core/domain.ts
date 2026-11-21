@@ -244,7 +244,7 @@ export interface OutboxMessage {
   channel: string
   dedupeKey: string
   payload: unknown
-  status: 'pending' | 'sending' | 'sent' | 'failed' | 'unknown'
+  status: 'pending' | 'sending' | 'sent' | 'failed' | 'unknown' | 'merged'
   attempts: number
   claimedBy?: string
   leaseUntil?: string
@@ -254,6 +254,33 @@ export interface OutboxMessage {
   updatedAt: string
   sentAt?: string
   readAt?: string
+  coalesceKey?: string
+  coalescedCount?: number
+  mergedIntoId?: string
+  resolution?: OutboxResolution
+}
+
+export interface NotificationPreferences {
+  userId: string
+  quietStart?: string
+  quietEnd?: string
+  utcOffsetMinutes: number
+  revision: number
+  updatedAt: string
+}
+
+export interface OutboxResolutionDraft {
+  commandId: string
+  resolution: 'sent' | 'failed'
+  note: string
+}
+
+interface OutboxResolution {
+  resolution: 'sent' | 'failed'
+  note: string
+  previousStatus: 'failed' | 'unknown'
+  resolvedBy: string
+  createdAt: string
 }
 
 export interface ReleaseRef {

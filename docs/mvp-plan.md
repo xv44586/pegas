@@ -60,7 +60,7 @@
 - [x] Memory 来源、修正、删除和按需加载（服务端闭环；自动抽取与 Web 写操作待补）；
 - [x] SQLite 备份、校验与恢复演练（在线备份、SHA-256/integrity 校验、空环境恢复续跑回归）；
 - [x] Worker、网络和数据库故障注入测试（Worker 三崩溃点真实进程注入 `pnpm smoke:crash`；网络/数据库故障由确定性 lease/DSH stream fault/备份恢复回归覆盖）；
-- [ ] Outbox 的重试、合并、静默时段和未知投递处理。
+- [x] Outbox 的重试、合并、静默时段和未知投递处理（NOTIFY-005：指数退避重试、同 key pending 合并、按用户静默时段、unknown 停车与人工核对）。
 
 ## 自我修改闭环
 

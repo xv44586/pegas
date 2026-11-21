@@ -1,4 +1,7 @@
-import type { NotificationChannel } from './channel.js'
+import {
+  DeliveryOutcomeUnknownError,
+  type NotificationChannel,
+} from './channel.js'
 import type { PegasStore } from '../storage/sqlite-store.js'
 
 export interface OutboxDispatcherOptions {
@@ -39,6 +42,12 @@ export class OutboxDispatcher {
       this.#store.markOutboxSent(message.id, this.#dispatcherId)
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
+      if (error instanceof DeliveryOutcomeUnknownError) {
+        // The receiver may already have the message; never auto-retry an
+        // unknown outcome. It waits for an explicit human resolution.
+        this.#store.markOutboxUnknown(message.id, this.#dispatcherId, detail)
+        return true
+      }
       const retryMs = Math.min(
         5 * 60 * 1000,
         this.#retryBaseMs * 2 ** Math.max(0, message.attempts - 1),
