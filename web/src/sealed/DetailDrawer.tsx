@@ -395,6 +395,10 @@ function TaskDetail({
   const [stopError, setStopError] = useState('')
   const [retrying, setRetrying] = useState(false)
   const [retryError, setRetryError] = useState('')
+  const [summaryExpanded, setSummaryExpanded] = useState(false)
+  const [expandedTimeline, setExpandedTimeline] = useState<Set<string>>(
+    () => new Set(),
+  )
 
   async function retryRun() {
     if (!run || retrying) return
@@ -434,7 +438,22 @@ function TaskDetail({
         <div>
           <small>{state}</small>
           <h3>{stateHeadline(state)}</h3>
-          <p>{stateDescription(state, run)}</p>
+          <p>
+            {state === '已完成' && run?.output
+              ? summaryExpanded
+                ? run.output
+                : stateDescription(state, run)
+              : stateDescription(state, run)}
+          </p>
+          {state === '已完成' && run?.output && run.output.length > 260 && (
+            <button
+              className="inline-link"
+              onClick={() => setSummaryExpanded(current => !current)}
+              type="button"
+            >
+              {summaryExpanded ? '收起结果' : '展开完整结果'}
+            </button>
+          )}
         </div>
       </section>
       {state === '失败' && (
@@ -506,7 +525,31 @@ function TaskDetail({
             {timelineItems.map(item => (
               <li key={item.id}>
                 <strong>{item.role}</strong>
-                <p>{item.text}</p>
+                <p>
+                  {item.text.length > 520 && !expandedTimeline.has(item.id)
+                    ? `${item.text.slice(0, 520)}…`
+                    : item.text}
+                </p>
+                {item.text.length > 520 && (
+                  <button
+                    className="inline-link"
+                    onClick={() =>
+                      setExpandedTimeline(current => {
+                        const next = new Set(current)
+                        if (next.has(item.id)) next.delete(item.id)
+                        else next.add(item.id)
+                        return next
+                      })
+                    }
+                    type="button"
+                  >
+                    {expandedTimeline.has(item.id)
+                      ? '收起'
+                      : item.role === '你'
+                        ? '展开完整消息'
+                        : '展开完整回复'}
+                  </button>
+                )}
                 <small>{formatRelativeTime(item.at)}</small>
               </li>
             ))}

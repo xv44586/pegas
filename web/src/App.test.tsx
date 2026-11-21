@@ -1106,6 +1106,8 @@ describe('sealed Pegas UI', () => {
       }),
     )
     const list = screen.getByLabelText('事情列表')
+    expect(within(list).getByText(channel.title)).toBeTruthy()
+    fireEvent.click(screen.getByRole('tab', { name: '进行中' }))
     expect(within(list).queryByText(channel.title)).toBeNull()
     fireEvent.click(screen.getByRole('tab', { name: '等待中' }))
     expect(within(list).getByText(channel.title)).toBeTruthy()
@@ -3699,5 +3701,155 @@ describe('sealed Pegas UI', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('shows completed work by default under all work', async () => {
+    installSnapshotFetch({
+      ...snapshot,
+      channels: [{ ...channel, status: 'completed' }],
+      runs: [{ ...run, status: 'completed', output: '默认即可见的结果' }],
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /所有事情/,
+      }),
+    )
+    const list = screen.getByLabelText('事情列表')
+    expect(within(list).getByText(channel.title)).toBeTruthy()
+    expect(screen.getByRole('tab', { name: '全部' }).ariaSelected).toBe('true')
+    expect(screen.queryByText('这里还没有事情')).toBeNull()
+    fireEvent.click(screen.getByRole('tab', { name: '进行中' }))
+    expect(screen.getByText('当前筛选下没有事情')).toBeTruthy()
+  })
+
+  it('moves global search focus with arrow keys', async () => {
+    installFetch()
+    render(<App />)
+    const trigger = await screen.findByRole('button', { name: '全局搜索' })
+    fireEvent.click(trigger)
+    const dialog = screen.getByRole('dialog', { name: '全局搜索' })
+    const input = within(dialog).getByRole('textbox', { name: '搜索事情' })
+    const result = within(dialog).getByRole('button', {
+      name: /安全自更新流程/,
+    })
+    fireEvent.keyDown(input, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(result)
+    fireEvent.keyDown(result, { key: 'ArrowUp' })
+    expect(document.activeElement).toBe(input)
+  })
+
+  it('makes the background inert while a modal is open', async () => {
+    installFetch()
+    render(<App />)
+    const trigger = await screen.findByRole('button', { name: '全局搜索' })
+    fireEvent.click(trigger)
+    expect(document.querySelector<HTMLElement>('.app-shell')?.inert).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: '关闭搜索' }))
+    await waitFor(() =>
+      expect(document.querySelector<HTMLElement>('.app-shell')?.inert).toBe(
+        false,
+      ),
+    )
+  })
+
+  it('filters important results and marks them as results', async () => {
+    const source = snapshot.messages[0]
+    if (!source) throw new Error('missing attention fixture')
+    installSnapshotFetch({
+      ...snapshot,
+      messages: [
+        {
+          ...source,
+          id: 'result-1',
+          payload: { type: 'run.completed', text: '验收结果已生成' },
+        },
+        {
+          ...source,
+          id: 'failed-1',
+          payload: { type: 'run.failed', error: '执行失败原因' },
+        },
+      ],
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    expect(document.querySelector('.attention-icon.is-result')).toBeTruthy()
+    expect(document.querySelector('.attention-icon.is-failed')).toBeTruthy()
+    fireEvent.click(screen.getByRole('tab', { name: '重要结果' }))
+    expect(screen.getByText('验收结果已生成')).toBeTruthy()
+    expect(screen.queryByText('执行失败原因')).toBeNull()
+  })
+
+  it('labels long user messages as messages, not replies', async () => {
+    const longText = '这是一条很长的用户输入。'.repeat(60)
+    const userEvent = snapshot.events[0]
+    if (!userEvent) throw new Error('missing user event fixture')
+    installSnapshotFetch({
+      ...snapshot,
+      events: [{ ...userEvent, payload: { text: longText } }],
+    })
+    render(<App />)
+    const expand = await screen.findByRole('button', {
+      name: '展开完整消息',
+    })
+    expect(screen.queryByRole('button', { name: '展开完整回复' })).toBeNull()
+    fireEvent.click(expand)
+    expect(screen.getByRole('button', { name: '收起回复' })).toBeTruthy()
+  })
+
+  it('expands long drawer results and timeline entries on demand', () => {
+    const longOutput = '长结果段落。'.repeat(120)
+    const userEvent = snapshot.events[0]
+    if (!userEvent) throw new Error('missing user event fixture')
+    render(
+      <DetailDrawer
+        onChange={vi.fn()}
+        onClose={vi.fn()}
+        onRetry={vi.fn()}
+        view={{
+          kind: 'task',
+          channel: { ...channel, status: 'completed' },
+          run: { ...run, status: 'completed', output: longOutput },
+          timeline: {
+            channel,
+            events: [{ ...userEvent, payload: { text: longOutput } }],
+            messages: [],
+            runs: [],
+          },
+        }}
+      />,
+    )
+    const expandResult = screen.getByRole('button', {
+      name: '展开完整结果',
+    })
+    fireEvent.click(expandResult)
+    expect(screen.getByText(longOutput)).toBeTruthy()
+    expect(screen.getByRole('button', { name: '收起结果' })).toBeTruthy()
+    const timelineExpand = screen.getByRole('button', {
+      name: '展开完整消息',
+    })
+    fireEvent.click(timelineExpand)
+    expect(screen.getAllByText(longOutput).length).toBeGreaterThan(1)
+  })
+
+  it('reports configured providers as configured until a test succeeds', async () => {
+    installFetch()
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: '设置',
+      }),
+    )
+    fireEvent.click(
+      within(screen.getByLabelText('设置分类')).getByRole('button', {
+        name: '模型服务',
+      }),
+    )
+    expect((await screen.findAllByText('已配置')).length).toBeGreaterThan(0)
+    expect(screen.queryByText('连接正常')).toBeNull()
   })
 })

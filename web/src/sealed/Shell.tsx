@@ -55,6 +55,9 @@ export function AppShell({
     <div
       className={page === 'settings' ? 'app-shell is-settings' : 'app-shell'}
     >
+      <a className="skip-link" href="#pegas-main">
+        跳到主要内容
+      </a>
       <aside className="primary-rail" aria-label="主导航">
         <div className="brand-lockup">
           <PegasMark size={42} />
@@ -117,7 +120,9 @@ export function AppShell({
           <span>设置</span>
         </button>
       </aside>
-      <main className="main-canvas">{children}</main>
+      <main className="main-canvas" id="pegas-main">
+        {children}
+      </main>
       <nav className="mobile-nav" aria-label="移动端主导航">
         {navItems.map(({ id, label, icon: Icon }) => (
           <button
@@ -189,6 +194,14 @@ export function GlobalSearch({
         .includes(query.toLowerCase()),
     )
     .slice(0, 5)
+  const resultRefs = useRef<(HTMLButtonElement | null)[]>([])
+  resultRefs.current = []
+  function focusResult(index: number) {
+    const options = resultRefs.current.filter(Boolean)
+    if (!options.length) return
+    const clamped = Math.max(0, Math.min(index, options.length - 1))
+    options[clamped]?.focus()
+  }
   useEffect(() => {
     inputRef.current?.focus()
     const containFocus = (event: KeyboardEvent) => {
@@ -229,6 +242,12 @@ export function GlobalSearch({
           <input
             aria-label="搜索事情"
             onChange={event => setQuery(event.target.value)}
+            onKeyDown={event => {
+              if (event.key === 'ArrowDown') {
+                event.preventDefault()
+                focusResult(0)
+              }
+            }}
             placeholder="搜索事情"
             ref={inputRef}
             value={query}
@@ -237,10 +256,23 @@ export function GlobalSearch({
         </div>
         <p className="command-section-label">最近</p>
         {visibleChannels.length ? (
-          visibleChannels.map(channel => (
+          visibleChannels.map((channel, index) => (
             <button
               key={channel.id}
               onClick={() => onOpen(channel)}
+              onKeyDown={event => {
+                if (event.key === 'ArrowDown') {
+                  event.preventDefault()
+                  focusResult(index + 1)
+                } else if (event.key === 'ArrowUp') {
+                  event.preventDefault()
+                  if (index === 0) inputRef.current?.focus()
+                  else focusResult(index - 1)
+                }
+              }}
+              ref={element => {
+                resultRefs.current[index] = element
+              }}
               type="button"
             >
               <Clock3 size={17} />

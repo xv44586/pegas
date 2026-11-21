@@ -370,7 +370,6 @@ try {
     .getByRole('heading', { name: '所有事情', exact: true })
     .waitFor()
   await capture(mobilePage, 'mobile-all-work.png', 'mobile-all-work')
-  await mobilePage.getByRole('tab', { name: '已完成' }).click()
   const mobileWork = mobilePage
     .getByLabel('事情列表')
     .getByRole('button')
