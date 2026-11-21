@@ -112,6 +112,14 @@ console.log(JSON.stringify({
     expect(prompt).toContain('PEGAS_INPUT_EVENT_ID')
   })
 
+  it('describes the follow-up API as a one-shot continuation of the current Task', () => {
+    const prompt = executorPrompt('明天下午再问我是否发布')
+    expect(prompt).toContain('POST /v1/runs/:runId/follow-ups')
+    expect(prompt).toContain('Follow-up 只针对当前事情继续一次')
+    expect(prompt).toContain('事情已停止或完成时不会唤醒')
+    expect(prompt).toContain('ISO-8601 未来时间')
+  })
+
   it('accepts only a completed final event and captures the session id', async () => {
     const command = fakeDsh(`
 console.log(JSON.stringify({ type: 'session', sessionId: 'session-test' }))

@@ -120,6 +120,26 @@ export function automationFingerprint(value: unknown): string {
   return createHash('sha256').update(stableJson(value)).digest('hex')
 }
 
+export interface FollowUpCommand {
+  commandId: string
+  prompt: string
+  at: string
+  title?: string
+}
+
+export function parseFollowUpCommand(value: unknown): FollowUpCommand {
+  const input = record(value, 'Follow-up command')
+  exactKeys(input, ['commandId', 'prompt', 'at', 'title'])
+  return {
+    commandId: requiredString(input.commandId, 'commandId', 160),
+    prompt: requiredString(input.prompt, 'prompt', 8000),
+    at: isoTimestamp(input.at, 'at'),
+    ...(input.title === undefined
+      ? {}
+      : { title: requiredString(input.title, 'title', 120) }),
+  }
+}
+
 export function firstAutomaticFireAt(
   schedule: AutomationSchedule,
   now: Date,

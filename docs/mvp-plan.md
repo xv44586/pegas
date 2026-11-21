@@ -52,7 +52,7 @@
 
 ## 长期运行闭环
 
-- [ ] Follow-up 对话式自动化；
+- [x] Follow-up 对话式自动化（Executor 经 `POST /v1/runs/:runId/follow-ups` 以当前 Run claim 创建 once+existing_task Automation，到点经既有 Scheduler/Inbox 链路送回同一事情）；
 - [x] 一次性与固定间隔 Schedule；
 - [x] Scheduler 事务性写入 Event Inbox；
 - [x] Approval 持久等待、释放 Worker 和事件恢复；

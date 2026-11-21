@@ -12,6 +12,26 @@
 
 Automation 是独立产品对象。它不是 Task，不是 Run，也不是 DSH session；一条 Automation 可以依次产生多个 Task，一个 Task 也可以被重复唤醒。第一版界面中的“自动化”页只能读取这里返回的事实。
 
+### Follow-up（对话式一次性跟进）
+
+Follow-up 是 Automation 的一个受限创建入口，而不是新的领域对象：实际 Executor 在对话中听到“明天下午再问我是否发布”这类围绕当前事情的一次性跟进时，用当前 Run 的短期 claim 调用：
+
+```http
+POST /v1/runs/:runId/follow-ups
+x-pegas-run-claim-token: <current run claim>
+```
+
+```json
+{
+  "commandId": "stable-key",
+  "prompt": "到点要执行或询问的内容",
+  "at": "2026-11-22T14:00:00.000Z",
+  "title": "可选短标题"
+}
+```
+
+服务端把它落盘为 `once + existing_task(当前 Task)` 的 Automation：owner 取自 Run 所属 Task，不接受调用方指定其他 Task 或 new_task；`at` 必须在未来；Task 已停止/完成时拒绝（`automation_target_unavailable`）。命令按 `follow-up:<runId>:<commandId>` 幂等，重放返回冻结的 Automation，payload 冲突 409。到点由既有 Scheduler → Event Inbox → Router 链路把提示词作为机器输入送回同一事情；周期性责任仍走显式 Automation API，Follow-up 不表达周期语义。
+
 ## 领域模型
 
 Automation 保存：

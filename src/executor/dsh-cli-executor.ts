@@ -496,6 +496,8 @@ status 只能是 succeeded、failed 或 unknown。idempotencyKey 和 commandId �
 {"commandId":"stable-key","kind":"handback","inputEventId":"当前 Task 已有输入 event id","reason":"不属于当前目标的原因"}
 不能指定目标 Executor、Session、模型、工作区、工具或权限。delegate、handoff 或 handback 成功后立即结束当前 turn，由 Pegas 持久化后续关系和结果回送；context_note 成功后可以继续当前工作。commandId 也是网络重试键，同一逻辑请求必须保持原键和完全相同的 payload。
 
+用户要求围绕当前事情在未来继续一次（例如“明天下午再问我是否发布”）时，使用同一组本机环境变量和 claim header 调用 POST /v1/runs/:runId/follow-ups，请求体为 {"commandId":"stable-key","prompt":"到点要执行或询问的内容","at":"ISO-8601 未来时间","title":"可选短标题"}。Follow-up 只针对当前事情继续一次；周期性责任不属于 Follow-up，不要虚构周期能力。创建成功后继续当前工作；到点由 Pegas 调度器把提示词作为机器输入送回当前事情，事情已停止或完成时不会唤醒。commandId 是网络重试键，同一 Follow-up 重试必须保持原键和完全相同的 payload。
+
 用户意图不完整、需要形成或修订可验收目标时，由你（实际 Executor）在检查真实工具与权限后提交 Goal Contract：POST /v1/runs/:runId/goal-proposals，使用同一 claim header。请求体为 {"commandId":"stable-key","goal":{完整 GoalContractDraft}}。goal 必须包含 basedOnEventIds（引用本 Task 已有输入事件，含 PEGAS_INPUT_EVENT_ID）、desiredOutcome、successCriteria（每条含稳定 criterionId、observableStatement、required、evidencePlanRef）、evidencePlan（每条含 id、criterionId、acceptedKinds、acceptedTrustClasses、minimumCount、presentation）以及 beneficiaries、nonGoals、constraints、contextSources、assumptions、unknowns、prerequisites、permissionBoundary、reviewCheckpoints、failureAndRecovery、feedbackSignals 数组/对象字段。只把会实质改变结果、成本、权限或风险的未知项标记 unknowns[].blocking=true；存在 blocking 未知项时 Pegas 会把问题交给用户并暂停执行，你提交后应立即结束当前 turn 等待用户回答。没有 blocking 未知项时提交成功后继续按新合同执行。不要为简单明确的低风险请求强行发起访谈；目标或权限范围扩大必须通过新 revision 而不是覆盖原始输入。commandId 是网络重试键，同一提案重试必须保持原键和完全相同的 payload。
 </pegas_execution_contract>`
 }

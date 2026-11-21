@@ -116,6 +116,7 @@ import {
   type AutomationStatusCommand,
   type AutomationTarget,
   type AutomationUpdateCommand,
+  type FollowUpCommand,
 } from '../schedule/schedule.js'
 import {
   effectiveWorkerProfile,
@@ -6384,6 +6385,31 @@ export class PegasStore {
     )
       return
     this.#claimForCapability(runId, claimToken)
+  }
+
+  createFollowUpFromRun(
+    runId: string,
+    claimToken: string,
+    command: FollowUpCommand,
+  ): { automation: Automation } {
+    this.#claimForCapability(runId, claimToken)
+    const run = this.#runById(runId)
+    const task = this.#taskById(run.taskId)
+    if (task.status === 'completed' || task.status === 'cancelled')
+      throw new AutomationTargetUnavailableError()
+    if (Date.parse(command.at) <= this.#clock.now().getTime())
+      throw new Error('Follow-up time must be in the future')
+    const automation = this.createAutomation({
+      userId: task.userId,
+      commandId: `follow-up:${runId}:${command.commandId}`,
+      automation: {
+        title: (command.title ?? `Follow-up: ${task.title}`).slice(0, 120),
+        prompt: command.prompt,
+        schedule: { kind: 'once', at: command.at },
+        target: { kind: 'existing_task', taskId: task.id },
+      },
+    })
+    return { automation }
   }
 
   submitWorkerReport(

@@ -63,6 +63,7 @@ import {
   parseAutomationCreate,
   parseAutomationStatusCommand,
   parseAutomationUpdate,
+  parseFollowUpCommand,
 } from '../schedule/schedule.js'
 import type {
   SpeechRecognitionProvider,
@@ -592,6 +593,28 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
           parseGoalContractDraft(body.goal),
         )
         return sendJson(response, 201, result)
+      }
+      const runFollowUpMatch = /^\/v1\/runs\/([^/]+)\/follow-ups$/.exec(
+        taskResourceUrl.pathname,
+      )
+      if (runFollowUpMatch && request.method === 'POST') {
+        const claimToken = runClaimToken(request)
+        if (!claimToken)
+          return sendJson(response, 403, { error: 'run_claim_required' })
+        const runId = decodeURIComponent(runFollowUpMatch[1] ?? '')
+        const command = parseFollowUpCommand(await readJson(request))
+        try {
+          const result = options.store.createFollowUpFromRun(
+            runId,
+            claimToken,
+            command,
+          )
+          return sendJson(response, 201, result)
+        } catch (error) {
+          if (error instanceof RunClaimError)
+            return sendJson(response, 403, { error: 'run_claim_invalid' })
+          return sendAutomationError(response, error)
+        }
       }
       const workerProfileMatch = /^\/v1\/tasks\/([^/]+)\/worker-profile$/.exec(
         taskResourceUrl.pathname,
@@ -1871,6 +1894,7 @@ function isRunCapabilityWrite(request: IncomingMessage): boolean {
   return (
     /^\/v1\/runs\/[^/]+\/(reports|approvals|collaborations)$/.test(pathname) ||
     /^\/v1\/runs\/[^/]+\/goal-proposals$/.test(pathname) ||
+    /^\/v1\/runs\/[^/]+\/follow-ups$/.test(pathname) ||
     /^\/v1\/actions\/[^/]+\/outcomes$/.test(pathname)
   )
 }
