@@ -8,6 +8,23 @@ Feature：`TASK-001`（现有五状态与失败重试）和 `TASK-002`（Partial
 
 边界：服务端为状态权威；重试接口沿用现有单用户 API token，并校验 userId 与 Task 归属。原输入、执行器和已保存 session 用于恢复，不新增权限。对执行产生的外部副作用不承诺 exactly-once；沿用已保存 session 的恢复边界。
 
+## 完整状态迁移（2026-11-21）
+
+Task 与 Run 的合法状态与迁移由数据库和应用层双重约束：
+
+- **Task**：`backlog / unstarted / started / completed / cancelled`（migration 7 触发器强制）。路由创建 → `unstarted`；Run 领取 → `started`；完成门禁通过 → `completed`；用户停止 → `cancelled`（永久，重复停止幂等）。`completed` 只能经 Mandate 复核的显式续接输入回到非终态；`cancelled` 在入口与事务两层拒绝任何恢复。
+- **Run**：`queued / running / waiting / completed / failed / cancelled`（schema v29 新增 `runs_status_insert/update` 触发器，非法状态直接 ABORT）。迁移路径：
+  - `queued → running`（claim，含节点绑定与契约版本 fence）；
+  - `running → completed`（无 Goal 合同的 completeRun，或 Goal 完成门禁通过）；
+  - `running → failed`（执行失败 / lease 过期结算，后者同事务创建 `retryOfRunId` 后继）；
+  - `running → waiting`（高风险 Action 停放等待审批）；`waiting → cancelled`（审批决定取代原 Run，`superseded_by_approval_decision`）+ 新 `queued` 后继；
+  - `running → cancelled`（用户停止或 steering 取代，`superseded_by_steering:<successor>`）+ 新 `queued` 后继；
+  - `waiting → running`（reporting phase 接管，evidence 补齐唤醒）。
+- **终态不可变**：`completed / failed / cancelled` Run 拒绝一切迟到写回（claim fence + 状态检查）；重试只允许最新 failed Run 且同 Task 无活跃 Run，重复重试返回同一后继。
+- **Event Inbox**：`pending → processing → processed / failed`（CHECK 约束 + claim fencing，见 ROUTE-002）；审批/协作停放使用保留 lease，结算后幂等 no-op。
+
+自动化证据：`test/task-run-state-machine.test.ts` 覆盖非法状态拒绝（v29 触发器）、成功路径、失败重试幂等、lease 过期恢复、审批停放与后继、steering 取代、用户停止全量取消、completed 显式续接；既有 lifecycle/approval/control-intents/collaboration 回归保护其余边界。v29 为纯新增触发器，不改写历史数据，旧 Release 读取不受影响。
+
 迁移：schema v7 将 inbox→backlog、planning→unstarted、running/waiting/paused/failed→started，保留等待/暂停/失败的原因。v10 为 Task 回填不可变 `mandate_json` 和结构化 `ended_json`，为 Run 回填保守的 `execution_context_json`，并增加停止命令幂等表；历史 cancelled 一律按人工停止迁移，历史 completed 保留可恢复结束记录。v5 和 v6 分别属于 Provider 连接与 Agent 模型覆盖。早期 Task-only v5 候选库在启动时识别并修正迁移编号，然后应用 Provider 迁移。运行前应备份数据库；回滚需同时恢复旧版数据库备份与应用，不能让旧 Worker 与新库混跑。
 
 恢复：事务提交前失败不产生后继；提交后响应丢失可重发。一个 Run 最多一个重试后继；任务存在 queued/running Run 时拒绝额外重试。租约到期时旧 Run 标为 failed（lease_expired），新 Run 从保存的 session 恢复。失败 Run 的错误与输出保留用于诊断。

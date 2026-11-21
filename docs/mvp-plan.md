@@ -40,7 +40,7 @@
 - [x] 同一用户的 Router lease / fencing（事件 claim 续租 + 路由/控制/审批写入与写回的 claim fence，过期接管后旧 Worker 写入被拒绝）；
 - [x] 新建、补充、纠正和取消 Task 的完整路由（steer/cancel 控制意图、心跳中止与 session 后继已实现；Idea/Trigger 意图待补）；
 - [x] 从自由文本或语音形成带 revision 的 Goal Contract，只追问会改变结果、权限、成本或风险的关键未知项；Executor 提案 API 与 blocking 澄清停放已实现，Web 澄清卡片待接入；
-- [ ] Task 与 Run 完整状态迁移；
+- [x] Task 与 Run 完整状态迁移（schema v29 Run 状态触发器 + 全路径回归：成功/失败重试/lease 恢复/审批停放/steering/停止/完成续接，见 `docs/task-lifecycle.md`）；
 - [x] success criteria、EvidenceRef 与 Control Plane 完成门禁；
 - [x] 第一版 DSH headless Executor Adapter；
 - [x] Run 与 DSH session 映射及租约过期恢复；

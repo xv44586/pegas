@@ -466,6 +466,15 @@ CREATE TABLE IF NOT EXISTS execution_nodes (
 );
 `
 
+const migration29 = `
+CREATE TRIGGER runs_status_insert BEFORE INSERT ON runs
+WHEN NEW.status NOT IN ('queued','running','waiting','completed','failed','cancelled')
+BEGIN SELECT RAISE(ABORT, 'Invalid run status'); END;
+CREATE TRIGGER runs_status_update BEFORE UPDATE OF status ON runs
+WHEN NEW.status NOT IN ('queued','running','waiting','completed','failed','cancelled')
+BEGIN SELECT RAISE(ABORT, 'Invalid run status'); END;
+`
+
 const migration2 = `
 ALTER TABLE tasks ADD COLUMN goal TEXT NOT NULL DEFAULT '';
 
@@ -2089,6 +2098,7 @@ export class PegasStore {
     this.#migrate(26, migration26)
     this.#migrate(27, migration27)
     this.#migrate(28, migration28)
+    this.#migrate(29, migration29)
   }
 
   #backfillWorkerIconIds(): void {
