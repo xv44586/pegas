@@ -3,7 +3,7 @@
 import { cleanup, render } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { PegasAgentIcon, PegasAgentSprite } from './PegasAgentIcon'
+import { PegasAgentIcon } from './PegasAgentIcon'
 import type { TaskStatus } from './types'
 
 afterEach(cleanup)
@@ -28,7 +28,7 @@ describe('PegasAgentIcon', () => {
         .querySelector('.pegas-agent-status')
         ?.getAttribute('data-status'),
     ).toBe(status)
-    expect(container.querySelector('.pegas-agent-glyph')).toBeTruthy()
+    expect(container.querySelector('img.pegas-agent-glyph')).toBeTruthy()
   })
 
   it('keeps decorative icons hidden and informative icons named', () => {
@@ -40,7 +40,7 @@ describe('PegasAgentIcon', () => {
     ).toBe('true')
     expect(
       container
-        .querySelector('svg.pegas-agent-glyph')
+        .querySelector('img.pegas-agent-glyph')
         ?.getAttribute('aria-hidden'),
     ).toBe('true')
 
@@ -49,34 +49,33 @@ describe('PegasAgentIcon', () => {
     expect(avatar?.getAttribute('role')).toBe('img')
     expect(avatar?.getAttribute('aria-label')).toBe('Pegas')
     expect(
-      container.querySelector('svg.pegas-agent-glyph')?.getAttribute('role'),
+      container.querySelector('img.pegas-agent-glyph')?.getAttribute('role'),
     ).toBeNull()
   })
 
-  it('inlines the sprite once so first paint never waits on a fetch', () => {
+  it('renders each identity from its transparent illustration with a stable box', () => {
     const { container } = render(
       <>
-        <PegasAgentSprite />
         <PegasAgentIcon iconId="bot" />
         <PegasAgentIcon iconId="car" />
         <PegasAgentIcon iconId="camera" />
+        <PegasAgentIcon iconId="computer" />
+        <PegasAgentIcon iconId="phone" />
       </>,
     )
 
-    const sprites = container.querySelectorAll('.pegas-agent-sprite')
-    expect(sprites.length).toBe(1)
-    const sprite = sprites[0]
-    for (const iconId of ['bot', 'car', 'camera', 'computer', 'phone']) {
-      expect(sprite?.querySelector(`#pegas-agent-${iconId}`)).toBeTruthy()
-    }
-    const uses = [...container.querySelectorAll('use')]
-    expect(uses.map(use => use.getAttribute('href'))).toEqual([
-      '#pegas-agent-bot',
-      '#pegas-agent-car',
-      '#pegas-agent-camera',
+    const glyphs = [...container.querySelectorAll('img.pegas-agent-glyph')]
+    expect(glyphs.map(glyph => glyph.getAttribute('src'))).toEqual([
+      '/brand/agent-bot.webp',
+      '/brand/agent-car.webp',
+      '/brand/agent-camera.webp',
+      '/brand/agent-computer.webp',
+      '/brand/agent-phone.webp',
     ])
-    expect(uses.every(use => !use.getAttribute('href')?.includes('.svg'))).toBe(
-      true,
-    )
+    for (const glyph of glyphs) {
+      expect(glyph.getAttribute('width')).toBe('34')
+      expect(glyph.getAttribute('height')).toBe('34')
+      expect(glyph.getAttribute('alt')).toBe('')
+    }
   })
 })

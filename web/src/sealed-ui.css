@@ -248,7 +248,7 @@ a {
   padding: 0 20px 18px;
 }
 .pegas-mark {
-  color: var(--accent);
+  display: block;
   flex: 0 0 auto;
 }
 .brand-lockup strong {
@@ -1148,8 +1148,6 @@ a {
   width: 38px;
 }
 .work-icon .pegas-agent-avatar {
-  --pegas-icon-background: var(--accent);
-  --pegas-icon-foreground: #fff;
   display: flex;
   height: 38px;
   width: 38px;
@@ -1158,6 +1156,13 @@ a {
   display: block;
   height: 100%;
   width: 100%;
+}
+@media (forced-colors: active) {
+  .work-icon .pegas-agent-avatar {
+    border: 1px solid CanvasText;
+    border-radius: 11px;
+    forced-color-adjust: none;
+  }
 }
 .work-copy {
   display: grid;

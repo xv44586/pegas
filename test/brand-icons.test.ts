@@ -36,9 +36,9 @@ describe('unified brand application icons', () => {
       path.join(repositoryRoot, 'web/index.html'),
       'utf8',
     )
-    expect(html).toContain('href="/favicon.svg?v=2"')
-    expect(html).toContain('href="/favicon-32.png?v=2"')
-    expect(html).toContain('href="/apple-touch-icon.png?v=2"')
+    expect(html).toContain('href="/favicon.svg?v=3"')
+    expect(html).toContain('href="/favicon-32.png?v=3"')
+    expect(html).toContain('href="/apple-touch-icon.png?v=3"')
     for (const file of [
       'favicon.svg',
       'favicon-32.png',
@@ -67,7 +67,7 @@ describe('unified brand application icons', () => {
         'utf8',
       ),
     ) as Record<string, string>
-    expect(Object.keys(manifest).length).toBe(5)
+    expect(Object.keys(manifest).length).toBe(10)
     for (const [relativePath, expectedHash] of Object.entries(manifest)) {
       const content = await readFile(path.join(repositoryRoot, relativePath))
       expect(createHash('sha256').update(content).digest('hex')).toBe(

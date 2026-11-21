@@ -18,6 +18,15 @@ const manifestPath = path.join(
 const tileSize = 1024
 const tileRadius = 224
 const mascotBox = { x: 132, y: 150, width: 760, height: 700 }
+const agentTileSize = 256
+const agentIconIds = ['bot', 'car', 'camera', 'computer', 'phone']
+const agentSourceNames = {
+  bot: 'pegas-mascot.png',
+  car: 'worker-car.png',
+  camera: 'worker-camera.png',
+  computer: 'worker-computer.png',
+  phone: 'worker-phone.png',
+}
 
 const icnsEntries = [
   ['ic07', 128],
@@ -66,11 +75,51 @@ tile.save(${JSON.stringify(outputPath)})
 `
 }
 
+function renderAgentAssetScript(sourcePath, outputPath) {
+  return `
+from PIL import Image
+source = Image.open(${JSON.stringify(sourcePath)}).convert('RGBA')
+box = source.getchannel('A').getbbox()
+if box:
+    source = source.crop(box)
+scale = min(${agentTileSize} / source.width, ${agentTileSize} / source.height)
+resized = source.resize(
+    (round(source.width * scale), round(source.height * scale)),
+    Image.LANCZOS,
+)
+canvas = Image.new('RGBA', (${agentTileSize}, ${agentTileSize}), (0, 0, 0, 0))
+canvas.alpha_composite(
+    resized,
+    ((${agentTileSize} - resized.width) // 2, (${agentTileSize} - resized.height) // 2),
+)
+canvas.save(${JSON.stringify(outputPath)}, format='WEBP', lossless=True, quality=100, method=6)
+`
+}
+
 function resizeScript(sourcePath, outputPath, size) {
   return `
 from PIL import Image
 image = Image.open(${JSON.stringify(sourcePath)}).convert('RGBA')
 image.resize((${size}, ${size}), Image.LANCZOS).save(${JSON.stringify(outputPath)})
+`
+}
+
+function renderFaviconScript(tilePath, outputPath) {
+  return `
+import base64, io
+from PIL import Image
+image = Image.open(${JSON.stringify(tilePath)}).convert('RGBA')
+image = image.resize((128, 128), Image.LANCZOS)
+buffer = io.BytesIO()
+image.save(buffer, format='PNG', optimize=True)
+encoded = base64.b64encode(buffer.getvalue()).decode('ascii')
+svg = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">\\n'
+    '  <image href="data:image/png;base64,' + encoded + '" width="64" height="64"/>\\n'
+    '</svg>\\n'
+)
+with open(${JSON.stringify(outputPath)}, 'w', encoding='utf-8') as handle:
+    handle.write(svg)
 `
 }
 
@@ -84,6 +133,8 @@ async function buildArtifacts() {
   runPython(renderTileScript(mascotPath, tilePath))
 
   const tileBase64 = (await readFile(tilePath)).toString('base64')
+  const faviconPath = path.join(temporaryDirectory, 'favicon.svg')
+  runPython(renderFaviconScript(tilePath, faviconPath))
   const artifacts = [
     {
       outputPath: path.join(repositoryRoot, 'desktop/icon.svg'),
@@ -97,25 +148,24 @@ async function buildArtifacts() {
     },
     {
       outputPath: path.join(repositoryRoot, 'web/public/favicon.svg'),
-      content: Buffer.from(
-        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="14" fill="#5267F8"/>
-  <g fill="none" stroke="#ffffff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M32 17V11"/>
-    <circle cx="32" cy="9" r="2.4" fill="#ffffff" stroke="none"/>
-    <path d="M17 31l-6 4 6 4"/>
-    <path d="M47 31l6 4-6 4"/>
-    <rect x="17" y="17" width="30" height="30" rx="13"/>
-  </g>
-  <rect x="22" y="25" width="20" height="13" rx="6.5" fill="#181818"/>
-  <circle cx="28" cy="31.5" r="2.1" fill="#7defff"/>
-  <circle cx="36" cy="31.5" r="2.1" fill="#7defff"/>
-</svg>
-`,
-        'utf8',
-      ),
+      content: await readFile(faviconPath),
     },
   ]
+
+  for (const iconId of agentIconIds) {
+    const sourcePath = path.join(
+      repositoryRoot,
+      'web/public/brand',
+      agentSourceNames[iconId],
+    )
+    const outputPath = path.join(
+      repositoryRoot,
+      'web/public/brand',
+      `agent-${iconId}.webp`,
+    )
+    runPython(renderAgentAssetScript(sourcePath, outputPath))
+    artifacts.push({ outputPath, content: await readFile(outputPath) })
+  }
 
   const pngSizes = [
     ['favicon-32.png', 32],

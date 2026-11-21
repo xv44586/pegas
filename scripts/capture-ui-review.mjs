@@ -541,6 +541,16 @@ async function seedConversation(apiPort) {
 
 async function capture(page, name, label) {
   await assertGeometry(page, label)
+  await page.evaluate(async () => {
+    const images = [...globalThis.document.images]
+    await Promise.all(
+      images.map(image =>
+        image.complete
+          ? Promise.resolve()
+          : image.decode().catch(() => undefined),
+      ),
+    )
+  })
   await page.screenshot({
     path: resolve(outputDirectory, name),
     fullPage: false,

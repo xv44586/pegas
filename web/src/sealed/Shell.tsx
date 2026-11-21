@@ -17,7 +17,6 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { ChannelSearchResult, WorkChannel } from '../types'
-import { PegasAgentSprite } from '../PegasAgentIcon'
 import { PegasMark } from './PegasMark'
 import { PegasMascot, type PegasMascotPose } from './PegasMascot'
 import type { AppPage } from './types'
@@ -57,7 +56,6 @@ export function AppShell({
     <div
       className={page === 'settings' ? 'app-shell is-settings' : 'app-shell'}
     >
-      <PegasAgentSprite />
       <a className="skip-link" href="#pegas-main">
         跳到主要内容
       </a>
