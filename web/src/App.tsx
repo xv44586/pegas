@@ -433,10 +433,17 @@ export function App() {
         : undefined) ??
       latestRunForTask(runs, channel.id) ??
       view.run
-    const records =
-      data.usage?.records.filter(record => record.runId === run?.id) ?? []
+    const taskRecords =
+      data.usage?.records.filter(record => record.taskId === channel.id) ?? []
+    const records = taskRecords.filter(record => record.runId === run?.id)
     if (!records.length)
-      return { ...view, channel, run, runs, usage: undefined }
+      return {
+        ...view,
+        channel,
+        run,
+        runs,
+        usage: taskRecords.length ? { records: taskRecords } : undefined,
+      }
     const sum = (key: 'totalTokens' | 'durationMs' | 'costUsd') => {
       const values = records
         .map(record => record[key])
@@ -467,6 +474,7 @@ export function App() {
           : undefined,
         durationMs: sum('durationMs'),
         costUsd: sum('costUsd'),
+        records: taskRecords,
       },
     }
   }

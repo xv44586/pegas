@@ -280,6 +280,60 @@ interface RunProgressSummary {
   at: string
 }
 
+function formatDurationMs(durationMs: number): string {
+  const seconds = Math.round(durationMs / 1000)
+  if (seconds < 60) return `${String(seconds)}s`
+  const minutes = Math.floor(seconds / 60)
+  const rest = seconds % 60
+  if (minutes < 60)
+    return rest ? `${String(minutes)}m ${String(rest)}s` : `${String(minutes)}m`
+  const hours = Math.floor(minutes / 60)
+  return `${String(hours)}h ${String(minutes % 60)}m`
+}
+
+interface WorkflowStep {
+  label: string
+  tools: string[]
+}
+
+function groupWorkflowSteps(recent: readonly string[]): WorkflowStep[] {
+  const steps: WorkflowStep[] = []
+  let current: WorkflowStep | undefined
+  for (const label of recent) {
+    if (label.startsWith('调用工具')) {
+      if (!current) {
+        current = { label: '准备', tools: [] }
+        steps.push(current)
+      }
+      current.tools.push(label.replace(/^调用工具\s*/, ''))
+      continue
+    }
+    if (label.startsWith('开始第')) {
+      current = {
+        label: label.replace(/^开始第\s*/, '第 ').replace(/步推理$/, ' 步'),
+        tools: [],
+      }
+      steps.push(current)
+      continue
+    }
+    if (label.startsWith('完成第')) {
+      const finished = label
+        .replace(/^完成第\s*/, '第 ')
+        .replace(/步推理$/, ' 步')
+      if (current?.label === finished) {
+        current.label = `${finished}（已完成）`
+      } else {
+        steps.push({ label: `${finished}（已完成）`, tools: [] })
+      }
+      current = undefined
+      continue
+    }
+    current = { label, tools: [] }
+    steps.push(current)
+  }
+  return steps
+}
+
 function runProgressFromPayload(
   payload: unknown,
 ): Omit<RunProgressSummary, 'at'> | undefined {
@@ -899,6 +953,24 @@ function TaskDetail({
       })
     }
   }
+  const usageByRun = new Map(
+    (usage?.records ?? []).map(record => [record.runId, record]),
+  )
+  const totalDurationMs = (usage?.records ?? []).reduce(
+    (sum, record) => sum + (record.durationMs ?? 0),
+    0,
+  )
+  const hasDuration = (usage?.records ?? []).some(
+    record => record.durationMs !== undefined,
+  )
+  const liveRun = runHistory.findLast(historyRun =>
+    ['queued', 'running', 'waiting'].includes(historyRun.status),
+  )
+  const liveProgress = liveRun ? progressByRun.get(liveRun.id) : undefined
+  const liveDurationMs =
+    liveRun?.status === 'running'
+      ? Math.max(0, Date.now() - Date.parse(liveRun.createdAt))
+      : undefined
   const timelineItems = [
     ...(timeline?.events.map(event => ({
       id: event.id,
@@ -999,7 +1071,18 @@ function TaskDetail({
         </section>
       )}
       <section className="detail-section">
-        <h3>运行记录</h3>
+        <div className="run-record-heading">
+          <h3>运行记录</h3>
+          <small className="run-duration-summary">
+            {hasDuration
+              ? `累计用时 ${formatDurationMs(totalDurationMs)}`
+              : liveDurationMs !== undefined
+                ? `本次已运行 ${formatDurationMs(liveDurationMs)}`
+                : '用时待回报'}
+            {liveProgress &&
+              ` · 工具 ${String(liveProgress.toolCalls)} 次 · ${String(liveProgress.steps)} 步推理`}
+          </small>
+        </div>
         <ol className="progress-list">
           <li className="is-done">
             <CheckCircle2 size={14} />
@@ -1012,6 +1095,7 @@ function TaskDetail({
             runHistory.map((historyRun, index) => {
               const historyState = runStatusLabel(historyRun)
               const progress = progressByRun.get(historyRun.id)
+              const runUsage = usageByRun.get(historyRun.id)
               return (
                 <li
                   className={runProgressClass(historyState)}
@@ -1027,27 +1111,47 @@ function TaskDetail({
                     <small>
                       {historyState} ·{' '}
                       {formatRelativeTime(historyRun.updatedAt)}
+                      {runUsage?.durationMs !== undefined &&
+                        ` · 用时 ${formatDurationMs(runUsage.durationMs)}`}
                     </small>
                     {runHistory.length > 1 && historyRun.lastError && (
                       <small>{historyRun.lastError}</small>
                     )}
-                    {progress && (
-                      <small className="run-progress-summary">
-                        工具调用 {progress.toolCalls} 次 · 已完成{' '}
-                        {progress.steps} 步推理 ·{' '}
-                        {formatRelativeTime(progress.at)}
-                      </small>
-                    )}
                     {progress && progress.recent.length > 0 && (
                       <details className="run-progress-details">
-                        <summary>执行动态</summary>
-                        <ul>
-                          {progress.recent.map((label, labelIndex) => (
-                            <li key={`${historyRun.id}-${String(labelIndex)}`}>
-                              {label}
-                            </li>
-                          ))}
-                        </ul>
+                        <summary>
+                          工作流程记录 · 工具 {progress.toolCalls} 次 ·{' '}
+                          {progress.steps} 步推理
+                        </summary>
+                        <ol className="run-workflow">
+                          {groupWorkflowSteps(progress.recent).map(
+                            (step, stepIndex) => (
+                              <li
+                                key={`${historyRun.id}-step-${String(stepIndex)}`}
+                              >
+                                {step.tools.length > 0 ? (
+                                  <details className="run-step-tools">
+                                    <summary>
+                                      {step.label} · {step.tools.length}{' '}
+                                      次工具调用
+                                    </summary>
+                                    <ul>
+                                      {step.tools.map((tool, toolIndex) => (
+                                        <li
+                                          key={`${historyRun.id}-step-${String(stepIndex)}-tool-${String(toolIndex)}`}
+                                        >
+                                          {tool}
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  </details>
+                                ) : (
+                                  <span>{step.label}</span>
+                                )}
+                              </li>
+                            ),
+                          )}
+                        </ol>
                       </details>
                     )}
                   </span>

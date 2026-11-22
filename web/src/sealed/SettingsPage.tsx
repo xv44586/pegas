@@ -34,6 +34,7 @@ import type {
   MemoryRecord,
   ModelCatalogItem,
   ModelProviderDraft,
+  ModelUsageRecord,
   ModelUsageReport,
   NotificationPreferences,
   NotificationPreferencesUpdate,
@@ -2298,6 +2299,65 @@ function formatUtcOffset(minutes: number): string {
   return `${sign}${String(hours)}${remainder ? `:${String(remainder).padStart(2, '0')}` : ''}`
 }
 
+interface ModelUsageRow {
+  model: string
+  runs: number
+  tasks: number
+  inputTokens?: number
+  outputTokens?: number
+  cacheReadTokens?: number
+  durationMs?: number
+}
+
+function aggregateUsageByModel(
+  records: readonly ModelUsageRecord[],
+): ModelUsageRow[] {
+  const byModel = new Map<
+    string,
+    { row: ModelUsageRow; taskIds: Set<string> }
+  >()
+  for (const record of records) {
+    const model = record.modelRef ?? record.executor
+    const entry = byModel.get(model) ?? {
+      row: { model, runs: 0, tasks: 0 },
+      taskIds: new Set<string>(),
+    }
+    entry.row.runs += 1
+    entry.taskIds.add(record.taskId)
+    entry.row.tasks = entry.taskIds.size
+    entry.row.inputTokens = addOptional(
+      entry.row.inputTokens,
+      record.inputTokens,
+    )
+    entry.row.outputTokens = addOptional(
+      entry.row.outputTokens,
+      record.outputTokens,
+    )
+    entry.row.cacheReadTokens = addOptional(
+      entry.row.cacheReadTokens,
+      record.cacheReadTokens,
+    )
+    entry.row.durationMs = addOptional(entry.row.durationMs, record.durationMs)
+    byModel.set(model, entry)
+  }
+  return [...byModel.values()]
+    .map(entry => entry.row)
+    .toSorted(
+      (left, right) =>
+        (right.inputTokens ?? 0) +
+        (right.outputTokens ?? 0) -
+        ((left.inputTokens ?? 0) + (left.outputTokens ?? 0)),
+    )
+}
+
+function addOptional(
+  current: number | undefined,
+  value: number | undefined,
+): number | undefined {
+  if (value === undefined) return current
+  return (current ?? 0) + value
+}
+
 function UsageSettings({
   usage,
   error,
@@ -2307,6 +2367,7 @@ function UsageSettings({
   error?: string
   onRetry: () => void
 }) {
+  const [dimension, setDimension] = useState<'run' | 'model'>('run')
   const summary = usage?.summary
   const hasTokenUsage = usage?.records.some(
     record =>
@@ -2321,6 +2382,7 @@ function UsageSettings({
   const total = hasTokenUsage
     ? (summary?.inputTokens ?? 0) + (summary?.outputTokens ?? 0)
     : undefined
+  const modelRows = aggregateUsageByModel(usage?.records ?? [])
   return (
     <div className="settings-pane">
       <SettingsHeading
@@ -2379,37 +2441,89 @@ function UsageSettings({
               </span>
             </article>
           </div>
-          <div className="usage-table">
-            <div>
-              <b>模型 / Run</b>
-              <b>输入</b>
-              <b>输出</b>
-              <b>缓存</b>
-              <b>时长</b>
-            </div>
-            {usage.records.map(record => (
-              <div key={record.runId}>
-                <span>
-                  {record.modelRef ?? record.executor}
-                  <small>{`事情 ${record.taskId} · Run ${record.runId}`}</small>
-                </span>
-                <span>
-                  {record.inputTokens?.toLocaleString('zh-CN') ?? '—'}
-                </span>
-                <span>
-                  {record.outputTokens?.toLocaleString('zh-CN') ?? '—'}
-                </span>
-                <span>
-                  {record.cacheReadTokens?.toLocaleString('zh-CN') ?? '—'}
-                </span>
-                <span>
-                  {record.durationMs
-                    ? `${String(Math.round(record.durationMs / 1000))}s`
-                    : '—'}
-                </span>
-              </div>
-            ))}
+          <div className="usage-dimension" role="group" aria-label="统计维度">
+            <button
+              aria-pressed={dimension === 'run'}
+              className={dimension === 'run' ? 'is-active' : ''}
+              onClick={() => setDimension('run')}
+              type="button"
+            >
+              按 Run
+            </button>
+            <button
+              aria-pressed={dimension === 'model'}
+              className={dimension === 'model' ? 'is-active' : ''}
+              onClick={() => setDimension('model')}
+              type="button"
+            >
+              按模型
+            </button>
           </div>
+          {dimension === 'run' ? (
+            <div className="usage-table">
+              <div>
+                <b>模型 / Run</b>
+                <b>输入</b>
+                <b>输出</b>
+                <b>缓存</b>
+                <b>时长</b>
+              </div>
+              {usage.records.map(record => (
+                <div key={record.runId}>
+                  <span>
+                    {record.modelRef ?? record.executor}
+                    <small>{`事情 ${record.taskId} · Run ${record.runId}`}</small>
+                  </span>
+                  <span>
+                    {record.inputTokens?.toLocaleString('zh-CN') ?? '—'}
+                  </span>
+                  <span>
+                    {record.outputTokens?.toLocaleString('zh-CN') ?? '—'}
+                  </span>
+                  <span>
+                    {record.cacheReadTokens?.toLocaleString('zh-CN') ?? '—'}
+                  </span>
+                  <span>
+                    {record.durationMs
+                      ? `${String(Math.round(record.durationMs / 1000))}s`
+                      : '—'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="usage-table">
+              <div>
+                <b>模型</b>
+                <b>输入</b>
+                <b>输出</b>
+                <b>缓存</b>
+                <b>时长</b>
+              </div>
+              {modelRows.map(row => (
+                <div key={row.model}>
+                  <span>
+                    {row.model}
+                    <small>
+                      {row.runs} 个 Run · {row.tasks} 个事情
+                    </small>
+                  </span>
+                  <span>{row.inputTokens?.toLocaleString('zh-CN') ?? '—'}</span>
+                  <span>
+                    {row.outputTokens?.toLocaleString('zh-CN') ?? '—'}
+                  </span>
+                  <span>
+                    {row.cacheReadTokens?.toLocaleString('zh-CN') ?? '—'}
+                  </span>
+                  <span>
+                    {row.durationMs !== undefined
+                      ? `${String(Math.round(row.durationMs / 1000))}s`
+                      : '—'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
           {usage.router && usage.router.summary.calls > 0 && (
             <>
               <SettingsHeading

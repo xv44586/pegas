@@ -49,9 +49,11 @@ import {
   needsOutboxResolution,
   reviewProjection,
   statusLabel,
+  taskContextCue,
   textFromPayload,
   unresolvedAttentionMessages,
   type DrawerView,
+  type TaskContextCue,
 } from './types'
 
 interface PageActions {
@@ -377,6 +379,7 @@ export function ConversationPage({
         at: event.createdAt,
         status: event.status,
         attachment: event.attachment,
+        cue: undefined as TaskContextCue | undefined,
       }))
     const pegas = snapshot.messages.map(message => {
       const channel = snapshot.channels.find(item => item.id === message.taskId)
@@ -387,6 +390,7 @@ export function ConversationPage({
         text: textFromPayload(message.payload),
         at: message.createdAt,
         taskId: message.taskId,
+        cue: taskContextCue(message, snapshot.channels, snapshot.events),
         clarification:
           channel?.statusReason === 'awaiting_goal_clarification'
             ? questions
@@ -499,6 +503,17 @@ export function ConversationPage({
                 key={message.id}
               >
                 <div className="message-content">
+                  {message.role === 'pegas' && message.cue && (
+                    <p className="message-context-cue">
+                      <span>「{message.cue.title}」</span>
+                      {message.cue.origin && (
+                        <small>原始请求：{message.cue.origin}</small>
+                      )}
+                      {message.cue.lastUser && (
+                        <small>你最近补充：{message.cue.lastUser}</small>
+                      )}
+                    </p>
+                  )}
                   <MarkdownMessage
                     content={
                       message.text.length > 520 &&

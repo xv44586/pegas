@@ -127,7 +127,7 @@ export interface ChannelTimeline {
   runs: Run[]
 }
 
-interface ModelUsageRecord {
+export interface ModelUsageRecord {
   runId: string
   taskId: string
   userId: string

@@ -2938,6 +2938,110 @@ describe('sealed Pegas UI', () => {
     ).toBeTruthy()
   })
 
+  it('switches the usage table between run and model dimensions', async () => {
+    installFetch(path => {
+      if (!path.startsWith('/v1/usage?')) return undefined
+      return Response.json({
+        summary: {
+          records: 2,
+          completeRecords: 2,
+          partialRecords: 0,
+          unavailableRecords: 0,
+          inputTokens: 3000,
+          outputTokens: 500,
+          durationMs: 30_000,
+        },
+        records: [
+          {
+            runId: 'run-a',
+            taskId: 'task-1',
+            userId: 'owner',
+            workerIconId: 'computer',
+            executor: 'dsh',
+            modelRef: 'magpie/qwen4-max',
+            completeness: 'complete',
+            inputTokens: 1000,
+            outputTokens: 200,
+            reportedSteps: 1,
+            unreportedSteps: 0,
+            durationMs: 10_000,
+            observedAt: '2026-11-22T00:00:00.000Z',
+          },
+          {
+            runId: 'run-b',
+            taskId: 'task-2',
+            userId: 'owner',
+            workerIconId: 'computer',
+            executor: 'dsh',
+            modelRef: 'magpie/qwen4-max',
+            completeness: 'complete',
+            inputTokens: 2000,
+            outputTokens: 300,
+            reportedSteps: 2,
+            unreportedSteps: 0,
+            durationMs: 20_000,
+            observedAt: '2026-11-22T00:01:00.000Z',
+          },
+        ],
+      })
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /模型用量/ }))
+    expect(await screen.findByText('事情 task-1 · Run run-a')).toBeTruthy()
+    expect(screen.getByText('事情 task-2 · Run run-b')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '按模型' }))
+    expect(screen.queryByText('事情 task-1 · Run run-a')).toBeNull()
+    expect(screen.getByText('2 个 Run · 2 个事情')).toBeTruthy()
+    expect(screen.getByText('3,000')).toBeTruthy()
+    expect(screen.getByText('500')).toBeTruthy()
+    expect(screen.getAllByText('30s').length).toBeGreaterThan(0)
+    fireEvent.click(screen.getByRole('button', { name: '按 Run' }))
+    expect(screen.getByText('事情 task-1 · Run run-a')).toBeTruthy()
+  })
+
+  it('cues the task origin and latest user input above terminal results', async () => {
+    const source = snapshot.messages[0]
+    const originEvent = snapshot.events[0]
+    if (!source || !originEvent) throw new Error('missing chat fixtures')
+    installSnapshotFetch({
+      ...snapshot,
+      events: [
+        originEvent,
+        {
+          ...originEvent,
+          id: 'event-steer',
+          payload: { text: '重点看团队版，输出成表格', taskId: channel.id },
+          createdAt: '2026-11-19T08:00:30.000Z',
+        },
+      ],
+      messages: [
+        {
+          ...source,
+          id: 'result-cue',
+          payload: {
+            type: 'run.completed',
+            runId: run.id,
+            text: '价格表格已生成。',
+          },
+          createdAt: '2026-11-19T08:05:00.000Z',
+        },
+      ],
+    })
+    render(<App />)
+    expect(await screen.findByText('价格表格已生成。')).toBeTruthy()
+    const cue = document.querySelector('.message-context-cue')
+    expect(cue?.textContent).toContain(channel.title)
+    expect(cue?.textContent).toContain(
+      '原始请求：帮我设计一个安全的自更新流程。',
+    )
+    expect(cue?.textContent).toContain('你最近补充：重点看团队版，输出成表格')
+  })
+
   it('shows router and rewrite metering with honest unreported tokens', async () => {
     installFetch(path => {
       if (!path.startsWith('/v1/usage?')) return undefined
@@ -5293,14 +5397,25 @@ describe('sealed Pegas UI', () => {
     )
     const drawer = await screen.findByRole('dialog', { name: '工作详情' })
     expect(
-      await within(drawer).findByText(/工具调用 2 次 · 已完成 1 步推理/),
+      (await within(drawer).findAllByText(/工具 2 次 · 1 步推理/)).length,
     ).toBeTruthy()
-    fireEvent.click(within(drawer).getByText('执行动态'))
-    expect(within(drawer).getByText('调用工具 read')).toBeTruthy()
-    expect(within(drawer).getByText('完成第 1 步推理')).toBeTruthy()
-    expect(within(drawer).getByText('调用工具 test')).toBeTruthy()
+    expect(within(drawer).getByText(/累计用时 12s/)).toBeTruthy()
+    fireEvent.click(
+      within(drawer).getByText(/工作流程记录 · 工具 2 次 · 1 步推理/),
+    )
+    const toolGroups = within(drawer).getAllByText(/准备 · 1 次工具调用/)
+    const [firstGroup, secondGroup] = toolGroups
+    if (!firstGroup || !secondGroup) throw new Error('expected two tool groups')
+    fireEvent.click(firstGroup)
+    expect(within(drawer).getByText('read')).toBeTruthy()
+    expect(within(drawer).getByText('第 1 步（已完成）')).toBeTruthy()
+    fireEvent.click(secondGroup)
+    expect(within(drawer).getByText('test')).toBeTruthy()
     expect(
       within(drawer).queryByText('执行中 · 工具调用 2 次 · 已完成 1 步推理'),
+    ).toBeNull()
+    expect(
+      screen.queryByText('执行中 · 工具调用 2 次 · 已完成 1 步推理'),
     ).toBeNull()
   })
 

@@ -26,6 +26,7 @@
 ## 数据与权限边界
 
 - 服务端 `model_usage_records` 是 Pegas 的用量事实来源；Web 只负责读取和格式化。
+- 设置页用量表支持「按 Run / 按模型」维度切换：模型维度按 `modelRef ?? executor` 在客户端聚合输入/输出/缓存 token 与观测时长，并显示 Run 数与事情数；聚合只是同一权威记录的视图，不产生新事实。
 - token 来源为 `provider_reported`，经 DSH durable `step_end` 投影传递；Pegas 不重新分词。
 - `durationMs` 来源为 `pegas_observed`，表示整个 Executor Run 的墙钟耗时，不伪装成模型首 token 延迟或纯推理时间。
 - 模型引用来自 Run 的不可变 `executionContext.model` 快照。值为 `profile` 时只能说明使用 DSH profile，不能推断实际 provider/model。

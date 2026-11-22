@@ -6,6 +6,8 @@ import type {
   DurableAction,
   ExecutionNode,
   GoalContract,
+  InboxEvent,
+  ModelUsageRecord,
   ModelUsageReport,
   OutboxMessage,
   ReviewProjection,
@@ -56,6 +58,7 @@ export type DrawerView =
         totalTokens?: number
         durationMs?: number
         costUsd?: number
+        records?: ModelUsageRecord[]
       }
     }
   | { kind: 'runtime'; run?: Run; nodes?: ExecutionNode[]; nodesError?: string }
@@ -137,6 +140,7 @@ export const settingsSections: readonly {
 ]
 
 export function textFromPayload(payload: unknown): string {
+  if (payloadType(payload) === 'run.progress') return ''
   if (typeof payload === 'string') return payload
   if (!payload || typeof payload !== 'object') return ''
   const value = payload as Record<string, unknown>
@@ -212,6 +216,62 @@ export function runIdFromMessage(message: OutboxMessage): string | undefined {
   if (!message.payload || typeof message.payload !== 'object') return undefined
   const runId = (message.payload as Record<string, unknown>).runId
   return typeof runId === 'string' && runId.trim() ? runId : undefined
+}
+
+const terminalCueTypes = new Set([
+  'run.completed',
+  'run.failed',
+  'review.ready',
+])
+
+export interface TaskContextCue {
+  title: string
+  origin?: string
+  lastUser?: string
+}
+
+export function taskContextCue(
+  message: OutboxMessage,
+  channels: readonly WorkChannel[],
+  events: readonly InboxEvent[],
+): TaskContextCue | undefined {
+  const type = payloadType(message.payload)
+  if (!type || !terminalCueTypes.has(type) || !message.taskId) return undefined
+  const channel = channels.find(item => item.id === message.taskId)
+  if (!channel) return undefined
+  const cue: TaskContextCue = { title: channel.title }
+  const originEvent = events.find(event => event.id === channel.originEventId)
+  const origin = originEvent
+    ? firstCueLine(textFromPayload(originEvent.payload))
+    : undefined
+  if (origin && origin !== firstCueLine(channel.title)) cue.origin = origin
+  const lastUserEvent = events
+    .filter(
+      event =>
+        event.type === 'user.message' &&
+        event.id !== channel.originEventId &&
+        eventPayloadTaskId(event.payload) === message.taskId,
+    )
+    .toSorted(
+      (left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt),
+    )[0]
+  const lastUser = lastUserEvent
+    ? firstCueLine(textFromPayload(lastUserEvent.payload))
+    : undefined
+  if (lastUser && lastUser !== cue.origin) cue.lastUser = lastUser
+  return cue
+}
+
+function eventPayloadTaskId(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== 'object') return undefined
+  const value = (payload as Record<string, unknown>).taskId
+  return typeof value === 'string' ? value : undefined
+}
+
+function firstCueLine(text: string): string | undefined {
+  const line = text.replaceAll(/\s+/g, ' ').trim()
+  if (!line) return undefined
+  return line.length > 80 ? `${line.slice(0, 80)}…` : line
 }
 
 export function approvalIdFromMessage(
