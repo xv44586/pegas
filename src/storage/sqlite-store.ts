@@ -65,6 +65,7 @@ import {
   buildToolSemantic,
   splitToolDetail,
 } from '../activity/tool-semantics.js'
+import { needsChineseSummary } from '../activity/thinking-summary.js'
 import type { ExecutorResult } from '../executor/executor.js'
 import {
   parseExecutionPools,
@@ -765,6 +766,35 @@ CREATE TABLE run_subagent_transcripts (
 
 CREATE INDEX run_subagents_by_run
 ON run_subagent_transcripts (run_id);
+`
+
+const migration37 = `
+-- USAGE-001: the Chinese thinking-headline pass is a third metered
+-- control-plane component. The router/rewrite ledger CHECK cannot be
+-- extended in place, so summary calls land in an additive sibling table
+-- with identical columns; reads union both ledgers.
+CREATE TABLE summary_usage_records (
+  call_id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  component TEXT NOT NULL CHECK (component IN ('summary')),
+  event_id TEXT,
+  model_ref TEXT NOT NULL,
+  completeness TEXT NOT NULL CHECK (completeness IN ('complete', 'unavailable')),
+  token_source TEXT CHECK (token_source IN ('provider_reported')),
+  input_tokens INTEGER CHECK (input_tokens >= 0),
+  output_tokens INTEGER CHECK (output_tokens >= 0),
+  total_tokens INTEGER CHECK (total_tokens >= 0),
+  cache_read_tokens INTEGER CHECK (cache_read_tokens >= 0),
+  cache_write_tokens INTEGER CHECK (cache_write_tokens >= 0),
+  reasoning_tokens INTEGER CHECK (reasoning_tokens >= 0),
+  duration_ms INTEGER CHECK (duration_ms >= 0),
+  latency_source TEXT CHECK (latency_source IN ('pegas_observed')),
+  outcome TEXT NOT NULL CHECK (outcome IN ('ok', 'error')),
+  observed_at TEXT NOT NULL
+);
+
+CREATE INDEX summary_usage_by_user_time
+ON summary_usage_records (user_id, observed_at DESC);
 `
 
 const migration32 = `
@@ -2339,7 +2369,7 @@ interface ModelUsageRow {
 interface RouterUsageRow {
   call_id: string
   user_id: string
-  component: 'router' | 'rewrite'
+  component: 'router' | 'rewrite' | 'summary'
   event_id: string | null
   model_ref: string
   completeness: 'complete' | 'unavailable'
@@ -2566,6 +2596,7 @@ export class PegasStore {
     this.#migrate(34, migration34)
     this.#migrate(35, migration35)
     this.#migrate(36, migration36)
+    this.#migrate(37, migration37)
   }
 
   #backfillWorkerIconIds(): void {
@@ -9588,9 +9619,13 @@ export class PegasStore {
   }
 
   recordRouterUsage(record: RouterUsageRecord): void {
+    const table =
+      record.component === 'summary'
+        ? 'summary_usage_records'
+        : 'router_usage_records'
     this.#database
       .prepare(
-        `INSERT INTO router_usage_records
+        `INSERT INTO ${table}
           (call_id, user_id, component, event_id, model_ref, completeness,
            token_source, input_tokens, output_tokens, total_tokens,
            cache_read_tokens, cache_write_tokens, reasoning_tokens,
@@ -9622,11 +9657,14 @@ export class PegasStore {
   listRouterUsage(userId: string): RouterUsageReport {
     const rows = this.#database
       .prepare(
-        `SELECT * FROM router_usage_records
-         WHERE user_id = ?
+        `SELECT * FROM (
+           SELECT * FROM router_usage_records WHERE user_id = ?
+           UNION ALL
+           SELECT * FROM summary_usage_records WHERE user_id = ?
+         )
          ORDER BY observed_at DESC, call_id DESC`,
       )
-      .all(userId) as unknown as RouterUsageRow[]
+      .all(userId, userId) as unknown as RouterUsageRow[]
     const records = rows.map(toRouterUsageRecord)
     return { summary: summarizeRouterUsage(records), records }
   }
@@ -10257,6 +10295,103 @@ export class PegasStore {
       totalEntries: total.count,
       truncated: total.count > entries.length,
     }
+  }
+
+  /**
+   * EXEC-006: thinking rows of one Run for the best-effort Chinese headline
+   * pass. Runs after completion, so it deliberately does not require a live
+   * claim; it only ever reads thinking rows of an existing Run.
+   */
+  listRunThinking(
+    runId: string,
+  ): { seq: number; label: string; detail?: string; summary?: string }[] {
+    const rows = this.#database
+      .prepare(
+        `SELECT seq, label, detail_json FROM run_activity_entries
+         WHERE run_id = ? AND kind = 'thinking' ORDER BY seq ASC`,
+      )
+      .all(runId) as unknown as {
+      seq: number
+      label: string
+      detail_json: string | null
+    }[]
+    return rows.map(row => {
+      const stored = row.detail_json
+        ? decodeActivityDetail(row.detail_json)
+        : {}
+      return {
+        seq: row.seq,
+        label: row.label,
+        ...(stored.detail !== undefined ? { detail: stored.detail } : {}),
+        ...(stored.summary !== undefined ? { summary: stored.summary } : {}),
+      }
+    })
+  }
+
+  /**
+   * Idempotent write-back of one Chinese headline into the thinking envelope.
+   * An existing summary is never overwritten, and the raw detail/label stay
+   * verbatim so a failed or replayed pass cannot corrupt the transcript.
+   */
+  setRunThinkingSummary(runId: string, seq: number, summary: string): void {
+    const trimmed = summary.trim()
+    if (!trimmed) return
+    const row = this.#database
+      .prepare(
+        `SELECT detail_json FROM run_activity_entries
+         WHERE run_id = ? AND seq = ? AND kind = 'thinking'`,
+      )
+      .get(runId, seq) as { detail_json: string | null } | undefined
+    if (!row) return
+    const stored = row.detail_json ? decodeActivityDetail(row.detail_json) : {}
+    if (stored.summary !== undefined) return
+    this.#database
+      .prepare(
+        `UPDATE run_activity_entries
+         SET detail_json = ?, updated_at = ?
+         WHERE run_id = ? AND seq = ? AND kind = 'thinking'`,
+      )
+      .run(
+        JSON.stringify({
+          ...(stored.detail !== undefined ? { detail: stored.detail } : {}),
+          summary: trimmed.slice(0, 200),
+        }),
+        this.#clock.now().toISOString(),
+        runId,
+        seq,
+      )
+  }
+
+  /**
+   * EXEC-006: bounded scan of settled Runs whose thinking still lacks a
+   * Chinese headline, newest first. Used once per worker start so historical
+   * English reasoning gets the same treatment without an unbounded backlog
+   * walk; running Runs are excluded because their tail is still streaming.
+   */
+  listRunsMissingThinkingSummary(
+    limit: number,
+  ): { runId: string; userId: string }[] {
+    const rows = this.#database
+      .prepare(
+        `SELECT runs.id, tasks.user_id FROM runs
+         JOIN tasks ON tasks.id = runs.task_id
+         WHERE runs.status IN ('completed', 'waiting', 'failed', 'cancelled')
+           AND EXISTS (
+             SELECT 1 FROM run_activity_entries
+             WHERE run_activity_entries.run_id = runs.id
+               AND run_activity_entries.kind = 'thinking'
+           )
+         ORDER BY runs.updated_at DESC LIMIT ?`,
+      )
+      .all(Math.max(1, Math.min(limit, 200))) as unknown as {
+      id: string
+      user_id: string
+    }[]
+    return rows
+      .filter(row =>
+        this.listRunThinking(row.id).some(entry => needsChineseSummary(entry)),
+      )
+      .map(row => ({ runId: row.id, userId: row.user_id }))
   }
 
   recordRunSubagents(
@@ -13104,6 +13239,7 @@ function nextQuietWindowEnd(
  * envelope `{detail, semantic}`. Both stay readable without migration. */
 function decodeActivityDetail(raw: string): {
   detail?: string
+  summary?: string
   semantic?: ToolSemantic
 } {
   let parsed: unknown
@@ -13117,6 +13253,9 @@ function decodeActivityDetail(raw: string): {
     const value = parsed as Record<string, unknown>
     return {
       ...(typeof value.detail === 'string' ? { detail: value.detail } : {}),
+      ...(typeof value.summary === 'string' && value.summary.length > 0
+        ? { summary: value.summary }
+        : {}),
       ...(value.semantic &&
       typeof value.semantic === 'object' &&
       typeof (value.semantic as Record<string, unknown>).kind === 'string'
@@ -13132,7 +13271,7 @@ function projectActivityDetail(row: {
   status: RunActivityEntry['status'] | null
   tool: string | null
   detail_json: string | null
-}): Pick<RunActivityEntry, 'detail' | 'semantic' | 'meta'> {
+}): Pick<RunActivityEntry, 'detail' | 'summary' | 'semantic' | 'meta'> {
   if (row.kind === 'step' && row.tool === 'steered') {
     const stored = row.detail_json ? decodeActivityDetail(row.detail_json) : {}
     return {
@@ -13145,7 +13284,12 @@ function projectActivityDetail(row: {
   if (!row.detail_json) return {}
   const stored = decodeActivityDetail(row.detail_json)
   if (row.kind !== 'tool_call') {
-    return stored.detail !== undefined ? { detail: stored.detail } : {}
+    return {
+      ...(stored.detail !== undefined ? { detail: stored.detail } : {}),
+      ...(row.kind === 'thinking' && stored.summary !== undefined
+        ? { summary: stored.summary }
+        : {}),
+    }
   }
   if (stored.semantic) {
     return {
