@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 
+import './test-env'
+
 import {
   act,
   cleanup,
@@ -2344,9 +2346,11 @@ describe('sealed Pegas UI', () => {
     const composer = await screen.findByLabelText('给 Pegas 发消息')
     const form = composer.closest('form')
     expect(form?.getAttribute('aria-label')).toBe('发送消息')
+    fireEvent.change(composer, { target: { value: '先填草稿再看发送按钮' } })
     expect(
       screen.getByRole('button', { name: '发送' }).getAttribute('type'),
     ).toBe('submit')
+    fireEvent.change(composer, { target: { value: '' } })
     const modelButton = await screen.findByRole('button', {
       name: /选择执行模型/,
     })

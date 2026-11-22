@@ -319,6 +319,46 @@ export function runIdFromMessage(message: OutboxMessage): string | undefined {
   return typeof runId === 'string' && runId.trim() ? runId : undefined
 }
 
+export function isRunProgressMessage(message: OutboxMessage): boolean {
+  return payloadType(message.payload) === 'run.acknowledged'
+}
+
+export function latestRunProgressText(
+  messages: readonly OutboxMessage[],
+  runId: string,
+): string | undefined {
+  let latest: OutboxMessage | undefined
+  for (const message of messages) {
+    if (!isRunProgressMessage(message)) continue
+    if (runIdFromMessage(message) !== runId) continue
+    if (
+      !latest ||
+      Date.parse(message.createdAt) >= Date.parse(latest.createdAt)
+    )
+      latest = message
+  }
+  return latest ? textFromPayload(latest.payload) : undefined
+}
+
+export function formatRunDuration(run: Run): string {
+  const started = Date.parse(run.createdAt)
+  const ended = Date.parse(run.updatedAt)
+  if (Number.isNaN(started) || Number.isNaN(ended) || ended < started) return ''
+  const totalSeconds = Math.round((ended - started) / 1000)
+  if (totalSeconds < 60) return `${String(totalSeconds)} 秒`
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  if (minutes < 60)
+    return seconds > 0
+      ? `${String(minutes)} 分 ${String(seconds)} 秒`
+      : `${String(minutes)} 分钟`
+  const hours = Math.floor(minutes / 60)
+  const remainingMinutes = minutes % 60
+  return remainingMinutes > 0
+    ? `${String(hours)} 小时 ${String(remainingMinutes)} 分`
+    : `${String(hours)} 小时`
+}
+
 export function approvalIdFromMessage(
   message: OutboxMessage,
 ): string | undefined {

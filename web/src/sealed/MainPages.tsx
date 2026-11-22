@@ -6,6 +6,7 @@ import {
   ChevronDown,
   CircleAlert,
   CircleQuestionMark,
+  Copy,
   FileText,
   Layers3,
   Mic,
@@ -15,6 +16,7 @@ import {
   Search,
   Send,
   ShieldCheck,
+  Square,
   Trash2,
   X,
   Zap,
@@ -45,8 +47,11 @@ import {
   attentionSummary,
   clarificationQuestions,
   formatRelativeTime,
+  formatRunDuration,
   isReconciliationMessage,
+  isRunProgressMessage,
   latestRunForTask,
+  latestRunProgressText,
   needsOutboxResolution,
   reviewProjection,
   statusLabel,
@@ -54,6 +59,7 @@ import {
   unresolvedAttentionMessages,
   type DrawerView,
 } from './types'
+import { useChatScroll } from './useChatScroll'
 
 interface PageActions {
   onSearch: () => void
@@ -362,8 +368,14 @@ export function ConversationPage({
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(
     () => new Set(),
   )
-  const scrollRef = useRef<HTMLDivElement>(null)
-  const stickToBottomRef = useRef(true)
+  const chatScroll = useChatScroll()
+  const [copiedMessageId, setCopiedMessageId] = useState<string>()
+  const [retryingMessageId, setRetryingMessageId] = useState<string>()
+  const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([])
+  const [confirmingStop, setConfirmingStop] = useState(false)
+  const [stopping, setStopping] = useState(false)
+  const previousPegasIdsRef = useRef<Set<string>>(new Set())
+  const sendOriginRef = useRef<DOMRect | undefined>(undefined)
   const messages = useMemo(() => {
     const user = snapshot.events
       .filter(event => event.type === 'user.message')
@@ -375,30 +387,44 @@ export function ConversationPage({
         status: event.status,
         attachment: event.attachment,
       }))
-    const pegas = snapshot.messages.map(message => {
-      const channel = snapshot.channels.find(item => item.id === message.taskId)
-      const questions = clarificationQuestions(message)
-      return {
-        id: message.id,
-        role: 'pegas' as const,
-        text: textFromPayload(message.payload),
-        at: message.createdAt,
-        taskId: message.taskId,
-        clarification:
-          channel?.statusReason === 'awaiting_goal_clarification'
-            ? questions
-            : undefined,
-        review: reviewProjection(message),
-      }
-    })
+    const pegas = snapshot.messages
+      .filter(message => !isRunProgressMessage(message))
+      .map(message => {
+        const channel = snapshot.channels.find(
+          item => item.id === message.taskId,
+        )
+        const questions = clarificationQuestions(message)
+        return {
+          id: message.id,
+          role: 'pegas' as const,
+          text: textFromPayload(message.payload),
+          at: message.createdAt,
+          taskId: message.taskId,
+          clarification:
+            channel?.statusReason === 'awaiting_goal_clarification'
+              ? questions
+              : undefined,
+          review: reviewProjection(message),
+        }
+      })
     return [...user, ...pegas]
       .filter(message => message.text)
       .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
   }, [snapshot.channels, snapshot.events, snapshot.messages])
   useEffect(() => {
-    const area = scrollRef.current
-    if (area && stickToBottomRef.current) area.scrollTop = area.scrollHeight
-  }, [messages])
+    const previous = previousPegasIdsRef.current
+    const fresh = messages.filter(
+      message => message.role === 'pegas' && !previous.has(message.id),
+    )
+    previousPegasIdsRef.current = new Set(
+      messages
+        .filter(message => message.role === 'pegas')
+        .map(message => message.id),
+    )
+    if (fresh.length > 0) {
+      chatScroll.noteNewReply('Pegas 发来了新回复')
+    }
+  }, [messages, chatScroll])
   const dictation = useVoiceDictation({
     transcribe: async blob => {
       if (!voiceDirectSend) return api.transcribeVoice(blob)
@@ -423,10 +449,24 @@ export function ConversationPage({
   const summaryRun = summaryChannel
     ? latestRunForTask(snapshot.runs, summaryChannel.id)
     : undefined
+  const summaryActive =
+    summaryRun?.status === 'running' || summaryRun?.status === 'queued'
+  const steerTarget =
+    continuationChannel?.status === 'started'
+      ? continuationChannel
+      : summaryChannel?.status === 'started'
+        ? summaryChannel
+        : undefined
+  const steerRun = steerTarget
+    ? latestRunForTask(snapshot.runs, steerTarget.id)
+    : undefined
+  const canSteer =
+    steerRun?.status === 'running' || steerRun?.status === 'queued'
 
   async function send() {
     const text = draft.trim()
     if (!text || sending || dictationBusy) return
+    sendOriginRef.current = captureSendOrigin()
     setSending(true)
     setError('')
     try {
@@ -451,6 +491,173 @@ export function ConversationPage({
     }
   }
 
+  async function steer() {
+    const text = draft.trim()
+    if (!text || !steerTarget || sending || dictationBusy) return
+    sendOriginRef.current = captureSendOrigin()
+    setSending(true)
+    setError('')
+    try {
+      await api.sendSteerMessage(text, steerTarget.id)
+      onDraftChange('')
+      await onSent()
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? `插话失败：${caught.message}`
+          : '插话失败，请重试。',
+      )
+    } finally {
+      setSending(false)
+    }
+  }
+
+  function queueDraft() {
+    const text = draft.trim()
+    if (!text || !summaryChannel) return
+    setQueuedMessages(current => [
+      ...current,
+      { id: crypto.randomUUID(), text, channelId: summaryChannel.id },
+    ])
+    onDraftChange('')
+    setError('')
+  }
+
+  useEffect(() => {
+    if (queuedMessages.length === 0 || sending) return
+    const next = queuedMessages[0]
+    if (!next) return
+    const channel = snapshot.channels.find(item => item.id === next.channelId)
+    if (!channel || channel.status === 'cancelled') {
+      setQueuedMessages(current => current.slice(1))
+      return
+    }
+    const run = latestRunForTask(snapshot.runs, channel.id)
+    if (run && (run.status === 'running' || run.status === 'queued')) return
+    void (async () => {
+      setSending(true)
+      try {
+        await api.sendMessage(next.text, channel.id)
+        setQueuedMessages(current => current.slice(1))
+        await onSent()
+      } catch (caught) {
+        setError(
+          caught instanceof Error
+            ? `排队消息发送失败：${caught.message}`
+            : '排队消息发送失败，请重试。',
+        )
+      } finally {
+        setSending(false)
+      }
+    })()
+  }, [queuedMessages, sending, snapshot.channels, snapshot.runs, api, onSent])
+
+  async function copyMessage(messageId: string, text: string) {
+    try {
+      const html = `<div>${text
+        .split(/\n{2,}/u)
+        .map(
+          paragraph =>
+            `<p>${escapeHtml(paragraph).replace(/\n/gu, '<br>')}</p>`,
+        )
+        .join('')}</div>`
+      if (typeof navigator.clipboard.write === 'function') {
+        await navigator.clipboard.write([
+          new ClipboardItem({
+            'text/plain': new Blob([text], { type: 'text/plain' }),
+            'text/html': new Blob([html], { type: 'text/html' }),
+          }),
+        ])
+      } else {
+        await navigator.clipboard.writeText(text)
+      }
+      setCopiedMessageId(messageId)
+      window.setTimeout(() => {
+        setCopiedMessageId(current =>
+          current === messageId ? undefined : current,
+        )
+      }, 1500)
+    } catch {
+      setError('复制失败，请检查浏览器剪贴板权限。')
+    }
+  }
+
+  async function retryMessage(eventId: string) {
+    setRetryingMessageId(eventId)
+    setError('')
+    try {
+      await api.retryEvent(eventId)
+      await onSent()
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : '重试失败，请稍后再试。',
+      )
+    } finally {
+      setRetryingMessageId(undefined)
+    }
+  }
+
+  async function stopSummary() {
+    if (!summaryChannel || stopping) return
+    setStopping(true)
+    setError('')
+    try {
+      await api.stopChannel(summaryChannel.id, 'Stopped from the Pegas UI')
+      setConfirmingStop(false)
+      await onSent()
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '停止失败，请重试。')
+    } finally {
+      setStopping(false)
+    }
+  }
+
+  function captureSendOrigin(): DOMRect | undefined {
+    const textarea =
+      document.querySelector<HTMLTextAreaElement>('#pegas-message')
+    return textarea?.getBoundingClientRect()
+  }
+
+  useEffect(() => {
+    const origin = sendOriginRef.current
+    if (!origin) return
+    sendOriginRef.current = undefined
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+    const content = chatScroll.contentRef.current
+    if (!content) return
+    const rows = content.querySelectorAll<HTMLElement>('.message-row.is-user')
+    const row = rows[rows.length - 1]
+    const body = row?.querySelector<HTMLElement>('.message-content')
+    if (!row || !body) return
+    const target = body.getBoundingClientRect()
+    if (target.width === 0 || target.height === 0) return
+    const deltaX = origin.left - target.left
+    const deltaY = origin.top - target.top
+    const scaleX = Math.max(0.5, Math.min(1, origin.width / target.width))
+    const scaleY = Math.max(0.5, Math.min(1, origin.height / target.height))
+    row.dataset.sendAnimating = 'true'
+    const animation = body.animate(
+      [
+        {
+          transform: `translate(${String(deltaX)}px, ${String(deltaY)}px) scale(${String(scaleX)}, ${String(scaleY)})`,
+          opacity: 0.4,
+        },
+        {
+          transform: 'translate(0, -3px) scale(1.01, 1.02)',
+          opacity: 1,
+          offset: 0.8,
+        },
+        { transform: 'translate(0, 0) scale(1, 1)', opacity: 1 },
+      ],
+      { duration: 600, easing: 'cubic-bezier(0.2, 0, 0, 1)' },
+    )
+    const finish = () => {
+      delete row.dataset.sendAnimating
+    }
+    animation.onfinish = finish
+    animation.oncancel = finish
+  }, [messages, chatScroll.contentRef])
+
   function selectAttachment(file: File | undefined) {
     if (!file) return
     if (file.size > 25 * 1024 * 1024) {
@@ -470,14 +677,10 @@ export function ConversationPage({
       />
       <div
         className="conversation-scroll"
-        onScroll={event => {
-          const area = event.currentTarget
-          stickToBottomRef.current =
-            area.scrollHeight - area.scrollTop - area.clientHeight < 48
-        }}
-        ref={scrollRef}
+        onScroll={chatScroll.onScroll}
+        ref={chatScroll.scrollRef}
       >
-        <div className="conversation-flow">
+        <div className="conversation-flow" ref={chatScroll.contentRef}>
           {messages.length === 0 ? (
             <section className="conversation-welcome">
               <PegasMascot size={148} />
@@ -485,9 +688,18 @@ export function ConversationPage({
               <p>告诉我目标。我会整理事情、推进执行，并在需要你决定时回来。</p>
             </section>
           ) : (
-            messages.map(message => (
+            messages.map((message, index) => (
               <article
-                className={`message-row is-${message.role}`}
+                className={[
+                  'message-row',
+                  `is-${message.role}`,
+                  messages[index + 1]?.role === message.role
+                    ? 'grouped-next'
+                    : '',
+                ]
+                  .filter(Boolean)
+                  .join(' ')}
+                data-message-id={message.id}
                 key={message.id}
               >
                 <div className="message-content">
@@ -499,11 +711,6 @@ export function ConversationPage({
                         : message.text
                     }
                   />
-                  {message.role === 'user' && (
-                    <small className="message-delivery">
-                      {deliveryStatusLabel(message.status)}
-                    </small>
-                  )}
                   {message.role === 'user' && message.attachment && (
                     <span className="message-attachment">
                       <FileText size={14} />
@@ -605,41 +812,138 @@ export function ConversationPage({
                     </section>
                   )}
                 </div>
+                <div className="message-meta">
+                  <time dateTime={message.at}>
+                    {formatRelativeTime(message.at)}
+                  </time>
+                  {message.role === 'user' && (
+                    <small className="message-delivery">
+                      {deliveryStatusLabel(message.status)}
+                    </small>
+                  )}
+                  <button
+                    aria-label={
+                      copiedMessageId === message.id ? '已复制' : '复制消息'
+                    }
+                    className="message-action"
+                    onClick={() => void copyMessage(message.id, message.text)}
+                    type="button"
+                  >
+                    {copiedMessageId === message.id ? (
+                      <Check size={14} />
+                    ) : (
+                      <Copy size={14} />
+                    )}
+                  </button>
+                  {message.role === 'user' && message.status === 'failed' && (
+                    <button
+                      className="message-action is-retry"
+                      disabled={retryingMessageId === message.id}
+                      onClick={() => void retryMessage(message.id)}
+                      type="button"
+                    >
+                      <RotateCw size={14} />
+                      {retryingMessageId === message.id ? '重试中…' : '重试'}
+                    </button>
+                  )}
+                </div>
               </article>
             ))
           )}
 
           {summaryChannel && summaryRun && (
-            <button
-              className="run-summary"
-              onClick={() =>
+            <RunStatusBar
+              channel={summaryChannel}
+              messages={snapshot.messages}
+              onOpen={() =>
                 actions.onOpenDrawer({
                   kind: 'task',
                   channel: summaryChannel,
                   run: summaryRun,
                 })
               }
-              type="button"
-            >
-              <i data-status={summaryRun.status} />
-              <span>
-                <strong>
-                  {statusLabel(summaryChannel, summaryRun)} ·{' '}
-                  {summaryChannel.title}
-                </strong>
-                <small>
-                  {summaryRun.status === 'running'
-                    ? 'Pegas 正在推进这件事'
-                    : `${(summaryRun.output ?? summaryChannel.goal).slice(0, 160)}${(summaryRun.output ?? summaryChannel.goal).length > 160 ? '…' : ''}`}
-                </small>
-              </span>
-              <ArrowRight size={18} />
-            </button>
+              run={summaryRun}
+            />
           )}
         </div>
+        <p aria-live="polite" className="visually-hidden" role="status">
+          {chatScroll.announcement}
+        </p>
       </div>
 
-      <div className="composer-wrap">
+      {chatScroll.hasNewReplies && (
+        <button
+          className="new-replies-button"
+          onClick={chatScroll.jumpToBottom}
+          type="button"
+        >
+          新回复 <ArrowUp size={14} className="is-flipped" />
+        </button>
+      )}
+
+      <div className="composer-wrap" ref={chatScroll.composerRef}>
+        {confirmingStop && summaryChannel && (
+          <div
+            aria-labelledby="composer-stop-title"
+            className="stop-confirmation"
+            role="alertdialog"
+          >
+            <div>
+              <strong id="composer-stop-title">确定停止这件事？</strong>
+              <p>
+                停止后无法继续当前运行；历史记录会保留，你仍可重新发起事情。
+              </p>
+            </div>
+            <div className="stop-confirmation-actions">
+              <button onClick={() => setConfirmingStop(false)} type="button">
+                继续执行
+              </button>
+              <button
+                className="is-danger"
+                disabled={stopping}
+                onClick={() => void stopSummary()}
+                type="button"
+              >
+                {stopping ? '正在停止…' : '确认停止'}
+              </button>
+            </div>
+          </div>
+        )}
+        {queuedMessages.length > 0 && (
+          <ol aria-label="排队消息" className="composer-queue">
+            {queuedMessages.map((item, index) => (
+              <li key={item.id}>
+                <span className="composer-queue-position">{index + 1}</span>
+                <span className="composer-queue-preview" title={item.text}>
+                  {item.text}
+                </span>
+                <button
+                  aria-label={`编辑排队消息 ${String(index + 1)}`}
+                  onClick={() => {
+                    setQueuedMessages(current =>
+                      current.filter(entry => entry.id !== item.id),
+                    )
+                    onDraftChange(item.text)
+                  }}
+                  type="button"
+                >
+                  编辑
+                </button>
+                <button
+                  aria-label={`删除排队消息 ${String(index + 1)}`}
+                  onClick={() =>
+                    setQueuedMessages(current =>
+                      current.filter(entry => entry.id !== item.id),
+                    )
+                  }
+                  type="button"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </li>
+            ))}
+          </ol>
+        )}
         {error && (
           <div className="composer-error" role="alert">
             {error}
@@ -681,7 +985,12 @@ export function ConversationPage({
         )}
         <form
           aria-label="发送消息"
-          className="composer"
+          className={[
+            'composer',
+            draft.includes('\n') || attachment || continuationChannel
+              ? 'is-multiline'
+              : 'is-single-line',
+          ].join(' ')}
           onSubmit={event => {
             event.preventDefault()
             void send()
@@ -762,6 +1071,28 @@ export function ConversationPage({
                   正在整理…
                 </span>
               )}
+              {canSteer && draft.trim() && (
+                <button
+                  className="composer-steer-button"
+                  disabled={sending || dictationBusy}
+                  onClick={() => void steer()}
+                  title="不打断当前执行，把这条指示立即交给正在做的事情"
+                  type="button"
+                >
+                  <Zap size={15} /> 插话
+                </button>
+              )}
+              {summaryActive && summaryChannel && draft.trim() && (
+                <button
+                  className="composer-queue-button"
+                  disabled={sending || dictationBusy}
+                  onClick={queueDraft}
+                  title="这件事完成后自动发送这条消息"
+                  type="button"
+                >
+                  排队
+                </button>
+              )}
               <ComposerModelPicker
                 models={models}
                 onSelect={onSelectModel}
@@ -791,19 +1122,123 @@ export function ConversationPage({
               >
                 <Mic size={20} />
               </button>
-              <button
-                aria-label="发送"
-                className="send-button"
-                disabled={!draft.trim() || sending || dictationBusy}
-                type="submit"
-              >
-                <ArrowUp size={20} />
-              </button>
+              {summaryActive && summaryChannel?.canStop && !draft.trim() ? (
+                <button
+                  aria-label="停止"
+                  className="send-button is-stop"
+                  disabled={stopping}
+                  onClick={() => setConfirmingStop(true)}
+                  title="停止当前执行"
+                  type="button"
+                >
+                  <Square size={16} />
+                </button>
+              ) : (
+                <button
+                  aria-label="发送"
+                  className="send-button"
+                  disabled={!draft.trim() || sending || dictationBusy}
+                  type="submit"
+                >
+                  <ArrowUp size={20} />
+                </button>
+              )}
             </div>
           </div>
         </form>
       </div>
     </div>
+  )
+}
+
+interface QueuedMessage {
+  id: string
+  text: string
+  channelId: string
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/gu, '&amp;')
+    .replace(/</gu, '&lt;')
+    .replace(/>/gu, '&gt;')
+    .replace(/"/gu, '&quot;')
+}
+
+const WAITING_PHRASES = [
+  '正在梳理思路',
+  '正在拆解步骤',
+  '正在核对已有信息',
+  '正在推进这件事',
+] as const
+
+const LONG_WAIT_PHRASES = [
+  '这件事比平时花的时间长一些',
+  '还在继续推进，可以先去忙别的',
+  '仍在处理中，有结果会第一时间回来',
+] as const
+
+function RunStatusBar({
+  channel,
+  run,
+  messages,
+  onOpen,
+}: {
+  channel: WorkChannel
+  run: NonNullable<ReturnType<typeof latestRunForTask>>
+  messages: readonly OutboxMessage[]
+  onOpen: () => void
+}) {
+  const active = run.status === 'running' || run.status === 'queued'
+  const progressText = latestRunProgressText(messages, run.id)
+  const [phraseIndex, setPhraseIndex] = useState(0)
+  useEffect(() => {
+    if (!active || progressText) return
+    const started = Date.parse(run.createdAt)
+    const timer = window.setInterval(() => {
+      setPhraseIndex(current => current + 1)
+    }, 5000)
+    const elapsed = Date.now() - started
+    if (elapsed > 120_000) setPhraseIndex(current => current + 1)
+    return () => window.clearInterval(timer)
+  }, [active, progressText, run.createdAt])
+  const elapsedLong = Date.now() - Date.parse(run.createdAt) > 120_000
+  const waitingPhrase = elapsedLong
+    ? LONG_WAIT_PHRASES[phraseIndex % LONG_WAIT_PHRASES.length]
+    : WAITING_PHRASES[phraseIndex % WAITING_PHRASES.length]
+  const duration = formatRunDuration(run)
+  const headline = active
+    ? statusLabel(channel, run)
+    : run.status === 'completed'
+      ? '已完成'
+      : run.status === 'failed'
+        ? '执行失败'
+        : run.status === 'cancelled'
+          ? '已停止'
+          : '等待中'
+  const detail = active
+    ? (progressText ?? waitingPhrase)
+    : run.status === 'completed' && duration
+      ? `工作了 ${duration}`
+      : run.status === 'failed'
+        ? (run.lastError ?? '可以重试或补充说明后继续')
+        : `${(run.output ?? channel.goal).slice(0, 160)}${(run.output ?? channel.goal).length > 160 ? '…' : ''}`
+  return (
+    <button
+      className="run-status-bar"
+      data-active={active || undefined}
+      onClick={onOpen}
+      type="button"
+    >
+      <i data-status={run.status} />
+      <span>
+        <strong className={active ? 'is-shimmer' : undefined}>
+          {headline} · {channel.title}
+        </strong>
+        <small>{detail}</small>
+      </span>
+      <ArrowRight size={18} />
+    </button>
   )
 }
 

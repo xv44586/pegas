@@ -934,8 +934,20 @@ async function assertGeometry(page, label) {
       const composerStyle = globalThis.getComputedStyle(composer)
       const inputStyle = globalThis.getComputedStyle(composerInput)
       const sendRect = sendButton.getBoundingClientRect()
-      if (Number.parseFloat(composerStyle.borderRadius) > 26)
-        out.push(`composer is too pill-shaped (${composerStyle.borderRadius})`)
+      const multiline = composer.classList.contains('is-multiline')
+      if (composerStyle.transitionProperty.includes('border-radius')) {
+        await new Promise(resolve => setTimeout(resolve, 260))
+      }
+      const settledStyle = globalThis.getComputedStyle(composer)
+      const radius = Number.parseFloat(settledStyle.borderRadius)
+      if (multiline && radius > 26)
+        out.push(
+          `multiline composer is too pill-shaped (${settledStyle.borderRadius})`,
+        )
+      if (!multiline && radius < 100)
+        out.push(
+          `single-line composer is not a capsule (${settledStyle.borderRadius})`,
+        )
       if (inputStyle.fieldSizing !== 'content')
         out.push(
           `composer textarea does not auto-size (${inputStyle.fieldSizing})`,
