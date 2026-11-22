@@ -346,6 +346,7 @@ export function ConversationPage({
   onSelectModel,
   onAnswerClarification,
   onOpenAttention,
+  onSelectTask,
   continuationChannel,
   sourceContextChannel,
   onClearContinuation,
@@ -365,6 +366,7 @@ export function ConversationPage({
   onSelectModel: (model: DshModelCatalogItem) => Promise<void>
   onAnswerClarification: (channel: Snapshot['channels'][number]) => void
   onOpenAttention: (message: OutboxMessage) => Promise<void>
+  onSelectTask: (taskId: string) => void
   continuationChannel?: Snapshot['channels'][number]
   sourceContextChannel?: Snapshot['channels'][number]
   onClearContinuation: () => void
@@ -480,25 +482,43 @@ export function ConversationPage({
     },
   })
   const dictationBusy = dictation.state !== 'idle'
+  const trayChannels = useMemo(
+    () =>
+      snapshot.channels
+        .filter(
+          channel =>
+            channel.status !== 'completed' && channel.status !== 'cancelled',
+        )
+        .toSorted(
+          (left, right) =>
+            Date.parse(right.latestActivityAt) -
+            Date.parse(left.latestActivityAt),
+        ),
+    [snapshot.channels],
+  )
+  useEffect(() => {
+    if (continuationChannel?.status === 'cancelled') onClearContinuation()
+  }, [continuationChannel, onClearContinuation])
   const summaryChannel =
     snapshot.channels.find(item => item.id === continuationChannel?.id) ??
+    trayChannels[0] ??
     snapshot.channels[0]
   const summaryRun = summaryChannel
     ? latestRunForTask(snapshot.runs, summaryChannel.id)
     : undefined
   const summaryActive =
     summaryRun?.status === 'running' || summaryRun?.status === 'queued'
-  const steerTarget =
-    continuationChannel?.status === 'started'
-      ? continuationChannel
-      : summaryChannel?.status === 'started'
-        ? summaryChannel
-        : undefined
+  const steerTarget = continuationChannel
   const steerRun = steerTarget
     ? latestRunForTask(snapshot.runs, steerTarget.id)
     : undefined
   const canSteer =
     steerRun?.status === 'running' || steerRun?.status === 'queued'
+  const canQueue =
+    continuationChannel !== undefined &&
+    continuationChannel.status !== 'completed' &&
+    continuationChannel.status !== 'cancelled' &&
+    summaryActive
 
   async function send() {
     const text = draft.trim()
@@ -556,10 +576,10 @@ export function ConversationPage({
 
   function queueDraft() {
     const text = draft.trim()
-    if (!text || !summaryChannel) return
+    if (!text || !continuationChannel) return
     setQueuedMessages(current => [
       ...current,
-      { id: crypto.randomUUID(), text, channelId: summaryChannel.id },
+      { id: crypto.randomUUID(), text, channelId: continuationChannel.id },
     ])
     onDraftChange('')
     setError('')
@@ -943,6 +963,44 @@ export function ConversationPage({
       )}
 
       <div className="composer-wrap" ref={chatScroll.composerRef}>
+        {trayChannels.length > 0 && (
+          <div aria-label="进行中的事情" className="task-tray" role="group">
+            {trayChannels.map(channel => {
+              const channelRun = latestRunForTask(snapshot.runs, channel.id)
+              const selected = continuationChannel?.id === channel.id
+              const waitingOnUser = channel.statusReason !== undefined
+              return (
+                <button
+                  aria-pressed={selected}
+                  className="task-tray-item"
+                  data-status={
+                    waitingOnUser
+                      ? 'attention'
+                      : channelRun?.status === 'running' ||
+                          channelRun?.status === 'queued'
+                        ? 'active'
+                        : 'idle'
+                  }
+                  key={channel.id}
+                  onClick={() => {
+                    if (selected) onClearContinuation()
+                    else onSelectTask(channel.id)
+                  }}
+                  title={
+                    selected
+                      ? '取消选中，恢复自动归属'
+                      : `选中后输入指向「${channel.title}」`
+                  }
+                  type="button"
+                >
+                  <i aria-hidden="true" />
+                  <span className="task-tray-title">{channel.title}</span>
+                  <small>{statusLabel(channel, channelRun)}</small>
+                </button>
+              )
+            })}
+          </div>
+        )}
         {confirmingStop && summaryChannel && (
           <div
             aria-labelledby="composer-stop-title"
@@ -1157,12 +1215,12 @@ export function ConversationPage({
                   <Zap size={15} /> 插话
                 </button>
               )}
-              {summaryActive && summaryChannel && draft.trim() && (
+              {canQueue && draft.trim() && (
                 <button
                   className="composer-queue-button"
                   disabled={sending || dictationBusy}
                   onClick={queueDraft}
-                  title="这件事完成后自动发送这条消息"
+                  title="选中的事情完成后自动发送这条消息"
                   type="button"
                 >
                   排队

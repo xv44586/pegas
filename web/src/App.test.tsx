@@ -3903,7 +3903,9 @@ describe('sealed Pegas UI', () => {
     })
     render(<App />)
     expect(await screen.findByText('你的私人智能工作伙伴')).toBeTruthy()
-    expect(await screen.findByText('安全自更新流程')).toBeTruthy()
+    expect(
+      (await screen.findAllByText('安全自更新流程')).length,
+    ).toBeGreaterThan(0)
   })
 
   it('restores profile-managed execution after a model override', async () => {
@@ -4846,7 +4848,7 @@ describe('sealed Pegas UI', () => {
       })
       render(<App />)
       await act(async () => vi.advanceTimersByTimeAsync(0))
-      expect(screen.getByText(channel.title)).toBeTruthy()
+      expect(screen.getAllByText(channel.title).length).toBeGreaterThan(0)
       await act(async () => vi.advanceTimersByTimeAsync(5_000))
       expect(screen.getByRole('heading', { name: '连接到 Pegas' })).toBeTruthy()
       fireEvent.change(screen.getByLabelText('访问令牌'), {
@@ -4855,7 +4857,7 @@ describe('sealed Pegas UI', () => {
       fireEvent.click(screen.getByRole('button', { name: /继续/ }))
       await act(async () => Promise.resolve())
       expect(screen.getByRole('heading', { name: '连接到 Pegas' })).toBeTruthy()
-      expect(screen.queryByText(channel.title)).toBeNull()
+      expect(screen.queryAllByText(channel.title)).toHaveLength(0)
     } finally {
       vi.useRealTimers()
     }
