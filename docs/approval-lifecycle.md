@@ -137,9 +137,27 @@ X-Pegas-Run-Claim-Token: <successor-capability>
 | Approval 不属于该用户或不存在 | 404  | `not_found`（读取）  |
 | payload、状态或幂等键冲突     | 400  | `bad_request`        |
 
+## DSH 工具审批桥接
+
+除执行合同中由 Executor 主动发起的 Approval 外，Worker 现在以 `--approval-policy ask` 运行 DSH，并通过 `--patch` 注入进程内桥接插件 `src/executor/dsh-approval-bridge.mjs`。插件挂接 DSH 的 `approval/request` seam：工具在沙箱内被直接允许的调用不经审批；一旦工具请求越权（例如 bash/fs 的 `sandbox_permissions` 升级），DSH 会发起审批请求，由桥接插件接管：
+
+1. **停放**：插件用当前 Run 的 claim capability 调 `POST /v1/runs/:runId/approvals` 创建持久 Approval。Action `kind` 为 `dsh.tool.<tool>`、risk 固定 `high`，`request` 保存 `tool`、`callId`、`reason` 与 `argumentsHash`（工具参数的稳定序列化 SHA-256），幂等键为 `dsh-tool:<runId>:<callId>`。创建成功后向 headless JSON 流写入 `approval_pending` 事件并对本次调用返回 `rejected`；Executor 识别该事件后按持久等待结算 Run（服务端已把 Run 置为 `waiting` 并清除 lease），不再提交 Report。创建失败时写入 `approval_bridge_error` 事件，Executor 将其作为执行失败处理，不放行工具。
+2. **恢复**：用户批准后，successor Run 的输入是结构化 `approval.decision` 上下文。Worker 解析出 `actionId`，回查服务端 Action 确认 `status='authorized'` 且 `resumeRunId` 等于当前 Run，才构造一次性 `toolApprovalGrant {actionId, tool, argumentsHash}` 传给 Executor，并随桥接 patch 注入 DSH。
+3. **一次性放行**：插件在 `tools/pre-execute` 记录每个 `callId` 的工具名与参数哈希；`approval/request` 到达时只有 `tool` 与 `argumentsHash` 都与 grant 完全一致才返回 `allowed-once`，且每个 DSH 进程只消费一次。模型改写参数后重试不会命中 grant，会重新走停放流程。
+4. **记录结果**：被放行调用结束后，插件在 `tools/post-execute` 用 successor 的 claim 调 `POST /v1/actions/:actionId/outcomes`（`commandId` 为 `dsh-tool-outcome:<actionId>`）：工具报错或 post-execute 被 block 记 `failed`，否则记 `succeeded`。outcome 上报失败会发出 `approval_bridge_error` 事件并使该 Run 失败，Action 由既有 lease/完成 fence 转为 `unknown` 进入人工核对，不会静默丢失。
+
+claim token 只经进程环境传给 DSH 主进程，DSH 自身的 subprocess 环境清洗会剥离 `*TOKEN*` 与 `DSH_*` 变量，因此不会进入 bash 等工具子进程。`PEGAS_TOOL_APPROVAL_GRANT` 与 `PEGAS_APPROVAL_BRIDGE` 也在 Worker 的父进程环境剥离清单内，防止残留串扰。
+
+桥接的已知边界：
+
+- 只覆盖走 DSH `approval/request` seam 的调用（沙箱越权类）；沙箱内直接允许的工具与未接入该 seam 的工具不产生 Approval。
+- 同一 DSH 进程只停放第一个越权调用；并行的其余审批请求 fall through 到 DSH 默认 `unavailable`，fail closed。
+- 批准后恢复的是同一 DSH session，但模型需要重新发起同参数调用才能命中一次性 grant；grant 不预执行任何工具。
+- 拒绝或要求修改时不注入 grant，Action 走既有 `rejected`/修订路径。
+
 ## 当前限制
 
-第一版已经提供持久对象、策略边界、API、Web 决策、恢复协议与人工核对闭环，但仍标记为 `Partial`：DSH 的通用 tool-call 代理尚未把所有真实工具自动接入 Action Policy；当前只有接入本协议的 Executor/工具适配器会被强制拦截。Web 待处理页尚未提供核对表单（当前只能通过 API 提交）。组织级 RBAC、多人会签、超时策略、可配置风险阈值和自动对账（由验证器主动探测外部状态）属于后续 Feature。
+持久对象、策略边界、API、Web 决策、恢复协议与人工核对闭环已可用，DSH 沙箱越权类工具调用已经由桥接插件自动接入 Action/Approval。仍标记为 `Partial`：沙箱内直接允许的工具调用不经过 Action Policy，自动 risk 分级（当前桥接一律 `high`）与由验证器主动探测外部状态的自动对账属于后续 Feature。组织级 RBAC、多人会签、超时策略与可配置风险阈值同样不在当前范围内。
 
 ## 回滚
 

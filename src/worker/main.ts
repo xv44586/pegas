@@ -108,7 +108,7 @@ const eventHandler = new RoutingEventHandler(router, executor.name, task => {
     nodeId: config.nodeId,
     permissions: JSON.stringify({
       mode: 'workspace-write',
-      approvalPolicy: 'never',
+      approvalPolicy: 'ask',
       additionalDirectories: config.dshAdditionalDirectories,
       privacyMode: settings.privacyMode,
     }),
@@ -246,7 +246,7 @@ function createExecutor(
     executorProfile: config.dshProfile,
     workspace: config.workspaceRoot,
     permissionMode: 'workspace-write',
-    approvalPolicy: 'never' as const,
+    approvalPolicy: 'ask' as const,
     additionalDirectories: config.dshAdditionalDirectories,
     privacyMode: settings.privacyMode,
   }
