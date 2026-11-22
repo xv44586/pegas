@@ -106,7 +106,8 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - **数据与权限边界**：纯 CI 配置变更，无数据库、API、权限或运行时影响；`permissions: contents: read` 不变。
 - **失败与恢复**：若新版本 action 在 CI 上行为异常，revert 本提交即恢复 v4/v5 行为；本地门禁不依赖远程 action 版本，可独立验证。
 - **当前证据（2026-11-22）**：worktree `quality-001-ci-node24`（分支 `feat/QUALITY-001-ci-node24`，基线 `3621a49`）。`.github/workflows/ci.yml` 四个 action 升级：checkout v4→v7、setup-node v4→v7、upload-artifact v4→v7、pnpm/action-setup v4→v6（经 gh api 核实四者 action.yml 均 `using: node24`；setup-node v7 移除 dummy NODE_AUTH_TOKEN 导出，本仓库未使用，无影响）。新增 `test/ci-actions-runtime.test.ts` 5 测试（四个 action 主版本下限 + PR head ref/node24 工具链不变），先红后绿。完整门禁：`pnpm check` 94 文件 / 918 测试全绿（statement 84.9%、branch 77.78%、function 89.53%、line 88.16%），格式、品牌资产、Lint、类型、Knip 与三端构建通过；`pnpm smoke` 通过。
-- **交付状态**：`DONE_WITH_CONCERNS`（待推送验证远程 CI annotation 消失）。回滚只需 revert 本提交；纯 CI 配置变更，无数据库/API/运行时影响。
+- **交付状态**：`DONE_WITH_CONCERNS`（已合并主分支 `363f72f` 并推送）。回滚只需 revert 合并提交 `363f72f`；纯 CI 配置变更，无数据库/API/运行时影响。
+- **远程 CI 验证（2026-11-22）**：推送 `origin/main`（`363f72f`）后 GitHub Actions run 44995511060 success（check job 约 2m40s，Post Run 显示 actions/checkout@v7、actions/setup-node@v7、pnpm/action-setup@v6）；check-runs annotations 为空——「Node.js 20 is deprecated」弃用警告已消失。主分支合并后 `pnpm smoke` 与 CI workflow 回归 10 测试通过。
 
 ### TASK-001：Task/Run 完整状态迁移（2026-11-21）
 
