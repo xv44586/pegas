@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 
 import { loadConfig } from '../core/config.js'
+import { ModelThinkingSummarizer } from '../activity/thinking-summary.js'
 import { ConversationExecutor } from '../executor/conversation-executor.js'
 import { DshCliExecutor } from '../executor/dsh-cli-executor.js'
 import { readDshSubagentTranscripts } from '../executor/dsh-subagent-transcript.js'
@@ -49,11 +50,13 @@ import { MetricsRegistry } from '../observability/metrics.js'
 import { SelfChangeExecutor } from '../self-change/self-change-executor.js'
 import { SelfChangeRoutingExecutor } from '../self-change/routing-executor.js'
 import {
+  backfillThinkingSummaries,
   executeClaimedRun,
   localControlPlaneBaseUrl,
   processNextEvent,
   RoutingEventHandler,
   type SubagentTranscriptCollector,
+  type ThinkingSummarizerFactory,
 } from './processor.js'
 import {
   decodeDshExecutionSnapshot,
@@ -129,7 +132,7 @@ const selfChangeExecutor = config.selfChangeEnabled
       recoveryBaseUrl: config.recoveryBaseUrl,
       ...(config.recoveryToken ? { recoveryToken: config.recoveryToken } : {}),
       editor: executor,
-      compatibility: { minimumSchema: 1, maximumSchema: 36 },
+      compatibility: { minimumSchema: 1, maximumSchema: 37 },
       reviewer: 'pegas-self-change-gate',
       controlPlaneBaseUrl,
     })
@@ -163,6 +166,28 @@ const collectSubagents: SubagentTranscriptCollector | undefined =
       }
 const settingsRouter = new SettingsAwareTaskRouter(store, createRouter)
 const router: TaskRouter = settingsRouter
+const lazySummaryProvider: JsonModelProvider = {
+  name: 'configured-summary',
+  generateJson: request =>
+    createModelProvider(store.getRuntimeSettings()).generateJson(request),
+  generateJsonWithUsage: async request => {
+    const provider = createModelProvider(store.getRuntimeSettings())
+    return provider.generateJsonWithUsage
+      ? provider.generateJsonWithUsage(request)
+      : { value: await provider.generateJson(request) }
+  },
+}
+const createThinkingSummarizer: ThinkingSummarizerFactory = context =>
+  new ModelThinkingSummarizer(
+    new MeteredJsonModelProvider(lazySummaryProvider, store, 'summary', () => {
+      const settings = store.getRuntimeSettings()
+      return {
+        userId: context.userId,
+        eventId: `thinking:${context.runId}:${String(context.seq)}`,
+        modelRef: `${settings.modelProvider}/${settings.modelName}`,
+      }
+    }),
+  )
 const eventHandler = new RoutingEventHandler(router, executor.name, task => {
   const settings = store.getRuntimeSettings()
   return store.resolveWorkerExecutionContext(task.id, task.userId, {
@@ -219,6 +244,18 @@ logger.info('service.started', {
   message: `Pegas worker ${workerId} started with ${baseExecutor.name}`,
 })
 
+if (config.executorMode !== 'echo') {
+  void backfillThinkingSummaries(
+    store,
+    createThinkingSummarizer,
+    telemetry,
+  ).catch((error: unknown) => {
+    logger.warn('run.thinking_summary_backfill_failed', {
+      error: error instanceof Error ? error.message : String(error),
+    })
+  })
+}
+
 while (!lifecycle.stopping) {
   const routed = await processNextEvent(
     store,
@@ -243,6 +280,7 @@ while (!lifecycle.stopping) {
       controlPlaneBaseUrl,
       telemetry,
       collectSubagents,
+      createThinkingSummarizer,
     )
       .catch((error: unknown) => {
         logger.error('run.persistence_failed', error, {
@@ -279,6 +317,7 @@ while (!lifecycle.stopping) {
       controlPlaneBaseUrl,
       telemetry,
       collectSubagents,
+      createThinkingSummarizer,
     )
       .catch((error: unknown) => {
         logger.error('conversation.persistence_failed', error, {

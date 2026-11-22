@@ -2575,7 +2575,11 @@ function UsageSettings({
                     <span>
                       {record.modelRef}
                       <small>
-                        {record.component === 'router' ? '路由' : '改写'}
+                        {record.component === 'router'
+                          ? '路由'
+                          : record.component === 'summary'
+                            ? '思考摘要'
+                            : '改写'}
                         {record.eventId ? ` · 事件 ${record.eventId}` : ''}
                       </small>
                     </span>

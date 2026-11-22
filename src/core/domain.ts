@@ -280,6 +280,8 @@ export interface RunActivityEntry {
   step?: number
   label: string
   detail?: string
+  /** Model-generated Chinese headline for English thinking; raw detail stays verbatim. */
+  summary?: string
   semantic?: ToolSemantic
   /** Lightweight lifecycle marker (compaction / steering); no tool payload. */
   meta?: { kind: 'compaction' | 'steered'; note?: string }
@@ -447,7 +449,7 @@ export interface RunSubagentReport {
 export interface RouterUsageRecord {
   callId: string
   userId: string
-  component: 'router' | 'rewrite'
+  component: 'router' | 'rewrite' | 'summary'
   eventId?: string
   modelRef: string
   usage?: {

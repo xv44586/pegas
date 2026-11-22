@@ -6,6 +6,10 @@ import type {
   Task,
 } from '../core/domain.js'
 import { buildToolSemantic } from '../activity/tool-semantics.js'
+import {
+  needsChineseSummary,
+  type ThinkingSummarizer,
+} from '../activity/thinking-summary.js'
 import type { RunExecutor, ToolApprovalGrant } from '../executor/executor.js'
 import type { Logger } from '../observability/logger.js'
 import type { MetricsRegistry } from '../observability/metrics.js'
@@ -37,6 +41,18 @@ export type SubagentTranscriptCollector = (input: {
   rootSessionId: string
   workspace: string
 }) => SubagentTranscript[]
+
+/**
+ * EXEC-006: builds a per-entry Chinese-headline summarizer. Injected by the
+ * worker runtime (configured control-plane model + privacy mask + metering
+ * keyed by Run and entry); absent in tests and unconfigured deployments,
+ * where English thinking simply keeps its original headline.
+ */
+export type ThinkingSummarizerFactory = (context: {
+  userId: string
+  runId: string
+  seq: number
+}) => ThinkingSummarizer
 
 export function localControlPlaneBaseUrl(host: string, port: number): string {
   if (host === '0.0.0.0') return `http://127.0.0.1:${String(port)}`
@@ -750,6 +766,7 @@ export async function executeClaimedRun(
   controlPlaneBaseUrl: string,
   telemetry?: { logger?: Logger; metrics?: MetricsRegistry },
   collectSubagents?: SubagentTranscriptCollector,
+  thinkingSummarizer?: ThinkingSummarizerFactory,
 ): Promise<void> {
   const runStartedAt = performance.now()
   const observeRun = (outcome: string) => {
@@ -1040,6 +1057,7 @@ export async function executeClaimedRun(
   store.completeRun(claimed.run.id, workerId, result)
   observeRun('completed')
   if (result.approvalPending) return
+  await summarizeRunThinking(store, claimed, thinkingSummarizer, telemetry)
   const persistedRun = store
     .listRuns(claimed.task.id)
     .find(run => run.id === claimed.run.id)
@@ -1102,6 +1120,89 @@ function collectSubagentTranscripts(
       component: 'worker',
       kind: 'subagent_transcript',
     })
+  }
+}
+
+const MAX_THINKING_SUMMARIES_PER_RUN = 12
+const MAX_BACKFILL_RUNS_PER_START = 20
+
+/**
+ * EXEC-006: after a Run settles, English thinking rows get a bounded Chinese
+ * headline through the control-plane model. Best-effort and idempotent: a
+ * provider failure leaves the original text untouched, already-summarized
+ * rows are skipped, and the pass never fails the completed Run.
+ */
+async function summarizeRunThinking(
+  store: PegasStore,
+  claimed: ClaimedRun,
+  createSummarizer: ThinkingSummarizerFactory | undefined,
+  telemetry?: { logger?: Logger; metrics?: MetricsRegistry },
+): Promise<void> {
+  if (!createSummarizer) return
+  await summarizeThinkingEntries(
+    store,
+    { runId: claimed.run.id, userId: claimed.task.userId },
+    createSummarizer,
+    telemetry,
+  )
+}
+
+/**
+ * One bounded best-effort pass per worker start so settled historical Runs
+ * receive the same Chinese headlines. Idempotent through the write-back
+ * guard; never blocks or fails the worker loop.
+ */
+export async function backfillThinkingSummaries(
+  store: PegasStore,
+  createSummarizer: ThinkingSummarizerFactory,
+  telemetry?: { logger?: Logger; metrics?: MetricsRegistry },
+): Promise<void> {
+  let pending: { runId: string; userId: string }[]
+  try {
+    pending = store.listRunsMissingThinkingSummary(MAX_BACKFILL_RUNS_PER_START)
+  } catch {
+    return
+  }
+  for (const item of pending) {
+    await summarizeThinkingEntries(store, item, createSummarizer, telemetry)
+  }
+}
+
+async function summarizeThinkingEntries(
+  store: PegasStore,
+  target: { runId: string; userId: string },
+  createSummarizer: ThinkingSummarizerFactory,
+  telemetry?: { logger?: Logger; metrics?: MetricsRegistry },
+): Promise<void> {
+  let candidates: ReturnType<PegasStore['listRunThinking']>
+  try {
+    candidates = store
+      .listRunThinking(target.runId)
+      .filter(entry => needsChineseSummary(entry))
+      .slice(0, MAX_THINKING_SUMMARIES_PER_RUN)
+  } catch {
+    return
+  }
+  for (const entry of candidates) {
+    try {
+      const summarizer = createSummarizer({
+        userId: target.userId,
+        runId: target.runId,
+        seq: entry.seq,
+      })
+      const summary = await summarizer.summarize(entry.detail ?? entry.label)
+      store.setRunThinkingSummary(target.runId, entry.seq, summary)
+    } catch (error) {
+      telemetry?.logger?.warn('run.thinking_summary_failed', {
+        runId: target.runId,
+        seq: entry.seq,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      telemetry?.metrics?.increment('pegas_errors_total', {
+        component: 'worker',
+        kind: 'thinking_summary',
+      })
+    }
   }
 }
 
