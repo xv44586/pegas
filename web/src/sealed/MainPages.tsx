@@ -938,7 +938,6 @@ export function ConversationPage({
           <ol aria-label="排队消息" className="composer-queue">
             {queuedMessages.map((item, index) => (
               <li key={item.id}>
-                <span className="composer-queue-position">{index + 1}</span>
                 <span className="composer-queue-preview" title={item.text}>
                   {item.text}
                 </span>
