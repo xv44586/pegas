@@ -5,6 +5,8 @@ type EventStatus = 'pending' | 'processing' | 'processed' | 'failed'
 export type TaskStatus =
   'backlog' | 'unstarted' | 'started' | 'completed' | 'cancelled'
 
+type TaskKind = 'work' | 'conversation'
+
 interface ActorRef {
   source: string
   id: string
@@ -50,6 +52,10 @@ export interface ExecutionContext {
   workerProfileRevision?: number
   workerProfileSource?: 'global' | 'task'
   authoritySourceRunId?: string
+  executionPool?: 'fast' | 'balanced' | 'deep'
+  requestedPool?: 'fast' | 'balanced' | 'deep'
+  poolDowngradeReason?: string
+  reasoningEffort?: string
 }
 
 export interface InboxEvent {
@@ -108,6 +114,8 @@ export interface Task {
   title: string
   goal: string
   status: TaskStatus
+  /** Defaults to 'work' when omitted; conversation Tasks carry 'conversation'. */
+  kind?: TaskKind
   workerIconId: WorkerIconId
   statusReason?: string
   targetResource?: 'pegas_repository'
@@ -115,6 +123,58 @@ export interface Task {
   ended?: TaskEnd
   createdAt: string
   updatedAt: string
+}
+
+/**
+ * ROUTE-003: one routing candidate plus authoritative summary facts derived
+ * by the Control Plane. Workers never supply these fields as free text.
+ */
+export interface RoutingCandidate {
+  task: Task
+  /** Latest pending question the user is expected to answer, if any. */
+  awaiting?: string
+  /** First line of the most recent completed Run output. */
+  lastDelivery?: string
+  /** First line of the most recent user input attached to this Task. */
+  recentInput?: string
+}
+
+/**
+ * NOTIFY-006: one owed user-visible delivery. A terminal Run stays on this
+ * ledger until its notification is confirmed sent (or human-resolved);
+ * delivery failure never settles the debt. Read-only projection.
+ */
+export interface OwedDelivery {
+  userId: string
+  taskId: string
+  taskTitle: string
+  runId: string
+  runStatus: 'completed' | 'failed'
+  runEndedAt: string
+  runError?: string
+  messageId: string
+  dedupeKey: string
+  deliveryStatus: OutboxMessage['status']
+  attempts: number
+  deliveryError?: string
+  messageCreatedAt: string
+  mergedIntoId?: string
+  mergedIntoStatus?: OutboxMessage['status']
+}
+
+/**
+ * NOTIFY-006: read-only reconciliation finding. Findings only alert; repair
+ * stays on the existing lease/retry/human-reconciliation paths (OBS-001
+ * boundary: the watchdog never writes product state).
+ */
+export interface ReconciliationFinding {
+  kind: 'unreported' | 'never_started' | 'stranded' | 'stale_waiting'
+  userId: string
+  taskId: string
+  runId?: string
+  nodeId?: string
+  since: string
+  detail: string
 }
 
 type RunStatus =
@@ -211,6 +271,89 @@ export interface ModelUsageReport {
   records: ModelUsageRecord[]
 }
 
+export interface RunActivityEntry {
+  seq: number
+  kind: 'text' | 'thinking' | 'tool_call' | 'step'
+  status?: 'started' | 'completed' | 'error'
+  callId?: string
+  tool?: string
+  step?: number
+  label: string
+  detail?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface RunActivityReport {
+  runId: string
+  taskId: string
+  entries: RunActivityEntry[]
+  totalEntries: number
+  truncated: boolean
+}
+
+export interface SubagentTranscript {
+  sessionId: string
+  parentSessionId: string
+  delegationDepth: number
+  /** The delegation tool-call description, from the child's durable descriptor. */
+  label?: string
+  /** The delegated prompt, from the child's first durable user message. */
+  prompt?: string
+  createdAt: string
+  entries: RunActivityEntry[]
+  totalEntries: number
+  truncated: boolean
+}
+
+export interface RunSubagentReport {
+  runId: string
+  taskId: string
+  subagents: SubagentTranscript[]
+}
+
+export interface RouterUsageRecord {
+  callId: string
+  userId: string
+  component: 'router' | 'rewrite'
+  eventId?: string
+  modelRef: string
+  usage?: {
+    inputTokens?: number
+    outputTokens?: number
+    totalTokens?: number
+    cacheReadTokens?: number
+    cacheWriteTokens?: number
+    reasoningTokens?: number
+  }
+  durationMs: number
+  outcome: 'ok' | 'error'
+}
+
+export interface RouterUsageReport {
+  summary: {
+    calls: number
+    okCalls: number
+    errorCalls: number
+    reportedCalls: number
+    inputTokens: number
+    outputTokens: number
+    durationMs: number
+  }
+  records: (Omit<RouterUsageRecord, 'usage'> & {
+    completeness: 'complete' | 'unavailable'
+    tokenSource?: 'provider_reported'
+    inputTokens?: number
+    outputTokens?: number
+    totalTokens?: number
+    cacheReadTokens?: number
+    cacheWriteTokens?: number
+    reasoningTokens?: number
+    latencySource: 'pegas_observed'
+    observedAt: string
+  })[]
+}
+
 export type RoutingDecision =
   | {
       kind: 'create_task'
@@ -219,6 +362,12 @@ export type RoutingDecision =
       input: string
       reason: string
       targetResource?: 'pegas_repository'
+      sourceContext?: TaskSourceContext
+    }
+  | {
+      kind: 'reply'
+      input: string
+      reason: string
     }
   | {
       kind: 'continue_task'
@@ -237,6 +386,25 @@ export type RoutingDecision =
       taskId: string
       reason: string
     }
+
+/**
+ * COLLAB-001 (PLAN-001 P5): terminal facts handed from a finished or stopped
+ * source Task into a new Task's first Run input. This is a factual handoff,
+ * not a context note and not an authorization: it never resumes the source
+ * session and never expands the new Task's mandate. The Control Plane
+ * derives every field from authoritative rows; clients only reference the
+ * source Task.
+ */
+export interface TaskSourceContext {
+  sourceTaskId: string
+  relationId?: string
+  sourceTitle: string
+  sourceStatus: 'completed' | 'cancelled'
+  summary: string
+  keyDecisions: string[]
+  artifactRefs: { id: string; name: string; kind: string; uri?: string }[]
+  reviewPackId?: string
+}
 
 export interface OutboxMessage {
   id: string

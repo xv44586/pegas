@@ -35,6 +35,17 @@
 - **边界**：Watchdog 只读健康端点，不写产品状态、不自动重启或回滚（Supervisor 职责）；被监测方全部宕机时仍可发出告警。
 - **运行**：`pnpm dev:healthcheck` / `pnpm start:healthcheck`（构建后）；`pnpm smoke:healthcheck` 以真实进程验证 healthy→掉线（latch 单次 offline 告警）→恢复（单次 recovered 告警）→SIGTERM 停止。
 
+## 交付可靠性对账（NOTIFY-006）
+
+`src/observability/delivery-reconciliation.ts` + `src/observability/reconciliation-main.ts` 提供 Run 终态与用户可见通知之间的第二道安全网（第一道是 durable lease/retry 恢复链）：
+
+- **欠账视图**：`store.listOwedDeliveries(userId?)` 列出终态 Run（completed/failed）中通知仍 pending/sending/failed/unknown（含 merged 到未 sent 消息）的清单；只有 sent 确认或人工 `resolveOutboxMessage` 清算欠账，投递失败 ≠ 结清。
+- **四类 finding**（`store.listReconciliationFindings`）：`unreported`（终态超过阈值无 sent 确认，排除已被 retry/steering 后继接管的 Run）、`never_started`（开放 work Task 无 Run）、`stranded`（queued 超窗且匹配执行节点在线）、`stale_waiting`（审批已决/委派已结/用户输入已到但 waiting Run 未唤醒）。
+- **边界（沿用 OBS-001 Watchdog 约束）**：只读，不写任何产品状态，不自动修复；finding 只产生 `pegas_reconciliation_findings_total{kind}`、`pegas_owed_deliveries` 指标与 `reconciliation.finding` 结构化日志（仅 durable 标识）。修复走既有 lease 过期、retry、人工核对路径。
+- **运行**：独立进程 `pnpm dev:reconciliation` / `pnpm start:reconciliation`；`PEGAS_RECONCILE_INTERVAL_MS`（默认 60000）、`PEGAS_RECONCILE_UNREPORTED_AFTER_MS`/`NEVER_STARTED_AFTER_MS`/`STALE_WAITING_AFTER_MS`（默认 300000）、`PEGAS_RECONCILE_STRANDED_AFTER_MS`（默认 120000）；非法配置启动即失败。对账进程崩溃不影响主链路（独立 SQLite 连接，回归验证）。
+- **API**：`GET /v1/reconciliation?userId=`（与主 API 同一 bearer 鉴权）返回 `{owed, findings}` 只读投影。
+- **证据**：`test/delivery-reconciliation.test.ts` 14 个测试（四类 finding 故障注入、欠账清算语义、只读与崩溃隔离边界、配置 fail-closed、API 鉴权）。
+
 ## 非目标
 
 - 不做外部日志聚合/远端 error tracking（Sentry 等）、不做指标持久化与跨进程聚合、不做产品级告警规则；主机级外部健康检查见下文独立 Watchdog。

@@ -26,6 +26,7 @@
 ## 数据与权限边界
 
 - 服务端 `model_usage_records` 是 Pegas 的用量事实来源；Web 只负责读取和格式化。
+- 设置页用量表支持「按 Run / 按模型」维度切换：模型维度按 `modelRef ?? executor` 在客户端聚合输入/输出/缓存 token 与观测时长，并显示 Run 数与事情数；聚合只是同一权威记录的视图，不产生新事实。
 - token 来源为 `provider_reported`，经 DSH durable `step_end` 投影传递；Pegas 不重新分词。
 - `durationMs` 来源为 `pegas_observed`，表示整个 Executor Run 的墙钟耗时，不伪装成模型首 token 延迟或纯推理时间。
 - 模型引用来自 Run 的不可变 `executionContext.model` 快照。值为 `profile` 时只能说明使用 DSH profile，不能推断实际 provider/model。
@@ -34,7 +35,7 @@
 
 ## 非目标
 
-- 第一版不计入 Router、输入改写、语音识别、图片或嵌入模型调用；它们后续应复用同一账本，而不是在 Web 单独统计。
+- 语音识别、图片或嵌入模型调用尚未计入；它们后续应复用同一账本，而不是在 Web 单独统计。Router 与输入改写已于 PLAN-001 P2 接入（见下）。
 - 不从 Magpie 账户余额、套餐窗口或价目表推算本次 Run 成本。
 - 不实现预算告警、按日期账期、CSV 导出或跨 Worker 排行。
 - 不把 token 数量作为 Channel 完成、Worker 能力或质量判断依据。
@@ -64,6 +65,10 @@
 
 ## 下一缺口
 
-- Router、输入改写、ASR、图片与嵌入模型调用尚未接入同一账本。
+- ASR、图片与嵌入模型调用尚未接入同一账本。
 - 尚无账期、预算告警、CSV 导出、分页或跨 Channel/Worker 对比。
 - 当前 DSH 合同不回报费用；界面因此诚实显示“供应商未提供”。
+
+## Router 与改写计量（PLAN-001 P2，2026-11-22）
+
+schema v33 新增 `router_usage_records`：Router 与输入改写的每次模型调用一行，幂等键为 `component:eventId:modelRef`（同一事件重放路由不重复计费）。token 只取供应商上报（OpenAI `usage.prompt_tokens/completion_tokens/prompt_tokens_details.cached_tokens`；Anthropic `usage.input_tokens/output_tokens/cache_read_input_tokens/cache_creation_input_tokens`）；无上报记 `unavailable`，调用失败记 `outcome=error`，绝不估算。耗时为 Pegas 观测墙钟。计量经 `MeteredJsonModelProvider` 包裹在 PrivacyMaskingProvider 外层，写失败静默跳过、不阻塞路由。`GET /v1/usage?userId=…`（不带 taskId）附 `router` 报告；设置页“模型用量”新增“路由与改写用量”汇总与明细。证据：`test/routing-cost.test.ts` 计量 4 测试、`web/src/App.test.tsx` 渲染回归。

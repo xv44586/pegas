@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 
+import './test-env'
+
 import {
   act,
   cleanup,
@@ -2344,9 +2346,11 @@ describe('sealed Pegas UI', () => {
     const composer = await screen.findByLabelText('给 Pegas 发消息')
     const form = composer.closest('form')
     expect(form?.getAttribute('aria-label')).toBe('发送消息')
+    fireEvent.change(composer, { target: { value: '先填草稿再看发送按钮' } })
     expect(
       screen.getByRole('button', { name: '发送' }).getAttribute('type'),
     ).toBe('submit')
+    fireEvent.change(composer, { target: { value: '' } })
     const modelButton = await screen.findByRole('button', {
       name: /选择执行模型/,
     })
@@ -3177,6 +3181,515 @@ describe('sealed Pegas UI', () => {
     expect(
       await screen.findByText(`事情 ${channel.id} · Run ${run.id}`),
     ).toBeTruthy()
+  })
+
+  it('switches the usage table between run and model dimensions', async () => {
+    installFetch(path => {
+      if (!path.startsWith('/v1/usage?')) return undefined
+      return Response.json({
+        summary: {
+          records: 2,
+          completeRecords: 2,
+          partialRecords: 0,
+          unavailableRecords: 0,
+          inputTokens: 3000,
+          outputTokens: 500,
+          durationMs: 30_000,
+        },
+        records: [
+          {
+            runId: 'run-a',
+            taskId: 'task-1',
+            userId: 'owner',
+            workerIconId: 'computer',
+            executor: 'dsh',
+            modelRef: 'magpie/qwen4-max',
+            completeness: 'complete',
+            inputTokens: 1000,
+            outputTokens: 200,
+            reportedSteps: 1,
+            unreportedSteps: 0,
+            durationMs: 10_000,
+            observedAt: '2026-11-22T00:00:00.000Z',
+          },
+          {
+            runId: 'run-b',
+            taskId: 'task-2',
+            userId: 'owner',
+            workerIconId: 'computer',
+            executor: 'dsh',
+            modelRef: 'magpie/qwen4-max',
+            completeness: 'complete',
+            inputTokens: 2000,
+            outputTokens: 300,
+            reportedSteps: 2,
+            unreportedSteps: 0,
+            durationMs: 20_000,
+            observedAt: '2026-11-22T00:01:00.000Z',
+          },
+        ],
+      })
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /模型用量/ }))
+    expect(await screen.findByText('事情 task-1 · Run run-a')).toBeTruthy()
+    expect(screen.getByText('事情 task-2 · Run run-b')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '按模型' }))
+    expect(screen.queryByText('事情 task-1 · Run run-a')).toBeNull()
+    expect(screen.getByText('2 个 Run · 2 个事情')).toBeTruthy()
+    expect(screen.getByText('3,000')).toBeTruthy()
+    expect(screen.getByText('500')).toBeTruthy()
+    expect(screen.getAllByText('30s').length).toBeGreaterThan(0)
+    fireEvent.click(screen.getByRole('button', { name: '按 Run' }))
+    expect(screen.getByText('事情 task-1 · Run run-a')).toBeTruthy()
+  })
+
+  it('expands the run workflow inline with markdown and tool details', async () => {
+    installSnapshotFetch(
+      {
+        ...snapshot,
+        channels: [{ ...channel, status: 'completed', canStop: false }],
+        runs: [
+          {
+            ...run,
+            status: 'completed',
+            output: '**结论**：团队版每人每月 30 美元。',
+          },
+        ],
+      },
+      path => {
+        if (!path.startsWith('/v1/runs/run-1/activity?')) return undefined
+        return Response.json({
+          runId: 'run-1',
+          taskId: channel.id,
+          totalEntries: 4,
+          truncated: false,
+          entries: [
+            {
+              seq: 1,
+              kind: 'step',
+              status: 'started',
+              step: 1,
+              label: '第 1 步开始',
+              createdAt: '2026-11-19T08:00:10.000Z',
+              updatedAt: '2026-11-19T08:00:10.000Z',
+            },
+            {
+              seq: 2,
+              kind: 'tool_call',
+              status: 'completed',
+              callId: 'call-1',
+              tool: 'shell',
+              label: 'shell',
+              detail:
+                '{"command":"curl https://example.com/pricing"}\n[结果]\nTeam $30',
+              createdAt: '2026-11-19T08:00:20.000Z',
+              updatedAt: '2026-11-19T08:00:30.000Z',
+            },
+            {
+              seq: 3,
+              kind: 'thinking',
+              label: '核对价格口径',
+              detail: '需要区分*年付*与月付。',
+              createdAt: '2026-11-19T08:00:40.000Z',
+              updatedAt: '2026-11-19T08:00:40.000Z',
+            },
+            {
+              seq: 4,
+              kind: 'text',
+              label: '团队版价格已确认',
+              detail: '团队版价格为 **$30/人/月**。',
+              createdAt: '2026-11-19T08:00:50.000Z',
+              updatedAt: '2026-11-19T08:00:50.000Z',
+            },
+          ],
+        })
+      },
+    )
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: new RegExp(channel.title) }),
+    )
+    const taskDrawer = await screen.findByRole('dialog', { name: '工作详情' })
+    const heroStrong = taskDrawer.querySelector('.state-hero-markdown strong')
+    expect(heroStrong?.textContent).toBe('结论')
+    fireEvent.click(await within(taskDrawer).findByText(/工作流程记录/))
+    expect(await within(taskDrawer).findByText('第 1 步开始')).toBeTruthy()
+    expect(screen.queryByRole('dialog', { name: '运行详情' })).toBeNull()
+    expect(
+      within(taskDrawer).queryByRole('button', { name: /查看完整记录/ }),
+    ).toBeNull()
+    fireEvent.click(within(taskDrawer).getByText('shell'))
+    expect(
+      within(taskDrawer).getByText(/curl https:\/\/example.com\/pricing/),
+    ).toBeTruthy()
+    expect(within(taskDrawer).getByText(/Team \$30/)).toBeTruthy()
+    fireEvent.click(within(taskDrawer).getByText('推理'))
+    expect(within(taskDrawer).getByText('年付').tagName).toBe('EM')
+    const messageStrong = taskDrawer.querySelectorAll(
+      '.transcript-message strong',
+    )
+    expect(
+      [...messageStrong].some(node => node.textContent === '$30/人/月'),
+    ).toBe(true)
+    fireEvent.click(within(taskDrawer).getByText('最终结果'))
+    expect(
+      [...taskDrawer.querySelectorAll('.run-final-output strong')].some(
+        node => node.textContent === '结论',
+      ),
+    ).toBe(true)
+  })
+
+  it('renders a subagent delegation card with the child execution transcript', async () => {
+    installSnapshotFetch(
+      {
+        ...snapshot,
+        channels: [{ ...channel, status: 'completed', canStop: false }],
+        runs: [
+          {
+            ...run,
+            status: 'completed',
+            output: 'docs 共 29 个文件。',
+          },
+        ],
+      },
+      path => {
+        if (path.startsWith('/v1/runs/run-1/activity?')) {
+          return Response.json({
+            runId: 'run-1',
+            taskId: channel.id,
+            totalEntries: 1,
+            truncated: false,
+            entries: [
+              {
+                seq: 1,
+                kind: 'tool_call',
+                status: 'completed',
+                callId: 'call-delegate',
+                tool: 'subagent',
+                label: 'subagent',
+                detail:
+                  '{"description":"统计 docs 文件","prompt":"数一下 docs 目录的文件数","name":"agent-1"}\n[结果]\nstarted subagent agent-1\ndocs 目录共 **29** 个文件。',
+                createdAt: '2026-11-19T08:00:10.000Z',
+                updatedAt: '2026-11-19T08:00:40.000Z',
+              },
+            ],
+          })
+        }
+        if (path.startsWith('/v1/runs/run-1/subagents?')) {
+          return Response.json({
+            runId: 'run-1',
+            taskId: channel.id,
+            subagents: [
+              {
+                sessionId: 'session-child',
+                parentSessionId: 'session-root',
+                delegationDepth: 1,
+                label: '统计 docs 文件',
+                prompt: '数一下 docs 目录的文件数',
+                createdAt: '2026-11-19T08:00:12.000Z',
+                totalEntries: 2,
+                truncated: false,
+                entries: [
+                  {
+                    seq: 1,
+                    kind: 'tool_call',
+                    status: 'completed',
+                    callId: 'call-child',
+                    tool: 'bash',
+                    label: 'bash',
+                    detail: '{"command":"ls docs | wc -l"}\n[结果]\n29',
+                    createdAt: '2026-11-19T08:00:15.000Z',
+                    updatedAt: '2026-11-19T08:00:16.000Z',
+                  },
+                  {
+                    seq: 2,
+                    kind: 'text',
+                    label: 'docs 目录共 29 个文件。',
+                    detail: 'docs 目录共 29 个文件。',
+                    createdAt: '2026-11-19T08:00:18.000Z',
+                    updatedAt: '2026-11-19T08:00:18.000Z',
+                  },
+                ],
+              },
+            ],
+          })
+        }
+        return undefined
+      },
+    )
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: new RegExp(channel.title) }),
+    )
+    const taskDrawer = await screen.findByRole('dialog', { name: '工作详情' })
+    fireEvent.click(await within(taskDrawer).findByText(/工作流程记录/))
+    const card = await within(taskDrawer).findByText(/子任务 · 统计 docs 文件/)
+    fireEvent.click(card)
+    fireEvent.click(within(taskDrawer).getByText('任务书'))
+    expect(
+      within(taskDrawer).getByText(/数一下 docs 目录的文件数/),
+    ).toBeTruthy()
+    expect(
+      [...taskDrawer.querySelectorAll('.transcript-subagent strong')].some(
+        node => node.textContent === '29',
+      ),
+    ).toBe(true)
+    fireEvent.click(
+      await within(taskDrawer).findByText(/子 agent 执行记录 · 工具 1 次/),
+    )
+    fireEvent.click(within(taskDrawer).getByText('bash'))
+    expect(within(taskDrawer).getByText(/ls docs \| wc -l/)).toBeTruthy()
+    expect(
+      within(taskDrawer).getAllByText('docs 目录共 29 个文件。').length,
+    ).toBeGreaterThan(0)
+  })
+
+  it('shows only the matched child under each delegation card', async () => {
+    installSnapshotFetch(
+      {
+        ...snapshot,
+        channels: [{ ...channel, status: 'completed', canStop: false }],
+        runs: [{ ...run, status: 'completed', output: '两个子任务都完成了。' }],
+      },
+      path => {
+        if (path.startsWith('/v1/runs/run-1/activity?')) {
+          return Response.json({
+            runId: 'run-1',
+            taskId: channel.id,
+            totalEntries: 2,
+            truncated: false,
+            entries: [
+              {
+                seq: 1,
+                kind: 'tool_call',
+                status: 'completed',
+                callId: 'call-a',
+                tool: 'subagent',
+                label: 'subagent',
+                detail:
+                  '{"description":"数文件","prompt":"数一下 docs 文件数"}\n[结果]\n28 个',
+                createdAt: '2026-11-19T08:00:10.000Z',
+                updatedAt: '2026-11-19T08:00:40.000Z',
+              },
+              {
+                seq: 2,
+                kind: 'tool_call',
+                status: 'completed',
+                callId: 'call-b',
+                tool: 'subagent',
+                label: 'subagent',
+                detail:
+                  '{"description":"查定价","prompt":"查一下 Notion 定价"}\n[结果]\n$10',
+                createdAt: '2026-11-19T08:00:50.000Z',
+                updatedAt: '2026-11-19T08:01:20.000Z',
+              },
+            ],
+          })
+        }
+        if (path.startsWith('/v1/runs/run-1/subagents?')) {
+          return Response.json({
+            runId: 'run-1',
+            taskId: channel.id,
+            subagents: [
+              {
+                sessionId: 'child-files',
+                parentSessionId: 'session-root',
+                delegationDepth: 1,
+                label: '数文件',
+                prompt: '数一下 docs 文件数',
+                createdAt: '2026-11-19T08:00:12.000Z',
+                totalEntries: 1,
+                truncated: false,
+                entries: [
+                  {
+                    seq: 1,
+                    kind: 'text',
+                    label: '共 28 个文件',
+                    detail: '共 28 个文件',
+                    createdAt: '2026-11-19T08:00:20.000Z',
+                    updatedAt: '2026-11-19T08:00:20.000Z',
+                  },
+                ],
+              },
+              {
+                sessionId: 'child-pricing',
+                parentSessionId: 'session-root',
+                delegationDepth: 1,
+                label: '查定价',
+                prompt: '查一下 Notion 定价',
+                createdAt: '2026-11-19T08:00:52.000Z',
+                totalEntries: 1,
+                truncated: false,
+                entries: [
+                  {
+                    seq: 1,
+                    kind: 'text',
+                    label: 'Plus 每人每月 10 美元',
+                    detail: 'Plus 每人每月 10 美元',
+                    createdAt: '2026-11-19T08:01:00.000Z',
+                    updatedAt: '2026-11-19T08:01:00.000Z',
+                  },
+                ],
+              },
+            ],
+          })
+        }
+        return undefined
+      },
+    )
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: new RegExp(channel.title) }),
+    )
+    const taskDrawer = await screen.findByRole('dialog', { name: '工作详情' })
+    fireEvent.click(await within(taskDrawer).findByText(/工作流程记录/))
+    const filesCard = (
+      await within(taskDrawer).findByText(/子任务 · 数文件/)
+    ).closest('details')
+    const pricingCard = within(taskDrawer)
+      .getByText(/子任务 · 查定价/)
+      .closest('details')
+    if (!filesCard || !pricingCard) throw new Error('expected delegation cards')
+    fireEvent.click(within(taskDrawer).getByText(/子任务 · 数文件/))
+    fireEvent.click(
+      await within(filesCard as HTMLElement).findByText(/子 agent 执行记录/),
+    )
+    expect(
+      within(filesCard as HTMLElement).getByText('共 28 个文件'),
+    ).toBeTruthy()
+    expect(
+      within(filesCard as HTMLElement).queryByText('Plus 每人每月 10 美元'),
+    ).toBeNull()
+    fireEvent.click(within(taskDrawer).getByText(/子任务 · 查定价/))
+    fireEvent.click(
+      await within(pricingCard as HTMLElement).findByText(/子 agent 执行记录/),
+    )
+    expect(
+      within(pricingCard as HTMLElement).getByText('Plus 每人每月 10 美元'),
+    ).toBeTruthy()
+    expect(
+      within(pricingCard as HTMLElement).queryByText('共 28 个文件'),
+    ).toBeNull()
+  })
+
+  it('cues the task origin and latest user input above terminal results', async () => {
+    const source = snapshot.messages[0]
+    const originEvent = snapshot.events[0]
+    if (!source || !originEvent) throw new Error('missing chat fixtures')
+    installSnapshotFetch({
+      ...snapshot,
+      events: [
+        originEvent,
+        {
+          ...originEvent,
+          id: 'event-steer',
+          payload: { text: '重点看团队版，输出成表格', taskId: channel.id },
+          createdAt: '2026-11-19T08:00:30.000Z',
+        },
+      ],
+      messages: [
+        {
+          ...source,
+          id: 'result-cue',
+          payload: {
+            type: 'run.completed',
+            runId: run.id,
+            text: '价格表格已生成。',
+          },
+          createdAt: '2026-11-19T08:05:00.000Z',
+        },
+      ],
+    })
+    render(<App />)
+    expect(await screen.findByText('价格表格已生成。')).toBeTruthy()
+    const cue = document.querySelector('.message-context-cue')
+    expect(cue?.textContent).toContain(channel.title)
+    expect(cue?.textContent).toContain(
+      '原始请求：帮我设计一个安全的自更新流程。',
+    )
+    expect(cue?.textContent).toContain('你最近补充：重点看团队版，输出成表格')
+  })
+
+  it('shows router and rewrite metering with honest unreported tokens', async () => {
+    installFetch(path => {
+      if (!path.startsWith('/v1/usage?')) return undefined
+      return Response.json({
+        summary: {
+          records: 0,
+          completeRecords: 0,
+          partialRecords: 0,
+          unavailableRecords: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          durationMs: 0,
+        },
+        records: [],
+        router: {
+          summary: {
+            calls: 2,
+            okCalls: 1,
+            errorCalls: 1,
+            reportedCalls: 1,
+            inputTokens: 100,
+            outputTokens: 20,
+            durationMs: 900,
+          },
+          records: [
+            {
+              callId: 'router:event-1:openai/router-model',
+              userId: 'owner',
+              component: 'router',
+              eventId: 'event-1',
+              modelRef: 'openai/router-model',
+              completeness: 'complete',
+              tokenSource: 'provider_reported',
+              inputTokens: 100,
+              outputTokens: 20,
+              durationMs: 500,
+              latencySource: 'pegas_observed',
+              outcome: 'ok',
+              observedAt: '2026-11-22T00:00:00.000Z',
+            },
+            {
+              callId: 'rewrite:event-2:openai/router-model',
+              userId: 'owner',
+              component: 'rewrite',
+              eventId: 'event-2',
+              modelRef: 'openai/router-model',
+              completeness: 'unavailable',
+              durationMs: 400,
+              latencySource: 'pegas_observed',
+              outcome: 'error',
+              observedAt: '2026-11-22T00:00:01.000Z',
+            },
+          ],
+        },
+      })
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /模型用量/ }))
+    expect(await screen.findByText('路由与改写用量')).toBeTruthy()
+    expect(screen.getByText('成功 1 · 失败 1')).toBeTruthy()
+    expect(screen.getByText('路由 · 事件 event-1')).toBeTruthy()
+    expect(screen.getByText('改写 · 事件 event-2')).toBeTruthy()
+    expect(screen.getByText('120')).toBeTruthy()
   })
 
   it('shows the shell as offline when the authoritative snapshot fails', async () => {
@@ -5177,7 +5690,7 @@ describe('sealed Pegas UI', () => {
       quietEnd: '07:00',
     })
     expect((saved as { utcOffsetMinutes: number }).utcOffsetMinutes).toBe(
-      -new Date().getTimezoneOffset(),
+      -new Date().getTimezoneOffset() || 0,
     )
   })
 
@@ -5334,6 +5847,210 @@ describe('sealed Pegas UI', () => {
         ([path]) => path === '/v1/settings/agent-models',
       ).length,
     ).toBeGreaterThan(0)
+  })
+
+  it('saves a task-level execution pool and effort selection', async () => {
+    let submitted: unknown
+    installFetch((path, init) => {
+      if (
+        path === '/v1/tasks/task-1/worker-profile' &&
+        init?.method === 'PUT'
+      ) {
+        submitted = JSON.parse(typeof init.body === 'string' ? init.body : '{}')
+        const draft = submitted as {
+          expectedRevision: number
+          modelMode: 'inherit' | 'override'
+          pool?: string
+          effort?: string
+        }
+        const profile = {
+          id: 'worker-profile-1',
+          taskId: 'task-1',
+          revision: draft.expectedRevision + 1,
+          modelMode: draft.modelMode,
+          ...(draft.pool ? { pool: draft.pool } : {}),
+          ...(draft.effort ? { effort: draft.effort } : {}),
+          createdAt: '2026-11-19T08:00:00.000Z',
+          updatedAt: '2026-11-22T00:00:00.000Z',
+        }
+        return Response.json({
+          profile,
+          effective: {
+            profile,
+            source: 'task',
+            modelMode: 'override',
+            modelProvider: 'magpie',
+            modelName: 'flash',
+            modelRef: 'magpie/flash',
+            ...(draft.pool ? { pool: draft.pool } : {}),
+            ...(draft.effort ? { effort: draft.effort } : {}),
+          },
+        })
+      }
+      return undefined
+    })
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(screen.getByRole('button', { name: /安全自更新流程/ }))
+    expect(await screen.findByText('事情级执行设置')).toBeTruthy()
+    fireEvent.change(await screen.findByLabelText('执行池'), {
+      target: { value: 'fast' },
+    })
+    const effortSelect = screen.getByLabelText('推理档位')
+    expect(effortSelect.tagName).toBe('SELECT')
+    fireEvent.change(effortSelect, { target: { value: 'low' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存执行设置' }))
+    expect(
+      await screen.findByText('执行设置已保存，对后续运行生效。'),
+    ).toBeTruthy()
+    expect(submitted).toMatchObject({
+      userId: 'owner',
+      modelMode: 'inherit',
+      pool: 'fast',
+      effort: 'low',
+    })
+    expect(await screen.findByText('magpie/flash')).toBeTruthy()
+  })
+
+  it('creates a related task carrying the ended source context reference', async () => {
+    const fetchMock = installSnapshotFetch({
+      ...snapshot,
+      channels: [{ ...channel, status: 'cancelled', canStop: false }],
+      runs: [],
+    })
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(await screen.findByRole('button', { name: '已归档' }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: new RegExp(channel.title) }),
+    )
+    fireEvent.click(await screen.findByRole('button', { name: '新建相关事情' }))
+    expect(await screen.findByText(/新建相关事情，携带终态摘要/)).toBeTruthy()
+    const composer = screen.getByLabelText('给 Pegas 发消息')
+    fireEvent.change(composer, { target: { value: '基于它的结论继续做计划' } })
+    fireEvent.keyDown(composer, { key: 'Enter' })
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([path, init]) => {
+          if (path !== '/v1/events' || init?.method !== 'POST') return false
+          const body = JSON.parse(
+            typeof init.body === 'string' ? init.body : '{}',
+          ) as { payload?: { sourceTaskId?: string; taskId?: string } }
+          return (
+            body.payload?.sourceTaskId === channel.id &&
+            body.payload.taskId === undefined
+          )
+        }),
+      ).toBe(true),
+    )
+    await waitFor(() =>
+      expect(screen.queryByText(/新建相关事情，携带终态摘要/)).toBeNull(),
+    )
+  })
+
+  it('shows live execution activity for the running Run in the drawer', async () => {
+    installSnapshotFetch(
+      {
+        ...snapshot,
+        messages: [
+          ...snapshot.messages,
+          {
+            id: 'message-progress',
+            userId: 'owner',
+            taskId: channel.id,
+            payload: {
+              type: 'run.progress',
+              taskId: channel.id,
+              runId: 'run-1',
+              toolCalls: 2,
+              steps: 1,
+              recent: ['调用工具 read', '完成第 1 步推理', '调用工具 test'],
+              text: '执行中 · 工具调用 2 次 · 已完成 1 步推理',
+            },
+            status: 'pending',
+            createdAt: '2026-11-19T08:02:30.000Z',
+          },
+        ],
+      },
+      path => {
+        if (!path.startsWith('/v1/runs/run-1/activity?')) return undefined
+        return Response.json({
+          runId: 'run-1',
+          taskId: channel.id,
+          totalEntries: 4,
+          truncated: false,
+          entries: [
+            {
+              seq: 1,
+              kind: 'tool_call',
+              status: 'completed',
+              callId: 'call-read',
+              tool: 'read',
+              label: 'read',
+              detail: '{"path":"README.md"}\n[结果]\n# Pegas',
+              createdAt: '2026-11-19T08:02:10.000Z',
+              updatedAt: '2026-11-19T08:02:12.000Z',
+            },
+            {
+              seq: 2,
+              kind: 'step',
+              status: 'completed',
+              step: 1,
+              label: '第 1 步完成',
+              createdAt: '2026-11-19T08:02:20.000Z',
+              updatedAt: '2026-11-19T08:02:20.000Z',
+            },
+            {
+              seq: 3,
+              kind: 'tool_call',
+              status: 'completed',
+              callId: 'call-test',
+              tool: 'test',
+              label: 'test',
+              detail: '{"command":"pnpm test"}\n[结果]\nall green',
+              createdAt: '2026-11-19T08:02:25.000Z',
+              updatedAt: '2026-11-19T08:02:28.000Z',
+            },
+            {
+              seq: 4,
+              kind: 'text',
+              label: '进展说明',
+              detail: '已读取文档，正在跑测试。',
+              createdAt: '2026-11-19T08:02:29.000Z',
+              updatedAt: '2026-11-19T08:02:29.000Z',
+            },
+          ],
+        })
+      },
+    )
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: new RegExp(channel.title) }),
+    )
+    const drawer = await screen.findByRole('dialog', { name: '工作详情' })
+    expect(
+      (await within(drawer).findAllByText(/工具 2 次 · 1 步推理/)).length,
+    ).toBeTruthy()
+    expect(within(drawer).getByText(/累计用时 12s/)).toBeTruthy()
+    fireEvent.click(
+      within(drawer).getByText(/工作流程记录 · 工具 2 次 · 1 步推理/),
+    )
+    fireEvent.click(await within(drawer).findByText('read'))
+    expect(within(drawer).getByText(/README\.md/)).toBeTruthy()
+    expect(within(drawer).getByText('第 1 步完成')).toBeTruthy()
+    fireEvent.click(within(drawer).getByText('test'))
+    expect(within(drawer).getByText(/pnpm test/)).toBeTruthy()
+    expect(within(drawer).getByText('已读取文档，正在跑测试。')).toBeTruthy()
+    expect(
+      within(drawer).queryByText('执行中 · 工具调用 2 次 · 已完成 1 步推理'),
+    ).toBeNull()
+    expect(
+      screen.queryByText('执行中 · 工具调用 2 次 · 已完成 1 步推理'),
+    ).toBeNull()
   })
 
   it('renders collaboration relations in the task drawer', async () => {

@@ -13,6 +13,9 @@ describe('loadConfig', () => {
       apiPort: 4317,
       databasePath: resolve('data/pegas.sqlite'),
       executorMode: 'dsh',
+      dshHome: resolve('data/dsh'),
+      dshSessionsRoot: resolve('data/dsh/sessions'),
+      dshProfile: 'headless',
       modelName: 'discovery-api/deepseek-v4.1-flash-1017',
       modelProvider: 'magpie',
       pushMode: 'disabled',
@@ -33,6 +36,7 @@ describe('loadConfig', () => {
         PEGAS_API_HOST: 'localhost',
         PEGAS_API_PORT: '5000',
         PEGAS_DSH_ADD_DIRS: './one, ./two,',
+        PEGAS_DSH_HOME: './isolated-dsh',
         PEGAS_EXECUTOR: 'echo',
         PEGAS_MODEL_BASE_URL: 'https://models.example/v1',
         PEGAS_MODEL_NAME: 'model-test',
@@ -52,6 +56,8 @@ describe('loadConfig', () => {
       apiHost: 'localhost',
       apiPort: 5000,
       dshAdditionalDirectories: [resolve('./one'), resolve('./two')],
+      dshHome: resolve('./isolated-dsh'),
+      dshSessionsRoot: resolve('./isolated-dsh/sessions'),
       executorMode: 'echo',
       modelBaseUrl: 'https://models.example/v1',
       modelName: 'model-test',
@@ -66,6 +72,25 @@ describe('loadConfig', () => {
       speechModel: 'Qwen/Qwen3-ASR-1.7B',
       speechProvider: 'openai-compatible',
       workerConcurrency: 4,
+    })
+  })
+
+  it('keeps an explicit sessions root override independent of dshHome', () => {
+    expect(
+      loadConfig({
+        PEGAS_DSH_HOME: './isolated-dsh',
+        PEGAS_DSH_SESSIONS_ROOT: './legacy-sessions',
+      }),
+    ).toMatchObject({
+      dshHome: resolve('./isolated-dsh'),
+      dshSessionsRoot: resolve('./legacy-sessions'),
+    })
+  })
+
+  it('follows a custom data directory when deriving the sessions root', () => {
+    expect(loadConfig({ PEGAS_DATA_DIR: './custom-data' })).toMatchObject({
+      dshHome: resolve('./custom-data/dsh'),
+      dshSessionsRoot: resolve('./custom-data/dsh/sessions'),
     })
   })
 

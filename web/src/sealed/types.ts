@@ -6,10 +6,14 @@ import type {
   DurableAction,
   ExecutionNode,
   GoalContract,
+  InboxEvent,
+  ModelUsageRecord,
   ModelUsageReport,
   OutboxMessage,
   ReviewProjection,
   Run,
+  RunActivityReport,
+  RunSubagentReport,
   SettingsResponse,
   Snapshot,
   TaskDelivery,
@@ -56,7 +60,12 @@ export type DrawerView =
         totalTokens?: number
         durationMs?: number
         costUsd?: number
+        records?: ModelUsageRecord[]
       }
+      activityByRun?: Record<string, RunActivityReport>
+      activityErrorByRun?: Record<string, string>
+      subagentsByRun?: Record<string, RunSubagentReport>
+      subagentErrorByRun?: Record<string, string>
     }
   | { kind: 'runtime'; run?: Run; nodes?: ExecutionNode[]; nodesError?: string }
   | { kind: 'message'; message: OutboxMessage }
@@ -137,6 +146,7 @@ export const settingsSections: readonly {
 ]
 
 export function textFromPayload(payload: unknown): string {
+  if (payloadType(payload) === 'run.progress') return ''
   if (typeof payload === 'string') return payload
   if (!payload || typeof payload !== 'object') return ''
   const value = payload as Record<string, unknown>
@@ -317,6 +327,102 @@ export function runIdFromMessage(message: OutboxMessage): string | undefined {
   if (!message.payload || typeof message.payload !== 'object') return undefined
   const runId = (message.payload as Record<string, unknown>).runId
   return typeof runId === 'string' && runId.trim() ? runId : undefined
+}
+
+const terminalCueTypes = new Set([
+  'run.completed',
+  'run.failed',
+  'review.ready',
+])
+
+export interface TaskContextCue {
+  title: string
+  origin?: string
+  lastUser?: string
+}
+
+export function taskContextCue(
+  message: OutboxMessage,
+  channels: readonly WorkChannel[],
+  events: readonly InboxEvent[],
+): TaskContextCue | undefined {
+  const type = payloadType(message.payload)
+  if (!type || !terminalCueTypes.has(type) || !message.taskId) return undefined
+  const channel = channels.find(item => item.id === message.taskId)
+  if (!channel) return undefined
+  const cue: TaskContextCue = { title: channel.title }
+  const originEvent = events.find(event => event.id === channel.originEventId)
+  const origin = originEvent
+    ? firstCueLine(textFromPayload(originEvent.payload))
+    : undefined
+  if (origin && origin !== firstCueLine(channel.title)) cue.origin = origin
+  const lastUserEvent = events
+    .filter(
+      event =>
+        event.type === 'user.message' &&
+        event.id !== channel.originEventId &&
+        eventPayloadTaskId(event.payload) === message.taskId,
+    )
+    .toSorted(
+      (left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt),
+    )[0]
+  const lastUser = lastUserEvent
+    ? firstCueLine(textFromPayload(lastUserEvent.payload))
+    : undefined
+  if (lastUser && lastUser !== cue.origin) cue.lastUser = lastUser
+  return cue
+}
+
+function eventPayloadTaskId(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== 'object') return undefined
+  const value = (payload as Record<string, unknown>).taskId
+  return typeof value === 'string' ? value : undefined
+}
+
+function firstCueLine(text: string): string | undefined {
+  const line = text.replaceAll(/\s+/g, ' ').trim()
+  if (!line) return undefined
+  return line.length > 80 ? `${line.slice(0, 80)}…` : line
+}
+
+export function isRunProgressMessage(message: OutboxMessage): boolean {
+  return payloadType(message.payload) === 'run.acknowledged'
+}
+
+export function latestRunProgressText(
+  messages: readonly OutboxMessage[],
+  runId: string,
+): string | undefined {
+  let latest: OutboxMessage | undefined
+  for (const message of messages) {
+    if (!isRunProgressMessage(message)) continue
+    if (runIdFromMessage(message) !== runId) continue
+    if (
+      !latest ||
+      Date.parse(message.createdAt) >= Date.parse(latest.createdAt)
+    )
+      latest = message
+  }
+  return latest ? textFromPayload(latest.payload) : undefined
+}
+
+export function formatRunDuration(run: Run): string {
+  const started = Date.parse(run.createdAt)
+  const ended = Date.parse(run.updatedAt)
+  if (Number.isNaN(started) || Number.isNaN(ended) || ended < started) return ''
+  const totalSeconds = Math.round((ended - started) / 1000)
+  if (totalSeconds < 60) return `${String(totalSeconds)} 秒`
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  if (minutes < 60)
+    return seconds > 0
+      ? `${String(minutes)} 分 ${String(seconds)} 秒`
+      : `${String(minutes)} 分钟`
+  const hours = Math.floor(minutes / 60)
+  const remainingMinutes = minutes % 60
+  return remainingMinutes > 0
+    ? `${String(hours)} 小时 ${String(remainingMinutes)} 分`
+    : `${String(hours)} 小时`
 }
 
 export function approvalIdFromMessage(

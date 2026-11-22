@@ -7,6 +7,7 @@ const memorySchemaVersion = 21
 const goalProposalSchemaVersion = 22
 const actionReconciliationSchemaVersion = 23
 const steeringSchemaVersion = 24
+const chatLaneSchemaVersion = 32
 
 export class RollbackCompatibilityError extends Error {}
 
@@ -134,6 +135,24 @@ export function assertRollbackCompatible(
       if (pendingSteering) {
         throw new RollbackCompatibilityError(
           'Rollback is unsafe while unconsumed steering directives exist',
+        )
+      }
+    }
+    if (
+      currentVersion >= chatLaneSchemaVersion &&
+      targetMaximumSchema < chatLaneSchemaVersion
+    ) {
+      const liveConversationRun = database
+        .prepare(
+          `SELECT 1 FROM runs
+           WHERE status IN ('queued','running','waiting')
+             AND task_id IN (SELECT id FROM tasks WHERE kind = 'conversation')
+           LIMIT 1`,
+        )
+        .get()
+      if (liveConversationRun) {
+        throw new RollbackCompatibilityError(
+          'Rollback is unsafe while conversation Runs are still active',
         )
       }
     }

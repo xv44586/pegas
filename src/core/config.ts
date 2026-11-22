@@ -1,5 +1,5 @@
 import { hostname } from 'node:os'
-import { resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 
 import {
   modelProviderPreset,
@@ -19,13 +19,18 @@ export interface PegasConfig {
   executorMode: 'dsh' | 'echo'
   dshCommand: string
   dshProfile: string
+  dshHome: string
   dshAdditionalDirectories: string[]
   dshTimeoutMs: number
+  dshSessionsRoot: string
   workspaceRoot: string
   workerConcurrency: number
   nodeId: string
   nodeLabel: string
   routerMode: 'rules' | 'model'
+  chatLaneEnabled: boolean
+  chatConcurrency: number
+  routeCollectWindowMs: number
   modelProvider: ModelProviderId
   modelBaseUrl?: string
   modelApiKey?: string
@@ -109,6 +114,8 @@ export function loadConfig(
     )
   }
 
+  const dshHome = resolve(environment.PEGAS_DSH_HOME ?? resolve(dataDir, 'dsh'))
+
   return {
     apiHost,
     apiPort: parsePositiveInteger(
@@ -132,6 +139,7 @@ export function loadConfig(
     executorMode: environment.PEGAS_EXECUTOR === 'echo' ? 'echo' : 'dsh',
     dshCommand: environment.PEGAS_DSH_COMMAND ?? 'dsh',
     dshProfile: environment.PEGAS_DSH_PROFILE ?? 'headless',
+    dshHome,
     dshAdditionalDirectories: commaSeparatedPaths(
       environment.PEGAS_DSH_ADD_DIRS,
     ),
@@ -139,6 +147,12 @@ export function loadConfig(
       environment.PEGAS_DSH_TIMEOUT_MS,
       60 * 60 * 1000,
       'PEGAS_DSH_TIMEOUT_MS',
+    ),
+    dshSessionsRoot: resolve(
+      nonemptyOr(
+        environment.PEGAS_DSH_SESSIONS_ROOT,
+        join(dshHome, 'sessions'),
+      ),
     ),
     workspaceRoot: resolve(environment.PEGAS_WORKSPACE_ROOT ?? '.'),
     workerConcurrency: parsePositiveInteger(
@@ -149,6 +163,17 @@ export function loadConfig(
     nodeId: nonemptyOr(environment.PEGAS_NODE_ID, hostname()),
     nodeLabel: nonemptyOr(environment.PEGAS_NODE_LABEL, hostname()),
     routerMode,
+    chatLaneEnabled: environment.PEGAS_CHAT_LANE === 'on',
+    chatConcurrency: parsePositiveInteger(
+      environment.PEGAS_CHAT_CONCURRENCY,
+      1,
+      'PEGAS_CHAT_CONCURRENCY',
+    ),
+    routeCollectWindowMs: parseNonNegativeInteger(
+      environment.PEGAS_ROUTE_COLLECT_WINDOW_MS,
+      400,
+      'PEGAS_ROUTE_COLLECT_WINDOW_MS',
+    ),
     modelProvider: modelProvider as ModelProviderId,
     ...(modelBaseUrl ? { modelBaseUrl } : {}),
     ...(environment.PEGAS_MODEL_API_KEY
@@ -244,6 +269,17 @@ function parsePositiveInteger(
   const parsed = value === undefined ? fallback : Number(value)
   if (!Number.isSafeInteger(parsed) || parsed <= 0)
     throw new Error(`${name} must be a positive integer`)
+  return parsed
+}
+
+function parseNonNegativeInteger(
+  value: string | undefined,
+  fallback: number,
+  name: string,
+): number {
+  const parsed = value === undefined ? fallback : Number(value)
+  if (!Number.isSafeInteger(parsed) || parsed < 0)
+    throw new Error(`${name} must be a non-negative integer`)
   return parsed
 }
 
