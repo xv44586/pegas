@@ -406,6 +406,15 @@ export function App() {
   function enrichDrawer(view: DrawerView): DrawerView {
     if (view.kind === 'runtime')
       return { ...view, run: data.snapshot.runs.at(-1) ?? view.run }
+    if (view.kind === 'run') {
+      const snapshotRun = data.snapshot.runs.find(
+        item => item.id === view.run.id,
+      )
+      return snapshotRun &&
+        Date.parse(snapshotRun.updatedAt) > Date.parse(view.run.updatedAt)
+        ? { ...view, run: snapshotRun }
+        : view
+    }
     if (view.kind !== 'task') return view
     const snapshotChannel = data.snapshot.channels.find(
       item => item.id === view.channel.id,
@@ -638,7 +647,38 @@ export function App() {
     if (view.kind === 'task') void loadTaskDrawer(view.channel.id)
     if (view.kind === 'review' && !view.goal) loadReviewGoal(view)
     if (view.kind === 'runtime') loadRuntimeNodes()
+    if (view.kind === 'run') void loadRunActivity(view.run.id)
   }
+  const runActivityRequestRef = useRef(0)
+  const loadRunActivity = useCallback(
+    async (runId: string) => {
+      const requestId = runActivityRequestRef.current + 1
+      runActivityRequestRef.current = requestId
+      try {
+        const activity = await api.runActivity(runId)
+        if (runActivityRequestRef.current !== requestId) return
+        setDrawer(current =>
+          current?.kind === 'run' && current.run.id === runId
+            ? { ...current, activity, activityError: undefined }
+            : current,
+        )
+      } catch (caught) {
+        if (runActivityRequestRef.current !== requestId) return
+        setDrawer(current =>
+          current?.kind === 'run' && current.run.id === runId
+            ? {
+                ...current,
+                activityError:
+                  caught instanceof Error
+                    ? caught.message
+                    : '读取执行记录失败。',
+              }
+            : current,
+        )
+      }
+    },
+    [api],
+  )
   function loadRuntimeNodes() {
     const requestId = nodesRequestRef.current + 1
     nodesRequestRef.current = requestId
@@ -727,6 +767,18 @@ export function App() {
 
   const openDrawerChannelId = drawer?.kind === 'task' ? drawer.channel.id : ''
   const openApprovalId = drawer?.kind === 'approval' ? drawer.approval.id : ''
+  const openRunActivityId = drawer?.kind === 'run' ? drawer.run.id : ''
+  const openRunActivityLive =
+    drawer?.kind === 'run' &&
+    ['queued', 'running', 'waiting'].includes(drawer.run.status)
+  useEffect(() => {
+    if (!openRunActivityId || !openRunActivityLive) return
+    const interval = window.setInterval(
+      () => void loadRunActivity(openRunActivityId),
+      5_000,
+    )
+    return () => window.clearInterval(interval)
+  }, [loadRunActivity, openRunActivityId, openRunActivityLive])
   const openReconciliationActionId =
     drawer?.kind === 'reconciliation' ? drawer.action.id : ''
   useEffect(() => {

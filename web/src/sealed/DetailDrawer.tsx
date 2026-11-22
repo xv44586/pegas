@@ -19,6 +19,7 @@ import {
 import { useEffect, useRef, useState } from 'react'
 
 import { ApiError, type PegasApi } from '../api'
+import { MarkdownMessage } from '../MarkdownMessage'
 import type {
   ChannelEvidencePage,
   ChannelRelation,
@@ -32,6 +33,7 @@ import type {
   ReviewProjection,
   ReviewPack,
   Run,
+  RunActivityEntry,
   TaskDelivery,
   WorkerProfileResponse,
 } from '../types'
@@ -130,9 +132,11 @@ export function DetailDrawer({
         aria-label={
           view.kind === 'task'
             ? '工作详情'
-            : view.kind === 'message'
-              ? '消息详情'
-              : '详情'
+            : view.kind === 'run'
+              ? '运行详情'
+              : view.kind === 'message'
+                ? '消息详情'
+                : '详情'
         }
         className="detail-drawer"
         ref={drawerRef}
@@ -260,6 +264,7 @@ export function DetailDrawer({
             run={view.run}
           />
         )}
+        {view.kind === 'run' && <RunDetail view={view} />}
         {view.kind === 'rule' && <RuleDetail api={api} view={view} />}
         {view.kind === 'preview' && (
           <PreviewDetail
@@ -355,6 +360,7 @@ function runProgressFromPayload(
 
 function drawerEyebrow(view: DrawerView): string {
   if (view.kind === 'task') return '工作详情'
+  if (view.kind === 'run') return '运行详情'
   if (view.kind === 'message') return '待你处理'
   if (view.kind === 'approval') return '需要确认'
   if (view.kind === 'reconciliation') return '需要核对'
@@ -366,6 +372,8 @@ function drawerEyebrow(view: DrawerView): string {
 }
 function drawerTitle(view: DrawerView): string {
   if (view.kind === 'task') return view.channel.title
+  if (view.kind === 'run')
+    return `Run · ${view.run.id.slice(0, 8)} · ${view.channel.title}`
   if (view.kind === 'message') return 'Pegas 消息'
   if (view.kind === 'approval') return view.approval.prompt.summary
   if (view.kind === 'reconciliation') return '核对动作的真实结果'
@@ -971,6 +979,11 @@ function TaskDetail({
     liveRun?.status === 'running'
       ? Math.max(0, Date.now() - Date.parse(liveRun.createdAt))
       : undefined
+  const completedOutputRun = runHistory.findLast(
+    historyRun => historyRun.status === 'completed' && historyRun.output,
+  )
+  const completedOutput =
+    state === '已完成' ? completedOutputRun?.output : undefined
   const timelineItems = [
     ...(timeline?.events.map(event => ({
       id: event.id,
@@ -1041,14 +1054,20 @@ function TaskDetail({
         <div>
           <small>{state}</small>
           <h3>{stateHeadline(state)}</h3>
-          <p>
-            {state === '已完成' && run?.output
-              ? summaryExpanded
-                ? run.output
-                : stateDescription(state, run)
-              : stateDescription(state, run)}
-          </p>
-          {state === '已完成' && run?.output && run.output.length > 260 && (
+          {completedOutput ? (
+            <div className="state-hero-markdown">
+              <MarkdownMessage
+                content={
+                  completedOutput.length > 600 && !summaryExpanded
+                    ? `${completedOutput.slice(0, 600)}…`
+                    : completedOutput
+                }
+              />
+            </div>
+          ) : (
+            <p>{stateDescription(state, run)}</p>
+          )}
+          {completedOutput && completedOutput.length > 600 && (
             <button
               className="inline-link"
               onClick={() => setSummaryExpanded(current => !current)}
@@ -1103,11 +1122,32 @@ function TaskDetail({
                 >
                   {runProgressIcon(historyState)}
                   <span>
-                    <strong>
-                      {runHistory.length === 1
-                        ? `Run · ${historyRun.id.slice(0, 8)}`
-                        : `Run ${String(index + 1)} · ${historyRun.id.slice(0, 8)}`}
-                    </strong>
+                    {onOpenView ? (
+                      <button
+                        className="run-record-link"
+                        onClick={() =>
+                          onOpenView({
+                            kind: 'run',
+                            channel,
+                            run: historyRun,
+                          })
+                        }
+                        type="button"
+                      >
+                        <strong>
+                          {runHistory.length === 1
+                            ? `Run · ${historyRun.id.slice(0, 8)}`
+                            : `Run ${String(index + 1)} · ${historyRun.id.slice(0, 8)}`}
+                        </strong>
+                        <small>查看完整记录 →</small>
+                      </button>
+                    ) : (
+                      <strong>
+                        {runHistory.length === 1
+                          ? `Run · ${historyRun.id.slice(0, 8)}`
+                          : `Run ${String(index + 1)} · ${historyRun.id.slice(0, 8)}`}
+                      </strong>
+                    )}
                     <small>
                       {historyState} ·{' '}
                       {formatRelativeTime(historyRun.updatedAt)}
@@ -1196,11 +1236,15 @@ function TaskDetail({
             {timelineItems.map(item => (
               <li key={item.key}>
                 <strong>{item.role}</strong>
-                <p>
-                  {item.text.length > 520 && !expandedTimeline.has(item.key)
-                    ? `${item.text.slice(0, 520)}…`
-                    : item.text}
-                </p>
+                <div className="timeline-markdown">
+                  <MarkdownMessage
+                    content={
+                      item.text.length > 520 && !expandedTimeline.has(item.key)
+                        ? `${item.text.slice(0, 520)}…`
+                        : item.text
+                    }
+                  />
+                </div>
                 {item.attachment && api && (
                   <button
                     className="attachment-link"
@@ -2532,6 +2576,134 @@ function stateDescription(state: string, run?: Run): string {
   if (state === '进行中') return '离开页面不会中断执行；状态由服务端持续保存。'
   if (state === '已归档') return '归档内容仍保留在服务端。'
   return '上下文已保存，服务端尚未返回可执行的下一步。'
+}
+
+function RunDetail({ view }: { view: Extract<DrawerView, { kind: 'run' }> }) {
+  const { run, activity, activityError } = view
+  const durationMs =
+    run.status === 'running'
+      ? Math.max(0, Date.now() - Date.parse(run.createdAt))
+      : Math.max(0, Date.parse(run.updatedAt) - Date.parse(run.createdAt))
+  const toolCalls = (activity?.entries ?? []).filter(
+    entry => entry.kind === 'tool_call',
+  ).length
+  const steps = (activity?.entries ?? []).filter(
+    entry => entry.kind === 'step' && entry.status === 'completed',
+  ).length
+  return (
+    <div className="drawer-body">
+      <section className="run-transcript-heading">
+        <strong>
+          {run.status === 'running' ? '已运行' : '用时'}{' '}
+          {formatDurationMs(durationMs)}
+        </strong>
+        <small>
+          {runStatusLabel(run)} · 工具 {toolCalls} 次 · {steps} 步推理
+          {activity?.truncated && ' · 仅显示最近记录'}
+        </small>
+      </section>
+      {run.lastError && (
+        <section className="failure-card">
+          <header>
+            <AlertTriangle size={19} />
+            <strong>运行错误</strong>
+          </header>
+          <p>{run.lastError}</p>
+        </section>
+      )}
+      <section className="detail-section">
+        <h3>执行记录</h3>
+        {activityError && (
+          <p className="settings-error" role="alert">
+            {activityError}
+          </p>
+        )}
+        {!activity && !activityError && (
+          <p className="drawer-footnote">正在读取完整执行记录。</p>
+        )}
+        {activity?.entries.length === 0 && (
+          <p className="drawer-footnote">
+            这次运行没有留存执行记录（旧版本运行或尚未开始）。
+          </p>
+        )}
+        {activity && activity.entries.length > 0 && (
+          <ol className="run-transcript">
+            {activity.entries.map(entry => (
+              <TranscriptEntry entry={entry} key={entry.seq} />
+            ))}
+          </ol>
+        )}
+      </section>
+      {run.output && (
+        <section className="detail-section run-final-output">
+          <h3>最终结果</h3>
+          <MarkdownMessage content={run.output} />
+        </section>
+      )}
+    </div>
+  )
+}
+
+function TranscriptEntry({ entry }: { entry: RunActivityEntry }) {
+  if (entry.kind === 'step') {
+    return (
+      <li className="transcript-step">
+        <Clock3 size={13} />
+        <span>{entry.label}</span>
+        <small>{formatRelativeTime(entry.createdAt)}</small>
+      </li>
+    )
+  }
+  if (entry.kind === 'tool_call') {
+    return (
+      <li className="transcript-tool">
+        <details>
+          <summary>
+            <FileText size={13} />
+            <span>
+              {entry.tool ?? entry.label}
+              {entry.status === 'error' && (
+                <em className="transcript-error">失败</em>
+              )}
+              {entry.status === 'started' && (
+                <em className="transcript-pending">执行中</em>
+              )}
+            </span>
+            <small>{formatRelativeTime(entry.createdAt)}</small>
+          </summary>
+          {entry.detail ? (
+            <pre className="transcript-detail">{entry.detail}</pre>
+          ) : (
+            <p className="drawer-footnote">没有留存参数或输出。</p>
+          )}
+        </details>
+      </li>
+    )
+  }
+  if (entry.kind === 'thinking') {
+    return (
+      <li className="transcript-thinking">
+        <details>
+          <summary>
+            <CircleHelp size={13} />
+            <span>推理</span>
+            <small>{formatRelativeTime(entry.createdAt)}</small>
+          </summary>
+          <div className="transcript-markdown">
+            <MarkdownMessage content={entry.detail ?? entry.label} />
+          </div>
+        </details>
+      </li>
+    )
+  }
+  return (
+    <li className="transcript-message">
+      <div className="transcript-markdown">
+        <MarkdownMessage content={entry.detail ?? entry.label} />
+      </div>
+      <small>{formatRelativeTime(entry.createdAt)}</small>
+    </li>
+  )
 }
 
 function RuntimeDetail({

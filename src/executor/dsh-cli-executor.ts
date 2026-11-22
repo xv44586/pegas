@@ -46,11 +46,26 @@ interface DshTextEvent {
 interface DshToolCallEvent {
   type: 'tool_call'
   tool?: string
+  callId?: string
+  input?: string
+}
+
+interface DshToolResultEvent {
+  type: 'tool_result'
+  callId: string
+  status: 'completed' | 'error'
+  result?: string
+}
+
+interface DshThinkingEvent {
+  type: 'thinking'
+  text: string
 }
 
 interface DshStatusEvent {
   type: 'status'
   phase: string
+  step?: number
   usage?: ModelTokenUsage
 }
 
@@ -207,6 +222,12 @@ export class DshCliExecutor implements RunExecutor {
         if (event.type === 'text' && !acknowledgementEmitted) {
           pendingAssistantText.push(event.text)
         }
+        if (event.type === 'text' && acknowledgementEmitted) {
+          input.onProgress?.({ type: 'message', text: event.text })
+        }
+        if (event.type === 'thinking') {
+          input.onProgress?.({ type: 'thinking', text: event.text })
+        }
         if (
           event.type === 'tool_call' &&
           !acknowledgementEmitted &&
@@ -224,6 +245,22 @@ export class DshCliExecutor implements RunExecutor {
             type: 'activity',
             label: `调用工具 ${event.tool ?? '未知工具'}`,
           })
+          if (event.callId) {
+            input.onProgress?.({
+              type: 'tool_call',
+              callId: event.callId,
+              tool: event.tool ?? '未知工具',
+              ...(event.input !== undefined ? { input: event.input } : {}),
+            })
+          }
+        }
+        if (event.type === 'tool_result') {
+          input.onProgress?.({
+            type: 'tool_result',
+            callId: event.callId,
+            status: event.status,
+            ...(event.result !== undefined ? { result: event.result } : {}),
+          })
         }
         if (event.type === 'status' && event.phase === 'step_end') {
           if (event.usage) {
@@ -236,11 +273,21 @@ export class DshCliExecutor implements RunExecutor {
             type: 'activity',
             label: `完成第 ${String(reportedSteps + unreportedSteps)} 步推理`,
           })
+          input.onProgress?.({
+            type: 'step',
+            phase: 'end',
+            ...(event.step !== undefined ? { step: event.step } : {}),
+          })
         }
         if (event.type === 'status' && event.phase === 'step_start') {
           input.onProgress?.({
             type: 'activity',
             label: `开始第 ${String(reportedSteps + unreportedSteps + 1)} 步推理`,
+          })
+          input.onProgress?.({
+            type: 'step',
+            phase: 'start',
+            ...(event.step !== undefined ? { step: event.step } : {}),
           })
         }
         if (event.type === 'error')
@@ -380,6 +427,8 @@ function parseDshEvent(
   | DshErrorEvent
   | DshTextEvent
   | DshToolCallEvent
+  | DshToolResultEvent
+  | DshThinkingEvent
   | DshStatusEvent
   | DshOtherEvent {
   const parsed = JSON.parse(line) as unknown
@@ -412,16 +461,38 @@ function parseDshEvent(
   if (parsed.type === 'text' && typeof parsed.text === 'string') {
     return { type: 'text', text: parsed.text }
   }
+  if (parsed.type === 'thinking' && typeof parsed.text === 'string') {
+    return { type: 'thinking', text: parsed.text }
+  }
   if (parsed.type === 'tool_call') {
     return {
       type: 'tool_call',
       ...(typeof parsed.tool === 'string' ? { tool: parsed.tool } : {}),
+      ...(typeof parsed.callId === 'string' ? { callId: parsed.callId } : {}),
+      ...(parsed.input === undefined
+        ? {}
+        : { input: JSON.stringify(parsed.input).slice(0, 8192) }),
+    }
+  }
+  if (parsed.type === 'tool_result' && typeof parsed.callId === 'string') {
+    return {
+      type: 'tool_result',
+      callId: parsed.callId,
+      status: parsed.status === 'error' ? 'error' : 'completed',
+      ...(typeof parsed.result === 'string'
+        ? { result: parsed.result }
+        : parsed.result === undefined
+          ? {}
+          : { result: JSON.stringify(parsed.result).slice(0, 8192) }),
     }
   }
   if (parsed.type === 'status' && typeof parsed.phase === 'string') {
     return {
       type: 'status',
       phase: parsed.phase,
+      ...(typeof parsed.step === 'number' && Number.isSafeInteger(parsed.step)
+        ? { step: parsed.step }
+        : {}),
       ...(parsed.usage === undefined
         ? {}
         : { usage: parseTokenUsage(parsed.usage) }),

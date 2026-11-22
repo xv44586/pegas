@@ -821,7 +821,63 @@ export async function executeClaimedRun(
       },
       onProgress: event => {
         if (!store.ownsRun(claimed.run.id, workerId)) return
+        if (event.type === 'message') {
+          store.appendRunActivity(claimed.run.id, workerId, {
+            kind: 'text',
+            label: event.text.replaceAll(/\s+/g, ' ').slice(0, 120),
+            detail: event.text,
+          })
+          return
+        }
+        if (event.type === 'thinking') {
+          store.appendRunActivity(claimed.run.id, workerId, {
+            kind: 'thinking',
+            label: event.text.replaceAll(/\s+/g, ' ').slice(0, 120),
+            detail: event.text,
+          })
+          return
+        }
+        if (event.type === 'tool_call') {
+          store.appendRunActivity(claimed.run.id, workerId, {
+            kind: 'tool_call',
+            status: 'started',
+            callId: event.callId,
+            tool: event.tool,
+            label: event.tool,
+            ...(event.input !== undefined ? { detail: event.input } : {}),
+          })
+          return
+        }
+        if (event.type === 'tool_result') {
+          store.completeRunActivityToolCall(
+            claimed.run.id,
+            workerId,
+            event.callId,
+            {
+              status: event.status,
+              ...(event.result !== undefined ? { result: event.result } : {}),
+            },
+          )
+          return
+        }
+        if (event.type === 'step') {
+          store.appendRunActivity(claimed.run.id, workerId, {
+            kind: 'step',
+            status: event.phase === 'start' ? 'started' : 'completed',
+            ...(event.step !== undefined ? { step: event.step } : {}),
+            label:
+              event.phase === 'start'
+                ? `第 ${String(event.step ?? '?')} 步开始`
+                : `第 ${String(event.step ?? '?')} 步完成`,
+          })
+          return
+        }
         if (event.type === 'acknowledgement') {
+          store.appendRunActivity(claimed.run.id, workerId, {
+            kind: 'text',
+            label: event.text.replaceAll(/\s+/g, ' ').slice(0, 120),
+            detail: event.text,
+          })
           store.enqueueOutbox({
             userId: claimed.task.userId,
             taskId: claimed.task.id,

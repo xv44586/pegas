@@ -4,6 +4,9 @@ import { join } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
+import type { AddressInfo } from 'node:net'
+
+import { createControlPlane } from '../src/control-plane/server.js'
 import { loadConfig } from '../src/core/config.js'
 import { DshCliExecutor } from '../src/executor/dsh-cli-executor.js'
 import type {
@@ -415,3 +418,188 @@ function fakeDsh(body: string): string {
   chmodSync(command, 0o700)
   return command
 }
+
+class TranscriptExecutor implements RunExecutor {
+  readonly name = 'transcript-test'
+
+  execute(input: ExecutorInput): Promise<ExecutorResult> {
+    input.onProgress?.({ type: 'acknowledgement', text: '我开始查资料。' })
+    input.onProgress?.({ type: 'step', phase: 'start', step: 1 })
+    input.onProgress?.({ type: 'thinking', text: '先找定价页面。' })
+    input.onProgress?.({
+      type: 'tool_call',
+      callId: 'call-1',
+      tool: 'shell',
+      input: '{"command":"curl https://example.com/pricing"}',
+    })
+    input.onProgress?.({
+      type: 'tool_result',
+      callId: 'call-1',
+      status: 'completed',
+      result: 'Team $30/user/month',
+    })
+    input.onProgress?.({
+      type: 'message',
+      text: '**团队版** 每成员每月 30 美元。',
+    })
+    input.onProgress?.({ type: 'step', phase: 'end', step: 1 })
+    return Promise.resolve({
+      executorRef: 'session-transcript',
+      output: '最终结论。',
+    })
+  }
+}
+
+describe('EXEC-006 durable run activity transcript', () => {
+  it('persists typed entries with tool input/result merge and serves them owner-scoped', async () => {
+    const store = openStore()
+    const executor = new TranscriptExecutor()
+    store.enqueueEvent({
+      userId: 'owner',
+      type: 'user.message',
+      source: 'web',
+      authenticatedActor: 'human',
+      payload: { text: '调研定价并留档' },
+    })
+    await processNextEvent(
+      store,
+      new RoutingEventHandler(new RuleBasedTaskRouter(), executor.name),
+      'feedback-router',
+      undefined,
+      { collectWindowMs: 0 },
+    )
+    const claimed = store.claimNextRun('feedback-worker')
+    if (!claimed) throw new Error('Expected run claim')
+    await executeClaimedRun(
+      store,
+      executor,
+      claimed,
+      'feedback-worker',
+      process.cwd(),
+      new AbortController().signal,
+      'http://127.0.0.1:4317',
+    )
+    const report = store.listRunActivity(claimed.run.id, 'owner')
+    expect(report?.totalEntries).toBe(6)
+    expect(report?.entries.map(entry => entry.kind)).toEqual([
+      'text',
+      'step',
+      'thinking',
+      'tool_call',
+      'text',
+      'step',
+    ])
+    const tool = report?.entries.find(entry => entry.kind === 'tool_call')
+    expect(tool).toMatchObject({
+      callId: 'call-1',
+      tool: 'shell',
+      status: 'completed',
+    })
+    expect(tool?.detail).toContain('curl https://example.com/pricing')
+    expect(tool?.detail).toContain('[结果]')
+    expect(tool?.detail).toContain('Team $30/user/month')
+    expect(
+      report?.entries.filter(entry => entry.kind === 'text').at(-1)?.detail,
+    ).toBe('**团队版** 每成员每月 30 美元。')
+    expect(store.listRunActivity(claimed.run.id, 'intruder')).toBeUndefined()
+
+    const server = createControlPlane({ store })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    cleanups.push(
+      () => new Promise<void>(resolve => server.close(() => resolve())),
+    )
+    const base = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+    const response = await fetch(
+      `${base}/v1/runs/${claimed.run.id}/activity?userId=owner`,
+    )
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as { totalEntries: number }
+    expect(body.totalEntries).toBe(6)
+    const foreign = await fetch(
+      `${base}/v1/runs/${claimed.run.id}/activity?userId=intruder`,
+    )
+    expect(foreign.status).toBeGreaterThanOrEqual(400)
+  })
+
+  it('bounds the transcript window and reports truncation honestly', () => {
+    const store = openStore()
+    const event = store.enqueueEvent({
+      userId: 'owner',
+      type: 'user.message',
+      source: 'web',
+      authenticatedActor: 'human',
+      payload: { text: '长任务' },
+    }).event
+    const created = store.applyRoutingDecision(
+      event,
+      {
+        kind: 'create_task',
+        title: '长任务',
+        goal: '长任务',
+        input: '长任务',
+        reason: 't',
+      },
+      'echo-test',
+    )
+    store.claimNextRun('transcript-worker')
+    for (let index = 0; index < 5; index += 1) {
+      store.appendRunActivity(created.run.id, 'transcript-worker', {
+        kind: 'text',
+        label: `条目 ${String(index)}`,
+        detail: `条目 ${String(index)}`,
+      })
+    }
+    const report = store.listRunActivity(created.run.id, 'owner', { limit: 3 })
+    expect(report?.entries).toHaveLength(3)
+    expect(report?.totalEntries).toBe(5)
+    expect(report?.truncated).toBe(true)
+    expect(report?.entries.map(entry => entry.label)).toEqual([
+      '条目 2',
+      '条目 3',
+      '条目 4',
+    ])
+  })
+
+  it('streams tool_result, thinking and step numbers from the DSH executor', async () => {
+    const command = fakeDsh(`
+console.log(JSON.stringify({ type: 'session', sessionId: 'session-transcript' }))
+console.log(JSON.stringify({ type: 'status', phase: 'step_start', turn: 1, step: 1 }))
+console.log(JSON.stringify({ type: 'thinking', text: 'plan the search' }))
+console.log(JSON.stringify({ type: 'tool_call', callId: 'call-9', tool: 'grep', input: { pattern: 'price' } }))
+console.log(JSON.stringify({ type: 'tool_result', callId: 'call-9', status: 'completed', result: '3 matches' }))
+console.log(JSON.stringify({ type: 'status', phase: 'step_end', turn: 1, step: 1 }))
+console.log(JSON.stringify({
+  type: 'final',
+  sessionId: 'session-transcript',
+  text: 'finished',
+  reason: { kind: 'completed' }
+}))
+`)
+    const executor = new DshCliExecutor({ command })
+    const events: string[] = []
+    await executor.execute({
+      runId: 'run-dsh-transcript',
+      taskId: 'task-dsh-transcript',
+      prompt: 'do the work',
+      workingDirectory: process.cwd(),
+      onProgress: event => {
+        if (event.type === 'tool_call')
+          events.push(`call:${event.callId}:${event.tool}:${event.input ?? ''}`)
+        if (event.type === 'tool_result')
+          events.push(
+            `result:${event.callId}:${event.status}:${event.result ?? ''}`,
+          )
+        if (event.type === 'thinking') events.push(`thinking:${event.text}`)
+        if (event.type === 'step')
+          events.push(`step:${event.phase}:${String(event.step ?? '')}`)
+      },
+    })
+    expect(events).toEqual([
+      'step:start:1',
+      'thinking:plan the search',
+      'call:call-9:grep:{"pattern":"price"}',
+      'result:call-9:completed:3 matches',
+      'step:end:1',
+    ])
+  })
+})

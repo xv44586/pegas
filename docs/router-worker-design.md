@@ -145,6 +145,7 @@ fast/balanced/deep 三池全部用户可配可缺省，初始映射不硬编码�
 3. **执行过程可见**：Executor 进度事件扩展为 acknowledgement + activity（工具调用、推理步开始/结束）；Worker 把 activity 汇总成单条 coalesced Outbox `run.progress` 投影（工具调用次数、完成步数、最近 ≤20 条动态），经 PRIVACY-001 还原后到达 Web；工作详情按 Run 展示执行动态，不再"只能傻等"。
 4. **推理档位为受控选择**：事情级 effort 从自由文本改为下拉（默认/low/medium/high/max），已有非标准值保留可见可存。
 5. **进度与结果的展示分工（第二轮实测反馈）**：`run.progress` 是工作详情的私有投影，不进入主 chat 与正文时间线；工作详情按 Codex 式工作流展示——顶部用时统计，Run 级「工作流程记录」默认收缩，推理步分组内的工具明细二次收缩；终态结果在主 chat 携带上下文 cue（事情标题 + 原始请求 + 最近用户补充，全部由服务端权威事件在客户端推导，不改写 Outbox 原文）。
+6. **完整执行记录 = 轻列表 + 按需全量（第三轮，借鉴 Codex transcript 数据分工）**：Codex 的列表 item 只带类型/标题/计时，重内容（命令输出、diff）显式 deferred，打开详情才按需读取权威记录。Pegas 对应实现：DSH `--json` 的 text/thinking/tool_call(input)/tool_result(result)/step 逐条落 `run_activity_entries`（v35，durable、owner 隔离、有界截断），列表仍用 coalesced `run.progress` 轻投影；第二层运行详情抽屉打开时经 `GET /v1/runs/:id/activity` 拉全量（运行中轮询），工具参数/输出与推理全文默认收缩、点击展开；正文与结果统一 Markdown 渲染。
 
 **验收**：模型答 reply 时相关事情仍创建 work Task 且首 Run 含来源终态；连发消息只产生一个 Run 且输入合并；running 中继续输入生成可领取的 steering 后继；activity 经 Outbox 单条投影可见且脱敏还原；`pnpm check` + `pnpm smoke` + `pnpm smoke:crash`。
 

@@ -3004,6 +3004,103 @@ describe('sealed Pegas UI', () => {
     expect(screen.getByText('事情 task-1 · Run run-a')).toBeTruthy()
   })
 
+  it('opens a second-level run transcript with markdown and tool details', async () => {
+    installSnapshotFetch(
+      {
+        ...snapshot,
+        channels: [{ ...channel, status: 'completed', canStop: false }],
+        runs: [
+          {
+            ...run,
+            status: 'completed',
+            output: '**结论**：团队版每人每月 30 美元。',
+          },
+        ],
+      },
+      path => {
+        if (!path.startsWith('/v1/runs/run-1/activity?')) return undefined
+        return Response.json({
+          runId: 'run-1',
+          taskId: channel.id,
+          totalEntries: 4,
+          truncated: false,
+          entries: [
+            {
+              seq: 1,
+              kind: 'step',
+              status: 'started',
+              step: 1,
+              label: '第 1 步开始',
+              createdAt: '2026-11-19T08:00:10.000Z',
+              updatedAt: '2026-11-19T08:00:10.000Z',
+            },
+            {
+              seq: 2,
+              kind: 'tool_call',
+              status: 'completed',
+              callId: 'call-1',
+              tool: 'shell',
+              label: 'shell',
+              detail:
+                '{"command":"curl https://example.com/pricing"}\n[结果]\nTeam $30',
+              createdAt: '2026-11-19T08:00:20.000Z',
+              updatedAt: '2026-11-19T08:00:30.000Z',
+            },
+            {
+              seq: 3,
+              kind: 'thinking',
+              label: '核对价格口径',
+              detail: '需要区分*年付*与月付。',
+              createdAt: '2026-11-19T08:00:40.000Z',
+              updatedAt: '2026-11-19T08:00:40.000Z',
+            },
+            {
+              seq: 4,
+              kind: 'text',
+              label: '团队版价格已确认',
+              detail: '团队版价格为 **$30/人/月**。',
+              createdAt: '2026-11-19T08:00:50.000Z',
+              updatedAt: '2026-11-19T08:00:50.000Z',
+            },
+          ],
+        })
+      },
+    )
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: new RegExp(channel.title) }),
+    )
+    const taskDrawer = await screen.findByRole('dialog', { name: '工作详情' })
+    const heroStrong = taskDrawer.querySelector('.state-hero-markdown strong')
+    expect(heroStrong?.textContent).toBe('结论')
+    fireEvent.click(
+      await within(taskDrawer).findByRole('button', { name: /查看完整记录/ }),
+    )
+    const runDrawer = await screen.findByRole('dialog', { name: '运行详情' })
+    expect(await within(runDrawer).findByText('第 1 步开始')).toBeTruthy()
+    expect(within(runDrawer).getByText(/用时/)).toBeTruthy()
+    fireEvent.click(within(runDrawer).getByText('shell'))
+    expect(
+      within(runDrawer).getByText(/curl https:\/\/example.com\/pricing/),
+    ).toBeTruthy()
+    expect(within(runDrawer).getByText(/Team \$30/)).toBeTruthy()
+    fireEvent.click(within(runDrawer).getByText('推理'))
+    expect(within(runDrawer).getByText('年付').tagName).toBe('EM')
+    const messageStrong = runDrawer.querySelectorAll(
+      '.transcript-message strong',
+    )
+    expect(
+      [...messageStrong].some(node => node.textContent === '$30/人/月'),
+    ).toBe(true)
+    expect(
+      [...runDrawer.querySelectorAll('.run-final-output strong')].some(
+        node => node.textContent === '结论',
+      ),
+    ).toBe(true)
+  })
+
   it('cues the task origin and latest user input above terminal results', async () => {
     const source = snapshot.messages[0]
     const originEvent = snapshot.events[0]

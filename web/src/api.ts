@@ -26,6 +26,7 @@ import type {
   RecoveryStatus,
   ReviewPack,
   Run,
+  RunActivityReport,
   ModelProviderDraft,
   RuntimeSettings,
   SettingsResponse,
@@ -66,6 +67,13 @@ export class PegasApi {
 
   setToken(token: string): void {
     this.#token = token
+  }
+
+  async runActivity(runId: string): Promise<RunActivityReport> {
+    const user = encodeURIComponent(this.#userId)
+    return this.#get<RunActivityReport>(
+      `/v1/runs/${encodeURIComponent(runId)}/activity?userId=${user}&limit=400`,
+    )
   }
 
   async channelTimeline(channelId: string): Promise<ChannelTimeline> {

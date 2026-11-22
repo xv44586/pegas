@@ -22,11 +22,7 @@ export class PrivacyMaskingExecutor implements RunExecutor {
     const prompt = this.#masker.mask(input.prompt).text
     const onProgress = input.onProgress
       ? (event: ExecutorProgressEvent) =>
-          input.onProgress?.(
-            event.type === 'acknowledgement'
-              ? { ...event, text: this.#masker.restore(event.text) }
-              : { ...event, label: this.#masker.restore(event.label) },
-          )
+          input.onProgress?.(this.#restoreProgress(event))
       : undefined
     const result = await this.#executor.execute({
       ...input,
@@ -36,6 +32,33 @@ export class PrivacyMaskingExecutor implements RunExecutor {
     return {
       ...result,
       output: this.#masker.restore(result.output),
+    }
+  }
+
+  #restoreProgress(event: ExecutorProgressEvent): ExecutorProgressEvent {
+    const restore = (text: string) => this.#masker.restore(text)
+    switch (event.type) {
+      case 'acknowledgement':
+      case 'message':
+      case 'thinking':
+        return { ...event, text: restore(event.text) }
+      case 'activity':
+        return { ...event, label: restore(event.label) }
+      case 'tool_call':
+        return {
+          ...event,
+          tool: restore(event.tool),
+          ...(event.input !== undefined ? { input: restore(event.input) } : {}),
+        }
+      case 'tool_result':
+        return {
+          ...event,
+          ...(event.result !== undefined
+            ? { result: restore(event.result) }
+            : {}),
+        }
+      case 'step':
+        return event
     }
   }
 }

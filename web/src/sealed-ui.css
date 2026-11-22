@@ -2886,6 +2886,100 @@ kbd {
   gap: 10px;
   justify-content: space-between;
 }
+.run-record-link {
+  align-items: baseline;
+  background: none;
+  display: flex;
+  gap: 8px;
+  padding: 0;
+  text-align: left;
+}
+.run-record-link small {
+  color: var(--accent);
+}
+.run-transcript-heading {
+  align-items: baseline;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  padding-bottom: 12px;
+}
+.run-transcript-heading small {
+  color: var(--muted);
+}
+.run-transcript {
+  display: grid;
+  gap: 10px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.run-transcript > li {
+  font-size: 13px;
+}
+.transcript-step {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  font-size: 12px;
+  gap: 6px;
+}
+.transcript-step small {
+  margin-left: auto;
+}
+.transcript-tool summary,
+.transcript-thinking summary {
+  align-items: center;
+  color: var(--ink);
+  cursor: pointer;
+  display: flex;
+  gap: 6px;
+  list-style: none;
+}
+.transcript-tool summary small,
+.transcript-thinking summary small {
+  color: var(--muted);
+  margin-left: auto;
+}
+.transcript-error {
+  color: var(--critical);
+  font-style: normal;
+  margin-left: 6px;
+}
+.transcript-pending {
+  color: var(--accent);
+  font-style: normal;
+  margin-left: 6px;
+}
+.transcript-detail {
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 12px;
+  margin: 6px 0 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.transcript-message {
+  border-left: 2px solid var(--line);
+  padding-left: 10px;
+}
+.transcript-message > small {
+  color: var(--muted);
+}
+.transcript-markdown {
+  margin-top: 4px;
+}
+.state-hero-markdown {
+  font-size: 14px;
+}
+.timeline-markdown {
+  font-size: 14px;
+}
 .run-duration-summary {
   color: var(--muted);
   font-size: 12px;

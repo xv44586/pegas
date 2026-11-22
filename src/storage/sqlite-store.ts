@@ -39,6 +39,8 @@ import type {
   InboxEvent,
   ModelUsageRecord,
   ModelUsageReport,
+  RunActivityEntry,
+  RunActivityReport,
   NewInboxEvent,
   NotificationPreferences,
   OutboxMessage,
@@ -714,6 +716,27 @@ ALTER TABLE runtime_settings ADD COLUMN execution_pools_json TEXT NOT NULL DEFAU
 ALTER TABLE worker_profiles ADD COLUMN pool TEXT
 CHECK (pool IN ('fast', 'balanced', 'deep'));
 ALTER TABLE worker_profiles ADD COLUMN effort TEXT;
+`
+
+const migration35 = `
+CREATE TABLE run_activity_entries (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL REFERENCES runs(id),
+  seq INTEGER NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('text', 'thinking', 'tool_call', 'step')),
+  status TEXT CHECK (status IN ('started', 'completed', 'error')),
+  call_id TEXT,
+  tool TEXT,
+  step INTEGER,
+  label TEXT NOT NULL,
+  detail_json TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (run_id, seq)
+);
+
+CREATE INDEX run_activity_by_run_call
+ON run_activity_entries (run_id, call_id);
 `
 
 const migration32 = `
@@ -2513,6 +2536,7 @@ export class PegasStore {
     this.#migrate(32, migration32)
     this.#migrate(33, migration33)
     this.#migrate(34, migration34)
+    this.#migrate(35, migration35)
   }
 
   #backfillWorkerIconIds(): void {
@@ -9903,6 +9927,143 @@ export class PegasStore {
         )
         .get(runId, workerId),
     )
+  }
+
+  appendRunActivity(
+    runId: string,
+    workerId: string,
+    entry: {
+      kind: 'text' | 'thinking' | 'tool_call' | 'step'
+      status?: 'started' | 'completed' | 'error'
+      callId?: string
+      tool?: string
+      step?: number
+      label: string
+      detail?: string
+    },
+  ): void {
+    if (!this.ownsRun(runId, workerId)) return
+    const now = this.#clock.now().toISOString()
+    this.#database
+      .prepare(
+        `INSERT INTO run_activity_entries
+          (run_id, seq, kind, status, call_id, tool, step, label, detail_json,
+           created_at, updated_at)
+         VALUES (?, COALESCE(
+           (SELECT MAX(seq) + 1 FROM run_activity_entries WHERE run_id = ?), 1
+         ), ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        runId,
+        runId,
+        entry.kind,
+        entry.status ?? null,
+        entry.callId ?? null,
+        entry.tool ?? null,
+        entry.step ?? null,
+        entry.label.slice(0, 400),
+        entry.detail === undefined ? null : JSON.stringify(entry.detail),
+        now,
+        now,
+      )
+  }
+
+  completeRunActivityToolCall(
+    runId: string,
+    workerId: string,
+    callId: string,
+    outcome: { status: 'completed' | 'error'; result?: string },
+  ): void {
+    if (!this.ownsRun(runId, workerId)) return
+    const row = this.#database
+      .prepare(
+        `SELECT id, detail_json FROM run_activity_entries
+         WHERE run_id = ? AND call_id = ? AND kind = 'tool_call'
+         ORDER BY seq DESC LIMIT 1`,
+      )
+      .get(runId, callId) as
+      { id: number; detail_json: string | null } | undefined
+    if (!row) return
+    const detail = row.detail_json
+      ? (JSON.parse(row.detail_json) as string)
+      : ''
+    const merged = [detail, outcome.result ? `\n[结果]\n${outcome.result}` : '']
+      .join('')
+      .slice(0, 16_384)
+    this.#database
+      .prepare(
+        `UPDATE run_activity_entries
+         SET status = ?, detail_json = ?, updated_at = ? WHERE id = ?`,
+      )
+      .run(
+        outcome.status,
+        JSON.stringify(merged),
+        this.#clock.now().toISOString(),
+        row.id,
+      )
+  }
+
+  listRunActivity(
+    runId: string,
+    userId: string,
+    options: { limit?: number } = {},
+  ): RunActivityReport | undefined {
+    const run = this.#database
+      .prepare(
+        `SELECT runs.id, runs.task_id FROM runs
+         JOIN tasks ON tasks.id = runs.task_id
+         WHERE runs.id = ? AND tasks.user_id = ?`,
+      )
+      .get(runId, userId) as { id: string; task_id: string } | undefined
+    if (!run) return undefined
+    const limit = Math.min(Math.max(options.limit ?? 400, 1), 1000)
+    const total = this.#database
+      .prepare(
+        'SELECT COUNT(*) AS count FROM run_activity_entries WHERE run_id = ?',
+      )
+      .get(runId) as { count: number }
+    const rows = this.#database
+      .prepare(
+        `SELECT seq, kind, status, call_id, tool, step, label, detail_json,
+           created_at, updated_at
+         FROM run_activity_entries WHERE run_id = ?
+         ORDER BY seq DESC LIMIT ?`,
+      )
+      .all(runId, limit) as unknown as {
+      seq: number
+      kind: RunActivityEntry['kind']
+      status: RunActivityEntry['status'] | null
+      call_id: string | null
+      tool: string | null
+      step: number | null
+      label: string
+      detail_json: string | null
+      created_at: string
+      updated_at: string
+    }[]
+    const entries = rows
+      .map(row => ({
+        seq: row.seq,
+        kind: row.kind,
+        ...(row.status ? { status: row.status } : {}),
+        ...(row.call_id ? { callId: row.call_id } : {}),
+        ...(row.tool ? { tool: row.tool } : {}),
+        ...(row.step !== null ? { step: row.step } : {}),
+        label: row.label,
+        ...(row.detail_json
+          ? { detail: JSON.parse(row.detail_json) as string }
+          : {}),
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      }))
+      .reverse()
+    return {
+      runId,
+      taskId: run.task_id,
+      entries,
+      totalEntries: total.count,
+      truncated: total.count > entries.length,
+    }
   }
 
   #claimForCapability(

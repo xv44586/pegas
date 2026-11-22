@@ -271,6 +271,27 @@ export interface ModelUsageReport {
   records: ModelUsageRecord[]
 }
 
+export interface RunActivityEntry {
+  seq: number
+  kind: 'text' | 'thinking' | 'tool_call' | 'step'
+  status?: 'started' | 'completed' | 'error'
+  callId?: string
+  tool?: string
+  step?: number
+  label: string
+  detail?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface RunActivityReport {
+  runId: string
+  taskId: string
+  entries: RunActivityEntry[]
+  totalEntries: number
+  truncated: boolean
+}
+
 export interface RouterUsageRecord {
   callId: string
   userId: string

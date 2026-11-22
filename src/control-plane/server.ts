@@ -1639,6 +1639,21 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
 
       if (request.url?.startsWith('/v1/runs') && request.method === 'GET') {
         const url = new URL(request.url, 'http://localhost')
+        const activityMatch = /^\/v1\/runs\/([^/]+)\/activity$/.exec(
+          url.pathname,
+        )
+        if (activityMatch) {
+          const userId = url.searchParams.get('userId')
+          if (!userId) throw new Error('userId is required')
+          const limitParam = url.searchParams.get('limit')
+          const report = options.store.listRunActivity(
+            decodeURIComponent(activityMatch[1] ?? ''),
+            userId,
+            limitParam ? { limit: Number(limitParam) } : {},
+          )
+          if (!report) throw new Error('Run not found')
+          return sendJson(response, 200, report)
+        }
         const userId = url.searchParams.get('userId')
         if (!userId) throw new Error('userId is required')
         const taskId = url.searchParams.get('taskId') ?? undefined
