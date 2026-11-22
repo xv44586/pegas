@@ -156,6 +156,23 @@ export class RoutingEventHandler implements EventHandler {
       })
       return
     }
+    if (decision.kind === 'continue_task') {
+      const target = store.findTask(decision.taskId, event.userId)
+      if (target?.kind === 'conversation') {
+        const settings = store.getRuntimeSettings()
+        store.applyRoutingDecision(event, decision, this.#executorName, {
+          executor: this.#executorName,
+          protocol: 'conversation-v1',
+          permissions: JSON.stringify({
+            mode: 'read-only',
+            approvalPolicy: 'never',
+            additionalDirectories: [],
+            privacyMode: settings.privacyMode,
+          }),
+        })
+        return
+      }
+    }
     store.applyRoutingDecision(event, decision, this.#executorName, task =>
       this.#executionContext(task),
     )
