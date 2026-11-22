@@ -180,6 +180,7 @@ export interface RunActivityEntry {
   step?: number
   label: string
   detail?: string
+  summary?: string
   semantic?: ToolSemantic
   meta?: { kind: 'compaction' | 'steered'; note?: string }
   createdAt: string
@@ -343,7 +344,7 @@ export interface RunSubagentReport {
 interface RouterUsageRecord {
   callId: string
   userId: string
-  component: 'router' | 'rewrite'
+  component: 'router' | 'rewrite' | 'summary'
   eventId?: string
   modelRef: string
   completeness: 'complete' | 'unavailable'

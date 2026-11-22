@@ -52,6 +52,8 @@ export function isDelegationEntry(entry: RunActivityEntry): boolean {
 }
 
 export function thinkingHeadline(entry: RunActivityEntry): string {
+  const summary = entry.summary?.trim()
+  if (summary) return summary.length > 64 ? `${summary.slice(0, 64)}…` : summary
   const source = entry.label.trim() || (entry.detail ?? '').trim()
   const firstLine =
     source
