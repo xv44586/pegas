@@ -740,6 +740,138 @@ describe('DESIGN-003 chat page', () => {
     expect(screen.queryByRole('group', { name: '进行中的事情' })).toBeNull()
   })
 
+  it('CONV-007: consecutive same-task facts render as one structural thread', async () => {
+    const threadSnapshot: Snapshot = {
+      ...baseSnapshot,
+      messages: [
+        {
+          id: 'message-work-1',
+          userId: 'owner',
+          taskId: channel.id,
+          payload: {
+            type: 'run.status',
+            taskId: channel.id,
+            runId: 'run-1',
+            text: '已核对数据来源',
+          },
+          status: 'sent',
+          createdAt: '2026-11-22T08:01:00.000Z',
+          projection: {
+            lane: 'work',
+            weight: 'card',
+            anchor: { taskId: channel.id, eventId: 'event-1' },
+          },
+        },
+        {
+          id: 'message-work-2',
+          userId: 'owner',
+          taskId: channel.id,
+          payload: {
+            type: 'run.completed',
+            taskId: channel.id,
+            runId: 'run-1',
+            text: '报表已完成',
+          },
+          status: 'sent',
+          createdAt: '2026-11-22T08:02:00.000Z',
+          projection: {
+            lane: 'work',
+            weight: 'card',
+            anchor: { taskId: channel.id, eventId: 'event-1' },
+          },
+        },
+      ],
+    }
+    installChatFetch(threadSnapshot)
+    const { container } = render(<App />)
+    const thread = await screen.findByLabelText('事情进展：整理季度数据')
+    expect(thread.classList.contains('message-thread')).toBe(true)
+    expect(thread.querySelectorAll('.message-row')).toHaveLength(2)
+    expect(
+      container.querySelectorAll('.conversation-flow > .message-thread'),
+    ).toHaveLength(1)
+    expect(
+      within(thread).getAllByRole('button', { name: '整理季度数据' }),
+    ).toHaveLength(1)
+    expect(
+      within(thread).getAllByRole('button', { name: '回到发起消息' }),
+    ).toHaveLength(2)
+  })
+
+  it('CONV-007: a lone fact or an interleaved task does not form a thread', async () => {
+    const otherChannel: WorkChannel = {
+      ...channel,
+      id: 'task-2',
+      taskId: 'task-2',
+      originEventId: 'event-2',
+      title: '核对发布窗口',
+    }
+    const mixedSnapshot: Snapshot = {
+      ...baseSnapshot,
+      channels: [channel, otherChannel],
+      events: [
+        ...baseSnapshot.events,
+        {
+          ...baseEvent,
+          id: 'event-2',
+          payload: { text: '顺便核对发布窗口' },
+          createdAt: '2026-11-22T08:00:30.000Z',
+        },
+      ],
+      messages: [
+        {
+          id: 'message-a1',
+          userId: 'owner',
+          taskId: channel.id,
+          payload: {
+            type: 'run.status',
+            taskId: channel.id,
+            runId: 'run-1',
+            text: 'A 的进展',
+          },
+          status: 'sent',
+          createdAt: '2026-11-22T08:01:00.000Z',
+          projection: { lane: 'work', weight: 'card' },
+        },
+        {
+          id: 'message-b1',
+          userId: 'owner',
+          taskId: otherChannel.id,
+          payload: {
+            type: 'run.status',
+            taskId: otherChannel.id,
+            runId: 'run-2',
+            text: 'B 的进展',
+          },
+          status: 'sent',
+          createdAt: '2026-11-22T08:01:30.000Z',
+          projection: { lane: 'work', weight: 'card' },
+        },
+        {
+          id: 'message-a2',
+          userId: 'owner',
+          taskId: channel.id,
+          payload: {
+            type: 'run.completed',
+            taskId: channel.id,
+            runId: 'run-1',
+            text: 'A 已完成',
+          },
+          status: 'sent',
+          createdAt: '2026-11-22T08:02:00.000Z',
+          projection: { lane: 'work', weight: 'card' },
+        },
+      ],
+    }
+    installChatFetch(mixedSnapshot)
+    const { container } = render(<App />)
+    await screen.findByText('A 已完成')
+    expect(container.querySelectorAll('.message-thread')).toHaveLength(0)
+    expect(
+      screen.getAllByRole('button', { name: '整理季度数据' }).length,
+    ).toBeGreaterThanOrEqual(2)
+  })
+
   it('retries a failed user message in place', async () => {
     const failed: Snapshot = {
       ...baseSnapshot,

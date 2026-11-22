@@ -404,6 +404,7 @@ export function ConversationPage({
         attachment: event.attachment,
         cue: undefined as TaskContextCue | undefined,
         lane: 'say',
+        taskId: undefined as string | undefined,
         anchor: undefined as ConversationAnchor | undefined,
         resolved: false,
         source: undefined as OutboxMessage | undefined,
@@ -450,6 +451,10 @@ export function ConversationPage({
         message.role === 'user' ? (derivedByOrigin.get(message.id) ?? []) : [],
     }))
   }, [snapshot.channels, snapshot.events, snapshot.messages])
+  const messageBlocks = useMemo(
+    () => groupMessageThreads<(typeof messages)[number]>(messages),
+    [messages],
+  )
   useEffect(() => {
     const previous = previousPegasIdsRef.current
     const fresh = messages.filter(
@@ -761,6 +766,156 @@ export function ConversationPage({
       })
   }
 
+  function renderMessage(
+    message: (typeof messages)[number],
+    groupedNext: boolean,
+    inThreadContinuation: boolean,
+  ) {
+    return (
+      <article
+        className={[
+          'message-row',
+          `is-${message.role}`,
+          message.role === 'pegas' && message.lane !== 'say'
+            ? `is-lane-${message.lane}`
+            : '',
+          groupedNext ? 'grouped-next' : '',
+          highlightedId === message.id ? 'is-anchor-highlight' : '',
+        ]
+          .filter(Boolean)
+          .join(' ')}
+        data-message-id={message.id}
+        key={message.id}
+      >
+        <div className="message-content">
+          {message.role === 'pegas' && message.lane !== 'say' ? (
+            <FactCard
+              actions={actions}
+              expanded={expandedMessages.has(message.id)}
+              hideTaskTitle={inThreadContinuation}
+              message={message}
+              onAnswerClarification={onAnswerClarification}
+              onJumpToMessage={jumpToMessage}
+              onOpenAttention={onOpenAttention}
+              onOpenTask={openTaskDetails}
+              onToggleExpanded={() =>
+                setExpandedMessages(current => {
+                  const next = new Set(current)
+                  if (next.has(message.id)) next.delete(message.id)
+                  else next.add(message.id)
+                  return next
+                })
+              }
+              snapshot={snapshot}
+            />
+          ) : (
+            <>
+              {message.role === 'pegas' && message.cue && (
+                <p className="message-context-cue">
+                  <span>「{message.cue.title}」</span>
+                </p>
+              )}
+              <MarkdownMessage
+                content={
+                  message.text.length > 520 && !expandedMessages.has(message.id)
+                    ? `${message.text.slice(0, 520)}…`
+                    : message.text
+                }
+                linkPreviewLoader={url => api.linkPreview(url)}
+              />
+            </>
+          )}
+          {message.role === 'user' && message.attachment && (
+            <span className="message-attachment">
+              <FileText size={14} />
+              {message.attachment.fileName} ·{' '}
+              {formatFileSize(message.attachment.byteSize)}
+            </span>
+          )}
+          {message.role === 'user' && message.derivedIds.length > 0 && (
+            <button
+              className="inline-link is-derived-jump"
+              onClick={() =>
+                jumpToMessage(
+                  message.derivedIds[message.derivedIds.length - 1] ??
+                    message.id,
+                )
+              }
+              type="button"
+            >
+              <Link2 size={14} />
+              {message.derivedIds.length === 1
+                ? '查看进展'
+                : `查看进展 · ${String(message.derivedIds.length)}`}
+            </button>
+          )}
+          {message.text.length > 520 && message.lane === 'say' && (
+            <button
+              className="inline-link"
+              onClick={() =>
+                setExpandedMessages(current => {
+                  const next = new Set(current)
+                  if (next.has(message.id)) next.delete(message.id)
+                  else next.add(message.id)
+                  return next
+                })
+              }
+              type="button"
+            >
+              {expandedMessages.has(message.id)
+                ? '收起回复'
+                : message.role === 'user'
+                  ? '展开完整消息'
+                  : '展开完整回复'}
+            </button>
+          )}
+          {message.role === 'pegas' &&
+            message.lane === 'say' &&
+            message.taskId && (
+              <button
+                className="inline-link"
+                onClick={() => openTaskDetails(message.taskId)}
+                type="button"
+              >
+                查看工作详情 <ArrowRight size={15} />
+              </button>
+            )}
+        </div>
+        <div className="message-meta">
+          <time dateTime={message.at}>{formatRelativeTime(message.at)}</time>
+          {message.role === 'user' && (
+            <small className="message-delivery">
+              {deliveryStatusLabel(message.status)}
+            </small>
+          )}
+          <button
+            aria-label={copiedMessageId === message.id ? '已复制' : '复制消息'}
+            className="message-action"
+            onClick={() => void copyMessage(message.id, message.text)}
+            type="button"
+          >
+            {copiedMessageId === message.id ? (
+              <Check size={14} />
+            ) : (
+              <Copy size={14} />
+            )}
+          </button>
+          {message.role === 'user' && message.status === 'failed' && (
+            <button
+              className="message-action is-retry"
+              disabled={retryingMessageId === message.id}
+              onClick={() => void retryMessage(message.id)}
+              type="button"
+            >
+              <RotateCw size={14} />
+              {retryingMessageId === message.id ? '重试中…' : '重试'}
+            </button>
+          )}
+        </div>
+      </article>
+    )
+  }
+
   return (
     <div className="conversation-page">
       <PageHeader
@@ -781,155 +936,28 @@ export function ConversationPage({
               <p>告诉我目标。我会整理事情、推进执行，并在需要你决定时回来。</p>
             </section>
           ) : (
-            messages.map((message, index) => (
-              <article
-                className={[
-                  'message-row',
-                  `is-${message.role}`,
-                  message.role === 'pegas' && message.lane !== 'say'
-                    ? `is-lane-${message.lane}`
-                    : '',
-                  messages[index + 1]?.role === message.role
-                    ? 'grouped-next'
-                    : '',
-                  highlightedId === message.id ? 'is-anchor-highlight' : '',
-                ]
-                  .filter(Boolean)
-                  .join(' ')}
-                data-message-id={message.id}
-                key={message.id}
-              >
-                <div className="message-content">
-                  {message.role === 'pegas' && message.lane !== 'say' ? (
-                    <FactCard
-                      actions={actions}
-                      expanded={expandedMessages.has(message.id)}
-                      message={message}
-                      onAnswerClarification={onAnswerClarification}
-                      onJumpToMessage={jumpToMessage}
-                      onOpenAttention={onOpenAttention}
-                      onOpenTask={openTaskDetails}
-                      onToggleExpanded={() =>
-                        setExpandedMessages(current => {
-                          const next = new Set(current)
-                          if (next.has(message.id)) next.delete(message.id)
-                          else next.add(message.id)
-                          return next
-                        })
-                      }
-                      snapshot={snapshot}
-                    />
-                  ) : (
-                    <>
-                      {message.role === 'pegas' && message.cue && (
-                        <p className="message-context-cue">
-                          <span>「{message.cue.title}」</span>
-                        </p>
-                      )}
-                      <MarkdownMessage
-                        content={
-                          message.text.length > 520 &&
-                          !expandedMessages.has(message.id)
-                            ? `${message.text.slice(0, 520)}…`
-                            : message.text
-                        }
-                        linkPreviewLoader={url => api.linkPreview(url)}
-                      />
-                    </>
+            messageBlocks.map(block =>
+              block.kind === 'thread' ? (
+                <section
+                  aria-label={`事情进展：${
+                    snapshot.channels.find(item => item.id === block.taskId)
+                      ?.title ?? 'Pegas'
+                  }`}
+                  className="message-thread"
+                  key={`thread-${block.messages[0]?.id ?? block.taskId}`}
+                >
+                  {block.messages.map((message, threadIndex) =>
+                    renderMessage(
+                      message,
+                      threadIndex < block.messages.length - 1,
+                      threadIndex > 0,
+                    ),
                   )}
-                  {message.role === 'user' && message.attachment && (
-                    <span className="message-attachment">
-                      <FileText size={14} />
-                      {message.attachment.fileName} ·{' '}
-                      {formatFileSize(message.attachment.byteSize)}
-                    </span>
-                  )}
-                  {message.role === 'user' && message.derivedIds.length > 0 && (
-                    <button
-                      className="inline-link is-derived-jump"
-                      onClick={() =>
-                        jumpToMessage(
-                          message.derivedIds[message.derivedIds.length - 1] ??
-                            message.id,
-                        )
-                      }
-                      type="button"
-                    >
-                      <Link2 size={14} />
-                      {message.derivedIds.length === 1
-                        ? '查看进展'
-                        : `查看进展 · ${String(message.derivedIds.length)}`}
-                    </button>
-                  )}
-                  {message.text.length > 520 && message.lane === 'say' && (
-                    <button
-                      className="inline-link"
-                      onClick={() =>
-                        setExpandedMessages(current => {
-                          const next = new Set(current)
-                          if (next.has(message.id)) next.delete(message.id)
-                          else next.add(message.id)
-                          return next
-                        })
-                      }
-                      type="button"
-                    >
-                      {expandedMessages.has(message.id)
-                        ? '收起回复'
-                        : message.role === 'user'
-                          ? '展开完整消息'
-                          : '展开完整回复'}
-                    </button>
-                  )}
-                  {message.role === 'pegas' &&
-                    message.lane === 'say' &&
-                    message.taskId && (
-                      <button
-                        className="inline-link"
-                        onClick={() => openTaskDetails(message.taskId)}
-                        type="button"
-                      >
-                        查看工作详情 <ArrowRight size={15} />
-                      </button>
-                    )}
-                </div>
-                <div className="message-meta">
-                  <time dateTime={message.at}>
-                    {formatRelativeTime(message.at)}
-                  </time>
-                  {message.role === 'user' && (
-                    <small className="message-delivery">
-                      {deliveryStatusLabel(message.status)}
-                    </small>
-                  )}
-                  <button
-                    aria-label={
-                      copiedMessageId === message.id ? '已复制' : '复制消息'
-                    }
-                    className="message-action"
-                    onClick={() => void copyMessage(message.id, message.text)}
-                    type="button"
-                  >
-                    {copiedMessageId === message.id ? (
-                      <Check size={14} />
-                    ) : (
-                      <Copy size={14} />
-                    )}
-                  </button>
-                  {message.role === 'user' && message.status === 'failed' && (
-                    <button
-                      className="message-action is-retry"
-                      disabled={retryingMessageId === message.id}
-                      onClick={() => void retryMessage(message.id)}
-                      type="button"
-                    >
-                      <RotateCw size={14} />
-                      {retryingMessageId === message.id ? '重试中…' : '重试'}
-                    </button>
-                  )}
-                </div>
-              </article>
-            ))
+                </section>
+              ) : (
+                renderMessage(block.message, false, false)
+              ),
+            )
           )}
 
           {summaryChannel && summaryRun && (
@@ -1284,6 +1312,49 @@ export function ConversationPage({
   )
 }
 
+interface ThreadMessage {
+  id: string
+  role: 'user' | 'pegas'
+  lane: string
+  taskId?: string
+}
+
+type MessageBlock<T extends ThreadMessage> =
+  | { kind: 'message'; message: T }
+  | { kind: 'thread'; taskId: string; messages: T[] }
+
+function groupMessageThreads<T extends ThreadMessage>(
+  messages: readonly T[],
+): MessageBlock<T>[] {
+  const blocks: MessageBlock<T>[] = []
+  let run: T[] = []
+  const flush = () => {
+    if (run.length === 0) return
+    const taskId = run[0]?.taskId
+    if (run.length >= 2 && taskId)
+      blocks.push({ kind: 'thread', taskId, messages: run })
+    else for (const message of run) blocks.push({ kind: 'message', message })
+    run = []
+  }
+  for (const message of messages) {
+    const isFact = message.role === 'pegas' && message.lane !== 'say'
+    if (
+      isFact &&
+      message.taskId &&
+      run.length > 0 &&
+      run[0]?.taskId === message.taskId
+    ) {
+      run.push(message)
+      continue
+    }
+    flush()
+    if (isFact && message.taskId) run = [message]
+    else blocks.push({ kind: 'message', message })
+  }
+  flush()
+  return blocks
+}
+
 interface QueuedMessage {
   id: string
   text: string
@@ -1333,6 +1404,7 @@ function FactCard({
   snapshot,
   actions,
   expanded,
+  hideTaskTitle = false,
   onToggleExpanded,
   onJumpToMessage,
   onOpenTask,
@@ -1343,6 +1415,7 @@ function FactCard({
   snapshot: Snapshot
   actions: PageActions
   expanded: boolean
+  hideTaskTitle?: boolean
   onToggleExpanded: () => void
   onJumpToMessage: (messageId: string) => void
   onOpenTask: (taskId: string | undefined) => void
@@ -1394,7 +1467,7 @@ function FactCard({
       <header className="fact-card-header">
         <Icon size={16} />
         <strong>{heading.label}</strong>
-        {channel && (
+        {channel && !hideTaskTitle && (
           <button
             className="fact-card-task"
             onClick={() => onOpenTask(message.taskId)}
