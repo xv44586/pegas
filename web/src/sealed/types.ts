@@ -61,16 +61,11 @@ export type DrawerView =
         costUsd?: number
         records?: ModelUsageRecord[]
       }
+      activityByRun?: Record<string, RunActivityReport>
+      activityErrorByRun?: Record<string, string>
     }
   | { kind: 'runtime'; run?: Run; nodes?: ExecutionNode[]; nodesError?: string }
   | { kind: 'message'; message: OutboxMessage }
-  | {
-      kind: 'run'
-      channel: WorkChannel
-      run: Run
-      activity?: RunActivityReport
-      activityError?: string
-    }
   | {
       kind: 'approval'
       approval: Approval

@@ -2857,6 +2857,12 @@ kbd {
   top: 17px;
   width: 1px;
 }
+.progress-list .run-transcript li {
+  min-height: 0;
+}
+.progress-list .run-transcript li::after {
+  display: none;
+}
 .progress-list li:last-child::after {
   display: none;
 }
@@ -2886,33 +2892,11 @@ kbd {
   gap: 10px;
   justify-content: space-between;
 }
-.run-record-link {
-  align-items: baseline;
-  background: none;
-  display: flex;
-  gap: 8px;
-  padding: 0;
-  text-align: left;
-}
-.run-record-link small {
-  color: var(--accent);
-}
-.run-transcript-heading {
-  align-items: baseline;
-  border-bottom: 1px solid var(--line);
-  display: flex;
-  gap: 10px;
-  justify-content: space-between;
-  padding-bottom: 12px;
-}
-.run-transcript-heading small {
-  color: var(--muted);
-}
 .run-transcript {
   display: grid;
   gap: 10px;
   list-style: none;
-  margin: 0;
+  margin: 6px 0 0;
   padding: 0;
 }
 .run-transcript > li {
@@ -2989,38 +2973,13 @@ kbd {
   cursor: pointer;
   font-size: 12px;
 }
-.run-workflow {
-  color: var(--muted);
-  font-size: 12px;
-  list-style: none;
-  margin: 4px 0 0;
-  padding: 0;
+.run-final-output {
+  margin-top: 8px;
 }
-.run-workflow > li {
-  display: block;
-  min-height: 0;
-  padding: 2px 0;
-}
-.run-workflow > li::after {
-  display: none;
-}
-.run-step-tools summary {
+.run-final-output summary {
   color: var(--ink);
   cursor: pointer;
-}
-.run-step-tools ul {
-  list-style: none;
-  margin: 2px 0 4px;
-  padding-left: 14px;
-}
-.run-step-tools li {
-  color: var(--muted);
-  display: block;
-  min-height: 0;
-  padding: 1px 0;
-}
-.run-step-tools li::after {
-  display: none;
+  font-size: 12px;
 }
 .artifact-row {
   align-items: center;

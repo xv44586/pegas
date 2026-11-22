@@ -406,15 +406,6 @@ export function App() {
   function enrichDrawer(view: DrawerView): DrawerView {
     if (view.kind === 'runtime')
       return { ...view, run: data.snapshot.runs.at(-1) ?? view.run }
-    if (view.kind === 'run') {
-      const snapshotRun = data.snapshot.runs.find(
-        item => item.id === view.run.id,
-      )
-      return snapshotRun &&
-        Date.parse(snapshotRun.updatedAt) > Date.parse(view.run.updatedAt)
-        ? { ...view, run: snapshotRun }
-        : view
-    }
     if (view.kind !== 'task') return view
     const snapshotChannel = data.snapshot.channels.find(
       item => item.id === view.channel.id,
@@ -647,31 +638,48 @@ export function App() {
     if (view.kind === 'task') void loadTaskDrawer(view.channel.id)
     if (view.kind === 'review' && !view.goal) loadReviewGoal(view)
     if (view.kind === 'runtime') loadRuntimeNodes()
-    if (view.kind === 'run') void loadRunActivity(view.run.id)
   }
-  const runActivityRequestRef = useRef(0)
+  const runActivityRequestRef = useRef(new Map<string, number>())
   const loadRunActivity = useCallback(
     async (runId: string) => {
-      const requestId = runActivityRequestRef.current + 1
-      runActivityRequestRef.current = requestId
+      const requestId = (runActivityRequestRef.current.get(runId) ?? 0) + 1
+      runActivityRequestRef.current.set(runId, requestId)
       try {
         const activity = await api.runActivity(runId)
-        if (runActivityRequestRef.current !== requestId) return
-        setDrawer(current =>
-          current?.kind === 'run' && current.run.id === runId
-            ? { ...current, activity, activityError: undefined }
-            : current,
-        )
+        if (runActivityRequestRef.current.get(runId) !== requestId) return
+        setDrawer(current => {
+          if (current?.kind !== 'task') return current
+          const known =
+            current.runs?.some(item => item.id === runId) ??
+            current.run?.id === runId
+          if (!known) return current
+          const restErrors = Object.fromEntries(
+            Object.entries(current.activityErrorByRun ?? {}).filter(
+              ([key]) => key !== runId,
+            ),
+          )
+          return {
+            ...current,
+            activityByRun: {
+              ...current.activityByRun,
+              [runId]: activity,
+            },
+            activityErrorByRun: restErrors,
+          }
+        })
       } catch (caught) {
-        if (runActivityRequestRef.current !== requestId) return
+        if (runActivityRequestRef.current.get(runId) !== requestId) return
         setDrawer(current =>
-          current?.kind === 'run' && current.run.id === runId
+          current?.kind === 'task'
             ? {
                 ...current,
-                activityError:
-                  caught instanceof Error
-                    ? caught.message
-                    : '读取执行记录失败。',
+                activityErrorByRun: {
+                  ...current.activityErrorByRun,
+                  [runId]:
+                    caught instanceof Error
+                      ? caught.message
+                      : '读取执行记录失败。',
+                },
               }
             : current,
         )
@@ -737,6 +745,11 @@ export function App() {
     }
     setDrawer(view)
   }
+  const loadRunActivityRef = useRef(loadRunActivity)
+  loadRunActivityRef.current = loadRunActivity
+  const openRunWorkflow = useCallback((runId: string) => {
+    void loadRunActivityRef.current(runId)
+  }, [])
   function openSearch() {
     rememberFocus()
     setSearchOpen(true)
@@ -767,18 +780,20 @@ export function App() {
 
   const openDrawerChannelId = drawer?.kind === 'task' ? drawer.channel.id : ''
   const openApprovalId = drawer?.kind === 'approval' ? drawer.approval.id : ''
-  const openRunActivityId = drawer?.kind === 'run' ? drawer.run.id : ''
-  const openRunActivityLive =
-    drawer?.kind === 'run' &&
-    ['queued', 'running', 'waiting'].includes(drawer.run.status)
+  const openTaskLiveRunId =
+    drawer?.kind === 'task'
+      ? ((drawer.runs ?? (drawer.run ? [drawer.run] : [])).findLast(item =>
+          ['queued', 'running', 'waiting'].includes(item.status),
+        )?.id ?? '')
+      : ''
   useEffect(() => {
-    if (!openRunActivityId || !openRunActivityLive) return
+    if (!openTaskLiveRunId) return
     const interval = window.setInterval(
-      () => void loadRunActivity(openRunActivityId),
+      () => void loadRunActivity(openTaskLiveRunId),
       5_000,
     )
     return () => window.clearInterval(interval)
-  }, [loadRunActivity, openRunActivityId, openRunActivityLive])
+  }, [loadRunActivity, openTaskLiveRunId])
   const openReconciliationActionId =
     drawer?.kind === 'reconciliation' ? drawer.action.id : ''
   useEffect(() => {
@@ -1475,6 +1490,7 @@ export function App() {
           onChange={changeDrawer}
           onClose={closeDrawer}
           onOpenView={openNestedDrawer}
+          onLoadRunActivity={openRunWorkflow}
           onContinue={channel => continueChannel(channel.id)}
           onCreateRelated={channel => {
             setSourceContextTaskId(channel.id)

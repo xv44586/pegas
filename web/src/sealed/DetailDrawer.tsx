@@ -34,6 +34,7 @@ import type {
   ReviewPack,
   Run,
   RunActivityEntry,
+  RunActivityReport,
   TaskDelivery,
   WorkerProfileResponse,
 } from '../types'
@@ -53,6 +54,7 @@ export function DetailDrawer({
   onClose,
   onChange,
   onOpenView,
+  onLoadRunActivity,
   onRetry,
   onContinue,
   onCreateRelated,
@@ -66,6 +68,7 @@ export function DetailDrawer({
   onClose: () => void
   onChange: (view: DrawerView) => void
   onOpenView?: (view: DrawerView) => void
+  onLoadRunActivity?: (runId: string) => void
   onRetry: (run: Run) => Promise<void>
   onContinue?: (
     channel: Extract<DrawerView, { kind: 'task' }>['channel'],
@@ -132,11 +135,9 @@ export function DetailDrawer({
         aria-label={
           view.kind === 'task'
             ? '工作详情'
-            : view.kind === 'run'
-              ? '运行详情'
-              : view.kind === 'message'
-                ? '消息详情'
-                : '详情'
+            : view.kind === 'message'
+              ? '消息详情'
+              : '详情'
         }
         className="detail-drawer"
         ref={drawerRef}
@@ -159,6 +160,8 @@ export function DetailDrawer({
         {view.kind === 'task' && (
           <TaskDetail
             api={api}
+            activityByRun={view.activityByRun}
+            activityErrorByRun={view.activityErrorByRun}
             channel={view.channel}
             collaborations={view.collaborations}
             collaborationsError={view.collaborationsError}
@@ -166,6 +169,7 @@ export function DetailDrawer({
             deliveryError={view.deliveryError}
             onContinue={onContinue}
             onCreateRelated={onCreateRelated}
+            onLoadRunActivity={onLoadRunActivity}
             onOpenEvidence={
               onOpenView
                 ? evidence => onOpenView(evidencePreviewView(evidence))
@@ -264,7 +268,6 @@ export function DetailDrawer({
             run={view.run}
           />
         )}
-        {view.kind === 'run' && <RunDetail view={view} />}
         {view.kind === 'rule' && <RuleDetail api={api} view={view} />}
         {view.kind === 'preview' && (
           <PreviewDetail
@@ -296,49 +299,6 @@ function formatDurationMs(durationMs: number): string {
   return `${String(hours)}h ${String(minutes % 60)}m`
 }
 
-interface WorkflowStep {
-  label: string
-  tools: string[]
-}
-
-function groupWorkflowSteps(recent: readonly string[]): WorkflowStep[] {
-  const steps: WorkflowStep[] = []
-  let current: WorkflowStep | undefined
-  for (const label of recent) {
-    if (label.startsWith('调用工具')) {
-      if (!current) {
-        current = { label: '准备', tools: [] }
-        steps.push(current)
-      }
-      current.tools.push(label.replace(/^调用工具\s*/, ''))
-      continue
-    }
-    if (label.startsWith('开始第')) {
-      current = {
-        label: label.replace(/^开始第\s*/, '第 ').replace(/步推理$/, ' 步'),
-        tools: [],
-      }
-      steps.push(current)
-      continue
-    }
-    if (label.startsWith('完成第')) {
-      const finished = label
-        .replace(/^完成第\s*/, '第 ')
-        .replace(/步推理$/, ' 步')
-      if (current?.label === finished) {
-        current.label = `${finished}（已完成）`
-      } else {
-        steps.push({ label: `${finished}（已完成）`, tools: [] })
-      }
-      current = undefined
-      continue
-    }
-    current = { label, tools: [] }
-    steps.push(current)
-  }
-  return steps
-}
-
 function runProgressFromPayload(
   payload: unknown,
 ): Omit<RunProgressSummary, 'at'> | undefined {
@@ -360,7 +320,6 @@ function runProgressFromPayload(
 
 function drawerEyebrow(view: DrawerView): string {
   if (view.kind === 'task') return '工作详情'
-  if (view.kind === 'run') return '运行详情'
   if (view.kind === 'message') return '待你处理'
   if (view.kind === 'approval') return '需要确认'
   if (view.kind === 'reconciliation') return '需要核对'
@@ -372,8 +331,6 @@ function drawerEyebrow(view: DrawerView): string {
 }
 function drawerTitle(view: DrawerView): string {
   if (view.kind === 'task') return view.channel.title
-  if (view.kind === 'run')
-    return `Run · ${view.run.id.slice(0, 8)} · ${view.channel.title}`
   if (view.kind === 'message') return 'Pegas 消息'
   if (view.kind === 'approval') return view.approval.prompt.summary
   if (view.kind === 'reconciliation') return '核对动作的真实结果'
@@ -898,6 +855,8 @@ function OutboxResolutionForm({
 
 function TaskDetail({
   api,
+  activityByRun,
+  activityErrorByRun,
   channel,
   collaborations,
   collaborationsError,
@@ -913,12 +872,15 @@ function TaskDetail({
   onOpenEvidence,
   onOpenTarget,
   onOpenView,
+  onLoadRunActivity,
   onRetry,
   onContinue,
   onCreateRelated,
   onStop,
 }: {
   api?: PegasApi
+  activityByRun?: Record<string, RunActivityReport>
+  activityErrorByRun?: Record<string, string>
   channel: Extract<DrawerView, { kind: 'task' }>['channel']
   collaborations?: ChannelRelation[]
   collaborationsError?: string
@@ -934,6 +896,7 @@ function TaskDetail({
   onOpenEvidence?: (evidence: ReviewEvidencePreview) => void
   onOpenTarget?: (targetTaskId: string) => Promise<void>
   onOpenView?: (view: DrawerView) => void
+  onLoadRunActivity?: (runId: string) => void
   onRetry: (run: Run) => Promise<void>
   onContinue?: (
     channel: Extract<DrawerView, { kind: 'task' }>['channel'],
@@ -1115,6 +1078,12 @@ function TaskDetail({
               const historyState = runStatusLabel(historyRun)
               const progress = progressByRun.get(historyRun.id)
               const runUsage = usageByRun.get(historyRun.id)
+              const activity = activityByRun?.[historyRun.id]
+              const activityError = activityErrorByRun?.[historyRun.id]
+              const runLabel =
+                runHistory.length === 1
+                  ? `Run · ${historyRun.id.slice(0, 8)}`
+                  : `Run ${String(index + 1)} · ${historyRun.id.slice(0, 8)}`
               return (
                 <li
                   className={runProgressClass(historyState)}
@@ -1122,32 +1091,7 @@ function TaskDetail({
                 >
                   {runProgressIcon(historyState)}
                   <span>
-                    {onOpenView ? (
-                      <button
-                        className="run-record-link"
-                        onClick={() =>
-                          onOpenView({
-                            kind: 'run',
-                            channel,
-                            run: historyRun,
-                          })
-                        }
-                        type="button"
-                      >
-                        <strong>
-                          {runHistory.length === 1
-                            ? `Run · ${historyRun.id.slice(0, 8)}`
-                            : `Run ${String(index + 1)} · ${historyRun.id.slice(0, 8)}`}
-                        </strong>
-                        <small>查看完整记录 →</small>
-                      </button>
-                    ) : (
-                      <strong>
-                        {runHistory.length === 1
-                          ? `Run · ${historyRun.id.slice(0, 8)}`
-                          : `Run ${String(index + 1)} · ${historyRun.id.slice(0, 8)}`}
-                      </strong>
-                    )}
+                    <strong>{runLabel}</strong>
                     <small>
                       {historyState} ·{' '}
                       {formatRelativeTime(historyRun.updatedAt)}
@@ -1157,41 +1101,62 @@ function TaskDetail({
                     {runHistory.length > 1 && historyRun.lastError && (
                       <small>{historyRun.lastError}</small>
                     )}
-                    {progress && progress.recent.length > 0 && (
+                    {(progress ??
+                      activity ??
+                      activityError ??
+                      onLoadRunActivity) && (
                       <details className="run-progress-details">
-                        <summary>
-                          工作流程记录 · 工具 {progress.toolCalls} 次 ·{' '}
-                          {progress.steps} 步推理
+                        <summary
+                          onClick={() => {
+                            if (!activity && !activityError)
+                              onLoadRunActivity?.(historyRun.id)
+                          }}
+                        >
+                          工作流程记录
+                          {progress &&
+                            ` · 工具 ${String(progress.toolCalls)} 次 · ${String(progress.steps)} 步推理`}
                         </summary>
-                        <ol className="run-workflow">
-                          {groupWorkflowSteps(progress.recent).map(
-                            (step, stepIndex) => (
-                              <li
-                                key={`${historyRun.id}-step-${String(stepIndex)}`}
-                              >
-                                {step.tools.length > 0 ? (
-                                  <details className="run-step-tools">
-                                    <summary>
-                                      {step.label} · {step.tools.length}{' '}
-                                      次工具调用
-                                    </summary>
-                                    <ul>
-                                      {step.tools.map((tool, toolIndex) => (
-                                        <li
-                                          key={`${historyRun.id}-step-${String(stepIndex)}-tool-${String(toolIndex)}`}
-                                        >
-                                          {tool}
-                                        </li>
-                                      ))}
-                                    </ul>
-                                  </details>
-                                ) : (
-                                  <span>{step.label}</span>
-                                )}
-                              </li>
-                            ),
-                          )}
-                        </ol>
+                        {activityError && (
+                          <p className="settings-error" role="alert">
+                            {activityError}
+                          </p>
+                        )}
+                        {!activity && !activityError && (
+                          <p className="drawer-footnote">
+                            正在读取完整执行记录。
+                          </p>
+                        )}
+                        {activity?.entries.length === 0 && (
+                          <p className="drawer-footnote">
+                            这次运行没有留存执行记录（旧版本运行或直接应答）。
+                          </p>
+                        )}
+                        {activity && activity.entries.length > 0 && (
+                          <>
+                            {activity.truncated && (
+                              <p className="drawer-footnote">
+                                记录过长，仅显示最近 {activity.entries.length}{' '}
+                                条。
+                              </p>
+                            )}
+                            <ol className="run-transcript">
+                              {activity.entries.map(entry => (
+                                <TranscriptEntry
+                                  entry={entry}
+                                  key={entry.seq}
+                                />
+                              ))}
+                            </ol>
+                          </>
+                        )}
+                        {historyRun.output && (
+                          <details className="run-final-output">
+                            <summary>最终结果</summary>
+                            <div className="transcript-markdown">
+                              <MarkdownMessage content={historyRun.output} />
+                            </div>
+                          </details>
+                        )}
                       </details>
                     )}
                   </span>
@@ -2576,72 +2541,6 @@ function stateDescription(state: string, run?: Run): string {
   if (state === '进行中') return '离开页面不会中断执行；状态由服务端持续保存。'
   if (state === '已归档') return '归档内容仍保留在服务端。'
   return '上下文已保存，服务端尚未返回可执行的下一步。'
-}
-
-function RunDetail({ view }: { view: Extract<DrawerView, { kind: 'run' }> }) {
-  const { run, activity, activityError } = view
-  const durationMs =
-    run.status === 'running'
-      ? Math.max(0, Date.now() - Date.parse(run.createdAt))
-      : Math.max(0, Date.parse(run.updatedAt) - Date.parse(run.createdAt))
-  const toolCalls = (activity?.entries ?? []).filter(
-    entry => entry.kind === 'tool_call',
-  ).length
-  const steps = (activity?.entries ?? []).filter(
-    entry => entry.kind === 'step' && entry.status === 'completed',
-  ).length
-  return (
-    <div className="drawer-body">
-      <section className="run-transcript-heading">
-        <strong>
-          {run.status === 'running' ? '已运行' : '用时'}{' '}
-          {formatDurationMs(durationMs)}
-        </strong>
-        <small>
-          {runStatusLabel(run)} · 工具 {toolCalls} 次 · {steps} 步推理
-          {activity?.truncated && ' · 仅显示最近记录'}
-        </small>
-      </section>
-      {run.lastError && (
-        <section className="failure-card">
-          <header>
-            <AlertTriangle size={19} />
-            <strong>运行错误</strong>
-          </header>
-          <p>{run.lastError}</p>
-        </section>
-      )}
-      <section className="detail-section">
-        <h3>执行记录</h3>
-        {activityError && (
-          <p className="settings-error" role="alert">
-            {activityError}
-          </p>
-        )}
-        {!activity && !activityError && (
-          <p className="drawer-footnote">正在读取完整执行记录。</p>
-        )}
-        {activity?.entries.length === 0 && (
-          <p className="drawer-footnote">
-            这次运行没有留存执行记录（旧版本运行或尚未开始）。
-          </p>
-        )}
-        {activity && activity.entries.length > 0 && (
-          <ol className="run-transcript">
-            {activity.entries.map(entry => (
-              <TranscriptEntry entry={entry} key={entry.seq} />
-            ))}
-          </ol>
-        )}
-      </section>
-      {run.output && (
-        <section className="detail-section run-final-output">
-          <h3>最终结果</h3>
-          <MarkdownMessage content={run.output} />
-        </section>
-      )}
-    </div>
-  )
 }
 
 function TranscriptEntry({ entry }: { entry: RunActivityEntry }) {

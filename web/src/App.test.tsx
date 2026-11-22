@@ -3004,7 +3004,7 @@ describe('sealed Pegas UI', () => {
     expect(screen.getByText('事情 task-1 · Run run-a')).toBeTruthy()
   })
 
-  it('opens a second-level run transcript with markdown and tool details', async () => {
+  it('expands the run workflow inline with markdown and tool details', async () => {
     installSnapshotFetch(
       {
         ...snapshot,
@@ -3075,27 +3075,28 @@ describe('sealed Pegas UI', () => {
     const taskDrawer = await screen.findByRole('dialog', { name: '工作详情' })
     const heroStrong = taskDrawer.querySelector('.state-hero-markdown strong')
     expect(heroStrong?.textContent).toBe('结论')
-    fireEvent.click(
-      await within(taskDrawer).findByRole('button', { name: /查看完整记录/ }),
-    )
-    const runDrawer = await screen.findByRole('dialog', { name: '运行详情' })
-    expect(await within(runDrawer).findByText('第 1 步开始')).toBeTruthy()
-    expect(within(runDrawer).getByText(/用时/)).toBeTruthy()
-    fireEvent.click(within(runDrawer).getByText('shell'))
+    fireEvent.click(await within(taskDrawer).findByText(/工作流程记录/))
+    expect(await within(taskDrawer).findByText('第 1 步开始')).toBeTruthy()
+    expect(screen.queryByRole('dialog', { name: '运行详情' })).toBeNull()
     expect(
-      within(runDrawer).getByText(/curl https:\/\/example.com\/pricing/),
+      within(taskDrawer).queryByRole('button', { name: /查看完整记录/ }),
+    ).toBeNull()
+    fireEvent.click(within(taskDrawer).getByText('shell'))
+    expect(
+      within(taskDrawer).getByText(/curl https:\/\/example.com\/pricing/),
     ).toBeTruthy()
-    expect(within(runDrawer).getByText(/Team \$30/)).toBeTruthy()
-    fireEvent.click(within(runDrawer).getByText('推理'))
-    expect(within(runDrawer).getByText('年付').tagName).toBe('EM')
-    const messageStrong = runDrawer.querySelectorAll(
+    expect(within(taskDrawer).getByText(/Team \$30/)).toBeTruthy()
+    fireEvent.click(within(taskDrawer).getByText('推理'))
+    expect(within(taskDrawer).getByText('年付').tagName).toBe('EM')
+    const messageStrong = taskDrawer.querySelectorAll(
       '.transcript-message strong',
     )
     expect(
       [...messageStrong].some(node => node.textContent === '$30/人/月'),
     ).toBe(true)
+    fireEvent.click(within(taskDrawer).getByText('最终结果'))
     expect(
-      [...runDrawer.querySelectorAll('.run-final-output strong')].some(
+      [...taskDrawer.querySelectorAll('.run-final-output strong')].some(
         node => node.textContent === '结论',
       ),
     ).toBe(true)
@@ -5464,28 +5465,80 @@ describe('sealed Pegas UI', () => {
   })
 
   it('shows live execution activity for the running Run in the drawer', async () => {
-    installSnapshotFetch({
-      ...snapshot,
-      messages: [
-        ...snapshot.messages,
-        {
-          id: 'message-progress',
-          userId: 'owner',
-          taskId: channel.id,
-          payload: {
-            type: 'run.progress',
+    installSnapshotFetch(
+      {
+        ...snapshot,
+        messages: [
+          ...snapshot.messages,
+          {
+            id: 'message-progress',
+            userId: 'owner',
             taskId: channel.id,
-            runId: 'run-1',
-            toolCalls: 2,
-            steps: 1,
-            recent: ['调用工具 read', '完成第 1 步推理', '调用工具 test'],
-            text: '执行中 · 工具调用 2 次 · 已完成 1 步推理',
+            payload: {
+              type: 'run.progress',
+              taskId: channel.id,
+              runId: 'run-1',
+              toolCalls: 2,
+              steps: 1,
+              recent: ['调用工具 read', '完成第 1 步推理', '调用工具 test'],
+              text: '执行中 · 工具调用 2 次 · 已完成 1 步推理',
+            },
+            status: 'pending',
+            createdAt: '2026-11-19T08:02:30.000Z',
           },
-          status: 'pending',
-          createdAt: '2026-11-19T08:02:30.000Z',
-        },
-      ],
-    })
+        ],
+      },
+      path => {
+        if (!path.startsWith('/v1/runs/run-1/activity?')) return undefined
+        return Response.json({
+          runId: 'run-1',
+          taskId: channel.id,
+          totalEntries: 4,
+          truncated: false,
+          entries: [
+            {
+              seq: 1,
+              kind: 'tool_call',
+              status: 'completed',
+              callId: 'call-read',
+              tool: 'read',
+              label: 'read',
+              detail: '{"path":"README.md"}\n[结果]\n# Pegas',
+              createdAt: '2026-11-19T08:02:10.000Z',
+              updatedAt: '2026-11-19T08:02:12.000Z',
+            },
+            {
+              seq: 2,
+              kind: 'step',
+              status: 'completed',
+              step: 1,
+              label: '第 1 步完成',
+              createdAt: '2026-11-19T08:02:20.000Z',
+              updatedAt: '2026-11-19T08:02:20.000Z',
+            },
+            {
+              seq: 3,
+              kind: 'tool_call',
+              status: 'completed',
+              callId: 'call-test',
+              tool: 'test',
+              label: 'test',
+              detail: '{"command":"pnpm test"}\n[结果]\nall green',
+              createdAt: '2026-11-19T08:02:25.000Z',
+              updatedAt: '2026-11-19T08:02:28.000Z',
+            },
+            {
+              seq: 4,
+              kind: 'text',
+              label: '进展说明',
+              detail: '已读取文档，正在跑测试。',
+              createdAt: '2026-11-19T08:02:29.000Z',
+              updatedAt: '2026-11-19T08:02:29.000Z',
+            },
+          ],
+        })
+      },
+    )
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
@@ -5500,14 +5553,12 @@ describe('sealed Pegas UI', () => {
     fireEvent.click(
       within(drawer).getByText(/工作流程记录 · 工具 2 次 · 1 步推理/),
     )
-    const toolGroups = within(drawer).getAllByText(/准备 · 1 次工具调用/)
-    const [firstGroup, secondGroup] = toolGroups
-    if (!firstGroup || !secondGroup) throw new Error('expected two tool groups')
-    fireEvent.click(firstGroup)
-    expect(within(drawer).getByText('read')).toBeTruthy()
-    expect(within(drawer).getByText('第 1 步（已完成）')).toBeTruthy()
-    fireEvent.click(secondGroup)
-    expect(within(drawer).getByText('test')).toBeTruthy()
+    fireEvent.click(await within(drawer).findByText('read'))
+    expect(within(drawer).getByText(/README\.md/)).toBeTruthy()
+    expect(within(drawer).getByText('第 1 步完成')).toBeTruthy()
+    fireEvent.click(within(drawer).getByText('test'))
+    expect(within(drawer).getByText(/pnpm test/)).toBeTruthy()
+    expect(within(drawer).getByText('已读取文档，正在跑测试。')).toBeTruthy()
     expect(
       within(drawer).queryByText('执行中 · 工具调用 2 次 · 已完成 1 步推理'),
     ).toBeNull()
