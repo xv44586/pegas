@@ -180,8 +180,138 @@ export interface RunActivityEntry {
   step?: number
   label: string
   detail?: string
+  semantic?: ToolSemantic
+  meta?: { kind: 'compaction' | 'steered'; note?: string }
   createdAt: string
   updatedAt: string
+}
+
+export type ToolSemantic =
+  | {
+      kind: 'shell'
+      command: string
+      description?: string
+      output?: string
+      outputTruncated?: boolean
+      exitCode?: number
+      interrupted?: boolean
+    }
+  | {
+      kind: 'file_read'
+      path: string
+      lineCount?: number
+      preview?: string
+      previewTruncated?: boolean
+    }
+  | {
+      kind: 'image'
+      path: string
+      mediaType?: string
+      width?: number
+      height?: number
+      bytes?: number
+      originalWidth?: number
+      originalHeight?: number
+    }
+  | {
+      kind: 'delivery'
+      files: { path: string; description?: string }[]
+      preview?: string
+      previewTruncated?: boolean
+    }
+  | {
+      kind: 'file_edit'
+      path: string
+      mode: 'edit' | 'write' | 'patch'
+      additions: number
+      deletions: number
+      hunks: DiffHunk[]
+      diffTruncated?: boolean
+    }
+  | {
+      kind: 'search'
+      query: string
+      path?: string
+      include?: string
+      shape?: 'matches' | 'paths'
+      total?: number
+      resultTruncated?: boolean
+      files?: SearchFileHits[]
+      paths?: string[]
+      preview?: string
+      previewTruncated?: boolean
+    }
+  | {
+      kind: 'todo'
+      items: TodoItem[]
+      itemsTruncated?: boolean
+    }
+  | {
+      kind: 'ask_user'
+      questions: AskQuestion[]
+      answers?: AskAnswer[]
+      pending?: boolean
+      preview?: string
+      previewTruncated?: boolean
+    }
+  | {
+      kind: 'web'
+      url?: string
+      query?: string
+      queries?: string[]
+      statusCode?: number
+      sources?: WebSource[]
+      sourcesTruncated?: boolean
+      preview?: string
+      previewTruncated?: boolean
+    }
+  | {
+      kind: 'agent_control'
+      action: 'wait' | 'message' | 'list' | 'interrupt'
+      agent?: string
+      message?: string
+      timeoutMs?: number
+      timedOut?: boolean
+      agents?: { name: string; status: string; description?: string }[]
+      preview?: string
+      previewTruncated?: boolean
+    }
+  | { kind: 'unknown' }
+
+interface WebSource {
+  url: string
+  title?: string
+  snippet?: string
+}
+
+interface SearchFileHits {
+  path: string
+  matches: { line: number; text: string }[]
+}
+
+interface TodoItem {
+  content: string
+  status: 'pending' | 'in_progress' | 'completed'
+}
+
+interface AskQuestion {
+  id: string
+  question: string
+  header?: string
+  options?: { label: string; description?: string }[]
+  multiSelect?: boolean
+}
+
+interface AskAnswer {
+  id: string
+  selected: string[]
+  custom?: string
+}
+
+interface DiffHunk {
+  oldStart?: number
+  newStart?: number
+  lines: { type: 'context' | 'add' | 'del'; text: string }[]
 }
 
 export interface RunActivityReport {

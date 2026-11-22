@@ -55,7 +55,7 @@ describe('sealed UI layout contracts', () => {
 
   it('makes detail drawers full height and responsive', () => {
     expect(sealedUi).toMatch(
-      /\.detail-drawer\s*\{[^}]*height:\s*100dvh;[^}]*width:\s*470px;/,
+      /\.detail-drawer\s*\{[^}]*height:\s*100dvh;[^}]*width:\s*560px;/,
     )
     expect(sealedUi).toMatch(
       /@media \(max-width: 820px\)[\s\S]*?\.detail-drawer\s*\{[^}]*width:\s*100%;/,
