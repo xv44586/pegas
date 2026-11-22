@@ -89,7 +89,7 @@ export function createDshModelConfiguration(options: {
           ? 'anthropic-messages'
           : 'openai-completions',
       baseURL: connection.baseUrl,
-      apiKeyEnv: keyEnvironment,
+      ...(apiKey ? { apiKeyEnv: keyEnvironment } : {}),
       models: [{ id: catalogModel, name: catalogModel }],
     }
   }
