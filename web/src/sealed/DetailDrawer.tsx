@@ -1350,7 +1350,7 @@ function DeliverySection({
   }>()
   const [historyError, setHistoryError] = useState('')
   const [historyLoading, setHistoryLoading] = useState(false)
-  const [historyKey, setHistoryKey] = useState('')
+  const [historyKey, setHistoryKey] = useState(channelId)
   const [expandedRevisions, setExpandedRevisions] = useState<Set<number>>(
     () => new Set(),
   )

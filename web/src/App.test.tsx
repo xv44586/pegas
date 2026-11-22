@@ -5181,7 +5181,7 @@ describe('sealed Pegas UI', () => {
       quietEnd: '07:00',
     })
     expect((saved as { utcOffsetMinutes: number }).utcOffsetMinutes).toBe(
-      -new Date().getTimezoneOffset(),
+      -new Date().getTimezoneOffset() || 0,
     )
   })
 

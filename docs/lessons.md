@@ -228,6 +228,18 @@
 - Enforcement：尚未晋升为全仓规则；本次以 `pnpm smoke` + `pnpm smoke:crash` 作为该入口改动的完成门禁。
 - Owner / next action：同类问题再次出现时评估把「入口改动必须跑进程级 smoke」晋升为 AGENTS.md 条款或 CI 条件门禁。
 
+### LESSON-20261122-03：以 prop 为 key 的组件内重置 effect 会吞掉挂载后立刻发起的异步状态
+
+- Rule：组件用 `useState('') + useEffect 比较 key` 做「切换对象时重置」时，重置 effect 会在首次挂载后必然运行一次；若用户在首帧内触发异步加载（点击展开、自动预取），结果会被这次重置清空。key 状态应初始化为当前 prop（`useState(channelId)`），或改用父层 `key` 强制重挂载。
+- Why：DESIGN-002 详情抽屉 `DeliverySection` 的 `historyKey` 初始为 `''`，挂载后的重置 effect 与「查看历史修订」的 fetch 竞争：CI 慢机器上 fetch 在重置前完成时 `setHistoryOpen(false)`/`setHistory(undefined)` 吞掉结果，历史修订间歇性打不开；本地快机器 fetch 慢于重置所以全绿。
+- Feature：DESIGN-002
+- Evidence：2026-11-22 CI run 44982291853 `drills into goal and review pack history` 失败；本地插桩日志证实 `TOGGLE-OPEN → RESET → HISTORY-SET` 顺序；`historyKey` 改为 `useState(channelId)` 后完整 App 套件连续 5 次全绿（修复前 3 次内可复现失败）。同 run 还暴露 UTC 时区 `-0` 断言问题（`-getTimezoneOffset()` 在 UTC 下为 `-0`），断言改为 `|| 0` 归一化。
+- Seen：1（2026-11-22）
+- Severity：normal
+- Status：Observed
+- Enforcement：尚未晋升为全仓规则；本次以组件修复 + 既有回归作为门禁。
+- Owner / next action：同类问题再次出现时晋升为「key-reset effect 必须初始化自当前 prop」的 Lint 规则或 review checklist。
+
 <!--
 ### LESSON-YYYYMMDD-NN：简短标题
 
