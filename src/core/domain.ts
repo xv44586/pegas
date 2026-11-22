@@ -280,8 +280,58 @@ export interface RunActivityEntry {
   step?: number
   label: string
   detail?: string
+  semantic?: ToolSemantic
   createdAt: string
   updatedAt: string
+}
+
+/** Derived, bounded projection of a tool call for dedicated result views. */
+export type ToolSemantic =
+  | {
+      kind: 'shell'
+      command: string
+      description?: string
+      output?: string
+      outputTruncated?: boolean
+      exitCode?: number
+      interrupted?: boolean
+    }
+  | {
+      kind: 'file_read'
+      path: string
+      lineCount?: number
+      preview?: string
+      previewTruncated?: boolean
+    }
+  | {
+      kind: 'file_edit'
+      path: string
+      mode: 'edit' | 'write' | 'patch'
+      additions: number
+      deletions: number
+      hunks: DiffHunk[]
+      diffTruncated?: boolean
+    }
+  | {
+      kind: 'search'
+      query: string
+      path?: string
+      preview?: string
+      previewTruncated?: boolean
+    }
+  | {
+      kind: 'web'
+      url?: string
+      query?: string
+      preview?: string
+      previewTruncated?: boolean
+    }
+  | { kind: 'unknown' }
+
+export interface DiffHunk {
+  oldStart?: number
+  newStart?: number
+  lines: { type: 'context' | 'add' | 'del'; text: string }[]
 }
 
 export interface RunActivityReport {

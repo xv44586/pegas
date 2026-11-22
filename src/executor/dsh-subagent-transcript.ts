@@ -4,6 +4,7 @@ import { zstdDecompressSync } from 'node:zlib'
 
 import type { SubagentTranscript } from '../core/domain.js'
 import type { RunActivityEntry } from '../core/domain.js'
+import { buildToolSemantic } from '../activity/tool-semantics.js'
 
 /**
  * Post-hoc reader for DSH child-session durable logs. The `--json` stream only
@@ -266,6 +267,10 @@ function projectTranscript(
           tool,
           label: tool,
           ...(input !== undefined ? { detail: input } : {}),
+          semantic: buildToolSemantic({
+            tool,
+            ...(input !== undefined ? { input } : {}),
+          }),
         },
         record.time,
       )
@@ -294,12 +299,23 @@ function projectTranscript(
       const target = index !== undefined ? entries[index] : undefined
       if (target) {
         target.status = status
+        const restoredResult = result ? restore(result) : undefined
         target.detail = [
           target.detail ?? '',
-          result ? `\n[结果]\n${restore(result)}` : '',
+          restoredResult ? `\n[结果]\n${restoredResult}` : '',
         ]
           .join('')
           .slice(0, MAX_DETAIL_CHARACTERS)
+        target.semantic = buildToolSemantic(
+          {
+            tool: target.tool ?? '',
+            input: target.detail.split('\n[结果]\n')[0],
+          },
+          {
+            status,
+            ...(restoredResult !== undefined ? { result: restoredResult } : {}),
+          },
+        )
         if (record.time !== undefined) {
           target.updatedAt = new Date(record.time).toISOString()
         }

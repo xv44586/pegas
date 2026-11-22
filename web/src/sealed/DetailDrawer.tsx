@@ -41,6 +41,8 @@ import type {
   WorkerProfileResponse,
 } from '../types'
 import { PegasMascot } from './PegasMascot'
+import { ActivityTimeline } from './ActivityTimeline'
+import { isDelegationEntry } from './activityModel'
 import {
   formatRelativeTime,
   needsOutboxResolution,
@@ -1154,18 +1156,21 @@ function TaskDetail({
                                 条。
                               </p>
                             )}
-                            <ol className="run-transcript">
-                              {activity.entries.map(entry => (
-                                <TranscriptEntry
-                                  entry={entry}
-                                  key={entry.seq}
-                                  runId={historyRun.id}
-                                  subagents={subagents}
-                                  subagentError={subagentError}
-                                  onLoadSubagents={onLoadRunSubagents}
-                                />
-                              ))}
-                            </ol>
+                            <ActivityTimeline
+                              entries={activity.entries}
+                              renderDelegation={entry =>
+                                isDelegationEntry(entry) ? (
+                                  <SubagentCard
+                                    delegation={parseDelegation(entry.detail)}
+                                    entry={entry}
+                                    runId={historyRun.id}
+                                    subagents={subagents}
+                                    subagentError={subagentError}
+                                    onLoadSubagents={onLoadRunSubagents}
+                                  />
+                                ) : undefined
+                              }
+                            />
                           </>
                         )}
                         {subagentError && (
@@ -2568,96 +2573,6 @@ function stateDescription(state: string, run?: Run): string {
   return '上下文已保存，服务端尚未返回可执行的下一步。'
 }
 
-function TranscriptEntry({
-  entry,
-  runId,
-  subagents,
-  subagentError,
-  onLoadSubagents,
-}: {
-  entry: RunActivityEntry
-  runId?: string
-  subagents?: SubagentTranscript[]
-  subagentError?: string
-  onLoadSubagents?: (runId: string) => void
-}) {
-  if (entry.kind === 'step') {
-    return (
-      <li className="transcript-step">
-        <Clock3 size={13} />
-        <span>{entry.label}</span>
-        <small>{formatRelativeTime(entry.createdAt)}</small>
-      </li>
-    )
-  }
-  if (entry.kind === 'tool_call') {
-    const delegation =
-      entry.tool === 'subagent' || entry.tool === 'subagent_fork'
-        ? parseDelegation(entry.detail)
-        : undefined
-    if (delegation) {
-      return (
-        <SubagentCard
-          delegation={delegation}
-          entry={entry}
-          runId={runId}
-          subagents={subagents}
-          subagentError={subagentError}
-          onLoadSubagents={onLoadSubagents}
-        />
-      )
-    }
-    return (
-      <li className="transcript-tool">
-        <details>
-          <summary>
-            <FileText size={13} />
-            <span>
-              {entry.tool ?? entry.label}
-              {entry.status === 'error' && (
-                <em className="transcript-error">失败</em>
-              )}
-              {entry.status === 'started' && (
-                <em className="transcript-pending">执行中</em>
-              )}
-            </span>
-            <small>{formatRelativeTime(entry.createdAt)}</small>
-          </summary>
-          {entry.detail ? (
-            <pre className="transcript-detail">{entry.detail}</pre>
-          ) : (
-            <p className="drawer-footnote">没有留存参数或输出。</p>
-          )}
-        </details>
-      </li>
-    )
-  }
-  if (entry.kind === 'thinking') {
-    return (
-      <li className="transcript-thinking">
-        <details>
-          <summary>
-            <CircleHelp size={13} />
-            <span>推理</span>
-            <small>{formatRelativeTime(entry.createdAt)}</small>
-          </summary>
-          <div className="transcript-markdown">
-            <MarkdownMessage content={entry.detail ?? entry.label} />
-          </div>
-        </details>
-      </li>
-    )
-  }
-  return (
-    <li className="transcript-message">
-      <div className="transcript-markdown">
-        <MarkdownMessage content={entry.detail ?? entry.label} />
-      </div>
-      <small>{formatRelativeTime(entry.createdAt)}</small>
-    </li>
-  )
-}
-
 interface DelegationDetail {
   description?: string
   prompt?: string
@@ -2746,11 +2661,7 @@ function SubagentCard({
                 {child.entries.filter(item => item.kind === 'tool_call').length}{' '}
                 次{child.truncated && ' · 仅显示部分记录'}
               </summary>
-              <ol className="run-transcript">
-                {child.entries.map(item => (
-                  <TranscriptEntry entry={item} key={item.seq} />
-                ))}
-              </ol>
+              <ActivityTimeline entries={child.entries} />
             </details>
           ))
         ) : (

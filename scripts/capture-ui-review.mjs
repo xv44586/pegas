@@ -552,6 +552,9 @@ try {
     'task-running',
     'task-waiting',
     'task-failed',
+    'task-activity',
+    'task-activity-open',
+    'task-activity-running',
     'preview-file',
     'preview-image',
     'preview-video',
@@ -574,6 +577,28 @@ try {
       }, fixture)
       await fixturePage.goto(`http://127.0.0.1:${String(port)}/`)
       await fixturePage.getByRole('button', { name: '关闭详情' }).waitFor()
+      if (fixture.startsWith('task-activity')) {
+        await fixturePage.getByText('工作流程记录', { exact: false }).click()
+        if (fixture === 'task-activity-open') {
+          await fixturePage
+            .locator('.activity-batch > details > summary')
+            .filter({ hasText: '运行了 2 条命令' })
+            .click()
+          await fixturePage
+            .locator('.activity-tool')
+            .filter({ hasText: 'git merge origin/main' })
+            .locator('summary')
+            .click()
+          await fixturePage
+            .locator('.activity-tool')
+            .filter({ hasText: '已编辑' })
+            .locator('summary')
+            .click()
+          await fixturePage
+            .locator('.activity-card.diff-card')
+            .scrollIntoViewIfNeeded()
+        }
+      }
       await capture(fixturePage, `${size}-${fixture}.png`, `${size}-${fixture}`)
       await fixturePage.close()
     }

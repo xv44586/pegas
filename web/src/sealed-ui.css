@@ -3035,7 +3035,7 @@ kbd {
   height: 100dvh;
   margin-left: auto;
   max-width: 100%;
-  width: 470px;
+  width: 560px;
 }
 .drawer-header {
   align-items: center;
@@ -3386,6 +3386,7 @@ kbd {
   color: var(--ink);
   display: grid;
   gap: 3px;
+  min-width: 0;
 }
 .progress-list > li small {
   color: var(--muted);
@@ -3395,40 +3396,6 @@ kbd {
   display: flex;
   gap: 10px;
   justify-content: space-between;
-}
-.run-transcript {
-  display: grid;
-  gap: 10px;
-  list-style: none;
-  margin: 6px 0 0;
-  padding: 0;
-}
-.run-transcript > li {
-  font-size: 13px;
-}
-.transcript-step {
-  align-items: center;
-  color: var(--muted);
-  display: flex;
-  font-size: 12px;
-  gap: 6px;
-}
-.transcript-step small {
-  margin-left: auto;
-}
-.transcript-tool summary,
-.transcript-thinking summary {
-  align-items: center;
-  color: var(--ink);
-  cursor: pointer;
-  display: flex;
-  gap: 6px;
-  list-style: none;
-}
-.transcript-tool summary small,
-.transcript-thinking summary small {
-  color: var(--muted);
-  margin-left: auto;
 }
 .transcript-error {
   color: var(--critical);
@@ -3452,15 +3419,337 @@ kbd {
   white-space: pre-wrap;
   word-break: break-word;
 }
-.transcript-message {
-  border-left: 2px solid var(--line);
-  padding-left: 10px;
-}
-.transcript-message > small {
-  color: var(--muted);
-}
 .transcript-markdown {
   margin-top: 4px;
+}
+.activity-timeline {
+  border-left: 1px solid var(--line);
+  display: grid;
+  font-size: 13px;
+  gap: 2px;
+  list-style: none;
+  margin: 8px 0 0 6px;
+  min-width: 0;
+  padding: 2px 0 2px 14px;
+}
+.activity-timeline > li {
+  min-width: 0;
+}
+.activity-timeline summary {
+  align-items: center;
+  border-radius: 8px;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  gap: 8px;
+  list-style: none;
+  min-height: 32px;
+  min-width: 0;
+  padding: 4px 8px;
+}
+.activity-timeline summary::-webkit-details-marker {
+  display: none;
+}
+.activity-timeline summary:hover,
+.activity-timeline summary:focus-visible {
+  background: var(--surface-hover);
+  color: var(--ink-soft);
+}
+.activity-icon {
+  align-items: center;
+  display: inline-flex;
+  flex: none;
+  justify-content: center;
+}
+.activity-running {
+  align-items: center;
+  display: inline-flex;
+  position: relative;
+}
+.activity-spinner {
+  animation: spin 900ms linear infinite;
+}
+.activity-running .activity-spinner {
+  background: var(--surface-raised);
+  border-radius: 50%;
+  bottom: -4px;
+  position: absolute;
+  right: -5px;
+}
+.activity-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.activity-title,
+.activity-subject {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.activity-tool .activity-title {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+}
+.activity-subject {
+  color: var(--ink-soft);
+}
+.activity-tool .activity-subject {
+  text-decoration: underline;
+  text-decoration-color: var(--line-strong);
+  text-underline-offset: 3px;
+}
+.activity-diffstat {
+  font-variant-numeric: tabular-nums;
+}
+.activity-diffstat .is-add {
+  color: var(--positive);
+  font-weight: 600;
+}
+.activity-diffstat .is-del {
+  color: var(--critical);
+  font-weight: 600;
+}
+.activity-error {
+  color: var(--critical);
+  font-style: normal;
+  margin-left: 6px;
+}
+.activity-chevron {
+  color: var(--faint);
+  flex: none;
+  margin-left: auto;
+  opacity: 0;
+  transition:
+    transform 160ms ease,
+    opacity 160ms ease;
+}
+.activity-timeline summary:hover .activity-chevron,
+.activity-timeline summary:focus-visible .activity-chevron,
+.activity-timeline details[open] > summary .activity-chevron {
+  opacity: 1;
+}
+.activity-timeline details[open] > summary .activity-chevron {
+  transform: rotate(180deg);
+}
+@media (hover: none) {
+  .activity-chevron {
+    opacity: 1;
+  }
+}
+.activity-batch-items {
+  border-left: 1px solid var(--line);
+  display: grid;
+  gap: 2px;
+  list-style: none;
+  margin: 2px 0 6px 15px;
+  min-width: 0;
+  padding: 2px 0 2px 8px;
+}
+.activity-batch-items > li {
+  min-width: 0;
+}
+.activity-timeline details {
+  min-width: 0;
+}
+.activity-step {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  font-size: 12px;
+  gap: 8px;
+  min-height: 28px;
+  padding: 2px 8px;
+}
+.activity-step small {
+  color: var(--faint);
+  margin-left: auto;
+}
+.activity-message {
+  padding: 4px 8px;
+}
+.activity-message > small {
+  color: var(--faint);
+  font-size: 11px;
+}
+.activity-prose {
+  color: var(--ink-soft);
+  margin: 2px 8px 8px;
+}
+.activity-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  margin: 4px 0 8px 8px;
+  overflow: hidden;
+}
+.activity-card-header {
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  display: flex;
+  font-size: 12px;
+  gap: 8px;
+  min-height: 34px;
+  padding: 4px 10px;
+}
+.activity-copy {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+  margin-left: auto;
+}
+.activity-copy button {
+  align-items: center;
+  background: transparent;
+  border-radius: 6px;
+  color: var(--muted);
+  display: inline-flex;
+  height: 26px;
+  justify-content: center;
+  width: 26px;
+}
+.activity-copy button:hover,
+.activity-copy button:focus-visible {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+@media (hover: hover) {
+  .activity-copy button {
+    opacity: 0;
+  }
+  .activity-card:hover .activity-copy button,
+  .activity-copy button:focus-visible,
+  .activity-copy button[data-copied],
+  .activity-copy button[data-failed] {
+    opacity: 1;
+  }
+}
+.activity-copy-tip {
+  color: var(--positive);
+  font-size: 11px;
+}
+.activity-copy button[data-failed] + .activity-copy-tip {
+  color: var(--critical);
+}
+.shell-command,
+.shell-output,
+.preview-body,
+.activity-raw {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: 10px 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.shell-command {
+  color: var(--ink);
+}
+.shell-prompt {
+  color: var(--faint);
+  user-select: none;
+}
+.shell-output {
+  border-top: 1px dashed var(--line);
+  color: var(--ink-soft);
+}
+.shell-footer {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  font-size: 12px;
+  gap: 6px;
+  justify-content: flex-end;
+  padding: 6px 12px 8px;
+}
+.shell-footer.is-ok {
+  color: var(--positive);
+}
+.shell-footer.is-error {
+  color: var(--critical);
+}
+.diff-path {
+  flex: 1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.diff-body {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.7;
+  max-height: 360px;
+  overflow: auto;
+}
+.diff-hunk-header {
+  background: var(--surface-hover);
+  color: var(--muted);
+  padding: 2px 10px;
+}
+.diff-line {
+  display: grid;
+  grid-template-columns: 34px 34px 16px 1fr;
+}
+.diff-line.is-add {
+  background: var(--positive-soft);
+}
+.diff-line.is-del {
+  background: var(--critical-soft);
+}
+.diff-gutter {
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+  padding-right: 8px;
+  text-align: right;
+  user-select: none;
+}
+.diff-line.is-add .diff-gutter {
+  color: var(--positive);
+}
+.diff-line.is-del .diff-gutter {
+  color: var(--critical);
+}
+.diff-marker {
+  color: var(--faint);
+  text-align: center;
+  user-select: none;
+}
+.diff-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  padding-right: 10px;
+  white-space: pre-wrap;
+}
+.preview-meta {
+  color: var(--faint);
+  flex: none;
+  font-size: 11px;
+}
+.preview-body {
+  color: var(--ink-soft);
+}
+.activity-raw {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--ink-soft);
+  margin: 4px 0 8px 8px;
+}
+.activity-empty {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 6px 10px 8px;
+}
+.activity-empty.is-error {
+  color: var(--critical);
 }
 .state-hero-markdown {
   font-size: 14px;

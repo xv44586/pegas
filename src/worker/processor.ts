@@ -5,6 +5,7 @@ import type {
   SubagentTranscript,
   Task,
 } from '../core/domain.js'
+import { buildToolSemantic } from '../activity/tool-semantics.js'
 import type { RunExecutor, ToolApprovalGrant } from '../executor/executor.js'
 import type { Logger } from '../observability/logger.js'
 import type { MetricsRegistry } from '../observability/metrics.js'
@@ -879,6 +880,10 @@ export async function executeClaimedRun(
             tool: event.tool,
             label: event.tool,
             ...(event.input !== undefined ? { detail: event.input } : {}),
+            semantic: buildToolSemantic({
+              tool: event.tool,
+              ...(event.input !== undefined ? { input: event.input } : {}),
+            }),
           })
           return
         }

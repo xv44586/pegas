@@ -1,0 +1,316 @@
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
+
+import { describe, expect, it } from 'vitest'
+
+import {
+  buildToolSemantic,
+  splitToolDetail,
+} from '../src/activity/tool-semantics.js'
+import { PegasStore } from '../src/storage/sqlite-store.js'
+
+describe('EXEC-006 tool semantics projection', () => {
+  it('projects bash calls into shell semantics with command and output', () => {
+    const semantic = buildToolSemantic(
+      {
+        tool: 'bash',
+        input: JSON.stringify({
+          command: 'git status --short',
+          description: '检查工作区状态',
+        }),
+      },
+      { status: 'completed', result: ' M web/src/App.tsx\n' },
+    )
+    expect(semantic).toMatchObject({
+      kind: 'shell',
+      command: 'git status --short',
+      description: '检查工作区状态',
+      output: ' M web/src/App.tsx\n',
+    })
+  })
+
+  it('recovers the command from clipped legacy JSON input', () => {
+    const clipped = `{"command":"cd /tmp && echo ${'x'.repeat(9000)}`.slice(
+      0,
+      8192,
+    )
+    const semantic = buildToolSemantic({ tool: 'bash', input: clipped })
+    expect(semantic.kind).toBe('shell')
+    if (semantic.kind !== 'shell') throw new Error('expected shell')
+    expect(semantic.command.startsWith('cd /tmp && echo ')).toBe(true)
+  })
+
+  it('bounds long shell output and flags truncation honestly', () => {
+    const semantic = buildToolSemantic(
+      { tool: 'bash', input: '{"command":"cat big.log"}' },
+      { status: 'completed', result: 'y'.repeat(20_000) },
+    )
+    if (semantic.kind !== 'shell') throw new Error('expected shell')
+    expect(semantic.output?.length).toBe(12_000)
+    expect(semantic.outputTruncated).toBe(true)
+  })
+
+  it('projects edit calls into a context diff with add/del counts', () => {
+    const semantic = buildToolSemantic(
+      {
+        tool: 'edit',
+        input: JSON.stringify({
+          file_path: '/repo/api.ts',
+          old_string: 'const a = 1\nconst b = 2\nconst c = 3',
+          new_string: 'const a = 1\nconst b = 22\nconst c = 3',
+        }),
+      },
+      { status: 'completed', result: 'ok' },
+    )
+    expect(semantic).toMatchObject({
+      kind: 'file_edit',
+      path: '/repo/api.ts',
+      mode: 'edit',
+      additions: 1,
+      deletions: 1,
+    })
+    if (semantic.kind !== 'file_edit') throw new Error('expected file_edit')
+    const lines = semantic.hunks[0]?.lines ?? []
+    expect(lines.map(line => line.type)).toEqual([
+      'context',
+      'del',
+      'add',
+      'context',
+    ])
+    expect(lines.find(line => line.type === 'del')?.text).toBe('const b = 2')
+    expect(lines.find(line => line.type === 'add')?.text).toBe('const b = 22')
+  })
+
+  it('projects write calls into an all-additions view', () => {
+    const semantic = buildToolSemantic({
+      tool: 'write',
+      input: JSON.stringify({
+        file_path: '/repo/notes.md',
+        content: '# 标题\n\n正文\n',
+      }),
+    })
+    expect(semantic).toMatchObject({
+      kind: 'file_edit',
+      mode: 'write',
+      additions: 3,
+      deletions: 0,
+    })
+    if (semantic.kind !== 'file_edit') throw new Error('expected file_edit')
+    expect(semantic.hunks[0]?.newStart).toBe(1)
+    expect(semantic.hunks[0]?.lines.every(line => line.type === 'add')).toBe(
+      true,
+    )
+  })
+
+  it('parses single-file apply_patch hunks with absolute line starts', () => {
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: src/api.ts',
+      '@@ -74,7 +74,6 @@',
+      '   async linkPreview(url: string): Promise<LinkPreview> {',
+      '-<<<<<<< HEAD',
+      '     return projectLinkPreview(raw)',
+      '-=======',
+      '+  }',
+      '   async runActivity(runId: string): Promise<RunActivityReport> {',
+      '*** End Patch',
+    ].join('\n')
+    const semantic = buildToolSemantic({
+      tool: 'apply_patch',
+      input: JSON.stringify({ input: patch }),
+    })
+    expect(semantic).toMatchObject({
+      kind: 'file_edit',
+      path: 'src/api.ts',
+      mode: 'patch',
+      additions: 1,
+      deletions: 2,
+    })
+    if (semantic.kind !== 'file_edit') throw new Error('expected file_edit')
+    expect(semantic.hunks[0]?.oldStart).toBe(74)
+    expect(semantic.hunks[0]?.newStart).toBe(74)
+  })
+
+  it('degrades multi-file or malformed patches to unknown', () => {
+    const multi = [
+      '*** Begin Patch',
+      '*** Update File: a.ts',
+      '@@',
+      '-a',
+      '*** Update File: b.ts',
+      '@@',
+      '-b',
+      '*** End Patch',
+    ].join('\n')
+    expect(
+      buildToolSemantic({
+        tool: 'apply_patch',
+        input: JSON.stringify({ input: multi }),
+      }),
+    ).toEqual({ kind: 'unknown' })
+    expect(
+      buildToolSemantic({ tool: 'apply_patch', input: 'not a patch' }),
+    ).toEqual({ kind: 'unknown' })
+  })
+
+  it('projects read/search/web calls and degrades unknown tools', () => {
+    const read = buildToolSemantic(
+      { tool: 'read', input: '{"file_path":"/repo/README.md"}' },
+      {
+        status: 'completed',
+        result:
+          '<path>/repo/README.md</path>\n<type>file</type>\n<content>\n1: # Pegas\n2: intro\n</content>',
+      },
+    )
+    expect(read).toMatchObject({
+      kind: 'file_read',
+      path: '/repo/README.md',
+      lineCount: 2,
+    })
+    const search = buildToolSemantic({
+      tool: 'grep',
+      input: '{"pattern":"runActivity","path":"web/src"}',
+    })
+    expect(search).toMatchObject({
+      kind: 'search',
+      query: 'runActivity',
+      path: 'web/src',
+    })
+    const web = buildToolSemantic({
+      tool: 'web_fetch',
+      input: '{"url":"https://example.com"}',
+    })
+    expect(web).toMatchObject({ kind: 'web', url: 'https://example.com' })
+    expect(buildToolSemantic({ tool: 'wait_agent', input: '{}' })).toEqual({
+      kind: 'unknown',
+    })
+    expect(buildToolSemantic({ tool: 'bash', input: 'broken json' })).toEqual({
+      kind: 'unknown',
+    })
+  })
+
+  it('splits legacy merged detail strings without losing content', () => {
+    expect(splitToolDetail('{"command":"ls"}\n[结果]\nfile-a')).toEqual({
+      input: '{"command":"ls"}',
+      result: 'file-a',
+    })
+    expect(splitToolDetail('{"command":"ls"}')).toEqual({
+      input: '{"command":"ls"}',
+    })
+    expect(splitToolDetail(undefined)).toEqual({})
+  })
+})
+
+describe('EXEC-006 store semantic persistence and legacy derivation', () => {
+  function claimedRun(store: PegasStore): { runId: string } {
+    const event = store.enqueueEvent({
+      userId: 'owner',
+      type: 'user.message',
+      source: 'web',
+      authenticatedActor: 'human',
+      payload: { text: '语义化执行记录' },
+    }).event
+    const created = store.applyRoutingDecision(
+      event,
+      {
+        kind: 'create_task',
+        title: '语义化执行记录',
+        goal: '语义化执行记录',
+        input: '语义化执行记录',
+        reason: 't',
+      },
+      'echo-test',
+    )
+    store.claimNextRun('semantic-worker')
+    return { runId: created.run.id }
+  }
+
+  it('persists semantic on append and refreshes it on completion', () => {
+    const store = new PegasStore(':memory:')
+    const { runId } = claimedRun(store)
+    const input = JSON.stringify({ command: 'pnpm check' })
+    store.appendRunActivity(runId, 'semantic-worker', {
+      kind: 'tool_call',
+      status: 'started',
+      callId: 'call-sem',
+      tool: 'bash',
+      label: 'bash',
+      detail: input,
+      semantic: buildToolSemantic({ tool: 'bash', input }),
+    })
+    let report = store.listRunActivity(runId, 'owner')
+    expect(report?.entries[0]?.semantic).toMatchObject({
+      kind: 'shell',
+      command: 'pnpm check',
+    })
+    expect(report?.entries[0]?.detail).toBe(input)
+    store.completeRunActivityToolCall(runId, 'semantic-worker', 'call-sem', {
+      status: 'completed',
+      result: 'all green',
+    })
+    report = store.listRunActivity(runId, 'owner')
+    const entry = report?.entries[0]
+    expect(entry?.detail).toBe(`${input}\n[结果]\nall green`)
+    expect(entry?.semantic).toMatchObject({
+      kind: 'shell',
+      command: 'pnpm check',
+      output: 'all green',
+    })
+    store.close()
+  })
+
+  it('derives semantics for legacy bare-string rows on read', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'pegas-semantic-'))
+    const path = join(directory, 'pegas.sqlite')
+    try {
+      const store = new PegasStore(path)
+      const { runId } = claimedRun(store)
+      const input = JSON.stringify({
+        file_path: '/repo/api.ts',
+        old_string: 'a',
+        new_string: 'b',
+      })
+      store.appendRunActivity(runId, 'semantic-worker', {
+        kind: 'tool_call',
+        status: 'started',
+        callId: 'call-legacy',
+        tool: 'edit',
+        label: 'edit',
+        detail: input,
+      })
+      store.completeRunActivityToolCall(
+        runId,
+        'semantic-worker',
+        'call-legacy',
+        {
+          status: 'completed',
+          result: 'ok',
+        },
+      )
+      store.close()
+      // Rewrite the row into the pre-feature bare-string encoding.
+      const database = new DatabaseSync(path)
+      database
+        .prepare(
+          `UPDATE run_activity_entries SET detail_json = ? WHERE call_id = 'call-legacy'`,
+        )
+        .run(JSON.stringify(`${input}\n[结果]\nok`))
+      database.close()
+      const reopened = new PegasStore(path)
+      const report = reopened.listRunActivity(runId, 'owner')
+      const entry = report?.entries[0]
+      expect(entry?.detail).toBe(`${input}\n[结果]\nok`)
+      expect(entry?.semantic).toMatchObject({
+        kind: 'file_edit',
+        path: '/repo/api.ts',
+        additions: 1,
+        deletions: 1,
+      })
+      reopened.close()
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+})

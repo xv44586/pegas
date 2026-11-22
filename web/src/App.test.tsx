@@ -24,6 +24,7 @@ import type {
   ReviewPack,
   ReviewProjection,
   Run,
+  RunActivityEntry,
   SettingsResponse,
   Snapshot,
   TaskArtifact,
@@ -3288,6 +3289,11 @@ describe('sealed Pegas UI', () => {
               label: 'shell',
               detail:
                 '{"command":"curl https://example.com/pricing"}\n[结果]\nTeam $30',
+              semantic: {
+                kind: 'shell',
+                command: 'curl https://example.com/pricing',
+                output: 'Team $30',
+              },
               createdAt: '2026-11-19T08:00:20.000Z',
               updatedAt: '2026-11-19T08:00:30.000Z',
             },
@@ -3326,15 +3332,20 @@ describe('sealed Pegas UI', () => {
     expect(
       within(taskDrawer).queryByRole('button', { name: /查看完整记录/ }),
     ).toBeNull()
-    fireEvent.click(within(taskDrawer).getByText('shell'))
-    expect(
-      within(taskDrawer).getByText(/curl https:\/\/example.com\/pricing/),
-    ).toBeTruthy()
+    const curlHeadline = within(taskDrawer).getAllByText(
+      'curl https://example.com/pricing',
+    )[0]
+    if (!curlHeadline) throw new Error('expected shell headline')
+    fireEvent.click(curlHeadline)
+    expect(taskDrawer.querySelector('.shell-card')).toBeTruthy()
     expect(within(taskDrawer).getByText(/Team \$30/)).toBeTruthy()
+    expect(
+      within(taskDrawer).getByRole('button', { name: '复制命令与输出' }),
+    ).toBeTruthy()
     fireEvent.click(within(taskDrawer).getByText('推理'))
     expect(within(taskDrawer).getByText('年付').tagName).toBe('EM')
     const messageStrong = taskDrawer.querySelectorAll(
-      '.transcript-message strong',
+      '.activity-message strong',
     )
     expect(
       [...messageStrong].some(node => node.textContent === '$30/人/月'),
@@ -3406,6 +3417,11 @@ describe('sealed Pegas UI', () => {
                     tool: 'bash',
                     label: 'bash',
                     detail: '{"command":"ls docs | wc -l"}\n[结果]\n29',
+                    semantic: {
+                      kind: 'shell',
+                      command: 'ls docs | wc -l',
+                      output: '29',
+                    },
                     createdAt: '2026-11-19T08:00:15.000Z',
                     updatedAt: '2026-11-19T08:00:16.000Z',
                   },
@@ -3447,8 +3463,11 @@ describe('sealed Pegas UI', () => {
     fireEvent.click(
       await within(taskDrawer).findByText(/子 agent 执行记录 · 工具 1 次/),
     )
-    fireEvent.click(within(taskDrawer).getByText('bash'))
-    expect(within(taskDrawer).getByText(/ls docs \| wc -l/)).toBeTruthy()
+    const childHeadline = within(taskDrawer).getAllByText('ls docs | wc -l')[0]
+    if (!childHeadline) throw new Error('expected child shell headline')
+    fireEvent.click(childHeadline)
+    expect(taskDrawer.querySelector('.shell-card')).toBeTruthy()
+    expect(within(taskDrawer).getAllByText('29').length).toBeGreaterThan(0)
     expect(
       within(taskDrawer).getAllByText('docs 目录共 29 个文件。').length,
     ).toBeGreaterThan(0)
@@ -5990,6 +6009,11 @@ describe('sealed Pegas UI', () => {
               tool: 'read',
               label: 'read',
               detail: '{"path":"README.md"}\n[结果]\n# Pegas',
+              semantic: {
+                kind: 'file_read',
+                path: 'README.md',
+                preview: '# Pegas',
+              },
               createdAt: '2026-11-19T08:02:10.000Z',
               updatedAt: '2026-11-19T08:02:12.000Z',
             },
@@ -6039,8 +6063,8 @@ describe('sealed Pegas UI', () => {
     fireEvent.click(
       within(drawer).getByText(/工作流程记录 · 工具 2 次 · 1 步推理/),
     )
-    fireEvent.click(await within(drawer).findByText('read'))
-    expect(within(drawer).getByText(/README\.md/)).toBeTruthy()
+    fireEvent.click(await within(drawer).findByText('已读取'))
+    expect(within(drawer).getAllByText('README.md').length).toBeGreaterThan(0)
     expect(within(drawer).getByText('第 1 步完成')).toBeTruthy()
     fireEvent.click(within(drawer).getByText('test'))
     expect(within(drawer).getByText(/pnpm test/)).toBeTruthy()
@@ -6051,6 +6075,250 @@ describe('sealed Pegas UI', () => {
     expect(
       screen.queryByText('执行中 · 工具调用 2 次 · 已完成 1 步推理'),
     ).toBeNull()
+  })
+
+  it('batches consecutive semantic tool calls and renders shell/diff cards', async () => {
+    const entries: RunActivityEntry[] = [
+      {
+        seq: 1,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-git',
+        tool: 'bash',
+        label: 'bash',
+        semantic: {
+          kind: 'shell',
+          command: 'git status --short',
+          output: ' M web/src/api.ts',
+        },
+        createdAt: '2026-11-19T08:00:10.000Z',
+        updatedAt: '2026-11-19T08:00:12.000Z',
+      },
+      {
+        seq: 2,
+        kind: 'tool_call',
+        status: 'error',
+        callId: 'call-merge',
+        tool: 'bash',
+        label: 'bash',
+        semantic: {
+          kind: 'shell',
+          command: 'git merge origin/main --no-edit',
+          output: 'CONFLICT (content): Merge conflict in web/src/api.ts',
+        },
+        createdAt: '2026-11-19T08:00:14.000Z',
+        updatedAt: '2026-11-19T08:00:16.000Z',
+      },
+      {
+        seq: 3,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-read-a',
+        tool: 'read',
+        label: 'read',
+        semantic: {
+          kind: 'file_read',
+          path: 'web/src/api.ts',
+          lineCount: 96,
+          preview: '74:   async linkPreview(url: string) {',
+        },
+        createdAt: '2026-11-19T08:00:18.000Z',
+        updatedAt: '2026-11-19T08:00:19.000Z',
+      },
+      {
+        seq: 4,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-read-b',
+        tool: 'read',
+        label: 'read',
+        semantic: { kind: 'file_read', path: 'web/src/types.ts' },
+        createdAt: '2026-11-19T08:00:20.000Z',
+        updatedAt: '2026-11-19T08:00:21.000Z',
+      },
+      {
+        seq: 5,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-edit',
+        tool: 'edit',
+        label: 'edit',
+        semantic: {
+          kind: 'file_edit',
+          path: 'web/src/api.ts',
+          mode: 'edit',
+          additions: 2,
+          deletions: 3,
+          hunks: [
+            {
+              lines: [
+                { type: 'del', text: '<<<<<<< HEAD' },
+                { type: 'add', text: '  }' },
+                { type: 'add', text: '' },
+                {
+                  type: 'context',
+                  text: '  async runActivity(runId: string) {',
+                },
+                { type: 'del', text: '=======' },
+                { type: 'del', text: '>>>>>>> origin/main' },
+              ],
+            },
+          ],
+        },
+        createdAt: '2026-11-19T08:00:22.000Z',
+        updatedAt: '2026-11-19T08:00:24.000Z',
+      },
+      {
+        seq: 6,
+        kind: 'tool_call',
+        status: 'started',
+        callId: 'call-smoke',
+        tool: 'bash',
+        label: 'bash',
+        semantic: { kind: 'shell', command: 'pnpm smoke' },
+        createdAt: '2026-11-19T08:00:26.000Z',
+        updatedAt: '2026-11-19T08:00:26.000Z',
+      },
+    ]
+    installSnapshotFetch(
+      {
+        ...snapshot,
+        channels: [{ ...channel, status: 'completed', canStop: false }],
+        runs: [{ ...run, status: 'completed', output: '合并完成。' }],
+      },
+      path => {
+        if (!path.startsWith('/v1/runs/run-1/activity?')) return undefined
+        return Response.json({
+          runId: 'run-1',
+          taskId: channel.id,
+          totalEntries: entries.length,
+          truncated: false,
+          entries,
+        })
+      },
+    )
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    })
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: new RegExp(channel.title) }),
+    )
+    const drawer = await screen.findByRole('dialog', { name: '工作详情' })
+    fireEvent.click(await within(drawer).findByText(/工作流程记录/))
+    const commandBatch = (
+      await within(drawer).findByText('运行了 2 条命令')
+    ).closest('details')
+    if (!commandBatch) throw new Error('expected command batch')
+    expect(
+      within(commandBatch as HTMLElement).getByText(/1 条失败/),
+    ).toBeTruthy()
+    expect(within(drawer).getByText('读取了 2 个文件')).toBeTruthy()
+    expect(within(drawer).getByText('已编辑')).toBeTruthy()
+    expect(within(drawer).getAllByText('+2').length).toBeGreaterThan(0)
+    expect(within(drawer).getAllByText('-3').length).toBeGreaterThan(0)
+    fireEvent.click(within(drawer).getByText(/运行了 2 条命令/))
+    const mergeHeadline = within(commandBatch as HTMLElement)
+      .getAllByText('git merge origin/main --no-edit')
+      .at(-1)
+    if (!mergeHeadline) throw new Error('expected merge headline')
+    fireEvent.click(mergeHeadline)
+    const shellCard = [
+      ...(commandBatch as HTMLElement).querySelectorAll('.shell-card'),
+    ].find(card => card.textContent.includes('CONFLICT'))
+    if (!shellCard) throw new Error('expected merge shell card')
+    expect(
+      within(shellCard as HTMLElement).getByText(/CONFLICT \(content\)/),
+    ).toBeTruthy()
+    expect(within(shellCard as HTMLElement).getByText('失败')).toBeTruthy()
+    const smokeHeadline = within(drawer).getAllByText('pnpm smoke')[0]
+    if (!smokeHeadline) throw new Error('expected running shell headline')
+    const runningRow = smokeHeadline.closest('details')
+    if (!runningRow) throw new Error('expected running shell row')
+    expect(runningRow.querySelector('.activity-spinner')).toBeTruthy()
+    fireEvent.click(smokeHeadline)
+    expect(within(runningRow as HTMLElement).getByText('执行中')).toBeTruthy()
+    fireEvent.click(within(drawer).getByText('已编辑'))
+    const diffCard = drawer.querySelector('.diff-card')
+    if (!diffCard) throw new Error('expected diff card')
+    expect(diffCard.querySelectorAll('.diff-line.is-add').length).toBe(2)
+    expect(diffCard.querySelectorAll('.diff-line.is-del').length).toBe(3)
+    expect(diffCard.querySelectorAll('.diff-gutter').length).toBeGreaterThan(0)
+    fireEvent.click(
+      within(diffCard as HTMLElement).getByRole('button', {
+        name: '复制 diff',
+      }),
+    )
+    await waitFor(() =>
+      expect(
+        within(diffCard as HTMLElement).getByRole('button', { name: '已复制' }),
+      ).toBeTruthy(),
+    )
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining('+  }'))
+    expect(
+      within(diffCard as HTMLElement).getByRole('status').textContent,
+    ).toBe('已复制')
+  })
+
+  it('keeps honest fallbacks for legacy and unknown tool records', async () => {
+    installSnapshotFetch(
+      {
+        ...snapshot,
+        channels: [{ ...channel, status: 'completed', canStop: false }],
+        runs: [{ ...run, status: 'completed', output: '完成。' }],
+      },
+      path => {
+        if (!path.startsWith('/v1/runs/run-1/activity?')) return undefined
+        return Response.json({
+          runId: 'run-1',
+          taskId: channel.id,
+          totalEntries: 2,
+          truncated: false,
+          entries: [
+            {
+              seq: 1,
+              kind: 'tool_call',
+              status: 'completed',
+              callId: 'call-legacy',
+              tool: 'test',
+              label: 'test',
+              detail: '{"command":"pnpm test"}\n[结果]\nall green',
+              createdAt: '2026-11-19T08:00:10.000Z',
+              updatedAt: '2026-11-19T08:00:12.000Z',
+            },
+            {
+              seq: 2,
+              kind: 'tool_call',
+              status: 'completed',
+              callId: 'call-empty',
+              tool: 'mystery',
+              label: 'mystery',
+              createdAt: '2026-11-19T08:00:14.000Z',
+              updatedAt: '2026-11-19T08:00:16.000Z',
+            },
+          ],
+        })
+      },
+    )
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: new RegExp(channel.title) }),
+    )
+    const drawer = await screen.findByRole('dialog', { name: '工作详情' })
+    fireEvent.click(await within(drawer).findByText(/工作流程记录/))
+    expect(within(drawer).queryByText(/运行了/)).toBeNull()
+    fireEvent.click(await within(drawer).findByText('test'))
+    expect(drawer.querySelector('.activity-raw')?.textContent).toContain(
+      'pnpm test',
+    )
+    fireEvent.click(within(drawer).getByText('mystery'))
+    expect(within(drawer).getByText('没有留存参数或输出。')).toBeTruthy()
   })
 
   it('renders collaboration relations in the task drawer', async () => {
