@@ -2,7 +2,7 @@
 
 > 状态：Living Document
 >
-> 更新日期：2026-11-22（QUALITY-001 CI actions 升级 node24 登记；DESIGN-004 字号/字重/层级收敛；PLAN-001 P2–P6 路由/执行/可观测性落地；DESIGN-003 聊天体验；CONV-005 链接悬停预览卡片）
+> 更新日期：2026-11-22（SELF-001 main-b22fa90-r1 生产发布；QUALITY-001 CI actions 升级 node24 登记；DESIGN-004 字号/字重/层级收敛；PLAN-001 P2–P6 路由/执行/可观测性落地；DESIGN-003 聊天体验；CONV-005 链接悬停预览卡片）
 
 Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查这里和代码，确认能力是否已经存在、权威实现在哪里、还缺什么；功能合入时必须同步更新对应条目。它不代替 Issue 或路线图，而是防止同一能力被不同入口重复实现。
 
@@ -108,6 +108,7 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - **当前证据（2026-11-22）**：worktree `quality-001-ci-node24`（分支 `feat/QUALITY-001-ci-node24`，基线 `3621a49`）。`.github/workflows/ci.yml` 四个 action 升级：checkout v4→v7、setup-node v4→v7、upload-artifact v4→v7、pnpm/action-setup v4→v6（经 gh api 核实四者 action.yml 均 `using: node24`；setup-node v7 移除 dummy NODE_AUTH_TOKEN 导出，本仓库未使用，无影响）。新增 `test/ci-actions-runtime.test.ts` 5 测试（四个 action 主版本下限 + PR head ref/node24 工具链不变），先红后绿。完整门禁：`pnpm check` 94 文件 / 918 测试全绿（statement 84.9%、branch 77.78%、function 89.53%、line 88.16%），格式、品牌资产、Lint、类型、Knip 与三端构建通过；`pnpm smoke` 通过。
 - **交付状态**：`DONE_WITH_CONCERNS`（已合并主分支 `363f72f` 并推送）。回滚只需 revert 合并提交 `363f72f`；纯 CI 配置变更，无数据库/API/运行时影响。
 - **远程 CI 验证（2026-11-22）**：推送 `origin/main`（`363f72f`）后 GitHub Actions run 44995511060 success（check job 约 2m40s，Post Run 显示 actions/checkout@v7、actions/setup-node@v7、pnpm/action-setup@v6）；check-runs annotations 为空——「Node.js 20 is deprecated」弃用警告已消失。主分支合并后 `pnpm smoke` 与 CI workflow 回归 10 测试通过。
+- **发布验证（2026-11-22）**：包含本 Feature 的 main `b22fa90` 已经 SELF-001 Candidate 链路发布到运行中的实例（`main-b22fa90-r1`，见 SELF-001 生产发布记录）；本 Feature 的交付物是 CI 配置，随仓库 commit 进入 Release 身份，运行时行为不变，node24 效果以远程 CI 零 annotation 为准。
 
 ### TASK-001：Task/Run 完整状态迁移（2026-11-21）
 
@@ -304,6 +305,7 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - **当前证据（2026-11-21）**：`test/self-change.test.ts` 7 个测试（模型 intake 与机器输入拒绝、分派隔离、不可变构建/只读冻结/篡改检测、脏 worktree 拒绝、staging 鉴权与路径校验、verified staging 与篡改 409、真实 Control Plane HTTP 的审批→发布→outcome→完成闭环）；`pnpm smoke:self-change` 以真实 Supervisor 进程验证 MVP 场景 5（候选接管服务并通过观察期，前后 Task 闭环正常）与场景 6（运行时损坏的诚实候选自动回滚，Recovery API 全程在线，回滚后 Task 闭环正常）；`test/sqlite-store.test.ts` 迁移列表含 25。rebase 至含 DESIGN-002 搜索/触发历史/对账接线的 main 后，完整门禁通过 54 个测试文件、525 个测试（statement 84.33%、branch 77.59%、function 88.47%、line 87.24%）；`pnpm check`、`pnpm smoke`、`pnpm smoke:desktop` 与 `pnpm smoke:self-change` 均通过。
 - **破坏性 migration 单独审批（2026-11-21 增补）**：`src/storage/migration-policy.ts` 维护破坏性迁移登记表（当前 v30 outbox 表重建）；Candidate Manifest `compatibility.destructiveMigrations` 由构建器按登记表强制写入，候选无法隐瞒。Supervisor staging 时按 live `schema_migrations` 计算待执行破坏性迁移：无专用批准返回 409 `migration_approval_required`（携带 versions）；批准必须是同一 durable 数据库中 `self_change.migration`（critical）Action 的 approved Approval，且 request 绑定精确 releaseId 与迁移集合，普通 publish 批准不能替代；有批准时先在已验证备份副本上演练真实迁移代码并通过 integrity_check，再切换。启动路径同样校验，重启不能绕过。Executor 在 publish 批准后收到 409 时记录 publish outcome（succeeded，stagingDeferred），创建专用迁移 Approval 停放 Run；迁移批准后携带 `{actionId, approvalId}` grant 重新 staging；拒绝或 granted staging 失败记录确定性 failed outcome。证据：`test/migration-approval.test.ts` 7 个测试（pending 计算、无 grant/伪造 grant/拒绝 grant 拒绝、releaseId 绑定、declared 越界拒绝、v29 副本演练不动 live 文件、Recovery API 409 合同与 grant 透传、publish→迁移双重审批真实 HTTP 闭环、granted 失败确定性 outcome）。rebase 至含 BRAND-001 Tabler glyphs 的 main 后，完整门禁通过 70 个测试文件、614 个测试（statement 84.89%、branch 78.18%、function 89.11%、line 87.71%）；`pnpm check`、`pnpm smoke`、`pnpm smoke:desktop`、`pnpm smoke:self-change` 均通过。
 - **为什么是 Usable**：目标场景（隔离修改→门禁→审批→接管→失败回滚→恢复汇报）全部有真实进程自动化验证；真实 DSH editor 驱动的自我修改演练与签名为登记在下一缺口的加固项，不阻塞本闭环使用。
+- **生产发布（2026-11-22）**：应用户要求把 main `b22fa90`（DESIGN-004 + QUALITY-001 + EXEC-005 conversation 只读通道修复）发布到运行中的实例。隔离 worktree `release-b22fa90`（exact commit，`pnpm install --frozen-lockfile` + `pnpm build`）内完整门禁 `pnpm check` 918 测试 + `pnpm smoke` 通过后，经 `buildSelfChangeCandidate` 构建不可变 Candidate `main-b22fa90-r1`（目录 SHA-256 attestation + 只读冻结；schema 31–36，无待批破坏性迁移；`local-self-change-gate` 本地 attestation；reviewer `pegas-release-agent`）。独立 Supervisor（recovery API 4318）staging 返回 202 → verifying，startup grace + stabilization 后自动 confirm 为 stable，active=`main-b22fa90-r1`、previous=`main-3621a49-r1` 保留可回滚（`POST /v1/recovery/rollback`）。观察约 4 分钟（15 次采样）：`/readyz` 持续报告 `main-b22fa90-r1`、recovery integrity ok、metrics 无 `pegas_errors_total`/5xx；真实客户端持续轮询 events/channels/runs/outbox 均 200；`/v1/events|channels|runs?userId=owner` 关键路径 200；线上 CSS 与 Candidate 字节一致，无头浏览器实测八档 `--text-*` token（10/11/12/13/14/16/20/26px）、标题 500 直立 Inter、页面正常渲染。运行时字节与 `main-3621a49-r1` 的 dist 逐字节一致（3621a49..b22fa90 仅 CI workflow/测试/文档），本次发布使 release 身份与 main HEAD 一致。证据位于 `releases/candidates/main-b22fa90-r1.*`（本地，不入库）。注意：三个在役 Candidate 的 `node_modules` 为指向 worktree 的符号链接，`release-b22fa90`、`exec-006-live-feedback` worktree 在对应 Release 退役前不得删除（SELF-001 既有 worktree 清理策略缺口）。
 
 ### 服务端第一版收尾（2026-11-21）
 
