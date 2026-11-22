@@ -1,9 +1,38 @@
-import type { InboxEvent, RoutingDecision, Task } from '../core/domain.js'
+import type {
+  InboxEvent,
+  RoutingCandidate,
+  RoutingDecision,
+  Task,
+} from '../core/domain.js'
 import type { JsonModelProvider } from '../model/provider.js'
 
 export interface TaskRouter {
-  route(event: InboxEvent, tasks: Task[]): Promise<RoutingDecision | undefined>
+  route(
+    event: InboxEvent,
+    candidates: RoutingCandidate[] | Task[],
+    context?: RouterRoutingContext,
+  ): Promise<RoutingDecision | undefined>
 }
+
+export interface RouterRoutingContext {
+  resolveExplicitTask?: ExplicitTaskResolver
+  /**
+   * COLLAB-001 P5: the Control Plane derives terminal facts for a referenced
+   * ended source Task. Routers attach the result to create_task decisions;
+   * they never author the facts themselves.
+   */
+  resolveSourceContext?: (
+    sourceTaskId: string,
+  ) => import('../core/domain.js').TaskSourceContext | undefined
+}
+
+/**
+ * ROUTE-003: explicit task references stay deterministic even when the
+ * target is outside the open candidate set (for example a completed Task
+ * resuming through its mandate-revalidated path). The store remains the
+ * authorization boundary for such continuations.
+ */
+export type ExplicitTaskResolver = (taskId: string) => Task | undefined
 
 /**
  * Deterministic first-pass routing. Explicit task references are honored and
@@ -13,12 +42,15 @@ export interface TaskRouter {
 export class RuleBasedTaskRouter implements TaskRouter {
   route(
     event: InboxEvent,
-    tasks: Task[],
+    candidates: RoutingCandidate[] | Task[],
+    context: RouterRoutingContext = {},
   ): Promise<RoutingDecision | undefined> {
     if (event.type !== 'user.message') return Promise.resolve(undefined)
+    const tasks = candidateTasks(candidates)
     const payload = messagePayload(event.payload)
     const explicitTask = payload.taskId
-      ? tasks.find(task => task.id === payload.taskId)
+      ? (tasks.find(task => task.id === payload.taskId) ??
+        context.resolveExplicitTask?.(payload.taskId))
       : undefined
 
     if (payload.taskId && !explicitTask) {
@@ -45,12 +77,21 @@ export class RuleBasedTaskRouter implements TaskRouter {
       })
     }
 
+    const sourceContext = payload.sourceTaskId
+      ? context.resolveSourceContext?.(payload.sourceTaskId)
+      : undefined
+    if (payload.sourceTaskId && !sourceContext) {
+      throw new Error(
+        `Source task ${payload.sourceTaskId} has no terminal facts to hand off`,
+      )
+    }
     return Promise.resolve({
       kind: 'create_task',
       title: titleFromText(payload.text),
       goal: payload.text,
       input: payload.text,
       reason: 'No existing task was explicitly referenced.',
+      ...(sourceContext ? { sourceContext } : {}),
     })
   }
 }
@@ -79,14 +120,31 @@ export class ModelTaskRouter implements TaskRouter {
 
   async route(
     event: InboxEvent,
-    tasks: Task[],
+    candidates: RoutingCandidate[] | Task[],
+    context: RouterRoutingContext = {},
   ): Promise<RoutingDecision | undefined> {
     if (event.type !== 'user.message') return undefined
     const payload = messagePayload(event.payload)
-    if (payload.taskId) return this.#fallback.route(event, tasks)
+    if (payload.taskId) {
+      return this.#fallback.route(event, candidates, context)
+    }
+    const sourceContext = payload.sourceTaskId
+      ? context.resolveSourceContext?.(payload.sourceTaskId)
+      : undefined
+    if (payload.sourceTaskId && !sourceContext) {
+      throw new Error(
+        `Source task ${payload.sourceTaskId} has no terminal facts to hand off`,
+      )
+    }
 
-    const candidates = tasks
-      .filter(task => task.status !== 'cancelled')
+    const open = candidates
+      .map(toRoutingCandidate)
+      .filter(
+        candidate =>
+          candidate.task.status !== 'completed' &&
+          candidate.task.status !== 'cancelled' &&
+          candidate.task.kind !== 'conversation',
+      )
       .slice(0, this.#maximumCandidateTasks)
 
     try {
@@ -94,25 +152,48 @@ export class ModelTaskRouter implements TaskRouter {
         system: routerSystemPrompt,
         input: JSON.stringify({
           message: payload.text,
-          tasks: candidates.map(task => ({
-            id: task.id,
-            title: task.title,
-            goal: task.goal,
-            status: task.status,
-            statusReason: task.statusReason ?? null,
+          tasks: open.map(candidate => ({
+            id: candidate.task.id,
+            title: candidate.task.title,
+            goal: candidate.task.goal,
+            status: candidate.task.status,
+            statusReason: candidate.task.statusReason ?? null,
+            awaiting: candidate.awaiting ?? null,
+            lastDelivery: candidate.lastDelivery ?? null,
+            recentInput: candidate.recentInput ?? null,
           })),
         }),
         schema: routerDecisionSchema,
       })
-      return modelDecision(answer, payload.text, candidates)
+      const decision = modelDecision(
+        answer,
+        payload.text,
+        open.map(candidate => candidate.task),
+      )
+      return sourceContext && decision.kind === 'create_task'
+        ? { ...decision, sourceContext }
+        : decision
     } catch {
-      return this.#fallback.route(event, tasks)
+      return this.#fallback.route(event, candidates, context)
     }
   }
 }
 
+function toRoutingCandidate(value: RoutingCandidate | Task): RoutingCandidate {
+  return 'task' in value ? value : { task: value }
+}
+
+function candidateTasks(candidates: RoutingCandidate[] | Task[]): Task[] {
+  return candidates.map(candidate =>
+    'task' in candidate ? candidate.task : candidate,
+  )
+}
+
 const routerSystemPrompt = `You route one user message into durable personal-agent tasks.
 Return one JSON object only.
+If the message is casual chat or a simple question that can be answered directly in one reply, needs no external side effects and no deliverable, return:
+{"kind":"reply","taskId":"","title":"","goal":"","reason":"short reason"}
+Only choose reply when certain; when unsure whether real work is needed, prefer create_task.
 If the message clearly continues exactly one listed task, return:
 {"kind":"continue_task","taskId":"listed id","title":"","goal":"","reason":"short reason"}
 If the message redirects, narrows or corrects work that is currently executing on exactly one listed task (its status is "started"), return:
@@ -123,6 +204,7 @@ Otherwise return:
 {"kind":"create_task","taskId":"","title":"concise title","goal":"complete user goal","reason":"short reason"}
 When the new task asks to change, fix or extend Pegas itself (its own code, UI, prompts or behavior), also set "targetResource":"pegas_repository" on the create_task decision; otherwise set "targetResource":"".
 Never invent a task id. Prefer create_task when uncertain or when the message introduces an independent idea.
+When a candidate has a non-empty "awaiting" question and the message directly answers that question, prefer continue_task for that candidate.
 You only classify ownership and control intent. Never answer the task content, never judge tool availability, and never use steer_task or cancel_task without an explicit user instruction targeting that task.`
 
 const routerDecisionSchema = {
@@ -130,7 +212,13 @@ const routerDecisionSchema = {
   properties: {
     kind: {
       type: 'string',
-      enum: ['create_task', 'continue_task', 'steer_task', 'cancel_task'],
+      enum: [
+        'create_task',
+        'reply',
+        'continue_task',
+        'steer_task',
+        'cancel_task',
+      ],
     },
     taskId: { type: 'string' },
     title: { type: 'string' },
@@ -145,6 +233,7 @@ const routerDecisionSchema = {
 interface MessagePayload {
   text: string
   taskId?: string
+  sourceTaskId?: string
   intent?: 'steer'
 }
 
@@ -160,6 +249,16 @@ function messagePayload(value: unknown): MessagePayload {
   if (taskId !== undefined && (typeof taskId !== 'string' || !taskId.trim())) {
     throw new Error('taskId must be a non-empty string')
   }
+  const sourceTaskId = value.sourceTaskId
+  if (
+    sourceTaskId !== undefined &&
+    (typeof sourceTaskId !== 'string' || !sourceTaskId.trim())
+  ) {
+    throw new Error('sourceTaskId must be a non-empty string')
+  }
+  if (typeof taskId === 'string' && typeof sourceTaskId === 'string') {
+    throw new Error('taskId and sourceTaskId cannot be combined')
+  }
   const intent = value.intent
   if (intent !== undefined && intent !== 'steer') {
     throw new Error('intent must be "steer" when present')
@@ -170,6 +269,7 @@ function messagePayload(value: unknown): MessagePayload {
   return {
     text: value.text.trim(),
     ...(typeof taskId === 'string' ? { taskId } : {}),
+    ...(typeof sourceTaskId === 'string' ? { sourceTaskId } : {}),
     ...(intent === 'steer' ? { intent } : {}),
   }
 }
@@ -187,6 +287,9 @@ function modelDecision(
     throw new Error('Router model returned an invalid decision')
   }
   const reason = requiredString(value.reason, 'reason')
+  if (value.kind === 'reply') {
+    return { kind: 'reply', input, reason }
+  }
   if (value.kind === 'continue_task') {
     const taskId = requiredString(value.taskId, 'taskId')
     if (!candidates.some(task => task.id === taskId)) {

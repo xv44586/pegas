@@ -21,6 +21,7 @@ export interface DshCliExecutorOptions {
   maximumEventBytes?: number
   maximumStderrBytes?: number
   agentModel?: { provider: string; model: string }
+  reasoningEffort?: string
   approvalBridgePath?: string
   modelConfiguration?: DshModelConfiguration
 }
@@ -49,6 +50,21 @@ interface DshTextEvent {
 
 interface DshToolCallEvent {
   type: 'tool_call'
+  tool?: string
+  callId?: string
+  input?: string
+}
+
+interface DshToolResultEvent {
+  type: 'tool_result'
+  callId: string
+  status: 'completed' | 'error'
+  result?: string
+}
+
+interface DshThinkingEvent {
+  type: 'thinking'
+  text: string
 }
 
 interface DshApprovalPendingEvent {
@@ -68,6 +84,7 @@ interface DshApprovalBridgeErrorEvent {
 interface DshStatusEvent {
   type: 'status'
   phase: string
+  step?: number
   usage?: ModelTokenUsage
 }
 
@@ -88,6 +105,7 @@ export class DshCliExecutor implements RunExecutor {
   readonly #maximumEventBytes: number
   readonly #maximumStderrBytes: number
   readonly #agentModel?: { provider: string; model: string }
+  readonly #reasoningEffort?: string
   readonly #approvalBridgePath: string
   readonly #modelConfiguration?: DshModelConfiguration
 
@@ -103,6 +121,7 @@ export class DshCliExecutor implements RunExecutor {
     this.#maximumEventBytes = options.maximumEventBytes ?? 8 * 1024 * 1024
     this.#maximumStderrBytes = options.maximumStderrBytes ?? 64 * 1024
     this.#agentModel = options.agentModel
+    this.#reasoningEffort = options.reasoningEffort
     this.#approvalBridgePath =
       options.approvalBridgePath ?? defaultApprovalBridgePath()
     this.#modelConfiguration = options.modelConfiguration
@@ -144,7 +163,7 @@ export class DshCliExecutor implements RunExecutor {
     const startedAt = performance.now()
     const patch =
       !input.resumeSessionId && this.#agentModel && !this.#modelConfiguration
-        ? createAgentModelPatch(this.#agentModel)
+        ? createAgentModelPatch(this.#agentModel, this.#reasoningEffort)
         : undefined
     const bridgeEnabled =
       Boolean(input.actionCapability) && this.#approvalPolicy === 'ask'
@@ -261,6 +280,12 @@ export class DshCliExecutor implements RunExecutor {
         if (event.type === 'text' && !acknowledgementEmitted) {
           pendingAssistantText.push(event.text)
         }
+        if (event.type === 'text' && acknowledgementEmitted) {
+          input.onProgress?.({ type: 'message', text: event.text })
+        }
+        if (event.type === 'thinking') {
+          input.onProgress?.({ type: 'thinking', text: event.text })
+        }
         if (
           event.type === 'tool_call' &&
           !acknowledgementEmitted &&
@@ -273,6 +298,28 @@ export class DshCliExecutor implements RunExecutor {
             acknowledgementEmitted = true
           }
         }
+        if (event.type === 'tool_call') {
+          input.onProgress?.({
+            type: 'activity',
+            label: `调用工具 ${event.tool ?? '未知工具'}`,
+          })
+          if (event.callId) {
+            input.onProgress?.({
+              type: 'tool_call',
+              callId: event.callId,
+              tool: event.tool ?? '未知工具',
+              ...(event.input !== undefined ? { input: event.input } : {}),
+            })
+          }
+        }
+        if (event.type === 'tool_result') {
+          input.onProgress?.({
+            type: 'tool_result',
+            callId: event.callId,
+            status: event.status,
+            ...(event.result !== undefined ? { result: event.result } : {}),
+          })
+        }
         if (event.type === 'status' && event.phase === 'step_end') {
           if (event.usage) {
             usage = usage ? addTokenUsage(usage, event.usage) : event.usage
@@ -280,6 +327,26 @@ export class DshCliExecutor implements RunExecutor {
           } else {
             unreportedSteps += 1
           }
+          input.onProgress?.({
+            type: 'activity',
+            label: `完成第 ${String(reportedSteps + unreportedSteps)} 步推理`,
+          })
+          input.onProgress?.({
+            type: 'step',
+            phase: 'end',
+            ...(event.step !== undefined ? { step: event.step } : {}),
+          })
+        }
+        if (event.type === 'status' && event.phase === 'step_start') {
+          input.onProgress?.({
+            type: 'activity',
+            label: `开始第 ${String(reportedSteps + unreportedSteps + 1)} 步推理`,
+          })
+          input.onProgress?.({
+            type: 'step',
+            phase: 'start',
+            ...(event.step !== undefined ? { step: event.step } : {}),
+          })
         }
         if (event.type === 'approval_pending') {
           approvalPending = event
@@ -432,7 +499,10 @@ function delay(milliseconds: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, milliseconds))
 }
 
-function createAgentModelPatch(model: { provider: string; model: string }): {
+function createAgentModelPatch(
+  model: { provider: string; model: string },
+  reasoningEffort: string | undefined,
+): {
   path: string
   remove: () => void
 } {
@@ -443,7 +513,11 @@ function createAgentModelPatch(model: { provider: string; model: string }): {
     JSON.stringify([
       {
         id: 'agent-default-model',
-        config: { provider: model.provider, model: model.model },
+        config: {
+          provider: model.provider,
+          model: model.model,
+          ...(reasoningEffort ? { reasoningEffort } : {}),
+        },
       },
     ]),
     { mode: 0o600 },
@@ -506,6 +580,8 @@ function parseDshEvent(
   | DshErrorEvent
   | DshTextEvent
   | DshToolCallEvent
+  | DshToolResultEvent
+  | DshThinkingEvent
   | DshApprovalPendingEvent
   | DshApprovalBridgeErrorEvent
   | DshStatusEvent
@@ -540,7 +616,31 @@ function parseDshEvent(
   if (parsed.type === 'text' && typeof parsed.text === 'string') {
     return { type: 'text', text: parsed.text }
   }
-  if (parsed.type === 'tool_call') return { type: 'tool_call' }
+  if (parsed.type === 'thinking' && typeof parsed.text === 'string') {
+    return { type: 'thinking', text: parsed.text }
+  }
+  if (parsed.type === 'tool_call') {
+    return {
+      type: 'tool_call',
+      ...(typeof parsed.tool === 'string' ? { tool: parsed.tool } : {}),
+      ...(typeof parsed.callId === 'string' ? { callId: parsed.callId } : {}),
+      ...(parsed.input === undefined
+        ? {}
+        : { input: JSON.stringify(parsed.input).slice(0, 8192) }),
+    }
+  }
+  if (parsed.type === 'tool_result' && typeof parsed.callId === 'string') {
+    return {
+      type: 'tool_result',
+      callId: parsed.callId,
+      status: parsed.status === 'error' ? 'error' : 'completed',
+      ...(typeof parsed.result === 'string'
+        ? { result: parsed.result }
+        : parsed.result === undefined
+          ? {}
+          : { result: JSON.stringify(parsed.result).slice(0, 8192) }),
+    }
+  }
   if (
     parsed.type === 'approval_pending' &&
     typeof parsed.callId === 'string' &&
@@ -571,6 +671,9 @@ function parseDshEvent(
     return {
       type: 'status',
       phase: parsed.phase,
+      ...(typeof parsed.step === 'number' && Number.isSafeInteger(parsed.step)
+        ? { step: parsed.step }
+        : {}),
       ...(parsed.usage === undefined
         ? {}
         : { usage: parseTokenUsage(parsed.usage) }),

@@ -20,6 +20,7 @@ export interface DshExecutionDefaults {
 
 export interface DshExecutionSnapshot extends DshExecutionDefaults {
   agentModel?: { provider: string; model: string }
+  reasoningEffort?: string
 }
 
 export function dshExecutorOptionsFromSnapshot(
@@ -36,6 +37,9 @@ export function dshExecutorOptionsFromSnapshot(
     approvalPolicy: snapshot.approvalPolicy,
     additionalDirectories: snapshot.additionalDirectories,
     ...(snapshot.agentModel ? { agentModel: snapshot.agentModel } : {}),
+    ...(snapshot.reasoningEffort
+      ? { reasoningEffort: snapshot.reasoningEffort }
+      : {}),
   }
 }
 
@@ -97,6 +101,8 @@ function decodeVersion2(
   }
 
   const permissions = parsePermissions(context.permissions, true)
+  const reasoningEffort =
+    context.reasoningEffort && agentModel ? context.reasoningEffort : undefined
   return {
     executorProfile,
     workspace,
@@ -105,6 +111,7 @@ function decodeVersion2(
     additionalDirectories: permissions.additionalDirectories,
     privacyMode: permissions.privacyMode,
     ...(agentModel ? { agentModel } : {}),
+    ...(reasoningEffort ? { reasoningEffort } : {}),
   }
 }
 
@@ -129,6 +136,9 @@ function decodeLegacy(
       permissions?.additionalDirectories ?? defaults.additionalDirectories,
     privacyMode: permissions?.privacyMode ?? defaults.privacyMode,
     ...(agentModel ? { agentModel } : {}),
+    ...(context?.reasoningEffort && agentModel
+      ? { reasoningEffort: context.reasoningEffort }
+      : {}),
   }
 }
 

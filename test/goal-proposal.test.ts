@@ -27,10 +27,10 @@ describe('GOAL-001 executor goal formation', () => {
     const store = new PegasStore(':memory:')
     cleanups.push(() => store.close())
     const seeded = seedTask(store, '把知识库整理好')
-    const second = continueTask(store, seeded.taskId, '顺便加上检索')
     const claimed = store.claimNextRun('worker-proposal')
     if (claimed?.run.id !== seeded.runId)
       throw new Error('Expected the first Run to be claimed')
+    const second = continueTask(store, seeded.taskId, '顺便加上检索')
 
     const result = store.proposeGoalFromRun(
       claimed.run.id,
@@ -463,7 +463,7 @@ function continueTask(
   const event = store.enqueueEvent({
     userId: 'owner',
     type: 'user.message',
-    source: 'web',
+    source: 'automation',
     authenticatedActor: 'human',
     payload: { text, taskId },
   }).event

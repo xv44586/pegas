@@ -100,7 +100,8 @@ describe('APPROVAL-001 human action reconciliation', () => {
       resolution: 'succeeded',
     })
 
-    // Continuation is allowed again and creates a new Run.
+    // Continuation is allowed again and redirects the live Run instead of
+    // racing a parallel Run against it.
     const continued = store.applyRoutingDecision(
       parked,
       {
@@ -111,7 +112,16 @@ describe('APPROVAL-001 human action reconciliation', () => {
       },
       'echo',
     )
-    expect(continued.run.status).toBe('queued')
+    expect(continued.run.id).toBe(blocked.resumeRunId)
+    expect(continued.run.status).toBe('running')
+    expect(
+      store.listPendingRunSteering(blocked.resumeRunId, 'worker-resumed'),
+    ).toMatchObject([{ eventId: parked.id, text: '继续推进' }])
+    expect(
+      store
+        .listRuns(blocked.taskId)
+        .filter(run => run.status === 'queued' || run.status === 'running'),
+    ).toHaveLength(1)
   })
 
   it('keeps failed resolutions blocking retry, Goal revision and collaboration', () => {

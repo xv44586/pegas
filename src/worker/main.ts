@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto'
 
 import { loadConfig } from '../core/config.js'
+import { ConversationExecutor } from '../executor/conversation-executor.js'
 import { DshCliExecutor } from '../executor/dsh-cli-executor.js'
+import { readDshSubagentTranscripts } from '../executor/dsh-subagent-transcript.js'
 import {
   createDshModelConfiguration,
   ensureDshProfileHome,
@@ -13,6 +15,7 @@ import type {
   RunExecutor,
 } from '../executor/executor.js'
 import { loadModelCredentialVault } from '../model/model-credential-vault.js'
+import { MeteredJsonModelProvider } from '../model/metered-provider.js'
 import {
   createConfiguredModelProvider,
   createRewriteModelProvider,
@@ -49,6 +52,7 @@ import {
   localControlPlaneBaseUrl,
   processNextEvent,
   RoutingEventHandler,
+  type SubagentTranscriptCollector,
 } from './processor.js'
 import {
   decodeDshExecutionSnapshot,
@@ -123,7 +127,7 @@ const selfChangeExecutor = config.selfChangeEnabled
       recoveryBaseUrl: config.recoveryBaseUrl,
       ...(config.recoveryToken ? { recoveryToken: config.recoveryToken } : {}),
       editor: executor,
-      compatibility: { minimumSchema: 1, maximumSchema: 31 },
+      compatibility: { minimumSchema: 1, maximumSchema: 36 },
       reviewer: 'pegas-self-change-gate',
       controlPlaneBaseUrl,
     })
@@ -131,7 +135,32 @@ const selfChangeExecutor = config.selfChangeEnabled
 const runExecutor: RunExecutor = selfChangeExecutor
   ? new SelfChangeRoutingExecutor(store, executor, selfChangeExecutor)
   : executor
-const router = new SettingsAwareTaskRouter(store, createRouter)
+const conversationExecutor = new ConversationExecutor(executor)
+const laneExecutor: RunExecutor = {
+  name: runExecutor.name,
+  execute: input =>
+    input.executionContext?.protocol === 'conversation-v1'
+      ? conversationExecutor.execute(input)
+      : runExecutor.execute(input),
+}
+const collectSubagents: SubagentTranscriptCollector | undefined =
+  config.executorMode === 'echo'
+    ? undefined
+    : input => {
+        const settings = store.getRuntimeSettings()
+        const masker =
+          settings.privacyMode === 'mask' ? createPrivacyMasker() : undefined
+        return readDshSubagentTranscripts(
+          input.rootSessionId,
+          input.workspace,
+          {
+            sessionsRoot: config.dshSessionsRoot,
+            ...(masker ? { restore: text => masker.restore(text) } : {}),
+          },
+        )
+      }
+const settingsRouter = new SettingsAwareTaskRouter(store, createRouter)
+const router: TaskRouter = settingsRouter
 const eventHandler = new RoutingEventHandler(router, executor.name, task => {
   const settings = store.getRuntimeSettings()
   return store.resolveWorkerExecutionContext(task.id, task.userId, {
@@ -151,6 +180,7 @@ const eventHandler = new RoutingEventHandler(router, executor.name, task => {
 const lifecycle = { stopping: false }
 const shutdown = new AbortController()
 const activeRuns = new Set<Promise<void>>()
+const activeChatRuns = new Set<Promise<void>>()
 
 const nodeCapabilities = [
   'dsh',
@@ -193,22 +223,24 @@ while (!lifecycle.stopping) {
     eventHandler,
     workerId,
     telemetry,
+    { collectWindowMs: config.routeCollectWindowMs },
   )
 
   // The signal callback may change stopping while a run is being awaited.
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
   while (!lifecycle.stopping && activeRuns.size < config.workerConcurrency) {
-    const claimed = store.claimNextRun(workerId, 30_000, config.nodeId)
+    const claimed = store.claimNextRun(workerId, 30_000, config.nodeId, 'work')
     if (!claimed) break
     const execution = executeClaimedRun(
       store,
-      runExecutor,
+      laneExecutor,
       claimed,
       workerId,
       config.workspaceRoot,
       shutdown.signal,
       controlPlaneBaseUrl,
       telemetry,
+      collectSubagents,
     )
       .catch((error: unknown) => {
         logger.error('run.persistence_failed', error, {
@@ -224,10 +256,46 @@ while (!lifecycle.stopping) {
     activeRuns.add(execution)
   }
 
+  // EXEC-005: the chat lane has its own concurrency budget so heavy Runs
+  // never starve instant replies, and chat never consumes heavy Run slots.
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+  while (!lifecycle.stopping && activeChatRuns.size < config.chatConcurrency) {
+    const claimed = store.claimNextRun(
+      workerId,
+      30_000,
+      config.nodeId,
+      'conversation',
+    )
+    if (!claimed) break
+    const execution = executeClaimedRun(
+      store,
+      laneExecutor,
+      claimed,
+      workerId,
+      config.workspaceRoot,
+      shutdown.signal,
+      controlPlaneBaseUrl,
+      telemetry,
+      collectSubagents,
+    )
+      .catch((error: unknown) => {
+        logger.error('conversation.persistence_failed', error, {
+          runId: claimed.run.id,
+          workerId,
+        })
+        metrics.increment('pegas_errors_total', {
+          component: 'worker',
+          kind: 'conversation_persistence',
+        })
+      })
+      .finally(() => activeChatRuns.delete(execution))
+    activeChatRuns.add(execution)
+  }
+
   if (!routed) await wait(config.eventPollMs)
 }
 
-await Promise.allSettled(activeRuns)
+await Promise.allSettled([...activeRuns, ...activeChatRuns])
 store.close()
 
 function requestStop(): void {
@@ -246,29 +314,47 @@ function required(value: string | undefined, name: string): string {
 }
 
 function createRouter(settings: RuntimeSettings): TaskRouter {
-  let provider: JsonModelProvider | undefined
   const baseRouter: TaskRouter =
     settings.routerMode === 'model'
       ? new ModelTaskRouter({
-          provider: (provider = createModelProvider(settings)),
+          provider: metered(createModelProvider(settings), 'router'),
         })
       : new RuleBasedTaskRouter()
   if (settings.rewriteMode === 'disabled') return baseRouter
   const rewriteConnection = store.getRewriteConnection()
-  if (rewriteConnection.mode === 'custom') {
-    const independent = createRewriteModelProvider(
-      rewriteConnection,
-      modelCredentialVault,
-      config.modelTimeoutMs,
-    )
-    provider =
-      settings.privacyMode === 'mask'
-        ? new PrivacyMaskingProvider(independent, createPrivacyMasker())
-        : independent
-  } else {
-    provider ??= createModelProvider(settings)
-  }
-  return new RewritingTaskRouter(baseRouter, new ModelInputRewriter(provider))
+  const rewriteProvider: JsonModelProvider =
+    rewriteConnection.mode === 'custom'
+      ? withPrivacy(
+          createRewriteModelProvider(
+            rewriteConnection,
+            modelCredentialVault,
+            config.modelTimeoutMs,
+          ),
+          settings,
+        )
+      : createModelProvider(settings)
+  return new RewritingTaskRouter(
+    baseRouter,
+    new ModelInputRewriter(metered(rewriteProvider, 'rewrite')),
+  )
+}
+
+function withPrivacy(
+  provider: JsonModelProvider,
+  settings: RuntimeSettings,
+): JsonModelProvider {
+  return settings.privacyMode === 'mask'
+    ? new PrivacyMaskingProvider(provider, createPrivacyMasker())
+    : provider
+}
+
+function metered(
+  provider: JsonModelProvider,
+  component: 'router' | 'rewrite',
+): JsonModelProvider {
+  return new MeteredJsonModelProvider(provider, store, component, () =>
+    settingsRouter.meteringContext(),
+  )
 }
 
 function createExecutor(

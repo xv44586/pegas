@@ -1,4 +1,9 @@
-import type { JsonModelProvider, JsonModelRequest } from './provider.js'
+import type {
+  JsonModelProvider,
+  JsonModelRequest,
+  JsonModelResult,
+  ModelCallUsage,
+} from './provider.js'
 
 export interface AnthropicProviderOptions {
   baseUrl: string
@@ -25,6 +30,12 @@ export class AnthropicProvider implements JsonModelProvider {
   }
 
   async generateJson(request: JsonModelRequest): Promise<unknown> {
+    return (await this.generateJsonWithUsage(request)).value
+  }
+
+  async generateJsonWithUsage(
+    request: JsonModelRequest,
+  ): Promise<JsonModelResult> {
     const timeoutSignal = AbortSignal.timeout(this.#timeoutMs)
     const signal = request.signal
       ? AbortSignal.any([request.signal, timeoutSignal])
@@ -59,8 +70,38 @@ export class AnthropicProvider implements JsonModelProvider {
         `Model provider returned ${String(response.status)}${detail ? `: ${detail}` : ''}`,
       )
     }
-    return extractToolInput(await response.json())
+    const body: unknown = await response.json()
+    const usage = extractUsage(body)
+    return {
+      value: extractToolInput(body),
+      ...(usage ? { usage } : {}),
+    }
   }
+}
+
+function extractUsage(value: unknown): ModelCallUsage | undefined {
+  if (!isRecord(value) || !isRecord(value.usage)) return undefined
+  const usage = value.usage
+  const input = nonNegative(usage.input_tokens)
+  const output = nonNegative(usage.output_tokens)
+  if (input === undefined && output === undefined) return undefined
+  const cacheRead = nonNegative(usage.cache_read_input_tokens)
+  const cacheWrite = nonNegative(usage.cache_creation_input_tokens)
+  return {
+    ...(input === undefined ? {} : { inputTokens: input }),
+    ...(output === undefined ? {} : { outputTokens: output }),
+    ...(input !== undefined && output !== undefined
+      ? { totalTokens: input + output }
+      : {}),
+    ...(cacheRead === undefined ? {} : { cacheReadTokens: cacheRead }),
+    ...(cacheWrite === undefined ? {} : { cacheWriteTokens: cacheWrite }),
+  }
+}
+
+function nonNegative(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0
+    ? value
+    : undefined
 }
 
 const defaultObjectSchema = { type: 'object', additionalProperties: true }

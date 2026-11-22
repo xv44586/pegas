@@ -568,6 +568,16 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
               )
           }
         }
+        const sourceTaskId = sourceContextTaskId(input)
+        if (sourceTaskId) {
+          const source = options.store.findTask(sourceTaskId, input.userId)
+          if (!source)
+            throw new Error(`Task ${sourceTaskId} does not exist for user`)
+          if (source.status !== 'completed' && source.status !== 'cancelled')
+            throw new Error(
+              'sourceTaskId must reference a completed or cancelled Task',
+            )
+        }
         const result = options.store.enqueueEvent(input)
         return sendJson(response, result.inserted ? 202 : 200, result)
       }
@@ -1283,6 +1293,7 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         return sendJson(response, 200, {
           channels: options.store
             .listTasks(userId)
+            .filter(task => task.kind !== 'conversation')
             .map(task => projectWorkChannel(task)),
         })
       }
@@ -1323,11 +1334,23 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         const userId = url.searchParams.get('userId')
         if (!userId) throw new Error('userId is required')
         const taskId = url.searchParams.get('taskId') ?? undefined
-        return sendJson(
-          response,
-          200,
-          options.store.listModelUsage(userId, taskId),
-        )
+        const report = options.store.listModelUsage(userId, taskId)
+        return sendJson(response, 200, {
+          ...report,
+          ...(taskId ? {} : { router: options.store.listRouterUsage(userId) }),
+        })
+      }
+
+      if (
+        request.url?.startsWith('/v1/reconciliation') &&
+        request.method === 'GET'
+      ) {
+        const url = new URL(request.url, 'http://localhost')
+        const userId = url.searchParams.get('userId') ?? undefined
+        return sendJson(response, 200, {
+          owed: options.store.listOwedDeliveries(userId),
+          findings: options.store.listReconciliationFindings(),
+        })
       }
 
       const stopChannelMatch = request.url?.match(
@@ -1650,6 +1673,34 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
 
       if (request.url?.startsWith('/v1/runs') && request.method === 'GET') {
         const url = new URL(request.url, 'http://localhost')
+        const activityMatch = /^\/v1\/runs\/([^/]+)\/activity$/.exec(
+          url.pathname,
+        )
+        if (activityMatch) {
+          const userId = url.searchParams.get('userId')
+          if (!userId) throw new Error('userId is required')
+          const limitParam = url.searchParams.get('limit')
+          const report = options.store.listRunActivity(
+            decodeURIComponent(activityMatch[1] ?? ''),
+            userId,
+            limitParam ? { limit: Number(limitParam) } : {},
+          )
+          if (!report) throw new Error('Run not found')
+          return sendJson(response, 200, report)
+        }
+        const subagentsMatch = /^\/v1\/runs\/([^/]+)\/subagents$/.exec(
+          url.pathname,
+        )
+        if (subagentsMatch) {
+          const userId = url.searchParams.get('userId')
+          if (!userId) throw new Error('userId is required')
+          const report = options.store.listRunSubagents(
+            decodeURIComponent(subagentsMatch[1] ?? ''),
+            userId,
+          )
+          if (!report) throw new Error('Run not found')
+          return sendJson(response, 200, report)
+        }
         const userId = url.searchParams.get('userId')
         if (!userId) throw new Error('userId is required')
         const taskId = url.searchParams.get('taskId') ?? undefined
@@ -1887,6 +1938,31 @@ function explicitTaskId(input: NewInboxEvent): string | undefined {
     return undefined
   const taskId = input.payload.taskId
   return typeof taskId === 'string' && taskId.trim() ? taskId : undefined
+}
+
+function sourceContextTaskId(input: NewInboxEvent): string | undefined {
+  if (
+    input.type !== 'user.message' ||
+    !input.payload ||
+    typeof input.payload !== 'object' ||
+    Array.isArray(input.payload)
+  )
+    return undefined
+  if ('sourceContext' in input.payload)
+    throw new Error(
+      'sourceContext facts are derived by the server and cannot be submitted',
+    )
+  if (!('sourceTaskId' in input.payload)) return undefined
+  const sourceTaskId = input.payload.sourceTaskId
+  if (typeof sourceTaskId !== 'string' || !sourceTaskId.trim())
+    throw new Error('sourceTaskId must be a non-empty string')
+  if (
+    'taskId' in input.payload &&
+    typeof input.payload.taskId === 'string' &&
+    input.payload.taskId.trim()
+  )
+    throw new Error('taskId and sourceTaskId cannot be combined')
+  return sourceTaskId
 }
 
 function explicitSteerIntent(input: NewInboxEvent): boolean {

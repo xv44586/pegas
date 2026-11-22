@@ -28,15 +28,29 @@ export interface ExecutorInput {
   signal?: AbortSignal
 }
 
+export type ExecutorProgressEvent =
+  | { type: 'acknowledgement'; text: string }
+  | { type: 'activity'; label: string }
+  | { type: 'message'; text: string }
+  | { type: 'thinking'; text: string }
+  | {
+      type: 'tool_call'
+      callId: string
+      tool: string
+      input?: string
+    }
+  | {
+      type: 'tool_result'
+      callId: string
+      status: 'completed' | 'error'
+      result?: string
+    }
+  | { type: 'step'; phase: 'start' | 'end'; step?: number }
+
 export interface ToolApprovalGrant {
   actionId: string
   tool: string
   argumentsHash: string
-}
-
-interface ExecutorProgressEvent {
-  type: 'acknowledgement'
-  text: string
 }
 
 export interface ExecutorResult {

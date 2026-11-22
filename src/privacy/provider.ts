@@ -1,4 +1,8 @@
-import type { JsonModelProvider, JsonModelRequest } from '../model/provider.js'
+import type {
+  JsonModelProvider,
+  JsonModelRequest,
+  JsonModelResult,
+} from '../model/provider.js'
 import type { TextPrivacyMasker } from './masker.js'
 
 /** Applies fail-closed masking at Pegas's model provider boundary. */
@@ -14,14 +18,26 @@ export class PrivacyMaskingProvider implements JsonModelProvider {
   }
 
   async generateJson(request: JsonModelRequest): Promise<unknown> {
+    return (await this.generateJsonWithUsage(request)).value
+  }
+
+  async generateJsonWithUsage(
+    request: JsonModelRequest,
+  ): Promise<JsonModelResult> {
     const system = this.#masker.mask(request.system).text
     const input = this.#masker.mask(request.input).text
-    const response = await this.#provider.generateJson({
+    const masked: JsonModelRequest = {
       ...request,
       system,
       input,
-    })
-    return restoreValue(response, this.#masker)
+    }
+    const result = this.#provider.generateJsonWithUsage
+      ? await this.#provider.generateJsonWithUsage(masked)
+      : { value: await this.#provider.generateJson(masked) }
+    return {
+      value: restoreValue(result.value, this.#masker),
+      ...(result.usage ? { usage: result.usage } : {}),
+    }
   }
 }
 

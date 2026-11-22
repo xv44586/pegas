@@ -34,6 +34,7 @@ import type {
   MemoryRecord,
   ModelCatalogItem,
   ModelProviderDraft,
+  ModelUsageRecord,
   ModelUsageReport,
   NotificationPreferences,
   NotificationPreferencesUpdate,
@@ -768,6 +769,59 @@ function PegasSettings({
             凭证由 Pegas 的模型服务或隔离的 DSH profile 提供，不读取个人默认
             profile。
           </p>
+          <h3>执行池（可选）</h3>
+          <p className="field-hint">
+            为事情级执行设置提供 fast / balanced / deep 档位。留空的池按
+            fast→balanced→全局默认 显式降级，绝不静默换池。
+          </p>
+          {(['fast', 'balanced', 'deep'] as const).map(poolKey => {
+            const poolModel = draft.executionPools?.[poolKey]
+            const value = poolModel
+              ? `${poolModel.provider}::${poolModel.model}`
+              : ''
+            return (
+              <label className="field-label" key={poolKey}>
+                {poolKey} 池模型
+                <select
+                  value={value}
+                  onChange={event => {
+                    if (!event.target.value) {
+                      const next = Object.fromEntries(
+                        Object.entries(draft.executionPools ?? {}).filter(
+                          ([key]) => key !== poolKey,
+                        ),
+                      )
+                      onChange({ ...draft, executionPools: next })
+                      return
+                    }
+                    const model = models.find(
+                      item =>
+                        `${item.provider}::${item.id}` === event.target.value,
+                    )
+                    if (!model) return
+                    const next = {
+                      ...(draft.executionPools ?? {}),
+                      [poolKey]: {
+                        provider: model.provider,
+                        model: model.id,
+                      },
+                    }
+                    onChange({ ...draft, executionPools: next })
+                  }}
+                >
+                  <option value="">未配置（按降级链处理）</option>
+                  {models.map(model => (
+                    <option
+                      key={`${model.provider}/${model.id}`}
+                      value={`${model.provider}::${model.id}`}
+                    >
+                      {model.name} · {model.provider}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )
+          })}
         </div>
       )}
       {tab === 'behavior' && (
@@ -2245,6 +2299,65 @@ function formatUtcOffset(minutes: number): string {
   return `${sign}${String(hours)}${remainder ? `:${String(remainder).padStart(2, '0')}` : ''}`
 }
 
+interface ModelUsageRow {
+  model: string
+  runs: number
+  tasks: number
+  inputTokens?: number
+  outputTokens?: number
+  cacheReadTokens?: number
+  durationMs?: number
+}
+
+function aggregateUsageByModel(
+  records: readonly ModelUsageRecord[],
+): ModelUsageRow[] {
+  const byModel = new Map<
+    string,
+    { row: ModelUsageRow; taskIds: Set<string> }
+  >()
+  for (const record of records) {
+    const model = record.modelRef ?? record.executor
+    const entry = byModel.get(model) ?? {
+      row: { model, runs: 0, tasks: 0 },
+      taskIds: new Set<string>(),
+    }
+    entry.row.runs += 1
+    entry.taskIds.add(record.taskId)
+    entry.row.tasks = entry.taskIds.size
+    entry.row.inputTokens = addOptional(
+      entry.row.inputTokens,
+      record.inputTokens,
+    )
+    entry.row.outputTokens = addOptional(
+      entry.row.outputTokens,
+      record.outputTokens,
+    )
+    entry.row.cacheReadTokens = addOptional(
+      entry.row.cacheReadTokens,
+      record.cacheReadTokens,
+    )
+    entry.row.durationMs = addOptional(entry.row.durationMs, record.durationMs)
+    byModel.set(model, entry)
+  }
+  return [...byModel.values()]
+    .map(entry => entry.row)
+    .toSorted(
+      (left, right) =>
+        (right.inputTokens ?? 0) +
+        (right.outputTokens ?? 0) -
+        ((left.inputTokens ?? 0) + (left.outputTokens ?? 0)),
+    )
+}
+
+function addOptional(
+  current: number | undefined,
+  value: number | undefined,
+): number | undefined {
+  if (value === undefined) return current
+  return (current ?? 0) + value
+}
+
 function UsageSettings({
   usage,
   error,
@@ -2254,6 +2367,7 @@ function UsageSettings({
   error?: string
   onRetry: () => void
 }) {
+  const [dimension, setDimension] = useState<'run' | 'model'>('run')
   const summary = usage?.summary
   const hasTokenUsage = usage?.records.some(
     record =>
@@ -2268,6 +2382,7 @@ function UsageSettings({
   const total = hasTokenUsage
     ? (summary?.inputTokens ?? 0) + (summary?.outputTokens ?? 0)
     : undefined
+  const modelRows = aggregateUsageByModel(usage?.records ?? [])
   return (
     <div className="settings-pane">
       <SettingsHeading
@@ -2326,37 +2441,159 @@ function UsageSettings({
               </span>
             </article>
           </div>
-          <div className="usage-table">
-            <div>
-              <b>模型 / Run</b>
-              <b>输入</b>
-              <b>输出</b>
-              <b>缓存</b>
-              <b>时长</b>
-            </div>
-            {usage.records.map(record => (
-              <div key={record.runId}>
-                <span>
-                  {record.modelRef ?? record.executor}
-                  <small>{`事情 ${record.taskId} · Run ${record.runId}`}</small>
-                </span>
-                <span>
-                  {record.inputTokens?.toLocaleString('zh-CN') ?? '—'}
-                </span>
-                <span>
-                  {record.outputTokens?.toLocaleString('zh-CN') ?? '—'}
-                </span>
-                <span>
-                  {record.cacheReadTokens?.toLocaleString('zh-CN') ?? '—'}
-                </span>
-                <span>
-                  {record.durationMs
-                    ? `${String(Math.round(record.durationMs / 1000))}s`
-                    : '—'}
-                </span>
-              </div>
-            ))}
+          <div className="usage-dimension" role="group" aria-label="统计维度">
+            <button
+              aria-pressed={dimension === 'run'}
+              className={dimension === 'run' ? 'is-active' : ''}
+              onClick={() => setDimension('run')}
+              type="button"
+            >
+              按 Run
+            </button>
+            <button
+              aria-pressed={dimension === 'model'}
+              className={dimension === 'model' ? 'is-active' : ''}
+              onClick={() => setDimension('model')}
+              type="button"
+            >
+              按模型
+            </button>
           </div>
+          {dimension === 'run' ? (
+            <div className="usage-table">
+              <div>
+                <b>模型 / Run</b>
+                <b>输入</b>
+                <b>输出</b>
+                <b>缓存</b>
+                <b>时长</b>
+              </div>
+              {usage.records.map(record => (
+                <div key={record.runId}>
+                  <span>
+                    {record.modelRef ?? record.executor}
+                    <small>{`事情 ${record.taskId} · Run ${record.runId}`}</small>
+                  </span>
+                  <span>
+                    {record.inputTokens?.toLocaleString('zh-CN') ?? '—'}
+                  </span>
+                  <span>
+                    {record.outputTokens?.toLocaleString('zh-CN') ?? '—'}
+                  </span>
+                  <span>
+                    {record.cacheReadTokens?.toLocaleString('zh-CN') ?? '—'}
+                  </span>
+                  <span>
+                    {record.durationMs
+                      ? `${String(Math.round(record.durationMs / 1000))}s`
+                      : '—'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="usage-table">
+              <div>
+                <b>模型</b>
+                <b>输入</b>
+                <b>输出</b>
+                <b>缓存</b>
+                <b>时长</b>
+              </div>
+              {modelRows.map(row => (
+                <div key={row.model}>
+                  <span>
+                    {row.model}
+                    <small>
+                      {row.runs} 个 Run · {row.tasks} 个事情
+                    </small>
+                  </span>
+                  <span>{row.inputTokens?.toLocaleString('zh-CN') ?? '—'}</span>
+                  <span>
+                    {row.outputTokens?.toLocaleString('zh-CN') ?? '—'}
+                  </span>
+                  <span>
+                    {row.cacheReadTokens?.toLocaleString('zh-CN') ?? '—'}
+                  </span>
+                  <span>
+                    {row.durationMs !== undefined
+                      ? `${String(Math.round(row.durationMs / 1000))}s`
+                      : '—'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+          {usage.router && usage.router.summary.calls > 0 && (
+            <>
+              <SettingsHeading
+                title="路由与改写用量"
+                description="Router 与输入改写的模型调用消耗；token 仅在供应商上报时显示。"
+              />
+              <div className="usage-metrics">
+                <article>
+                  <small>调用次数</small>
+                  <strong>
+                    {usage.router.summary.calls.toLocaleString('zh-CN')}
+                  </strong>
+                  <span>
+                    {`成功 ${String(usage.router.summary.okCalls)} · 失败 ${String(usage.router.summary.errorCalls)}`}
+                  </span>
+                </article>
+                <article>
+                  <small>上报 Token</small>
+                  <strong>
+                    {usage.router.summary.reportedCalls > 0
+                      ? (
+                          usage.router.summary.inputTokens +
+                          usage.router.summary.outputTokens
+                        ).toLocaleString('zh-CN')
+                      : '—'}
+                  </strong>
+                  <span>
+                    {usage.router.summary.reportedCalls > 0
+                      ? '供应商上报'
+                      : '供应商未回报'}
+                  </span>
+                </article>
+                <article>
+                  <small>调用时长</small>
+                  <strong>
+                    {`${String(Math.round(usage.router.summary.durationMs / 1000))}s`}
+                  </strong>
+                  <span>Pegas 观测</span>
+                </article>
+              </div>
+              <div className="usage-table">
+                <div>
+                  <b>模型 / 调用</b>
+                  <b>输入</b>
+                  <b>输出</b>
+                  <b>结果</b>
+                  <b>时长</b>
+                </div>
+                {usage.router.records.map(record => (
+                  <div key={record.callId}>
+                    <span>
+                      {record.modelRef}
+                      <small>
+                        {record.component === 'router' ? '路由' : '改写'}
+                        {record.eventId ? ` · 事件 ${record.eventId}` : ''}
+                      </small>
+                    </span>
+                    <span>
+                      {record.inputTokens?.toLocaleString('zh-CN') ?? '—'}
+                    </span>
+                    <span>
+                      {record.outputTokens?.toLocaleString('zh-CN') ?? '—'}
+                    </span>
+                    <span>{record.outcome === 'ok' ? '成功' : '失败'}</span>
+                    <span>{`${String(Math.round(record.durationMs / 1000))}s`}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
         </>
       )}
     </div>

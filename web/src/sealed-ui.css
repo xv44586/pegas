@@ -726,6 +726,23 @@ a {
   }
 }
 
+.message-context-cue {
+  border-left: 2px solid var(--line);
+  color: var(--muted);
+  display: grid;
+  font-size: 12px;
+  gap: 2px;
+  margin: 0 0 8px;
+  padding-left: 10px;
+}
+.message-context-cue span {
+  color: var(--ink);
+  font-weight: 600;
+}
+.message-context-cue small {
+  color: var(--muted);
+}
+
 .drawer-timeline {
   display: grid;
   gap: 12px;
@@ -2812,6 +2829,24 @@ kbd {
   font-size: 12px;
   margin-top: 22px;
 }
+.usage-dimension {
+  display: flex;
+  gap: 6px;
+  margin-top: 18px;
+}
+.usage-dimension button {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 5px 12px;
+}
+.usage-dimension button.is-active {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--canvas);
+}
 .usage-table > div {
   border-bottom: 1px solid var(--line);
   display: grid;
@@ -3186,7 +3221,7 @@ kbd {
   margin: 0;
   padding: 0;
 }
-.progress-list li {
+.progress-list > li {
   color: var(--faint);
   display: grid;
   gap: 10px;
@@ -3194,7 +3229,7 @@ kbd {
   min-height: 48px;
   position: relative;
 }
-.progress-list li::after {
+.progress-list > li::after {
   background: var(--line);
   content: '';
   height: 26px;
@@ -3203,28 +3238,146 @@ kbd {
   top: 17px;
   width: 1px;
 }
-.progress-list li:last-child::after {
+.progress-list > li:last-child::after {
   display: none;
 }
-.progress-list li.is-done {
+.progress-list > li.is-done {
   color: var(--positive);
 }
-.progress-list li.is-current {
+.progress-list > li.is-current {
   color: var(--accent);
 }
-.progress-list li.is-waiting {
+.progress-list > li.is-waiting {
   color: var(--caution);
 }
-.progress-list li.is-failed {
+.progress-list > li.is-failed {
   color: var(--critical);
 }
-.progress-list li span {
+.progress-list > li > span {
   color: var(--ink);
   display: grid;
   gap: 3px;
 }
-.progress-list small {
+.progress-list > li small {
   color: var(--muted);
+}
+.run-record-heading {
+  align-items: baseline;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+.run-transcript {
+  display: grid;
+  gap: 10px;
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+.run-transcript > li {
+  font-size: 13px;
+}
+.transcript-step {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  font-size: 12px;
+  gap: 6px;
+}
+.transcript-step small {
+  margin-left: auto;
+}
+.transcript-tool summary,
+.transcript-thinking summary {
+  align-items: center;
+  color: var(--ink);
+  cursor: pointer;
+  display: flex;
+  gap: 6px;
+  list-style: none;
+}
+.transcript-tool summary small,
+.transcript-thinking summary small {
+  color: var(--muted);
+  margin-left: auto;
+}
+.transcript-error {
+  color: var(--critical);
+  font-style: normal;
+  margin-left: 6px;
+}
+.transcript-pending {
+  color: var(--accent);
+  font-style: normal;
+  margin-left: 6px;
+}
+.transcript-detail {
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 12px;
+  margin: 6px 0 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.transcript-message {
+  border-left: 2px solid var(--line);
+  padding-left: 10px;
+}
+.transcript-message > small {
+  color: var(--muted);
+}
+.transcript-markdown {
+  margin-top: 4px;
+}
+.state-hero-markdown {
+  font-size: 14px;
+}
+.timeline-markdown {
+  font-size: 14px;
+}
+.run-duration-summary {
+  color: var(--muted);
+  font-size: 12px;
+}
+.run-progress-details summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+.run-final-output {
+  margin-top: 8px;
+}
+.run-final-output summary {
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 12px;
+}
+.transcript-subagent > details > summary {
+  align-items: center;
+  color: var(--ink);
+  cursor: pointer;
+  display: flex;
+  gap: 6px;
+  list-style: none;
+}
+.transcript-subagent > details > summary small {
+  color: var(--muted);
+  margin-left: auto;
+}
+.transcript-subagent {
+  border-left: 2px solid var(--accent);
+  padding-left: 10px;
+}
+.subagent-prompt summary,
+.subagent-transcript summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  margin-top: 6px;
 }
 .artifact-row {
   align-items: center;
