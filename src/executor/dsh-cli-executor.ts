@@ -45,6 +45,7 @@ interface DshTextEvent {
 
 interface DshToolCallEvent {
   type: 'tool_call'
+  tool?: string
 }
 
 interface DshStatusEvent {
@@ -218,6 +219,12 @@ export class DshCliExecutor implements RunExecutor {
             acknowledgementEmitted = true
           }
         }
+        if (event.type === 'tool_call') {
+          input.onProgress?.({
+            type: 'activity',
+            label: `调用工具 ${event.tool ?? '未知工具'}`,
+          })
+        }
         if (event.type === 'status' && event.phase === 'step_end') {
           if (event.usage) {
             usage = usage ? addTokenUsage(usage, event.usage) : event.usage
@@ -225,6 +232,16 @@ export class DshCliExecutor implements RunExecutor {
           } else {
             unreportedSteps += 1
           }
+          input.onProgress?.({
+            type: 'activity',
+            label: `完成第 ${String(reportedSteps + unreportedSteps)} 步推理`,
+          })
+        }
+        if (event.type === 'status' && event.phase === 'step_start') {
+          input.onProgress?.({
+            type: 'activity',
+            label: `开始第 ${String(reportedSteps + unreportedSteps + 1)} 步推理`,
+          })
         }
         if (event.type === 'error')
           streamError = event.message ?? 'Unknown DSH error'
@@ -395,7 +412,12 @@ function parseDshEvent(
   if (parsed.type === 'text' && typeof parsed.text === 'string') {
     return { type: 'text', text: parsed.text }
   }
-  if (parsed.type === 'tool_call') return { type: 'tool_call' }
+  if (parsed.type === 'tool_call') {
+    return {
+      type: 'tool_call',
+      ...(typeof parsed.tool === 'string' ? { tool: parsed.tool } : {}),
+    }
+  }
   if (parsed.type === 'status' && typeof parsed.phase === 'string') {
     return {
       type: 'status',

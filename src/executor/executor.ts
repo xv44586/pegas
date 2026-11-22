@@ -27,10 +27,9 @@ export interface ExecutorInput {
   signal?: AbortSignal
 }
 
-interface ExecutorProgressEvent {
-  type: 'acknowledgement'
-  text: string
-}
+export type ExecutorProgressEvent =
+  | { type: 'acknowledgement'; text: string }
+  | { type: 'activity'; label: string }
 
 export interface ExecutorResult {
   executorRef: string

@@ -466,7 +466,13 @@ describe('durable approval', () => {
     expect(
       store.listEvents('owner').find(event => event.id === continuation.id),
     ).toMatchObject({ status: 'processed', attempts: 2 })
-    expect(store.listRuns(claimed.task.id)).toHaveLength(3)
+    expect(store.listRuns(claimed.task.id)).toHaveLength(2)
+    expect(store.listRuns(claimed.task.id).at(-1)).toMatchObject({
+      status: 'queued',
+    })
+    expect(store.listRuns(claimed.task.id).at(-1)?.input).toContain(
+      'Use a safer alternative.',
+    )
     store.close()
   })
 

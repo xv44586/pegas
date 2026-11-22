@@ -136,6 +136,17 @@ fast/balanced/deep 三池全部用户可配可缺省，初始映射不硬编码�
 
 **验收**：cancelled→新建相关 Channel 携带来源摘要且权限不扩大；来源摘要经 PRIVACY-001 边界；旧数据无 sourceContext 时行为不变。
 
+### P6 真实供应商实测修正（EXEC-006，2026-11-22）
+
+真实模型 + 真实 DSH 首轮实测暴露四个缺口，本节记录已落地的语义修正：
+
+1. **相关事情引用是确定性意图，不交给模型**：`payload.sourceTaskId` 存在时，无论模型答 reply/continue/steer，处理器一律强制 `create_task` 并注入服务端派生的 sourceContext；来源无终态事实时 failEvent 退回，绝不静默降级成对话。模型只负责没有结构化引用时的归属判断。
+2. **continue_task 不追加并行 Run**：目标 Task 存在 queued/running Run 时，用户继续输入按 steering 语义处理——queued Run 直接合并进输入（`[用户补充]` 块），running Run 追加 steering 指令，由既有 supersede 机制生成唯一后继。修复了实测中"6 秒内连发两条消息产生两个并行 Run，steering 后继被无关 Run 永久阻塞"的卡死。automation 与 collaboration 事件保持既有追加语义（调度提示与协作交接需要独立 Run 承载其 provenance）。同一事件的决策重放必须一致，否则拒绝。
+3. **执行过程可见**：Executor 进度事件扩展为 acknowledgement + activity（工具调用、推理步开始/结束）；Worker 把 activity 汇总成单条 coalesced Outbox `run.progress` 投影（工具调用次数、完成步数、最近 ≤20 条动态），经 PRIVACY-001 还原后到达 Web；工作详情按 Run 展示执行动态，不再"只能傻等"。
+4. **推理档位为受控选择**：事情级 effort 从自由文本改为下拉（默认/low/medium/high/max），已有非标准值保留可见可存。
+
+**验收**：模型答 reply 时相关事情仍创建 work Task 且首 Run 含来源终态；连发消息只产生一个 Run 且输入合并；running 中继续输入生成可领取的 steering 后继；activity 经 Outbox 单条投影可见且脱敏还原；`pnpm check` + `pnpm smoke` + `pnpm smoke:crash`。
+
 ## 5. 明确不做（本轮非目标）
 
 - 不重构 Task/Run 状态机、Mandate/Goal Contract/evidence 门禁、claim fencing——它们是本设计的地基。

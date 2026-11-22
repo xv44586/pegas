@@ -84,6 +84,31 @@ export class RoutingEventHandler implements EventHandler {
           store.getRuntimeSettings().chatLaneEnabled === true,
       }) ?? (await this.#router.route(event, candidates, routingContext))
     if (!decision) return
+    const sourceReference = sourceTaskReference(event)
+    if (sourceReference && decision.kind !== 'create_task') {
+      const sourceContext = routingContext.resolveSourceContext(sourceReference)
+      if (!sourceContext) {
+        throw new Error(
+          `Source task ${sourceReference} has no terminal facts to hand off`,
+        )
+      }
+      const text = userMessageText(event)
+      store.applyRoutingDecision(
+        event,
+        {
+          kind: 'create_task',
+          title: text.replaceAll(/\s+/g, ' ').slice(0, 120),
+          goal: text,
+          input: text,
+          reason:
+            'The message explicitly references an ended source Task; a related Task is required.',
+          sourceContext,
+        },
+        this.#executorName,
+        task => this.#executionContext(task),
+      )
+      return
+    }
     if (decision.kind === 'steer_task' || decision.kind === 'cancel_task') {
       store.applyControlIntent(event, decision)
       return
@@ -316,6 +341,22 @@ function recordPayload(value: unknown, field: string): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value))
     throw new Error(`${field} must be an object`)
   return value as Record<string, unknown>
+}
+
+function sourceTaskReference(event: InboxEvent): string | undefined {
+  if (event.type !== 'user.message') return undefined
+  const payload = event.payload
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload))
+    return undefined
+  const value = (payload as Record<string, unknown>).sourceTaskId
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function userMessageText(event: InboxEvent): string {
+  return requiredPayloadString(
+    recordPayload(event.payload, 'user.message'),
+    'text',
+  )
 }
 
 /**
@@ -718,6 +759,12 @@ export async function executeClaimedRun(
   if (signal.aborted) abortRun()
   else signal.addEventListener('abort', abortRun, { once: true })
   const steeringState = { pending: false }
+  const activityState = {
+    recent: [] as string[],
+    toolCalls: 0,
+    steps: 0,
+    events: 0,
+  }
   const leaseHeartbeat = setInterval(() => {
     try {
       if (store.renewRunLeaseAndCheckSteering(claimed.run.id, workerId)) {
@@ -774,16 +821,40 @@ export async function executeClaimedRun(
       },
       onProgress: event => {
         if (!store.ownsRun(claimed.run.id, workerId)) return
+        if (event.type === 'acknowledgement') {
+          store.enqueueOutbox({
+            userId: claimed.task.userId,
+            taskId: claimed.task.id,
+            channel: 'conversation',
+            dedupeKey: `run-acknowledged:${claimed.run.id}`,
+            payload: {
+              type: 'run.acknowledged',
+              taskId: claimed.task.id,
+              runId: claimed.run.id,
+              text: event.text,
+            },
+          })
+          return
+        }
+        if (event.label.startsWith('调用工具')) activityState.toolCalls += 1
+        if (event.label.startsWith('完成第')) activityState.steps += 1
+        activityState.recent.push(event.label)
+        if (activityState.recent.length > 20) activityState.recent.shift()
+        activityState.events += 1
         store.enqueueOutbox({
           userId: claimed.task.userId,
           taskId: claimed.task.id,
           channel: 'conversation',
-          dedupeKey: `run-acknowledged:${claimed.run.id}`,
+          dedupeKey: `run-progress:${claimed.run.id}:${String(activityState.events)}`,
+          coalesceKey: `run-progress:${claimed.run.id}`,
           payload: {
-            type: 'run.acknowledged',
+            type: 'run.progress',
             taskId: claimed.task.id,
             runId: claimed.run.id,
-            text: event.text,
+            toolCalls: activityState.toolCalls,
+            steps: activityState.steps,
+            recent: [...activityState.recent],
+            text: `执行中 · 工具调用 ${String(activityState.toolCalls)} 次 · 已完成 ${String(activityState.steps)} 步推理`,
           },
         })
       },

@@ -5571,6 +5571,12 @@ export class PegasStore {
         .get(event.id) as unknown as RunRow | undefined
       if (existingRun) {
         const existingTask = this.#taskById(existingRun.task_id)
+        const existingDecision = this.#database
+          .prepare('SELECT kind FROM routing_decisions WHERE event_id = ?')
+          .get(event.id) as { kind: string } | undefined
+        if (existingDecision && existingDecision.kind !== decision.kind) {
+          throw new Error('Event already routed with a different decision')
+        }
         if (collaboration) {
           if (collaboration.target_event_id === event.id) {
             this.#markCollaborationDispatchedInTransaction(
@@ -5684,6 +5690,74 @@ export class PegasStore {
         .get(task.id) as { status: string } | undefined
       if (decision.kind === 'continue_task' && blockingAction) {
         throw new TaskActionBlockedError(task.id, blockingAction.status)
+      }
+
+      if (
+        decision.kind === 'continue_task' &&
+        !collaboration &&
+        event.source !== 'automation'
+      ) {
+        const activeRun = this.#database
+          .prepare(
+            `SELECT id, status FROM runs
+             WHERE task_id = ? AND status IN ('queued','running')
+             ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+          )
+          .get(task.id) as { id: string; status: string } | undefined
+        if (activeRun) {
+          if (activeRun.status === 'queued') {
+            const run = this.#runById(activeRun.id)
+            this.#database
+              .prepare(
+                'UPDATE runs SET input_json = ?, updated_at = ? WHERE id = ?',
+              )
+              .run(
+                JSON.stringify(
+                  `${run.input}\n\n[用户补充] 用户在执行开始前补充了以下要求，必须与原始目标合并处理：\n${decision.input}`,
+                ),
+                now,
+                activeRun.id,
+              )
+          } else {
+            const row = this.#database
+              .prepare('SELECT steering_json FROM runs WHERE id = ?')
+              .get(activeRun.id) as { steering_json: string | null }
+            const directive = {
+              eventId: event.id,
+              text: decision.input,
+              at: now,
+            }
+            const directives = row.steering_json
+              ? (JSON.parse(row.steering_json) as (typeof directive)[])
+              : []
+            directives.push(directive)
+            this.#database
+              .prepare(
+                'UPDATE runs SET steering_json = ?, updated_at = ? WHERE id = ?',
+              )
+              .run(JSON.stringify(directives), now, activeRun.id)
+          }
+          this.#database
+            .prepare(
+              `INSERT INTO task_events (event_id, task_id, relation, created_at)
+               VALUES (?, ?, 'steering', ?)
+               ON CONFLICT(event_id) DO UPDATE SET
+                 task_id = excluded.task_id,
+                 relation = excluded.relation,
+                 created_at = excluded.created_at`,
+            )
+            .run(event.id, task.id, now)
+          this.#database
+            .prepare(
+              `INSERT INTO routing_decisions (event_id, kind, task_id, reason, created_at)
+               VALUES (?, ?, ?, ?, ?)`,
+            )
+            .run(event.id, decision.kind, task.id, decision.reason, now)
+          const redirectedTask = this.#taskById(task.id)
+          const redirectedRun = this.#runById(activeRun.id)
+          this.#database.exec('COMMIT')
+          return { task: redirectedTask, run: redirectedRun }
+        }
       }
 
       const existingTaskEvent = this.#database

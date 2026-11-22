@@ -272,6 +272,33 @@ export function DetailDrawer({
   )
 }
 
+interface RunProgressSummary {
+  runId: string
+  toolCalls: number
+  steps: number
+  recent: string[]
+  at: string
+}
+
+function runProgressFromPayload(
+  payload: unknown,
+): Omit<RunProgressSummary, 'at'> | undefined {
+  if (!payload || typeof payload !== 'object') return undefined
+  const value = payload as Record<string, unknown>
+  if (value.type !== 'run.progress' || typeof value.runId !== 'string')
+    return undefined
+  return {
+    runId: value.runId,
+    toolCalls: typeof value.toolCalls === 'number' ? value.toolCalls : 0,
+    steps: typeof value.steps === 'number' ? value.steps : 0,
+    recent: Array.isArray(value.recent)
+      ? value.recent.filter(
+          (entry): entry is string => typeof entry === 'string',
+        )
+      : [],
+  }
+}
+
 function drawerEyebrow(view: DrawerView): string {
   if (view.kind === 'task') return '工作详情'
   if (view.kind === 'message') return '待你处理'
@@ -860,6 +887,18 @@ function TaskDetail({
   const runHistory = (runs ?? (run ? [run] : [])).toSorted(
     (left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt),
   )
+  const progressByRun = new Map<string, RunProgressSummary>()
+  for (const message of timeline?.messages ?? []) {
+    const progress = runProgressFromPayload(message.payload)
+    if (!progress) continue
+    const existing = progressByRun.get(progress.runId)
+    if (!existing || Date.parse(message.createdAt) >= Date.parse(existing.at)) {
+      progressByRun.set(progress.runId, {
+        ...progress,
+        at: message.createdAt,
+      })
+    }
+  }
   const timelineItems = [
     ...(timeline?.events.map(event => ({
       id: event.id,
@@ -868,6 +907,7 @@ function TaskDetail({
       role: '你',
       text: textFromPayload(event.payload),
       attachment: event.attachment,
+      progressRunId: undefined as string | undefined,
     })) ?? []),
     ...(timeline?.messages.map(message => ({
       id: message.id,
@@ -876,9 +916,10 @@ function TaskDetail({
       role: 'Pegas',
       text: textFromPayload(message.payload),
       attachment: undefined,
+      progressRunId: runProgressFromPayload(message.payload)?.runId,
     })) ?? []),
   ]
-    .filter(item => item.text)
+    .filter(item => item.text && !item.progressRunId)
     .toSorted((left, right) => Date.parse(left.at) - Date.parse(right.at))
   const [confirmingStop, setConfirmingStop] = useState(false)
   const [stopping, setStopping] = useState(false)
@@ -970,6 +1011,7 @@ function TaskDetail({
           {runHistory.length ? (
             runHistory.map((historyRun, index) => {
               const historyState = runStatusLabel(historyRun)
+              const progress = progressByRun.get(historyRun.id)
               return (
                 <li
                   className={runProgressClass(historyState)}
@@ -988,6 +1030,25 @@ function TaskDetail({
                     </small>
                     {runHistory.length > 1 && historyRun.lastError && (
                       <small>{historyRun.lastError}</small>
+                    )}
+                    {progress && (
+                      <small className="run-progress-summary">
+                        工具调用 {progress.toolCalls} 次 · 已完成{' '}
+                        {progress.steps} 步推理 ·{' '}
+                        {formatRelativeTime(progress.at)}
+                      </small>
+                    )}
+                    {progress && progress.recent.length > 0 && (
+                      <details className="run-progress-details">
+                        <summary>执行动态</summary>
+                        <ul>
+                          {progress.recent.map((label, labelIndex) => (
+                            <li key={`${historyRun.id}-${String(labelIndex)}`}>
+                              {label}
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
                     )}
                   </span>
                 </li>
@@ -2234,14 +2295,22 @@ function WorkerProfileSection({
                 </label>
               )}
               <label className="field-label">
-                推理档位（可选，如 low / high / max）
-                <input
+                推理档位
+                <select
                   disabled={saving}
                   onChange={event => setEffort(event.target.value)}
-                  placeholder="留空跟随模型默认"
-                  type="text"
                   value={effort}
-                />
+                >
+                  <option value="">跟随模型默认</option>
+                  <option value="low">low · 轻快</option>
+                  <option value="medium">medium · 均衡</option>
+                  <option value="high">high · 深入</option>
+                  <option value="max">max · 全力</option>
+                  {effort &&
+                    !['low', 'medium', 'high', 'max'].includes(effort) && (
+                      <option value={effort}>{effort}</option>
+                    )}
+                </select>
               </label>
               {modelMode === 'override' && (
                 <label className="field-label">

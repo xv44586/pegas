@@ -175,7 +175,9 @@ console.log(JSON.stringify({
       taskId: 'task-1',
       prompt: 'do the work',
       workingDirectory: process.cwd(),
-      onProgress: event => acknowledgements.push(event.text),
+      onProgress: event => {
+        if (event.type === 'acknowledgement') acknowledgements.push(event.text)
+      },
     })
 
     expect(acknowledgements).toEqual([
@@ -202,7 +204,9 @@ console.log(JSON.stringify({
       taskId: 'task-1',
       prompt: 'answer directly',
       workingDirectory: process.cwd(),
-      onProgress: event => acknowledgements.push(event.text),
+      onProgress: event => {
+        if (event.type === 'acknowledgement') acknowledgements.push(event.text)
+      },
     })
 
     expect(acknowledgements).toEqual([])

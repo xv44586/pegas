@@ -1,5 +1,6 @@
 import type {
   ExecutorInput,
+  ExecutorProgressEvent,
   ExecutorResult,
   RunExecutor,
 } from '../executor/executor.js'
@@ -20,11 +21,12 @@ export class PrivacyMaskingExecutor implements RunExecutor {
   async execute(input: ExecutorInput): Promise<ExecutorResult> {
     const prompt = this.#masker.mask(input.prompt).text
     const onProgress = input.onProgress
-      ? (event: { type: 'acknowledgement'; text: string }) =>
-          input.onProgress?.({
-            ...event,
-            text: this.#masker.restore(event.text),
-          })
+      ? (event: ExecutorProgressEvent) =>
+          input.onProgress?.(
+            event.type === 'acknowledgement'
+              ? { ...event, text: this.#masker.restore(event.text) }
+              : { ...event, label: this.#masker.restore(event.label) },
+          )
       : undefined
     const result = await this.#executor.execute({
       ...input,

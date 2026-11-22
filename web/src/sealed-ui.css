@@ -2845,6 +2845,29 @@ kbd {
 .progress-list small {
   color: var(--muted);
 }
+.run-progress-summary {
+  color: var(--accent);
+}
+.run-progress-details summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+.run-progress-details ul {
+  color: var(--muted);
+  font-size: 12px;
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+}
+.run-progress-details li {
+  display: block;
+  min-height: 0;
+  padding: 1px 0;
+}
+.run-progress-details li::after {
+  display: none;
+}
 .artifact-row {
   align-items: center;
   background: var(--surface-raised);

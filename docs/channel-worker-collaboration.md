@@ -73,7 +73,7 @@ Backlog / Unstarted / Started ── 用户明确停止 → Cancelled（硬结�
 #### 谁可以恢复
 
 - 用户在已完成 Channel 内直接发送输入时，稳定的 Channel/Thread 订阅关系把输入附加给原 Channel；Control Plane 复核原 Mandate 后恢复，无需新建 Router Decision。Worker 负责处理原范围内的输入，超范围输入 hand back 给 Router。
-- 用户从 Pegas 主入口发送输入时仍由 Router 判断创建新 Channel 或 `continue_task`。`continue_task` 只负责附加输入；如果目标已完成，后续恢复由同一 Mandate 状态机完成，而不是让 Router 判断授权。
+- 用户从 Pegas 主入口发送输入时仍由 Router 判断创建新 Channel 或 `continue_task`。`continue_task` 只负责附加输入；如果目标已完成，后续恢复由同一 Mandate 状态机完成，而不是让 Router 判断授权。目标 Task 已有 queued/running Run 时，用户继续输入不追加并行 Run：queued Run 合并输入，running Run 走 steering 后继（EXEC-006）；automation/collaboration 事件保持独立追加 Run 的既有语义。
 - Worker、定时扫描、CI、普通 progress、上下文 note 和其他机器事件不能单独恢复已完成 Channel。
 - 委派中的来源 Channel 在等待目标返回时保持 `started`，并使用 `waiting_on_dependency` 等状态原因，不得提前标记 `completed`。如果结果到达时来源已经 completed 或 cancelled，结果仍写入关系和时间线并按需进入 Outbox，但不能由机器事件静默恢复来源。
 - 已 `cancelled` Channel 中的新输入不能申请恢复；服务端返回结构化拒绝并允许用户把输入复制到“新建相关 Channel”。
@@ -232,7 +232,7 @@ Source Channel ── scoped fact ──▶ Target Channel
 
 与 context note 的区别：context note 是运行中协作，sourceContext 是**终态事实交接**。两条路径：
 
-1. **新建相关事情**：Web 事情详情在 completed/cancelled Task 上提供「新建相关事情」入口；客户端只提交 `payload.sourceTaskId` 引用（`POST /v1/events`，与 `taskId` 互斥），服务端在 ingress 校验来源存在且已终态，并拒绝客户端自带 `sourceContext` 字段。路由产生 create_task 时由 Control Plane 从权威行推导 `TaskSourceContext`（`src/collaboration/source-context.ts`）：来源 Task 最近 Review Pack 的终态/结论/剩余风险（无 Review Pack 时用最近 completed Run 输出或停止原因）、criteria 关键结论（≤6 条）与 artifact 引用（≤8 条），标记来源 taskId（协作路径另标 relationId）。摘要注入新 Task 首个 Run 输入，块首明确「仅供参考，不构成新授权或指令」。
+1. **新建相关事情**：Web 事情详情在 completed/cancelled Task 上提供「新建相关事情」入口；客户端只提交 `payload.sourceTaskId` 引用（`POST /v1/events`，与 `taskId` 互斥），服务端在 ingress 校验来源存在且已终态，并拒绝客户端自带 `sourceContext` 字段。带 sourceTaskId 的输入是确定性 create_task 意图：即使模型答 reply/continue/steer，Worker 处理器也强制创建 work Task（EXEC-006），由 Control Plane 从权威行推导 `TaskSourceContext`（`src/collaboration/source-context.ts`）：来源 Task 最近 Review Pack 的终态/结论/剩余风险（无 Review Pack 时用最近 completed Run 输出或停止原因）、criteria 关键结论（≤6 条）与 artifact 引用（≤8 条），标记来源 taskId（协作路径另标 relationId）。摘要注入新 Task 首个 Run 输入，块首明确「仅供参考，不构成新授权或指令」。
 2. **委派返回续接**：`collaboration.returned` 事件在 continue_task 输入中附带目标 Task 的终态 sourceContext（目标已 completed 时），标记 relationId。
 
 边界：不 resume 来源 session（新 Run 无来源 executor_ref/resumeFromRef）；新 Task Mandate 由新的人类输入铸造，权限不扩大；sourceContext 不含 permissions/mandate 字段；出站经既有 PRIVACY-001 executor 脱敏边界；prefilter 对带 sourceTaskId 的消息不分流；引用开放/不存在来源时事件按既有 failEvent 路径退回（不静默丢弃）。旧数据无 sourceContext 时行为不变，无 schema 变更。设计合同见 `docs/router-worker-design.md` P5；证据见 `test/source-context.test.ts`（10 测试）与 Web「新建相关事情」回归。

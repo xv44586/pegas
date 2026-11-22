@@ -5209,10 +5209,9 @@ describe('sealed Pegas UI', () => {
     fireEvent.change(await screen.findByLabelText('执行池'), {
       target: { value: 'fast' },
     })
-    fireEvent.change(
-      screen.getByLabelText('推理档位（可选，如 low / high / max）'),
-      { target: { value: 'low' } },
-    )
+    const effortSelect = screen.getByLabelText('推理档位')
+    expect(effortSelect.tagName).toBe('SELECT')
+    fireEvent.change(effortSelect, { target: { value: 'low' } })
     fireEvent.click(screen.getByRole('button', { name: '保存执行设置' }))
     expect(
       await screen.findByText('执行设置已保存，对后续运行生效。'),
@@ -5261,6 +5260,48 @@ describe('sealed Pegas UI', () => {
     await waitFor(() =>
       expect(screen.queryByText(/新建相关事情，携带终态摘要/)).toBeNull(),
     )
+  })
+
+  it('shows live execution activity for the running Run in the drawer', async () => {
+    installSnapshotFetch({
+      ...snapshot,
+      messages: [
+        ...snapshot.messages,
+        {
+          id: 'message-progress',
+          userId: 'owner',
+          taskId: channel.id,
+          payload: {
+            type: 'run.progress',
+            taskId: channel.id,
+            runId: 'run-1',
+            toolCalls: 2,
+            steps: 1,
+            recent: ['调用工具 read', '完成第 1 步推理', '调用工具 test'],
+            text: '执行中 · 工具调用 2 次 · 已完成 1 步推理',
+          },
+          status: 'pending',
+          createdAt: '2026-11-19T08:02:30.000Z',
+        },
+      ],
+    })
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: new RegExp(channel.title) }),
+    )
+    const drawer = await screen.findByRole('dialog', { name: '工作详情' })
+    expect(
+      await within(drawer).findByText(/工具调用 2 次 · 已完成 1 步推理/),
+    ).toBeTruthy()
+    fireEvent.click(within(drawer).getByText('执行动态'))
+    expect(within(drawer).getByText('调用工具 read')).toBeTruthy()
+    expect(within(drawer).getByText('完成第 1 步推理')).toBeTruthy()
+    expect(within(drawer).getByText('调用工具 test')).toBeTruthy()
+    expect(
+      within(drawer).queryByText('执行中 · 工具调用 2 次 · 已完成 1 步推理'),
+    ).toBeNull()
   })
 
   it('renders collaboration relations in the task drawer', async () => {
