@@ -133,6 +133,12 @@ function activityEntries(running: boolean): RunActivityEntry[] {
       detail:
         '先确认工作区状态，再决定合并顺序。冲突大概率出现在 api.ts，需要先 grep 冲突标记。',
     }),
+    activityEntry(15, {
+      kind: 'thinking',
+      label: '合并顺序确认：CONV-005 先行。',
+      detail:
+        '合并顺序确认：CONV-005 先行，DESKTOP-001 的 smoke 修复随后，最后清理旧 worktree。',
+    }),
     fixtureShell(
       2,
       `cd ${workspace} && git status --short | grep -v node_modules | head -3`,
@@ -242,6 +248,16 @@ function activityEntries(running: boolean): RunActivityEntry[] {
       running ? 'smoke: 等待 worker 心跳…' : 'smoke: 18/18 场景通过',
       running ? 'started' : 'completed',
     ),
+    ...(running
+      ? [
+          activityEntry(16, {
+            kind: 'thinking',
+            status: 'started',
+            label: '正在核对 smoke 场景覆盖。',
+            detail: '正在核对 smoke 场景覆盖，等待 worker 心跳后确认 18/18。',
+          }),
+        ]
+      : []),
   ]
   return entries
 }

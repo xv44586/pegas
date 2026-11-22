@@ -3360,6 +3360,135 @@ describe('sealed Pegas UI', () => {
     ).toBe(true)
   })
 
+  it('folds settled thinking runs while keeping live reasoning row-by-row', async () => {
+    installSnapshotFetch(
+      {
+        ...snapshot,
+        channels: [{ ...channel, status: 'completed', canStop: false }],
+        runs: [
+          {
+            ...run,
+            status: 'completed',
+            output: '完成。',
+          },
+        ],
+      },
+      path => {
+        if (!path.startsWith('/v1/runs/run-1/activity?')) return undefined
+        return Response.json({
+          runId: 'run-1',
+          taskId: channel.id,
+          totalEntries: 7,
+          truncated: false,
+          entries: [
+            {
+              seq: 1,
+              kind: 'thinking',
+              label: '先看目录结构',
+              detail: '先看目录结构，确认入口文件。',
+              createdAt: '2026-11-19T08:00:10.000Z',
+              updatedAt: '2026-11-19T08:00:10.000Z',
+            },
+            {
+              seq: 2,
+              kind: 'step',
+              status: 'completed',
+              step: 1,
+              label: '第 1 步完成',
+              createdAt: '2026-11-19T08:00:11.000Z',
+              updatedAt: '2026-11-19T08:00:11.000Z',
+            },
+            {
+              seq: 3,
+              kind: 'thinking',
+              label: '再核对价格口径',
+              detail: '再核对价格口径，区分年付与月付。',
+              createdAt: '2026-11-19T08:00:12.000Z',
+              updatedAt: '2026-11-19T08:00:12.000Z',
+            },
+            {
+              seq: 4,
+              kind: 'tool_call',
+              status: 'completed',
+              callId: 'call-read',
+              tool: 'read',
+              label: 'read',
+              detail: '{"file_path":"README.md"}',
+              semantic: { kind: 'file_read', path: 'README.md' },
+              createdAt: '2026-11-19T08:00:13.000Z',
+              updatedAt: '2026-11-19T08:00:14.000Z',
+            },
+            {
+              seq: 5,
+              kind: 'thinking',
+              label: '工具结果已核对',
+              detail: '工具结果已核对，准备汇总。',
+              createdAt: '2026-11-19T08:00:15.000Z',
+              updatedAt: '2026-11-19T08:00:15.000Z',
+            },
+            {
+              seq: 6,
+              kind: 'thinking',
+              status: 'started',
+              label: '正在整理结论',
+              detail: '正在整理结论…',
+              createdAt: '2026-11-19T08:00:16.000Z',
+              updatedAt: '2026-11-19T08:00:16.000Z',
+            },
+            {
+              seq: 7,
+              kind: 'thinking',
+              label: '补充风险说明',
+              detail: '补充风险说明。',
+              createdAt: '2026-11-19T08:00:17.000Z',
+              updatedAt: '2026-11-19T08:00:17.000Z',
+            },
+          ],
+        })
+      },
+    )
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: new RegExp(channel.title) }),
+    )
+    const taskDrawer = await screen.findByRole('dialog', { name: '工作详情' })
+    fireEvent.click(await within(taskDrawer).findByText(/工作流程记录/))
+    await within(taskDrawer).findByText('更早的思考 · 1 段')
+    const foldRow = taskDrawer.querySelector('.activity-thinking-fold')
+    if (!foldRow) throw new Error('expected thinking fold row')
+    const outerSummary = foldRow.querySelector(':scope > details > summary')
+    if (!outerSummary) throw new Error('expected fold headline')
+    fireEvent.click(outerSummary)
+    expect(
+      within(foldRow as HTMLElement).getByText('再核对价格口径'),
+    ).toBeTruthy()
+    const historyPreview = within(foldRow as HTMLElement).queryByText(
+      '先看目录结构',
+    )
+    const historyDetails = foldRow.querySelector('.todo-history')
+    expect(historyDetails?.hasAttribute('open')).toBe(false)
+    fireEvent.click(
+      within(foldRow as HTMLElement).getByText('更早的思考 · 1 段'),
+    )
+    expect(
+      await within(foldRow as HTMLElement).findByText('先看目录结构'),
+    ).toBeTruthy()
+    expect(historyDetails?.hasAttribute('open')).toBe(true)
+    expect(historyPreview).toBeTruthy()
+    expect(within(taskDrawer).getByText('工具结果已核对')).toBeTruthy()
+    expect(within(taskDrawer).getByText('正在整理结论')).toBeTruthy()
+    expect(within(taskDrawer).getByText('补充风险说明')).toBeTruthy()
+    expect(taskDrawer.querySelectorAll('.activity-thinking-fold')).toHaveLength(
+      1,
+    )
+    const titles = [...taskDrawer.querySelectorAll('.activity-thinking')].map(
+      row => row.querySelector('.activity-title')?.textContent,
+    )
+    expect(titles.every(title => title === '思考')).toBe(true)
+  })
+
   it('renders a subagent delegation card with the child execution transcript', async () => {
     installSnapshotFetch(
       {
