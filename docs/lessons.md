@@ -216,6 +216,18 @@
 - Enforcement：本次以两条确定性回归 + 真实进程 park→approve→resume 联调作为该路径验收；后续同类进程交接 Feature 必须包含真实进程交接验证。
 - Owner / next action：同类问题再次出现时晋升为「进程交接必须真实进程验证」的仓库条款或 smoke 场景（把 park→resume 加入 smoke:crash 类脚本）。
 
+### LESSON-20261122-02：服务入口的运行时装配必须有真实进程验证
+
+- Rule：`src/*/main.ts` 等服务入口新增运行时装配（类、闭包、初始化顺序）时，必须至少有一条真实进程路径（smoke 或等价启动验证）覆盖新装配；单元测试与 `pnpm check` 不能替代入口初始化顺序验证。
+- Why：EXEC-007 把 `ManagedDshExecutor` 类声明放在 worker 入口主循环之后，主循环同步启动即引用该类触发 TDZ `ReferenceError`，每个 Run 执行失败；`pnpm check`（708 测试）全绿，缺陷由 `pnpm smoke:crash` 真实进程暴露。main.ts 不在单元测试 import 图内，此类错误对 typecheck/lint/coverage 全部不可见。
+- Feature：EXEC-007
+- Evidence：2026-11-22 EXEC-007 worktree；修复前 `pnpm smoke:crash` 报 `worker did not reach the event-claim crash point`，worker 日志 `Cannot access 'ManagedDshExecutor' before initialization`；把类声明移到主循环之前后 smoke:crash 三崩溃点通过。
+- Seen：1（2026-11-22）
+- Severity：normal
+- Status：Observed
+- Enforcement：尚未晋升为全仓规则；本次以 `pnpm smoke` + `pnpm smoke:crash` 作为该入口改动的完成门禁。
+- Owner / next action：同类问题再次出现时评估把「入口改动必须跑进程级 smoke」晋升为 AGENTS.md 条款或 CI 条件门禁。
+
 <!--
 ### LESSON-YYYYMMDD-NN：简短标题
 

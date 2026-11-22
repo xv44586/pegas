@@ -53,6 +53,8 @@ const environment = {
   PEGAS_EXECUTOR: 'dsh',
   PEGAS_DSH_COMMAND: fakeCommand,
   PEGAS_DSH_TIMEOUT_MS: '20000',
+  PEGAS_MODEL_PROVIDER: 'magpie',
+  PEGAS_MODEL_BASE_URL: 'http://127.0.0.1:3425/v1',
   PEGAS_ROUTER: 'rules',
   PEGAS_PRIVACY_MODE: 'disabled',
   PEGAS_WORKSPACE_ROOT: workspaceDirectory,

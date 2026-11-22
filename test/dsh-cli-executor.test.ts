@@ -36,8 +36,102 @@ describe('DshCliExecutor', () => {
         PEGAS_TASK_ID: 'stale-task',
         PEGAS_INPUT_EVENT_ID: 'stale-input-event',
         PEGAS_CONTROL_PLANE_URL: 'http://stale.example',
+        DSH_HOME: '/Users/someone/.dsh-stale',
+        PEGAS_DSH_MODEL_KEY_MAGPIE: 'stale-model-key',
       }),
     ).toEqual({ PATH: '/usr/bin', DSH_API_KEY: 'executor-owned' })
+  })
+
+  it('runs DSH inside the isolated home with the managed model configuration', async () => {
+    const command = fakeDsh(`
+const fs = require('node:fs')
+const patchIndex = process.argv.indexOf('--patch')
+const patchPath = patchIndex >= 0 ? process.argv[patchIndex + 1] : undefined
+console.log(JSON.stringify({
+  type: 'final',
+  sessionId: 'session-isolated',
+  text: JSON.stringify({
+    home: process.env.DSH_HOME,
+    modelKey: process.env.PEGAS_DSH_MODEL_KEY_MAGPIE,
+    patch: patchPath ? JSON.parse(fs.readFileSync(patchPath, 'utf8')) : undefined
+  }),
+  reason: { kind: 'completed' }
+}))
+`)
+    const executor = new DshCliExecutor({
+      command,
+      home: '/tmp/pegas-isolated-dsh-home',
+      modelConfiguration: {
+        patchPath: managedPatchPath([
+          {
+            id: 'agent-default-model',
+            config: { provider: 'magpie', model: 'gateway/model-a' },
+          },
+        ]),
+        environment: { PEGAS_DSH_MODEL_KEY_MAGPIE: 'managed-key' },
+        remove: () => undefined,
+      },
+    })
+
+    const result = await executor.execute({
+      runId: 'run-isolated',
+      taskId: 'task-isolated',
+      prompt: 'answer directly',
+      workingDirectory: process.cwd(),
+    })
+
+    expect(JSON.parse(result.output)).toMatchObject({
+      home: '/tmp/pegas-isolated-dsh-home',
+      modelKey: 'managed-key',
+      patch: [
+        {
+          id: 'agent-default-model',
+          config: { provider: 'magpie', model: 'gateway/model-a' },
+        },
+      ],
+    })
+  })
+
+  it('keeps the managed model patch when resuming an existing session', async () => {
+    const command = fakeDsh(`
+console.log(JSON.stringify({
+  type: 'final',
+  sessionId: 'session-existing',
+  text: JSON.stringify({
+    hasPatch: process.argv.includes('--patch'),
+    home: process.env.DSH_HOME
+  }),
+  reason: { kind: 'completed' }
+}))
+`)
+    const executor = new DshCliExecutor({
+      command,
+      home: '/tmp/pegas-isolated-dsh-home',
+      agentModel: { provider: 'magpie', model: 'gateway/model-a' },
+      modelConfiguration: {
+        patchPath: managedPatchPath([
+          {
+            id: 'agent-default-model',
+            config: { provider: 'magpie', model: 'gateway/model-a' },
+          },
+        ]),
+        environment: {},
+        remove: () => undefined,
+      },
+    })
+
+    const result = await executor.execute({
+      runId: 'run-resume',
+      taskId: 'task-resume',
+      prompt: 'continue',
+      workingDirectory: process.cwd(),
+      resumeSessionId: 'session-existing',
+    })
+
+    expect(JSON.parse(result.output)).toEqual({
+      hasPatch: true,
+      home: '/tmp/pegas-isolated-dsh-home',
+    })
   })
 
   it('exposes only the active Run capability to the Executor process', async () => {
@@ -631,4 +725,12 @@ function fakeDsh(body: string): string {
   writeFileSync(command, `#!/usr/bin/env node\n${body}`, { mode: 0o700 })
   chmodSync(command, 0o700)
   return command
+}
+
+function managedPatchPath(entries: unknown[]): string {
+  const directory = mkdtempSync(join(tmpdir(), 'pegas-managed-patch-'))
+  temporaryDirectories.push(directory)
+  const path = join(directory, 'model-configuration.json')
+  writeFileSync(path, JSON.stringify(entries), { mode: 0o600 })
+  return path
 }
