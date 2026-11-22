@@ -120,6 +120,65 @@ interface ParsedSessionLog {
   records: LogRecord[]
 }
 
+/** One durable tool result from the root session log, keyed by call id. */
+export interface DshRootToolOutcome {
+  callId: string
+  status: 'completed' | 'error'
+  result?: string
+  meta?: unknown
+}
+
+/**
+ * EXEC-006 P1a: the `--json` stream omits `tool/result.meta`, but the root
+ * session persists the full durable log. This reads that log post-hoc and
+ * returns faithful results + meta per call id so root activity rows can be
+ * upgraded to structured semantics. Defensive: unknown formats, torn frames
+ * and unreadable files yield fewer outcomes, never an exception.
+ */
+export function readDshRootToolOutcomes(
+  rootSessionId: string,
+  workspace: string,
+  options: DshSubagentReaderOptions,
+): DshRootToolOutcome[] {
+  const projectDirectory = join(options.sessionsRoot, dshProjectKey(workspace))
+  const outcomes: DshRootToolOutcome[] = []
+  for (const path of listSessionLogs(projectDirectory)) {
+    const log = readSessionLog(path)
+    if (log?.header.id !== rootSessionId) continue
+    const restore = options.restore ?? ((text: string) => text)
+    for (const record of log.records) {
+      if (record.type !== 'tool/result') continue
+      if (record.surfaceOp !== undefined && record.surfaceOp !== 'append') {
+        continue
+      }
+      const data = record.data
+      const message = data?.message
+      if (!isRecord(message) || typeof message.toolCallId !== 'string') continue
+      const result = Array.isArray(message.content)
+        ? message.content
+            .filter(
+              (block): block is { type: string; text: string } =>
+                isRecord(block) &&
+                block.type === 'text' &&
+                typeof block.text === 'string',
+            )
+            .map(block => block.text)
+            .join('')
+        : ''
+      outcomes.push({
+        callId: message.toolCallId,
+        status: message.isError === true ? 'error' : 'completed',
+        ...(result ? { result: restore(result) } : {}),
+        ...(data?.meta !== undefined
+          ? { meta: restoreMetaStrings(data.meta, restore) }
+          : {}),
+      })
+    }
+    break
+  }
+  return outcomes
+}
+
 function listSessionLogs(projectDirectory: string): string[] {
   let entries: string[]
   try {

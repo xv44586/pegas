@@ -41,7 +41,7 @@ import type {
   WorkerProfileResponse,
 } from '../types'
 import { PegasMascot } from './PegasMascot'
-import { ActivityTimeline } from './ActivityTimeline'
+import { ActivityTimeline, type ActivityDataAccess } from './ActivityTimeline'
 import { isDelegationEntry } from './activityModel'
 import {
   formatRelativeTime,
@@ -981,6 +981,27 @@ function TaskDetail({
   const [expandedTimeline, setExpandedTimeline] = useState<Set<string>>(
     () => new Set(),
   )
+  const deliveryRef = useRef<HTMLDivElement>(null)
+  const hasDelivery = Boolean(
+    delivery?.goal ?? delivery?.reviewPack ?? deliveryError,
+  )
+  const jumpToDelivery = hasDelivery
+    ? () => {
+        deliveryRef.current?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start',
+        })
+      }
+    : undefined
+  const activityAccess = api
+    ? (runId: string): ActivityDataAccess => ({
+        runId,
+        loadOutputPage: (targetRun, callId, offset) =>
+          api.runActivityOutputPage(targetRun, callId, offset),
+        imageUrl: (targetRun, callId) =>
+          api.runActivityImageUrl(targetRun, callId),
+      })
+    : undefined
 
   async function retryRun() {
     if (!run || retrying) return
@@ -1145,6 +1166,8 @@ function TaskDetail({
                             )}
                             <ActivityTimeline
                               entries={activity.entries}
+                              dataAccess={activityAccess?.(historyRun.id)}
+                              onReviewJump={jumpToDelivery}
                               renderDelegation={entry =>
                                 isDelegationEntry(entry) ? (
                                   <SubagentCard
@@ -1191,13 +1214,15 @@ function TaskDetail({
         </ol>
       </section>
       {(delivery?.goal ?? delivery?.reviewPack ?? deliveryError) && (
-        <DeliverySection
-          api={api}
-          channelId={channel.id}
-          delivery={delivery}
-          error={deliveryError}
-          onOpenEvidence={onOpenEvidence}
-        />
+        <div className="delivery-anchor" ref={deliveryRef}>
+          <DeliverySection
+            api={api}
+            channelId={channel.id}
+            delivery={delivery}
+            error={deliveryError}
+            onOpenEvidence={onOpenEvidence}
+          />
+        </div>
       )}
       {(collaborations?.length ?? 0) > 0 || collaborationsError ? (
         <CollaborationSection

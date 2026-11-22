@@ -651,6 +651,7 @@ try {
     'task-web-agent',
     'task-todo-search',
     'task-run-artifacts',
+    'task-output-archive',
     'preview-file',
     'preview-image',
     'preview-video',
@@ -671,6 +672,50 @@ try {
       await fixturePage.addInitScript(value => {
         globalThis.__PEGAS_UI_REVIEW__ = value
       }, fixture)
+      if (fixture === 'task-output-archive') {
+        await fixturePage.route('**/v1/runs/**', async route => {
+          const url = route.request().url()
+          if (url.includes('/output?')) {
+            const offset = Number(
+              new URL(url).searchParams.get('offset') ?? '0',
+            )
+            const tail =
+              offset === 4_000
+                ? Array.from(
+                    { length: 40 },
+                    (_, index) =>
+                      `line ${String(index + 161).padStart(3, '0')}: archived tail output — suite finished`,
+                  ).join('\n')
+                : ''
+            await route.fulfill({
+              contentType: 'application/json',
+              body: JSON.stringify({
+                runId: 'review-completed',
+                callId: 'call-2',
+                content: tail,
+                offset,
+                totalCharacters: 14_800,
+                archivedCharacters: 14_800,
+                truncatedArchive: false,
+              }),
+            })
+            return
+          }
+          if (url.includes('/image?')) {
+            const png = Buffer.from(
+              'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+              'base64',
+            )
+            await route.fulfill({ contentType: 'image/png', body: png })
+            return
+          }
+          await route.fulfill({
+            contentType: 'application/json',
+            status: 404,
+            body: JSON.stringify({ error: 'not_found' }),
+          })
+        })
+      }
       await fixturePage.goto(`http://127.0.0.1:${String(port)}/`)
       await fixturePage.getByRole('button', { name: '关闭详情' }).waitFor()
       if (fixture.startsWith('task-activity')) {
@@ -778,6 +823,28 @@ try {
         await fixturePage
           .locator('.activity-card.delivery-card')
           .scrollIntoViewIfNeeded()
+      }
+      if (fixture === 'task-output-archive') {
+        await fixturePage.getByText('工作流程记录', { exact: false }).click()
+        await fixturePage
+          .locator('.activity-tool')
+          .filter({ hasText: 'pnpm check' })
+          .locator('summary')
+          .click()
+        await fixturePage.getByRole('button', { name: '加载后续输出' }).click()
+        await fixturePage
+          .getByText('archived tail output', { exact: false })
+          .first()
+          .waitFor()
+        await fixturePage
+          .locator('.activity-changes > details > summary')
+          .click()
+        await fixturePage
+          .locator('.activity-tool')
+          .filter({ hasText: '查看了图片' })
+          .locator('summary')
+          .click()
+        await fixturePage.locator('.shell-card').scrollIntoViewIfNeeded()
       }
       await capture(fixturePage, `${size}-${fixture}.png`, `${size}-${fixture}`)
       await fixturePage.close()

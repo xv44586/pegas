@@ -28,6 +28,7 @@ import type {
   ReviewPack,
   Run,
   RunActivityReport,
+  RunActivityOutputPage,
   RunSubagentReport,
   ModelProviderDraft,
   RuntimeSettings,
@@ -90,6 +91,22 @@ export class PegasApi {
     return this.#get<RunSubagentReport>(
       `/v1/runs/${encodeURIComponent(runId)}/subagents?userId=${user}`,
     )
+  }
+
+  async runActivityOutputPage(
+    runId: string,
+    callId: string,
+    offset: number,
+  ): Promise<RunActivityOutputPage> {
+    const user = encodeURIComponent(this.#userId)
+    return this.#get<RunActivityOutputPage>(
+      `/v1/runs/${encodeURIComponent(runId)}/activity/${encodeURIComponent(callId)}/output?userId=${user}&offset=${String(offset)}&limit=12000`,
+    )
+  }
+
+  runActivityImageUrl(runId: string, callId: string): string {
+    const user = encodeURIComponent(this.#userId)
+    return `/v1/runs/${encodeURIComponent(runId)}/activity/${encodeURIComponent(callId)}/image?userId=${user}`
   }
 
   async channelTimeline(channelId: string): Promise<ChannelTimeline> {

@@ -43,6 +43,21 @@ export type SubagentTranscriptCollector = (input: {
 }) => SubagentTranscript[]
 
 /**
+ * EXEC-006 P1a: reads the root session's durable tool outcomes (result +
+ * structured meta) that the `--json` stream drops. Injected by the worker
+ * runtime; absent in tests and non-DSH deployments.
+ */
+export type RootToolOutcomeCollector = (input: {
+  rootSessionId: string
+  workspace: string
+}) => {
+  callId: string
+  status: 'completed' | 'error'
+  result?: string
+  meta?: unknown
+}[]
+
+/**
  * EXEC-006: builds a per-entry Chinese-headline summarizer. Injected by the
  * worker runtime (configured control-plane model + privacy mask + metering
  * keyed by Run and entry); absent in tests and unconfigured deployments,
@@ -52,6 +67,7 @@ export type ThinkingSummarizerFactory = (context: {
   userId: string
   runId: string
   seq: number
+  sessionId?: string
 }) => ThinkingSummarizer
 
 export function localControlPlaneBaseUrl(host: string, port: number): string {
@@ -767,6 +783,7 @@ export async function executeClaimedRun(
   telemetry?: { logger?: Logger; metrics?: MetricsRegistry },
   collectSubagents?: SubagentTranscriptCollector,
   thinkingSummarizer?: ThinkingSummarizerFactory,
+  collectRootOutcomes?: RootToolOutcomeCollector,
 ): Promise<void> {
   const runStartedAt = performance.now()
   const observeRun = (outcome: string) => {
@@ -1054,6 +1071,14 @@ export async function executeClaimedRun(
     collectSubagents,
     telemetry,
   )
+  upgradeRootToolSemantics(
+    store,
+    claimed,
+    workingDirectory,
+    result.executorRef || claimed.run.executorRef,
+    collectRootOutcomes,
+    telemetry,
+  )
   store.completeRun(claimed.run.id, workerId, result)
   observeRun('completed')
   if (result.approvalPending) return
@@ -1156,7 +1181,34 @@ export async function backfillThinkingSummaries(
   store: PegasStore,
   createSummarizer: ThinkingSummarizerFactory,
   telemetry?: { logger?: Logger; metrics?: MetricsRegistry },
+  collectRootOutcomes?: RootToolOutcomeCollector,
 ): Promise<void> {
+  if (collectRootOutcomes) {
+    let settled: ReturnType<PegasStore['listSettledRunsWithExecutorRef']>
+    try {
+      settled = store.listSettledRunsWithExecutorRef(
+        MAX_BACKFILL_RUNS_PER_START,
+      )
+    } catch {
+      settled = []
+    }
+    for (const item of settled) {
+      try {
+        const outcomes = collectRootOutcomes({
+          rootSessionId: item.executorRef,
+          workspace: item.workspace,
+        })
+        if (outcomes.length > 0) {
+          store.upgradeRunToolSemantics(item.runId, outcomes)
+        }
+      } catch (error) {
+        telemetry?.logger?.warn('run.root_semantic_upgrade_failed', {
+          runId: item.runId,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
+    }
+  }
   let pending: { runId: string; userId: string }[]
   try {
     pending = store.listRunsMissingThinkingSummary(MAX_BACKFILL_RUNS_PER_START)
@@ -1165,6 +1217,47 @@ export async function backfillThinkingSummaries(
   }
   for (const item of pending) {
     await summarizeThinkingEntries(store, item, createSummarizer, telemetry)
+    await summarizeChildThinking(store, item, createSummarizer, telemetry)
+  }
+}
+
+async function summarizeChildThinking(
+  store: PegasStore,
+  target: { runId: string; userId: string },
+  createSummarizer: ThinkingSummarizerFactory,
+  telemetry?: { logger?: Logger; metrics?: MetricsRegistry },
+): Promise<void> {
+  let candidates: ReturnType<PegasStore['listSubagentThinkingMissingSummary']>
+  try {
+    candidates = store
+      .listSubagentThinkingMissingSummary(target.runId)
+      .slice(0, MAX_THINKING_SUMMARIES_PER_RUN)
+  } catch {
+    return
+  }
+  for (const entry of candidates) {
+    try {
+      const summarizer = createSummarizer({
+        userId: target.userId,
+        runId: target.runId,
+        seq: entry.seq,
+        sessionId: entry.sessionId,
+      })
+      const summary = await summarizer.summarize(entry.detail ?? entry.label)
+      store.setSubagentThinkingSummary(
+        target.runId,
+        entry.sessionId,
+        entry.seq,
+        summary,
+      )
+    } catch (error) {
+      telemetry?.logger?.warn('run.thinking_summary_failed', {
+        runId: target.runId,
+        sessionId: entry.sessionId,
+        seq: entry.seq,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
   }
 }
 
@@ -1226,6 +1319,40 @@ function resolveToolApprovalGrant(
     return undefined
   }
   return { actionId: action.id, tool, argumentsHash }
+}
+
+/**
+ * EXEC-006 P1a: best-effort post-hoc upgrade of root tool rows from the
+ * durable session log. Never fails the Run; unknown logs simply yield no
+ * outcomes and the render-text projection stays.
+ */
+function upgradeRootToolSemantics(
+  store: PegasStore,
+  claimed: ClaimedRun,
+  workingDirectory: string,
+  executorRef: string | undefined,
+  collect: RootToolOutcomeCollector | undefined,
+  telemetry?: { logger?: Logger; metrics?: MetricsRegistry },
+): void {
+  if (!collect || !executorRef) return
+  try {
+    const outcomes = collect({
+      rootSessionId: executorRef,
+      workspace: runExecutionWorkspace(claimed.run, workingDirectory),
+    })
+    if (outcomes.length > 0) {
+      store.upgradeRunToolSemantics(claimed.run.id, outcomes)
+    }
+  } catch (error) {
+    telemetry?.logger?.warn('run.root_semantic_upgrade_failed', {
+      runId: claimed.run.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    telemetry?.metrics?.increment('pegas_errors_total', {
+      component: 'worker',
+      kind: 'root_semantic_upgrade',
+    })
+  }
 }
 
 function parseApprovalDecisionContext(input: string):
