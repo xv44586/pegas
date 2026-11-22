@@ -204,6 +204,18 @@
 - Enforcement：尚未晋升为全仓规则；本次以短查询回归测试约束该分支。
 - Owner / next action：后续给 `searchChannels` 或其他条件拼接查询增加分支时，必须为每个分支补参数绑定回归；同类问题在三个独立日期出现后晋升为门禁。
 
+### LESSON-20261122-01：快速结束的进程边界必须验证下一跳的独占资源交接
+
+- Rule：一个 Run 以「提前结束当前 Executor 进程、由 successor 恢复同一持久 session」为协议时，必须用真实进程验证 park→resume 交接：前一进程的资源释放（如 DSH session 内核写锁的 bounded dispose 窗口）与 successor 的获取时机要能闭环，mock Executor 测试不能替代。
+- Why：APPROVAL-001 桥接在 fake DSH 全链路测试与全部门禁通过后，真实 DSH 联调发现 park 进程在 turn 结束后仍持有 session flock 最长约 5 秒（DSH 设计上的 bounded shutdown），用户秒批时 successor 立即 resume 撞 `already owned by an active write handle`，Run 失败且 authorized Action 被 fence 转为 unknown，需要人工核对。修复为 Executor 对该确定性错误做有界重试（默认 20s，可配置，abort 即停）。
+- Feature：APPROVAL-001
+- Evidence：2026-11-22 真实 DSH 0.2.2-rc.5 + Pegas dist 联调（隔离 home + 受管模型配置）；park 成功创建 `dsh.tool.bash` Approval，approve 后 successor 报 session write handle 冲突；`dsh-session-persistence-jsonl` lease 注释与 `profile-boot` `PROCESS_SHUTDOWN_TIMEOUT_MS=5000` 证实窗口；`test/dsh-cli-executor.test.ts` 新增锁释放后重试成功与超窗失败两条回归。
+- Seen：1（2026-11-22）
+- Severity：recovery
+- Status：Observed
+- Enforcement：本次以两条确定性回归 + 真实进程 park→approve→resume 联调作为该路径验收；后续同类进程交接 Feature 必须包含真实进程交接验证。
+- Owner / next action：同类问题再次出现时晋升为「进程交接必须真实进程验证」的仓库条款或 smoke 场景（把 park→resume 加入 smoke:crash 类脚本）。
+
 <!--
 ### LESSON-YYYYMMDD-NN：简短标题
 

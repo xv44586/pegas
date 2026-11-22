@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
+import { fileURLToPath } from 'node:url'
 
 import type { ModelTokenUsage } from '../core/domain.js'
 import type { ExecutorInput, ExecutorResult, RunExecutor } from './executor.js'
@@ -18,6 +19,7 @@ export interface DshCliExecutorOptions {
   maximumEventBytes?: number
   maximumStderrBytes?: number
   agentModel?: { provider: string; model: string }
+  approvalBridgePath?: string
 }
 
 interface DshSessionEvent {
@@ -46,6 +48,20 @@ interface DshToolCallEvent {
   type: 'tool_call'
 }
 
+interface DshApprovalPendingEvent {
+  type: 'approval_pending'
+  callId: string
+  tool: string
+  actionId: string
+  approvalId: string
+}
+
+interface DshApprovalBridgeErrorEvent {
+  type: 'approval_bridge_error'
+  stage: string
+  message: string
+}
+
 interface DshStatusEvent {
   type: 'status'
   phase: string
@@ -68,6 +84,7 @@ export class DshCliExecutor implements RunExecutor {
   readonly #maximumEventBytes: number
   readonly #maximumStderrBytes: number
   readonly #agentModel?: { provider: string; model: string }
+  readonly #approvalBridgePath: string
 
   constructor(options: DshCliExecutorOptions = {}) {
     this.#command = options.command ?? 'dsh'
@@ -80,23 +97,39 @@ export class DshCliExecutor implements RunExecutor {
     this.#maximumEventBytes = options.maximumEventBytes ?? 8 * 1024 * 1024
     this.#maximumStderrBytes = options.maximumStderrBytes ?? 64 * 1024
     this.#agentModel = options.agentModel
+    this.#approvalBridgePath =
+      options.approvalBridgePath ?? defaultApprovalBridgePath()
   }
 
   async execute(input: ExecutorInput): Promise<ExecutorResult> {
-    try {
-      return await this.#executeOnce(input)
-    } catch (error) {
-      if (
-        input.resumeSessionId &&
-        error instanceof DshExecutionError &&
-        error.sessionId === input.resumeSessionId &&
-        isWorkspaceSessionMismatch(error.message)
-      ) {
-        const freshInput = { ...input }
-        delete freshInput.resumeSessionId
-        return this.#executeOnce(freshInput)
+    const sessionBusyDeadline = Date.now() + sessionBusyWaitMs()
+    for (;;) {
+      try {
+        return await this.#executeOnce(input)
+      } catch (error) {
+        if (
+          input.resumeSessionId &&
+          error instanceof DshExecutionError &&
+          error.sessionId === input.resumeSessionId &&
+          isWorkspaceSessionMismatch(error.message)
+        ) {
+          const freshInput = { ...input }
+          delete freshInput.resumeSessionId
+          return this.#executeOnce(freshInput)
+        }
+        if (
+          input.resumeSessionId &&
+          error instanceof DshExecutionError &&
+          error.sessionId === input.resumeSessionId &&
+          isSessionWriteHandleBusy(error.message) &&
+          !input.signal?.aborted &&
+          Date.now() < sessionBusyDeadline
+        ) {
+          await delay(sessionBusyRetryDelayMs())
+          continue
+        }
+        throw error
       }
-      throw error
     }
   }
 
@@ -106,10 +139,19 @@ export class DshCliExecutor implements RunExecutor {
       !input.resumeSessionId && this.#agentModel
         ? createAgentModelPatch(this.#agentModel)
         : undefined
+    const bridgeEnabled =
+      Boolean(input.actionCapability) && this.#approvalPolicy === 'ask'
+    const bridgePatch = bridgeEnabled
+      ? createApprovalBridgePatch(
+          this.#approvalBridgePath,
+          input.toolApprovalGrant,
+        )
+      : undefined
     const arguments_ = [
       '--profile',
       this.#profile,
       ...(patch ? ['--patch', patch.path] : []),
+      ...(bridgePatch ? ['--patch', bridgePatch.path] : []),
       '--json',
       '--permission-mode',
       this.#permissionMode,
@@ -126,6 +168,7 @@ export class DshCliExecutor implements RunExecutor {
       cwd: input.workingDirectory,
       env: {
         ...executorEnvironment(process.env),
+        ...(bridgeEnabled ? { PEGAS_APPROVAL_BRIDGE: '1' } : {}),
         ...(input.actionCapability
           ? {
               PEGAS_CONTROL_PLANE_URL: input.actionCapability.baseUrl,
@@ -170,6 +213,7 @@ export class DshCliExecutor implements RunExecutor {
     let usage: ModelTokenUsage | undefined
     let reportedSteps = 0
     let unreportedSteps = 0
+    let approvalPending: DshApprovalPendingEvent | undefined
     const stderrChunks: Buffer[] = []
     let stderrBytes = 0
 
@@ -223,6 +267,12 @@ export class DshCliExecutor implements RunExecutor {
             unreportedSteps += 1
           }
         }
+        if (event.type === 'approval_pending') {
+          approvalPending = event
+        }
+        if (event.type === 'approval_bridge_error') {
+          streamError = `Approval bridge failed to ${event.stage}: ${event.message}`
+        }
         if (event.type === 'error')
           streamError = event.message ?? 'Unknown DSH error'
       } catch (error) {
@@ -249,9 +299,38 @@ export class DshCliExecutor implements RunExecutor {
       input.signal?.removeEventListener('abort', abort)
       lines.close()
       patch?.remove()
+      bridgePatch?.remove()
     }
     const { code, signal } = exit
     const stderr = Buffer.concat(stderrChunks).toString('utf8')
+
+    if (
+      approvalPending &&
+      terminationError === undefined &&
+      streamError === undefined
+    ) {
+      return {
+        executorRef: sessionId ?? approvalPending.callId,
+        output: `工具 ${approvalPending.tool} 的越权操作已提交审批，等待你的决定后继续。`,
+        approvalPending: {
+          actionId: approvalPending.actionId,
+          approvalId: approvalPending.approvalId,
+          callId: approvalPending.callId,
+          tool: approvalPending.tool,
+        },
+        ...(usage
+          ? {
+              usage: {
+                tokens: usage,
+                source: 'provider_reported' as const,
+                reportedSteps,
+                unreportedSteps,
+              },
+            }
+          : {}),
+        durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
+      }
+    }
 
     if (
       terminationError !== undefined ||
@@ -301,6 +380,8 @@ export function executorEnvironment(
     'PEGAS_TASK_ID',
     'PEGAS_INPUT_EVENT_ID',
     'PEGAS_RUN_CLAIM_TOKEN',
+    'PEGAS_TOOL_APPROVAL_GRANT',
+    'PEGAS_APPROVAL_BRIDGE',
   ])
   return Object.fromEntries(
     Object.entries(source).filter(([key]) => !protectedKeys.has(key)),
@@ -311,6 +392,26 @@ function isWorkspaceSessionMismatch(message: string): boolean {
   return /^session "[^"]+" was recorded in "[^"]+", not "[^"]+"$/.test(
     message.trim(),
   )
+}
+
+function isSessionWriteHandleBusy(message: string): boolean {
+  return /^session "[^"]+" is already owned by an active write handle$/.test(
+    message.trim(),
+  )
+}
+
+function sessionBusyWaitMs(): number {
+  const parsed = Number(process.env.PEGAS_DSH_SESSION_BUSY_WAIT_MS)
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 20_000
+}
+
+function sessionBusyRetryDelayMs(): number {
+  const parsed = Number(process.env.PEGAS_DSH_SESSION_BUSY_RETRY_MS)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 500
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, milliseconds))
 }
 
 function createAgentModelPatch(model: { provider: string; model: string }): {
@@ -325,6 +426,40 @@ function createAgentModelPatch(model: { provider: string; model: string }): {
       {
         id: 'agent-default-model',
         config: { provider: model.provider, model: model.model },
+      },
+    ]),
+    { mode: 0o600 },
+  )
+  return {
+    path,
+    remove: () => rmSync(directory, { recursive: true, force: true }),
+  }
+}
+
+function defaultApprovalBridgePath(): string {
+  return join(
+    dirname(fileURLToPath(import.meta.url)),
+    'dsh-approval-bridge.mjs',
+  )
+}
+
+function createApprovalBridgePatch(
+  bridgePath: string,
+  grant?: ExecutorInput['toolApprovalGrant'],
+): { path: string; remove: () => void } {
+  const directory = mkdtempSync(join(tmpdir(), 'pegas-dsh-approval-'))
+  const path = join(directory, 'approval-bridge.json')
+  writeFileSync(
+    path,
+    JSON.stringify([
+      {
+        insert: [
+          {
+            id: 'pegas-approval-bridge',
+            name: bridgePath,
+            ...(grant ? { config: { grant } } : {}),
+          },
+        ],
       },
     ]),
     { mode: 0o600 },
@@ -353,6 +488,8 @@ function parseDshEvent(
   | DshErrorEvent
   | DshTextEvent
   | DshToolCallEvent
+  | DshApprovalPendingEvent
+  | DshApprovalBridgeErrorEvent
   | DshStatusEvent
   | DshOtherEvent {
   const parsed = JSON.parse(line) as unknown
@@ -386,6 +523,32 @@ function parseDshEvent(
     return { type: 'text', text: parsed.text }
   }
   if (parsed.type === 'tool_call') return { type: 'tool_call' }
+  if (
+    parsed.type === 'approval_pending' &&
+    typeof parsed.callId === 'string' &&
+    typeof parsed.tool === 'string' &&
+    typeof parsed.actionId === 'string' &&
+    typeof parsed.approvalId === 'string'
+  ) {
+    return {
+      type: 'approval_pending',
+      callId: parsed.callId,
+      tool: parsed.tool,
+      actionId: parsed.actionId,
+      approvalId: parsed.approvalId,
+    }
+  }
+  if (
+    parsed.type === 'approval_bridge_error' &&
+    typeof parsed.stage === 'string' &&
+    typeof parsed.message === 'string'
+  ) {
+    return {
+      type: 'approval_bridge_error',
+      stage: parsed.stage,
+      message: parsed.message,
+    }
+  }
   if (parsed.type === 'status' && typeof parsed.phase === 'string') {
     return {
       type: 'status',

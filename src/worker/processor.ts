@@ -4,7 +4,7 @@ import type {
   InboxEvent,
   Task,
 } from '../core/domain.js'
-import type { RunExecutor } from '../executor/executor.js'
+import type { RunExecutor, ToolApprovalGrant } from '../executor/executor.js'
 import type { Logger } from '../observability/logger.js'
 import type { MetricsRegistry } from '../observability/metrics.js'
 import type { TaskRouter } from '../router/router.js'
@@ -447,6 +447,7 @@ export async function executeClaimedRun(
       claimed.task.id,
     )
     const workRules = store.workRuleContextForUser(claimed.task.userId)
+    const toolApprovalGrant = resolveToolApprovalGrant(store, claimed)
     result = await executor.execute({
       runId: claimed.run.id,
       taskId: claimed.task.id,
@@ -464,6 +465,7 @@ export async function executeClaimedRun(
         baseUrl: controlPlaneBaseUrl,
         claimToken: claimed.claimToken,
       },
+      ...(toolApprovalGrant ? { toolApprovalGrant } : {}),
       ...(claimed.run.executorRef || claimed.run.resumeFromRef
         ? {
             resumeSessionId:
@@ -530,6 +532,7 @@ export async function executeClaimedRun(
   }
   store.completeRun(claimed.run.id, workerId, result)
   observeRun('completed')
+  if (result.approvalPending) return
   const persistedRun = store
     .listRuns(claimed.task.id)
     .find(run => run.id === claimed.run.id)
@@ -561,4 +564,61 @@ export async function executeClaimedRun(
       ],
     })
   }
+}
+
+function resolveToolApprovalGrant(
+  store: PegasStore,
+  claimed: ClaimedRun,
+): ToolApprovalGrant | undefined {
+  const context = parseApprovalDecisionContext(claimed.run.input)
+  if (context?.decision !== 'approve') return undefined
+  if (!context.action.kind.startsWith('dsh.tool.')) return undefined
+  const action = store.getAction(context.actionId, claimed.task.userId)
+  if (
+    action?.status !== 'authorized' ||
+    action.resumeRunId !== claimed.run.id
+  ) {
+    return undefined
+  }
+  const tool = action.request.tool
+  const argumentsHash = action.request.argumentsHash
+  if (typeof tool !== 'string' || typeof argumentsHash !== 'string') {
+    return undefined
+  }
+  return { actionId: action.id, tool, argumentsHash }
+}
+
+function parseApprovalDecisionContext(input: string):
+  | {
+      decision: string
+      actionId: string
+      action: { kind: string }
+    }
+  | undefined {
+  const trimmed = input.trimStart()
+  if (!trimmed.startsWith('{"type":"approval.decision"')) return undefined
+  try {
+    const parsed: unknown = JSON.parse(trimmed)
+    if (
+      isRecord(parsed) &&
+      parsed.type === 'approval.decision' &&
+      typeof parsed.decision === 'string' &&
+      typeof parsed.actionId === 'string' &&
+      isRecord(parsed.action) &&
+      typeof parsed.action.kind === 'string'
+    ) {
+      return {
+        decision: parsed.decision,
+        actionId: parsed.actionId,
+        action: { kind: parsed.action.kind },
+      }
+    }
+  } catch {
+    return undefined
+  }
+  return undefined
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
