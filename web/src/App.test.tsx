@@ -6264,6 +6264,157 @@ describe('sealed Pegas UI', () => {
     ).toBe('已复制')
   })
 
+  it('renders web citation cards and the agent-team control family', async () => {
+    const entries: RunActivityEntry[] = [
+      {
+        seq: 1,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-search',
+        tool: 'web_search',
+        label: 'web_search',
+        semantic: {
+          kind: 'web',
+          query: '成都 社保 补缴',
+          queries: ['成都 社保 补缴', '养老保险 缴费 2026'],
+          sources: [
+            {
+              url: 'http://sc.people.com.cn/a',
+              title: '人民网',
+              snippet: '缴费金额公布',
+            },
+            { url: 'https://cdhrss.chengdu.gov.cn/b' },
+          ],
+          sourcesTruncated: true,
+          preview: 'Sources:\n- [人民网](http://sc.people.com.cn/a)',
+        },
+        createdAt: '2026-11-19T08:00:10.000Z',
+        updatedAt: '2026-11-19T08:00:12.000Z',
+      },
+      {
+        seq: 2,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-fetch',
+        tool: 'web_fetch',
+        label: 'web_fetch',
+        semantic: {
+          kind: 'web',
+          url: 'https://example.com/a',
+          statusCode: 200,
+          preview: '# 标题',
+        },
+        createdAt: '2026-11-19T08:00:14.000Z',
+        updatedAt: '2026-11-19T08:00:16.000Z',
+      },
+      {
+        seq: 3,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-wait',
+        tool: 'wait_agent',
+        label: 'wait_agent',
+        semantic: {
+          kind: 'agent_control',
+          action: 'wait',
+          timeoutMs: 60_000,
+          timedOut: false,
+        },
+        createdAt: '2026-11-19T08:00:18.000Z',
+        updatedAt: '2026-11-19T08:00:20.000Z',
+      },
+      {
+        seq: 4,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-msg',
+        tool: 'send_message',
+        label: 'send_message',
+        semantic: {
+          kind: 'agent_control',
+          action: 'message',
+          agent: 'count-tests',
+          message: '请以 78 结束',
+        },
+        createdAt: '2026-11-19T08:00:22.000Z',
+        updatedAt: '2026-11-19T08:00:24.000Z',
+      },
+      {
+        seq: 5,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-list',
+        tool: 'list_agents',
+        label: 'list_agents',
+        semantic: {
+          kind: 'agent_control',
+          action: 'list',
+          agents: [
+            { name: 'lead', status: 'running', description: 'root agent' },
+            { name: 'count-tests', status: 'inactive' },
+          ],
+        },
+        createdAt: '2026-11-19T08:00:26.000Z',
+        updatedAt: '2026-11-19T08:00:28.000Z',
+      },
+    ]
+    installSnapshotFetch(
+      {
+        ...snapshot,
+        channels: [{ ...channel, status: 'completed', canStop: false }],
+        runs: [{ ...run, status: 'completed', output: '调研完成。' }],
+      },
+      path => {
+        if (!path.startsWith('/v1/runs/run-1/activity?')) return undefined
+        return Response.json({
+          runId: 'run-1',
+          taskId: channel.id,
+          totalEntries: entries.length,
+          truncated: false,
+          entries,
+        })
+      },
+    )
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: new RegExp(channel.title) }),
+    )
+    const drawer = await screen.findByRole('dialog', { name: '工作详情' })
+    fireEvent.click(await within(drawer).findByText(/工作流程记录/))
+    expect(await within(drawer).findByText('访问了 2 个网页')).toBeTruthy()
+    expect(within(drawer).getByText('协调了 3 次子 agent')).toBeTruthy()
+    const searchHeadline = within(drawer).getAllByText('已搜索网页')[0]
+    if (!searchHeadline) throw new Error('expected search headline')
+    fireEvent.click(searchHeadline)
+    const sourceLink = within(drawer).getByRole('link', { name: '人民网' })
+    expect(sourceLink.getAttribute('href')).toBe('http://sc.people.com.cn/a')
+    expect(sourceLink.getAttribute('rel')).toContain('noopener')
+    expect(within(drawer).getByText('缴费金额公布')).toBeTruthy()
+    expect(within(drawer).getByText('来源过多，仅保留前段引用。')).toBeTruthy()
+    expect(within(drawer).getByText(/等 2 个查询/)).toBeTruthy()
+    const fetchHeadline = within(drawer).getAllByText('已访问')[0]
+    if (!fetchHeadline) throw new Error('expected fetch headline')
+    fireEvent.click(fetchHeadline)
+    expect(within(drawer).getByText('HTTP 200')).toBeTruthy()
+    const waitHeadline = within(drawer).getAllByText('收到子 agent 消息')[0]
+    if (!waitHeadline) throw new Error('expected wait headline')
+    fireEvent.click(waitHeadline)
+    expect(within(drawer).getByText('上限 60s')).toBeTruthy()
+    expect(within(drawer).getByText('收到新消息')).toBeTruthy()
+    const messageHeadline = within(drawer).getAllByText('已发消息给')[0]
+    if (!messageHeadline) throw new Error('expected message headline')
+    fireEvent.click(messageHeadline)
+    expect(within(drawer).getByText('请以 78 结束')).toBeTruthy()
+    const listHeadline = within(drawer).getAllByText('查看了子 agent')[0]
+    if (!listHeadline) throw new Error('expected list headline')
+    fireEvent.click(listHeadline)
+    expect(within(drawer).getAllByText('count-tests').length).toBeGreaterThan(1)
+    expect(within(drawer).getByText('root agent')).toBeTruthy()
+    expect(drawer.querySelectorAll('.agent-status').length).toBe(2)
+  })
+
   it('keeps honest fallbacks for legacy and unknown tool records', async () => {
     installSnapshotFetch(
       {

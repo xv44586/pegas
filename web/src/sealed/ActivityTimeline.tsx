@@ -9,6 +9,7 @@ import {
   FileText,
   Globe,
   LoaderCircle,
+  Network,
   Search,
   SquareTerminal,
 } from 'lucide-react'
@@ -68,6 +69,8 @@ function groupIcon(group: ActivityGroupKind, size = 14) {
       return <Search size={size} />
     case 'web':
       return <Globe size={size} />
+    case 'agent':
+      return <Network size={size} />
   }
 }
 
@@ -85,6 +88,8 @@ function entryIcon(entry: RunActivityEntry) {
       return groupIcon('search')
     case 'web':
       return groupIcon('web')
+    case 'agent_control':
+      return groupIcon('agent')
     case 'unknown':
       return <FileText size={14} />
   }
@@ -260,6 +265,8 @@ function ToolResultBody({ entry }: { entry: RunActivityEntry }) {
       return <ShellCard entry={entry} semantic={semantic} />
     case 'file_edit':
       return <DiffCard entry={entry} semantic={semantic} />
+    case 'agent_control':
+      return <AgentControlCard entry={entry} semantic={semantic} />
     case 'file_read':
     case 'search':
     case 'web':
@@ -432,23 +439,55 @@ function PreviewCard({
   semantic: Extract<ToolSemantic, { kind: 'file_read' | 'search' | 'web' }>
 }) {
   const preview = semantic.preview
+  const web = semantic.kind === 'web' ? semantic : undefined
+  const sources = web?.sources
   const meta =
     semantic.kind === 'file_read'
       ? semantic.path
       : semantic.kind === 'search'
         ? `“${semantic.query}”${semantic.path ? ` · ${semantic.path}` : ''}`
-        : (semantic.url ?? semantic.query ?? '')
+        : (web?.url ??
+          (web?.queries && web.queries.length > 0
+            ? web.queries.join('、')
+            : (web?.query ?? '')))
   return (
     <div className="activity-card preview-card">
       <header className="activity-card-header">
         <span className="diff-path" title={meta}>
           {meta}
         </span>
+        {web?.statusCode !== undefined && (
+          <span
+            className={`preview-meta http-status ${web.statusCode < 400 ? 'is-ok' : 'is-error'}`}
+          >
+            HTTP {String(web.statusCode)}
+          </span>
+        )}
         {semantic.kind === 'file_read' && semantic.lineCount !== undefined && (
           <span className="preview-meta">{String(semantic.lineCount)} 行</span>
         )}
         {preview && <CopyAction label="复制内容" text={preview} />}
       </header>
+      {sources && sources.length > 0 && (
+        <ol className="web-sources" role="list">
+          {sources.map((source, index) => (
+            <li key={`${source.url}-${String(index)}`}>
+              <a
+                href={source.url}
+                rel="noreferrer noopener"
+                target="_blank"
+                title={source.url}
+              >
+                {source.title ?? source.url}
+              </a>
+              {source.snippet && <small>{source.snippet}</small>}
+            </li>
+          ))}
+        </ol>
+      )}
+      {web?.sourcesTruncated && (
+        <p className="activity-empty">来源过多，仅保留前段引用。</p>
+      )}
       {preview ? (
         <pre className="preview-body" tabIndex={0}>
           {preview}
@@ -460,6 +499,96 @@ function PreviewCard({
       )}
       {semantic.previewTruncated && (
         <p className="activity-empty">内容过长，仅保留前段预览。</p>
+      )}
+    </div>
+  )
+}
+
+function AgentControlCard({
+  entry,
+  semantic,
+}: {
+  entry: RunActivityEntry
+  semantic: Extract<ToolSemantic, { kind: 'agent_control' }>
+}) {
+  const running = entry.status === 'started'
+  const failed = entry.status === 'error'
+  const status =
+    semantic.action === 'wait'
+      ? running
+        ? { label: '等待中', tone: 'running' }
+        : semantic.timedOut === true
+          ? { label: '等待超时', tone: 'error' }
+          : semantic.timedOut === false
+            ? { label: '收到新消息', tone: 'ok' }
+            : undefined
+      : undefined
+  return (
+    <div className="activity-card agent-card">
+      <header className="activity-card-header">
+        <span>
+          {semantic.action === 'wait'
+            ? '等待子 agent'
+            : semantic.action === 'message'
+              ? `发给 ${semantic.agent ?? '子 agent'}`
+              : semantic.action === 'interrupt'
+                ? `请求停止 ${semantic.agent ?? '子 agent'}`
+                : '子 agent 列表'}
+        </span>
+        {semantic.timeoutMs !== undefined && (
+          <span className="preview-meta">
+            上限 {String(Math.round(semantic.timeoutMs / 1000))}s
+          </span>
+        )}
+        {semantic.message && (
+          <CopyAction label="复制消息" text={semantic.message} />
+        )}
+      </header>
+      {semantic.message && <p className="agent-message">{semantic.message}</p>}
+      {semantic.agents && semantic.agents.length > 0 && (
+        <ol className="agent-list" role="list">
+          {semantic.agents.map(agent => (
+            <li key={agent.name}>
+              <span
+                aria-hidden="true"
+                className={`agent-status is-${agent.status}`}
+              />
+              <strong>{agent.name}</strong>
+              <em>{agent.status}</em>
+              {agent.description && <small>{agent.description}</small>}
+            </li>
+          ))}
+        </ol>
+      )}
+      {!semantic.message && !semantic.agents && semantic.preview && (
+        <pre className="preview-body" tabIndex={0}>
+          {semantic.preview}
+        </pre>
+      )}
+      {!semantic.message &&
+        !semantic.agents &&
+        !semantic.preview &&
+        semantic.action !== 'wait' && (
+          <p className="activity-empty">
+            {running ? '执行中…' : '没有留存内容。'}
+          </p>
+        )}
+      {(status ?? failed) && (
+        <footer
+          className={`shell-footer is-${failed ? 'error' : (status?.tone ?? 'ok')}`}
+        >
+          {!failed && status?.tone === 'ok' && (
+            <Check aria-hidden="true" size={13} />
+          )}
+          {!failed && status?.tone === 'running' && (
+            <LoaderCircle
+              aria-hidden="true"
+              className="activity-spinner"
+              size={12}
+            />
+          )}
+          <span>{failed ? '失败' : status?.label}</span>
+        </footer>
       )}
     </div>
   )

@@ -10,6 +10,7 @@ export type ReviewFixture =
   | 'task-activity'
   | 'task-activity-open'
   | 'task-activity-running'
+  | 'task-web-agent'
   | 'preview-file'
   | 'preview-image'
   | 'preview-video'
@@ -259,7 +260,139 @@ function activityView(
   }
 }
 
+function webAgentEntries(): RunActivityEntry[] {
+  return [
+    activityEntry(1, {
+      kind: 'text',
+      label: '先查成都社保补缴规则，再让子 agent 复核。',
+      detail: '先查**成都社保补缴规则**，再让子 agent 复核缴费口径。',
+    }),
+    activityEntry(2, {
+      tool: 'web_search',
+      label: 'web_search',
+      detail: JSON.stringify({
+        queries: ['成都 社保 补缴 规则 2026', '养老保险 缴费 金额'],
+      }),
+      semantic: {
+        kind: 'web',
+        query: '成都 社保 补缴 规则 2026',
+        queries: ['成都 社保 补缴 规则 2026', '养老保险 缴费 金额'],
+        sources: [
+          {
+            url: 'http://sc.people.com.cn/n2/2026/0109/c345167-41467721.html',
+            title: '2026年成都市城乡居民基本养老保险缴费金额公布',
+            snippet: '缴费金额公布 (2026-01-09)',
+          },
+          {
+            url: 'https://cdhrss.chengdu.gov.cn/cdrsj/c152160/faq.shtml',
+            title: '成都人社局 · 补缴常见问题',
+            snippet: '断缴后可按年度补缴，滞纳金按日计收。',
+          },
+          {
+            url: 'https://sichuan.scol.com.cn/ggxw/202601/82777.html',
+            title: '四川在线 · 社保补缴答疑',
+          },
+        ],
+        sourcesTruncated: true,
+        preview:
+          'Sources:\n- [人民网](http://sc.people.com.cn/n2/2026/0109/c345167-41467721.html) — 缴费金额公布 (2026-01-09)',
+      },
+    }),
+    activityEntry(3, {
+      tool: 'web_fetch',
+      label: 'web_fetch',
+      detail: JSON.stringify({
+        url: 'http://sc.people.com.cn/n2/2026/0109/c345167-41467721.html',
+      }),
+      semantic: {
+        kind: 'web',
+        url: 'http://sc.people.com.cn/n2/2026/0109/c345167-41467721.html',
+        statusCode: 200,
+        preview:
+          '2026年成都市城乡居民基本养老保险缴费金额公布\n\n缴费档次共 13 档，最高档每年 6000 元…',
+      },
+    }),
+    activityEntry(4, {
+      tool: 'wait_agent',
+      label: 'wait_agent',
+      detail: '{"timeout_ms":60000}',
+      semantic: {
+        kind: 'agent_control',
+        action: 'wait',
+        timeoutMs: 60_000,
+        timedOut: false,
+      },
+    }),
+    activityEntry(5, {
+      tool: 'send_message',
+      label: 'send_message',
+      detail: JSON.stringify({
+        agent: 'count-tests',
+        message: '结果 78 已收到并确认，请直接以「78」作为最终答复结束任务。',
+      }),
+      semantic: {
+        kind: 'agent_control',
+        action: 'message',
+        agent: 'count-tests',
+        message: '结果 78 已收到并确认，请直接以「78」作为最终答复结束任务。',
+      },
+    }),
+    activityEntry(6, {
+      tool: 'list_agents',
+      label: 'list_agents',
+      detail: '{}',
+      semantic: {
+        kind: 'agent_control',
+        action: 'list',
+        agents: [
+          { name: 'lead', status: 'running', description: 'root agent' },
+          {
+            name: 'pkg-version',
+            status: 'inactive',
+            description: '查看 package 版本',
+          },
+          {
+            name: 'count-tests',
+            status: 'running',
+            description: '统计仓库测试文件',
+          },
+        ],
+      },
+    }),
+    activityEntry(7, {
+      tool: 'wait_agent',
+      label: 'wait_agent',
+      status: 'started',
+      detail: '{"timeout_ms":120000}',
+      semantic: {
+        kind: 'agent_control',
+        action: 'wait',
+        timeoutMs: 120_000,
+      },
+    }),
+  ]
+}
+
+function webAgentView(): DrawerView {
+  const base = taskView('completed')
+  if (base.kind !== 'task' || !base.run) return base
+  const entries = webAgentEntries()
+  return {
+    ...base,
+    activityByRun: {
+      [base.run.id]: {
+        runId: base.run.id,
+        taskId: channel.id,
+        entries,
+        totalEntries: entries.length,
+        truncated: false,
+      },
+    },
+  }
+}
+
 function fixtureView(fixture: ReviewFixture): DrawerView {
+  if (fixture === 'task-web-agent') return webAgentView()
   if (
     fixture === 'task-activity' ||
     fixture === 'task-activity-open' ||

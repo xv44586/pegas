@@ -9,7 +9,8 @@ export type ActivityUnit =
       entries: RunActivityEntry[]
     }
 
-export type ActivityGroupKind = 'command' | 'read' | 'edit' | 'search' | 'web'
+export type ActivityGroupKind =
+  'command' | 'read' | 'edit' | 'search' | 'web' | 'agent'
 
 function activityGroupKind(
   entry: RunActivityEntry,
@@ -27,6 +28,8 @@ function activityGroupKind(
       return 'search'
     case 'web':
       return 'web'
+    case 'agent_control':
+      return 'agent'
     case 'unknown':
       return undefined
   }
@@ -98,6 +101,8 @@ export function batchSummary(group: ActivityGroupKind, count: number): string {
       return `搜索了 ${value} 次`
     case 'web':
       return `访问了 ${value} 个网页`
+    case 'agent':
+      return `协调了 ${value} 次子 agent`
   }
 }
 
@@ -113,6 +118,8 @@ export function batchRunningLabel(group: ActivityGroupKind): string {
       return '正在搜索'
     case 'web':
       return '正在访问网页'
+    case 'agent':
+      return '正在协调子 agent'
   }
 }
 
@@ -157,13 +164,61 @@ export function toolHeadline(entry: RunActivityEntry): ToolHeadline {
       }
     case 'web': {
       const target = semantic.url ?? semantic.query ?? ''
+      const extraQueries =
+        semantic.queries && semantic.queries.length > 1
+          ? ` 等 ${String(semantic.queries.length)} 个查询`
+          : ''
       return {
-        title: entry.status === 'started' ? '正在访问' : '已访问',
-        subject: displayUrl(target),
+        title: semantic.url
+          ? entry.status === 'started'
+            ? '正在访问'
+            : '已访问'
+          : entry.status === 'started'
+            ? '正在搜索网页'
+            : '已搜索网页',
+        subject: `${displayUrl(target)}${extraQueries}`,
       }
     }
+    case 'agent_control':
+      return agentControlHeadline(entry, semantic)
     case 'unknown':
       return { title: entry.tool ?? entry.label }
+  }
+}
+
+function agentControlHeadline(
+  entry: RunActivityEntry,
+  semantic: Extract<ToolSemantic, { kind: 'agent_control' }>,
+): ToolHeadline {
+  const running = entry.status === 'started'
+  switch (semantic.action) {
+    case 'wait':
+      return {
+        title: running
+          ? '正在等待子 agent 消息'
+          : semantic.timedOut === true
+            ? '等待超时'
+            : semantic.timedOut === false
+              ? '收到子 agent 消息'
+              : '等待了子 agent',
+      }
+    case 'message':
+      return {
+        title: running ? '正在发消息给' : '已发消息给',
+        ...(semantic.agent ? { subject: semantic.agent } : {}),
+      }
+    case 'interrupt':
+      return {
+        title: running ? '正在请求停止' : '已请求停止',
+        ...(semantic.agent ? { subject: semantic.agent } : {}),
+      }
+    case 'list':
+      return {
+        title: running ? '正在查看子 agent' : '查看了子 agent',
+        ...(semantic.agents
+          ? { subject: `${String(semantic.agents.length)} 个` }
+          : {}),
+      }
   }
 }
 

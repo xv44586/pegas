@@ -555,6 +555,7 @@ try {
     'task-activity',
     'task-activity-open',
     'task-activity-running',
+    'task-web-agent',
     'preview-file',
     'preview-image',
     'preview-video',
@@ -598,6 +599,31 @@ try {
             .locator('.activity-card.diff-card')
             .scrollIntoViewIfNeeded()
         }
+      }
+      if (fixture === 'task-web-agent') {
+        await fixturePage.getByText('工作流程记录', { exact: false }).click()
+        await fixturePage
+          .locator('.activity-batch > details > summary')
+          .filter({ hasText: '访问了 2 个网页' })
+          .click()
+        await fixturePage
+          .locator('.activity-tool')
+          .filter({ hasText: '已搜索网页' })
+          .locator('summary')
+          .click()
+        await fixturePage
+          .locator('.activity-batch > details > summary')
+          .filter({ hasText: '正在协调子 agent' })
+          .click()
+        await fixturePage
+          .locator('.activity-tool')
+          .filter({ hasText: '查看了子 agent' })
+          .locator('summary')
+          .click()
+        await fixturePage
+          .locator('.activity-card.agent-card')
+          .first()
+          .scrollIntoViewIfNeeded()
       }
       await capture(fixturePage, `${size}-${fixture}.png`, `${size}-${fixture}`)
       await fixturePage.close()

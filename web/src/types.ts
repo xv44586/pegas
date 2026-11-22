@@ -222,10 +222,31 @@ export type ToolSemantic =
       kind: 'web'
       url?: string
       query?: string
+      queries?: string[]
+      statusCode?: number
+      sources?: WebSource[]
+      sourcesTruncated?: boolean
+      preview?: string
+      previewTruncated?: boolean
+    }
+  | {
+      kind: 'agent_control'
+      action: 'wait' | 'message' | 'list' | 'interrupt'
+      agent?: string
+      message?: string
+      timeoutMs?: number
+      timedOut?: boolean
+      agents?: { name: string; status: string; description?: string }[]
       preview?: string
       previewTruncated?: boolean
     }
   | { kind: 'unknown' }
+
+interface WebSource {
+  url: string
+  title?: string
+  snippet?: string
+}
 
 interface DiffHunk {
   oldStart?: number

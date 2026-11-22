@@ -1,9 +1,13 @@
-import type { DiffHunk, ToolSemantic } from '../core/domain.js'
+import type { DiffHunk, ToolSemantic, WebSource } from '../core/domain.js'
 
 const MAX_COMMAND_CHARACTERS = 4_000
 const MAX_OUTPUT_CHARACTERS = 12_000
 const MAX_PREVIEW_CHARACTERS = 4_000
 const MAX_DIFF_LINES = 400
+const MAX_WEB_SOURCES = 20
+const MAX_WEB_QUERIES = 8
+const MAX_AGENT_ENTRIES = 32
+const MAX_AGENT_MESSAGE_CHARACTERS = 2_000
 const CONTEXT_LINES = 3
 const RESULT_SEPARATOR = '\n[结果]\n'
 
@@ -47,6 +51,11 @@ export function buildToolSemantic(
     case 'web_search':
     case 'web_run':
       return webSemantic(args, result)
+    case 'wait_agent':
+    case 'send_message':
+    case 'list_agents':
+    case 'interrupt_agent':
+      return agentControlSemantic(call.tool, args, result)
     default:
       return { kind: 'unknown' }
   }
@@ -399,14 +408,26 @@ function webSemantic(
   result: string | undefined,
 ): ToolSemantic {
   const url = stringField(args, 'url')
-  const query = stringField(args, 'query')
+  const query = stringField(args, 'query') ?? firstQuery(args.queries)
+  const queries = queryList(args.queries)
   if (url === undefined && query === undefined) return { kind: 'unknown' }
+  const statusCode = url !== undefined ? fetchStatusCode(result) : undefined
+  const parsedSources =
+    url === undefined ? parseSearchSources(result) : undefined
   const preview =
     result === undefined ? undefined : clip(result, MAX_PREVIEW_CHARACTERS)
   return {
     kind: 'web',
     ...(url ? { url } : {}),
     ...(query ? { query } : {}),
+    ...(queries && queries.length > 1 ? { queries } : {}),
+    ...(statusCode !== undefined ? { statusCode } : {}),
+    ...(parsedSources && parsedSources.sources.length > 0
+      ? {
+          sources: parsedSources.sources,
+          ...(parsedSources.truncated ? { sourcesTruncated: true } : {}),
+        }
+      : {}),
     ...(preview
       ? {
           preview: preview.text,
@@ -414,4 +435,158 @@ function webSemantic(
         }
       : {}),
   }
+}
+
+function firstQuery(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined
+  const first: unknown = value[0]
+  return typeof first === 'string' && first.trim() ? first : undefined
+}
+
+function queryList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const queries = value
+    .filter(
+      (item): item is string => typeof item === 'string' && item.trim() !== '',
+    )
+    .slice(0, MAX_WEB_QUERIES)
+  return queries.length > 0 ? queries : undefined
+}
+
+/** Reads the HTTP status from the faithful `Fetched <url> (HTTP N)` header. */
+function fetchStatusCode(result: string | undefined): number | undefined {
+  if (result === undefined) return undefined
+  const match = /^Fetched \S+ \(HTTP (\d{3})\)/u.exec(result)
+  if (!match?.[1]) return undefined
+  const code = Number.parseInt(match[1], 10)
+  return Number.isSafeInteger(code) ? code : undefined
+}
+
+/**
+ * Parses the DSH search render's `Sources:` markdown list. Only the faithful
+ * `- [label](url)` lines are projected; the excerpt suffix is kept as a bounded
+ * snippet. Structured `tool/result.meta` is not carried by the `--json` stream,
+ * so this text route is the honest best-effort projection.
+ */
+function parseSearchSources(
+  result: string | undefined,
+): { sources: WebSource[]; truncated: boolean } | undefined {
+  if (result === undefined) return undefined
+  const section = /(?:^|\n)Sources:\n([\s\S]*?)(?:\n\n|$)/u.exec(result)
+  if (!section?.[1]) return undefined
+  const sources: WebSource[] = []
+  let truncated = /\(Showing the first \d+ sources\./u.test(result)
+  for (const line of section[1].split('\n')) {
+    const match = /^- \[([^\]]*)\]\((\S+?)\)(?: — ([\s\S]*))?$/u.exec(line)
+    if (!match?.[2]) continue
+    if (sources.length >= MAX_WEB_SOURCES) {
+      truncated = true
+      break
+    }
+    const label = match[1] ?? ''
+    const snippet = match[3]
+    sources.push({
+      url: match[2],
+      ...(label && label !== match[2] ? { title: label.slice(0, 200) } : {}),
+      ...(snippet ? { snippet: snippet.slice(0, 300) } : {}),
+    })
+  }
+  return { sources, truncated }
+}
+
+function agentControlSemantic(
+  tool: string,
+  args: Record<string, unknown>,
+  result: string | undefined,
+): ToolSemantic {
+  const agent = stringField(args, 'agent', 'target', 'name')
+  const preview =
+    result === undefined ? undefined : clip(result, MAX_PREVIEW_CHARACTERS)
+  const previewFields = preview
+    ? {
+        preview: preview.text,
+        ...(preview.truncated ? { previewTruncated: true } : {}),
+      }
+    : {}
+  switch (tool) {
+    case 'wait_agent': {
+      const timeout = args.timeout_ms
+      const timedOut = parseTimedOut(result)
+      return {
+        kind: 'agent_control',
+        action: 'wait',
+        ...(typeof timeout === 'number' && Number.isSafeInteger(timeout)
+          ? { timeoutMs: timeout }
+          : {}),
+        ...(timedOut !== undefined ? { timedOut } : {}),
+        ...previewFields,
+      }
+    }
+    case 'send_message': {
+      const message = stringField(args, 'message')
+      if (agent === undefined && message === undefined)
+        return { kind: 'unknown' }
+      return {
+        kind: 'agent_control',
+        action: 'message',
+        ...(agent ? { agent } : {}),
+        ...(message
+          ? { message: message.slice(0, MAX_AGENT_MESSAGE_CHARACTERS) }
+          : {}),
+        ...previewFields,
+      }
+    }
+    case 'interrupt_agent':
+      if (agent === undefined) return { kind: 'unknown' }
+      return {
+        kind: 'agent_control',
+        action: 'interrupt',
+        agent,
+        ...previewFields,
+      }
+    default: {
+      const agents = parseAgentList(result)
+      return {
+        kind: 'agent_control',
+        action: 'list',
+        ...(agents && agents.length > 0 ? { agents } : {}),
+        ...previewFields,
+      }
+    }
+  }
+}
+
+function parseTimedOut(result: string | undefined): boolean | undefined {
+  if (result === undefined) return undefined
+  try {
+    const parsed = JSON.parse(result) as unknown
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      typeof (parsed as { timedOut?: unknown }).timedOut === 'boolean'
+    )
+      return (parsed as { timedOut: boolean }).timedOut
+  } catch {
+    return undefined
+  }
+  return undefined
+}
+
+/** Parses the faithful `name [status] — description` list render. */
+function parseAgentList(
+  result: string | undefined,
+): { name: string; status: string; description?: string }[] | undefined {
+  if (result === undefined) return undefined
+  const agents: { name: string; status: string; description?: string }[] = []
+  for (const line of result.split('\n')) {
+    const match = /^(\S+) \[([a-z_]+)\](?: — (.*))?$/u.exec(line.trim())
+    if (!match?.[1] || !match[2]) continue
+    if (agents.length >= MAX_AGENT_ENTRIES) break
+    agents.push({
+      name: match[1].slice(0, 120),
+      status: match[2],
+      ...(match[3] ? { description: match[3].slice(0, 200) } : {}),
+    })
+  }
+  return agents.length > 0 ? agents : undefined
 }
