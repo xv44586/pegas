@@ -125,6 +125,49 @@ try {
     if (body.channels?.length >= 1) break
     await wait(100)
   }
+  const channelsBody = await (
+    await fetch(`http://127.0.0.1:${port}/v1/channels?userId=owner`)
+  ).json()
+  const firstChannel = channelsBody.channels?.[0]
+  if (!firstChannel) throw new Error('Unable to seed a11y attention')
+  for (const [index, payload] of [
+    {
+      type: 'run.completed',
+      taskId: firstChannel.id,
+      text: '这是测试相关事情的入口。我目前可以处理你在这条对话里提出的测试类需求。',
+    },
+    {
+      type: 'approval.required',
+      taskId: firstChannel.id,
+      approvalId: 'a11y-approval',
+      summary: '发布前需要确认影响范围',
+    },
+    {
+      type: 'goal.clarification_required',
+      taskId: firstChannel.id,
+      questions: ['发布窗口是哪个时间段？'],
+      text: '发布窗口是哪个时间段？',
+    },
+    {
+      type: 'run.failed',
+      taskId: firstChannel.id,
+      error: '上游模型超时，请稍后重试。',
+    },
+  ].entries()) {
+    const response = await fetch(`http://127.0.0.1:${port}/v1/outbox`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        userId: 'owner',
+        channel: 'conversation',
+        dedupeKey: `a11y-attention-${String(index)}`,
+        taskId: firstChannel.id,
+        payload,
+      }),
+    })
+    if (response.status !== 202)
+      throw new Error('Unable to seed a11y attention')
+  }
 
   browser = await chromium.launch({ headless: true })
   for (const theme of ['light', 'warm', 'dark']) {
@@ -150,6 +193,12 @@ try {
     ]) {
       await page.getByLabel('主导航').getByRole('button', { name: nav }).click()
       await page.getByRole('heading', { name: heading, exact: true }).waitFor()
+      if (nav === '待你处理')
+        await page
+          .getByLabel('待处理列表')
+          .getByRole('article')
+          .first()
+          .waitFor()
       await audit(page, `${theme}-${nav}`)
     }
     await page
@@ -199,6 +248,34 @@ try {
     `a11y forced-colors: glyph ${forcedState.glyphBox}px, status text "${forcedState.statusText}"`,
   )
   await forced.close()
+
+  const mobile = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    colorScheme: 'light',
+    reducedMotion: 'reduce',
+    hasTouch: true,
+  })
+  await mobile.addInitScript(() => {
+    localStorage.setItem('pegas-setup-complete', 'true')
+    localStorage.setItem('pegas-theme', 'light')
+  })
+  const mobilePage = await mobile.newPage()
+  await mobilePage.goto(`http://127.0.0.1:${port}/`)
+  await mobilePage.getByRole('textbox', { name: '给 Pegas 发消息' }).waitFor()
+  await mobilePage
+    .getByLabel('移动端主导航')
+    .getByRole('button', { name: '待你处理' })
+    .click()
+  await mobilePage
+    .getByRole('heading', { name: '待你处理', exact: true })
+    .waitFor()
+  await mobilePage
+    .getByLabel('待处理列表')
+    .getByRole('article')
+    .first()
+    .waitFor()
+  await audit(mobilePage, 'mobile-attention')
+  await mobile.close()
 
   console.log('Accessibility review passed.')
 } finally {

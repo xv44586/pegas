@@ -4,7 +4,7 @@
 >
 > 状态：Usable
 >
-> 更新日期：2026-11-20
+> 更新日期：2026-11-22
 
 ## 用户结果
 
@@ -74,3 +74,10 @@
 - `test/sqlite-store.test.ts`：产品已读与投递状态分离、幂等和用户隔离、schema 12 迁移。
 - `test/control-plane.test.ts`：已读 API 所有者成功与跨用户拒绝。
 - `web/src/App.test.tsx`：左侧入口、未读数量、自动已读、投递状态不变和来源 Channel 跳转。
+
+## Web 呈现 refinement（DESIGN-002，2026-11-22）
+
+- 「待你处理」的短标题、预览、语义状态、筛选计数、本地搜索和安静操作只改变 Web 交互适配，不改变 NOTIFY-003 的消息生成、所有者隔离、已读 API、投递状态或人工核对合同。
+- 本地搜索只过滤当前已加载快照中的内容与来源，不是服务端全文搜索；未加载消息不会被声称已搜索。筛选/搜索空态不删除或改写消息。
+- 已读仍不等于已解决：已读未解决事项保留在列表中；阅读不改变 Task/Run/Approval、用户接受或外部投递结果。完整正文与核对操作仍在既有详情中。
+- 证据与边界见 `docs/sealed-ui-rebuild.md` §17 和 `docs/feature-map.md` DESIGN-002「待处理收件箱 refinement」。回滚 Web refinement 不需要数据库迁移或 Outbox 数据回写。
