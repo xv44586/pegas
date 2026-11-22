@@ -7105,6 +7105,88 @@ describe('sealed Pegas UI', () => {
     expect(drawer.querySelectorAll('.activity-meta-row').length).toBe(2)
   })
 
+  it('pages archived web previews beyond the inline clip with the separator offset', async () => {
+    const outputCalls: string[] = []
+    installSnapshotFetch(
+      {
+        ...snapshot,
+        channels: [{ ...channel, status: 'completed', canStop: false }],
+        runs: [{ ...run, status: 'completed', output: '完成。' }],
+      },
+      path => {
+        if (path.startsWith('/v1/runs/run-1/activity?'))
+          return Response.json({
+            runId: 'run-1',
+            taskId: channel.id,
+            totalEntries: 1,
+            truncated: false,
+            entries: [
+              {
+                seq: 1,
+                kind: 'tool_call',
+                status: 'completed',
+                callId: 'call-fetch',
+                tool: 'web_fetch',
+                label: 'web_fetch',
+                semantic: {
+                  kind: 'web',
+                  url: 'https://example.com/readme',
+                  statusCode: 200,
+                  preview: 'P'.repeat(4_000),
+                  previewTruncated: true,
+                },
+                createdAt: '2026-11-19T08:00:10.000Z',
+                updatedAt: '2026-11-19T08:00:20.000Z',
+              },
+            ],
+          })
+        if (path.startsWith('/v1/runs/run-1/activity/call-fetch/output?')) {
+          outputCalls.push(path)
+          const offset = Number(
+            new URL(path, 'http://localhost').searchParams.get('offset'),
+          )
+          if (offset === 4_001)
+            return Response.json({
+              runId: 'run-1',
+              callId: 'call-fetch',
+              content: 'WEB-TAIL',
+              offset: 4_001,
+              totalCharacters: 4_009,
+              archivedCharacters: 4_009,
+              truncatedArchive: false,
+            })
+          return Response.json({ error: 'not_found' }, { status: 404 })
+        }
+        return undefined
+      },
+    )
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: new RegExp(channel.title) }),
+    )
+    const drawer = await screen.findByRole('dialog', { name: '工作详情' })
+    fireEvent.click(await within(drawer).findByText(/工作流程记录/))
+    const webHeadline = await within(drawer).findByText(
+      'https://example.com/readme',
+    )
+    fireEvent.click(webHeadline)
+    const previewCard = drawer.querySelector('.preview-card')
+    if (!previewCard) throw new Error('expected preview card')
+    const loadMore = within(previewCard as HTMLElement).getByRole('button', {
+      name: '加载后续输出',
+    })
+    fireEvent.click(loadMore)
+    expect(await within(drawer).findByText('WEB-TAIL')).toBeTruthy()
+    expect(outputCalls[0]).toContain('offset=4001')
+    expect(
+      within(previewCard as HTMLElement).queryByRole('button', {
+        name: '加载后续输出',
+      }),
+    ).toBeNull()
+  })
+
   it('pages archived shell output, highlights commands and jumps to the delivery review', async () => {
     const outputCalls: string[] = []
     installSnapshotFetch(
