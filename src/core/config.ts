@@ -1,4 +1,4 @@
-import { homedir, hostname } from 'node:os'
+import { hostname } from 'node:os'
 import { join, resolve } from 'node:path'
 
 import {
@@ -114,6 +114,8 @@ export function loadConfig(
     )
   }
 
+  const dshHome = resolve(environment.PEGAS_DSH_HOME ?? resolve(dataDir, 'dsh'))
+
   return {
     apiHost,
     apiPort: parsePositiveInteger(
@@ -137,7 +139,7 @@ export function loadConfig(
     executorMode: environment.PEGAS_EXECUTOR === 'echo' ? 'echo' : 'dsh',
     dshCommand: environment.PEGAS_DSH_COMMAND ?? 'dsh',
     dshProfile: environment.PEGAS_DSH_PROFILE ?? 'headless',
-    dshHome: resolve(environment.PEGAS_DSH_HOME ?? resolve(dataDir, 'dsh')),
+    dshHome,
     dshAdditionalDirectories: commaSeparatedPaths(
       environment.PEGAS_DSH_ADD_DIRS,
     ),
@@ -149,7 +151,7 @@ export function loadConfig(
     dshSessionsRoot: resolve(
       nonemptyOr(
         environment.PEGAS_DSH_SESSIONS_ROOT,
-        join(homedir(), '.dsh', 'sessions'),
+        join(dshHome, 'sessions'),
       ),
     ),
     workspaceRoot: resolve(environment.PEGAS_WORKSPACE_ROOT ?? '.'),
