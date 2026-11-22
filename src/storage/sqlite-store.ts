@@ -10568,6 +10568,35 @@ export class PegasStore {
   }
 
   /**
+   * EXEC-006 P1a backfill: settled Runs whose child transcripts still hold
+   * English thinking without a Chinese summary. A Run can have all root
+   * rows summarized yet pending child rows, so child candidates must be
+   * discoverable independently of listRunsMissingThinkingSummary.
+   */
+  listRunsMissingChildThinkingSummary(
+    limit: number,
+  ): { runId: string; userId: string }[] {
+    const rows = this.#database
+      .prepare(
+        `SELECT runs.id, tasks.user_id FROM runs
+         JOIN tasks ON tasks.id = runs.task_id
+         WHERE runs.status IN ('completed', 'waiting', 'failed', 'cancelled')
+           AND EXISTS (
+             SELECT 1 FROM run_subagent_transcripts
+             WHERE run_subagent_transcripts.run_id = runs.id
+           )
+         ORDER BY runs.updated_at DESC LIMIT ?`,
+      )
+      .all(Math.max(1, Math.min(limit, 200))) as unknown as {
+      id: string
+      user_id: string
+    }[]
+    return rows
+      .filter(row => this.listSubagentThinkingMissingSummary(row.id).length > 0)
+      .map(row => ({ runId: row.id, userId: row.user_id }))
+  }
+
+  /**
    * EXEC-006 P1a backfill: settled Runs with an executor ref, newest first,
    * so historical root rows can be upgraded from durable logs once per
    * worker start. Bounded; running Runs are excluded.

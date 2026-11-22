@@ -12,6 +12,7 @@ import {
   readDshRootToolOutcomes,
 } from '../src/executor/dsh-subagent-transcript.js'
 import { PegasStore } from '../src/storage/sqlite-store.js'
+import { backfillThinkingSummaries } from '../src/worker/processor.js'
 
 const cleanups: (() => Promise<void> | void)[] = []
 afterEach(async () => {
@@ -359,6 +360,64 @@ describe('EXEC-006 child thinking summary write-back', () => {
     expect(entry?.summary).toBe('仔细统计 src 下的文件数')
     expect(entry?.detail).toBe('Count the files under src carefully.')
     expect(store.listSubagentThinkingMissingSummary(claimed.run.id)).toEqual([])
+    store.close()
+  })
+
+  it('backfills child summaries even when every root row is already summarized', async () => {
+    const store = new PegasStore(':memory:')
+    const claimed = seedClaimedRun(store)
+    store.appendRunActivity(claimed.run.id, 'enhance-worker', {
+      kind: 'thinking',
+      label: 'Delegate the counting work.',
+      detail: 'Delegate the counting work to a subagent.',
+    })
+    store.recordRunSubagents(claimed.run.id, 'enhance-worker', [
+      {
+        sessionId: 'child-1',
+        parentSessionId: 'session-root',
+        delegationDepth: 1,
+        createdAt: '2026-11-23T00:00:00.000Z',
+        entries: [
+          {
+            seq: 1,
+            kind: 'thinking',
+            label: 'Count the files under src carefully.',
+            detail: 'Count the files under src carefully.',
+            createdAt: '2026-11-23T00:00:01.000Z',
+            updatedAt: '2026-11-23T00:00:01.000Z',
+          },
+        ],
+        totalEntries: 1,
+        truncated: false,
+      },
+    ])
+    store.completeRun(claimed.run.id, 'enhance-worker', {
+      executorRef: 'session-root',
+      output: 'done',
+    })
+    store.setRunThinkingSummary(claimed.run.id, 1, '把统计工作委派给子 agent')
+    expect(store.listRunsMissingThinkingSummary(10)).toEqual([])
+    expect(store.listRunsMissingChildThinkingSummary(10)).toEqual([
+      { runId: claimed.run.id, userId: 'owner' },
+    ])
+    const calls: { sessionId?: string }[] = []
+    await backfillThinkingSummaries(store, context => {
+      calls.push(context)
+      return { summarize: () => Promise.resolve('仔细统计 src 下的文件数') }
+    })
+    expect(calls).toEqual([
+      {
+        userId: 'owner',
+        runId: claimed.run.id,
+        seq: 1,
+        sessionId: 'child-1',
+      },
+    ])
+    const report = store.listRunSubagents(claimed.run.id, 'owner')
+    expect(report?.subagents[0]?.entries[0]?.summary).toBe(
+      '仔细统计 src 下的文件数',
+    )
+    expect(store.listRunsMissingChildThinkingSummary(10)).toEqual([])
     store.close()
   })
 })
