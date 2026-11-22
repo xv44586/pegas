@@ -449,16 +449,20 @@ function HighlightedText({ tokens }: { tokens: HighlightToken[] }) {
 }
 
 /**
- * EXEC-006 P1b: pages the archived full output beyond the inline 12KB clip.
+ * EXEC-006 P1b: pages the archived full output beyond the inline clip.
+ * Preview cards pass archiveOffset=1 because the archived result carries
+ * one separator newline before the inline preview text.
  * The button only appears when the Run has an output archive endpoint; the
  * archive itself is capped and says so honestly.
  */
 function OutputPager({
   entry,
   initialLength,
+  archiveOffset = 0,
 }: {
   entry: RunActivityEntry
   initialLength: number
+  archiveOffset?: number
 }) {
   const access = useContext(ActivityDataContext)
   const [pages, setPages] = useState<string[]>([])
@@ -466,9 +470,9 @@ function OutputPager({
     'idle',
   )
   const [archiveNote, setArchiveNote] = useState('')
-  const offsetRef = useRef(initialLength)
+  const offsetRef = useRef(initialLength + archiveOffset)
   if (!access || !entry.callId) {
-    return <p className="activity-empty">输出过长，仅保留前段记录。</p>
+    return <p className="activity-empty">内容过长，仅保留前段记录。</p>
   }
   const callId = entry.callId
   const loadMore = async () => {
@@ -687,7 +691,11 @@ function PreviewCard({
         </p>
       )}
       {semantic.previewTruncated && (
-        <p className="activity-empty">内容过长，仅保留前段预览。</p>
+        <OutputPager
+          entry={entry}
+          initialLength={preview?.length ?? 0}
+          archiveOffset={1}
+        />
       )}
     </div>
   )

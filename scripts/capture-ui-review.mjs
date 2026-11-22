@@ -679,19 +679,20 @@ try {
             const offset = Number(
               new URL(url).searchParams.get('offset') ?? '0',
             )
+            const isWebPreview = url.includes('/call-4/')
             const tail =
-              offset === 4_000
+              offset === (isWebPreview ? 4_001 : 4_000)
                 ? Array.from(
                     { length: 40 },
                     (_, index) =>
-                      `line ${String(index + 161).padStart(3, '0')}: archived tail output — suite finished`,
+                      `line ${String(index + 161).padStart(3, '0')}: archived tail output — ${isWebPreview ? 'readme remainder' : 'suite finished'}`,
                   ).join('\n')
                 : ''
             await route.fulfill({
               contentType: 'application/json',
               body: JSON.stringify({
                 runId: 'review-completed',
-                callId: 'call-2',
+                callId: isWebPreview ? 'call-4' : 'call-2',
                 content: tail,
                 offset,
                 totalCharacters: 14_800,
@@ -831,9 +832,25 @@ try {
           .filter({ hasText: 'pnpm check' })
           .locator('summary')
           .click()
-        await fixturePage.getByRole('button', { name: '加载后续输出' }).click()
+        await fixturePage
+          .getByRole('button', { name: '加载后续输出' })
+          .first()
+          .click()
         await fixturePage
           .getByText('archived tail output', { exact: false })
+          .first()
+          .waitFor()
+        await fixturePage
+          .locator('.activity-tool')
+          .filter({ hasText: 'example.com/long-readme' })
+          .locator('summary')
+          .click()
+        await fixturePage
+          .locator('.preview-card')
+          .getByRole('button', { name: '加载后续输出' })
+          .click()
+        await fixturePage
+          .getByText('readme remainder', { exact: false })
           .first()
           .waitFor()
         await fixturePage

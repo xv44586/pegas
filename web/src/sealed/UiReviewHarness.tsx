@@ -849,6 +849,18 @@ function outputArchiveView(): DrawerView {
       },
     }),
     activityEntry(4, {
+      tool: 'web_fetch',
+      label: 'web_fetch',
+      detail: '{"url":"https://example.com/long-readme"}',
+      semantic: {
+        kind: 'web',
+        url: 'https://example.com/long-readme',
+        statusCode: 200,
+        preview: longOutput.slice(0, 4_000),
+        previewTruncated: true,
+      },
+    }),
+    activityEntry(5, {
       tool: 'edit',
       label: 'edit',
       detail: JSON.stringify({
