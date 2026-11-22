@@ -221,4 +221,36 @@ describe('sealed UI typography scale (DESIGN-004)', () => {
     expect(stylesheet).not.toContain('.drawer-header small')
     expect(stylesheet).not.toContain('.state-hero small')
   })
+
+  it('keeps markdown headings at the surrounding card scale', () => {
+    for (const selector of [
+      '.message-markdown h1',
+      '.message-markdown h2',
+      '.message-markdown h3',
+      '.message-markdown h4',
+    ]) {
+      expect(fontSizeOf(selector), selector).toBe('inherit')
+    }
+  })
+
+  it('lets the drawer summary column shrink so wide code blocks scroll inside the card', () => {
+    expect(declarationOf('.state-hero > div', 'min-width')).toBe('0')
+    expect(declarationOf('.state-hero > div', 'flex')).toBe('1')
+    expect(declarationOf('.message-markdown', 'min-width')).toBe('0')
+    expect(declarationOf('.message-markdown pre', 'max-width')).toBe('100%')
+    expect(declarationOf('.message-markdown table', 'overflow-x')).toBe('auto')
+  })
+
+  it('caps drawer grid tracks so long timeline lines cannot widen the panel', () => {
+    for (const selector of [
+      '.drawer-timeline',
+      '.activity-timeline',
+      '.activity-batch-items',
+    ]) {
+      expect(declarationOf(selector, 'grid-template-columns'), selector).toBe(
+        'minmax(0, 1fr)',
+      )
+    }
+    expect(declarationOf('.drawer-timeline li', 'min-width')).toBe('0')
+  })
 })
