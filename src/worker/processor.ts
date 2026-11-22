@@ -20,6 +20,7 @@ import {
   TaskActionBlockedError,
   type PegasStore,
 } from '../storage/sqlite-store.js'
+import { decodeLegacyExecutionPermissions } from '../core/execution-permissions.js'
 import { runExecutionWorkspace } from './run-execution-snapshot.js'
 import { isTerminalProviderError } from './provider-errors.js'
 
@@ -156,6 +157,23 @@ export class RoutingEventHandler implements EventHandler {
         }),
       })
       return
+    }
+    if (decision.kind === 'continue_task') {
+      const target = store.findTask(decision.taskId, event.userId)
+      if (target?.kind === 'conversation') {
+        const settings = store.getRuntimeSettings()
+        store.applyRoutingDecision(event, decision, this.#executorName, {
+          executor: this.#executorName,
+          protocol: 'conversation-v1',
+          permissions: JSON.stringify({
+            mode: 'read-only',
+            approvalPolicy: 'never',
+            additionalDirectories: [],
+            privacyMode: settings.privacyMode,
+          }),
+        })
+        return
+      }
     }
     store.applyRoutingDecision(event, decision, this.#executorName, task =>
       this.#executionContext(task),
@@ -385,6 +403,7 @@ async function executeConversationRun(
   workerId: string,
   workingDirectory: string,
   signal: AbortSignal,
+  controlPlaneBaseUrl: string,
   telemetry?: { logger?: Logger; metrics?: MetricsRegistry },
 ): Promise<void> {
   const runStartedAt = performance.now()
@@ -415,6 +434,12 @@ async function executeConversationRun(
       executionContext: claimed.run.executionContext,
       executionContractVersion: claimed.run.executionContractVersion,
       mandate: claimed.task.mandate,
+      conversationStateCapability: {
+        baseUrl: controlPlaneBaseUrl,
+        runId: claimed.run.id,
+        claimToken: claimed.claimToken,
+        privacyMode: conversationPrivacyMode(claimed.run.executionContext),
+      },
       ...(memories.length > 0 ? { memories } : {}),
       ...(workRules.rules.length > 0 || workRules.customInstructions
         ? { workRules }
@@ -481,6 +506,13 @@ export function conversationSuggestion(
   if (!goal) return undefined
   const reply = trimmed.slice(0, match.index).trim()
   return { goal, ...(reply ? { reply } : {}) }
+}
+
+function conversationPrivacyMode(
+  context: ExecutionContext | undefined,
+): 'mask' | 'disabled' {
+  const permissions = decodeLegacyExecutionPermissions(context?.permissions)
+  return permissions?.privacyMode === 'mask' ? 'mask' : 'disabled'
 }
 
 function collaborationPayload(value: unknown): Record<string, unknown> {
@@ -763,6 +795,7 @@ export async function executeClaimedRun(
       workerId,
       workingDirectory,
       signal,
+      controlPlaneBaseUrl,
       telemetry,
     )
     return

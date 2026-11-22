@@ -21,6 +21,12 @@ export interface ExecutorInput {
     baseUrl: string
     claimToken: string
   }
+  conversationStateCapability?: {
+    baseUrl: string
+    runId: string
+    claimToken: string
+    privacyMode: 'mask' | 'disabled'
+  }
   toolApprovalGrant?: ToolApprovalGrant
   resumeSessionId?: string
   onExecutorRef?(executorRef: string): void

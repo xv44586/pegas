@@ -1410,9 +1410,7 @@ function ModelServices({
                 </dd>
               </div>
             </dl>
-            <h4>
-              可用模型 <b>{models.length}</b>
-            </h4>
+            <h4>可用模型（{models.length}）</h4>
             <button
               className="secondary-button"
               disabled={Boolean(busy) || !canProbe}

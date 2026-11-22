@@ -240,6 +240,18 @@
 - Enforcement：尚未晋升为全仓规则；本次以组件修复 + 既有回归作为门禁。
 - Owner / next action：同类问题再次出现时晋升为「key-reset effect 必须初始化自当前 prop」的 Lint 规则或 review checklist。
 
+### LESSON-20261122-04：在役 Candidate 的依赖不能指向可清理的构建 worktree
+
+- Rule：Supervisor 在役（active/previous）Candidate 的运行依赖必须自包含于 Release 目录；`node_modules` 不得以符号链接指向按流程会被清理的构建 worktree。构建器应原生产出实体依赖（如 APFS clonefile），清理 worktree 前必须校验在役 Release 无树外依赖。
+- Why：`buildSelfChangeCandidate` 以符号链接共享 worktree 的 `node_modules`，而 Feature 流程要求合并后清理 worktree/分支：清理会同时打断 active Release 的重启与 previous Release 的回滚恢复路径。本次发布后 `release-b22fa90` 无法按流程清理，需人工把依赖 clonefile 实体化并重算 attestation/manifest 哈希后才能删除 worktree。
+- Feature：SELF-001
+- Evidence：2026-11-22 `main-b22fa90-r1` 发布记录与依赖重锚定记录（`releases/candidates/main-b22fa90-r1.reanchor.json`，本地）；重锚定前后各一次真实 Supervisor restart 验证；`main-3621a49-r1`、`main-06ffb71-r1` 的 `node_modules` 仍指向 `exec-006-live-feedback` worktree。
+- Seen：1（2026-11-22）
+- Severity：recovery
+- Status：Observed
+- Enforcement：尚未晋升；按晋升规则 recovery 类一次确认即可晋升，Enforcement（构建器实体化依赖 + staging/清理前树外依赖校验的自动化门禁）需要独立 SELF-001 代码变更，已登记为下一缺口，不得以纯文档冒充门禁。
+- Owner / next action：下一个 SELF-001 迭代实现构建器自包含依赖与在役 Release 树外依赖检查，并同 commit 晋升本 Lesson；在此之前清理任何 worktree 前必须人工核查在役 Candidate 的 `node_modules` 指向。
+
 <!--
 ### LESSON-YYYYMMDD-NN：简短标题
 

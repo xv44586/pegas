@@ -365,6 +365,7 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
 
       if (
         !isRunCapabilityWrite(request) &&
+        !isConversationStateRead(request) &&
         !isAuthorized(request, options.apiToken)
       ) {
         return sendJson(response, 401, { error: 'unauthorized' })
@@ -1725,6 +1726,27 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
           if (!report) throw new Error('Run not found')
           return sendJson(response, 200, report)
         }
+        const conversationStateMatch =
+          /^\/v1\/runs\/([^/]+)\/conversation-state\/(tasks|memories)$/.exec(
+            url.pathname,
+          )
+        if (conversationStateMatch) {
+          const claimToken = runClaimToken(request)
+          if (!claimToken)
+            return sendJson(response, 403, { error: 'run_claim_required' })
+          try {
+            const projection = options.store.conversationStateForRun(
+              decodeURIComponent(conversationStateMatch[1] ?? ''),
+              claimToken,
+              conversationStateMatch[2] === 'memories' ? 'memories' : 'tasks',
+            )
+            return sendJson(response, 200, projection)
+          } catch (error) {
+            if (error instanceof RunClaimError)
+              return sendJson(response, 403, { error: 'run_claim_invalid' })
+            throw error
+          }
+        }
         const userId = url.searchParams.get('userId')
         if (!userId) throw new Error('userId is required')
         const taskId = url.searchParams.get('taskId') ?? undefined
@@ -2510,6 +2532,14 @@ function isRunCapabilityWrite(request: IncomingMessage): boolean {
     /^\/v1\/runs\/[^/]+\/goal-proposals$/.test(pathname) ||
     /^\/v1\/runs\/[^/]+\/follow-ups$/.test(pathname) ||
     /^\/v1\/actions\/[^/]+\/outcomes$/.test(pathname)
+  )
+}
+
+function isConversationStateRead(request: IncomingMessage): boolean {
+  if (request.method !== 'GET' || !request.url) return false
+  const pathname = new URL(request.url, 'http://localhost').pathname
+  return /^\/v1\/runs\/[^/]+\/conversation-state\/(tasks|memories)$/.test(
+    pathname,
   )
 }
 
