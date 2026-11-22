@@ -23,6 +23,7 @@ export interface DshCliExecutorOptions {
   agentModel?: { provider: string; model: string }
   reasoningEffort?: string
   approvalBridgePath?: string
+  readonlySurfacePath?: string
   modelConfiguration?: DshModelConfiguration
 }
 
@@ -107,6 +108,7 @@ export class DshCliExecutor implements RunExecutor {
   readonly #agentModel?: { provider: string; model: string }
   readonly #reasoningEffort?: string
   readonly #approvalBridgePath: string
+  readonly #readonlySurfacePath: string
   readonly #modelConfiguration?: DshModelConfiguration
 
   constructor(options: DshCliExecutorOptions = {}) {
@@ -124,6 +126,8 @@ export class DshCliExecutor implements RunExecutor {
     this.#reasoningEffort = options.reasoningEffort
     this.#approvalBridgePath =
       options.approvalBridgePath ?? defaultApprovalBridgePath()
+    this.#readonlySurfacePath =
+      options.readonlySurfacePath ?? defaultReadonlySurfacePath()
     this.#modelConfiguration = options.modelConfiguration
   }
 
@@ -174,6 +178,10 @@ export class DshCliExecutor implements RunExecutor {
           input.toolApprovalGrant,
         )
       : undefined
+    const readonlyPatch =
+      this.#permissionMode === 'read-only'
+        ? createReadonlySurfacePatch(this.#readonlySurfacePath)
+        : undefined
     const arguments_ = [
       '--profile',
       this.#profile,
@@ -182,6 +190,7 @@ export class DshCliExecutor implements RunExecutor {
         : []),
       ...(patch ? ['--patch', patch.path] : []),
       ...(bridgePatch ? ['--patch', bridgePatch.path] : []),
+      ...(readonlyPatch ? ['--patch', readonlyPatch.path] : []),
       '--json',
       '--permission-mode',
       this.#permissionMode,
@@ -382,6 +391,7 @@ export class DshCliExecutor implements RunExecutor {
       lines.close()
       patch?.remove()
       bridgePatch?.remove()
+      readonlyPatch?.remove()
     }
     const { code, signal } = exit
     const stderr = Buffer.concat(stderrChunks).toString('utf8')
@@ -539,6 +549,39 @@ function defaultApprovalBridgePath(): string {
     dirname(fileURLToPath(import.meta.url)),
     'dsh-approval-bridge.mjs',
   )
+}
+
+function defaultReadonlySurfacePath(): string {
+  return join(
+    dirname(fileURLToPath(import.meta.url)),
+    'dsh-readonly-surface.mjs',
+  )
+}
+
+function createReadonlySurfacePatch(surfacePath: string): {
+  path: string
+  remove: () => void
+} {
+  const directory = mkdtempSync(join(tmpdir(), 'pegas-dsh-readonly-'))
+  const path = join(directory, 'readonly-surface.json')
+  writeFileSync(
+    path,
+    JSON.stringify([
+      {
+        insert: [
+          {
+            id: 'pegas-readonly-surface',
+            name: surfacePath,
+          },
+        ],
+      },
+    ]),
+    { mode: 0o600 },
+  )
+  return {
+    path,
+    remove: () => rmSync(directory, { recursive: true, force: true }),
+  }
 }
 
 function createApprovalBridgePatch(

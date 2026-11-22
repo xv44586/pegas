@@ -94,6 +94,7 @@ fast/balanced/deep 三池全部用户可配可缺省，初始映射不硬编码�
 3. 承载按决策 1：reply 创建 `kind=conversation` 轻量 Task，Run 绑定 conversation executor。常驻性=session 长驻（体验常驻），进程仍是现有 Worker Runtime 按事件唤醒；空闲回收只关 runtime、留 session，下条消息 resume。
 4. 独立预算：config 新增 `chatConcurrency`（默认 1–2），与 `workerConcurrency` 分池；重任务占满时 reply 不受影响，chat session 永远拿不到重任务执行权限。
 5. 控制意图不受影响，优先级高于 chat。
+6. **真实只读工具面（2026-11-22 落地）**：conversation lane 的只读由三层机制强制，不再仅靠 prompt 合同。`DshCliExecutor` 在 `permissionMode=read-only` 时注入 `src/executor/dsh-readonly-surface.mjs` 补丁：①DSH read-only 沙箱（Seatbelt/bwrap）+ `approval-policy never`（越权升级请求确定性 rejected，无审批桥）；②目录裁剪——插件等 `tools` 服务就绪后原地包装 native executor 的 `describe`（保持对象身份，规避 ToolsService 单槽限制与 executor-owned prompt section 的身份比较），模型可见工具白名单 read/read_image/glob/grep/web_fetch/web_search/working_directory；`execute` 不包装，派发仍走 native pipeline；③单调 `tools.guard`——白名单外调用在工具体前拒绝（`PEGAS_READONLY_SURFACE_DENIED`，拒绝文案引导 suggest_task），`working_directory` 禁 cd。查任务状态/记忆的专用只读工具仍是后续缺口（记忆/规则走 prompt 注入）。DSH 升级需回归：工具注册名白名单与 describe 原地包装两处依赖。
 
 **验收**："今天星期几"→ reply → Outbox 回复，无重量级 DSH session（fixture 断言 executor 类型）；双向并发隔离；chat 中"帮我改 X 代码"→ suggest_task → 正常 create_task 全门禁；Worker 崩溃后 conversation session 可 resume（EXEC-003 崩溃注入手法）；chat 与 Task Executor 共享同一 prompt/记忆来源；决策 2 的零确认 fixture 断言。
 

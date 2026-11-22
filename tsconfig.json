@@ -16,6 +16,7 @@
   "include": [
     "src/**/*.ts",
     "src/executor/dsh-approval-bridge.mjs",
+    "src/executor/dsh-readonly-surface.mjs",
     "test/**/*.ts",
     "scripts/**/*.ts"
   ],
