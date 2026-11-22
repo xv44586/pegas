@@ -9763,6 +9763,39 @@ export class PegasStore {
     }
   }
 
+  retryEvent(eventId: string, userId: string): InboxEvent {
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const row = this.#database
+        .prepare('SELECT * FROM inbox_events WHERE id = ?')
+        .get(eventId) as unknown as InboxRow | undefined
+      if (row?.user_id !== userId)
+        throw new Error(`Event ${eventId} does not exist`)
+      if (row.type !== 'user.message')
+        throw new Error('Only user messages can be retried')
+      if (row.status !== 'failed') {
+        this.#database.exec('COMMIT')
+        return toInboxEvent(row)
+      }
+      this.#database
+        .prepare(
+          `UPDATE inbox_events
+           SET status = 'pending', attempts = 0, claimed_by = NULL,
+               lease_until = NULL, last_error = NULL, processed_at = NULL
+           WHERE id = ? AND status = 'failed'`,
+        )
+        .run(eventId)
+      const updated = this.#database
+        .prepare('SELECT * FROM inbox_events WHERE id = ?')
+        .get(eventId) as unknown as InboxRow
+      this.#database.exec('COMMIT')
+      return toInboxEvent(updated)
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
   stopTask(
     taskId: string,
     userId: string,

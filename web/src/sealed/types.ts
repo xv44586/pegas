@@ -163,6 +163,111 @@ export function textFromPayload(payload: unknown): string {
   return ''
 }
 
+export interface AttentionSummary {
+  title: string
+  preview?: string
+}
+
+function payloadRecord(payload: unknown): Record<string, unknown> | undefined {
+  return payload && typeof payload === 'object'
+    ? (payload as Record<string, unknown>)
+    : undefined
+}
+
+function payloadString(
+  payload: Record<string, unknown> | undefined,
+  key: string,
+): string | undefined {
+  const value = payload?.[key]
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function truncateText(value: string, maximum: number): string {
+  return value.length > maximum ? `${value.slice(0, maximum - 1)}…` : value
+}
+
+function plainMarkdownLine(value: string): string {
+  return value
+    .replace(/^\s{0,3}#{1,6}\s+/u, '')
+    .replace(/^\s{0,3}>\s?/u, '')
+    .replace(/^\s*(?:[-*+]|\d+[.)])\s+/u, '')
+    .replace(/!\[([^\]]*)\]\([^)]*\)/gu, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/gu, '$1')
+    .replace(/`([^`]*)`/gu, '$1')
+    .replace(/(\*\*|__|~~|\*|_|`)/gu, '')
+    .replace(/<[^>]+>/gu, '')
+    .trim()
+}
+
+function plainMarkdown(value: string): {
+  text: string
+  firstLine: string
+  heading: boolean
+} {
+  const rawLines = value.split(/\r?\n/u)
+  const firstRawLine = rawLines.find(line => line.trim()) ?? ''
+  const lines = rawLines.map(plainMarkdownLine).filter(Boolean)
+  return {
+    text: lines.join(' '),
+    firstLine: lines[0] ?? '',
+    heading: /^\s{0,3}#{1,6}\s+/u.test(firstRawLine),
+  }
+}
+
+function attentionBodyText(payload: unknown): string {
+  const record = payloadRecord(payload)
+  for (const key of ['text', 'message', 'content', 'output', 'error']) {
+    const value = payloadString(record, key)
+    if (value) return value
+  }
+  return textFromPayload(payload)
+}
+
+function splitAttentionText(
+  plain: ReturnType<typeof plainMarkdown>,
+): AttentionSummary {
+  if (!plain.text) return { title: 'Pegas 有一项更新' }
+  if (plain.heading && plain.firstLine) {
+    const rest = plain.text.slice(plain.firstLine.length).trim()
+    return {
+      title: truncateText(plain.firstLine, 80),
+      ...(rest ? { preview: truncateText(rest, 160) } : {}),
+    }
+  }
+  const sentence = /[。！？!?]/u.exec(plain.text)
+  if (sentence && sentence.index < 120) {
+    const title = plain.text.slice(0, sentence.index + 1)
+    const rest = plain.text.slice(sentence.index + 1).trim()
+    return {
+      title: truncateText(title, 80),
+      ...(rest ? { preview: truncateText(rest, 160) } : {}),
+    }
+  }
+  return { title: truncateText(plain.text, 80) }
+}
+
+export function attentionSummary(message: OutboxMessage): AttentionSummary {
+  const record = payloadRecord(message.payload)
+  const explicit =
+    payloadString(record, 'title') ?? payloadString(record, 'summary')
+  const body = attentionBodyText(message.payload)
+  const plain = plainMarkdown(body)
+  if (explicit) {
+    const title = truncateText(plainMarkdownLine(explicit), 80)
+    const previewSource =
+      plain.text && plain.text !== plainMarkdownLine(explicit)
+        ? splitAttentionText(plain).title
+        : undefined
+    return {
+      title,
+      ...(previewSource && previewSource !== title
+        ? { preview: truncateText(previewSource, 160) }
+        : {}),
+    }
+  }
+  return splitAttentionText(plain)
+}
+
 function payloadType(payload: unknown): string | undefined {
   if (!payload || typeof payload !== 'object') return undefined
   const type = (payload as Record<string, unknown>).type
@@ -278,6 +383,46 @@ function firstCueLine(text: string): string | undefined {
   const line = text.replaceAll(/\s+/g, ' ').trim()
   if (!line) return undefined
   return line.length > 80 ? `${line.slice(0, 80)}…` : line
+}
+
+export function isRunProgressMessage(message: OutboxMessage): boolean {
+  return payloadType(message.payload) === 'run.acknowledged'
+}
+
+export function latestRunProgressText(
+  messages: readonly OutboxMessage[],
+  runId: string,
+): string | undefined {
+  let latest: OutboxMessage | undefined
+  for (const message of messages) {
+    if (!isRunProgressMessage(message)) continue
+    if (runIdFromMessage(message) !== runId) continue
+    if (
+      !latest ||
+      Date.parse(message.createdAt) >= Date.parse(latest.createdAt)
+    )
+      latest = message
+  }
+  return latest ? textFromPayload(latest.payload) : undefined
+}
+
+export function formatRunDuration(run: Run): string {
+  const started = Date.parse(run.createdAt)
+  const ended = Date.parse(run.updatedAt)
+  if (Number.isNaN(started) || Number.isNaN(ended) || ended < started) return ''
+  const totalSeconds = Math.round((ended - started) / 1000)
+  if (totalSeconds < 60) return `${String(totalSeconds)} 秒`
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  if (minutes < 60)
+    return seconds > 0
+      ? `${String(minutes)} 分 ${String(seconds)} 秒`
+      : `${String(minutes)} 分钟`
+  const hours = Math.floor(minutes / 60)
+  const remainingMinutes = minutes % 60
+  return remainingMinutes > 0
+    ? `${String(hours)} 小时 ${String(remainingMinutes)} 分`
+    : `${String(hours)} 小时`
 }
 
 export function approvalIdFromMessage(

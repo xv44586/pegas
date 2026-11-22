@@ -4,8 +4,16 @@ import { loadConfig } from '../core/config.js'
 import { ConversationExecutor } from '../executor/conversation-executor.js'
 import { DshCliExecutor } from '../executor/dsh-cli-executor.js'
 import { readDshSubagentTranscripts } from '../executor/dsh-subagent-transcript.js'
+import {
+  createDshModelConfiguration,
+  ensureDshProfileHome,
+} from '../executor/dsh-home.js'
 import { EchoExecutor } from '../executor/echo-executor.js'
-import type { ExecutorInput, RunExecutor } from '../executor/executor.js'
+import type {
+  ExecutorInput,
+  ExecutorResult,
+  RunExecutor,
+} from '../executor/executor.js'
 import { loadModelCredentialVault } from '../model/model-credential-vault.js'
 import { MeteredJsonModelProvider } from '../model/metered-provider.js'
 import {
@@ -52,6 +60,27 @@ import {
 } from './run-execution-snapshot.js'
 
 const config = loadConfig()
+
+class ManagedDshExecutor implements RunExecutor {
+  readonly name: string
+  readonly #inner: RunExecutor
+  readonly #configuration: { remove: () => void }
+
+  constructor(inner: RunExecutor, configuration: { remove: () => void }) {
+    this.name = inner.name
+    this.#inner = inner
+    this.#configuration = configuration
+  }
+
+  async execute(input: ExecutorInput): Promise<ExecutorResult> {
+    try {
+      return await this.#inner.execute(input)
+    } finally {
+      this.#configuration.remove()
+    }
+  }
+}
+
 const logger = createLogger({ service: 'worker' })
 const metrics = new MetricsRegistry()
 const telemetry = { logger, metrics }
@@ -72,6 +101,9 @@ if (!store.hasRuntimeSettings()) {
   )
 }
 store.initializeRuntimeSettings(defaults)
+if (config.executorMode !== 'echo') {
+  ensureDshProfileHome(config.dshHome, config.dshProfile)
+}
 const workerId = `worker-${randomUUID()}`
 const baseExecutor: RunExecutor =
   config.executorMode === 'echo'
@@ -79,6 +111,7 @@ const baseExecutor: RunExecutor =
     : new DshCliExecutor({
         command: config.dshCommand,
         profile: config.dshProfile,
+        home: config.dshHome,
         additionalDirectories: config.dshAdditionalDirectories,
         timeoutMs: config.dshTimeoutMs,
       })
@@ -137,7 +170,7 @@ const eventHandler = new RoutingEventHandler(router, executor.name, task => {
     nodeId: config.nodeId,
     permissions: JSON.stringify({
       mode: 'workspace-write',
-      approvalPolicy: 'never',
+      approvalPolicy: 'ask',
       additionalDirectories: config.dshAdditionalDirectories,
       privacyMode: settings.privacyMode,
     }),
@@ -332,7 +365,7 @@ function createExecutor(
     executorProfile: config.dshProfile,
     workspace: config.workspaceRoot,
     permissionMode: 'workspace-write',
-    approvalPolicy: 'never' as const,
+    approvalPolicy: 'ask' as const,
     additionalDirectories: config.dshAdditionalDirectories,
     privacyMode: settings.privacyMode,
   }
@@ -341,11 +374,25 @@ function createExecutor(
   if (config.executorMode !== 'echo') {
     const snapshot = decodeDshExecutionSnapshot(input ?? {}, defaults)
     privacyMode = snapshot.privacyMode
-    runtimeExecutor = new DshCliExecutor(
-      dshExecutorOptionsFromSnapshot(snapshot, {
-        command: config.dshCommand,
-        timeoutMs: config.dshTimeoutMs,
-      }),
+    const agentModel = snapshot.agentModel ?? {
+      provider: settings.modelProvider,
+      model: settings.modelName,
+    }
+    const modelConfiguration = createDshModelConfiguration({
+      connections: store.listModelProviderConnections(),
+      vault: modelCredentialVault,
+      agentModel,
+    })
+    runtimeExecutor = new ManagedDshExecutor(
+      new DshCliExecutor(
+        dshExecutorOptionsFromSnapshot(snapshot, {
+          command: config.dshCommand,
+          timeoutMs: config.dshTimeoutMs,
+          home: config.dshHome,
+          modelConfiguration,
+        }),
+      ),
+      modelConfiguration,
     )
   }
   if (privacyMode === 'disabled') return runtimeExecutor

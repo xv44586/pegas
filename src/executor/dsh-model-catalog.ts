@@ -21,16 +21,29 @@ export async function loadDshModelCatalog(
   options: {
     command?: string
     profile?: string
+    home?: string
+    patchPath?: string
+    environment?: NodeJS.ProcessEnv
     timeoutMs?: number
   } = {},
 ): Promise<DshModelCatalog> {
   const { stdout } = await execFileAsync(
     options.command ?? 'dsh',
-    ['--profile', options.profile ?? 'headless', '--dump-config'],
+    [
+      '--profile',
+      options.profile ?? 'headless',
+      ...(options.patchPath ? ['--patch', options.patchPath] : []),
+      '--dump-config',
+    ],
     {
       encoding: 'utf8',
       maxBuffer: 8 * 1024 * 1024,
       timeout: options.timeoutMs ?? 15_000,
+      env: {
+        ...process.env,
+        ...(options.home ? { DSH_HOME: options.home } : {}),
+        ...options.environment,
+      },
     },
   )
   return parseDshModelCatalog(stdout)

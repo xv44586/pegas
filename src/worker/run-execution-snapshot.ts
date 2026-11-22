@@ -25,7 +25,10 @@ export interface DshExecutionSnapshot extends DshExecutionDefaults {
 
 export function dshExecutorOptionsFromSnapshot(
   snapshot: DshExecutionSnapshot,
-  runtime: Pick<DshCliExecutorOptions, 'command' | 'timeoutMs'>,
+  runtime: Pick<
+    DshCliExecutorOptions,
+    'command' | 'timeoutMs' | 'home' | 'modelConfiguration'
+  >,
 ): DshCliExecutorOptions {
   return {
     ...runtime,

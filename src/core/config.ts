@@ -19,6 +19,7 @@ export interface PegasConfig {
   executorMode: 'dsh' | 'echo'
   dshCommand: string
   dshProfile: string
+  dshHome: string
   dshAdditionalDirectories: string[]
   dshTimeoutMs: number
   dshSessionsRoot: string
@@ -136,6 +137,7 @@ export function loadConfig(
     executorMode: environment.PEGAS_EXECUTOR === 'echo' ? 'echo' : 'dsh',
     dshCommand: environment.PEGAS_DSH_COMMAND ?? 'dsh',
     dshProfile: environment.PEGAS_DSH_PROFILE ?? 'headless',
+    dshHome: resolve(environment.PEGAS_DSH_HOME ?? resolve(dataDir, 'dsh')),
     dshAdditionalDirectories: commaSeparatedPaths(
       environment.PEGAS_DSH_ADD_DIRS,
     ),

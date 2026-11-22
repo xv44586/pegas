@@ -554,6 +554,19 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
           if (!task) throw new Error(`Task ${taskId} does not exist for user`)
           if (task.status === 'cancelled')
             throw new Error('Task was stopped by the user')
+          if (explicitSteerIntent(input)) {
+            if (task.status !== 'started')
+              throw new Error(
+                'Steering requires a started task; queue the message instead',
+              )
+            const activeRun = options.store
+              .listRunsForUser(input.userId, taskId)
+              .some(run => run.status === 'queued' || run.status === 'running')
+            if (!activeRun)
+              throw new Error(
+                'Steering requires a queued or running Run; queue the message instead',
+              )
+          }
         }
         const sourceTaskId = sourceContextTaskId(input)
         if (sourceTaskId) {
@@ -1386,6 +1399,27 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         })
       }
 
+      const eventRetryMatch = request.url?.match(
+        /^\/v1\/events\/([^/]+)\/retry$/,
+      )
+      if (eventRetryMatch && request.method === 'POST') {
+        const body = await readJson(request)
+        if (
+          !body ||
+          typeof body !== 'object' ||
+          !('userId' in body) ||
+          typeof body.userId !== 'string' ||
+          !body.userId.trim()
+        )
+          throw new Error('userId is required')
+        return sendJson(response, 200, {
+          event: options.store.retryEvent(
+            decodeURIComponent(eventRetryMatch[1] ?? ''),
+            body.userId,
+          ),
+        })
+      }
+
       const runApprovalMatch = /^\/v1\/runs\/([^/]+)\/approvals$/.exec(
         taskResourceUrl.pathname,
       )
@@ -1929,6 +1963,16 @@ function sourceContextTaskId(input: NewInboxEvent): string | undefined {
   )
     throw new Error('taskId and sourceTaskId cannot be combined')
   return sourceTaskId
+}
+
+function explicitSteerIntent(input: NewInboxEvent): boolean {
+  return (
+    input.type === 'user.message' &&
+    !!input.payload &&
+    typeof input.payload === 'object' &&
+    'intent' in input.payload &&
+    input.payload.intent === 'steer'
+  )
 }
 
 function modelProbeConnection(

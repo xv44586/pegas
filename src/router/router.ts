@@ -59,6 +59,15 @@ export class RuleBasedTaskRouter implements TaskRouter {
       )
     }
 
+    if (payload.intent === 'steer' && explicitTask) {
+      return Promise.resolve({
+        kind: 'steer_task',
+        taskId: explicitTask.id,
+        input: payload.text,
+        reason: 'The user explicitly asked to steer the running task.',
+      })
+    }
+
     if (explicitTask) {
       return Promise.resolve({
         kind: 'continue_task',
@@ -225,6 +234,7 @@ interface MessagePayload {
   text: string
   taskId?: string
   sourceTaskId?: string
+  intent?: 'steer'
 }
 
 function messagePayload(value: unknown): MessagePayload {
@@ -249,10 +259,18 @@ function messagePayload(value: unknown): MessagePayload {
   if (typeof taskId === 'string' && typeof sourceTaskId === 'string') {
     throw new Error('taskId and sourceTaskId cannot be combined')
   }
+  const intent = value.intent
+  if (intent !== undefined && intent !== 'steer') {
+    throw new Error('intent must be "steer" when present')
+  }
+  if (intent === 'steer' && typeof taskId !== 'string') {
+    throw new Error('intent "steer" requires an explicit taskId')
+  }
   return {
     text: value.text.trim(),
     ...(typeof taskId === 'string' ? { taskId } : {}),
     ...(typeof sourceTaskId === 'string' ? { sourceTaskId } : {}),
+    ...(intent === 'steer' ? { intent } : {}),
   }
 }
 

@@ -1,15 +1,18 @@
 import { spawn } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
+import { fileURLToPath } from 'node:url'
 
 import type { ModelTokenUsage } from '../core/domain.js'
+import type { DshModelConfiguration } from './dsh-home.js'
 import type { ExecutorInput, ExecutorResult, RunExecutor } from './executor.js'
 
 export interface DshCliExecutorOptions {
   command?: string
   profile?: string
+  home?: string
   permissionMode?: string
   approvalPolicy?: 'ask' | 'never'
   additionalDirectories?: string[]
@@ -19,6 +22,8 @@ export interface DshCliExecutorOptions {
   maximumStderrBytes?: number
   agentModel?: { provider: string; model: string }
   reasoningEffort?: string
+  approvalBridgePath?: string
+  modelConfiguration?: DshModelConfiguration
 }
 
 interface DshSessionEvent {
@@ -62,6 +67,20 @@ interface DshThinkingEvent {
   text: string
 }
 
+interface DshApprovalPendingEvent {
+  type: 'approval_pending'
+  callId: string
+  tool: string
+  actionId: string
+  approvalId: string
+}
+
+interface DshApprovalBridgeErrorEvent {
+  type: 'approval_bridge_error'
+  stage: string
+  message: string
+}
+
 interface DshStatusEvent {
   type: 'status'
   phase: string
@@ -77,6 +96,7 @@ export class DshCliExecutor implements RunExecutor {
   readonly name = 'dsh-headless'
   readonly #command: string
   readonly #profile: string
+  readonly #home?: string
   readonly #permissionMode: string
   readonly #approvalPolicy: 'ask' | 'never'
   readonly #additionalDirectories: string[]
@@ -86,10 +106,13 @@ export class DshCliExecutor implements RunExecutor {
   readonly #maximumStderrBytes: number
   readonly #agentModel?: { provider: string; model: string }
   readonly #reasoningEffort?: string
+  readonly #approvalBridgePath: string
+  readonly #modelConfiguration?: DshModelConfiguration
 
   constructor(options: DshCliExecutorOptions = {}) {
     this.#command = options.command ?? 'dsh'
     this.#profile = options.profile ?? 'headless'
+    this.#home = options.home
     this.#permissionMode = options.permissionMode ?? 'workspace-write'
     this.#approvalPolicy = options.approvalPolicy ?? 'never'
     this.#additionalDirectories = options.additionalDirectories ?? []
@@ -99,36 +122,65 @@ export class DshCliExecutor implements RunExecutor {
     this.#maximumStderrBytes = options.maximumStderrBytes ?? 64 * 1024
     this.#agentModel = options.agentModel
     this.#reasoningEffort = options.reasoningEffort
+    this.#approvalBridgePath =
+      options.approvalBridgePath ?? defaultApprovalBridgePath()
+    this.#modelConfiguration = options.modelConfiguration
   }
 
   async execute(input: ExecutorInput): Promise<ExecutorResult> {
-    try {
-      return await this.#executeOnce(input)
-    } catch (error) {
-      if (
-        input.resumeSessionId &&
-        error instanceof DshExecutionError &&
-        error.sessionId === input.resumeSessionId &&
-        isWorkspaceSessionMismatch(error.message)
-      ) {
-        const freshInput = { ...input }
-        delete freshInput.resumeSessionId
-        return this.#executeOnce(freshInput)
+    const sessionBusyDeadline = Date.now() + sessionBusyWaitMs()
+    for (;;) {
+      try {
+        return await this.#executeOnce(input)
+      } catch (error) {
+        if (
+          input.resumeSessionId &&
+          error instanceof DshExecutionError &&
+          error.sessionId === input.resumeSessionId &&
+          isWorkspaceSessionMismatch(error.message)
+        ) {
+          const freshInput = { ...input }
+          delete freshInput.resumeSessionId
+          return this.#executeOnce(freshInput)
+        }
+        if (
+          input.resumeSessionId &&
+          error instanceof DshExecutionError &&
+          error.sessionId === input.resumeSessionId &&
+          isSessionWriteHandleBusy(error.message) &&
+          !input.signal?.aborted &&
+          Date.now() < sessionBusyDeadline
+        ) {
+          await delay(sessionBusyRetryDelayMs())
+          continue
+        }
+        throw error
       }
-      throw error
     }
   }
 
   async #executeOnce(input: ExecutorInput): Promise<ExecutorResult> {
     const startedAt = performance.now()
     const patch =
-      !input.resumeSessionId && this.#agentModel
+      !input.resumeSessionId && this.#agentModel && !this.#modelConfiguration
         ? createAgentModelPatch(this.#agentModel, this.#reasoningEffort)
         : undefined
+    const bridgeEnabled =
+      Boolean(input.actionCapability) && this.#approvalPolicy === 'ask'
+    const bridgePatch = bridgeEnabled
+      ? createApprovalBridgePatch(
+          this.#approvalBridgePath,
+          input.toolApprovalGrant,
+        )
+      : undefined
     const arguments_ = [
       '--profile',
       this.#profile,
+      ...(this.#modelConfiguration
+        ? ['--patch', this.#modelConfiguration.patchPath]
+        : []),
       ...(patch ? ['--patch', patch.path] : []),
+      ...(bridgePatch ? ['--patch', bridgePatch.path] : []),
       '--json',
       '--permission-mode',
       this.#permissionMode,
@@ -145,6 +197,11 @@ export class DshCliExecutor implements RunExecutor {
       cwd: input.workingDirectory,
       env: {
         ...executorEnvironment(process.env),
+        ...(bridgeEnabled ? { PEGAS_APPROVAL_BRIDGE: '1' } : {}),
+        ...(this.#home ? { DSH_HOME: this.#home } : {}),
+        ...(this.#modelConfiguration
+          ? this.#modelConfiguration.environment
+          : {}),
         ...(input.actionCapability
           ? {
               PEGAS_CONTROL_PLANE_URL: input.actionCapability.baseUrl,
@@ -189,6 +246,7 @@ export class DshCliExecutor implements RunExecutor {
     let usage: ModelTokenUsage | undefined
     let reportedSteps = 0
     let unreportedSteps = 0
+    let approvalPending: DshApprovalPendingEvent | undefined
     const stderrChunks: Buffer[] = []
     let stderrBytes = 0
 
@@ -290,6 +348,12 @@ export class DshCliExecutor implements RunExecutor {
             ...(event.step !== undefined ? { step: event.step } : {}),
           })
         }
+        if (event.type === 'approval_pending') {
+          approvalPending = event
+        }
+        if (event.type === 'approval_bridge_error') {
+          streamError = `Approval bridge failed to ${event.stage}: ${event.message}`
+        }
         if (event.type === 'error')
           streamError = event.message ?? 'Unknown DSH error'
       } catch (error) {
@@ -316,9 +380,38 @@ export class DshCliExecutor implements RunExecutor {
       input.signal?.removeEventListener('abort', abort)
       lines.close()
       patch?.remove()
+      bridgePatch?.remove()
     }
     const { code, signal } = exit
     const stderr = Buffer.concat(stderrChunks).toString('utf8')
+
+    if (
+      approvalPending &&
+      terminationError === undefined &&
+      streamError === undefined
+    ) {
+      return {
+        executorRef: sessionId ?? approvalPending.callId,
+        output: `工具 ${approvalPending.tool} 的越权操作已提交审批，等待你的决定后继续。`,
+        approvalPending: {
+          actionId: approvalPending.actionId,
+          approvalId: approvalPending.approvalId,
+          callId: approvalPending.callId,
+          tool: approvalPending.tool,
+        },
+        ...(usage
+          ? {
+              usage: {
+                tokens: usage,
+                source: 'provider_reported' as const,
+                reportedSteps,
+                unreportedSteps,
+              },
+            }
+          : {}),
+        durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
+      }
+    }
 
     if (
       terminationError !== undefined ||
@@ -368,9 +461,15 @@ export function executorEnvironment(
     'PEGAS_TASK_ID',
     'PEGAS_INPUT_EVENT_ID',
     'PEGAS_RUN_CLAIM_TOKEN',
+    'PEGAS_TOOL_APPROVAL_GRANT',
+    'PEGAS_APPROVAL_BRIDGE',
+    'DSH_HOME',
   ])
   return Object.fromEntries(
-    Object.entries(source).filter(([key]) => !protectedKeys.has(key)),
+    Object.entries(source).filter(
+      ([key]) =>
+        !protectedKeys.has(key) && !key.startsWith('PEGAS_DSH_MODEL_KEY_'),
+    ),
   )
 }
 
@@ -378,6 +477,26 @@ function isWorkspaceSessionMismatch(message: string): boolean {
   return /^session "[^"]+" was recorded in "[^"]+", not "[^"]+"$/.test(
     message.trim(),
   )
+}
+
+function isSessionWriteHandleBusy(message: string): boolean {
+  return /^session "[^"]+" is already owned by an active write handle$/.test(
+    message.trim(),
+  )
+}
+
+function sessionBusyWaitMs(): number {
+  const parsed = Number(process.env.PEGAS_DSH_SESSION_BUSY_WAIT_MS)
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 20_000
+}
+
+function sessionBusyRetryDelayMs(): number {
+  const parsed = Number(process.env.PEGAS_DSH_SESSION_BUSY_RETRY_MS)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 500
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, milliseconds))
 }
 
 function createAgentModelPatch(
@@ -409,6 +528,40 @@ function createAgentModelPatch(
   }
 }
 
+function defaultApprovalBridgePath(): string {
+  return join(
+    dirname(fileURLToPath(import.meta.url)),
+    'dsh-approval-bridge.mjs',
+  )
+}
+
+function createApprovalBridgePatch(
+  bridgePath: string,
+  grant?: ExecutorInput['toolApprovalGrant'],
+): { path: string; remove: () => void } {
+  const directory = mkdtempSync(join(tmpdir(), 'pegas-dsh-approval-'))
+  const path = join(directory, 'approval-bridge.json')
+  writeFileSync(
+    path,
+    JSON.stringify([
+      {
+        insert: [
+          {
+            id: 'pegas-approval-bridge',
+            name: bridgePath,
+            ...(grant ? { config: { grant } } : {}),
+          },
+        ],
+      },
+    ]),
+    { mode: 0o600 },
+  )
+  return {
+    path,
+    remove: () => rmSync(directory, { recursive: true, force: true }),
+  }
+}
+
 export class DshExecutionError extends Error {
   readonly sessionId?: string
 
@@ -429,6 +582,8 @@ function parseDshEvent(
   | DshToolCallEvent
   | DshToolResultEvent
   | DshThinkingEvent
+  | DshApprovalPendingEvent
+  | DshApprovalBridgeErrorEvent
   | DshStatusEvent
   | DshOtherEvent {
   const parsed = JSON.parse(line) as unknown
@@ -484,6 +639,32 @@ function parseDshEvent(
         : parsed.result === undefined
           ? {}
           : { result: JSON.stringify(parsed.result).slice(0, 8192) }),
+    }
+  }
+  if (
+    parsed.type === 'approval_pending' &&
+    typeof parsed.callId === 'string' &&
+    typeof parsed.tool === 'string' &&
+    typeof parsed.actionId === 'string' &&
+    typeof parsed.approvalId === 'string'
+  ) {
+    return {
+      type: 'approval_pending',
+      callId: parsed.callId,
+      tool: parsed.tool,
+      actionId: parsed.actionId,
+      approvalId: parsed.approvalId,
+    }
+  }
+  if (
+    parsed.type === 'approval_bridge_error' &&
+    typeof parsed.stage === 'string' &&
+    typeof parsed.message === 'string'
+  ) {
+    return {
+      type: 'approval_bridge_error',
+      stage: parsed.stage,
+      message: parsed.message,
     }
   }
   if (parsed.type === 'status' && typeof parsed.phase === 'string') {
