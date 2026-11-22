@@ -1,4 +1,10 @@
-import type { DiffHunk, ToolSemantic, WebSource } from '../core/domain.js'
+import type {
+  DiffHunk,
+  SearchFileHits,
+  TodoItem,
+  ToolSemantic,
+  WebSource,
+} from '../core/domain.js'
 
 const MAX_COMMAND_CHARACTERS = 4_000
 const MAX_OUTPUT_CHARACTERS = 12_000
@@ -8,6 +14,12 @@ const MAX_WEB_SOURCES = 20
 const MAX_WEB_QUERIES = 8
 const MAX_AGENT_ENTRIES = 32
 const MAX_AGENT_MESSAGE_CHARACTERS = 2_000
+const MAX_SEARCH_FILES = 40
+const MAX_SEARCH_MATCHES_PER_FILE = 20
+const MAX_SEARCH_PATHS = 200
+const MAX_SEARCH_LINE_CHARACTERS = 300
+const MAX_TODO_ITEMS = 50
+const MAX_TODO_CONTENT_CHARACTERS = 300
 const CONTEXT_LINES = 3
 const RESULT_SEPARATOR = '\n[结果]\n'
 
@@ -46,7 +58,9 @@ export function buildToolSemantic(
     case 'grep':
     case 'glob':
     case 'search':
-      return searchSemantic(args, result)
+      return searchSemantic(call.tool, args, result)
+    case 'todo_write':
+      return todoSemantic(args)
     case 'web_fetch':
     case 'web_search':
     case 'web_run':
@@ -382,19 +396,29 @@ function parseApplyPatch(patch: string): ToolSemantic | undefined {
 }
 
 function searchSemantic(
+  tool: string,
   args: Record<string, unknown>,
   result: string | undefined,
 ): ToolSemantic {
   const query = stringField(args, 'pattern', 'query', 'glob')
   if (query === undefined) return { kind: 'unknown' }
-  const path = stringField(args, 'path', 'include')
+  const path = stringField(args, 'path')
+  const include = stringField(args, 'include')
+  const structured =
+    tool === 'grep'
+      ? grepResultSemantic(result)
+      : tool === 'glob'
+        ? globResultSemantic(result)
+        : undefined
   const preview =
     result === undefined ? undefined : clip(result, MAX_PREVIEW_CHARACTERS)
   return {
     kind: 'search',
     query,
     ...(path ? { path } : {}),
-    ...(preview
+    ...(include ? { include } : {}),
+    ...structured,
+    ...(preview && !structured
       ? {
           preview: preview.text,
           ...(preview.truncated ? { previewTruncated: true } : {}),
@@ -589,4 +613,153 @@ function parseAgentList(
     })
   }
   return agents.length > 0 ? agents : undefined
+}
+
+interface SearchStructure {
+  shape: 'matches' | 'paths'
+  total?: number
+  resultTruncated?: boolean
+  files?: SearchFileHits[]
+  paths?: string[]
+}
+
+/**
+ * Parses the faithful grep render: `Found N match(es)` (or `Found K of N
+ * matches` when capped), then per-file groups of `Line N: text` rows. The
+ * structured `tool/result.meta` does not ride the `--json` stream, so this
+ * text route is the honest best-effort projection; unrecognized shapes keep
+ * the preview fallback.
+ */
+function grepResultSemantic(
+  result: string | undefined,
+): SearchStructure | undefined {
+  if (result === undefined) return undefined
+  if (result.trim() === 'No matches found') {
+    return { shape: 'matches', total: 0, files: [] }
+  }
+  const header = /^Found (\d+)(?: of (\d+))? match(?:es)?\b/u.exec(result)
+  if (!header?.[1]) return undefined
+  const kept = Number.parseInt(header[1], 10)
+  const seen = header[2] ? Number.parseInt(header[2], 10) : kept
+  const files: SearchFileHits[] = []
+  let current: SearchFileHits | undefined
+  let retained = 0
+  let dropped = false
+  for (const line of result.split('\n').slice(1)) {
+    const match = /^Line (\d+): (.*)$/u.exec(line)
+    if (match?.[1]) {
+      if (!current) {
+        dropped = true
+        continue
+      }
+      retained += 1
+      if (current.matches.length >= MAX_SEARCH_MATCHES_PER_FILE) {
+        dropped = true
+        continue
+      }
+      current.matches.push({
+        line: Number.parseInt(match[1], 10),
+        text: (match[2] ?? '').slice(0, MAX_SEARCH_LINE_CHARACTERS),
+      })
+      continue
+    }
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('(')) continue
+    if (files.length >= MAX_SEARCH_FILES) {
+      dropped = true
+      current = undefined
+      continue
+    }
+    current = { path: trimmed, matches: [] }
+    files.push(current)
+  }
+  const nonEmpty = files.filter(file => file.matches.length > 0)
+  return {
+    shape: 'matches',
+    total: seen,
+    ...(header[2] || dropped || retained < kept
+      ? { resultTruncated: true }
+      : {}),
+    files: nonEmpty,
+  }
+}
+
+/**
+ * Parses the faithful glob render: one path per line, `No files found` when
+ * empty, and a trailing `(Showing K of N paths…)` note when capped. Lines
+ * that do not look like paths abort the projection so a foreign render keeps
+ * the preview fallback instead of inventing structure.
+ */
+function globResultSemantic(
+  result: string | undefined,
+): SearchStructure | undefined {
+  if (result === undefined) return undefined
+  if (result.trim() === 'No files found') {
+    return { shape: 'paths', total: 0, paths: [] }
+  }
+  const showing = /\(Showing (\d+) of (\d+) paths/u.exec(result)
+  const paths: string[] = []
+  let dropped = false
+  for (const line of result.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('(')) continue
+    if (/\s/u.test(trimmed)) return undefined
+    if (paths.length >= MAX_SEARCH_PATHS) {
+      dropped = true
+      continue
+    }
+    paths.push(trimmed)
+  }
+  if (paths.length === 0) return undefined
+  const total = showing?.[2] ? Number.parseInt(showing[2], 10) : paths.length
+  const kept = showing?.[1] ? Number.parseInt(showing[1], 10) : paths.length
+  return {
+    shape: 'paths',
+    total,
+    ...(showing || dropped || paths.length < kept
+      ? { resultTruncated: true }
+      : {}),
+    paths,
+  }
+}
+
+/** Projects the whole-list todo_write snapshot; malformed lists degrade. */
+function todoSemantic(args: Record<string, unknown>): ToolSemantic {
+  const raw = args.todos
+  if (!Array.isArray(raw)) return { kind: 'unknown' }
+  const items: TodoItem[] = []
+  let dropped = false
+  for (const entry of raw) {
+    if (items.length >= MAX_TODO_ITEMS) {
+      dropped = true
+      break
+    }
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      dropped = true
+      continue
+    }
+    const record = entry as Record<string, unknown>
+    const content = record.content
+    const status = record.status
+    if (
+      typeof content !== 'string' ||
+      !content.trim() ||
+      (status !== 'pending' &&
+        status !== 'in_progress' &&
+        status !== 'completed')
+    ) {
+      dropped = true
+      continue
+    }
+    items.push({
+      content: content.trim().slice(0, MAX_TODO_CONTENT_CHARACTERS),
+      status,
+    })
+  }
+  if (items.length === 0) return { kind: 'unknown' }
+  return {
+    kind: 'todo',
+    items,
+    ...(dropped ? { itemsTruncated: true } : {}),
+  }
 }

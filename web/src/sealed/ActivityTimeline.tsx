@@ -8,6 +8,7 @@ import {
   FilePen,
   FileText,
   Globe,
+  ListChecks,
   LoaderCircle,
   Network,
   Search,
@@ -86,6 +87,8 @@ function entryIcon(entry: RunActivityEntry) {
       return groupIcon('edit')
     case 'search':
       return groupIcon('search')
+    case 'todo':
+      return <ListChecks size={14} />
     case 'web':
       return groupIcon('web')
     case 'agent_control':
@@ -267,8 +270,15 @@ function ToolResultBody({ entry }: { entry: RunActivityEntry }) {
       return <DiffCard entry={entry} semantic={semantic} />
     case 'agent_control':
       return <AgentControlCard entry={entry} semantic={semantic} />
-    case 'file_read':
+    case 'todo':
+      return <TodoCard entry={entry} semantic={semantic} />
     case 'search':
+      return semantic.shape ? (
+        <SearchCard entry={entry} semantic={semantic} />
+      ) : (
+        <PreviewCard entry={entry} semantic={semantic} />
+      )
+    case 'file_read':
     case 'web':
       return <PreviewCard entry={entry} semantic={semantic} />
   }
@@ -499,6 +509,168 @@ function PreviewCard({
       )}
       {semantic.previewTruncated && (
         <p className="activity-empty">内容过长，仅保留前段预览。</p>
+      )}
+    </div>
+  )
+}
+
+function TodoCard({
+  entry,
+  semantic,
+}: {
+  entry: RunActivityEntry
+  semantic: Extract<ToolSemantic, { kind: 'todo' }>
+}) {
+  const completed = semantic.items.filter(
+    item => item.status === 'completed',
+  ).length
+  const copyText = semantic.items
+    .map(item => `${todoMarker(item.status)} ${item.content}`)
+    .join('\n')
+  return (
+    <div className="activity-card todo-card">
+      <header className="activity-card-header">
+        <span>任务清单</span>
+        <span className="preview-meta">
+          {String(completed)}/{String(semantic.items.length)} 已完成
+        </span>
+        <CopyAction label="复制清单" text={copyText} />
+      </header>
+      {entry.status === 'error' && (
+        <p className="activity-empty is-error">
+          清单未写入成功，以下为尝试的快照。
+        </p>
+      )}
+      <ol className="todo-list" role="list">
+        {semantic.items.map((item, index) => (
+          <li className={`is-${item.status}`} key={index}>
+            <span aria-hidden="true" className="todo-marker">
+              {item.status === 'completed' ? (
+                <Check size={13} />
+              ) : item.status === 'in_progress' ? (
+                <LoaderCircle className="activity-spinner" size={13} />
+              ) : (
+                <span className="todo-dot" />
+              )}
+            </span>
+            <span className="todo-content">{item.content}</span>
+            <em className="todo-status">{todoStatusLabel(item.status)}</em>
+          </li>
+        ))}
+      </ol>
+      {semantic.itemsTruncated && (
+        <p className="activity-empty">清单过长或含无效项，仅保留有效前段。</p>
+      )}
+    </div>
+  )
+}
+
+function todoMarker(status: 'pending' | 'in_progress' | 'completed'): string {
+  return status === 'completed'
+    ? '[x]'
+    : status === 'in_progress'
+      ? '[~]'
+      : '[ ]'
+}
+
+function todoStatusLabel(
+  status: 'pending' | 'in_progress' | 'completed',
+): string {
+  return status === 'completed'
+    ? '已完成'
+    : status === 'in_progress'
+      ? '进行中'
+      : '待办'
+}
+
+function SearchCard({
+  entry,
+  semantic,
+}: {
+  entry: RunActivityEntry
+  semantic: Extract<ToolSemantic, { kind: 'search' }>
+}) {
+  const running = entry.status === 'started'
+  const failed = entry.status === 'error'
+  const files = semantic.files
+  const paths = semantic.paths
+  const copyText =
+    semantic.shape === 'paths'
+      ? (paths ?? []).join('\n')
+      : (files ?? [])
+          .map(file =>
+            [
+              file.path,
+              ...file.matches.map(
+                match => `Line ${String(match.line)}: ${match.text}`,
+              ),
+            ].join('\n'),
+          )
+          .join('\n\n')
+  const meta = `“${semantic.query}”${semantic.path ? ` · ${semantic.path}` : ''}${semantic.include ? ` (${semantic.include})` : ''}`
+  return (
+    <div className="activity-card search-card">
+      <header className="activity-card-header">
+        <span className="diff-path" title={meta}>
+          {meta}
+        </span>
+        {semantic.total !== undefined && (
+          <span className="preview-meta">
+            {String(semantic.total)}{' '}
+            {semantic.shape === 'paths' ? '个文件' : '处命中'}
+          </span>
+        )}
+        {copyText && <CopyAction label="复制结果" text={copyText} />}
+      </header>
+      {files && files.length > 0 && (
+        <div className="search-files">
+          {files.map(file => (
+            <section className="search-file" key={file.path}>
+              <header title={file.path}>{file.path}</header>
+              <ol role="list">
+                {file.matches.map((match, index) => (
+                  <li key={index}>
+                    <span aria-hidden="true" className="search-line-number">
+                      {String(match.line)}
+                    </span>
+                    <span className="search-line-text">{match.text}</span>
+                  </li>
+                ))}
+              </ol>
+            </section>
+          ))}
+        </div>
+      )}
+      {paths && paths.length > 0 && (
+        <ol className="search-paths" role="list">
+          {paths.map(path => (
+            <li key={path} title={path}>
+              {path}
+            </li>
+          ))}
+        </ol>
+      )}
+      {semantic.resultTruncated && (
+        <p className="activity-empty">结果过多，仅保留前段命中。</p>
+      )}
+      {!running &&
+        !failed &&
+        (files ?? paths) &&
+        (files?.length ?? 0) === 0 &&
+        (paths?.length ?? 0) === 0 && (
+          <p className="activity-empty">
+            {semantic.shape === 'paths'
+              ? '没有匹配该模式的文件。'
+              : '没有命中任何行。'}
+          </p>
+        )}
+      {running && (
+        <p className="activity-empty">搜索进行中，命中会随结果留存。</p>
+      )}
+      {failed && (
+        <footer className="shell-footer is-error">
+          <span>失败</span>
+        </footer>
       )}
     </div>
   )

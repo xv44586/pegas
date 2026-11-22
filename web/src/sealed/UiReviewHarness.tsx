@@ -11,6 +11,7 @@ export type ReviewFixture =
   | 'task-activity-open'
   | 'task-activity-running'
   | 'task-web-agent'
+  | 'task-todo-search'
   | 'preview-file'
   | 'preview-image'
   | 'preview-video'
@@ -391,8 +392,146 @@ function webAgentView(): DrawerView {
   }
 }
 
+function todoSearchEntries(): RunActivityEntry[] {
+  return [
+    activityEntry(1, {
+      kind: 'text',
+      label: '先列计划，再定位实现，最后补测试。',
+      detail: '先列**任务清单**，再定位 `runActivity` 的实现，最后补测试。',
+    }),
+    activityEntry(2, {
+      tool: 'todo_write',
+      label: 'todo_write',
+      detail: JSON.stringify({
+        todos: [
+          { content: '读取 activity API 现有实现', status: 'completed' },
+          { content: '定位 runActivity 调用点', status: 'in_progress' },
+          { content: '补齐语义投影回归测试', status: 'pending' },
+          { content: '跑完整门禁并截图对比', status: 'pending' },
+        ],
+      }),
+      semantic: {
+        kind: 'todo',
+        items: [
+          { content: '读取 activity API 现有实现', status: 'completed' },
+          { content: '定位 runActivity 调用点', status: 'in_progress' },
+          { content: '补齐语义投影回归测试', status: 'pending' },
+          { content: '跑完整门禁并截图对比', status: 'pending' },
+        ],
+      },
+    }),
+    activityEntry(3, {
+      tool: 'grep',
+      label: 'grep',
+      detail: JSON.stringify({
+        pattern: 'runActivity',
+        path: 'web/src',
+        include: '*.ts',
+      }),
+      semantic: {
+        kind: 'search',
+        query: 'runActivity',
+        path: 'web/src',
+        include: '*.ts',
+        shape: 'matches',
+        total: 4,
+        files: [
+          {
+            path: 'web/src/api.ts',
+            matches: [
+              {
+                line: 93,
+                text: 'async runActivity(runId: string): Promise<RunActivityReport> {',
+              },
+              {
+                line: 97,
+                text: 'return this.get(`/v1/runs/${runId}/activity`)',
+              },
+            ],
+          },
+          {
+            path: 'web/src/types.ts',
+            matches: [
+              { line: 208, text: 'export interface RunActivityReport {' },
+            ],
+          },
+          {
+            path: 'web/src/sealed/DetailDrawer.tsx',
+            matches: [
+              {
+                line: 412,
+                text: 'const report = await api.runActivity(runId)',
+              },
+            ],
+          },
+        ],
+      },
+    }),
+    activityEntry(4, {
+      tool: 'glob',
+      label: 'glob',
+      detail: '{"pattern":"test/**/*.test.ts"}',
+      semantic: {
+        kind: 'search',
+        query: 'test/**/*.test.ts',
+        shape: 'paths',
+        total: 98,
+        resultTruncated: true,
+        paths: [
+          'test/tool-semantics.test.ts',
+          'test/live-execution-feedback.test.ts',
+          'test/chat-experience-server.test.ts',
+          'test/execution-pools.test.ts',
+          'test/delivery-reconciliation.test.ts',
+          'test/dsh-home.test.ts',
+        ],
+      },
+    }),
+    activityEntry(5, {
+      tool: 'todo_write',
+      label: 'todo_write',
+      detail: JSON.stringify({
+        todos: [
+          { content: '读取 activity API 现有实现', status: 'completed' },
+          { content: '定位 runActivity 调用点', status: 'completed' },
+          { content: '补齐语义投影回归测试', status: 'in_progress' },
+          { content: '跑完整门禁并截图对比', status: 'pending' },
+        ],
+      }),
+      semantic: {
+        kind: 'todo',
+        items: [
+          { content: '读取 activity API 现有实现', status: 'completed' },
+          { content: '定位 runActivity 调用点', status: 'completed' },
+          { content: '补齐语义投影回归测试', status: 'in_progress' },
+          { content: '跑完整门禁并截图对比', status: 'pending' },
+        ],
+      },
+    }),
+  ]
+}
+
+function todoSearchView(): DrawerView {
+  const base = taskView('completed')
+  if (base.kind !== 'task' || !base.run) return base
+  const entries = todoSearchEntries()
+  return {
+    ...base,
+    activityByRun: {
+      [base.run.id]: {
+        runId: base.run.id,
+        taskId: channel.id,
+        entries,
+        totalEntries: entries.length,
+        truncated: false,
+      },
+    },
+  }
+}
+
 function fixtureView(fixture: ReviewFixture): DrawerView {
   if (fixture === 'task-web-agent') return webAgentView()
+  if (fixture === 'task-todo-search') return todoSearchView()
   if (
     fixture === 'task-activity' ||
     fixture === 'task-activity-open' ||

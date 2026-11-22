@@ -556,6 +556,7 @@ try {
     'task-activity-open',
     'task-activity-running',
     'task-web-agent',
+    'task-todo-search',
     'preview-file',
     'preview-image',
     'preview-video',
@@ -622,6 +623,32 @@ try {
           .click()
         await fixturePage
           .locator('.activity-card.agent-card')
+          .first()
+          .scrollIntoViewIfNeeded()
+      }
+      if (fixture === 'task-todo-search') {
+        await fixturePage.getByText('工作流程记录', { exact: false }).click()
+        await fixturePage
+          .locator('.activity-batch > details > summary')
+          .filter({ hasText: '搜索了 2 次' })
+          .click()
+        await fixturePage
+          .locator('.activity-tool')
+          .filter({ hasText: '1/4' })
+          .locator('summary')
+          .click()
+        await fixturePage
+          .locator('.activity-tool')
+          .filter({ hasText: '搜索命中' })
+          .locator('summary')
+          .click()
+        await fixturePage
+          .locator('.activity-tool')
+          .filter({ hasText: '匹配了文件' })
+          .locator('summary')
+          .click()
+        await fixturePage
+          .locator('.activity-card.todo-card')
           .first()
           .scrollIntoViewIfNeeded()
       }

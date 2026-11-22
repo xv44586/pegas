@@ -158,10 +158,9 @@ export function toolHeadline(entry: RunActivityEntry): ToolHeadline {
         deletions: semantic.deletions,
       }
     case 'search':
-      return {
-        title: entry.status === 'started' ? '正在搜索' : '已搜索',
-        subject: `“${semantic.query}”${semantic.path ? ` · ${baseName(semantic.path)}` : ''}`,
-      }
+      return searchHeadline(entry, semantic)
+    case 'todo':
+      return todoHeadline(entry, semantic)
     case 'web': {
       const target = semantic.url ?? semantic.query ?? ''
       const extraQueries =
@@ -219,6 +218,57 @@ function agentControlHeadline(
           ? { subject: `${String(semantic.agents.length)} 个` }
           : {}),
       }
+  }
+}
+
+function searchHeadline(
+  entry: RunActivityEntry,
+  semantic: Extract<ToolSemantic, { kind: 'search' }>,
+): ToolHeadline {
+  const running = entry.status === 'started'
+  const scope = semantic.path ? ` · ${baseName(semantic.path)}` : ''
+  if (semantic.shape === 'paths') {
+    const count =
+      semantic.total !== undefined ? ` ${String(semantic.total)} 个` : ''
+    return {
+      title: running
+        ? '正在匹配文件'
+        : semantic.total === 0
+          ? '没有匹配文件'
+          : '匹配了文件',
+      subject: `“${semantic.query}”${count}${scope}`,
+    }
+  }
+  if (semantic.shape === 'matches') {
+    const count =
+      semantic.total !== undefined ? ` ${String(semantic.total)} 处` : ''
+    return {
+      title: running
+        ? '正在搜索'
+        : semantic.total === 0
+          ? '没有命中'
+          : '搜索命中',
+      subject: `“${semantic.query}”${count}${scope}`,
+    }
+  }
+  return {
+    title: running ? '正在搜索' : '已搜索',
+    subject: `“${semantic.query}”${scope}`,
+  }
+}
+
+function todoHeadline(
+  entry: RunActivityEntry,
+  semantic: Extract<ToolSemantic, { kind: 'todo' }>,
+): ToolHeadline {
+  const completed = semantic.items.filter(
+    item => item.status === 'completed',
+  ).length
+  const active = semantic.items.find(item => item.status === 'in_progress')
+  const progress = `${String(completed)}/${String(semantic.items.length)}`
+  return {
+    title: entry.status === 'started' ? '正在更新任务清单' : '更新任务清单',
+    subject: active ? `${progress} · ${active.content}` : `${progress} 已完成`,
   }
 }
 

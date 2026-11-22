@@ -6417,6 +6417,152 @@ describe('sealed Pegas UI', () => {
     expect(drawer.querySelectorAll('.agent-status').length).toBe(2)
   })
 
+  it('renders todo checklist cards and structured grep/glob hit cards', async () => {
+    const entries: RunActivityEntry[] = [
+      {
+        seq: 1,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-todo',
+        tool: 'todo_write',
+        label: 'todo_write',
+        semantic: {
+          kind: 'todo',
+          items: [
+            { content: '读取现有实现', status: 'completed' },
+            { content: '补齐语义投影', status: 'in_progress' },
+            { content: '跑完整门禁', status: 'pending' },
+          ],
+        },
+        createdAt: '2026-11-19T08:00:10.000Z',
+        updatedAt: '2026-11-19T08:00:12.000Z',
+      },
+      {
+        seq: 2,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-grep',
+        tool: 'grep',
+        label: 'grep',
+        semantic: {
+          kind: 'search',
+          query: 'runActivity',
+          path: 'web/src',
+          include: '*.ts',
+          shape: 'matches',
+          total: 3,
+          files: [
+            {
+              path: 'web/src/api.ts',
+              matches: [
+                { line: 12, text: 'async runActivity(runId: string) {' },
+                { line: 40, text: 'return runActivity(id)' },
+              ],
+            },
+            {
+              path: 'web/src/types.ts',
+              matches: [
+                { line: 8, text: 'export interface RunActivityReport {' },
+              ],
+            },
+          ],
+        },
+        createdAt: '2026-11-19T08:00:14.000Z',
+        updatedAt: '2026-11-19T08:00:16.000Z',
+      },
+      {
+        seq: 3,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-glob',
+        tool: 'glob',
+        label: 'glob',
+        semantic: {
+          kind: 'search',
+          query: '**/*.test.ts',
+          shape: 'paths',
+          total: 412,
+          resultTruncated: true,
+          paths: ['test/a.test.ts', 'test/b.test.ts'],
+        },
+        createdAt: '2026-11-19T08:00:18.000Z',
+        updatedAt: '2026-11-19T08:00:20.000Z',
+      },
+      {
+        seq: 4,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-grep-empty',
+        tool: 'grep',
+        label: 'grep',
+        semantic: {
+          kind: 'search',
+          query: 'missing-symbol',
+          shape: 'matches',
+          total: 0,
+          files: [],
+        },
+        createdAt: '2026-11-19T08:00:22.000Z',
+        updatedAt: '2026-11-19T08:00:24.000Z',
+      },
+    ]
+    installSnapshotFetch(
+      {
+        ...snapshot,
+        channels: [{ ...channel, status: 'completed', canStop: false }],
+        runs: [{ ...run, status: 'completed', output: '完成。' }],
+      },
+      path => {
+        if (!path.startsWith('/v1/runs/run-1/activity?')) return undefined
+        return Response.json({
+          runId: 'run-1',
+          taskId: channel.id,
+          totalEntries: entries.length,
+          truncated: false,
+          entries,
+        })
+      },
+    )
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: new RegExp(channel.title) }),
+    )
+    const drawer = await screen.findByRole('dialog', { name: '工作详情' })
+    fireEvent.click(await within(drawer).findByText(/工作流程记录/))
+    const todoHeadline = await within(drawer).findByText('更新任务清单')
+    expect(within(drawer).getByText(/1\/3 · 补齐语义投影/)).toBeTruthy()
+    fireEvent.click(todoHeadline)
+    expect(within(drawer).getByText('任务清单')).toBeTruthy()
+    expect(within(drawer).getByText('1/3 已完成')).toBeTruthy()
+    expect(within(drawer).getByText('读取现有实现')).toBeTruthy()
+    expect(within(drawer).getByText('进行中')).toBeTruthy()
+    expect(within(drawer).getByText('待办')).toBeTruthy()
+    expect(drawer.querySelectorAll('.todo-list .is-completed').length).toBe(1)
+    expect(drawer.querySelectorAll('.todo-list .is-in_progress').length).toBe(1)
+    const grepHeadline = within(drawer).getAllByText('搜索命中')[0]
+    if (!grepHeadline) throw new Error('expected grep headline')
+    fireEvent.click(grepHeadline)
+    expect(within(drawer).getByText('3 处命中')).toBeTruthy()
+    expect(within(drawer).getByText('web/src/api.ts')).toBeTruthy()
+    expect(
+      within(drawer).getByText('async runActivity(runId: string) {'),
+    ).toBeTruthy()
+    expect(drawer.querySelectorAll('.search-file').length).toBe(2)
+    expect(drawer.querySelectorAll('.search-line-number').length).toBe(3)
+    const globHeadline = within(drawer).getAllByText('匹配了文件')[0]
+    if (!globHeadline) throw new Error('expected glob headline')
+    fireEvent.click(globHeadline)
+    expect(within(drawer).getByText('412 个文件')).toBeTruthy()
+    expect(within(drawer).getByText('test/a.test.ts')).toBeTruthy()
+    expect(within(drawer).getByText('结果过多，仅保留前段命中。')).toBeTruthy()
+    const emptyHeadline = within(drawer).getAllByText('没有命中')[0]
+    if (!emptyHeadline) throw new Error('expected empty headline')
+    fireEvent.click(emptyHeadline)
+    expect(within(drawer).getByText('没有命中任何行。')).toBeTruthy()
+  })
+
   it('keeps honest fallbacks for legacy and unknown tool records', async () => {
     installSnapshotFetch(
       {

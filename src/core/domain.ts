@@ -316,8 +316,19 @@ export type ToolSemantic =
       kind: 'search'
       query: string
       path?: string
+      include?: string
+      shape?: 'matches' | 'paths'
+      total?: number
+      resultTruncated?: boolean
+      files?: SearchFileHits[]
+      paths?: string[]
       preview?: string
       previewTruncated?: boolean
+    }
+  | {
+      kind: 'todo'
+      items: TodoItem[]
+      itemsTruncated?: boolean
     }
   | {
       kind: 'web'
@@ -347,6 +358,16 @@ export interface WebSource {
   url: string
   title?: string
   snippet?: string
+}
+
+export interface SearchFileHits {
+  path: string
+  matches: { line: number; text: string }[]
+}
+
+export interface TodoItem {
+  content: string
+  status: 'pending' | 'in_progress' | 'completed'
 }
 
 export interface DiffHunk {

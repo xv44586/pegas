@@ -302,6 +302,160 @@ describe('EXEC-006 tool semantics projection', () => {
     )
   })
 
+  it('projects grep results into per-file match groups with honest totals', () => {
+    const semantic = buildToolSemantic(
+      {
+        tool: 'grep',
+        input: JSON.stringify({
+          pattern: 'runActivity',
+          path: 'web/src',
+          include: '*.ts',
+        }),
+      },
+      {
+        status: 'completed',
+        result:
+          'Found 3 matches\n\nweb/src/api.ts\nLine 12: async runActivity(runId: string) {\nLine 40: return runActivity(id)\n\nweb/src/types.ts\nLine 8: export interface RunActivityReport {',
+      },
+    )
+    expect(semantic).toMatchObject({
+      kind: 'search',
+      query: 'runActivity',
+      path: 'web/src',
+      include: '*.ts',
+      shape: 'matches',
+      total: 3,
+      files: [
+        {
+          path: 'web/src/api.ts',
+          matches: [
+            { line: 12, text: 'async runActivity(runId: string) {' },
+            { line: 40, text: 'return runActivity(id)' },
+          ],
+        },
+        {
+          path: 'web/src/types.ts',
+          matches: [{ line: 8, text: 'export interface RunActivityReport {' }],
+        },
+      ],
+    })
+    if (semantic.kind !== 'search') throw new Error('expected search')
+    expect(semantic.resultTruncated).toBeUndefined()
+    expect(semantic.preview).toBeUndefined()
+  })
+
+  it('keeps grep truncation and empty results honest', () => {
+    const capped = buildToolSemantic(
+      { tool: 'grep', input: '{"pattern":"TODO"}' },
+      {
+        status: 'completed',
+        result:
+          'Found 2 of 57 matches\n\nsrc/a.ts\nLine 1: // TODO one\nLine 2: // TODO two\n\n(Full grep result stored at: /tmp/spill.txt. Read it to see more.)',
+      },
+    )
+    expect(capped).toMatchObject({
+      kind: 'search',
+      shape: 'matches',
+      total: 57,
+      resultTruncated: true,
+    })
+    const empty = buildToolSemantic(
+      { tool: 'grep', input: '{"pattern":"missing"}' },
+      { status: 'completed', result: 'No matches found' },
+    )
+    expect(empty).toMatchObject({
+      kind: 'search',
+      shape: 'matches',
+      total: 0,
+      files: [],
+    })
+  })
+
+  it('projects glob path lists and degrades foreign renders to preview', () => {
+    const semantic = buildToolSemantic(
+      { tool: 'glob', input: '{"pattern":"**/*.test.ts","path":"test"}' },
+      {
+        status: 'completed',
+        result: 'test/a.test.ts\ntest/b.test.ts\ntest/c.test.ts',
+      },
+    )
+    expect(semantic).toMatchObject({
+      kind: 'search',
+      query: '**/*.test.ts',
+      path: 'test',
+      shape: 'paths',
+      total: 3,
+      paths: ['test/a.test.ts', 'test/b.test.ts', 'test/c.test.ts'],
+    })
+    const capped = buildToolSemantic(
+      { tool: 'glob', input: '{"pattern":"**/*"}' },
+      {
+        status: 'completed',
+        result:
+          'src/a.ts\nsrc/b.ts\n\n(Showing 2 of 412 paths. Full sorted result stored at: /tmp/spill.txt. Read it.)',
+      },
+    )
+    expect(capped).toMatchObject({
+      kind: 'search',
+      shape: 'paths',
+      total: 412,
+      resultTruncated: true,
+      paths: ['src/a.ts', 'src/b.ts'],
+    })
+    const foreign = buildToolSemantic(
+      { tool: 'glob', input: '{"pattern":"*.md"}' },
+      { status: 'completed', result: 'some free-form text with spaces' },
+    )
+    if (foreign.kind !== 'search') throw new Error('expected search')
+    expect(foreign.shape).toBeUndefined()
+    expect(foreign.preview).toBe('some free-form text with spaces')
+  })
+
+  it('projects todo_write snapshots and degrades malformed lists', () => {
+    const semantic = buildToolSemantic({
+      tool: 'todo_write',
+      input: JSON.stringify({
+        todos: [
+          { content: '读取现有实现', status: 'completed' },
+          { content: '补齐语义投影', status: 'in_progress' },
+          { content: '跑完整门禁', status: 'pending' },
+        ],
+      }),
+    })
+    expect(semantic).toEqual({
+      kind: 'todo',
+      items: [
+        { content: '读取现有实现', status: 'completed' },
+        { content: '补齐语义投影', status: 'in_progress' },
+        { content: '跑完整门禁', status: 'pending' },
+      ],
+    })
+    const partial = buildToolSemantic({
+      tool: 'todo_write',
+      input: JSON.stringify({
+        todos: [
+          { content: '有效项', status: 'pending' },
+          { content: '', status: 'pending' },
+          { content: '非法状态', status: 'doing' },
+        ],
+      }),
+    })
+    expect(partial).toMatchObject({
+      kind: 'todo',
+      items: [{ content: '有效项', status: 'pending' }],
+      itemsTruncated: true,
+    })
+    expect(buildToolSemantic({ tool: 'todo_write', input: '{}' })).toEqual({
+      kind: 'unknown',
+    })
+    expect(
+      buildToolSemantic({
+        tool: 'todo_write',
+        input: '{"todos":[{"content":"x","status":"bogus"}]}',
+      }),
+    ).toEqual({ kind: 'unknown' })
+  })
+
   it('splits legacy merged detail strings without losing content', () => {
     expect(splitToolDetail('{"command":"ls"}\n[结果]\nfile-a')).toEqual({
       input: '{"command":"ls"}',
