@@ -8,6 +8,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -343,6 +344,93 @@ describe('DESIGN-003 chat page', () => {
       screen.queryByText('正在核对数据来源', {
         selector: '.message-content *',
       }),
+    ).toBeNull()
+  })
+
+  it('CONV-006: renders decide facts as action cards and marks them resolved', async () => {
+    const decideSnapshot: Snapshot = {
+      ...baseSnapshot,
+      runs: [{ ...runningRun, status: 'waiting' }],
+      messages: [
+        {
+          id: 'message-approval',
+          userId: 'owner',
+          taskId: channel.id,
+          payload: {
+            type: 'approval.required',
+            taskId: channel.id,
+            approvalId: 'approval-1',
+            text: '发布前需要确认影响范围',
+          },
+          status: 'sent',
+          createdAt: '2026-11-22T08:02:00.000Z',
+          projection: {
+            lane: 'decide',
+            weight: 'card',
+            anchor: { taskId: channel.id, eventId: 'event-1' },
+          },
+        },
+        {
+          id: 'message-approval-done',
+          userId: 'owner',
+          taskId: channel.id,
+          payload: {
+            type: 'approval.resolved',
+            taskId: channel.id,
+            approvalId: 'approval-1',
+            text: '已确认：暂不发布。',
+          },
+          status: 'sent',
+          createdAt: '2026-11-22T08:04:00.000Z',
+          projection: {
+            lane: 'work',
+            weight: 'card',
+            anchor: { taskId: channel.id, eventId: 'event-1' },
+          },
+        },
+      ],
+    }
+    installChatFetch(decideSnapshot)
+    render(<App />)
+    const decideCard = await screen.findByLabelText(/已处理：/)
+    expect(decideCard.classList.contains('is-resolved')).toBe(true)
+    expect(decideCard.textContent).toContain('发布前需要确认影响范围')
+    expect(
+      within(decideCard).queryByRole('button', { name: /查看内容|去处理/ }),
+    ).toBeNull()
+    expect(screen.getByLabelText(/工作进展：|已完成：/)).toBeTruthy()
+  })
+
+  it('CONV-006: unresolved decide cards keep an explicit action', async () => {
+    const decideSnapshot: Snapshot = {
+      ...baseSnapshot,
+      runs: [{ ...runningRun, status: 'waiting' }],
+      messages: [
+        {
+          id: 'message-approval-open',
+          userId: 'owner',
+          taskId: channel.id,
+          payload: {
+            type: 'approval.required',
+            taskId: channel.id,
+            approvalId: 'approval-open',
+            text: '发布前需要确认影响范围',
+          },
+          status: 'sent',
+          createdAt: '2026-11-22T08:02:00.000Z',
+          projection: { lane: 'decide', weight: 'card' },
+        },
+      ],
+    }
+    installChatFetch(decideSnapshot)
+    render(<App />)
+    const decideCard = await screen.findByLabelText(/需要你决定：/)
+    expect(decideCard.classList.contains('is-resolved')).toBe(false)
+    expect(
+      within(decideCard).getByRole('button', { name: /查看内容/ }),
+    ).toBeTruthy()
+    expect(
+      within(decideCard).queryByRole('button', { name: '回到发起消息' }),
     ).toBeNull()
   })
 

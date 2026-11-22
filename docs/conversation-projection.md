@@ -2,7 +2,7 @@
 
 > Feature：`CONV-006`（投影合同）、`CONV-007`（任务托盘与锚点导航）
 >
-> 状态：CONV-006 Partial（服务端派生层 + 投影 API + Web silent 过滤已落地）；CONV-007 Planned
+> 状态：CONV-006 Partial（服务端派生层 + 投影 API + Web 三声道渲染 + anchor 双向导航已落地；say 流式未实现）；CONV-007 Planned
 >
 > 更新日期：2026-11-22
 
@@ -95,3 +95,13 @@
 - **Web 最小接入**：`isSilentConversationMessage`（`web/src/sealed/types.ts`）优先信任服务端 `projection.weight === 'silent'`，无投影属性时回退既有 payload 类型过滤（`run.progress`/`run.acknowledged`）；聊天流过滤已切换。三声道卡片渲染、anchor 双向导航尚未实现（第二阶段）。
 - **自动化证据**：`test/conversation-projection.test.ts` 27 测试（三类 lane 映射、silent 过滤、兼容默认、anchor 不伪造、重放幂等、durable payload 不落投影、dispatcher/external 不带投影、read/resolve 投影、API 返回与客户端写入忽略）；`web/src/sealed/types.test.ts` CONV-006 2 测试（信任服务端投影 / 旧服务端回退）；`web/src/sealed/ChatExperience.test.tsx` CONV-006 2 测试（服务端 silent 事实不进聊天流含未知类型 / 旧服务端兼容）。
 - **门禁（2026-11-22）**：`pnpm check` format/brand/lint/typecheck/deadcode/build 通过；vitest 99 文件 / 1002 测试全绿（statement 85.01%、line 88.32%；并行满载下既有 dsh SIGKILL 计时用例抖动，隔离与串行复跑稳定通过，与本次改动无关）；`pnpm smoke`、`pnpm smoke:crash` 通过。
+
+## 已落地实现（2026-11-22，第二阶段：三声道渲染与锚点导航）
+
+- **三声道渲染**：`web/src/sealed/MainPages.tsx` 聊天流按服务端 `projection.lane` 分流——`say` 保持正文气泡；`work`/`decide` 渲染为 `FactCard`（`.fact-card`，头部 = 状态图标 + 短标签 + 任务名按钮 + 锚点回链，正文可展开，底部单一动作按钮）。decide 未决时按事实类型给出「审查交付 / 去回答 / 查看内容 / 去核对 / 核对投递 / 去处理」；`approval.resolved` / `action.reconciled` 匹配后卡片变已决态（`is-resolved`，动作消失）。无投影属性（旧服务端）整体回退为原有正文 UI，不报错不刷屏。
+- **锚点双向导航**：卡片头部锚点按钮（「回到发起消息」）滚动+高亮发起消息（`is-anchor-highlight` 1.6s 闪烁）；发起消息下方出现「查看进展 · N」跳到最新派生卡片。anchor 只来自服务端投影，不从正文推断；anchor 缺失或发起消息不在当前流中时按钮不渲染，不伪造来源。任务名点击打开事情详情抽屉。
+- **结构化分组**：卡片归属用任务名 + 锚点结构表达；删除了旧「原始请求：/你最近补充：」解释性文案（`taskContextCue` 收敛为仅任务标题）。
+- **决定动作复用既有链路**：审批/核对/投递核对走 `openAttentionMessage`（与「待你处理」同一恢复/已读路径）；澄清走 `continueChannel`；审查走 review 抽屉。不新增服务端意图。
+- **自动化证据（第二阶段新增/更新）**：`web/src/sealed/types.test.ts` +4 测试（lane/anchor 只读服务端、缺投影降级、approval/reconciliation 已决匹配）；`ChatExperience.test.tsx` +2 测试（decide 已决态无动作、未决有显式动作与锚点缺失不伪造）；`App.test.tsx` 3 个旧 cue/内联卡用例改写为投影驱动合同（含锚点双向往返断言）。
+- **门禁（第二阶段）**：`pnpm check` 99 文件 / 1008 测试全绿；`pnpm smoke`、`pnpm smoke:crash`、`pnpm review:ui -- --force`（桌面/移动/三主题几何断言）、`pnpm a11y:review`（0 违例）通过。
+- **仍未实现（CONV-006 剩余缺口）**：`say` 正文流式输出（现状仍是一次性完整文本）；work 卡内嵌 criteria 摘要（现经「审查交付/查看工作详情」抽屉下钻）；「待你处理」计数与聊天内就地解决的联动扣减仍以整页快照刷新为准。

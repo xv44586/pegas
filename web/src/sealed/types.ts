@@ -7,7 +7,6 @@ import type {
   DurableAction,
   ExecutionNode,
   GoalContract,
-  InboxEvent,
   ModelUsageRecord,
   ModelUsageReport,
   OutboxMessage,
@@ -338,52 +337,17 @@ const terminalCueTypes = new Set([
 
 export interface TaskContextCue {
   title: string
-  origin?: string
-  lastUser?: string
 }
 
 export function taskContextCue(
   message: OutboxMessage,
   channels: readonly WorkChannel[],
-  events: readonly InboxEvent[],
 ): TaskContextCue | undefined {
   const type = payloadType(message.payload)
   if (!type || !terminalCueTypes.has(type) || !message.taskId) return undefined
   const channel = channels.find(item => item.id === message.taskId)
   if (!channel) return undefined
-  const cue: TaskContextCue = { title: channel.title }
-  const originEvent = events.find(event => event.id === channel.originEventId)
-  const origin = originEvent
-    ? firstCueLine(textFromPayload(originEvent.payload))
-    : undefined
-  if (origin && origin !== firstCueLine(channel.title)) cue.origin = origin
-  const lastUserEvent = events
-    .filter(
-      event =>
-        event.type === 'user.message' &&
-        event.id !== channel.originEventId &&
-        eventPayloadTaskId(event.payload) === message.taskId,
-    )
-    .toSorted(
-      (left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt),
-    )[0]
-  const lastUser = lastUserEvent
-    ? firstCueLine(textFromPayload(lastUserEvent.payload))
-    : undefined
-  if (lastUser && lastUser !== cue.origin) cue.lastUser = lastUser
-  return cue
-}
-
-function eventPayloadTaskId(payload: unknown): string | undefined {
-  if (!payload || typeof payload !== 'object') return undefined
-  const value = (payload as Record<string, unknown>).taskId
-  return typeof value === 'string' ? value : undefined
-}
-
-function firstCueLine(text: string): string | undefined {
-  const line = text.replaceAll(/\s+/g, ' ').trim()
-  if (!line) return undefined
-  return line.length > 80 ? `${line.slice(0, 80)}…` : line
+  return { title: channel.title }
 }
 
 export function isRunProgressMessage(message: OutboxMessage): boolean {
@@ -400,6 +364,60 @@ export function isSilentConversationMessage(message: OutboxMessage): boolean {
   if (projection) return projection.weight === 'silent'
   const type = payloadType(message.payload)
   return type === 'run.progress' || type === 'run.acknowledged'
+}
+
+export type ConversationLane = ConversationProjection['lane']
+
+/**
+ * CONV-006: the render lane comes from the server projection. Without
+ * projection attributes (old server) the client falls back to a compatible
+ * default: everything stays inline text, exactly the pre-projection UI.
+ */
+export function conversationLane(message: OutboxMessage): ConversationLane {
+  return message.projection?.lane ?? 'say'
+}
+
+export interface ConversationAnchor {
+  taskId: string
+  eventId?: string
+}
+
+/** Server anchor only; never inferred from payload text. */
+export function conversationAnchor(
+  message: OutboxMessage,
+): ConversationAnchor | undefined {
+  return message.projection?.anchor
+}
+
+/** True when a later fact in the same stream resolves this decision. */
+export function isResolvedDecisionMessage(
+  message: OutboxMessage,
+  messages: readonly OutboxMessage[],
+): boolean {
+  if (conversationLane(message) !== 'decide') return false
+  const type = payloadType(message.payload)
+  if (type === 'approval.required' || type === 'approval.requested') {
+    const approvalId = approvalIdFromMessage(message)
+    if (!approvalId) return false
+    return messages.some(
+      item =>
+        payloadType(item.payload) === 'approval.resolved' &&
+        approvalIdFromMessage(item) === approvalId,
+    )
+  }
+  if (
+    type === 'action.reconciliation_required' ||
+    type === 'action.outcome_unknown'
+  ) {
+    const actionId = actionIdFromMessage(message)
+    if (!actionId) return false
+    return messages.some(
+      item =>
+        payloadType(item.payload) === 'action.reconciled' &&
+        actionIdFromMessage(item) === actionId,
+    )
+  }
+  return false
 }
 
 export function latestRunProgressText(
