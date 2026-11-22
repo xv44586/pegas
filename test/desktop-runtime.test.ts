@@ -29,6 +29,13 @@ describe('desktop runtime', () => {
     expect(desktopSmoke).toContain("name: '稍后设置'")
   })
 
+  it('targets the send button exactly so the dictation toggle cannot match', () => {
+    expect(desktopSmoke).toContain(
+      "getByRole('button', { name: '发送', exact: true })",
+    )
+    expect(desktopSmoke).not.toContain("getByRole('button', { name: '发送' })")
+  })
+
   it('starts database writers only after the Control Plane is ready', () => {
     const controlPlane = desktopMain.indexOf("['control-plane/main.js']")
     const ready = desktopMain.indexOf('await waitForControlPlane(appUrl)')
