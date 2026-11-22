@@ -61,6 +61,12 @@ export function ActivityTimeline({
             key={unit.key}
             latest={unit.latest}
           />
+        ) : unit.kind === 'thinking' ? (
+          <ThinkingFoldUnit
+            history={unit.history}
+            key={unit.key}
+            latest={unit.latest}
+          />
         ) : (
           <ActivityEntryRow
             entry={unit.entry}
@@ -207,26 +213,7 @@ function ActivityEntryRow({
     return null
   }
   if (entry.kind === 'thinking') {
-    return (
-      <li className="activity-thinking">
-        <details>
-          <summary>
-            <span className="activity-icon" aria-hidden="true">
-              <Lightbulb size={14} />
-            </span>
-            <span className="activity-label">{thinkingHeadline(entry)}</span>
-            <ChevronDown
-              aria-hidden="true"
-              className="activity-chevron"
-              size={14}
-            />
-          </summary>
-          <div className="activity-prose">
-            <MarkdownMessage content={entry.detail ?? entry.label} />
-          </div>
-        </details>
-      </li>
-    )
+    return <ThinkingRow entry={entry} />
   }
   if (entry.kind === 'text') {
     return (
@@ -759,6 +746,91 @@ function TodoFoldUnit({
           <ol className="activity-batch-items" role="list">
             {history.map(entry => (
               <ActivityEntryRow entry={entry} key={entry.seq} />
+            ))}
+          </ol>
+        </details>
+      </details>
+    </li>
+  )
+}
+
+function ThinkingRow({ entry }: { entry: RunActivityEntry }) {
+  const running = entry.status === 'started'
+  return (
+    <li className="activity-thinking">
+      <details>
+        <summary>
+          <span className="activity-icon" aria-hidden="true">
+            {running ? (
+              <RunningIcon>
+                <Lightbulb size={14} />
+              </RunningIcon>
+            ) : (
+              <Lightbulb size={14} />
+            )}
+          </span>
+          <span className="activity-label">
+            <span className="activity-title">思考</span>
+            <span className="activity-thinking-preview">
+              {thinkingHeadline(entry)}
+            </span>
+          </span>
+          <ChevronDown
+            aria-hidden="true"
+            className="activity-chevron"
+            size={14}
+          />
+        </summary>
+        <div className="activity-prose activity-thinking-body">
+          <MarkdownMessage content={entry.detail ?? entry.label} />
+        </div>
+      </details>
+    </li>
+  )
+}
+
+function ThinkingFoldUnit({
+  latest,
+  history,
+}: {
+  latest: RunActivityEntry
+  history: RunActivityEntry[]
+}) {
+  return (
+    <li className="activity-thinking activity-thinking-fold">
+      <details>
+        <summary>
+          <span className="activity-icon" aria-hidden="true">
+            <Lightbulb size={14} />
+          </span>
+          <span className="activity-label">
+            <span className="activity-title">思考</span>
+            <span className="activity-thinking-preview">
+              {thinkingHeadline(latest)}
+            </span>
+          </span>
+          <ChevronDown
+            aria-hidden="true"
+            className="activity-chevron"
+            size={14}
+          />
+        </summary>
+        <div className="activity-prose activity-thinking-body">
+          <MarkdownMessage content={latest.detail ?? latest.label} />
+        </div>
+        <details className="todo-history">
+          <summary>
+            <History aria-hidden="true" size={13} />
+            <span>更早的思考 · {String(history.length)} 段</span>
+            <ChevronDown
+              aria-hidden="true"
+              className="activity-chevron"
+              size={13}
+            />
+          </summary>
+          <ol className="activity-batch-items" role="list">
+            {history.map(entry => (
+              <ThinkingRow entry={entry} key={entry.seq} />
             ))}
           </ol>
         </details>

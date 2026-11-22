@@ -4038,6 +4038,23 @@ kbd {
 .todo-history .activity-batch-items {
   padding: 6px 0 0;
 }
+.activity-thinking-preview {
+  color: var(--faint);
+  margin-left: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.activity-thinking .activity-title {
+  font-family: inherit;
+}
+.activity-thinking-body {
+  color: var(--muted);
+  font-size: var(--text-small);
+}
+.activity-thinking-fold > details > .todo-history {
+  margin: 0 8px;
+}
 .ask-questions {
   display: grid;
 }

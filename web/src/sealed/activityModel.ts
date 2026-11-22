@@ -14,6 +14,12 @@ export type ActivityUnit =
       latest: RunActivityEntry
       history: RunActivityEntry[]
     }
+  | {
+      kind: 'thinking'
+      key: string
+      latest: RunActivityEntry
+      history: RunActivityEntry[]
+    }
 
 export type ActivityGroupKind =
   'command' | 'read' | 'edit' | 'search' | 'web' | 'agent'
@@ -124,6 +130,11 @@ export function summarizeRunChanges(
  * Consecutive todo_write snapshots fold last-write-wins: the newest snapshot
  * stays visible at the position of the first write, older ones move into a
  * collapsed history; any other entry breaks the fold.
+ * Consecutive settled thinking entries fold the same way (newest paragraph
+ * visible, earlier ones collapsed); a running thinking tail or any other
+ * visible entry breaks the fold so live reasoning stays row-by-row.
+ * Hidden lifecycle step rows are transparent: they neither join nor break
+ * folds, while meta-bearing step rows (compaction/steered) do break them.
  */
 export function groupActivityEntries(
   entries: readonly RunActivityEntry[],
@@ -132,6 +143,7 @@ export function groupActivityEntries(
   let pending: RunActivityEntry[] = []
   let pendingGroup: ActivityGroupKind | undefined
   let todoRun: RunActivityEntry[] = []
+  let thinkingRun: RunActivityEntry[] = []
   const flushTodos = () => {
     if (todoRun.length === 0) return
     const latest = todoRun.at(-1)
@@ -144,6 +156,27 @@ export function groupActivityEntries(
       })
     }
     todoRun = []
+  }
+  const flushThinking = () => {
+    if (thinkingRun.length === 0) return
+    const latest = thinkingRun.at(-1)
+    if (latest) {
+      if (thinkingRun.length === 1) {
+        units.push({
+          kind: 'entry',
+          key: `entry-${String(latest.seq)}`,
+          entry: latest,
+        })
+      } else {
+        units.push({
+          kind: 'thinking',
+          key: `thinking-${String(thinkingRun[0]?.seq ?? 0)}`,
+          latest,
+          history: thinkingRun.slice(0, -1).toReversed(),
+        })
+      }
+    }
+    thinkingRun = []
   }
   const flush = () => {
     if (pending.length === 0) return
@@ -163,12 +196,20 @@ export function groupActivityEntries(
     pendingGroup = undefined
   }
   for (const entry of entries) {
+    if (entry.kind === 'step' && !entry.meta) continue
     if (entry.kind === 'tool_call' && entry.semantic?.kind === 'todo') {
       flush()
+      flushThinking()
       todoRun.push(entry)
       continue
     }
     flushTodos()
+    if (entry.kind === 'thinking' && entry.status !== 'started') {
+      flush()
+      thinkingRun.push(entry)
+      continue
+    }
+    flushThinking()
     const group =
       entry.kind === 'tool_call' && !isDelegationEntry(entry)
         ? activityGroupKind(entry)
@@ -187,6 +228,7 @@ export function groupActivityEntries(
   }
   flush()
   flushTodos()
+  flushThinking()
   return units
 }
 
