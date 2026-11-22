@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 import type { ModelTokenUsage } from '../core/domain.js'
 import type { DshModelConfiguration } from './dsh-home.js'
 import type { ExecutorInput, ExecutorResult, RunExecutor } from './executor.js'
+import type { TextPrivacyMasker } from '../privacy/masker.js'
 
 export interface DshCliExecutorOptions {
   command?: string
@@ -24,6 +25,7 @@ export interface DshCliExecutorOptions {
   reasoningEffort?: string
   approvalBridgePath?: string
   readonlySurfacePath?: string
+  privacyMasker?: TextPrivacyMasker
   modelConfiguration?: DshModelConfiguration
 }
 
@@ -109,6 +111,7 @@ export class DshCliExecutor implements RunExecutor {
   readonly #reasoningEffort?: string
   readonly #approvalBridgePath: string
   readonly #readonlySurfacePath: string
+  readonly #privacyMasker?: TextPrivacyMasker
   readonly #modelConfiguration?: DshModelConfiguration
 
   constructor(options: DshCliExecutorOptions = {}) {
@@ -128,6 +131,7 @@ export class DshCliExecutor implements RunExecutor {
       options.approvalBridgePath ?? defaultApprovalBridgePath()
     this.#readonlySurfacePath =
       options.readonlySurfacePath ?? defaultReadonlySurfacePath()
+    this.#privacyMasker = options.privacyMasker
     this.#modelConfiguration = options.modelConfiguration
   }
 
@@ -180,7 +184,11 @@ export class DshCliExecutor implements RunExecutor {
       : undefined
     const readonlyPatch =
       this.#permissionMode === 'read-only'
-        ? createReadonlySurfacePatch(this.#readonlySurfacePath)
+        ? createReadonlySurfacePatch(
+            this.#readonlySurfacePath,
+            input.conversationStateCapability,
+            this.#privacyMasker,
+          )
         : undefined
     const arguments_ = [
       '--profile',
@@ -208,6 +216,16 @@ export class DshCliExecutor implements RunExecutor {
       env: {
         ...executorEnvironment(process.env),
         ...(bridgeEnabled ? { PEGAS_APPROVAL_BRIDGE: '1' } : {}),
+        ...(input.conversationStateCapability
+          ? {
+              PEGAS_CONTROL_PLANE_URL:
+                input.conversationStateCapability.baseUrl,
+              PEGAS_RUN_ID: input.conversationStateCapability.runId,
+              PEGAS_TASK_ID: input.taskId,
+              PEGAS_RUN_CLAIM_TOKEN:
+                input.conversationStateCapability.claimToken,
+            }
+          : {}),
         ...(this.#home ? { DSH_HOME: this.#home } : {}),
         ...(this.#modelConfiguration
           ? this.#modelConfiguration.environment
@@ -558,7 +576,11 @@ function defaultReadonlySurfacePath(): string {
   )
 }
 
-function createReadonlySurfacePatch(surfacePath: string): {
+function createReadonlySurfacePatch(
+  surfacePath: string,
+  capability?: ExecutorInput['conversationStateCapability'],
+  masker?: TextPrivacyMasker,
+): {
   path: string
   remove: () => void
 } {
@@ -572,6 +594,16 @@ function createReadonlySurfacePatch(surfacePath: string): {
           {
             id: 'pegas-readonly-surface',
             name: surfacePath,
+            ...(capability
+              ? {
+                  config: {
+                    capability,
+                    ...(capability.privacyMode === 'mask' && masker
+                      ? { masker }
+                      : {}),
+                  },
+                }
+              : {}),
           },
         ],
       },

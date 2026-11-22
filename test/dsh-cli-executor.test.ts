@@ -840,6 +840,51 @@ console.log(JSON.stringify({
         ),
     ).toBe(false)
   })
+
+  it('embeds the conversation state capability in the surface patch config', async () => {
+    const command = fakeDsh(`
+const fs = require('node:fs')
+const patchPaths = process.argv
+  .map((value, index) => (value === '--patch' ? process.argv[index + 1] : undefined))
+  .filter(value => value !== undefined)
+const patches = patchPaths.map(path => JSON.parse(fs.readFileSync(path, 'utf8')))
+console.log(JSON.stringify({
+  type: 'final',
+  sessionId: 'session-state-tools',
+  text: JSON.stringify(patches),
+  reason: { kind: 'completed' }
+}))
+`)
+    const executor = new DshCliExecutor({
+      command,
+      permissionMode: 'read-only',
+    })
+    const capability = {
+      baseUrl: 'http://127.0.0.1:4317',
+      runId: 'run-chat',
+      claimToken: 'claim-token',
+      privacyMode: 'disabled',
+    } as const
+    const result = await executor.execute({
+      runId: 'run-chat',
+      taskId: 'task-chat',
+      prompt: '我有哪些任务',
+      workingDirectory: process.cwd(),
+      conversationStateCapability: capability,
+    })
+    const patches = JSON.parse(result.output) as {
+      insert?: {
+        id: string
+        config?: { capability?: unknown; masker?: unknown }
+      }[]
+    }[][]
+    const entry = patches
+      .flat()
+      .flatMap(patch => patch.insert ?? [])
+      .find(candidate => candidate.id === 'pegas-readonly-surface')
+    expect(entry?.config?.capability).toEqual(capability)
+    expect(entry?.config?.masker).toBeUndefined()
+  })
 })
 
 function fakeDsh(body: string): string {

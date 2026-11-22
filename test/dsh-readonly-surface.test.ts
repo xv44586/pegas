@@ -1,11 +1,16 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   apply,
+  CONVERSATION_STATE_TOOL_NAMES,
+  conversationStateTools,
+  maskProjectionStrings,
+  normalizeCapability,
   READONLY_TOOL_NAMES,
   readonlyExecutor,
   surfaceDenial,
 } from '../src/executor/dsh-readonly-surface.mjs'
+import { DeterministicPrivacyMasker } from '../src/privacy/masker.js'
 
 interface GuardDenial {
   reason: string
@@ -22,6 +27,21 @@ interface NativeExecutor {
   execute: (input: unknown) => Promise<unknown>
 }
 
+interface StateToolDefinition {
+  name: string
+  execute: (
+    arguments_: unknown,
+    exec: { signal: AbortSignal },
+  ) => Promise<{ json: string }>
+}
+
+const capability = {
+  baseUrl: 'http://127.0.0.1:4317',
+  runId: 'run-chat',
+  claimToken: 'claim-secret',
+  privacyMode: 'disabled',
+} as const
+
 function surfaceContext(): {
   ctx: Parameters<typeof apply>[0]
   guards: ToolGuard[]
@@ -29,10 +49,12 @@ function surfaceContext(): {
   originalDescribe: NativeExecutor['describe']
   nativeBatches: unknown[]
   disposers: (() => void)[]
+  registered: StateToolDefinition[]
 } {
   const guards: ToolGuard[] = []
   const nativeBatches: unknown[] = []
   const disposers: (() => void)[] = []
+  const registered: StateToolDefinition[] = []
   const native: NativeExecutor = {
     describe: tools => ({
       schemas: tools.map(tool => ({ name: tool.name })),
@@ -57,12 +79,23 @@ function surfaceContext(): {
     },
     tools: {
       selectExecutor: () => native,
+      register: (definition: unknown) => {
+        registered.push(definition as StateToolDefinition)
+      },
       guard: (guard: ToolGuard) => {
         guards.push(guard)
       },
     },
   }
-  return { ctx, guards, native, originalDescribe, nativeBatches, disposers }
+  return {
+    ctx,
+    guards,
+    native,
+    originalDescribe,
+    nativeBatches,
+    disposers,
+    registered,
+  }
 }
 
 describe('DSH read-only tool surface plugin', () => {
@@ -165,5 +198,159 @@ describe('DSH read-only tool surface plugin', () => {
       { name: 'grep' },
     ]) as { schemas: { name: string }[] }
     expect(described.schemas).toEqual([{ name: 'read' }])
+  })
+})
+
+describe('conversation state tools', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('normalizes only complete http capabilities and defaults privacy to disabled', () => {
+    expect(normalizeCapability(undefined)).toBeUndefined()
+    expect(normalizeCapability(null)).toBeUndefined()
+    expect(
+      normalizeCapability({ ...capability, baseUrl: 'ftp://x' }),
+    ).toBeUndefined()
+    expect(normalizeCapability({ ...capability, runId: '' })).toBeUndefined()
+    expect(
+      normalizeCapability({ ...capability, claimToken: '' }),
+    ).toBeUndefined()
+    expect(
+      normalizeCapability({ ...capability, privacyMode: 'weird' }),
+    ).toEqual(capability)
+    expect(normalizeCapability({ ...capability, privacyMode: 'mask' })).toEqual(
+      { ...capability, privacyMode: 'mask' },
+    )
+  })
+
+  it('registers the state tools and opens the guard only with a capability', () => {
+    const plain = surfaceContext()
+    apply(plain.ctx)
+    expect(plain.registered).toHaveLength(0)
+    const plainGuard = plain.guards[0]
+    if (!plainGuard) throw new Error('Expected the surface guard')
+    for (const name of CONVERSATION_STATE_TOOL_NAMES) {
+      expect(plainGuard({ name, arguments: {} })?.info.code).toBe(
+        'PEGAS_READONLY_SURFACE_DENIED',
+      )
+    }
+
+    const wired = surfaceContext()
+    apply(wired.ctx, { capability })
+    expect(wired.registered.map(tool => tool.name)).toEqual([
+      ...CONVERSATION_STATE_TOOL_NAMES,
+    ])
+    const wiredGuard = wired.guards[0]
+    if (!wiredGuard) throw new Error('Expected the surface guard')
+    for (const name of CONVERSATION_STATE_TOOL_NAMES) {
+      expect(wiredGuard({ name, arguments: {} })).toBeUndefined()
+    }
+    expect(wiredGuard({ name: 'bash', arguments: {} })?.info.code).toBe(
+      'PEGAS_READONLY_SURFACE_DENIED',
+    )
+  })
+
+  it('ignores malformed capabilities instead of half-registering tools', () => {
+    const harness = surfaceContext()
+    apply(harness.ctx, { capability: { baseUrl: 'http://x' } })
+    expect(harness.registered).toHaveLength(0)
+    const guard = harness.guards[0]
+    if (!guard) throw new Error('Expected the surface guard')
+    expect(guard({ name: 'pegas_tasks', arguments: {} })?.info.code).toBe(
+      'PEGAS_READONLY_SURFACE_DENIED',
+    )
+  })
+
+  it('masks every string leaf of a projection while keeping keys and structure', () => {
+    const masked = maskProjectionStrings(
+      {
+        tasks: [{ title: 'a', awaiting: null, count: 2 }],
+        note: 'b',
+      },
+      text => `masked:${text}`,
+    )
+    expect(masked).toEqual({
+      tasks: [{ title: 'masked:a', awaiting: null, count: 2 }],
+      note: 'masked:b',
+    })
+  })
+
+  it('reads the authoritative projection with the run claim header', async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ tasks: [] }), { status: 200 }),
+      ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const [tasks] = conversationStateTools(capability)
+    if (!tasks) throw new Error('Expected the pegas_tasks definition')
+    const result = await tasks.execute(
+      {},
+      { signal: new AbortController().signal },
+    )
+    expect(JSON.parse(result.json)).toEqual({ tasks: [] })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const call = fetchMock.mock.calls[0] as unknown as
+      [string, { headers: Record<string, string> }] | undefined
+    if (!call) throw new Error('Expected the fetch call')
+    expect(call[0]).toBe(
+      'http://127.0.0.1:4317/v1/runs/run-chat/conversation-state/tasks',
+    )
+    expect(call[1].headers['x-pegas-run-claim-token']).toBe('claim-secret')
+  })
+
+  it('masks projection secrets before they reach the transcript in mask mode', async () => {
+    const masker = new DeterministicPrivacyMasker({
+      hmacKey: 'test-hmac-key-0123456789',
+    })
+    const secret = 'sk-abcdef1234567890abcdef'
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({ tasks: [{ title: `key ${secret}` }] }),
+            {
+              status: 200,
+            },
+          ),
+        ),
+      ),
+    )
+    const [tasks] = conversationStateTools(
+      { ...capability, privacyMode: 'mask' },
+      { masker },
+    )
+    if (!tasks) throw new Error('Expected the pegas_tasks definition')
+    const result = await tasks.execute(
+      {},
+      { signal: new AbortController().signal },
+    )
+    expect(result.json).not.toContain(secret)
+    expect(result.json).toContain('{{API_KEY_')
+  })
+
+  it('surfaces claim rejection and refuses oversized projections', async () => {
+    const [tasks] = conversationStateTools(capability)
+    if (!tasks) throw new Error('Expected the pegas_tasks definition')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve(new Response('no', { status: 403 }))),
+    )
+    await expect(
+      tasks.execute({}, { signal: new AbortController().signal }),
+    ).rejects.toThrow('凭证无效或已过期')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(
+          new Response('x'.repeat(64 * 1024 + 1), { status: 200 }),
+        ),
+      ),
+    )
+    await expect(
+      tasks.execute({}, { signal: new AbortController().signal }),
+    ).rejects.toThrow('大小上限')
   })
 })

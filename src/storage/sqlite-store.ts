@@ -7549,6 +7549,58 @@ export class PegasStore {
     this.#claimForCapability(runId, claimToken)
   }
 
+  /**
+   * EXEC-005: the conversation lane's read-only window into the owner's
+   * authoritative state. The capability is the live Run claim of a
+   * conversation Run; work Runs never gain this read surface, and every
+   * projection is bounded and scoped to the Run owner.
+   */
+  conversationStateForRun(
+    runId: string,
+    claimToken: string,
+    resource: 'tasks' | 'memories',
+  ): Record<string, unknown> {
+    this.#claimForCapability(runId, claimToken)
+    const run = this.#runById(runId)
+    const task = this.#taskById(run.taskId)
+    if (task.kind !== 'conversation') {
+      throw new RunClaimError(
+        'Conversation state reads require a conversation Run claim',
+      )
+    }
+    if (resource === 'tasks') {
+      const candidates = this.listRoutingCandidates(task.userId, { limit: 20 })
+      return {
+        tasks: candidates.map(candidate => ({
+          id: candidate.task.id,
+          title: candidate.task.title,
+          status: candidate.task.status,
+          updatedAt: candidate.task.updatedAt,
+          ...(candidate.awaiting ? { awaiting: candidate.awaiting } : {}),
+          ...(candidate.lastDelivery
+            ? { lastDelivery: candidate.lastDelivery }
+            : {}),
+          ...(candidate.recentInput
+            ? { recentInput: candidate.recentInput }
+            : {}),
+        })),
+      }
+    }
+    const memories = this.listMemories(task.userId, 50)
+    return {
+      memories: memories.items.map(memory => ({
+        id: memory.id,
+        scope: memory.scope,
+        category: memory.category,
+        content: memory.content.slice(0, 2000),
+        ...(memory.scope !== 'global' && memory.taskId
+          ? { taskId: memory.taskId }
+          : {}),
+      })),
+      ...(memories.nextCursor ? { truncated: true } : {}),
+    }
+  }
+
   createFollowUpFromRun(
     runId: string,
     claimToken: string,
