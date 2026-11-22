@@ -3489,6 +3489,73 @@ describe('sealed Pegas UI', () => {
     expect(titles.every(title => title === '思考')).toBe(true)
   })
 
+  it('prefers the Chinese summary headline while the body keeps the raw English reasoning', async () => {
+    installSnapshotFetch(
+      {
+        ...snapshot,
+        channels: [{ ...channel, status: 'completed', canStop: false }],
+        runs: [{ ...run, status: 'completed', output: '完成。' }],
+      },
+      path => {
+        if (!path.startsWith('/v1/runs/run-1/activity?')) return undefined
+        return Response.json({
+          runId: 'run-1',
+          taskId: channel.id,
+          totalEntries: 2,
+          truncated: false,
+          entries: [
+            {
+              seq: 1,
+              kind: 'thinking',
+              label:
+                'I should inspect api.ts first and grep for conflict markers.',
+              detail:
+                'I should inspect **api.ts** first and grep for conflict markers before merging.',
+              summary: '先检查 api.ts 的冲突标记',
+              createdAt: '2026-11-19T08:00:10.000Z',
+              updatedAt: '2026-11-19T08:00:12.000Z',
+            },
+            {
+              seq: 2,
+              kind: 'thinking',
+              label: 'The merge order is settled now.',
+              detail: 'The merge order is settled now.',
+              createdAt: '2026-11-19T08:00:13.000Z',
+              updatedAt: '2026-11-19T08:00:13.000Z',
+            },
+          ],
+        })
+      },
+    )
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: new RegExp(channel.title) }),
+    )
+    const taskDrawer = await screen.findByRole('dialog', { name: '工作详情' })
+    fireEvent.click(await within(taskDrawer).findByText(/工作流程记录/))
+    const summarizedHeadline =
+      await within(taskDrawer).findByText('先检查 api.ts 的冲突标记')
+    expect(
+      summarizedHeadline.closest('.activity-thinking-fold') ??
+        summarizedHeadline.closest('.activity-thinking'),
+    ).toBeTruthy()
+    expect(
+      within(taskDrawer).queryByText(
+        'I should inspect api.ts first and grep for conflict markers.',
+      ),
+    ).toBeNull()
+    expect(
+      within(taskDrawer).getAllByText('The merge order is settled now.').length,
+    ).toBeGreaterThan(0)
+    fireEvent.click(summarizedHeadline)
+    const thinkingRow = summarizedHeadline.closest('.activity-thinking')
+    const body = thinkingRow?.querySelector('.activity-thinking-body')
+    expect(body?.textContent).toContain('grep for conflict markers')
+    expect(body?.querySelector('strong')?.textContent).toBe('api.ts')
+  })
+
   it('renders a subagent delegation card with the child execution transcript', async () => {
     installSnapshotFetch(
       {

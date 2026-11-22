@@ -154,7 +154,9 @@ export function loadConfig(
         join(dshHome, 'sessions'),
       ),
     ),
-    workspaceRoot: resolve(environment.PEGAS_WORKSPACE_ROOT ?? '.'),
+    workspaceRoot: resolve(
+      nonemptyOr(environment.PEGAS_WORKSPACE_ROOT, join(dataDir, 'workspace')),
+    ),
     workerConcurrency: parsePositiveInteger(
       environment.PEGAS_WORKER_CONCURRENCY,
       2,

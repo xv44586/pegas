@@ -16,6 +16,7 @@ describe('loadConfig', () => {
       dshHome: resolve('data/dsh'),
       dshSessionsRoot: resolve('data/dsh/sessions'),
       dshProfile: 'headless',
+      workspaceRoot: resolve('data/workspace'),
       modelName: 'discovery-api/deepseek-v4.1-flash-1017',
       modelProvider: 'magpie',
       pushMode: 'disabled',
@@ -92,6 +93,22 @@ describe('loadConfig', () => {
       dshHome: resolve('./custom-data/dsh'),
       dshSessionsRoot: resolve('./custom-data/dsh/sessions'),
     })
+  })
+
+  it('derives the agent workspace from the data directory, never the checkout', () => {
+    expect(loadConfig({}).workspaceRoot).toBe(resolve('data/workspace'))
+    expect(loadConfig({ PEGAS_DATA_DIR: './custom-data' }).workspaceRoot).toBe(
+      resolve('./custom-data/workspace'),
+    )
+  })
+
+  it('keeps an explicit workspace override independent of the data directory', () => {
+    expect(
+      loadConfig({
+        PEGAS_DATA_DIR: './custom-data',
+        PEGAS_WORKSPACE_ROOT: './agent-work',
+      }).workspaceRoot,
+    ).toBe(resolve('./agent-work'))
   })
 
   it.each([

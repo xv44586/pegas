@@ -78,6 +78,7 @@ function activityEntry(
     kind?: RunActivityEntry['kind']
     meta?: RunActivityEntry['meta']
     step?: RunActivityEntry['step']
+    summary?: RunActivityEntry['summary']
   },
 ): RunActivityEntry {
   return {
@@ -90,6 +91,7 @@ function activityEntry(
     ...(partial.step !== undefined ? { step: partial.step } : {}),
     label: partial.label,
     ...(partial.detail !== undefined ? { detail: partial.detail } : {}),
+    ...(partial.summary !== undefined ? { summary: partial.summary } : {}),
     ...(partial.semantic ? { semantic: partial.semantic } : {}),
     ...(partial.meta ? { meta: partial.meta } : {}),
     createdAt: '2026-11-20T00:02:00.000Z',
@@ -135,9 +137,10 @@ function activityEntries(running: boolean): RunActivityEntry[] {
     }),
     activityEntry(15, {
       kind: 'thinking',
-      label: '合并顺序确认：CONV-005 先行。',
+      label: 'Merge order confirmed: CONV-005 first, then the DESKTOP-001 fix.',
       detail:
-        '合并顺序确认：CONV-005 先行，DESKTOP-001 的 smoke 修复随后，最后清理旧 worktree。',
+        'Merge order confirmed: CONV-005 lands first, the DESKTOP-001 smoke fix follows, and stale worktrees are archived before removal.',
+      summary: '合并顺序确认：CONV-005 先行',
     }),
     fixtureShell(
       2,

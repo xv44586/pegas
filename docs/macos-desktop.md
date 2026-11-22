@@ -23,6 +23,9 @@ Electron main
 - 导航只允许启动时确定的本机 Pegas origin；外部 `http`/`https` URL 交给 macOS 默认浏览器。
 - 权限默认拒绝；仅允许受信本机 origin 的 audio media 请求，用于封板语音输入。
 - 服务监听 `127.0.0.1` 并使用运行时选择的空闲端口。数据目录不放在应用包内。
+- 内置服务显式注入 `PEGAS_WORKSPACE_ROOT=<dataDir>/workspace`（userData 数据目录
+  下），Agent 执行工作区永不落在应用 checkout 内；从终端带出的同名环境变量会被
+  覆盖，避免开发仓库的 AGENTS.md/docs 被 DSH 误加载为 Agent 指令。
 - 内置服务每次启动生成随机实例 bearer；Electron session 仅向受信本机 origin 自动添加认证头。Renderer、URL、sessionStorage 和日志都不接触该 bearer。连接外部回环服务时则使用显式配置的 `PEGAS_API_TOKEN`。
 
 ## 运行与打包

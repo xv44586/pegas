@@ -100,6 +100,7 @@ export function desktopServiceEnvironment({
     PEGAS_API_PORT: String(port),
     PEGAS_API_TOKEN: apiToken,
     PEGAS_DATA_DIR: dataDir,
+    PEGAS_WORKSPACE_ROOT: join(dataDir, 'workspace'),
     PEGAS_PUSH_MODE: 'disabled',
     ...(testMode
       ? {
