@@ -552,6 +552,12 @@ try {
     'task-running',
     'task-waiting',
     'task-failed',
+    'task-activity',
+    'task-activity-open',
+    'task-activity-running',
+    'task-web-agent',
+    'task-todo-search',
+    'task-run-artifacts',
     'preview-file',
     'preview-image',
     'preview-video',
@@ -574,6 +580,112 @@ try {
       }, fixture)
       await fixturePage.goto(`http://127.0.0.1:${String(port)}/`)
       await fixturePage.getByRole('button', { name: '关闭详情' }).waitFor()
+      if (fixture.startsWith('task-activity')) {
+        await fixturePage.getByText('工作流程记录', { exact: false }).click()
+        if (fixture === 'task-activity-open') {
+          await fixturePage
+            .locator('.activity-batch > details > summary')
+            .filter({ hasText: '运行了 2 条命令' })
+            .click()
+          await fixturePage
+            .locator('.activity-tool')
+            .filter({ hasText: 'git merge origin/main' })
+            .locator('summary')
+            .click()
+          await fixturePage
+            .locator('.activity-timeline > .activity-tool')
+            .filter({ hasText: '已编辑' })
+            .locator('summary')
+            .first()
+            .click()
+          await fixturePage
+            .locator('.activity-card.diff-card')
+            .first()
+            .scrollIntoViewIfNeeded()
+        }
+      }
+      if (fixture === 'task-web-agent') {
+        await fixturePage.getByText('工作流程记录', { exact: false }).click()
+        await fixturePage
+          .locator('.activity-batch > details > summary')
+          .filter({ hasText: '访问了 2 个网页' })
+          .click()
+        await fixturePage
+          .locator('.activity-tool')
+          .filter({ hasText: '已搜索网页' })
+          .locator('summary')
+          .click()
+        await fixturePage
+          .locator('.activity-batch > details > summary')
+          .filter({ hasText: '正在协调子 agent' })
+          .click()
+        await fixturePage
+          .locator('.activity-tool')
+          .filter({ hasText: '查看了子 agent' })
+          .locator('summary')
+          .click()
+        await fixturePage
+          .locator('.activity-card.agent-card')
+          .first()
+          .scrollIntoViewIfNeeded()
+      }
+      if (fixture === 'task-todo-search') {
+        await fixturePage.getByText('工作流程记录', { exact: false }).click()
+        await fixturePage
+          .locator('.activity-batch > details > summary')
+          .filter({ hasText: '搜索了 2 次' })
+          .click()
+        await fixturePage
+          .locator('.activity-todo-fold')
+          .locator('summary')
+          .first()
+          .click()
+        await fixturePage
+          .locator('.activity-todo-fold .todo-history > summary')
+          .click()
+        await fixturePage
+          .locator('.activity-batch .activity-tool')
+          .filter({ hasText: '搜索命中' })
+          .locator('summary')
+          .click()
+        await fixturePage
+          .locator('.activity-batch .activity-tool')
+          .filter({ hasText: '匹配了文件' })
+          .locator('summary')
+          .click()
+        await fixturePage
+          .locator('.activity-tool')
+          .filter({ hasText: '你回答了提问' })
+          .locator('summary')
+          .click()
+        await fixturePage
+          .locator('.activity-card.ask-card')
+          .first()
+          .scrollIntoViewIfNeeded()
+      }
+      if (fixture === 'task-run-artifacts') {
+        await fixturePage.getByText('工作流程记录', { exact: false }).click()
+        await fixturePage
+          .locator('.activity-changes > details > summary')
+          .click()
+        await fixturePage
+          .locator('.changes-files > li > details > summary')
+          .first()
+          .click()
+        await fixturePage
+          .locator('.activity-tool')
+          .filter({ hasText: '查看了图片' })
+          .locator('summary')
+          .click()
+        await fixturePage
+          .locator('.activity-tool')
+          .filter({ hasText: '声明了交付物' })
+          .locator('summary')
+          .click()
+        await fixturePage
+          .locator('.activity-card.delivery-card')
+          .scrollIntoViewIfNeeded()
+      }
       await capture(fixturePage, `${size}-${fixture}.png`, `${size}-${fixture}`)
       await fixturePage.close()
     }

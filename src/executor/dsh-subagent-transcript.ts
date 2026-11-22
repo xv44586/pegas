@@ -4,6 +4,7 @@ import { zstdDecompressSync } from 'node:zlib'
 
 import type { SubagentTranscript } from '../core/domain.js'
 import type { RunActivityEntry } from '../core/domain.js'
+import { buildToolSemantic } from '../activity/tool-semantics.js'
 
 /**
  * Post-hoc reader for DSH child-session durable logs. The `--json` stream only
@@ -266,6 +267,10 @@ function projectTranscript(
           tool,
           label: tool,
           ...(input !== undefined ? { detail: input } : {}),
+          semantic: buildToolSemantic({
+            tool,
+            ...(input !== undefined ? { input } : {}),
+          }),
         },
         record.time,
       )
@@ -294,16 +299,48 @@ function projectTranscript(
       const target = index !== undefined ? entries[index] : undefined
       if (target) {
         target.status = status
+        const restoredResult = result ? restore(result) : undefined
         target.detail = [
           target.detail ?? '',
-          result ? `\n[结果]\n${restore(result)}` : '',
+          restoredResult ? `\n[结果]\n${restoredResult}` : '',
         ]
           .join('')
           .slice(0, MAX_DETAIL_CHARACTERS)
+        target.semantic = buildToolSemantic(
+          {
+            tool: target.tool ?? '',
+            input: target.detail.split('\n[结果]\n')[0],
+          },
+          {
+            status,
+            ...(restoredResult !== undefined ? { result: restoredResult } : {}),
+            ...(data.meta !== undefined
+              ? { meta: restoreMetaStrings(data.meta, restore) }
+              : {}),
+          },
+        )
         if (record.time !== undefined) {
           target.updatedAt = new Date(record.time).toISOString()
         }
       }
+      continue
+    }
+    if (record.type === 'compaction/end') {
+      const failed = data.error !== undefined
+      push(
+        {
+          kind: 'step',
+          status: failed ? 'error' : 'completed',
+          label: failed ? '上下文压缩失败' : '上下文已压缩',
+          meta: {
+            kind: 'compaction',
+            ...(typeof data.sourceCommandId === 'string'
+              ? { note: '手动触发' }
+              : { note: '自动触发' }),
+          },
+        },
+        record.time,
+      )
       continue
     }
     if (record.type === 'step/end') {
@@ -338,4 +375,32 @@ function summarize(text: string): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/**
+ * Restores PRIVACY-001 placeholders inside the opaque result meta before it
+ * feeds the semantic projection. Bounded recursion keeps a hostile or torn
+ * meta payload from exhausting the worker; unknown shapes pass through.
+ */
+function restoreMetaStrings(
+  value: unknown,
+  restore: (text: string) => string,
+  depth = 0,
+): unknown {
+  if (depth > 6) return undefined
+  if (typeof value === 'string') return restore(value)
+  if (Array.isArray(value)) {
+    return value
+      .slice(0, 400)
+      .map(item => restoreMetaStrings(item, restore, depth + 1))
+  }
+  if (isRecord(value)) {
+    const restored: Record<string, unknown> = {}
+    for (const [key, item] of Object.entries(value).slice(0, 40)) {
+      const projected = restoreMetaStrings(item, restore, depth + 1)
+      if (projected !== undefined) restored[key] = projected
+    }
+    return restored
+  }
+  return value
 }

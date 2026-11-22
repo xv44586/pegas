@@ -24,6 +24,7 @@ import type {
   ReviewPack,
   ReviewProjection,
   Run,
+  RunActivityEntry,
   SettingsResponse,
   Snapshot,
   TaskArtifact,
@@ -3288,6 +3289,11 @@ describe('sealed Pegas UI', () => {
               label: 'shell',
               detail:
                 '{"command":"curl https://example.com/pricing"}\n[结果]\nTeam $30',
+              semantic: {
+                kind: 'shell',
+                command: 'curl https://example.com/pricing',
+                output: 'Team $30',
+              },
               createdAt: '2026-11-19T08:00:20.000Z',
               updatedAt: '2026-11-19T08:00:30.000Z',
             },
@@ -3326,15 +3332,20 @@ describe('sealed Pegas UI', () => {
     expect(
       within(taskDrawer).queryByRole('button', { name: /查看完整记录/ }),
     ).toBeNull()
-    fireEvent.click(within(taskDrawer).getByText('shell'))
-    expect(
-      within(taskDrawer).getByText(/curl https:\/\/example.com\/pricing/),
-    ).toBeTruthy()
+    const curlHeadline = within(taskDrawer).getAllByText(
+      'curl https://example.com/pricing',
+    )[0]
+    if (!curlHeadline) throw new Error('expected shell headline')
+    fireEvent.click(curlHeadline)
+    expect(taskDrawer.querySelector('.shell-card')).toBeTruthy()
     expect(within(taskDrawer).getByText(/Team \$30/)).toBeTruthy()
+    expect(
+      within(taskDrawer).getByRole('button', { name: '复制命令与输出' }),
+    ).toBeTruthy()
     fireEvent.click(within(taskDrawer).getByText('推理'))
     expect(within(taskDrawer).getByText('年付').tagName).toBe('EM')
     const messageStrong = taskDrawer.querySelectorAll(
-      '.transcript-message strong',
+      '.activity-message strong',
     )
     expect(
       [...messageStrong].some(node => node.textContent === '$30/人/月'),
@@ -3406,6 +3417,11 @@ describe('sealed Pegas UI', () => {
                     tool: 'bash',
                     label: 'bash',
                     detail: '{"command":"ls docs | wc -l"}\n[结果]\n29',
+                    semantic: {
+                      kind: 'shell',
+                      command: 'ls docs | wc -l',
+                      output: '29',
+                    },
                     createdAt: '2026-11-19T08:00:15.000Z',
                     updatedAt: '2026-11-19T08:00:16.000Z',
                   },
@@ -3447,8 +3463,11 @@ describe('sealed Pegas UI', () => {
     fireEvent.click(
       await within(taskDrawer).findByText(/子 agent 执行记录 · 工具 1 次/),
     )
-    fireEvent.click(within(taskDrawer).getByText('bash'))
-    expect(within(taskDrawer).getByText(/ls docs \| wc -l/)).toBeTruthy()
+    const childHeadline = within(taskDrawer).getAllByText('ls docs | wc -l')[0]
+    if (!childHeadline) throw new Error('expected child shell headline')
+    fireEvent.click(childHeadline)
+    expect(taskDrawer.querySelector('.shell-card')).toBeTruthy()
+    expect(within(taskDrawer).getAllByText('29').length).toBeGreaterThan(0)
     expect(
       within(taskDrawer).getAllByText('docs 目录共 29 个文件。').length,
     ).toBeGreaterThan(0)
@@ -5992,6 +6011,11 @@ describe('sealed Pegas UI', () => {
               tool: 'read',
               label: 'read',
               detail: '{"path":"README.md"}\n[结果]\n# Pegas',
+              semantic: {
+                kind: 'file_read',
+                path: 'README.md',
+                preview: '# Pegas',
+              },
               createdAt: '2026-11-19T08:02:10.000Z',
               updatedAt: '2026-11-19T08:02:12.000Z',
             },
@@ -6041,8 +6065,8 @@ describe('sealed Pegas UI', () => {
     fireEvent.click(
       within(drawer).getByText(/工作流程记录 · 工具 2 次 · 1 步推理/),
     )
-    fireEvent.click(await within(drawer).findByText('read'))
-    expect(within(drawer).getByText(/README\.md/)).toBeTruthy()
+    fireEvent.click(await within(drawer).findByText('已读取'))
+    expect(within(drawer).getAllByText('README.md').length).toBeGreaterThan(0)
     expect(within(drawer).getByText('第 1 步完成')).toBeTruthy()
     fireEvent.click(within(drawer).getByText('test'))
     expect(within(drawer).getByText(/pnpm test/)).toBeTruthy()
@@ -6053,6 +6077,855 @@ describe('sealed Pegas UI', () => {
     expect(
       screen.queryByText('执行中 · 工具调用 2 次 · 已完成 1 步推理'),
     ).toBeNull()
+  })
+
+  it('batches consecutive semantic tool calls and renders shell/diff cards', async () => {
+    const entries: RunActivityEntry[] = [
+      {
+        seq: 1,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-git',
+        tool: 'bash',
+        label: 'bash',
+        semantic: {
+          kind: 'shell',
+          command: 'git status --short',
+          output: ' M web/src/api.ts',
+        },
+        createdAt: '2026-11-19T08:00:10.000Z',
+        updatedAt: '2026-11-19T08:00:12.000Z',
+      },
+      {
+        seq: 2,
+        kind: 'tool_call',
+        status: 'error',
+        callId: 'call-merge',
+        tool: 'bash',
+        label: 'bash',
+        semantic: {
+          kind: 'shell',
+          command: 'git merge origin/main --no-edit',
+          output: 'CONFLICT (content): Merge conflict in web/src/api.ts',
+        },
+        createdAt: '2026-11-19T08:00:14.000Z',
+        updatedAt: '2026-11-19T08:00:16.000Z',
+      },
+      {
+        seq: 3,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-read-a',
+        tool: 'read',
+        label: 'read',
+        semantic: {
+          kind: 'file_read',
+          path: 'web/src/api.ts',
+          lineCount: 96,
+          preview: '74:   async linkPreview(url: string) {',
+        },
+        createdAt: '2026-11-19T08:00:18.000Z',
+        updatedAt: '2026-11-19T08:00:19.000Z',
+      },
+      {
+        seq: 4,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-read-b',
+        tool: 'read',
+        label: 'read',
+        semantic: { kind: 'file_read', path: 'web/src/types.ts' },
+        createdAt: '2026-11-19T08:00:20.000Z',
+        updatedAt: '2026-11-19T08:00:21.000Z',
+      },
+      {
+        seq: 5,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-edit',
+        tool: 'edit',
+        label: 'edit',
+        semantic: {
+          kind: 'file_edit',
+          path: 'web/src/api.ts',
+          mode: 'edit',
+          additions: 2,
+          deletions: 3,
+          hunks: [
+            {
+              lines: [
+                { type: 'del', text: '<<<<<<< HEAD' },
+                { type: 'add', text: '  }' },
+                { type: 'add', text: '' },
+                {
+                  type: 'context',
+                  text: '  async runActivity(runId: string) {',
+                },
+                { type: 'del', text: '=======' },
+                { type: 'del', text: '>>>>>>> origin/main' },
+              ],
+            },
+          ],
+        },
+        createdAt: '2026-11-19T08:00:22.000Z',
+        updatedAt: '2026-11-19T08:00:24.000Z',
+      },
+      {
+        seq: 6,
+        kind: 'tool_call',
+        status: 'started',
+        callId: 'call-smoke',
+        tool: 'bash',
+        label: 'bash',
+        semantic: { kind: 'shell', command: 'pnpm smoke' },
+        createdAt: '2026-11-19T08:00:26.000Z',
+        updatedAt: '2026-11-19T08:00:26.000Z',
+      },
+    ]
+    installSnapshotFetch(
+      {
+        ...snapshot,
+        channels: [{ ...channel, status: 'completed', canStop: false }],
+        runs: [{ ...run, status: 'completed', output: '合并完成。' }],
+      },
+      path => {
+        if (!path.startsWith('/v1/runs/run-1/activity?')) return undefined
+        return Response.json({
+          runId: 'run-1',
+          taskId: channel.id,
+          totalEntries: entries.length,
+          truncated: false,
+          entries,
+        })
+      },
+    )
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    })
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: new RegExp(channel.title) }),
+    )
+    const drawer = await screen.findByRole('dialog', { name: '工作详情' })
+    fireEvent.click(await within(drawer).findByText(/工作流程记录/))
+    const commandBatch = (
+      await within(drawer).findByText('运行了 2 条命令')
+    ).closest('details')
+    if (!commandBatch) throw new Error('expected command batch')
+    expect(
+      within(commandBatch as HTMLElement).getByText(/1 条失败/),
+    ).toBeTruthy()
+    expect(within(drawer).getByText('读取了 2 个文件')).toBeTruthy()
+    expect(within(drawer).getAllByText('已编辑').length).toBeGreaterThan(0)
+    expect(within(drawer).getAllByText('+2').length).toBeGreaterThan(0)
+    expect(within(drawer).getAllByText('-3').length).toBeGreaterThan(0)
+    fireEvent.click(within(drawer).getByText(/运行了 2 条命令/))
+    const mergeHeadline = within(commandBatch as HTMLElement)
+      .getAllByText('git merge origin/main --no-edit')
+      .at(-1)
+    if (!mergeHeadline) throw new Error('expected merge headline')
+    fireEvent.click(mergeHeadline)
+    const shellCard = [
+      ...(commandBatch as HTMLElement).querySelectorAll('.shell-card'),
+    ].find(card => card.textContent.includes('CONFLICT'))
+    if (!shellCard) throw new Error('expected merge shell card')
+    expect(
+      within(shellCard as HTMLElement).getByText(/CONFLICT \(content\)/),
+    ).toBeTruthy()
+    expect(within(shellCard as HTMLElement).getByText('失败')).toBeTruthy()
+    const smokeHeadline = within(drawer).getAllByText('pnpm smoke')[0]
+    if (!smokeHeadline) throw new Error('expected running shell headline')
+    const runningRow = smokeHeadline.closest('details')
+    if (!runningRow) throw new Error('expected running shell row')
+    expect(runningRow.querySelector('.activity-spinner')).toBeTruthy()
+    fireEvent.click(smokeHeadline)
+    expect(within(runningRow as HTMLElement).getByText('执行中')).toBeTruthy()
+    const editHeadline = within(drawer).getAllByText('已编辑')[0]
+    if (!editHeadline) throw new Error('expected edit headline')
+    fireEvent.click(editHeadline)
+    const diffCard = drawer.querySelector('.diff-card')
+    if (!diffCard) throw new Error('expected diff card')
+    expect(diffCard.querySelectorAll('.diff-line.is-add').length).toBe(2)
+    expect(diffCard.querySelectorAll('.diff-line.is-del').length).toBe(3)
+    expect(diffCard.querySelectorAll('.diff-gutter').length).toBeGreaterThan(0)
+    fireEvent.click(
+      within(diffCard as HTMLElement).getByRole('button', {
+        name: '复制 diff',
+      }),
+    )
+    await waitFor(() =>
+      expect(
+        within(diffCard as HTMLElement).getByRole('button', { name: '已复制' }),
+      ).toBeTruthy(),
+    )
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining('+  }'))
+    expect(
+      within(diffCard as HTMLElement).getByRole('status').textContent,
+    ).toBe('已复制')
+  })
+
+  it('renders web citation cards and the agent-team control family', async () => {
+    const entries: RunActivityEntry[] = [
+      {
+        seq: 1,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-search',
+        tool: 'web_search',
+        label: 'web_search',
+        semantic: {
+          kind: 'web',
+          query: '成都 社保 补缴',
+          queries: ['成都 社保 补缴', '养老保险 缴费 2026'],
+          sources: [
+            {
+              url: 'http://sc.people.com.cn/a',
+              title: '人民网',
+              snippet: '缴费金额公布',
+            },
+            { url: 'https://cdhrss.chengdu.gov.cn/b' },
+          ],
+          sourcesTruncated: true,
+          preview: 'Sources:\n- [人民网](http://sc.people.com.cn/a)',
+        },
+        createdAt: '2026-11-19T08:00:10.000Z',
+        updatedAt: '2026-11-19T08:00:12.000Z',
+      },
+      {
+        seq: 2,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-fetch',
+        tool: 'web_fetch',
+        label: 'web_fetch',
+        semantic: {
+          kind: 'web',
+          url: 'https://example.com/a',
+          statusCode: 200,
+          preview: '# 标题',
+        },
+        createdAt: '2026-11-19T08:00:14.000Z',
+        updatedAt: '2026-11-19T08:00:16.000Z',
+      },
+      {
+        seq: 3,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-wait',
+        tool: 'wait_agent',
+        label: 'wait_agent',
+        semantic: {
+          kind: 'agent_control',
+          action: 'wait',
+          timeoutMs: 60_000,
+          timedOut: false,
+        },
+        createdAt: '2026-11-19T08:00:18.000Z',
+        updatedAt: '2026-11-19T08:00:20.000Z',
+      },
+      {
+        seq: 4,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-msg',
+        tool: 'send_message',
+        label: 'send_message',
+        semantic: {
+          kind: 'agent_control',
+          action: 'message',
+          agent: 'count-tests',
+          message: '请以 78 结束',
+        },
+        createdAt: '2026-11-19T08:00:22.000Z',
+        updatedAt: '2026-11-19T08:00:24.000Z',
+      },
+      {
+        seq: 5,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-list',
+        tool: 'list_agents',
+        label: 'list_agents',
+        semantic: {
+          kind: 'agent_control',
+          action: 'list',
+          agents: [
+            { name: 'lead', status: 'running', description: 'root agent' },
+            { name: 'count-tests', status: 'inactive' },
+          ],
+        },
+        createdAt: '2026-11-19T08:00:26.000Z',
+        updatedAt: '2026-11-19T08:00:28.000Z',
+      },
+    ]
+    installSnapshotFetch(
+      {
+        ...snapshot,
+        channels: [{ ...channel, status: 'completed', canStop: false }],
+        runs: [{ ...run, status: 'completed', output: '调研完成。' }],
+      },
+      path => {
+        if (!path.startsWith('/v1/runs/run-1/activity?')) return undefined
+        return Response.json({
+          runId: 'run-1',
+          taskId: channel.id,
+          totalEntries: entries.length,
+          truncated: false,
+          entries,
+        })
+      },
+    )
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: new RegExp(channel.title) }),
+    )
+    const drawer = await screen.findByRole('dialog', { name: '工作详情' })
+    fireEvent.click(await within(drawer).findByText(/工作流程记录/))
+    expect(await within(drawer).findByText('访问了 2 个网页')).toBeTruthy()
+    expect(within(drawer).getByText('协调了 3 次子 agent')).toBeTruthy()
+    const searchHeadline = within(drawer).getAllByText('已搜索网页')[0]
+    if (!searchHeadline) throw new Error('expected search headline')
+    fireEvent.click(searchHeadline)
+    const sourceLink = within(drawer).getByRole('link', { name: '人民网' })
+    expect(sourceLink.getAttribute('href')).toBe('http://sc.people.com.cn/a')
+    expect(sourceLink.getAttribute('rel')).toContain('noopener')
+    expect(within(drawer).getByText('缴费金额公布')).toBeTruthy()
+    expect(within(drawer).getByText('来源过多，仅保留前段引用。')).toBeTruthy()
+    expect(within(drawer).getByText(/等 2 个查询/)).toBeTruthy()
+    const fetchHeadline = within(drawer).getAllByText('已访问')[0]
+    if (!fetchHeadline) throw new Error('expected fetch headline')
+    fireEvent.click(fetchHeadline)
+    expect(within(drawer).getByText('HTTP 200')).toBeTruthy()
+    const waitHeadline = within(drawer).getAllByText('收到子 agent 消息')[0]
+    if (!waitHeadline) throw new Error('expected wait headline')
+    fireEvent.click(waitHeadline)
+    expect(within(drawer).getByText('上限 60s')).toBeTruthy()
+    expect(within(drawer).getByText('收到新消息')).toBeTruthy()
+    const messageHeadline = within(drawer).getAllByText('已发消息给')[0]
+    if (!messageHeadline) throw new Error('expected message headline')
+    fireEvent.click(messageHeadline)
+    expect(within(drawer).getByText('请以 78 结束')).toBeTruthy()
+    const listHeadline = within(drawer).getAllByText('查看了子 agent')[0]
+    if (!listHeadline) throw new Error('expected list headline')
+    fireEvent.click(listHeadline)
+    expect(within(drawer).getAllByText('count-tests').length).toBeGreaterThan(1)
+    expect(within(drawer).getByText('root agent')).toBeTruthy()
+    expect(drawer.querySelectorAll('.agent-status').length).toBe(2)
+  })
+
+  it('renders todo checklist cards and structured grep/glob hit cards', async () => {
+    const entries: RunActivityEntry[] = [
+      {
+        seq: 1,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-todo',
+        tool: 'todo_write',
+        label: 'todo_write',
+        semantic: {
+          kind: 'todo',
+          items: [
+            { content: '读取现有实现', status: 'completed' },
+            { content: '补齐语义投影', status: 'in_progress' },
+            { content: '跑完整门禁', status: 'pending' },
+          ],
+        },
+        createdAt: '2026-11-19T08:00:10.000Z',
+        updatedAt: '2026-11-19T08:00:12.000Z',
+      },
+      {
+        seq: 2,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-grep',
+        tool: 'grep',
+        label: 'grep',
+        semantic: {
+          kind: 'search',
+          query: 'runActivity',
+          path: 'web/src',
+          include: '*.ts',
+          shape: 'matches',
+          total: 3,
+          files: [
+            {
+              path: 'web/src/api.ts',
+              matches: [
+                { line: 12, text: 'async runActivity(runId: string) {' },
+                { line: 40, text: 'return runActivity(id)' },
+              ],
+            },
+            {
+              path: 'web/src/types.ts',
+              matches: [
+                { line: 8, text: 'export interface RunActivityReport {' },
+              ],
+            },
+          ],
+        },
+        createdAt: '2026-11-19T08:00:14.000Z',
+        updatedAt: '2026-11-19T08:00:16.000Z',
+      },
+      {
+        seq: 3,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-glob',
+        tool: 'glob',
+        label: 'glob',
+        semantic: {
+          kind: 'search',
+          query: '**/*.test.ts',
+          shape: 'paths',
+          total: 412,
+          resultTruncated: true,
+          paths: ['test/a.test.ts', 'test/b.test.ts'],
+        },
+        createdAt: '2026-11-19T08:00:18.000Z',
+        updatedAt: '2026-11-19T08:00:20.000Z',
+      },
+      {
+        seq: 4,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-grep-empty',
+        tool: 'grep',
+        label: 'grep',
+        semantic: {
+          kind: 'search',
+          query: 'missing-symbol',
+          shape: 'matches',
+          total: 0,
+          files: [],
+        },
+        createdAt: '2026-11-19T08:00:22.000Z',
+        updatedAt: '2026-11-19T08:00:24.000Z',
+      },
+    ]
+    installSnapshotFetch(
+      {
+        ...snapshot,
+        channels: [{ ...channel, status: 'completed', canStop: false }],
+        runs: [{ ...run, status: 'completed', output: '完成。' }],
+      },
+      path => {
+        if (!path.startsWith('/v1/runs/run-1/activity?')) return undefined
+        return Response.json({
+          runId: 'run-1',
+          taskId: channel.id,
+          totalEntries: entries.length,
+          truncated: false,
+          entries,
+        })
+      },
+    )
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: new RegExp(channel.title) }),
+    )
+    const drawer = await screen.findByRole('dialog', { name: '工作详情' })
+    fireEvent.click(await within(drawer).findByText(/工作流程记录/))
+    const todoHeadline = await within(drawer).findByText('更新任务清单')
+    expect(within(drawer).getByText(/1\/3 · 补齐语义投影/)).toBeTruthy()
+    fireEvent.click(todoHeadline)
+    expect(within(drawer).getByText('任务清单')).toBeTruthy()
+    expect(within(drawer).getByText('1/3 已完成')).toBeTruthy()
+    expect(within(drawer).getByText('读取现有实现')).toBeTruthy()
+    expect(within(drawer).getByText('进行中')).toBeTruthy()
+    expect(within(drawer).getByText('待办')).toBeTruthy()
+    expect(drawer.querySelectorAll('.todo-list .is-completed').length).toBe(1)
+    expect(drawer.querySelectorAll('.todo-list .is-in_progress').length).toBe(1)
+    const grepHeadline = within(drawer).getAllByText('搜索命中')[0]
+    if (!grepHeadline) throw new Error('expected grep headline')
+    fireEvent.click(grepHeadline)
+    expect(within(drawer).getByText('3 处命中')).toBeTruthy()
+    expect(within(drawer).getByText('web/src/api.ts')).toBeTruthy()
+    expect(
+      within(drawer).getByText('async runActivity(runId: string) {'),
+    ).toBeTruthy()
+    expect(drawer.querySelectorAll('.search-file').length).toBe(2)
+    expect(drawer.querySelectorAll('.search-line-number').length).toBe(3)
+    const globHeadline = within(drawer).getAllByText('匹配了文件')[0]
+    if (!globHeadline) throw new Error('expected glob headline')
+    fireEvent.click(globHeadline)
+    expect(within(drawer).getByText('412 个文件')).toBeTruthy()
+    expect(within(drawer).getByText('test/a.test.ts')).toBeTruthy()
+    expect(within(drawer).getByText('结果过多，仅保留前段命中。')).toBeTruthy()
+    const emptyHeadline = within(drawer).getAllByText('没有命中')[0]
+    if (!emptyHeadline) throw new Error('expected empty headline')
+    fireEvent.click(emptyHeadline)
+    expect(within(drawer).getByText('没有命中任何行。')).toBeTruthy()
+  })
+
+  it('folds consecutive todo snapshots and renders ask_user question rows', async () => {
+    const todoItems = (
+      active: number,
+    ): Extract<RunActivityEntry['semantic'], { kind: 'todo' }>['items'] => [
+      { content: '读取现有实现', status: 'completed' },
+      {
+        content: '补齐语义投影',
+        status: active >= 1 ? 'completed' : 'in_progress',
+      },
+      {
+        content: '跑完整门禁',
+        status: active >= 1 ? 'in_progress' : 'pending',
+      },
+    ]
+    const entries: RunActivityEntry[] = [
+      {
+        seq: 1,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-todo-1',
+        tool: 'todo_write',
+        label: 'todo_write',
+        semantic: { kind: 'todo', items: todoItems(0) },
+        createdAt: '2026-11-19T08:00:10.000Z',
+        updatedAt: '2026-11-19T08:00:12.000Z',
+      },
+      {
+        seq: 2,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-todo-2',
+        tool: 'todo_write',
+        label: 'todo_write',
+        semantic: { kind: 'todo', items: todoItems(1) },
+        createdAt: '2026-11-19T08:00:14.000Z',
+        updatedAt: '2026-11-19T08:00:16.000Z',
+      },
+      {
+        seq: 3,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-ask',
+        tool: 'ask_user_question',
+        label: 'ask_user_question',
+        semantic: {
+          kind: 'ask_user',
+          questions: [
+            {
+              id: 'scope',
+              question: '先做哪一部分？',
+              header: '范围',
+              options: [
+                { label: '语义投影 (Recommended)', description: '先打通数据' },
+                { label: '只做 UI' },
+              ],
+            },
+            { id: 'confirm', question: '可以开始吗？' },
+          ],
+          answers: [
+            { id: 'scope', selected: ['语义投影 (Recommended)'] },
+            { id: 'confirm', selected: [], custom: '可以，注意门禁' },
+          ],
+        },
+        createdAt: '2026-11-19T08:00:18.000Z',
+        updatedAt: '2026-11-19T08:00:20.000Z',
+      },
+      {
+        seq: 4,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-ask-pending',
+        tool: 'ask_user_question',
+        label: 'ask_user_question',
+        semantic: {
+          kind: 'ask_user',
+          questions: [{ id: 'retry', question: '要重跑门禁吗？' }],
+          pending: true,
+        },
+        createdAt: '2026-11-19T08:00:22.000Z',
+        updatedAt: '2026-11-19T08:00:24.000Z',
+      },
+      {
+        seq: 5,
+        kind: 'tool_call',
+        status: 'started',
+        callId: 'call-ask-running',
+        tool: 'ask_user_question',
+        label: 'ask_user_question',
+        semantic: {
+          kind: 'ask_user',
+          questions: [{ id: 'go', question: '现在合并吗？' }],
+        },
+        createdAt: '2026-11-19T08:00:26.000Z',
+        updatedAt: '2026-11-19T08:00:26.000Z',
+      },
+    ]
+    installSnapshotFetch(
+      {
+        ...snapshot,
+        channels: [{ ...channel, status: 'completed', canStop: false }],
+        runs: [{ ...run, status: 'completed', output: '完成。' }],
+      },
+      path => {
+        if (!path.startsWith('/v1/runs/run-1/activity?')) return undefined
+        return Response.json({
+          runId: 'run-1',
+          taskId: channel.id,
+          totalEntries: entries.length,
+          truncated: false,
+          entries,
+        })
+      },
+    )
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: new RegExp(channel.title) }),
+    )
+    const drawer = await screen.findByRole('dialog', { name: '工作详情' })
+    fireEvent.click(await within(drawer).findByText(/工作流程记录/))
+    const foldHeadline = (await within(drawer).findAllByText('更新任务清单'))[0]
+    if (!foldHeadline) throw new Error('expected todo fold headline')
+    expect(within(drawer).getByText(/2\/3 · 跑完整门禁/)).toBeTruthy()
+    expect(drawer.querySelectorAll('.activity-todo-fold').length).toBe(1)
+    fireEvent.click(foldHeadline)
+    expect(within(drawer).getByText('2/3 已完成')).toBeTruthy()
+    const historySummary = within(drawer).getByText(/历史快照 · 1 次更早写入/)
+    fireEvent.click(historySummary)
+    expect(within(drawer).getByText('1/3 已完成')).toBeTruthy()
+    const askHeadline = within(drawer).getAllByText('你回答了提问')[0]
+    if (!askHeadline) throw new Error('expected ask headline')
+    expect(within(drawer).getByText('2/2 已答')).toBeTruthy()
+    fireEvent.click(askHeadline)
+    expect(within(drawer).getByText('先做哪一部分？')).toBeTruthy()
+    expect(within(drawer).getByText('范围')).toBeTruthy()
+    expect(drawer.querySelectorAll('.ask-options .is-selected').length).toBe(1)
+    expect(within(drawer).getByText('回答：可以，注意门禁')).toBeTruthy()
+    const pendingHeadline = within(drawer).getAllByText('提问待回答')[0]
+    if (!pendingHeadline) throw new Error('expected pending headline')
+    fireEvent.click(pendingHeadline)
+    expect(within(drawer).getByText('超时未答，问题仍可回答')).toBeTruthy()
+    const runningHeadline = within(drawer).getAllByText('正在等待你的回答')[0]
+    if (!runningHeadline) throw new Error('expected running headline')
+    fireEvent.click(runningHeadline)
+    expect(within(drawer).getByText('等待回答中')).toBeTruthy()
+  })
+
+  it('renders run change summaries, image metadata, deliverables and lifecycle markers', async () => {
+    const editEntry = (
+      seq: number,
+      path: string,
+      additions: number,
+      deletions: number,
+    ): RunActivityEntry => ({
+      seq,
+      kind: 'tool_call',
+      status: 'completed',
+      callId: `call-edit-${String(seq)}`,
+      tool: 'edit',
+      label: 'edit',
+      semantic: {
+        kind: 'file_edit',
+        path,
+        mode: 'edit',
+        additions,
+        deletions,
+        hunks: [
+          {
+            oldStart: 1,
+            newStart: 1,
+            lines: [
+              { type: 'del', text: 'old line' },
+              { type: 'add', text: 'new line' },
+            ],
+          },
+        ],
+      },
+      createdAt: '2026-11-19T08:00:10.000Z',
+      updatedAt: '2026-11-19T08:00:12.000Z',
+    })
+    const entries: RunActivityEntry[] = [
+      editEntry(1, 'web/src/api.ts', 2, 3),
+      editEntry(2, 'web/src/types.ts', 5, 0),
+      editEntry(3, 'web/src/api.ts', 1, 1),
+      {
+        seq: 4,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-image',
+        tool: 'read_image',
+        label: 'read_image',
+        semantic: {
+          kind: 'image',
+          path: '/repo/assets/flow.png',
+          mediaType: 'image/png',
+          width: 1200,
+          height: 800,
+          bytes: 245_760,
+          originalWidth: 2400,
+          originalHeight: 1600,
+        },
+        createdAt: '2026-11-19T08:00:14.000Z',
+        updatedAt: '2026-11-19T08:00:16.000Z',
+      },
+      {
+        seq: 5,
+        kind: 'step',
+        status: 'completed',
+        label: '上下文已压缩',
+        meta: { kind: 'compaction', note: '自动触发' },
+        createdAt: '2026-11-19T08:00:18.000Z',
+        updatedAt: '2026-11-19T08:00:18.000Z',
+      },
+      {
+        seq: 6,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-present',
+        tool: 'present',
+        label: 'present',
+        semantic: {
+          kind: 'delivery',
+          files: [
+            { path: 'output/report.md', description: '调研报告' },
+            { path: 'output/summary.csv' },
+          ],
+        },
+        createdAt: '2026-11-19T08:00:20.000Z',
+        updatedAt: '2026-11-19T08:00:22.000Z',
+      },
+      {
+        seq: 7,
+        kind: 'step',
+        status: 'completed',
+        label: '用户插话，本次运行由后继接管',
+        meta: { kind: 'steered', note: '改成对比团队版价格' },
+        createdAt: '2026-11-19T08:00:24.000Z',
+        updatedAt: '2026-11-19T08:00:24.000Z',
+      },
+    ]
+    installSnapshotFetch(
+      {
+        ...snapshot,
+        channels: [{ ...channel, status: 'completed', canStop: false }],
+        runs: [{ ...run, status: 'completed', output: '完成。' }],
+      },
+      path => {
+        if (!path.startsWith('/v1/runs/run-1/activity?')) return undefined
+        return Response.json({
+          runId: 'run-1',
+          taskId: channel.id,
+          totalEntries: entries.length,
+          truncated: false,
+          entries,
+        })
+      },
+    )
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: new RegExp(channel.title) }),
+    )
+    const drawer = await screen.findByRole('dialog', { name: '工作详情' })
+    fireEvent.click(await within(drawer).findByText(/工作流程记录/))
+    const changesHeadline =
+      await within(drawer).findByText(/本次运行修改了 2 个文件/)
+    fireEvent.click(changesHeadline)
+    expect(within(drawer).getByText('文件变更汇总')).toBeTruthy()
+    const changesCard = drawer.querySelector('.changes-card')
+    if (!changesCard) throw new Error('expected changes card')
+    expect(
+      within(changesCard as HTMLElement).getAllByText('web/src/api.ts').length,
+    ).toBeGreaterThan(0)
+    expect(
+      within(changesCard as HTMLElement).getAllByText('+3').length,
+    ).toBeGreaterThan(0)
+    expect(
+      within(changesCard as HTMLElement).getAllByText('-4').length,
+    ).toBeGreaterThan(0)
+    const imageHeadline = within(drawer).getAllByText('查看了图片')[0]
+    if (!imageHeadline) throw new Error('expected image headline')
+    fireEvent.click(imageHeadline)
+    expect(
+      within(drawer).getByText(/image\/png · 1200×800 px · 240\.0 KB/),
+    ).toBeTruthy()
+    expect(within(drawer).getByText(/由 2400×1600 px 原图缩小/)).toBeTruthy()
+    expect(
+      within(drawer).getByText('图片内容未随执行记录留存，此处仅展示元数据。'),
+    ).toBeTruthy()
+    expect(within(drawer).getByText('上下文已压缩')).toBeTruthy()
+    expect(within(drawer).getByText(/自动触发/)).toBeTruthy()
+    const deliveryHeadline = within(drawer).getAllByText('声明了交付物')[0]
+    if (!deliveryHeadline) throw new Error('expected delivery headline')
+    fireEvent.click(deliveryHeadline)
+    expect(within(drawer).getByText('output/report.md')).toBeTruthy()
+    expect(within(drawer).getByText('调研报告')).toBeTruthy()
+    expect(within(drawer).getByText('output/summary.csv')).toBeTruthy()
+    expect(
+      within(drawer).getByText('用户插话，本次运行由后继接管'),
+    ).toBeTruthy()
+    expect(within(drawer).getByText(/改成对比团队版价格/)).toBeTruthy()
+    expect(drawer.querySelectorAll('.activity-meta-row').length).toBe(2)
+  })
+
+  it('keeps honest fallbacks for legacy and unknown tool records', async () => {
+    installSnapshotFetch(
+      {
+        ...snapshot,
+        channels: [{ ...channel, status: 'completed', canStop: false }],
+        runs: [{ ...run, status: 'completed', output: '完成。' }],
+      },
+      path => {
+        if (!path.startsWith('/v1/runs/run-1/activity?')) return undefined
+        return Response.json({
+          runId: 'run-1',
+          taskId: channel.id,
+          totalEntries: 2,
+          truncated: false,
+          entries: [
+            {
+              seq: 1,
+              kind: 'tool_call',
+              status: 'completed',
+              callId: 'call-legacy',
+              tool: 'test',
+              label: 'test',
+              detail: '{"command":"pnpm test"}\n[结果]\nall green',
+              createdAt: '2026-11-19T08:00:10.000Z',
+              updatedAt: '2026-11-19T08:00:12.000Z',
+            },
+            {
+              seq: 2,
+              kind: 'tool_call',
+              status: 'completed',
+              callId: 'call-empty',
+              tool: 'mystery',
+              label: 'mystery',
+              createdAt: '2026-11-19T08:00:14.000Z',
+              updatedAt: '2026-11-19T08:00:16.000Z',
+            },
+          ],
+        })
+      },
+    )
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: new RegExp(channel.title) }),
+    )
+    const drawer = await screen.findByRole('dialog', { name: '工作详情' })
+    fireEvent.click(await within(drawer).findByText(/工作流程记录/))
+    expect(within(drawer).queryByText(/运行了/)).toBeNull()
+    fireEvent.click(await within(drawer).findByText('test'))
+    expect(drawer.querySelector('.activity-raw')?.textContent).toContain(
+      'pnpm test',
+    )
+    fireEvent.click(within(drawer).getByText('mystery'))
+    expect(within(drawer).getByText('没有留存参数或输出。')).toBeTruthy()
   })
 
   it('renders collaboration relations in the task drawer', async () => {

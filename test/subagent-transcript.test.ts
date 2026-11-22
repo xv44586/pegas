@@ -213,6 +213,101 @@ describe('EXEC-006 subagent transcript reader', () => {
     expect(child?.entries.at(-1)?.detail).toBe('docs 目录共 29 个文件。')
   })
 
+  it('reads structured result meta and projects compaction markers', () => {
+    const sessionsRoot = temporaryDirectory('pegas-subagent-meta-')
+    const workspace = '/tmp/pegas-subagent-meta'
+    writeSessionLog(sessionsRoot, workspace, 'session-child', [
+      childHeader('session-child', 'session-root', workspace, 2_000),
+      {
+        type: 'tool/call',
+        seq: 1,
+        time: 2_100,
+        data: {
+          turn: 1,
+          step: 1,
+          callId: 'call-grep',
+          name: 'grep',
+          arguments: '{"pattern":"runActivity"}',
+        },
+      },
+      {
+        type: 'tool/result',
+        seq: 2,
+        time: 2_200,
+        surfaceOp: 'append',
+        data: {
+          turn: 1,
+          step: 1,
+          message: {
+            role: 'tool',
+            toolCallId: 'call-grep',
+            content: [{ type: 'text', text: 'Found 1 of 5 matches' }],
+          },
+          meta: {
+            shape: 'matches',
+            total: 5,
+            truncated: true,
+            files: [
+              {
+                path: 'web/src/api.ts',
+                matches: [{ lineNumber: 93, line: 'async runActivity(' }],
+              },
+            ],
+          },
+        },
+      },
+      {
+        type: 'compaction/end',
+        seq: 3,
+        time: 2_300,
+        data: { compactionId: 'c-1', turn: 1 },
+      },
+      {
+        type: 'compaction/end',
+        seq: 4,
+        time: 2_400,
+        data: {
+          compactionId: 'c-2',
+          turn: 1,
+          sourceCommandId: 'cmd-1',
+          error: [{ name: 'Error', message: 'summary failed' }],
+        },
+      },
+    ])
+    const transcripts = readDshSubagentTranscripts('session-root', workspace, {
+      sessionsRoot,
+    })
+    const child = transcripts[0]
+    const tool = child?.entries.find(entry => entry.callId === 'call-grep')
+    expect(tool?.semantic).toMatchObject({
+      kind: 'search',
+      shape: 'matches',
+      total: 5,
+      resultTruncated: true,
+      files: [
+        {
+          path: 'web/src/api.ts',
+          matches: [{ line: 93, text: 'async runActivity(' }],
+        },
+      ],
+    })
+    const markers = child?.entries.filter(
+      entry => entry.meta?.kind === 'compaction',
+    )
+    expect(markers).toHaveLength(2)
+    expect(markers?.[0]).toMatchObject({
+      kind: 'step',
+      status: 'completed',
+      label: '上下文已压缩',
+      meta: { kind: 'compaction', note: '自动触发' },
+    })
+    expect(markers?.[1]).toMatchObject({
+      status: 'error',
+      label: '上下文压缩失败',
+      meta: { kind: 'compaction', note: '手动触发' },
+    })
+  })
+
   it('includes nested delegations and ignores unrelated or unknown-format logs', () => {
     const sessionsRoot = temporaryDirectory('pegas-subagent-nested-')
     const workspace = '/tmp/pegas-subagent-nested'

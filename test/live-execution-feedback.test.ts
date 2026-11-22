@@ -246,6 +246,17 @@ describe('EXEC-006 continuation redirects active work instead of racing it', () 
     const successor = store.claimNextRun('feedback-worker')
     expect(successor?.run.id).toBe(runs[1]?.id)
     expect(successor?.run.resumeFromRef).toBe('session-live')
+    const report = store.listRunActivity(claimed.run.id, 'owner')
+    const marker = report?.entries.find(entry => entry.meta?.kind === 'steered')
+    expect(marker).toMatchObject({
+      kind: 'step',
+      status: 'completed',
+      label: '用户插话，本次运行由后继接管',
+      meta: { kind: 'steered', note: '改成对比团队版价格' },
+    })
+    expect(
+      report?.entries.filter(entry => entry.meta?.kind === 'steered'),
+    ).toHaveLength(1)
   })
 
   it('rejects replaying one event with a different routing decision', () => {

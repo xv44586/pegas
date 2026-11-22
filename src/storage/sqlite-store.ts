@@ -55,7 +55,12 @@ import type {
   RunSubagentReport,
   SubagentTranscript,
   Task,
+  ToolSemantic,
 } from '../core/domain.js'
+import {
+  buildToolSemantic,
+  splitToolDetail,
+} from '../activity/tool-semantics.js'
 import type { ExecutorResult } from '../executor/executor.js'
 import {
   parseExecutionPools,
@@ -5487,6 +5492,16 @@ export class PegasStore {
       const task = this.#taskById(row.task_id)
       if (task.status === 'completed' || task.status === 'cancelled')
         throw new Error('Task is closed')
+      const directives = JSON.parse(row.steering_json) as {
+        eventId: string
+        text: string
+        at: string
+      }[]
+      this.#appendSteeringMarker(
+        runId,
+        directives,
+        this.#clock.now().toISOString(),
+      )
       const existing = this.#database
         .prepare(`SELECT * FROM runs WHERE steering_of_run_id = ? LIMIT 1`)
         .get(runId) as unknown as RunRow | undefined
@@ -5500,11 +5515,6 @@ export class PegasStore {
         this.#database.exec('COMMIT')
         return successor
       }
-      const directives = JSON.parse(row.steering_json) as {
-        eventId: string
-        text: string
-        at: string
-      }[]
       const now = this.#clock.now().toISOString()
       const steeringText = directives
         .map(directive => directive.text)
@@ -10047,10 +10057,17 @@ export class PegasStore {
       step?: number
       label: string
       detail?: string
+      semantic?: ToolSemantic
     },
   ): void {
     if (!this.ownsRun(runId, workerId)) return
     const now = this.#clock.now().toISOString()
+    const detail =
+      entry.semantic === undefined
+        ? entry.detail === undefined
+          ? undefined
+          : JSON.stringify(entry.detail)
+        : JSON.stringify({ detail: entry.detail, semantic: entry.semantic })
     this.#database
       .prepare(
         `INSERT INTO run_activity_entries
@@ -10069,7 +10086,7 @@ export class PegasStore {
         entry.tool ?? null,
         entry.step ?? null,
         entry.label.slice(0, 400),
-        entry.detail === undefined ? null : JSON.stringify(entry.detail),
+        detail ?? null,
         now,
         now,
       )
@@ -10079,24 +10096,91 @@ export class PegasStore {
     runId: string,
     workerId: string,
     callId: string,
-    outcome: { status: 'completed' | 'error'; result?: string },
+    outcome: {
+      status: 'completed' | 'error'
+      result?: string
+      semantic?: ToolSemantic
+    },
   ): void {
     if (!this.ownsRun(runId, workerId)) return
+    this.#completeRunActivityToolCall(runId, callId, outcome)
+  }
+
+  /**
+   * Appends the honest steering marker inside the supersede transaction.
+   * Idempotent: a replayed supersede (existing successor) never duplicates it.
+   */
+  #appendSteeringMarker(
+    runId: string,
+    directives: { text: string }[],
+    now: string,
+  ): void {
+    const existing = this.#database
+      .prepare(
+        `SELECT 1 FROM run_activity_entries
+         WHERE run_id = ? AND tool = 'steered' LIMIT 1`,
+      )
+      .get(runId)
+    if (existing) return
+    const note = directives
+      .map(directive => directive.text)
+      .join('\n')
+      .slice(0, 2_000)
+    this.#database
+      .prepare(
+        `INSERT INTO run_activity_entries
+          (run_id, seq, kind, status, call_id, tool, step, label, detail_json,
+           created_at, updated_at)
+         VALUES (?, COALESCE(
+           (SELECT MAX(seq) + 1 FROM run_activity_entries WHERE run_id = ?), 1
+         ), 'step', 'completed', NULL, 'steered', NULL, ?, ?, ?, ?)`,
+      )
+      .run(
+        runId,
+        runId,
+        '用户插话，本次运行由后继接管',
+        JSON.stringify({ detail: note }),
+        now,
+        now,
+      )
+  }
+
+  #completeRunActivityToolCall(
+    runId: string,
+    callId: string,
+    outcome: {
+      status: 'completed' | 'error'
+      result?: string
+      semantic?: ToolSemantic
+    },
+  ): void {
     const row = this.#database
       .prepare(
-        `SELECT id, detail_json FROM run_activity_entries
+        `SELECT id, tool, detail_json FROM run_activity_entries
          WHERE run_id = ? AND call_id = ? AND kind = 'tool_call'
          ORDER BY seq DESC LIMIT 1`,
       )
       .get(runId, callId) as
-      { id: number; detail_json: string | null } | undefined
+      | { id: number; tool: string | null; detail_json: string | null }
+      | undefined
     if (!row) return
-    const detail = row.detail_json
-      ? (JSON.parse(row.detail_json) as string)
-      : ''
+    const stored = decodeActivityDetail(row.detail_json ?? '')
+    const detail = stored.detail ?? ''
     const merged = [detail, outcome.result ? `\n[结果]\n${outcome.result}` : '']
       .join('')
       .slice(0, 16_384)
+    const semantic =
+      outcome.semantic ??
+      buildToolSemantic(
+        {
+          tool: row.tool ?? '',
+          ...(stored.detail !== undefined ? { input: stored.detail } : {}),
+        },
+        {
+          status: outcome.status,
+          ...(outcome.result !== undefined ? { result: outcome.result } : {}),
+        },
+      )
     this.#database
       .prepare(
         `UPDATE run_activity_entries
@@ -10104,7 +10188,7 @@ export class PegasStore {
       )
       .run(
         outcome.status,
-        JSON.stringify(merged),
+        JSON.stringify({ detail: merged, semantic }),
         this.#clock.now().toISOString(),
         row.id,
       )
@@ -10157,9 +10241,7 @@ export class PegasStore {
         ...(row.tool ? { tool: row.tool } : {}),
         ...(row.step !== null ? { step: row.step } : {}),
         label: row.label,
-        ...(row.detail_json
-          ? { detail: JSON.parse(row.detail_json) as string }
-          : {}),
+        ...projectActivityDetail(row),
         createdAt: row.created_at,
         updatedAt: row.updated_at,
       }))
@@ -10235,9 +10317,17 @@ export class PegasStore {
     return {
       runId,
       taskId: run.task_id,
-      subagents: rows.map(
-        row => JSON.parse(row.transcript_json) as SubagentTranscript,
-      ),
+      subagents: rows.map(row => {
+        const transcript = JSON.parse(row.transcript_json) as SubagentTranscript
+        return {
+          ...transcript,
+          entries: transcript.entries.map(entry =>
+            entry.kind === 'tool_call' && !entry.semantic
+              ? { ...entry, ...deriveLegacySemantic(entry) }
+              : entry,
+          ),
+        }
+      }),
     }
   }
 
@@ -12943,4 +13033,82 @@ function nextQuietWindowEnd(
   else if (start > end && localTotalMinutes >= dayStartMinutes + start)
     endMinutes = dayStartMinutes + 1440 + end
   return new Date((endMinutes - preferences.utcOffsetMinutes) * 60_000)
+}
+
+/** Decodes detail_json: legacy rows store a bare string, new rows an
+ * envelope `{detail, semantic}`. Both stay readable without migration. */
+function decodeActivityDetail(raw: string): {
+  detail?: string
+  semantic?: ToolSemantic
+} {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw) as unknown
+  } catch {
+    return {}
+  }
+  if (typeof parsed === 'string') return { detail: parsed }
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    const value = parsed as Record<string, unknown>
+    return {
+      ...(typeof value.detail === 'string' ? { detail: value.detail } : {}),
+      ...(value.semantic &&
+      typeof value.semantic === 'object' &&
+      typeof (value.semantic as Record<string, unknown>).kind === 'string'
+        ? { semantic: value.semantic as ToolSemantic }
+        : {}),
+    }
+  }
+  return {}
+}
+
+function projectActivityDetail(row: {
+  kind: RunActivityEntry['kind']
+  status: RunActivityEntry['status'] | null
+  tool: string | null
+  detail_json: string | null
+}): Pick<RunActivityEntry, 'detail' | 'semantic' | 'meta'> {
+  if (row.kind === 'step' && row.tool === 'steered') {
+    const stored = row.detail_json ? decodeActivityDetail(row.detail_json) : {}
+    return {
+      meta: {
+        kind: 'steered',
+        ...(stored.detail ? { note: stored.detail } : {}),
+      },
+    }
+  }
+  if (!row.detail_json) return {}
+  const stored = decodeActivityDetail(row.detail_json)
+  if (row.kind !== 'tool_call') {
+    return stored.detail !== undefined ? { detail: stored.detail } : {}
+  }
+  if (stored.semantic) {
+    return {
+      ...(stored.detail !== undefined ? { detail: stored.detail } : {}),
+      semantic: stored.semantic,
+    }
+  }
+  if (stored.detail === undefined) return {}
+  const { input, result } = splitToolDetail(stored.detail)
+  const semantic = buildToolSemantic(
+    { tool: row.tool ?? '', ...(input !== undefined ? { input } : {}) },
+    row.status === 'completed' || row.status === 'error'
+      ? { status: row.status, ...(result !== undefined ? { result } : {}) }
+      : undefined,
+  )
+  return { detail: stored.detail, semantic }
+}
+
+function deriveLegacySemantic(
+  entry: RunActivityEntry,
+): Pick<RunActivityEntry, 'semantic'> {
+  const { input, result } = splitToolDetail(entry.detail)
+  return {
+    semantic: buildToolSemantic(
+      { tool: entry.tool ?? '', ...(input !== undefined ? { input } : {}) },
+      entry.status === 'completed' || entry.status === 'error'
+        ? { status: entry.status, ...(result !== undefined ? { result } : {}) }
+        : undefined,
+    ),
+  }
 }
