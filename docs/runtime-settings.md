@@ -100,6 +100,10 @@ fast/balanced/deep 三池各指向一个已配置的 provider/model，允许只�
   模型目录读取；patch 文件在子进程退出后删除，明文 key 只经子进程环境传递。
   恢复已有 session 时忽略当前覆盖并按保存的模型快照重建配置。DSH 运行在
   `<dataDir>/dsh` 隔离 home 内（`PEGAS_DSH_HOME` 可覆盖），不读写本机 `~/.dsh`。
+- Agent 执行工作区默认是 `<dataDir>/workspace`（`PEGAS_WORKSPACE_ROOT` 可显式
+  覆盖），Worker 启动时幂等创建。工作区与代码 checkout 分离：DSH 会从 cwd 向上
+  加载 AGENTS.md 风格指令文件，把工作区指向开发仓库会把开发文档误当作 Agent
+  自身指令。既有 Run 的 workspace 快照不可变，改默认值只影响新 Run。
 - 凭证密钥位于数据目录的权限受限文件；文件缺失或密文损坏时连接标记为不可用，不用
   空值覆盖密文，也不把解密错误降级为明文读取。
 - 回滚应用版本不需要删除新增连接表；旧版本继续读取环境变量。恢复新版本后再次读取

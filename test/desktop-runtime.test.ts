@@ -60,8 +60,24 @@ describe('desktop runtime', () => {
       PEGAS_API_PORT: '41234',
       PEGAS_API_TOKEN: 'desktop-instance-token',
       PEGAS_DATA_DIR: '/tmp/pegas-desktop-test',
+      PEGAS_WORKSPACE_ROOT: '/tmp/pegas-desktop-test/workspace',
       PEGAS_EXECUTOR: 'echo',
     })
+  })
+
+  it('keeps the desktop agent workspace out of the application checkout', () => {
+    const environment = desktopServiceEnvironment({
+      port: 41234,
+      dataDir: '/tmp/pegas-desktop-test',
+      apiToken: 'token',
+      environment: {
+        PATH: '/usr/bin',
+        PEGAS_WORKSPACE_ROOT: '/Users/dev/pegas',
+      },
+    })
+    expect(environment.PEGAS_WORKSPACE_ROOT).toBe(
+      '/tmp/pegas-desktop-test/workspace',
+    )
   })
 
   it('authenticates only requests to the trusted desktop service origin', () => {

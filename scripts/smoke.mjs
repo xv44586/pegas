@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { createServer as createHttpServer } from 'node:http'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -88,6 +88,10 @@ try {
   const run = await waitForCompletedRun(port, task.id)
   if (run.output !== 'Verify the durable task loop')
     throw new Error('Run output did not round-trip')
+  if (run.executionContext?.workspace !== join(dataDirectory, 'workspace'))
+    throw new Error('Run workspace did not default to the data directory')
+  if (!existsSync(join(dataDirectory, 'workspace')))
+    throw new Error('Worker did not create the default agent workspace')
   if (
     run.executionContext?.workerProfile !== `worker-profile:${task.id}` ||
     run.executionContext?.workerProfileRevision !== 1 ||
