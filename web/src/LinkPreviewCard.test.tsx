@@ -150,7 +150,7 @@ describe('CONV-005 link preview hover card', () => {
     expect(screen.queryByRole('tooltip')).toBeNull()
   })
 
-  it('opens on keyboard focus and shows a header-only card when unavailable', async () => {
+  it('opens on keyboard focus and offers a retry when unavailable', async () => {
     const loader = vi.fn(() =>
       Promise.resolve({ status: 'unavailable' } as LinkPreview),
     )
@@ -164,8 +164,33 @@ describe('CONV-005 link preview hover card', () => {
     await advance(600)
     const card = screen.getByRole('tooltip')
     expect(card.getAttribute('data-state')).toBe('pending')
+    expect(card.getAttribute('data-unavailable')).toBe('true')
     expect(card.textContent).toContain('example.com')
-    expect(card.querySelector('.link-preview-body')).toBeNull()
+    expect(card.textContent).toContain('预览暂不可用')
+    expect(screen.getByRole('button', { name: '重试' })).toBeTruthy()
+  })
+
+  it('retries an unavailable preview on demand and renders the recovered card', async () => {
+    const loader = vi
+      .fn<(url: string) => Promise<LinkPreview>>()
+      .mockResolvedValueOnce({ status: 'unavailable' })
+      .mockResolvedValueOnce(readyPreview)
+    render(
+      <LinkPreviewAnchor href="https://example.com/retry" loader={loader}>
+        retry
+      </LinkPreviewAnchor>,
+    )
+    const link = screen.getByRole('link', { name: 'retry' })
+    hover(link)
+    await advance(600)
+    expect(screen.getByRole('tooltip').textContent).toContain('预览暂不可用')
+    expect(loader).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole('button', { name: '重试' }))
+    await advance(0)
+    expect(loader).toHaveBeenCalledTimes(2)
+    const card = screen.getByRole('tooltip')
+    expect(card.getAttribute('data-state')).toBe('ready')
+    expect(card.textContent).toContain('makecindy/cindy')
   })
 
   it('toggles on touch without navigating on the first tap', async () => {

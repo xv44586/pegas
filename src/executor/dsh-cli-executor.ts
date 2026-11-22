@@ -137,7 +137,8 @@ export class DshCliExecutor implements RunExecutor {
           input.resumeSessionId &&
           error instanceof DshExecutionError &&
           error.sessionId === input.resumeSessionId &&
-          isWorkspaceSessionMismatch(error.message)
+          (isWorkspaceSessionMismatch(error.message) ||
+            isMissingSession(error.message, input.resumeSessionId))
         ) {
           const freshInput = { ...input }
           delete freshInput.resumeSessionId
@@ -477,6 +478,11 @@ function isWorkspaceSessionMismatch(message: string): boolean {
   return /^session "[^"]+" was recorded in "[^"]+", not "[^"]+"$/.test(
     message.trim(),
   )
+}
+
+function isMissingSession(message: string, sessionId: string): boolean {
+  const quotedSession = `session "${sessionId}" does not exist`
+  return message.split('\n').some(line => line.includes(quotedSession))
 }
 
 function isSessionWriteHandleBusy(message: string): boolean {
