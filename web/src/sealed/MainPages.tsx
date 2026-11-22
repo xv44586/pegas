@@ -497,6 +497,7 @@ export function ConversationPage({
                         ? `${message.text.slice(0, 520)}…`
                         : message.text
                     }
+                    linkPreviewLoader={url => api.linkPreview(url)}
                   />
                   {message.role === 'user' && (
                     <small className="message-delivery">

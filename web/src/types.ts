@@ -594,3 +594,18 @@ export interface TaskDelivery {
   }[]
   reviewPack?: ReviewPack
 }
+
+interface LinkPreviewImage {
+  dataUrl: string
+  width: number
+  height: number
+}
+
+export type LinkPreview =
+  | { status: 'unavailable' }
+  | {
+      status: 'ready'
+      title: string | null
+      description: string | null
+      image: LinkPreviewImage | null
+    }

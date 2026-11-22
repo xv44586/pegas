@@ -697,6 +697,113 @@ a {
   overflow: auto;
   padding: 14px;
 }
+.message-markdown a {
+  color: var(--accent-ink, var(--accent));
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  overflow-wrap: anywhere;
+}
+.link-preview-card {
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: var(--card-radius);
+  box-shadow: var(--shadow-pop);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  font-size: 13px;
+  max-height: min(320px, calc(100vh - 24px));
+  overflow: hidden;
+  position: fixed;
+  width: 360px;
+  z-index: 90;
+}
+.link-preview-head {
+  align-items: center;
+  color: var(--text-muted);
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+  padding: 10px 14px;
+}
+.link-preview-host {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.link-preview-open {
+  align-items: center;
+  color: var(--text);
+  display: inline-flex;
+  flex-shrink: 0;
+  gap: 5px;
+  text-decoration: none;
+}
+.link-preview-open:hover {
+  color: var(--accent-ink, var(--accent));
+}
+.link-preview-body {
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.link-preview-hero {
+  border-bottom: 1px solid var(--line);
+  display: block;
+  flex-shrink: 0;
+  height: auto;
+  max-height: 192px;
+  object-fit: cover;
+  width: 100%;
+}
+.link-preview-text {
+  align-items: flex-start;
+  display: flex;
+  gap: 10px;
+  padding: 14px;
+}
+.link-preview-thumb {
+  border-radius: 8px;
+  flex-shrink: 0;
+  height: 80px;
+  object-fit: cover;
+  width: 80px;
+}
+.link-preview-lines {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  min-width: 0;
+}
+.link-preview-lines h3 {
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  display: -webkit-box;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  margin: 0;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.link-preview-lines p {
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  color: var(--text-muted);
+  display: -webkit-box;
+  line-height: 1.4;
+  margin: 0;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
 .inline-link {
   align-items: center;
   background: transparent;

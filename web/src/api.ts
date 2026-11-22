@@ -15,6 +15,7 @@ import type {
   ChannelTimeline,
   DurableAction,
   DshModelCatalog,
+  LinkPreview,
   MemoryDraft,
   MemoryRecord,
   MemoryScope,
@@ -66,6 +67,13 @@ export class PegasApi {
 
   setToken(token: string): void {
     this.#token = token
+  }
+
+  async linkPreview(url: string): Promise<LinkPreview> {
+    const raw = await this.#get<unknown>(
+      `/v1/link-preview?url=${encodeURIComponent(url)}`,
+    )
+    return projectLinkPreview(raw)
   }
 
   async channelTimeline(channelId: string): Promise<ChannelTimeline> {
@@ -917,6 +925,40 @@ function isChannelTimeline(
     Array.isArray(candidate.messages) &&
     Array.isArray(candidate.runs)
   )
+}
+
+function projectLinkPreview(value: unknown): LinkPreview {
+  if (!value || typeof value !== 'object') return { status: 'unavailable' }
+  const candidate = value as {
+    status?: unknown
+    title?: unknown
+    description?: unknown
+    image?: {
+      dataUrl?: unknown
+      width?: unknown
+      height?: unknown
+    } | null
+  }
+  if (candidate.status !== 'ready') return { status: 'unavailable' }
+  const image =
+    candidate.image &&
+    typeof candidate.image.dataUrl === 'string' &&
+    candidate.image.dataUrl.startsWith('data:image/') &&
+    typeof candidate.image.width === 'number' &&
+    typeof candidate.image.height === 'number'
+      ? {
+          dataUrl: candidate.image.dataUrl,
+          width: candidate.image.width,
+          height: candidate.image.height,
+        }
+      : null
+  return {
+    status: 'ready',
+    title: typeof candidate.title === 'string' ? candidate.title : null,
+    description:
+      typeof candidate.description === 'string' ? candidate.description : null,
+    image,
+  }
 }
 
 async function throwResponse(response: Response): Promise<never> {
