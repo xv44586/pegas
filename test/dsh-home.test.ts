@@ -164,6 +164,18 @@ describe('createDshModelConfiguration', () => {
     })
     try {
       expect(configuration.environment).toEqual({})
+      const entries = JSON.parse(
+        readFileSync(configuration.patchPath, 'utf8'),
+      ) as { id: string; config: Record<string, unknown> }[]
+      const providers = (entries[0]?.config.providers ?? {}) as Record<
+        string,
+        Record<string, unknown>
+      >
+      expect(providers.magpie).not.toHaveProperty('apiKeyEnv')
+      expect(providers.magpie).toMatchObject({
+        api: 'openai-completions',
+        baseURL: 'http://127.0.0.1:3425/v1',
+      })
     } finally {
       configuration.remove()
     }
