@@ -21,10 +21,17 @@ export interface ExecutorInput {
     baseUrl: string
     claimToken: string
   }
+  toolApprovalGrant?: ToolApprovalGrant
   resumeSessionId?: string
   onExecutorRef?(executorRef: string): void
   onProgress?(event: ExecutorProgressEvent): void
   signal?: AbortSignal
+}
+
+export interface ToolApprovalGrant {
+  actionId: string
+  tool: string
+  argumentsHash: string
 }
 
 interface ExecutorProgressEvent {
@@ -37,6 +44,12 @@ export interface ExecutorResult {
   output: string
   usage?: ModelUsageSample
   durationMs?: number
+  approvalPending?: {
+    actionId: string
+    approvalId: string
+    callId: string
+    tool: string
+  }
 }
 
 export interface RunExecutor {

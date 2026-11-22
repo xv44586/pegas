@@ -1,6 +1,8 @@
 {
   "compilerOptions": {
     "allowImportingTsExtensions": true,
+    "allowJs": true,
+    "checkJs": true,
     "erasableSyntaxOnly": true,
     "lib": ["ES2024"],
     "module": "NodeNext",
@@ -11,6 +13,11 @@
     "target": "ES2024",
     "types": ["node", "vitest/globals"]
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "scripts/**/*.ts"],
+  "include": [
+    "src/**/*.ts",
+    "src/executor/dsh-approval-bridge.mjs",
+    "test/**/*.ts",
+    "scripts/**/*.ts"
+  ],
   "exclude": ["src/desktop/main.ts"]
 }
