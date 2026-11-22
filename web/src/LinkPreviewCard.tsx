@@ -50,10 +50,16 @@ export function isPreviewableLink(href: string | undefined): href is string {
 function loadPreview(
   loader: LinkPreviewLoader,
   href: string,
+  options: { retry?: boolean } = {},
 ): Promise<LinkPreview> | LinkPreview | undefined {
   const cached = previewCache.get(href)
   if (cached) {
-    if (cached.value && cached.expiresAt > Date.now()) return cached.value
+    if (
+      cached.value &&
+      cached.expiresAt > Date.now() &&
+      !(options.retry && cached.value.status === 'unavailable')
+    )
+      return cached.value
     if (cached.pending) return cached.pending
     previewCache.delete(href)
   }
@@ -165,6 +171,21 @@ export function LinkPreviewAnchor({
     }
   }, [href])
 
+  const retryPreview = useCallback(() => {
+    const activeLoader = loaderRef.current
+    if (!activeLoader || !isPreviewableLink(href)) return
+    const result = loadPreview(activeLoader, href, { retry: true })
+    if (!result) return
+    if (result instanceof Promise) {
+      setPreview(undefined)
+      void result.then(value => {
+        setPreview(current => (current === value ? current : value))
+      })
+    } else {
+      setPreview(result)
+    }
+  }, [href])
+
   const show = useCallback(() => {
     const anchor = anchorRef.current
     if (!anchor) return
@@ -259,6 +280,9 @@ export function LinkPreviewAnchor({
           <div
             className="link-preview-card"
             data-state={hasBody ? 'ready' : 'pending'}
+            data-unavailable={
+              preview?.status === 'unavailable' ? 'true' : undefined
+            }
             id={cardId}
             onBlur={event => {
               if (
@@ -323,6 +347,18 @@ export function LinkPreviewAnchor({
                     </div>
                   </div>
                 )}
+              </div>
+            )}
+            {preview?.status === 'unavailable' && (
+              <div className="link-preview-body link-preview-unavailable">
+                <p>预览暂不可用，可能是网络波动。</p>
+                <button
+                  className="link-preview-retry"
+                  onClick={retryPreview}
+                  type="button"
+                >
+                  重试
+                </button>
               </div>
             )}
           </div>,

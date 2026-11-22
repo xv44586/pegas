@@ -842,6 +842,28 @@ a {
   overflow-y: auto;
   overscroll-behavior: contain;
 }
+.link-preview-unavailable {
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 14px;
+}
+.link-preview-unavailable p {
+  color: var(--ink-soft);
+  font-size: 12.5px;
+  margin: 0;
+}
+.link-preview-retry {
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 12.5px;
+  padding: 3px 12px;
+}
+.link-preview-retry:hover {
+  border-color: var(--accent);
+}
 .link-preview-hero {
   border-bottom: 1px solid var(--line);
   display: block;
