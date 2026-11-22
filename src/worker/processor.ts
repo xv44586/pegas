@@ -1083,6 +1083,14 @@ export async function executeClaimedRun(
   observeRun('completed')
   if (result.approvalPending) return
   await summarizeRunThinking(store, claimed, thinkingSummarizer, telemetry)
+  if (thinkingSummarizer) {
+    await summarizeChildThinking(
+      store,
+      { runId: claimed.run.id, userId: claimed.task.userId },
+      thinkingSummarizer,
+      telemetry,
+    )
+  }
   const persistedRun = store
     .listRuns(claimed.task.id)
     .find(run => run.id === claimed.run.id)
@@ -1217,6 +1225,19 @@ export async function backfillThinkingSummaries(
   }
   for (const item of pending) {
     await summarizeThinkingEntries(store, item, createSummarizer, telemetry)
+    await summarizeChildThinking(store, item, createSummarizer, telemetry)
+  }
+  let pendingChildren: { runId: string; userId: string }[]
+  try {
+    pendingChildren = store.listRunsMissingChildThinkingSummary(
+      MAX_BACKFILL_RUNS_PER_START,
+    )
+  } catch {
+    return
+  }
+  const seen = new Set(pending.map(item => item.runId))
+  for (const item of pendingChildren) {
+    if (seen.has(item.runId)) continue
     await summarizeChildThinking(store, item, createSummarizer, telemetry)
   }
 }
