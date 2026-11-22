@@ -6,11 +6,13 @@ import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 
 import type { ModelTokenUsage } from '../core/domain.js'
+import type { DshModelConfiguration } from './dsh-home.js'
 import type { ExecutorInput, ExecutorResult, RunExecutor } from './executor.js'
 
 export interface DshCliExecutorOptions {
   command?: string
   profile?: string
+  home?: string
   permissionMode?: string
   approvalPolicy?: 'ask' | 'never'
   additionalDirectories?: string[]
@@ -20,6 +22,7 @@ export interface DshCliExecutorOptions {
   maximumStderrBytes?: number
   agentModel?: { provider: string; model: string }
   approvalBridgePath?: string
+  modelConfiguration?: DshModelConfiguration
 }
 
 interface DshSessionEvent {
@@ -76,6 +79,7 @@ export class DshCliExecutor implements RunExecutor {
   readonly name = 'dsh-headless'
   readonly #command: string
   readonly #profile: string
+  readonly #home?: string
   readonly #permissionMode: string
   readonly #approvalPolicy: 'ask' | 'never'
   readonly #additionalDirectories: string[]
@@ -85,10 +89,12 @@ export class DshCliExecutor implements RunExecutor {
   readonly #maximumStderrBytes: number
   readonly #agentModel?: { provider: string; model: string }
   readonly #approvalBridgePath: string
+  readonly #modelConfiguration?: DshModelConfiguration
 
   constructor(options: DshCliExecutorOptions = {}) {
     this.#command = options.command ?? 'dsh'
     this.#profile = options.profile ?? 'headless'
+    this.#home = options.home
     this.#permissionMode = options.permissionMode ?? 'workspace-write'
     this.#approvalPolicy = options.approvalPolicy ?? 'never'
     this.#additionalDirectories = options.additionalDirectories ?? []
@@ -99,6 +105,7 @@ export class DshCliExecutor implements RunExecutor {
     this.#agentModel = options.agentModel
     this.#approvalBridgePath =
       options.approvalBridgePath ?? defaultApprovalBridgePath()
+    this.#modelConfiguration = options.modelConfiguration
   }
 
   async execute(input: ExecutorInput): Promise<ExecutorResult> {
@@ -136,7 +143,7 @@ export class DshCliExecutor implements RunExecutor {
   async #executeOnce(input: ExecutorInput): Promise<ExecutorResult> {
     const startedAt = performance.now()
     const patch =
-      !input.resumeSessionId && this.#agentModel
+      !input.resumeSessionId && this.#agentModel && !this.#modelConfiguration
         ? createAgentModelPatch(this.#agentModel)
         : undefined
     const bridgeEnabled =
@@ -150,6 +157,9 @@ export class DshCliExecutor implements RunExecutor {
     const arguments_ = [
       '--profile',
       this.#profile,
+      ...(this.#modelConfiguration
+        ? ['--patch', this.#modelConfiguration.patchPath]
+        : []),
       ...(patch ? ['--patch', patch.path] : []),
       ...(bridgePatch ? ['--patch', bridgePatch.path] : []),
       '--json',
@@ -169,6 +179,10 @@ export class DshCliExecutor implements RunExecutor {
       env: {
         ...executorEnvironment(process.env),
         ...(bridgeEnabled ? { PEGAS_APPROVAL_BRIDGE: '1' } : {}),
+        ...(this.#home ? { DSH_HOME: this.#home } : {}),
+        ...(this.#modelConfiguration
+          ? this.#modelConfiguration.environment
+          : {}),
         ...(input.actionCapability
           ? {
               PEGAS_CONTROL_PLANE_URL: input.actionCapability.baseUrl,
@@ -382,9 +396,13 @@ export function executorEnvironment(
     'PEGAS_RUN_CLAIM_TOKEN',
     'PEGAS_TOOL_APPROVAL_GRANT',
     'PEGAS_APPROVAL_BRIDGE',
+    'DSH_HOME',
   ])
   return Object.fromEntries(
-    Object.entries(source).filter(([key]) => !protectedKeys.has(key)),
+    Object.entries(source).filter(
+      ([key]) =>
+        !protectedKeys.has(key) && !key.startsWith('PEGAS_DSH_MODEL_KEY_'),
+    ),
   )
 }
 
