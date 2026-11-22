@@ -2,7 +2,7 @@
 
 > 状态：Living Document
 >
-> 更新日期：2026-11-19
+> 更新日期：2026-11-22
 
 这里记录值得逐步采用、但尚未被 Pegas 自身事故证明为强制标准的工程规则。它们不是完成声明；开始实现时必须回到 Feature Intake，确认归属、验收条件和隔离 worktree。
 
@@ -35,6 +35,19 @@
 | hermetic smoke 与真实 DSH Candidate canary 分层                 | SelfChange 可运行       | fake child 故障测试 + 隔离真实 session 恢复 |
 | 取消的 CI 不算证据，Release 等待目标 workflow 在准确 SHA 上完成 | 自动发布上线            | release gate 集成测试                       |
 | 真实外部服务变更在受控 sandbox 做一次不可逆路径演练             | 新 provider / migration | canary 记录与回滚演练                       |
+
+## Feature 待办：DESIGN-002 待处理收件箱后续（2026-11-22）
+
+本轮收件箱 refinement 已合并的边界之外的缺口，开始实现时回到各自 Feature Intake，另建隔离 worktree：
+
+| 待办                                       | 归属          | 说明与验收                                                                                 |
+| ------------------------------------------ | ------------- | ------------------------------------------------------------------------------------------ |
+| 待处理服务端全文搜索                       | `NOTIFY-003`  | 当前 Web 搜索只过滤已加载快照；需服务端查询合同 + owner 隔离与上限回归                     |
+| 待处理游标分页 / 虚拟列表                  | `NOTIFY-003`  | 大量消息时保持稳定游标续页与滚动位置；分页合同、去重与恢复回归                             |
+| 待处理批量处理与通知优先级                 | `NOTIFY-003`  | 需服务端幂等批量合同与优先级事实来源，不得由 Web 从自由文本推断                            |
+| 待处理页 VoiceOver / NVDA 实机验证         | `DESIGN-002`  | axe 已 0 违例；补真实读屏的列表导航、操作名称与焦点恢复记录                                |
+| `smoke-desktop.mjs` 发送按钮选择器歧义修复 | `DESKTOP-001` | `getByRole('button', { name: '发送' })` 同时命中「说完直接发送」；先加复现回归再改精确匹配 |
+| Web bundle 超过 500 kB 的分包评估          | `DESIGN-002`  | Vite 构建提示主 chunk 587 kB；评估路由级 code splitting 与加载预算                         |
 
 ## 提醒约定
 
