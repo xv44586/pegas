@@ -1,4 +1,10 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -770,6 +776,69 @@ setInterval(() => {}, 1000)
       message: 'DSH execution was aborted',
       sessionId: 'session-aborted',
     })
+  })
+
+  it('mounts the read-only tool surface patch only under read-only permission mode', async () => {
+    const command = fakeDsh(`
+const fs = require('node:fs')
+const patchPaths = process.argv
+  .map((value, index) => (value === '--patch' ? process.argv[index + 1] : undefined))
+  .filter(value => value !== undefined)
+const patches = patchPaths.map(path => JSON.parse(fs.readFileSync(path, 'utf8')))
+console.log(JSON.stringify({
+  type: 'final',
+  sessionId: 'session-surface',
+  text: JSON.stringify({ patchPaths, patches }),
+  reason: { kind: 'completed' }
+}))
+`)
+    const readonly = new DshCliExecutor({
+      command,
+      permissionMode: 'read-only',
+    })
+    const readonlyResult = await readonly.execute({
+      runId: 'run-readonly',
+      taskId: 'task-1',
+      prompt: '随便聊聊',
+      workingDirectory: process.cwd(),
+    })
+    const readonlyOutput = JSON.parse(readonlyResult.output) as {
+      patchPaths: string[]
+      patches: { insert?: { id: string; name: string }[] }[][]
+    }
+    const surfacePatches = readonlyOutput.patches
+      .flat()
+      .filter(patch =>
+        patch.insert?.some(entry => entry.id === 'pegas-readonly-surface'),
+      )
+    expect(surfacePatches).toHaveLength(1)
+    expect(surfacePatches[0]?.insert?.[0]?.name).toContain(
+      'dsh-readonly-surface.mjs',
+    )
+    for (const path of readonlyOutput.patchPaths) {
+      expect(existsSync(path)).toBe(false)
+    }
+
+    const writable = new DshCliExecutor({
+      command,
+      permissionMode: 'workspace-write',
+    })
+    const writableResult = await writable.execute({
+      runId: 'run-writable',
+      taskId: 'task-1',
+      prompt: '干活',
+      workingDirectory: process.cwd(),
+    })
+    const writableOutput = JSON.parse(writableResult.output) as {
+      patches: { insert?: { id: string }[] }[][]
+    }
+    expect(
+      writableOutput.patches
+        .flat()
+        .some(patch =>
+          patch.insert?.some(entry => entry.id === 'pegas-readonly-surface'),
+        ),
+    ).toBe(false)
   })
 })
 
