@@ -44,6 +44,61 @@ process.stdout.write(\`- id: llm-pi-ai
       ],
     })
   })
+
+  it('dumps the isolated home with the managed patch and key environment', async () => {
+    const command = fakeDsh(`
+const fs = require('node:fs')
+const patchIndex = process.argv.indexOf('--patch')
+const patchPath = patchIndex >= 0 ? process.argv[patchIndex + 1] : undefined
+const patch = patchPath ? JSON.parse(fs.readFileSync(patchPath, 'utf8')) : []
+const defaultEntry = patch.find(entry => entry.id === 'agent-default-model')
+process.stdout.write(\`- id: agent-default-model
+  config:
+    provider: \${defaultEntry.config.provider}
+    model: \${defaultEntry.config.model}
+- id: llm-pi-ai
+  config:
+    home: \${process.env.DSH_HOME}
+    key: \${process.env.PEGAS_DSH_MODEL_KEY_MAGPIE}
+    providers:
+      magpie:
+        models:
+          - id: \${defaultEntry.config.model}
+\`)
+`)
+    const directory = mkdtempSync(join(tmpdir(), 'pegas-catalog-patch-'))
+    temporaryDirectories.push(directory)
+    const patchPath = join(directory, 'model-configuration.json')
+    writeFileSync(
+      patchPath,
+      JSON.stringify([
+        {
+          id: 'agent-default-model',
+          config: { provider: 'magpie', model: 'gateway/model-a' },
+        },
+      ]),
+    )
+
+    await expect(
+      loadDshModelCatalog({
+        command,
+        profile: 'headless',
+        home: '/tmp/pegas-isolated-dsh-home',
+        patchPath,
+        environment: { PEGAS_DSH_MODEL_KEY_MAGPIE: 'managed-key' },
+      }),
+    ).resolves.toEqual({
+      defaultProvider: 'magpie',
+      defaultModel: 'gateway/model-a',
+      models: [
+        {
+          provider: 'magpie',
+          id: 'gateway/model-a',
+          name: 'gateway/model-a',
+        },
+      ],
+    })
+  })
 })
 
 function fakeDsh(body: string): string {
