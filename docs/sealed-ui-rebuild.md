@@ -197,4 +197,4 @@
 - 新增当前快照内的内容/来源搜索、实时筛选计数和筛选空态；不新增归档、稍后处理、完成、批量、snooze、swipe、服务端全文检索或分页。NOTIFY-003 的服务端消息、已读与投递合同不变。
 - 可访问性补齐语义列表、条目标题、可区分的上下文操作名称和粗指针标题目标；筛选保持单行滚动并在选择后回到可见区域。三主题继续使用语义 token，移动端不产生横向页面溢出。
 - 证据：以上验证均在候选 worktree 完成。31 项定向回归通过；完整 `pnpm check` 全绿（76 个测试文件 / 710 个测试，statement 85.22%、line 88.26%）；`pnpm smoke`、`pnpm build`、`pnpm review:ui -- --force`（66 张截图）和 `pnpm a11y:review`（light/warm/dark 待处理页与移动端 0 违例）通过。额外 `pnpm smoke:desktop` 被既有发送按钮选择器歧义阻塞，未修改无关脚本。详见 `docs/feature-map.md` DESIGN-002「待处理收件箱 refinement」小节。
-- 仍缺：服务端全文搜索、游标分页/虚拟列表、批量处理与通知优先级；VoiceOver/NVDA 实机验证；DESIGN-002 整体 validity、协作操作和真实 ASR 缺口。候选改动尚未形成独立提交，未部署到正在运行的 Pegas，也不能把候选验证表述为主分支或线上验证。
+- 仍缺：服务端全文搜索、游标分页/虚拟列表、批量处理与通知优先级；VoiceOver/NVDA 实机验证；DESIGN-002 整体 validity、协作操作和真实 ASR 缺口。以上均已登记 `docs/engineering-todo.md`「DESIGN-002 待处理收件箱后续」。改动已隔离提交并进入主线集成流程；未部署到正在运行的 Pegas，不能把候选验证表述为线上验证。
