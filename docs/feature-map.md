@@ -2,7 +2,7 @@
 
 > 状态：Living Document
 >
-> 更新日期：2026-11-22（DESIGN-004 字号/字重/层级收敛登记；PLAN-001 P2–P6 路由/执行/可观测性落地；DESIGN-003 聊天体验；CONV-005 链接悬停预览卡片）
+> 更新日期：2026-11-22（QUALITY-001 CI actions 升级 node24 登记；DESIGN-004 字号/字重/层级收敛；PLAN-001 P2–P6 路由/执行/可观测性落地；DESIGN-003 聊天体验；CONV-005 链接悬停预览卡片）
 
 Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查这里和代码，确认能力是否已经存在、权威实现在哪里、还缺什么；功能合入时必须同步更新对应条目。它不代替 Issue 或路线图，而是防止同一能力被不同入口重复实现。
 
@@ -93,6 +93,20 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - **合并后复验（2026-11-22）**：合入 `main`（`ce72590`，含 node_modules symlink 清理与 DESKTOP-001 smoke 选择器修复）后复跑完整门禁：`pnpm check` 93 个测试文件 / 902 个测试全绿（statement 84.91%、branch 77.8%、function 89.51%、line 88.15%）；`pnpm smoke`、`pnpm review:ui -- --force`（66 截图+几何断言）、`pnpm a11y:review`（0 违例）、`pnpm smoke:desktop`（Electron macOS）全部通过。
 - **阶段 4–5 证据（2026-11-22）**：标题 `text-wrap: balance` 全局生效；26px 大标题统一行高 1.2/字距 -0.03em，20px 区块标题行高 1.25/字距 -0.02em（page-header/welcome/about/setup/access/settings-heading/drawer/empty-capability/settings-nav/provider/usage-metrics）。删除 `.file-preview` 死代码（ui-serif 一并移除）、抽屉 eyebrow（`drawerEyebrow` 函数与 `<small>`）、state-hero 冗余状态小标（任务与交付审查两处，审查结论并入正文保留 outcomeLabel 事实）、`.provider-detail h4 b` 计数药丸（改纯文本「可用模型（N）」）、`.composer-queue-position` 序号徽章。修正：worker-_.png 是 `scripts/generate-brand-icons.mjs` 生成 agent-_.webp 的源图，非死资产，保留。`test/sealed-ui-typography.test.ts` 扩至 14 测试（新增 6 项先红后绿）；`App.test.tsx` 审查抽屉断言随文案合并更新。完整门禁：`pnpm check` 93 文件 / 908 测试全绿（statement 84.89%、branch 77.76%、function 89.5%、line 88.14%）；`pnpm smoke`、`pnpm review:ui -- --force`（66 截图+几何断言）、`pnpm a11y:review`（0 违例）、`pnpm smoke:desktop` 通过；目检对话/抽屉/设置/用量/引导/移动端截图确认无回归。
 - **二次合并复验（2026-11-22）**：合入 `main`（`29cb57b`，EXEC-007 legacy session 重开 + CONV-005 链接预览不可用重试）后，将 CONV-005 新增的 `12.5px` 一次性字号收敛为 `--text-caption`（13px 提示文本）与 `--text-small`（12px 重试按钮，邻近文本 -1px）。复跑完整门禁：`pnpm check` 93 文件 / 911 测试全绿（statement 84.89%、branch 77.78%、function 89.53%、line 88.15%；首轮 dsh-cli-executor 一例并行计时抖动，隔离与复跑均稳定通过）；`pnpm smoke`、`pnpm review:ui -- --force`、`pnpm a11y:review`（0 违例）、`pnpm smoke:desktop` 全部通过。
+
+### QUALITY-001：CI actions 升级 node24 运行时（2026-11-22）
+
+- **用户结果**：CI 不再出现「Node.js 20 is deprecated … forced to run on Node.js 24」弃用警告；workflow 使用的 GitHub Actions 全部运行在官方 node24 运行时上，避免未来 GitHub 强制切换带来的不确定性。
+- **验收条件**：
+  1. `.github/workflows/ci.yml` 中 `actions/checkout`、`actions/setup-node`、`actions/upload-artifact` 升级到 v7，`pnpm/action-setup` 升级到 v6（四者 action.yml 均声明 `using: node24`）。
+  2. 现有用法保持兼容：checkout 的 `fetch-depth: 0` 与 PR head `ref`、setup-node 的 `node-version: 24` + `cache: pnpm`、pnpm-action-setup 的 `version: 11.25.0`、upload-artifact 的 name/path/retention/if-no-files-found 参数不变；不使用 NODE_AUTH_TOKEN/registry（setup-node v7 移除 dummy token 导出对本仓库无影响）。
+  3. 新增自动化回归：解析 ci.yml 断言四个 action 的主版本 ≥ node24 最低版本（checkout/setup-node/upload-artifact ≥7、pnpm/action-setup ≥6），先失败后通过。
+  4. `pnpm check`、`pnpm smoke` 全绿；推送后远程 CI run success 且不再出现 Node.js 20 弃用 annotation。
+- **非目标**：不改变 CI 触发条件、job 结构、review 证据流程与 Candidate 绑定语义；不升级 Node 版本本身（已为 24）；不引入 SHA pinning 或 Dependabot（另行登记）。
+- **数据与权限边界**：纯 CI 配置变更，无数据库、API、权限或运行时影响；`permissions: contents: read` 不变。
+- **失败与恢复**：若新版本 action 在 CI 上行为异常，revert 本提交即恢复 v4/v5 行为；本地门禁不依赖远程 action 版本，可独立验证。
+- **当前证据（2026-11-22）**：worktree `quality-001-ci-node24`（分支 `feat/QUALITY-001-ci-node24`，基线 `3621a49`）。`.github/workflows/ci.yml` 四个 action 升级：checkout v4→v7、setup-node v4→v7、upload-artifact v4→v7、pnpm/action-setup v4→v6（经 gh api 核实四者 action.yml 均 `using: node24`；setup-node v7 移除 dummy NODE_AUTH_TOKEN 导出，本仓库未使用，无影响）。新增 `test/ci-actions-runtime.test.ts` 5 测试（四个 action 主版本下限 + PR head ref/node24 工具链不变），先红后绿。完整门禁：`pnpm check` 94 文件 / 918 测试全绿（statement 84.9%、branch 77.78%、function 89.53%、line 88.16%），格式、品牌资产、Lint、类型、Knip 与三端构建通过；`pnpm smoke` 通过。
+- **交付状态**：`DONE_WITH_CONCERNS`（待推送验证远程 CI annotation 消失）。回滚只需 revert 本提交；纯 CI 配置变更，无数据库/API/运行时影响。
 
 ### TASK-001：Task/Run 完整状态迁移（2026-11-21）
 
