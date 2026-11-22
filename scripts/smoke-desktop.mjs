@@ -47,7 +47,7 @@ try {
   await window
     .getByRole('textbox', { name: '给 Pegas 发消息' })
     .fill(smokeMessage)
-  await window.getByRole('button', { name: '发送' }).click()
+  await window.getByRole('button', { name: '发送', exact: true }).click()
   await waitForCompletedRun(window, smokeMessage)
   assert.equal(await window.title(), '对话 · Pegas')
   const security = await application.evaluate(({ BrowserWindow }) => {
