@@ -633,22 +633,30 @@ try {
           .filter({ hasText: '搜索了 2 次' })
           .click()
         await fixturePage
-          .locator('.activity-tool')
-          .filter({ hasText: '1/4' })
+          .locator('.activity-todo-fold')
           .locator('summary')
+          .first()
           .click()
         await fixturePage
-          .locator('.activity-tool')
+          .locator('.activity-todo-fold .todo-history > summary')
+          .click()
+        await fixturePage
+          .locator('.activity-batch .activity-tool')
           .filter({ hasText: '搜索命中' })
           .locator('summary')
           .click()
         await fixturePage
-          .locator('.activity-tool')
+          .locator('.activity-batch .activity-tool')
           .filter({ hasText: '匹配了文件' })
           .locator('summary')
           .click()
         await fixturePage
-          .locator('.activity-card.todo-card')
+          .locator('.activity-tool')
+          .filter({ hasText: '你回答了提问' })
+          .locator('summary')
+          .click()
+        await fixturePage
+          .locator('.activity-card.ask-card')
           .first()
           .scrollIntoViewIfNeeded()
       }

@@ -1,4 +1,6 @@
 import type {
+  AskAnswer,
+  AskQuestion,
   DiffHunk,
   SearchFileHits,
   TodoItem,
@@ -20,6 +22,9 @@ const MAX_SEARCH_PATHS = 200
 const MAX_SEARCH_LINE_CHARACTERS = 300
 const MAX_TODO_ITEMS = 50
 const MAX_TODO_CONTENT_CHARACTERS = 300
+const MAX_ASK_QUESTIONS = 8
+const MAX_ASK_OPTIONS = 8
+const MAX_ASK_TEXT_CHARACTERS = 500
 const CONTEXT_LINES = 3
 const RESULT_SEPARATOR = '\n[结果]\n'
 
@@ -61,6 +66,8 @@ export function buildToolSemantic(
       return searchSemantic(call.tool, args, result)
     case 'todo_write':
       return todoSemantic(args)
+    case 'ask_user_question':
+      return askUserSemantic(args, result)
     case 'web_fetch':
     case 'web_search':
     case 'web_run':
@@ -762,4 +769,133 @@ function todoSemantic(args: Record<string, unknown>): ToolSemantic {
     items,
     ...(dropped ? { itemsTruncated: true } : {}),
   }
+}
+
+/**
+ * Projects ask_user_question calls: the question batch from the arguments
+ * and the answer batch (or the timed `pending` notice) from the JSON result.
+ * A running call has no result yet; an unparsable result keeps the preview
+ * fallback instead of inventing answers.
+ */
+function askUserSemantic(
+  args: Record<string, unknown>,
+  result: string | undefined,
+): ToolSemantic {
+  const questions = parseAskQuestions(args.questions)
+  if (!questions) return { kind: 'unknown' }
+  const outcome = parseAskOutcome(result)
+  const preview =
+    result === undefined || outcome
+      ? undefined
+      : clip(result, MAX_PREVIEW_CHARACTERS)
+  return {
+    kind: 'ask_user',
+    questions,
+    ...(outcome && 'answers' in outcome ? { answers: outcome.answers } : {}),
+    ...(outcome && 'pending' in outcome ? { pending: true } : {}),
+    ...(preview
+      ? {
+          preview: preview.text,
+          ...(preview.truncated ? { previewTruncated: true } : {}),
+        }
+      : {}),
+  }
+}
+
+function parseAskQuestions(raw: unknown): AskQuestion[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const questions: AskQuestion[] = []
+  for (const entry of raw) {
+    if (questions.length >= MAX_ASK_QUESTIONS) break
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue
+    const record = entry as Record<string, unknown>
+    const id = record.id
+    const question = record.question
+    if (
+      typeof id !== 'string' ||
+      !id.trim() ||
+      typeof question !== 'string' ||
+      !question.trim()
+    ) {
+      continue
+    }
+    const header = record.header
+    const options = parseAskOptions(record.options)
+    questions.push({
+      id: id.slice(0, 120),
+      question: question.trim().slice(0, MAX_ASK_TEXT_CHARACTERS),
+      ...(typeof header === 'string' && header.trim()
+        ? { header: header.trim().slice(0, 80) }
+        : {}),
+      ...(options ? { options } : {}),
+      ...(record.multi_select === true ? { multiSelect: true } : {}),
+    })
+  }
+  return questions.length > 0 ? questions : undefined
+}
+
+function parseAskOptions(
+  raw: unknown,
+): { label: string; description?: string }[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const options: { label: string; description?: string }[] = []
+  for (const entry of raw) {
+    if (options.length >= MAX_ASK_OPTIONS) break
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue
+    const record = entry as Record<string, unknown>
+    const label = record.label
+    if (typeof label !== 'string' || !label.trim()) continue
+    const description = record.description
+    options.push({
+      label: label.trim().slice(0, 200),
+      ...(typeof description === 'string' && description.trim()
+        ? { description: description.trim().slice(0, MAX_ASK_TEXT_CHARACTERS) }
+        : {}),
+    })
+  }
+  return options.length > 0 ? options : undefined
+}
+
+function parseAskOutcome(
+  result: string | undefined,
+): { answers: AskAnswer[] } | { pending: true } | undefined {
+  if (result === undefined) return undefined
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(result) as unknown
+  } catch {
+    return undefined
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return undefined
+  }
+  const record = parsed as Record<string, unknown>
+  if (record.pending === true) return { pending: true }
+  if (!Array.isArray(record.answers)) return undefined
+  const answers: AskAnswer[] = []
+  for (const entry of record.answers) {
+    if (answers.length >= MAX_ASK_QUESTIONS) break
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue
+    const answer = entry as Record<string, unknown>
+    const id = answer.id
+    if (typeof id !== 'string' || !id.trim()) continue
+    const selected = Array.isArray(answer.selected)
+      ? answer.selected
+          .filter(
+            (item): item is string =>
+              typeof item === 'string' && item.trim() !== '',
+          )
+          .slice(0, MAX_ASK_OPTIONS)
+          .map(item => item.slice(0, 200))
+      : []
+    const custom = answer.custom
+    answers.push({
+      id: id.slice(0, 120),
+      selected,
+      ...(typeof custom === 'string' && custom.trim()
+        ? { custom: custom.trim().slice(0, MAX_ASK_TEXT_CHARACTERS) }
+        : {}),
+    })
+  }
+  return { answers }
 }

@@ -6563,6 +6563,154 @@ describe('sealed Pegas UI', () => {
     expect(within(drawer).getByText('没有命中任何行。')).toBeTruthy()
   })
 
+  it('folds consecutive todo snapshots and renders ask_user question rows', async () => {
+    const todoItems = (
+      active: number,
+    ): Extract<RunActivityEntry['semantic'], { kind: 'todo' }>['items'] => [
+      { content: '读取现有实现', status: 'completed' },
+      {
+        content: '补齐语义投影',
+        status: active >= 1 ? 'completed' : 'in_progress',
+      },
+      {
+        content: '跑完整门禁',
+        status: active >= 1 ? 'in_progress' : 'pending',
+      },
+    ]
+    const entries: RunActivityEntry[] = [
+      {
+        seq: 1,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-todo-1',
+        tool: 'todo_write',
+        label: 'todo_write',
+        semantic: { kind: 'todo', items: todoItems(0) },
+        createdAt: '2026-11-19T08:00:10.000Z',
+        updatedAt: '2026-11-19T08:00:12.000Z',
+      },
+      {
+        seq: 2,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-todo-2',
+        tool: 'todo_write',
+        label: 'todo_write',
+        semantic: { kind: 'todo', items: todoItems(1) },
+        createdAt: '2026-11-19T08:00:14.000Z',
+        updatedAt: '2026-11-19T08:00:16.000Z',
+      },
+      {
+        seq: 3,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-ask',
+        tool: 'ask_user_question',
+        label: 'ask_user_question',
+        semantic: {
+          kind: 'ask_user',
+          questions: [
+            {
+              id: 'scope',
+              question: '先做哪一部分？',
+              header: '范围',
+              options: [
+                { label: '语义投影 (Recommended)', description: '先打通数据' },
+                { label: '只做 UI' },
+              ],
+            },
+            { id: 'confirm', question: '可以开始吗？' },
+          ],
+          answers: [
+            { id: 'scope', selected: ['语义投影 (Recommended)'] },
+            { id: 'confirm', selected: [], custom: '可以，注意门禁' },
+          ],
+        },
+        createdAt: '2026-11-19T08:00:18.000Z',
+        updatedAt: '2026-11-19T08:00:20.000Z',
+      },
+      {
+        seq: 4,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-ask-pending',
+        tool: 'ask_user_question',
+        label: 'ask_user_question',
+        semantic: {
+          kind: 'ask_user',
+          questions: [{ id: 'retry', question: '要重跑门禁吗？' }],
+          pending: true,
+        },
+        createdAt: '2026-11-19T08:00:22.000Z',
+        updatedAt: '2026-11-19T08:00:24.000Z',
+      },
+      {
+        seq: 5,
+        kind: 'tool_call',
+        status: 'started',
+        callId: 'call-ask-running',
+        tool: 'ask_user_question',
+        label: 'ask_user_question',
+        semantic: {
+          kind: 'ask_user',
+          questions: [{ id: 'go', question: '现在合并吗？' }],
+        },
+        createdAt: '2026-11-19T08:00:26.000Z',
+        updatedAt: '2026-11-19T08:00:26.000Z',
+      },
+    ]
+    installSnapshotFetch(
+      {
+        ...snapshot,
+        channels: [{ ...channel, status: 'completed', canStop: false }],
+        runs: [{ ...run, status: 'completed', output: '完成。' }],
+      },
+      path => {
+        if (!path.startsWith('/v1/runs/run-1/activity?')) return undefined
+        return Response.json({
+          runId: 'run-1',
+          taskId: channel.id,
+          totalEntries: entries.length,
+          truncated: false,
+          entries,
+        })
+      },
+    )
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: new RegExp(channel.title) }),
+    )
+    const drawer = await screen.findByRole('dialog', { name: '工作详情' })
+    fireEvent.click(await within(drawer).findByText(/工作流程记录/))
+    const foldHeadline = (await within(drawer).findAllByText('更新任务清单'))[0]
+    if (!foldHeadline) throw new Error('expected todo fold headline')
+    expect(within(drawer).getByText(/2\/3 · 跑完整门禁/)).toBeTruthy()
+    expect(drawer.querySelectorAll('.activity-todo-fold').length).toBe(1)
+    fireEvent.click(foldHeadline)
+    expect(within(drawer).getByText('2/3 已完成')).toBeTruthy()
+    const historySummary = within(drawer).getByText(/历史快照 · 1 次更早写入/)
+    fireEvent.click(historySummary)
+    expect(within(drawer).getByText('1/3 已完成')).toBeTruthy()
+    const askHeadline = within(drawer).getAllByText('你回答了提问')[0]
+    if (!askHeadline) throw new Error('expected ask headline')
+    expect(within(drawer).getByText('2/2 已答')).toBeTruthy()
+    fireEvent.click(askHeadline)
+    expect(within(drawer).getByText('先做哪一部分？')).toBeTruthy()
+    expect(within(drawer).getByText('范围')).toBeTruthy()
+    expect(drawer.querySelectorAll('.ask-options .is-selected').length).toBe(1)
+    expect(within(drawer).getByText('回答：可以，注意门禁')).toBeTruthy()
+    const pendingHeadline = within(drawer).getAllByText('提问待回答')[0]
+    if (!pendingHeadline) throw new Error('expected pending headline')
+    fireEvent.click(pendingHeadline)
+    expect(within(drawer).getByText('超时未答，问题仍可回答')).toBeTruthy()
+    const runningHeadline = within(drawer).getAllByText('正在等待你的回答')[0]
+    if (!runningHeadline) throw new Error('expected running headline')
+    fireEvent.click(runningHeadline)
+    expect(within(drawer).getByText('等待回答中')).toBeTruthy()
+  })
+
   it('keeps honest fallbacks for legacy and unknown tool records', async () => {
     installSnapshotFetch(
       {

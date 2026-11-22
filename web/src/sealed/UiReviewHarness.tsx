@@ -508,6 +508,76 @@ function todoSearchEntries(): RunActivityEntry[] {
         ],
       },
     }),
+    activityEntry(6, {
+      tool: 'todo_write',
+      label: 'todo_write',
+      detail: JSON.stringify({
+        todos: [
+          { content: '读取 activity API 现有实现', status: 'completed' },
+          { content: '定位 runActivity 调用点', status: 'completed' },
+          { content: '补齐语义投影回归测试', status: 'completed' },
+          { content: '跑完整门禁并截图对比', status: 'in_progress' },
+        ],
+      }),
+      semantic: {
+        kind: 'todo',
+        items: [
+          { content: '读取 activity API 现有实现', status: 'completed' },
+          { content: '定位 runActivity 调用点', status: 'completed' },
+          { content: '补齐语义投影回归测试', status: 'completed' },
+          { content: '跑完整门禁并截图对比', status: 'in_progress' },
+        ],
+      },
+    }),
+    activityEntry(7, {
+      tool: 'ask_user_question',
+      label: 'ask_user_question',
+      detail: JSON.stringify({
+        questions: [
+          {
+            id: 'gate',
+            question: '门禁全绿后直接合入 main 吗？',
+            header: '合并方式',
+            options: [
+              {
+                label: '走 PR + CI (Recommended)',
+                description: '留下可审查记录',
+              },
+              { label: '直接本地合并', description: '更快但少一道审查' },
+            ],
+          },
+        ],
+      }),
+      semantic: {
+        kind: 'ask_user',
+        questions: [
+          {
+            id: 'gate',
+            question: '门禁全绿后直接合入 main 吗？',
+            header: '合并方式',
+            options: [
+              {
+                label: '走 PR + CI (Recommended)',
+                description: '留下可审查记录',
+              },
+              { label: '直接本地合并', description: '更快但少一道审查' },
+            ],
+          },
+        ],
+        answers: [{ id: 'gate', selected: ['走 PR + CI (Recommended)'] }],
+      },
+    }),
+    activityEntry(8, {
+      tool: 'ask_user_question',
+      label: 'ask_user_question',
+      detail:
+        '{"questions":[{"id":"deploy","question":"要顺带切换运行版本吗？"}]}',
+      semantic: {
+        kind: 'ask_user',
+        questions: [{ id: 'deploy', question: '要顺带切换运行版本吗？' }],
+        pending: true,
+      },
+    }),
   ]
 }
 

@@ -456,6 +456,94 @@ describe('EXEC-006 tool semantics projection', () => {
     ).toEqual({ kind: 'unknown' })
   })
 
+  it('projects ask_user_question batches with answers, skips and pending', () => {
+    const input = JSON.stringify({
+      questions: [
+        {
+          id: 'scope',
+          question: '先做哪一部分？',
+          header: '范围',
+          options: [
+            { label: '语义投影 (Recommended)', description: '先打通数据' },
+            { label: '只做 UI' },
+          ],
+        },
+        { id: 'confirm', question: '可以开始吗？', multi_select: false },
+      ],
+    })
+    const answered = buildToolSemantic(
+      { tool: 'ask_user_question', input },
+      {
+        status: 'completed',
+        result: JSON.stringify({
+          answers: [
+            { id: 'scope', selected: ['语义投影 (Recommended)'] },
+            { id: 'confirm', selected: [], custom: '可以，注意门禁' },
+          ],
+        }),
+      },
+    )
+    expect(answered).toMatchObject({
+      kind: 'ask_user',
+      questions: [
+        {
+          id: 'scope',
+          question: '先做哪一部分？',
+          header: '范围',
+          options: [
+            { label: '语义投影 (Recommended)', description: '先打通数据' },
+            { label: '只做 UI' },
+          ],
+        },
+        { id: 'confirm', question: '可以开始吗？' },
+      ],
+      answers: [
+        { id: 'scope', selected: ['语义投影 (Recommended)'] },
+        { id: 'confirm', selected: [], custom: '可以，注意门禁' },
+      ],
+    })
+    if (answered.kind !== 'ask_user') throw new Error('expected ask_user')
+    expect(answered.pending).toBeUndefined()
+    expect(answered.preview).toBeUndefined()
+    const skipped = buildToolSemantic(
+      { tool: 'ask_user_question', input },
+      {
+        status: 'completed',
+        result: '{"answers":[{"id":"scope","selected":[]}]}',
+      },
+    )
+    expect(skipped).toMatchObject({
+      kind: 'ask_user',
+      answers: [{ id: 'scope', selected: [] }],
+    })
+    const pending = buildToolSemantic(
+      { tool: 'ask_user_question', input },
+      {
+        status: 'completed',
+        result:
+          '{"pending":true,"callId":"call-1","message":"No answer batch arrived before the timeout."}',
+      },
+    )
+    expect(pending).toMatchObject({ kind: 'ask_user', pending: true })
+    if (pending.kind !== 'ask_user') throw new Error('expected ask_user')
+    expect(pending.answers).toBeUndefined()
+    const running = buildToolSemantic({ tool: 'ask_user_question', input })
+    expect(running).toMatchObject({ kind: 'ask_user' })
+    if (running.kind !== 'ask_user') throw new Error('expected ask_user')
+    expect(running.answers).toBeUndefined()
+    expect(running.pending).toBeUndefined()
+    const foreign = buildToolSemantic(
+      { tool: 'ask_user_question', input },
+      { status: 'completed', result: 'free-form answer text' },
+    )
+    if (foreign.kind !== 'ask_user') throw new Error('expected ask_user')
+    expect(foreign.answers).toBeUndefined()
+    expect(foreign.preview).toBe('free-form answer text')
+    expect(
+      buildToolSemantic({ tool: 'ask_user_question', input: '{}' }),
+    ).toEqual({ kind: 'unknown' })
+  })
+
   it('splits legacy merged detail strings without losing content', () => {
     expect(splitToolDetail('{"command":"ls"}\n[结果]\nfile-a')).toEqual({
       input: '{"command":"ls"}',

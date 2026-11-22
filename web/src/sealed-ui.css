@@ -3901,6 +3901,100 @@ kbd {
 .todo-list .is-in_progress .todo-status {
   color: var(--accent-ink, var(--accent));
 }
+.todo-history {
+  border-top: 1px dashed var(--line);
+  margin: 0 12px;
+  padding: 6px 0 8px;
+}
+.todo-history > summary {
+  align-items: center;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  font-size: var(--text-tiny);
+  gap: 6px;
+  list-style: none;
+}
+.todo-history > summary .activity-chevron {
+  margin-left: auto;
+}
+.todo-history[open] > summary .activity-chevron {
+  transform: rotate(180deg);
+}
+.todo-history .activity-batch-items {
+  padding: 6px 0 0;
+}
+.ask-questions {
+  display: grid;
+}
+.ask-question {
+  border-bottom: 1px dashed var(--line);
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 12px;
+}
+.ask-question:last-child {
+  border-bottom: none;
+}
+.ask-question > small {
+  color: var(--muted);
+  font-size: var(--text-tiny);
+}
+.ask-question-text {
+  font-size: var(--text-small);
+  font-weight: 500;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.ask-options {
+  display: grid;
+  gap: 4px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.ask-options li {
+  align-items: baseline;
+  color: var(--ink-soft);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: var(--text-small);
+  gap: 6px;
+  min-width: 0;
+}
+.ask-option-marker {
+  align-self: center;
+  color: var(--positive);
+  display: inline-flex;
+  flex: none;
+  width: 12px;
+}
+.ask-options .is-selected .ask-option-label {
+  color: var(--ink);
+  font-weight: 500;
+}
+.ask-option-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.ask-options small {
+  color: var(--muted);
+  flex-basis: 100%;
+  font-size: var(--text-tiny);
+  padding-left: 18px;
+}
+.ask-custom {
+  color: var(--ink-soft);
+  font-size: var(--text-small);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.ask-skipped {
+  color: var(--muted);
+  font-size: var(--text-tiny);
+  margin: 0;
+}
 .search-files {
   display: grid;
   gap: 0;

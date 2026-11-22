@@ -331,6 +331,14 @@ export type ToolSemantic =
       itemsTruncated?: boolean
     }
   | {
+      kind: 'ask_user'
+      questions: AskQuestion[]
+      answers?: AskAnswer[]
+      pending?: boolean
+      preview?: string
+      previewTruncated?: boolean
+    }
+  | {
       kind: 'web'
       url?: string
       query?: string
@@ -368,6 +376,20 @@ export interface SearchFileHits {
 export interface TodoItem {
   content: string
   status: 'pending' | 'in_progress' | 'completed'
+}
+
+export interface AskQuestion {
+  id: string
+  question: string
+  header?: string
+  options?: { label: string; description?: string }[]
+  multiSelect?: boolean
+}
+
+export interface AskAnswer {
+  id: string
+  selected: string[]
+  custom?: string
 }
 
 export interface DiffHunk {

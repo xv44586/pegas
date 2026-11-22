@@ -8,6 +8,7 @@ import {
   FilePen,
   FileText,
   Globe,
+  History,
   ListChecks,
   LoaderCircle,
   Network,
@@ -45,6 +46,12 @@ export function ActivityTimeline({
             entries={unit.entries}
             group={unit.group}
             key={unit.key}
+          />
+        ) : unit.kind === 'todo' ? (
+          <TodoFoldUnit
+            history={unit.history}
+            key={unit.key}
+            latest={unit.latest}
           />
         ) : (
           <ActivityEntryRow
@@ -89,6 +96,8 @@ function entryIcon(entry: RunActivityEntry) {
       return groupIcon('search')
     case 'todo':
       return <ListChecks size={14} />
+    case 'ask_user':
+      return <CircleHelp size={14} />
     case 'web':
       return groupIcon('web')
     case 'agent_control':
@@ -272,6 +281,8 @@ function ToolResultBody({ entry }: { entry: RunActivityEntry }) {
       return <AgentControlCard entry={entry} semantic={semantic} />
     case 'todo':
       return <TodoCard entry={entry} semantic={semantic} />
+    case 'ask_user':
+      return <AskUserCard entry={entry} semantic={semantic} />
     case 'search':
       return semantic.shape ? (
         <SearchCard entry={entry} semantic={semantic} />
@@ -514,6 +525,56 @@ function PreviewCard({
   )
 }
 
+function TodoFoldUnit({
+  latest,
+  history,
+}: {
+  latest: RunActivityEntry
+  history: RunActivityEntry[]
+}) {
+  if (history.length === 0) return <ToolEntryRow entry={latest} />
+  const headline = toolHeadline(latest)
+  return (
+    <li className="activity-tool activity-todo-fold">
+      <details>
+        <summary>
+          <span className="activity-icon" aria-hidden="true">
+            <ListChecks size={14} />
+          </span>
+          <span className="activity-label">
+            <span className="activity-title">{headline.title}</span>
+            {headline.subject && (
+              <span className="activity-subject"> {headline.subject}</span>
+            )}
+          </span>
+          <ChevronDown
+            aria-hidden="true"
+            className="activity-chevron"
+            size={14}
+          />
+        </summary>
+        <ToolResultBody entry={latest} />
+        <details className="todo-history">
+          <summary>
+            <History aria-hidden="true" size={13} />
+            <span>历史快照 · {String(history.length)} 次更早写入</span>
+            <ChevronDown
+              aria-hidden="true"
+              className="activity-chevron"
+              size={13}
+            />
+          </summary>
+          <ol className="activity-batch-items" role="list">
+            {history.map(entry => (
+              <ActivityEntryRow entry={entry} key={entry.seq} />
+            ))}
+          </ol>
+        </details>
+      </details>
+    </li>
+  )
+}
+
 function TodoCard({
   entry,
   semantic,
@@ -581,6 +642,108 @@ function todoStatusLabel(
     : status === 'in_progress'
       ? '进行中'
       : '待办'
+}
+
+function AskUserCard({
+  entry,
+  semantic,
+}: {
+  entry: RunActivityEntry
+  semantic: Extract<ToolSemantic, { kind: 'ask_user' }>
+}) {
+  const running = entry.status === 'started'
+  const failed = entry.status === 'error'
+  const answers = new Map(
+    (semantic.answers ?? []).map(answer => [answer.id, answer]),
+  )
+  const copyText = semantic.questions
+    .map(question => {
+      const answer = answers.get(question.id)
+      const reply = answer
+        ? [...answer.selected, ...(answer.custom ? [answer.custom] : [])].join(
+            '、',
+          ) || '（已跳过）'
+        : undefined
+      return `${question.question}${reply ? `\n回答：${reply}` : ''}`
+    })
+    .join('\n\n')
+  return (
+    <div className="activity-card ask-card">
+      <header className="activity-card-header">
+        <span>向用户提问</span>
+        <span className="preview-meta">
+          {String(semantic.questions.length)} 个问题
+        </span>
+        <CopyAction label="复制问答" text={copyText} />
+      </header>
+      <div className="ask-questions">
+        {semantic.questions.map(question => {
+          const answer = answers.get(question.id)
+          const skipped = answer?.selected.length === 0 && !answer.custom
+          return (
+            <section className="ask-question" key={question.id}>
+              {question.header && <small>{question.header}</small>}
+              <p className="ask-question-text">{question.question}</p>
+              {question.options && question.options.length > 0 && (
+                <ol className="ask-options" role="list">
+                  {question.options.map(option => {
+                    const selected = answer?.selected.includes(option.label)
+                    return (
+                      <li
+                        className={selected ? 'is-selected' : undefined}
+                        key={option.label}
+                      >
+                        <span aria-hidden="true" className="ask-option-marker">
+                          {selected ? <Check size={12} /> : <span />}
+                        </span>
+                        <span className="ask-option-label">{option.label}</span>
+                        {option.description && (
+                          <small>{option.description}</small>
+                        )}
+                      </li>
+                    )
+                  })}
+                </ol>
+              )}
+              {answer?.custom && (
+                <p className="ask-custom">回答：{answer.custom}</p>
+              )}
+              {skipped && <p className="ask-skipped">已跳过这个问题</p>}
+              {question.multiSelect && !answer && (
+                <p className="ask-skipped">可多选</p>
+              )}
+            </section>
+          )
+        })}
+      </div>
+      {semantic.preview && (
+        <pre className="preview-body" tabIndex={0}>
+          {semantic.preview}
+        </pre>
+      )}
+      {semantic.previewTruncated && (
+        <p className="activity-empty">内容过长，仅保留前段预览。</p>
+      )}
+      {(running || semantic.pending === true || failed) && (
+        <footer className={`shell-footer is-${failed ? 'error' : 'running'}`}>
+          {!failed && (
+            <LoaderCircle
+              aria-hidden="true"
+              className="activity-spinner"
+              size={12}
+            />
+          )}
+          <span>
+            {failed
+              ? '失败'
+              : running
+                ? '等待回答中'
+                : '超时未答，问题仍可回答'}
+          </span>
+        </footer>
+      )}
+    </div>
+  )
 }
 
 function SearchCard({
