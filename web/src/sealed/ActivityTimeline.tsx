@@ -20,9 +20,15 @@ import {
   SquareTerminal,
 } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { createContext, useContext } from 'react'
 
 import { MarkdownMessage } from '../MarkdownMessage'
 import type { RunActivityEntry, ToolSemantic } from '../types'
+import {
+  tokenizeCodeLine,
+  tokenizeShell,
+  type HighlightToken,
+} from './activityHighlight'
 import {
   batchRunningLabel,
   batchSummary,
@@ -36,46 +42,79 @@ import {
 } from './activityModel'
 import { formatRelativeTime } from './types'
 
+/**
+ * Per-Run data access for output paging and image thumbnails. Child
+ * transcript rows carry session-local call ids, so their entries are served
+ * without archive/thumbnail access — honestly metadata-only.
+ */
+export interface ActivityDataAccess {
+  runId: string
+  loadOutputPage: (
+    runId: string,
+    callId: string,
+    offset: number,
+  ) => Promise<{
+    content: string
+    offset: number
+    totalCharacters: number
+    archivedCharacters: number
+    truncatedArchive: boolean
+  }>
+  imageUrl: (runId: string, callId: string) => string
+}
+
+const ActivityDataContext = createContext<ActivityDataAccess | undefined>(
+  undefined,
+)
+
 export function ActivityTimeline({
   entries,
   renderDelegation,
+  dataAccess,
+  onReviewJump,
 }: {
   entries: readonly RunActivityEntry[]
   renderDelegation?: (entry: RunActivityEntry) => ReactNode
+  dataAccess?: ActivityDataAccess
+  onReviewJump?: () => void
 }) {
   const units = groupActivityEntries(entries)
   const changes = summarizeRunChanges(entries)
   return (
-    <ol className="activity-timeline" role="list">
-      {changes && <RunChangesCard changes={changes} />}
-      {units.map(unit =>
-        unit.kind === 'batch' ? (
-          <ActivityBatch
-            entries={unit.entries}
-            group={unit.group}
-            key={unit.key}
-          />
-        ) : unit.kind === 'todo' ? (
-          <TodoFoldUnit
-            history={unit.history}
-            key={unit.key}
-            latest={unit.latest}
-          />
-        ) : unit.kind === 'thinking' ? (
-          <ThinkingFoldUnit
-            history={unit.history}
-            key={unit.key}
-            latest={unit.latest}
-          />
-        ) : (
-          <ActivityEntryRow
-            entry={unit.entry}
-            key={unit.key}
-            renderDelegation={renderDelegation}
-          />
-        ),
-      )}
-    </ol>
+    <ActivityDataContext.Provider value={dataAccess}>
+      <ol className="activity-timeline" role="list">
+        {changes && (
+          <RunChangesCard changes={changes} onReviewJump={onReviewJump} />
+        )}
+        {units.map(unit =>
+          unit.kind === 'batch' ? (
+            <ActivityBatch
+              entries={unit.entries}
+              group={unit.group}
+              key={unit.key}
+            />
+          ) : unit.kind === 'todo' ? (
+            <TodoFoldUnit
+              history={unit.history}
+              key={unit.key}
+              latest={unit.latest}
+            />
+          ) : unit.kind === 'thinking' ? (
+            <ThinkingFoldUnit
+              history={unit.history}
+              key={unit.key}
+              latest={unit.latest}
+            />
+          ) : (
+            <ActivityEntryRow
+              entry={unit.entry}
+              key={unit.key}
+              renderDelegation={renderDelegation}
+            />
+          ),
+        )}
+      </ol>
+    </ActivityDataContext.Provider>
   )
 }
 
@@ -368,7 +407,7 @@ function ShellCard({
         <span aria-hidden="true" className="shell-prompt">
           ${' '}
         </span>
-        {semantic.command}
+        <HighlightedText tokens={tokenizeShell(semantic.command)} />
       </pre>
       {output && (
         <pre className="shell-output" tabIndex={0}>
@@ -376,7 +415,7 @@ function ShellCard({
         </pre>
       )}
       {semantic.outputTruncated && (
-        <p className="activity-empty">输出过长，仅保留前段记录。</p>
+        <OutputPager entry={entry} initialLength={output.length} />
       )}
       <footer className={`shell-footer is-${footer.tone}`}>
         {footer.tone === 'ok' && <Check aria-hidden="true" size={13} />}
@@ -389,6 +428,110 @@ function ShellCard({
         )}
         <span>{footer.label}</span>
       </footer>
+    </div>
+  )
+}
+
+function HighlightedText({ tokens }: { tokens: HighlightToken[] }) {
+  return (
+    <>
+      {tokens.map((token, index) =>
+        token.kind ? (
+          <span className={`hl-${token.kind}`} key={index}>
+            {token.text}
+          </span>
+        ) : (
+          <span key={index}>{token.text}</span>
+        ),
+      )}
+    </>
+  )
+}
+
+/**
+ * EXEC-006 P1b: pages the archived full output beyond the inline 12KB clip.
+ * The button only appears when the Run has an output archive endpoint; the
+ * archive itself is capped and says so honestly.
+ */
+function OutputPager({
+  entry,
+  initialLength,
+}: {
+  entry: RunActivityEntry
+  initialLength: number
+}) {
+  const access = useContext(ActivityDataContext)
+  const [pages, setPages] = useState<string[]>([])
+  const [state, setState] = useState<'idle' | 'loading' | 'done' | 'error'>(
+    'idle',
+  )
+  const [archiveNote, setArchiveNote] = useState('')
+  const offsetRef = useRef(initialLength)
+  if (!access || !entry.callId) {
+    return <p className="activity-empty">输出过长，仅保留前段记录。</p>
+  }
+  const callId = entry.callId
+  const loadMore = async () => {
+    setState('loading')
+    try {
+      const page = await access.loadOutputPage(
+        access.runId,
+        callId,
+        offsetRef.current,
+      )
+      if (page.content.length === 0) {
+        setState('done')
+        if (page.truncatedArchive)
+          setArchiveNote(
+            `完整输出 ${String(page.totalCharacters)} 字符，档案保留前 ${String(page.archivedCharacters)} 字符。`,
+          )
+        return
+      }
+      offsetRef.current = page.offset + page.content.length
+      setPages(previous => [...previous, page.content])
+      const exhausted = offsetRef.current >= page.archivedCharacters
+      setState(exhausted ? 'done' : 'idle')
+      if (exhausted && page.truncatedArchive)
+        setArchiveNote(
+          `完整输出 ${String(page.totalCharacters)} 字符，档案保留前 ${String(page.archivedCharacters)} 字符。`,
+        )
+    } catch {
+      setState('error')
+    }
+  }
+  return (
+    <div className="output-pager">
+      {pages.map((page, index) => (
+        <pre className="shell-output" key={index} tabIndex={0}>
+          {page}
+        </pre>
+      ))}
+      <p className="activity-empty">
+        输出过长，仅保留前段记录。
+        {state !== 'done' && (
+          <button
+            className="inline-link"
+            disabled={state === 'loading'}
+            onClick={() => void loadMore()}
+            type="button"
+          >
+            {state === 'loading' ? '读取中…' : '加载后续输出'}
+          </button>
+        )}
+      </p>
+      {state === 'error' && (
+        <p className="activity-empty is-error" role="alert">
+          后续输出读取失败，可重试。
+          <button
+            className="inline-link"
+            onClick={() => void loadMore()}
+            type="button"
+          >
+            重试
+          </button>
+        </p>
+      )}
+      {archiveNote && <p className="activity-empty">{archiveNote}</p>}
     </div>
   )
 }
@@ -456,7 +599,13 @@ function DiffCard({
                           ? '-'
                           : ' '}
                     </span>
-                    <span className="diff-text">{line.text || ' '}</span>
+                    <span className="diff-text">
+                      {line.text ? (
+                        <HighlightedText tokens={tokenizeCodeLine(line.text)} />
+                      ) : (
+                        ' '
+                      )}
+                    </span>
                   </div>
                 )
               })}
@@ -546,8 +695,10 @@ function PreviewCard({
 
 function RunChangesCard({
   changes,
+  onReviewJump,
 }: {
   changes: NonNullable<ReturnType<typeof summarizeRunChanges>>
+  onReviewJump?: () => void
 }) {
   return (
     <li className="activity-tool activity-changes">
@@ -577,6 +728,17 @@ function RunChangesCard({
             <span>文件变更汇总</span>
             <span className="preview-meta">按记录的编辑尝试累计</span>
           </header>
+          {onReviewJump && (
+            <p className="changes-review-jump">
+              <button
+                className="inline-link"
+                onClick={onReviewJump}
+                type="button"
+              >
+                跳到交付评审 ↓
+              </button>
+            </p>
+          )}
           <ol className="changes-files" role="list">
             {changes.files.map(file => (
               <li key={file.path}>
@@ -617,6 +779,7 @@ function ImageCard({
   entry: RunActivityEntry
   semantic: Extract<ToolSemantic, { kind: 'image' }>
 }) {
+  const access = useContext(ActivityDataContext)
   const facts = [
     semantic.mediaType,
     semantic.width !== undefined && semantic.height !== undefined
@@ -632,6 +795,12 @@ function ImageCard({
         </span>
         <CopyAction label="复制路径" text={semantic.path} />
       </header>
+      {access && entry.callId && entry.status !== 'started' && (
+        <ImageThumb
+          alt={semantic.path}
+          src={access.imageUrl(access.runId, entry.callId)}
+        />
+      )}
       <div className="image-facts">
         <span aria-hidden="true" className="image-glyph">
           <ImageIcon size={22} />
@@ -645,7 +814,9 @@ function ImageCard({
                 {String(semantic.originalHeight)} px 原图缩小
               </small>
             )}
-          <small>图片内容未随执行记录留存，此处仅展示元数据。</small>
+          {!(access && entry.callId) && (
+            <small>图片内容未随执行记录留存，此处仅展示元数据。</small>
+          )}
         </div>
       </div>
       {entry.status === 'started' && <p className="activity-empty">读取中…</p>}
@@ -655,6 +826,34 @@ function ImageCard({
         </footer>
       )}
     </div>
+  )
+}
+
+/** Loads the authorized thumbnail; missing files degrade to metadata only. */
+function ImageThumb({ src, alt }: { src: string; alt: string }) {
+  const [failed, setFailed] = useState(false)
+  if (failed)
+    return (
+      <p className="activity-empty">
+        原文件已不可读（可能被移动或删除），仅展示元数据。
+      </p>
+    )
+  return (
+    <a
+      className="image-thumb-link"
+      href={src}
+      rel="noreferrer"
+      target="_blank"
+      title="在新标签页查看原图"
+    >
+      <img
+        alt={alt}
+        className="image-thumb"
+        loading="lazy"
+        onError={() => setFailed(true)}
+        src={src}
+      />
+    </a>
   )
 }
 

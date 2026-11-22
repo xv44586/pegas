@@ -330,6 +330,16 @@ export interface RunActivityReport {
   truncated: boolean
 }
 
+export interface RunActivityOutputPage {
+  runId: string
+  callId: string
+  content: string
+  offset: number
+  totalCharacters: number
+  archivedCharacters: number
+  truncatedArchive: boolean
+}
+
 export interface SubagentTranscript {
   sessionId: string
   parentSessionId: string

@@ -797,6 +797,19 @@ CREATE INDEX summary_usage_by_user_time
 ON summary_usage_records (user_id, observed_at DESC);
 `
 
+const migration38 = `
+-- EXEC-006 P1b: bounded archive of full tool outputs so the timeline can
+-- page beyond the 16KB inline detail. Additive only; rows expire by Run.
+CREATE TABLE run_activity_output_pages (
+  run_id TEXT NOT NULL REFERENCES runs(id),
+  call_id TEXT NOT NULL,
+  content TEXT NOT NULL,
+  total_characters INTEGER NOT NULL CHECK (total_characters >= 0),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (run_id, call_id)
+);
+`
+
 const migration32 = `
 ALTER TABLE tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'work'
 CHECK (kind IN ('work', 'conversation'));
@@ -2597,6 +2610,7 @@ export class PegasStore {
     this.#migrate(35, migration35)
     this.#migrate(36, migration36)
     this.#migrate(37, migration37)
+    this.#migrate(38, migration38)
   }
 
   #backfillWorkerIconIds(): void {
@@ -10211,6 +10225,9 @@ export class PegasStore {
     const merged = [detail, outcome.result ? `\n[结果]\n${outcome.result}` : '']
       .join('')
       .slice(0, 16_384)
+    if (outcome.result !== undefined && outcome.result.length > 0) {
+      this.#archiveToolOutput(runId, callId, outcome.result)
+    }
     const semantic =
       outcome.semantic ??
       buildToolSemantic(
@@ -10234,6 +10251,78 @@ export class PegasStore {
         this.#clock.now().toISOString(),
         row.id,
       )
+  }
+
+  /**
+   * EXEC-006 P1b: the inline detail stays bounded at 16KB, but the faithful
+   * full output is archived (capped at 256KB per call, honestly flagged) so
+   * the drawer can page through it. First write wins; a replayed completion
+   * never rewrites the archive.
+   */
+  #archiveToolOutput(runId: string, callId: string, result: string): void {
+    const bounded = result.slice(0, 262_144)
+    this.#database
+      .prepare(
+        `INSERT INTO run_activity_output_pages
+          (run_id, call_id, content, total_characters, created_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (run_id, call_id) DO NOTHING`,
+      )
+      .run(
+        runId,
+        callId,
+        bounded,
+        result.length,
+        this.#clock.now().toISOString(),
+      )
+  }
+
+  /**
+   * Owner-checked page of one archived tool output. `offset`/`limit` are
+   * character windows; `totalCharacters` is the faithful pre-cap length and
+   * `archivedCharacters` is what actually survived the 256KB archive cap.
+   */
+  readRunActivityOutput(
+    runId: string,
+    userId: string,
+    callId: string,
+    options: { offset?: number; limit?: number } = {},
+  ):
+    | {
+        runId: string
+        callId: string
+        content: string
+        offset: number
+        totalCharacters: number
+        archivedCharacters: number
+        truncatedArchive: boolean
+      }
+    | undefined {
+    const row = this.#database
+      .prepare(
+        `SELECT pages.content, pages.total_characters
+         FROM run_activity_output_pages AS pages
+         JOIN runs ON runs.id = pages.run_id
+         JOIN tasks ON tasks.id = runs.task_id
+         WHERE pages.run_id = ? AND pages.call_id = ? AND tasks.user_id = ?`,
+      )
+      .get(runId, callId, userId) as
+      { content: string; total_characters: number } | undefined
+    if (!row) return undefined
+    const offset = Math.max(
+      0,
+      Math.min(options.offset ?? 0, row.content.length),
+    )
+    const limit = Math.max(1, Math.min(options.limit ?? 12_000, 32_768))
+    return {
+      runId,
+      callId,
+      content: row.content.slice(offset, offset + limit),
+      offset,
+      totalCharacters: row.total_characters,
+      archivedCharacters: row.content.length,
+      truncatedArchive: row.total_characters > row.content.length,
+    }
   }
 
   listRunActivity(
@@ -10329,6 +10418,90 @@ export class PegasStore {
   }
 
   /**
+   * EXEC-006 P1a: upgrades settled root tool rows with faithful durable-log
+   * outcomes (result + structured meta). Only rows whose stored semantic
+   * lacks the meta-derived structure are rewritten, and only with a matching
+   * call id; the inline detail keeps its 16KB bound while the full output is
+   * archived for paging. Idempotent: a replay applies the same projection.
+   */
+  upgradeRunToolSemantics(
+    runId: string,
+    outcomes: readonly {
+      callId: string
+      status: 'completed' | 'error'
+      result?: string
+      meta?: unknown
+    }[],
+  ): number {
+    if (outcomes.length === 0) return 0
+    const select = this.#database.prepare(
+      `SELECT id, tool, status, detail_json FROM run_activity_entries
+       WHERE run_id = ? AND call_id = ? AND kind = 'tool_call'
+       ORDER BY seq DESC LIMIT 1`,
+    )
+    const update = this.#database.prepare(
+      `UPDATE run_activity_entries
+       SET status = ?, detail_json = ?, updated_at = ? WHERE id = ?`,
+    )
+    let upgraded = 0
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      for (const outcome of outcomes) {
+        if (outcome.meta === undefined) continue
+        const row = select.get(runId, outcome.callId) as
+          | {
+              id: number
+              tool: string | null
+              status: string | null
+              detail_json: string | null
+            }
+          | undefined
+        if (!row || row.status === 'started') continue
+        const stored = decodeActivityDetail(row.detail_json ?? '')
+        const { input } = splitToolDetail(stored.detail)
+        const semantic = buildToolSemantic(
+          { tool: row.tool ?? '', ...(input !== undefined ? { input } : {}) },
+          {
+            status: outcome.status,
+            ...(outcome.result !== undefined ? { result: outcome.result } : {}),
+            meta: outcome.meta,
+          },
+        )
+        if (semantic.kind === 'unknown') continue
+        if (
+          stored.semantic &&
+          JSON.stringify(stored.semantic) === JSON.stringify(semantic)
+        ) {
+          continue
+        }
+        const detail = stored.detail ?? ''
+        const { input: storedInput } = splitToolDetail(detail)
+        const merged = [
+          storedInput ?? detail,
+          outcome.result ? `\n[结果]\n${outcome.result}` : '',
+        ]
+          .join('')
+          .slice(0, 16_384)
+        if (outcome.result !== undefined && outcome.result.length > 0) {
+          this.#archiveToolOutput(runId, outcome.callId, outcome.result)
+        }
+        update.run(
+          outcome.status,
+          JSON.stringify({ detail: merged, semantic }),
+          this.#clock.now().toISOString(),
+          row.id,
+        )
+        upgraded += 1
+      }
+      this.#database.exec('COMMIT')
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+    return upgraded
+  }
+
+  /**
    * Idempotent write-back of one Chinese headline into the thinking envelope.
    * An existing summary is never overwritten, and the raw detail/label stay
    * verbatim so a failed or replayed pass cannot corrupt the transcript.
@@ -10392,6 +10565,159 @@ export class PegasStore {
         this.listRunThinking(row.id).some(entry => needsChineseSummary(entry)),
       )
       .map(row => ({ runId: row.id, userId: row.user_id }))
+  }
+
+  /**
+   * EXEC-006 P1a backfill: settled Runs with an executor ref, newest first,
+   * so historical root rows can be upgraded from durable logs once per
+   * worker start. Bounded; running Runs are excluded.
+   */
+  listSettledRunsWithExecutorRef(limit: number): {
+    runId: string
+    userId: string
+    executorRef: string
+    workspace: string
+  }[] {
+    const rows = this.#database
+      .prepare(
+        `SELECT runs.id, runs.executor_ref, runs.execution_context_json,
+           tasks.user_id
+         FROM runs JOIN tasks ON tasks.id = runs.task_id
+         WHERE runs.status IN ('completed', 'waiting', 'failed', 'cancelled')
+           AND runs.executor_ref IS NOT NULL
+         ORDER BY runs.updated_at DESC LIMIT ?`,
+      )
+      .all(Math.max(1, Math.min(limit, 200))) as unknown as {
+      id: string
+      executor_ref: string
+      execution_context_json: string
+      user_id: string
+    }[]
+    const projected: {
+      runId: string
+      userId: string
+      executorRef: string
+      workspace: string
+    }[] = []
+    for (const row of rows) {
+      try {
+        const context = parseExecutionContext(row.execution_context_json)
+        if (!context.workspace) continue
+        projected.push({
+          runId: row.id,
+          userId: row.user_id,
+          executorRef: row.executor_ref,
+          workspace: context.workspace,
+        })
+      } catch {
+        continue
+      }
+    }
+    return projected
+  }
+
+  /**
+   * EXEC-006: Chinese-headline write-back for one child transcript thinking
+   * entry. Same envelope semantics as root rows: existing summaries are
+   * never overwritten and the raw detail stays verbatim.
+   */
+  setSubagentThinkingSummary(
+    runId: string,
+    sessionId: string,
+    seq: number,
+    summary: string,
+  ): void {
+    const trimmed = summary.trim()
+    if (!trimmed) return
+    const row = this.#database
+      .prepare(
+        `SELECT transcript_json FROM run_subagent_transcripts
+         WHERE run_id = ? AND session_id = ?`,
+      )
+      .get(runId, sessionId) as { transcript_json: string } | undefined
+    if (!row) return
+    let transcript: SubagentTranscript
+    try {
+      transcript = JSON.parse(row.transcript_json) as SubagentTranscript
+    } catch {
+      return
+    }
+    const entry = transcript.entries.find(
+      item => item.seq === seq && item.kind === 'thinking',
+    )
+    if (!entry || entry.summary) return
+    entry.summary = trimmed.slice(0, 200)
+    this.#database
+      .prepare(
+        `UPDATE run_subagent_transcripts SET transcript_json = ?
+         WHERE run_id = ? AND session_id = ?`,
+      )
+      .run(JSON.stringify(transcript), runId, sessionId)
+  }
+
+  /** Child transcript thinking rows still lacking a Chinese headline. */
+  listSubagentThinkingMissingSummary(
+    runId: string,
+  ): { sessionId: string; seq: number; label: string; detail?: string }[] {
+    const rows = this.#database
+      .prepare(
+        `SELECT session_id, transcript_json FROM run_subagent_transcripts
+         WHERE run_id = ?`,
+      )
+      .all(runId) as { session_id: string; transcript_json: string }[]
+    const pending: {
+      sessionId: string
+      seq: number
+      label: string
+      detail?: string
+    }[] = []
+    for (const row of rows) {
+      let transcript: SubagentTranscript
+      try {
+        transcript = JSON.parse(row.transcript_json) as SubagentTranscript
+      } catch {
+        continue
+      }
+      for (const entry of transcript.entries) {
+        if (entry.kind !== 'thinking') continue
+        if (!needsChineseSummary(entry)) continue
+        pending.push({
+          sessionId: row.session_id,
+          seq: entry.seq,
+          label: entry.label,
+          ...(entry.detail !== undefined ? { detail: entry.detail } : {}),
+        })
+      }
+    }
+    return pending
+  }
+
+  /**
+   * EXEC-006 P2a: resolves one read_image call to its recorded absolute path
+   * after owner + Run + call checks. The path must come from a persisted
+   * image semantic of that exact call — never from client input — and must
+   * be absolute; the control plane serves the bytes under its own caps.
+   */
+  resolveRunImagePath(
+    runId: string,
+    userId: string,
+    callId: string,
+  ): string | undefined {
+    const row = this.#database
+      .prepare(
+        `SELECT entries.detail_json FROM run_activity_entries AS entries
+         JOIN runs ON runs.id = entries.run_id
+         JOIN tasks ON tasks.id = runs.task_id
+         WHERE entries.run_id = ? AND entries.call_id = ?
+           AND entries.kind = 'tool_call' AND tasks.user_id = ?
+         ORDER BY entries.seq DESC LIMIT 1`,
+      )
+      .get(runId, callId, userId) as { detail_json: string | null } | undefined
+    if (!row?.detail_json) return undefined
+    const stored = decodeActivityDetail(row.detail_json)
+    if (stored.semantic?.kind !== 'image') return undefined
+    const path = stored.semantic.path
+    return path.startsWith('/') ? path : undefined
   }
 
   recordRunSubagents(

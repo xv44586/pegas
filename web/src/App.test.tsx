@@ -7078,8 +7078,15 @@ describe('sealed Pegas UI', () => {
       within(drawer).getByText(/image\/png · 1200×800 px · 240\.0 KB/),
     ).toBeTruthy()
     expect(within(drawer).getByText(/由 2400×1600 px 原图缩小/)).toBeTruthy()
+    const thumb = drawer.querySelector('img.image-thumb')
+    if (!thumb) throw new Error('expected authorized image thumbnail')
+    expect(thumb.getAttribute('src')).toContain('/activity/')
+    expect(thumb.getAttribute('src')).toContain('/image?userId=')
+    fireEvent.error(thumb)
     expect(
-      within(drawer).getByText('图片内容未随执行记录留存，此处仅展示元数据。'),
+      within(drawer).getByText(
+        '原文件已不可读（可能被移动或删除），仅展示元数据。',
+      ),
     ).toBeTruthy()
     expect(within(drawer).getByText('上下文已压缩')).toBeTruthy()
     expect(within(drawer).getByText(/自动触发/)).toBeTruthy()
@@ -7094,6 +7101,136 @@ describe('sealed Pegas UI', () => {
     ).toBeTruthy()
     expect(within(drawer).getByText(/改成对比团队版价格/)).toBeTruthy()
     expect(drawer.querySelectorAll('.activity-meta-row').length).toBe(2)
+  })
+
+  it('pages archived shell output, highlights commands and jumps to the delivery review', async () => {
+    const outputCalls: string[] = []
+    installSnapshotFetch(
+      {
+        ...snapshot,
+        channels: [{ ...channel, status: 'completed', canStop: false }],
+        runs: [{ ...run, status: 'completed', output: '完成。' }],
+      },
+      path => {
+        if (path.startsWith('/v1/tasks/task-1/delivery?'))
+          return Response.json(deliveryFixture)
+        if (path.startsWith('/v1/runs/run-1/activity?'))
+          return Response.json({
+            runId: 'run-1',
+            taskId: channel.id,
+            totalEntries: 2,
+            truncated: false,
+            entries: [
+              {
+                seq: 1,
+                kind: 'tool_call',
+                status: 'completed',
+                callId: 'call-long',
+                tool: 'bash',
+                label: 'bash',
+                semantic: {
+                  kind: 'shell',
+                  command: 'grep -rn "conflict" src/ | head -3',
+                  output: 'x'.repeat(12_000),
+                  outputTruncated: true,
+                },
+                createdAt: '2026-11-19T08:00:10.000Z',
+                updatedAt: '2026-11-19T08:00:20.000Z',
+              },
+              {
+                seq: 2,
+                kind: 'tool_call',
+                status: 'completed',
+                callId: 'call-edit',
+                tool: 'edit',
+                label: 'edit',
+                semantic: {
+                  kind: 'file_edit',
+                  path: 'web/src/api.ts',
+                  mode: 'edit',
+                  additions: 1,
+                  deletions: 1,
+                  hunks: [
+                    {
+                      oldStart: 1,
+                      newStart: 1,
+                      lines: [
+                        { type: 'del', text: "const a = 'old'" },
+                        { type: 'add', text: "const a = 'new'" },
+                      ],
+                    },
+                  ],
+                },
+                createdAt: '2026-11-19T08:00:30.000Z',
+                updatedAt: '2026-11-19T08:00:31.000Z',
+              },
+            ],
+          })
+        if (path.startsWith('/v1/runs/run-1/activity/call-long/output?')) {
+          outputCalls.push(path)
+          const offset = Number(
+            new URL(path, 'http://localhost').searchParams.get('offset'),
+          )
+          if (offset === 12_000)
+            return Response.json({
+              runId: 'run-1',
+              callId: 'call-long',
+              content: 'TAIL-OUTPUT',
+              offset: 12_000,
+              totalCharacters: 12_011,
+              archivedCharacters: 12_011,
+              truncatedArchive: false,
+            })
+          return Response.json({ error: 'not_found' }, { status: 404 })
+        }
+        return undefined
+      },
+    )
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: new RegExp(channel.title) }),
+    )
+    const drawer = await screen.findByRole('dialog', { name: '工作详情' })
+    fireEvent.click(await within(drawer).findByText(/工作流程记录/))
+    const shellHeadline = await within(drawer).findByText(
+      'grep -rn "conflict" src/ | head -3',
+    )
+    fireEvent.click(shellHeadline)
+    const shellCard = drawer.querySelector('.shell-card')
+    if (!shellCard) throw new Error('expected shell card')
+    expect(shellCard.querySelector('.hl-flag')?.textContent).toBe('-rn')
+    expect(shellCard.querySelector('.hl-string')?.textContent).toBe(
+      '"conflict"',
+    )
+    const loadMore = within(shellCard as HTMLElement).getByRole('button', {
+      name: '加载后续输出',
+    })
+    fireEvent.click(loadMore)
+    expect(await within(drawer).findByText('TAIL-OUTPUT')).toBeTruthy()
+    expect(outputCalls[0]).toContain('offset=12000')
+    expect(
+      within(shellCard as HTMLElement).queryByRole('button', {
+        name: '加载后续输出',
+      }),
+    ).toBeNull()
+    const changesHeadline = within(drawer).getByText(/本次运行修改了 1 个文件/)
+    fireEvent.click(changesHeadline)
+    const diffCard = drawer.querySelector('.diff-card')
+    if (!diffCard) throw new Error('expected diff card')
+    expect(
+      [...diffCard.querySelectorAll('.hl-keyword')].some(
+        node => node.textContent === 'const',
+      ),
+    ).toBe(true)
+    const jump = within(drawer).getByRole('button', { name: '跳到交付评审 ↓' })
+    const scrollSpy = vi.fn()
+    const deliveryAnchor = drawer.querySelector('.delivery-anchor')
+    if (!deliveryAnchor) throw new Error('expected delivery anchor')
+    deliveryAnchor.scrollIntoView = scrollSpy
+    fireEvent.click(jump)
+    expect(scrollSpy).toHaveBeenCalled()
   })
 
   it('keeps honest fallbacks for legacy and unknown tool records', async () => {

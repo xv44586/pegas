@@ -44,6 +44,12 @@
   --caution-badge-ink: #fff;
   --critical: #b93a46;
   --critical-soft: #fff0f1;
+  --hl-keyword: #7c3aed;
+  --hl-string: #22754f;
+  --hl-comment: #a7a7a1;
+  --hl-number: #965e0e;
+  --hl-flag: #2f49de;
+  --hl-variable: #b93a46;
   --control-height: 40px;
   --control-height-compact: 36px;
   --control-radius: 10px;
@@ -67,6 +73,7 @@
   --line-strong: #d8ccbd;
   --accent-ink: #2f49de;
   --accent-soft: #e2e7ff;
+  --hl-comment: #8c8478;
 }
 
 :root[data-theme='dark'] {
@@ -95,6 +102,12 @@
   --caution-badge-ink: #171716;
   --critical: #f17b87;
   --critical-soft: #4a2529;
+  --hl-keyword: #c4a5ff;
+  --hl-string: #62c796;
+  --hl-comment: #73736d;
+  --hl-number: #e3aa52;
+  --hl-flag: #96a2ff;
+  --hl-variable: #f17b87;
   --shadow-pop: 0 18px 50px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.3);
   --shadow-drawer: -16px 0 50px rgba(0, 0, 0, 0.32);
 }
@@ -126,6 +139,12 @@
     --caution-badge-ink: #171716;
     --critical: #f17b87;
     --critical-soft: #4a2529;
+    --hl-keyword: #c4a5ff;
+    --hl-string: #62c796;
+    --hl-comment: #73736d;
+    --hl-number: #e3aa52;
+    --hl-flag: #96a2ff;
+    --hl-variable: #f17b87;
   }
 }
 
@@ -3784,6 +3803,58 @@ kbd {
 .shell-output {
   border-top: 1px dashed var(--line);
   color: var(--ink-soft);
+}
+.hl-keyword {
+  color: var(--hl-keyword);
+}
+.hl-string {
+  color: var(--hl-string);
+}
+.hl-comment {
+  color: var(--hl-comment);
+}
+.hl-number {
+  color: var(--hl-number);
+}
+.hl-flag {
+  color: var(--hl-flag);
+}
+.hl-variable {
+  color: var(--hl-variable);
+}
+.output-pager {
+  display: grid;
+  min-width: 0;
+}
+.output-pager .activity-empty {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.image-thumb-link {
+  border-bottom: 1px dashed var(--line);
+  display: block;
+  padding: 12px 12px 10px;
+}
+.image-thumb {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  display: block;
+  height: auto;
+  max-height: 260px;
+  max-width: 100%;
+  object-fit: contain;
+  width: auto;
+}
+.changes-review-jump {
+  border-bottom: 1px dashed var(--line);
+  margin: 0;
+  padding: 8px 12px;
+}
+.delivery-anchor {
+  scroll-margin-top: 12px;
 }
 .shell-footer {
   align-items: center;

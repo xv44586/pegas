@@ -1,4 +1,12 @@
-import type { Run, RunActivityEntry, ToolSemantic, WorkChannel } from '../types'
+import type {
+  GoalContract,
+  Run,
+  RunActivityEntry,
+  TaskDelivery,
+  ToolSemantic,
+  WorkChannel,
+} from '../types'
+import { PegasApi } from '../api'
 import { DetailDrawer } from './DetailDrawer'
 import type { DrawerView } from './types'
 
@@ -13,6 +21,7 @@ export type ReviewFixture =
   | 'task-web-agent'
   | 'task-todo-search'
   | 'task-run-artifacts'
+  | 'task-output-archive'
   | 'preview-file'
   | 'preview-image'
   | 'preview-video'
@@ -763,10 +772,133 @@ function runArtifactsView(): DrawerView {
   }
 }
 
+const reviewGoal: GoalContract = {
+  id: 'review-goal',
+  taskId: channel.id,
+  revision: 1,
+  commandId: 'cmd-review-goal',
+  createdAt: '2026-11-20T00:00:00.000Z',
+  basedOnEventIds: ['review-event'],
+  desiredOutcome: '执行记录语义化：长输出可分页、图片可见、直达交付评审',
+  beneficiaries: ['owner'],
+  successCriteria: [
+    {
+      criterionId: 'criterion-archive',
+      observableStatement: '超长输出可加载后续内容且不丢字',
+      required: true,
+      evidencePlanRef: 'plan-archive',
+    },
+  ],
+  nonGoals: [],
+  constraints: [],
+  contextSources: [],
+  assumptions: [],
+  unknowns: [],
+  prerequisites: [],
+  permissionBoundary: {},
+  reviewCheckpoints: [],
+  evidencePlan: [],
+  failureAndRecovery: '档案缺失时诚实降级为前段预览。',
+  feedbackSignals: [],
+}
+
+const reviewDelivery: TaskDelivery = {
+  goal: reviewGoal,
+  artifacts: [],
+  evidence: [],
+}
+
+function outputArchiveView(): DrawerView {
+  const base = taskView('completed')
+  if (base.kind !== 'task' || !base.run) return base
+  const longOutput = Array.from(
+    { length: 160 },
+    (_, index) =>
+      `line ${String(index + 1).padStart(3, '0')}: vitest worker output — check suite ${String(index % 12)} passed`,
+  ).join('\n')
+  const entries: RunActivityEntry[] = [
+    activityEntry(1, {
+      kind: 'text',
+      label: '跑完整门禁并核对长输出与截图。',
+      detail: '跑完整门禁并核对**长输出**与截图。',
+    }),
+    activityEntry(2, {
+      tool: 'bash',
+      label: 'bash',
+      detail: JSON.stringify({
+        command: 'pnpm check 2>&1 | tee /tmp/gate.log',
+      }),
+      semantic: {
+        kind: 'shell',
+        command: 'pnpm check 2>&1 | tee /tmp/gate.log',
+        output: longOutput.slice(0, 4_000),
+        outputTruncated: true,
+      },
+    }),
+    activityEntry(3, {
+      tool: 'read_image',
+      label: 'read_image',
+      detail: '{"file_path":"/repo/output/desktop-task-output-archive.png"}',
+      semantic: {
+        kind: 'image',
+        path: '/repo/output/desktop-task-output-archive.png',
+        mediaType: 'image/png',
+        width: 1440,
+        height: 900,
+        bytes: 92_038,
+      },
+    }),
+    activityEntry(4, {
+      tool: 'edit',
+      label: 'edit',
+      detail: JSON.stringify({
+        file_path: 'web/src/sealed/ActivityTimeline.tsx',
+        old_string: "const output = semantic.output ?? ''",
+        new_string:
+          "const output = semantic.output ?? ''\n      const paged = useOutputArchive(entry)",
+      }),
+      semantic: {
+        kind: 'file_edit',
+        path: 'web/src/sealed/ActivityTimeline.tsx',
+        mode: 'edit',
+        additions: 1,
+        deletions: 0,
+        hunks: [
+          {
+            oldStart: 360,
+            newStart: 360,
+            lines: [
+              { type: 'context', text: "const output = semantic.output ?? ''" },
+              {
+                type: 'add',
+                text: 'const paged = useOutputArchive(entry) // 分页读取档案',
+              },
+            ],
+          },
+        ],
+      },
+    }),
+  ]
+  return {
+    ...base,
+    delivery: reviewDelivery,
+    activityByRun: {
+      [base.run.id]: {
+        runId: base.run.id,
+        taskId: channel.id,
+        entries,
+        totalEntries: entries.length,
+        truncated: false,
+      },
+    },
+  }
+}
+
 function fixtureView(fixture: ReviewFixture): DrawerView {
   if (fixture === 'task-web-agent') return webAgentView()
   if (fixture === 'task-todo-search') return todoSearchView()
   if (fixture === 'task-run-artifacts') return runArtifactsView()
+  if (fixture === 'task-output-archive') return outputArchiveView()
   if (
     fixture === 'task-activity' ||
     fixture === 'task-activity-open' ||
@@ -801,6 +933,7 @@ export function UiReviewHarness({ fixture }: { fixture: ReviewFixture }) {
   return (
     <main className="review-harness">
       <DetailDrawer
+        api={new PegasApi('review')}
         onChange={() => undefined}
         onClose={() => undefined}
         onRetry={() => Promise.resolve()}

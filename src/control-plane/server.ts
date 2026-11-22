@@ -1,6 +1,6 @@
 import { timingSafeEqual } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
+import { readFile, stat as statFile } from 'node:fs/promises'
 import {
   createServer,
   type IncomingMessage,
@@ -133,6 +133,27 @@ const defaultPageLimit = 50
 const maximumPageLimit = 200
 const defaultMaximumAudioBytes = 25 * 1024 * 1024
 const maximumAttachmentBytes = 25 * 1024 * 1024
+const maximumRunImageBytes = 10 * 1024 * 1024
+
+function imageMediaType(path: string): string | undefined {
+  switch (extname(path).toLowerCase()) {
+    case '.png':
+      return 'image/png'
+    case '.jpg':
+    case '.jpeg':
+      return 'image/jpeg'
+    case '.gif':
+      return 'image/gif'
+    case '.webp':
+      return 'image/webp'
+    case '.bmp':
+      return 'image/bmp'
+    case '.avif':
+      return 'image/avif'
+    default:
+      return undefined
+  }
+}
 
 export interface ControlPlaneOptions {
   store: PegasStore
@@ -1712,6 +1733,54 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
           )
           if (!report) throw new Error('Run not found')
           return sendJson(response, 200, report)
+        }
+        const outputMatch =
+          /^\/v1\/runs\/([^/]+)\/activity\/([^/]+)\/output$/.exec(url.pathname)
+        if (outputMatch) {
+          const userId = requiredQuery(url, 'userId')
+          const offsetParam = url.searchParams.get('offset')
+          const limitParam = url.searchParams.get('limit')
+          const page = options.store.readRunActivityOutput(
+            decodeURIComponent(outputMatch[1] ?? ''),
+            userId,
+            decodeURIComponent(outputMatch[2] ?? ''),
+            {
+              ...(offsetParam ? { offset: Number(offsetParam) } : {}),
+              ...(limitParam ? { limit: Number(limitParam) } : {}),
+            },
+          )
+          if (!page) return sendJson(response, 404, { error: 'not_found' })
+          return sendJson(response, 200, page)
+        }
+        const imageMatch =
+          /^\/v1\/runs\/([^/]+)\/activity\/([^/]+)\/image$/.exec(url.pathname)
+        if (imageMatch) {
+          const userId = requiredQuery(url, 'userId')
+          const path = options.store.resolveRunImagePath(
+            decodeURIComponent(imageMatch[1] ?? ''),
+            userId,
+            decodeURIComponent(imageMatch[2] ?? ''),
+          )
+          if (!path) return sendJson(response, 404, { error: 'not_found' })
+          const mediaType = imageMediaType(path)
+          if (!mediaType)
+            return sendJson(response, 415, { error: 'unsupported_media' })
+          let bytes: Buffer
+          try {
+            const stats = await statFile(path)
+            if (!stats.isFile() || stats.size > maximumRunImageBytes)
+              return sendJson(response, 404, { error: 'not_found' })
+            bytes = await readFile(path)
+          } catch {
+            return sendJson(response, 404, { error: 'not_found' })
+          }
+          response.writeHead(200, {
+            'content-type': mediaType,
+            'content-length': String(bytes.byteLength),
+            'cache-control': 'private, max-age=300',
+            'x-content-type-options': 'nosniff',
+          })
+          return response.end(bytes)
         }
         const subagentsMatch = /^\/v1\/runs\/([^/]+)\/subagents$/.exec(
           url.pathname,

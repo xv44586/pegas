@@ -4,7 +4,10 @@ import { loadConfig } from '../core/config.js'
 import { ModelThinkingSummarizer } from '../activity/thinking-summary.js'
 import { ConversationExecutor } from '../executor/conversation-executor.js'
 import { DshCliExecutor } from '../executor/dsh-cli-executor.js'
-import { readDshSubagentTranscripts } from '../executor/dsh-subagent-transcript.js'
+import {
+  readDshRootToolOutcomes,
+  readDshSubagentTranscripts,
+} from '../executor/dsh-subagent-transcript.js'
 import {
   createDshModelConfiguration,
   ensureDshProfileHome,
@@ -54,6 +57,7 @@ import {
   localControlPlaneBaseUrl,
   processNextEvent,
   RoutingEventHandler,
+  type RootToolOutcomeCollector,
   type SubagentTranscriptCollector,
   type ThinkingSummarizerFactory,
 } from './processor.js'
@@ -130,7 +134,7 @@ const selfChangeExecutor = config.selfChangeEnabled
       recoveryBaseUrl: config.recoveryBaseUrl,
       ...(config.recoveryToken ? { recoveryToken: config.recoveryToken } : {}),
       editor: executor,
-      compatibility: { minimumSchema: 1, maximumSchema: 37 },
+      compatibility: { minimumSchema: 1, maximumSchema: 38 },
       reviewer: 'pegas-self-change-gate',
       controlPlaneBaseUrl,
     })
@@ -162,6 +166,18 @@ const collectSubagents: SubagentTranscriptCollector | undefined =
           },
         )
       }
+const collectRootOutcomes: RootToolOutcomeCollector | undefined =
+  config.executorMode === 'echo'
+    ? undefined
+    : input => {
+        const settings = store.getRuntimeSettings()
+        const masker =
+          settings.privacyMode === 'mask' ? createPrivacyMasker() : undefined
+        return readDshRootToolOutcomes(input.rootSessionId, input.workspace, {
+          sessionsRoot: config.dshSessionsRoot,
+          ...(masker ? { restore: text => masker.restore(text) } : {}),
+        })
+      }
 const settingsRouter = new SettingsAwareTaskRouter(store, createRouter)
 const router: TaskRouter = settingsRouter
 const lazySummaryProvider: JsonModelProvider = {
@@ -181,7 +197,7 @@ const createThinkingSummarizer: ThinkingSummarizerFactory = context =>
       const settings = store.getRuntimeSettings()
       return {
         userId: context.userId,
-        eventId: `thinking:${context.runId}:${String(context.seq)}`,
+        eventId: `thinking:${context.runId}:${context.sessionId ?? 'root'}:${String(context.seq)}`,
         modelRef: `${settings.modelProvider}/${settings.modelName}`,
       }
     }),
@@ -247,6 +263,7 @@ if (config.executorMode !== 'echo') {
     store,
     createThinkingSummarizer,
     telemetry,
+    collectRootOutcomes,
   ).catch((error: unknown) => {
     logger.warn('run.thinking_summary_backfill_failed', {
       error: error instanceof Error ? error.message : String(error),
@@ -279,6 +296,7 @@ while (!lifecycle.stopping) {
       telemetry,
       collectSubagents,
       createThinkingSummarizer,
+      collectRootOutcomes,
     )
       .catch((error: unknown) => {
         logger.error('run.persistence_failed', error, {
@@ -316,6 +334,7 @@ while (!lifecycle.stopping) {
       telemetry,
       collectSubagents,
       createThinkingSummarizer,
+      collectRootOutcomes,
     )
       .catch((error: unknown) => {
         logger.error('conversation.persistence_failed', error, {
