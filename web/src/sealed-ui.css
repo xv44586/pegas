@@ -2840,7 +2840,7 @@ kbd {
   margin: 0;
   padding: 0;
 }
-.progress-list li {
+.progress-list > li {
   color: var(--faint);
   display: grid;
   gap: 10px;
@@ -2848,7 +2848,7 @@ kbd {
   min-height: 48px;
   position: relative;
 }
-.progress-list li::after {
+.progress-list > li::after {
   background: var(--line);
   content: '';
   height: 26px;
@@ -2857,33 +2857,27 @@ kbd {
   top: 17px;
   width: 1px;
 }
-.progress-list .run-transcript li {
-  min-height: 0;
-}
-.progress-list .run-transcript li::after {
+.progress-list > li:last-child::after {
   display: none;
 }
-.progress-list li:last-child::after {
-  display: none;
-}
-.progress-list li.is-done {
+.progress-list > li.is-done {
   color: var(--positive);
 }
-.progress-list li.is-current {
+.progress-list > li.is-current {
   color: var(--accent);
 }
-.progress-list li.is-waiting {
+.progress-list > li.is-waiting {
   color: var(--caution);
 }
-.progress-list li.is-failed {
+.progress-list > li.is-failed {
   color: var(--critical);
 }
-.progress-list li span {
+.progress-list > li > span {
   color: var(--ink);
   display: grid;
   gap: 3px;
 }
-.progress-list small {
+.progress-list > li small {
   color: var(--muted);
 }
 .run-record-heading {
@@ -3003,12 +2997,6 @@ kbd {
   cursor: pointer;
   font-size: 12px;
   margin-top: 6px;
-}
-.progress-list .subagent-transcript .run-transcript li {
-  min-height: 0;
-}
-.progress-list .subagent-transcript .run-transcript li::after {
-  display: none;
 }
 .artifact-row {
   align-items: center;

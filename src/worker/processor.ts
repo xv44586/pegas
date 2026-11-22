@@ -777,6 +777,24 @@ export async function executeClaimedRun(
     steps: 0,
     events: 0,
   }
+  let liveExecutorRef: string | undefined =
+    claimed.run.executorRef ?? claimed.run.resumeFromRef
+  let lastSubagentSweepAt = 0
+  const sweepSubagentTranscripts = () => {
+    if (!collectSubagents || !liveExecutorRef) return
+    const now = Date.now()
+    if (now - lastSubagentSweepAt < 8_000) return
+    lastSubagentSweepAt = now
+    collectSubagentTranscripts(
+      store,
+      claimed,
+      workerId,
+      workingDirectory,
+      liveExecutorRef,
+      collectSubagents,
+      telemetry,
+    )
+  }
   const leaseHeartbeat = setInterval(() => {
     try {
       if (store.renewRunLeaseAndCheckSteering(claimed.run.id, workerId)) {
@@ -829,10 +847,12 @@ export async function executeClaimedRun(
           }
         : {}),
       onExecutorRef: executorRef => {
+        liveExecutorRef = executorRef
         store.recordExecutorRef(claimed.run.id, workerId, executorRef)
       },
       onProgress: event => {
         if (!store.ownsRun(claimed.run.id, workerId)) return
+        sweepSubagentTranscripts()
         if (event.type === 'message') {
           store.appendRunActivity(claimed.run.id, workerId, {
             kind: 'text',

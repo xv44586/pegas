@@ -105,6 +105,25 @@ describe('EXEC-006 subagent transcript reader', () => {
     writeSessionLog(sessionsRoot, workspace, 'session-child', [
       childHeader('session-child', 'session-root', workspace, 2_000),
       {
+        type: 'subagent/descriptor',
+        seq: 0,
+        time: 2_000,
+        data: {
+          version: 3,
+          mode: 'continuable',
+          provider: 'spawn',
+          label: '统计 docs 文件',
+        },
+      },
+      {
+        type: 'user/message',
+        seq: 1,
+        time: 2_050,
+        data: {
+          content: [{ type: 'text', text: '数一下 docs 目录的文件数' }],
+        },
+      },
+      {
         type: 'assistant/message',
         seq: 1,
         time: 2_100,
@@ -171,6 +190,8 @@ describe('EXEC-006 subagent transcript reader', () => {
       sessionId: 'session-child',
       parentSessionId: 'session-root',
       delegationDepth: 1,
+      label: '统计 docs 文件',
+      prompt: '数一下 docs 目录的文件数',
       truncated: false,
     })
     expect(child?.entries.map(entry => entry.kind)).toEqual([
@@ -430,5 +451,92 @@ describe('EXEC-006 subagent transcripts through the worker and API', () => {
     expect(store.listRunSubagents(claimed.run.id, 'owner')?.subagents).toEqual(
       [],
     )
+  })
+
+  it('sweeps child transcripts while the run is still executing', async () => {
+    const store = openStore()
+    const sessionsRoot = temporaryDirectory('pegas-subagent-live-')
+    const workspace = process.cwd()
+    writeSessionLog(sessionsRoot, workspace, 'session-child', [
+      childHeader('session-child', 'session-root', workspace, Date.now()),
+      {
+        type: 'subagent/descriptor',
+        seq: 0,
+        time: Date.now(),
+        data: { label: '统计 docs 文件' },
+      },
+      {
+        type: 'tool/call',
+        seq: 1,
+        time: Date.now(),
+        data: {
+          callId: 'call-live',
+          name: 'glob',
+          arguments: '{"pattern":"docs/*.md"}',
+        },
+      },
+    ])
+    const observedDuringRun: number[] = []
+    const executor: RunExecutor = {
+      name: 'live-delegating-test',
+      execute: input => {
+        input.onExecutorRef?.('session-root')
+        input.onProgress?.({
+          type: 'tool_call',
+          callId: 'call-delegate',
+          tool: 'subagent',
+          input: '{"description":"统计 docs 文件","prompt":"数一下"}',
+        })
+        // The sweep is throttled; the first progress event triggers it.
+        observedDuringRun.push(
+          store.listRunSubagents(claimedRunId, 'owner')?.subagents.length ?? 0,
+        )
+        input.onProgress?.({
+          type: 'tool_result',
+          callId: 'call-delegate',
+          status: 'completed',
+          result: 'started subagent agent-1',
+        })
+        return Promise.resolve({
+          executorRef: 'session-root',
+          output: 'done',
+        })
+      },
+    }
+    store.enqueueEvent({
+      userId: 'owner',
+      type: 'user.message',
+      source: 'web',
+      authenticatedActor: 'human',
+      payload: { text: '运行中就要看到子任务' },
+    })
+    await processNextEvent(
+      store,
+      new RoutingEventHandler(new RuleBasedTaskRouter(), executor.name),
+      'subagent-router',
+      undefined,
+      { collectWindowMs: 0 },
+    )
+    const claimed = store.claimNextRun('subagent-worker')
+    if (!claimed) throw new Error('Expected run claim')
+    const claimedRunId = claimed.run.id
+    await executeClaimedRun(
+      store,
+      executor,
+      claimed,
+      'subagent-worker',
+      workspace,
+      new AbortController().signal,
+      'http://127.0.0.1:4317',
+      undefined,
+      input =>
+        readDshSubagentTranscripts(input.rootSessionId, input.workspace, {
+          sessionsRoot,
+        }),
+    )
+    expect(observedDuringRun).toEqual([1])
+    const report = store.listRunSubagents(claimedRunId, 'owner')
+    expect(report?.subagents[0]?.label).toBe('统计 docs 文件')
+    expect(store.listRuns(claimed.task.id)[0]?.status).toBe('completed')
   })
 })

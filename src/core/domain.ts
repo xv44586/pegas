@@ -296,6 +296,10 @@ export interface SubagentTranscript {
   sessionId: string
   parentSessionId: string
   delegationDepth: number
+  /** The delegation tool-call description, from the child's durable descriptor. */
+  label?: string
+  /** The delegated prompt, from the child's first durable user message. */
+  prompt?: string
   createdAt: string
   entries: RunActivityEntry[]
   totalEntries: number

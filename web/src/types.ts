@@ -196,6 +196,8 @@ export interface SubagentTranscript {
   sessionId: string
   parentSessionId: string
   delegationDepth: number
+  label?: string
+  prompt?: string
   createdAt: string
   entries: RunActivityEntry[]
   totalEntries: number

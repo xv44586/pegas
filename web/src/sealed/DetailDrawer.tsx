@@ -2705,7 +2705,7 @@ function SubagentCard({
   subagentError?: string
   onLoadSubagents?: (runId: string) => void
 }) {
-  const children = subagents ?? []
+  const children = matchDelegationChildren(delegation, subagents ?? [])
   return (
     <li className="transcript-subagent">
       <details>
@@ -2756,7 +2756,7 @@ function SubagentCard({
         ) : (
           <p className="drawer-footnote">
             {entry.status === 'started'
-              ? '子 agent 运行中；完整执行记录将在运行结束后留存。'
+              ? '子 agent 运行中；执行记录会随运行持续留存，可稍后重新读取。'
               : '没有留存子 agent 执行记录（旧版本运行或日志不可读）。'}
             {runId && onLoadSubagents && (
               <button
@@ -2772,6 +2772,41 @@ function SubagentCard({
       </details>
     </li>
   )
+}
+
+/**
+ * Correlate one delegation tool-call with its child sessions. The child's
+ * durable descriptor label mirrors the delegation `description`, and its
+ * first user message mirrors the delegated `prompt`; either exact match is
+ * authoritative. When no child carries correlation fields (older records),
+ * fall back to showing every child rather than hiding real work.
+ */
+function matchDelegationChildren(
+  delegation: DelegationDetail,
+  subagents: SubagentTranscript[],
+): SubagentTranscript[] {
+  const matched = subagents.filter(child => {
+    if (
+      delegation.description &&
+      child.label &&
+      child.label === delegation.description
+    ) {
+      return true
+    }
+    if (delegation.prompt && child.prompt) {
+      return (
+        child.prompt === delegation.prompt ||
+        child.prompt.startsWith(delegation.prompt) ||
+        delegation.prompt.startsWith(child.prompt)
+      )
+    }
+    return false
+  })
+  if (matched.length > 0) return matched
+  const correlatable = subagents.some(
+    child => child.label !== undefined || child.prompt !== undefined,
+  )
+  return correlatable ? [] : subagents
 }
 
 function RuntimeDetail({

@@ -3147,6 +3147,8 @@ describe('sealed Pegas UI', () => {
                 sessionId: 'session-child',
                 parentSessionId: 'session-root',
                 delegationDepth: 1,
+                label: '统计 docs 文件',
+                prompt: '数一下 docs 目录的文件数',
                 createdAt: '2026-11-19T08:00:12.000Z',
                 totalEntries: 2,
                 truncated: false,
@@ -3205,6 +3207,136 @@ describe('sealed Pegas UI', () => {
     expect(
       within(taskDrawer).getAllByText('docs 目录共 29 个文件。').length,
     ).toBeGreaterThan(0)
+  })
+
+  it('shows only the matched child under each delegation card', async () => {
+    installSnapshotFetch(
+      {
+        ...snapshot,
+        channels: [{ ...channel, status: 'completed', canStop: false }],
+        runs: [{ ...run, status: 'completed', output: '两个子任务都完成了。' }],
+      },
+      path => {
+        if (path.startsWith('/v1/runs/run-1/activity?')) {
+          return Response.json({
+            runId: 'run-1',
+            taskId: channel.id,
+            totalEntries: 2,
+            truncated: false,
+            entries: [
+              {
+                seq: 1,
+                kind: 'tool_call',
+                status: 'completed',
+                callId: 'call-a',
+                tool: 'subagent',
+                label: 'subagent',
+                detail:
+                  '{"description":"数文件","prompt":"数一下 docs 文件数"}\n[结果]\n28 个',
+                createdAt: '2026-11-19T08:00:10.000Z',
+                updatedAt: '2026-11-19T08:00:40.000Z',
+              },
+              {
+                seq: 2,
+                kind: 'tool_call',
+                status: 'completed',
+                callId: 'call-b',
+                tool: 'subagent',
+                label: 'subagent',
+                detail:
+                  '{"description":"查定价","prompt":"查一下 Notion 定价"}\n[结果]\n$10',
+                createdAt: '2026-11-19T08:00:50.000Z',
+                updatedAt: '2026-11-19T08:01:20.000Z',
+              },
+            ],
+          })
+        }
+        if (path.startsWith('/v1/runs/run-1/subagents?')) {
+          return Response.json({
+            runId: 'run-1',
+            taskId: channel.id,
+            subagents: [
+              {
+                sessionId: 'child-files',
+                parentSessionId: 'session-root',
+                delegationDepth: 1,
+                label: '数文件',
+                prompt: '数一下 docs 文件数',
+                createdAt: '2026-11-19T08:00:12.000Z',
+                totalEntries: 1,
+                truncated: false,
+                entries: [
+                  {
+                    seq: 1,
+                    kind: 'text',
+                    label: '共 28 个文件',
+                    detail: '共 28 个文件',
+                    createdAt: '2026-11-19T08:00:20.000Z',
+                    updatedAt: '2026-11-19T08:00:20.000Z',
+                  },
+                ],
+              },
+              {
+                sessionId: 'child-pricing',
+                parentSessionId: 'session-root',
+                delegationDepth: 1,
+                label: '查定价',
+                prompt: '查一下 Notion 定价',
+                createdAt: '2026-11-19T08:00:52.000Z',
+                totalEntries: 1,
+                truncated: false,
+                entries: [
+                  {
+                    seq: 1,
+                    kind: 'text',
+                    label: 'Plus 每人每月 10 美元',
+                    detail: 'Plus 每人每月 10 美元',
+                    createdAt: '2026-11-19T08:01:00.000Z',
+                    updatedAt: '2026-11-19T08:01:00.000Z',
+                  },
+                ],
+              },
+            ],
+          })
+        }
+        return undefined
+      },
+    )
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: new RegExp(channel.title) }),
+    )
+    const taskDrawer = await screen.findByRole('dialog', { name: '工作详情' })
+    fireEvent.click(await within(taskDrawer).findByText(/工作流程记录/))
+    const filesCard = (
+      await within(taskDrawer).findByText(/子任务 · 数文件/)
+    ).closest('details')
+    const pricingCard = within(taskDrawer)
+      .getByText(/子任务 · 查定价/)
+      .closest('details')
+    if (!filesCard || !pricingCard) throw new Error('expected delegation cards')
+    fireEvent.click(within(taskDrawer).getByText(/子任务 · 数文件/))
+    fireEvent.click(
+      await within(filesCard as HTMLElement).findByText(/子 agent 执行记录/),
+    )
+    expect(
+      within(filesCard as HTMLElement).getByText('共 28 个文件'),
+    ).toBeTruthy()
+    expect(
+      within(filesCard as HTMLElement).queryByText('Plus 每人每月 10 美元'),
+    ).toBeNull()
+    fireEvent.click(within(taskDrawer).getByText(/子任务 · 查定价/))
+    fireEvent.click(
+      await within(pricingCard as HTMLElement).findByText(/子 agent 执行记录/),
+    )
+    expect(
+      within(pricingCard as HTMLElement).getByText('Plus 每人每月 10 美元'),
+    ).toBeTruthy()
+    expect(
+      within(pricingCard as HTMLElement).queryByText('共 28 个文件'),
+    ).toBeNull()
   })
 
   it('cues the task origin and latest user input above terminal results', async () => {

@@ -188,6 +188,8 @@ function projectTranscript(
   const toolIndexByCallId = new Map<string, number>()
   let seq = 0
   let totalEntries = 0
+  let delegationLabel: string | undefined
+  let delegationPrompt: string | undefined
   const push = (
     entry: Omit<RunActivityEntry, 'seq' | 'createdAt' | 'updatedAt'>,
     at: number | undefined,
@@ -201,6 +203,29 @@ function projectTranscript(
   for (const record of log.records) {
     const data = record.data
     if (!data) continue
+    if (record.type === 'subagent/descriptor') {
+      if (typeof data.label === 'string' && data.label.trim()) {
+        delegationLabel = restore(data.label).slice(0, MAX_LABEL_CHARACTERS)
+      }
+      continue
+    }
+    if (record.type === 'user/message') {
+      if (delegationPrompt === undefined && Array.isArray(data.content)) {
+        const text = data.content
+          .filter(
+            (block): block is { type: string; text: string } =>
+              isRecord(block) &&
+              block.type === 'text' &&
+              typeof block.text === 'string',
+          )
+          .map(block => block.text)
+          .join('')
+        if (text.trim()) {
+          delegationPrompt = restore(text).slice(0, MAX_DETAIL_CHARACTERS)
+        }
+      }
+      continue
+    }
     if (record.type === 'assistant/message') {
       const message = data.message
       if (!isRecord(message) || !Array.isArray(message.content)) continue
@@ -298,6 +323,8 @@ function projectTranscript(
     sessionId: log.header.id,
     parentSessionId: log.header.parentSession ?? '',
     delegationDepth: log.header.delegationDepth ?? 1,
+    ...(delegationLabel !== undefined ? { label: delegationLabel } : {}),
+    ...(delegationPrompt !== undefined ? { prompt: delegationPrompt } : {}),
     createdAt: new Date(log.header.createdAt ?? 0).toISOString(),
     entries,
     totalEntries,

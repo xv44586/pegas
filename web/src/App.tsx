@@ -845,6 +845,14 @@ export function App() {
     )
     return () => window.clearInterval(interval)
   }, [loadRunActivity, openTaskLiveRunId])
+  useEffect(() => {
+    if (!openTaskLiveRunId) return
+    const interval = window.setInterval(
+      () => void loadRunSubagents(openTaskLiveRunId),
+      10_000,
+    )
+    return () => window.clearInterval(interval)
+  }, [loadRunSubagents, openTaskLiveRunId])
   const openReconciliationActionId =
     drawer?.kind === 'reconciliation' ? drawer.action.id : ''
   useEffect(() => {
