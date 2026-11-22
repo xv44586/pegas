@@ -191,6 +191,37 @@ export class PegasApi {
     return body.event
   }
 
+  async sendSteerMessage(text: string, taskId: string): Promise<InboxEvent> {
+    const response = await fetch('/v1/events', {
+      method: 'POST',
+      headers: this.#headers(true),
+      body: JSON.stringify({
+        userId: this.#userId,
+        type: 'user.message',
+        source: 'web',
+        dedupeKey: crypto.randomUUID(),
+        payload: { text, taskId, intent: 'steer' },
+      }),
+    })
+    if (!response.ok) await throwResponse(response)
+    const body = (await response.json()) as { event: InboxEvent }
+    return body.event
+  }
+
+  async retryEvent(eventId: string): Promise<InboxEvent> {
+    const response = await fetch(
+      `/v1/events/${encodeURIComponent(eventId)}/retry`,
+      {
+        method: 'POST',
+        headers: this.#headers(true),
+        body: JSON.stringify({ userId: this.#userId }),
+      },
+    )
+    if (!response.ok) await throwResponse(response)
+    const body = (await response.json()) as { event: InboxEvent }
+    return body.event
+  }
+
   async transcribeVoice(
     audio: Blob,
     language = 'zh',
