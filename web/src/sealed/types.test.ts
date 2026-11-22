@@ -1,7 +1,155 @@
 import { describe, expect, it } from 'vitest'
 
 import type { OutboxMessage } from '../types'
-import { attentionKind, attentionSummary, isAttentionMessage } from './types'
+import {
+  attentionKind,
+  attentionSummary,
+  conversationAnchor,
+  conversationLane,
+  isAttentionMessage,
+  isResolvedDecisionMessage,
+  isSilentConversationMessage,
+} from './types'
+
+describe('CONV-006 lane and anchor projection helpers', () => {
+  const base: OutboxMessage = {
+    id: 'message-lane',
+    userId: 'owner',
+    taskId: 'task-1',
+    payload: { type: 'run.completed', text: '完成' },
+    status: 'sent',
+    createdAt: '2026-11-22T00:00:00.000Z',
+  }
+
+  it('reads lane and anchor from the server projection only', () => {
+    const projected: OutboxMessage = {
+      ...base,
+      projection: {
+        lane: 'work',
+        weight: 'card',
+        anchor: { taskId: 'task-1', eventId: 'event-1' },
+      },
+    }
+    expect(conversationLane(projected)).toBe('work')
+    expect(conversationAnchor(projected)).toEqual({
+      taskId: 'task-1',
+      eventId: 'event-1',
+    })
+  })
+
+  it('degrades to inline say and no anchor without projection', () => {
+    expect(conversationLane(base)).toBe('say')
+    expect(conversationAnchor(base)).toBeUndefined()
+  })
+
+  it('marks approvals resolved only when a matching resolution exists', () => {
+    const required: OutboxMessage = {
+      ...base,
+      id: 'approval-required',
+      payload: { type: 'approval.required', approvalId: 'approval-1' },
+      projection: { lane: 'decide', weight: 'card' },
+    }
+    const otherResolved: OutboxMessage = {
+      ...base,
+      id: 'approval-other',
+      payload: { type: 'approval.resolved', approvalId: 'approval-2' },
+    }
+    const matchedResolved: OutboxMessage = {
+      ...base,
+      id: 'approval-matched',
+      payload: { type: 'approval.resolved', approvalId: 'approval-1' },
+    }
+    expect(isResolvedDecisionMessage(required, [required])).toBe(false)
+    expect(isResolvedDecisionMessage(required, [required, otherResolved])).toBe(
+      false,
+    )
+    expect(
+      isResolvedDecisionMessage(required, [required, matchedResolved]),
+    ).toBe(true)
+    expect(
+      isResolvedDecisionMessage({ ...required, projection: undefined }, [
+        required,
+        matchedResolved,
+      ]),
+    ).toBe(false)
+  })
+
+  it('marks reconciliations resolved by a matching action.reconciled fact', () => {
+    const required: OutboxMessage = {
+      ...base,
+      id: 'reconcile-required',
+      payload: {
+        type: 'action.reconciliation_required',
+        actionId: 'action-1',
+      },
+      projection: { lane: 'decide', weight: 'card' },
+    }
+    const reconciled: OutboxMessage = {
+      ...base,
+      id: 'reconciled',
+      payload: { type: 'action.reconciled', actionId: 'action-1' },
+    }
+    expect(isResolvedDecisionMessage(required, [required])).toBe(false)
+    expect(isResolvedDecisionMessage(required, [required, reconciled])).toBe(
+      true,
+    )
+  })
+})
+
+describe('CONV-006 silent conversation projection', () => {
+  const base: OutboxMessage = {
+    id: 'message-silent',
+    userId: 'owner',
+    taskId: 'task-1',
+    payload: { type: 'run.progress', text: '执行中' },
+    status: 'pending',
+    createdAt: '2026-11-22T00:00:00.000Z',
+  }
+
+  it('trusts the server projection when present', () => {
+    expect(
+      isSilentConversationMessage({
+        ...base,
+        projection: { lane: 'work', weight: 'silent' },
+      }),
+    ).toBe(true)
+    expect(
+      isSilentConversationMessage({
+        ...base,
+        payload: { type: 'future.process', text: '未知过程事实' },
+        projection: { lane: 'work', weight: 'silent' },
+      }),
+    ).toBe(true)
+    expect(
+      isSilentConversationMessage({
+        ...base,
+        projection: { lane: 'say', weight: 'inline' },
+      }),
+    ).toBe(false)
+  })
+
+  it('falls back to legacy payload types without projection attributes', () => {
+    expect(isSilentConversationMessage(base)).toBe(true)
+    expect(
+      isSilentConversationMessage({
+        ...base,
+        payload: { type: 'run.acknowledged', text: '接单' },
+      }),
+    ).toBe(true)
+    expect(
+      isSilentConversationMessage({
+        ...base,
+        payload: { type: 'run.completed', text: '完成' },
+      }),
+    ).toBe(false)
+    expect(
+      isSilentConversationMessage({
+        ...base,
+        payload: { type: 'future.process', text: '未知事实' },
+      }),
+    ).toBe(false)
+  })
+})
 
 describe('Goal delivery attention messages', () => {
   it.each([

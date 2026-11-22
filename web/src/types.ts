@@ -107,6 +107,13 @@ export interface OutboxMessage {
   readAt?: string
   lastError?: string
   resolution?: OutboxResolution
+  projection?: ConversationProjection
+}
+
+export interface ConversationProjection {
+  lane: 'say' | 'work' | 'decide'
+  weight: 'inline' | 'card' | 'silent'
+  anchor?: { taskId: string; eventId?: string }
 }
 
 export type Approval = ServerApproval

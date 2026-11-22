@@ -8,6 +8,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -283,6 +284,154 @@ describe('DESIGN-003 chat page', () => {
       }),
     ).toBeNull()
     expect(document.querySelector('.run-status-bar[data-active]')).toBeTruthy()
+  })
+
+  it('CONV-006: keeps server-marked silent facts out of the chat stream', async () => {
+    const projected: Snapshot = {
+      ...baseSnapshot,
+      messages: [
+        {
+          ...baseMessage,
+          projection: {
+            lane: 'work',
+            weight: 'silent',
+            anchor: { taskId: channel.id, eventId: 'event-1' },
+          },
+        },
+        {
+          id: 'message-future-silent',
+          userId: 'owner',
+          taskId: channel.id,
+          payload: { type: 'future.process', text: '过程噪声不应出现' },
+          status: 'sent',
+          createdAt: '2026-11-22T08:01:30.000Z',
+          projection: { lane: 'work', weight: 'silent' },
+        },
+        {
+          id: 'message-say',
+          userId: 'owner',
+          taskId: channel.id,
+          payload: { type: 'run.completed', text: '报表已完成' },
+          status: 'sent',
+          createdAt: '2026-11-22T08:03:00.000Z',
+          projection: {
+            lane: 'work',
+            weight: 'card',
+            anchor: { taskId: channel.id, eventId: 'event-1' },
+          },
+        },
+      ],
+    }
+    installChatFetch(projected)
+    render(<App />)
+    expect(await screen.findByText('报表已完成')).toBeTruthy()
+    expect(screen.queryByText('过程噪声不应出现')).toBeNull()
+    expect(
+      screen.queryByText('正在核对数据来源', {
+        selector: '.message-content *',
+      }),
+    ).toBeNull()
+  })
+
+  it('CONV-006: old servers without projection keep the legacy filter', async () => {
+    installChatFetch(baseSnapshot)
+    render(<App />)
+    const bar = await screen.findByRole('button', {
+      name: /进行中 · 整理季度数据/,
+    })
+    expect(bar.textContent).toContain('正在核对数据来源')
+    expect(
+      screen.queryByText('正在核对数据来源', {
+        selector: '.message-content *',
+      }),
+    ).toBeNull()
+  })
+
+  it('CONV-006: renders decide facts as action cards and marks them resolved', async () => {
+    const decideSnapshot: Snapshot = {
+      ...baseSnapshot,
+      runs: [{ ...runningRun, status: 'waiting' }],
+      messages: [
+        {
+          id: 'message-approval',
+          userId: 'owner',
+          taskId: channel.id,
+          payload: {
+            type: 'approval.required',
+            taskId: channel.id,
+            approvalId: 'approval-1',
+            text: '发布前需要确认影响范围',
+          },
+          status: 'sent',
+          createdAt: '2026-11-22T08:02:00.000Z',
+          projection: {
+            lane: 'decide',
+            weight: 'card',
+            anchor: { taskId: channel.id, eventId: 'event-1' },
+          },
+        },
+        {
+          id: 'message-approval-done',
+          userId: 'owner',
+          taskId: channel.id,
+          payload: {
+            type: 'approval.resolved',
+            taskId: channel.id,
+            approvalId: 'approval-1',
+            text: '已确认：暂不发布。',
+          },
+          status: 'sent',
+          createdAt: '2026-11-22T08:04:00.000Z',
+          projection: {
+            lane: 'work',
+            weight: 'card',
+            anchor: { taskId: channel.id, eventId: 'event-1' },
+          },
+        },
+      ],
+    }
+    installChatFetch(decideSnapshot)
+    render(<App />)
+    const decideCard = await screen.findByLabelText(/已处理：/)
+    expect(decideCard.classList.contains('is-resolved')).toBe(true)
+    expect(decideCard.textContent).toContain('发布前需要确认影响范围')
+    expect(
+      within(decideCard).queryByRole('button', { name: /查看内容|去处理/ }),
+    ).toBeNull()
+    expect(screen.getByLabelText(/工作进展：|已完成：/)).toBeTruthy()
+  })
+
+  it('CONV-006: unresolved decide cards keep an explicit action', async () => {
+    const decideSnapshot: Snapshot = {
+      ...baseSnapshot,
+      runs: [{ ...runningRun, status: 'waiting' }],
+      messages: [
+        {
+          id: 'message-approval-open',
+          userId: 'owner',
+          taskId: channel.id,
+          payload: {
+            type: 'approval.required',
+            taskId: channel.id,
+            approvalId: 'approval-open',
+            text: '发布前需要确认影响范围',
+          },
+          status: 'sent',
+          createdAt: '2026-11-22T08:02:00.000Z',
+          projection: { lane: 'decide', weight: 'card' },
+        },
+      ],
+    }
+    installChatFetch(decideSnapshot)
+    render(<App />)
+    const decideCard = await screen.findByLabelText(/需要你决定：/)
+    expect(decideCard.classList.contains('is-resolved')).toBe(false)
+    expect(
+      within(decideCard).getByRole('button', { name: /查看内容/ }),
+    ).toBeTruthy()
+    expect(
+      within(decideCard).queryByRole('button', { name: '回到发起消息' }),
+    ).toBeNull()
   })
 
   it('hides stale progress once the run reaches a terminal state', async () => {

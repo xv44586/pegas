@@ -20,6 +20,10 @@ import {
   type WorkerCollaborationRequest,
 } from '../collaboration/collaboration.js'
 import { sourceContextInput } from '../collaboration/source-context.js'
+import {
+  withConversationProjection,
+  type ConversationProjectionContext,
+} from '../conversation/projection.js'
 import type {
   ActionOutcomeDraft,
   ActionReconciliation,
@@ -10536,7 +10540,67 @@ export class PegasStore {
              WHERE user_id = ? ORDER BY created_at ASC, rowid ASC`,
           )
           .all(userId)
-    return rows.map(row => toOutboxMessage(row as unknown as OutboxRow))
+    return rows.map(row =>
+      this.#projectOutboxMessage(toOutboxMessage(row as unknown as OutboxRow)),
+    )
+  }
+
+  /**
+   * CONV-006: attach the read-only conversation projection to an Outbox
+   * message on the user-facing read path. Derivation reads authoritative
+   * Task/Run rows only; durable payloads, delivery state and dispatcher
+   * claims are untouched. A fact whose Task row cannot be read degrades to
+   * the compatible default instead of blocking the stream.
+   */
+  #projectOutboxMessage(message: OutboxMessage): OutboxMessage {
+    try {
+      return withConversationProjection(
+        message,
+        this.#conversationProjectionContext(message),
+      )
+    } catch {
+      return withConversationProjection(message)
+    }
+  }
+
+  #conversationProjectionContext(
+    message: OutboxMessage,
+  ): ConversationProjectionContext {
+    const context: ConversationProjectionContext = {}
+    const taskId =
+      message.taskId ??
+      (message.payload &&
+      typeof message.payload === 'object' &&
+      typeof (message.payload as { taskId?: unknown }).taskId === 'string'
+        ? (message.payload as { taskId: string }).taskId
+        : undefined)
+    if (taskId) {
+      const taskRow = this.#database
+        .prepare('SELECT id, kind, origin_event_id FROM tasks WHERE id = ?')
+        .get(taskId) as
+        { id: string; kind: string | null; origin_event_id: string } | undefined
+      if (taskRow) {
+        context.task = {
+          id: taskRow.id,
+          kind: taskRow.kind === 'conversation' ? 'conversation' : 'work',
+          originEventId: taskRow.origin_event_id,
+        }
+      }
+    }
+    const runId =
+      message.payload &&
+      typeof message.payload === 'object' &&
+      typeof (message.payload as { runId?: unknown }).runId === 'string'
+        ? (message.payload as { runId: string }).runId
+        : undefined
+    if (runId) {
+      const runRow = this.#database
+        .prepare('SELECT origin_event_id FROM runs WHERE id = ?')
+        .get(runId) as { origin_event_id: string | null } | undefined
+      if (runRow?.origin_event_id)
+        context.runOriginEventId = runRow.origin_event_id
+    }
+    return context
   }
 
   /**
@@ -10819,7 +10883,7 @@ export class PegasStore {
       .run(now, now, messageId, userId)
     if (result.changes !== 1)
       throw new Error(`Outbox message ${messageId} does not exist for user`)
-    return this.#outboxById(messageId)
+    return this.#outboxForUser(messageId, userId)
   }
 
   claimNextOutbox(
@@ -11071,7 +11135,7 @@ export class PegasStore {
     const resolution = this.#database
       .prepare('SELECT * FROM outbox_resolutions WHERE message_id = ?')
       .get(messageId) as unknown as OutboxResolutionRow | undefined
-    return resolution
+    const resolved = resolution
       ? {
           ...message,
           resolution: {
@@ -11083,6 +11147,7 @@ export class PegasStore {
           },
         }
       : message
+    return this.#projectOutboxMessage(resolved)
   }
 
   markOutboxSent(messageId: string, dispatcherId: string): void {

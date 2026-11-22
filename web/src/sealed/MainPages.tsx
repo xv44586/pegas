@@ -9,6 +9,7 @@ import {
   Copy,
   FileText,
   Layers3,
+  Link2,
   Mic,
   PauseCircle,
   Plus,
@@ -46,10 +47,13 @@ import {
   attentionKind,
   attentionSummary,
   clarificationQuestions,
+  conversationAnchor,
+  conversationLane,
   formatRelativeTime,
   formatRunDuration,
   isReconciliationMessage,
-  isRunProgressMessage,
+  isResolvedDecisionMessage,
+  isSilentConversationMessage,
   latestRunForTask,
   latestRunProgressText,
   needsOutboxResolution,
@@ -58,6 +62,8 @@ import {
   taskContextCue,
   textFromPayload,
   unresolvedAttentionMessages,
+  type ConversationAnchor,
+  type ConversationLane,
   type DrawerView,
   type TaskContextCue,
 } from './types'
@@ -339,6 +345,7 @@ export function ConversationPage({
   selectedModelId,
   onSelectModel,
   onAnswerClarification,
+  onOpenAttention,
   continuationChannel,
   sourceContextChannel,
   onClearContinuation,
@@ -357,6 +364,7 @@ export function ConversationPage({
   selectedModelId?: string
   onSelectModel: (model: DshModelCatalogItem) => Promise<void>
   onAnswerClarification: (channel: Snapshot['channels'][number]) => void
+  onOpenAttention: (message: OutboxMessage) => Promise<void>
   continuationChannel?: Snapshot['channels'][number]
   sourceContextChannel?: Snapshot['channels'][number]
   onClearContinuation: () => void
@@ -393,9 +401,13 @@ export function ConversationPage({
         status: event.status,
         attachment: event.attachment,
         cue: undefined as TaskContextCue | undefined,
+        lane: 'say',
+        anchor: undefined as ConversationAnchor | undefined,
+        resolved: false,
+        source: undefined as OutboxMessage | undefined,
       }))
     const pegas = snapshot.messages
-      .filter(message => !isRunProgressMessage(message))
+      .filter(message => !isSilentConversationMessage(message))
       .map(message => {
         const channel = snapshot.channels.find(
           item => item.id === message.taskId,
@@ -407,17 +419,34 @@ export function ConversationPage({
           text: textFromPayload(message.payload),
           at: message.createdAt,
           taskId: message.taskId,
-          cue: taskContextCue(message, snapshot.channels, snapshot.events),
+          cue: taskContextCue(message, snapshot.channels),
           clarification:
             channel?.statusReason === 'awaiting_goal_clarification'
               ? questions
               : undefined,
           review: reviewProjection(message),
+          lane: conversationLane(message),
+          anchor: conversationAnchor(message),
+          resolved: isResolvedDecisionMessage(message, snapshot.messages),
+          source: message,
         }
       })
-    return [...user, ...pegas]
+    const visible = [...user, ...pegas]
       .filter(message => message.text)
       .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
+    const derivedByOrigin = new Map<string, string[]>()
+    for (const message of visible) {
+      if (message.role !== 'pegas' || !message.anchor?.eventId) continue
+      if (message.lane === 'say') continue
+      const list = derivedByOrigin.get(message.anchor.eventId) ?? []
+      list.push(message.id)
+      derivedByOrigin.set(message.anchor.eventId, list)
+    }
+    return visible.map(message => ({
+      ...message,
+      derivedIds:
+        message.role === 'user' ? (derivedByOrigin.get(message.id) ?? []) : [],
+    }))
   }, [snapshot.channels, snapshot.events, snapshot.messages])
   useEffect(() => {
     const previous = previousPegasIdsRef.current
@@ -681,6 +710,37 @@ export function ConversationPage({
     setAttachment(file)
   }
 
+  const [highlightedId, setHighlightedId] = useState<string>()
+  const highlightTimerRef = useRef<number>(0)
+  useEffect(() => () => window.clearTimeout(highlightTimerRef.current), [])
+
+  function jumpToMessage(messageId: string) {
+    const content = chatScroll.contentRef.current
+    const row = content?.querySelector<HTMLElement>(
+      `[data-message-id="${CSS.escape(messageId)}"]`,
+    )
+    if (!row) return
+    if ('scrollIntoView' in row)
+      row.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    setHighlightedId(messageId)
+    window.clearTimeout(highlightTimerRef.current)
+    highlightTimerRef.current = window.setTimeout(
+      () => setHighlightedId(undefined),
+      1600,
+    )
+  }
+
+  function openTaskDetails(taskId: string | undefined) {
+    if (!taskId) return
+    const channel = snapshot.channels.find(item => item.id === taskId)
+    if (channel)
+      actions.onOpenDrawer({
+        kind: 'task',
+        channel,
+        run: latestRunForTask(snapshot.runs, channel.id),
+      })
+  }
+
   return (
     <div className="conversation-page">
       <PageHeader
@@ -706,9 +766,13 @@ export function ConversationPage({
                 className={[
                   'message-row',
                   `is-${message.role}`,
+                  message.role === 'pegas' && message.lane !== 'say'
+                    ? `is-lane-${message.lane}`
+                    : '',
                   messages[index + 1]?.role === message.role
                     ? 'grouped-next'
                     : '',
+                  highlightedId === message.id ? 'is-anchor-highlight' : '',
                 ]
                   .filter(Boolean)
                   .join(' ')}
@@ -716,26 +780,43 @@ export function ConversationPage({
                 key={message.id}
               >
                 <div className="message-content">
-                  {message.role === 'pegas' && message.cue && (
-                    <p className="message-context-cue">
-                      <span>「{message.cue.title}」</span>
-                      {message.cue.origin && (
-                        <small>原始请求：{message.cue.origin}</small>
+                  {message.role === 'pegas' && message.lane !== 'say' ? (
+                    <FactCard
+                      actions={actions}
+                      expanded={expandedMessages.has(message.id)}
+                      message={message}
+                      onAnswerClarification={onAnswerClarification}
+                      onJumpToMessage={jumpToMessage}
+                      onOpenAttention={onOpenAttention}
+                      onOpenTask={openTaskDetails}
+                      onToggleExpanded={() =>
+                        setExpandedMessages(current => {
+                          const next = new Set(current)
+                          if (next.has(message.id)) next.delete(message.id)
+                          else next.add(message.id)
+                          return next
+                        })
+                      }
+                      snapshot={snapshot}
+                    />
+                  ) : (
+                    <>
+                      {message.role === 'pegas' && message.cue && (
+                        <p className="message-context-cue">
+                          <span>「{message.cue.title}」</span>
+                        </p>
                       )}
-                      {message.cue.lastUser && (
-                        <small>你最近补充：{message.cue.lastUser}</small>
-                      )}
-                    </p>
+                      <MarkdownMessage
+                        content={
+                          message.text.length > 520 &&
+                          !expandedMessages.has(message.id)
+                            ? `${message.text.slice(0, 520)}…`
+                            : message.text
+                        }
+                        linkPreviewLoader={url => api.linkPreview(url)}
+                      />
+                    </>
                   )}
-                  <MarkdownMessage
-                    content={
-                      message.text.length > 520 &&
-                      !expandedMessages.has(message.id)
-                        ? `${message.text.slice(0, 520)}…`
-                        : message.text
-                    }
-                    linkPreviewLoader={url => api.linkPreview(url)}
-                  />
                   {message.role === 'user' && message.attachment && (
                     <span className="message-attachment">
                       <FileText size={14} />
@@ -743,7 +824,24 @@ export function ConversationPage({
                       {formatFileSize(message.attachment.byteSize)}
                     </span>
                   )}
-                  {message.text.length > 520 && (
+                  {message.role === 'user' && message.derivedIds.length > 0 && (
+                    <button
+                      className="inline-link is-derived-jump"
+                      onClick={() =>
+                        jumpToMessage(
+                          message.derivedIds[message.derivedIds.length - 1] ??
+                            message.id,
+                        )
+                      }
+                      type="button"
+                    >
+                      <Link2 size={14} />
+                      {message.derivedIds.length === 1
+                        ? '查看进展'
+                        : `查看进展 · ${String(message.derivedIds.length)}`}
+                    </button>
+                  )}
+                  {message.text.length > 520 && message.lane === 'say' && (
                     <button
                       className="inline-link"
                       onClick={() =>
@@ -763,79 +861,17 @@ export function ConversationPage({
                           : '展开完整回复'}
                     </button>
                   )}
-                  {message.role === 'pegas' && message.taskId && (
-                    <button
-                      className="inline-link"
-                      onClick={() => {
-                        const channel = snapshot.channels.find(
-                          item => item.id === message.taskId,
-                        )
-                        if (channel)
-                          actions.onOpenDrawer({
-                            kind: 'task',
-                            channel,
-                            run: latestRunForTask(snapshot.runs, channel.id),
-                          })
-                      }}
-                      type="button"
-                    >
-                      查看工作详情 <ArrowRight size={15} />
-                    </button>
-                  )}
-                  {message.role === 'pegas' && message.clarification && (
-                    <section className="clarification-card">
-                      <header>
-                        <CircleQuestionMark size={17} />
-                        <strong>开始执行前，需要你补充几点</strong>
-                      </header>
-                      <ol className="clarification-questions">
-                        {message.clarification.map(question => (
-                          <li key={question}>{question}</li>
-                        ))}
-                      </ol>
+                  {message.role === 'pegas' &&
+                    message.lane === 'say' &&
+                    message.taskId && (
                       <button
-                        className="primary-button"
-                        onClick={() => {
-                          const channel = snapshot.channels.find(
-                            item => item.id === message.taskId,
-                          )
-                          if (channel) onAnswerClarification(channel)
-                        }}
+                        className="inline-link"
+                        onClick={() => openTaskDetails(message.taskId)}
                         type="button"
                       >
-                        去回答 <ArrowRight size={15} />
+                        查看工作详情 <ArrowRight size={15} />
                       </button>
-                    </section>
-                  )}
-                  {message.role === 'pegas' && message.review && (
-                    <section className="review-card">
-                      <header>
-                        <CheckCircle2 size={17} />
-                        <strong>这件事有一份交付可以审查</strong>
-                      </header>
-                      <button
-                        className="primary-button"
-                        onClick={() => {
-                          const channel = snapshot.channels.find(
-                            item => item.id === message.taskId,
-                          )
-                          const source = snapshot.messages.find(
-                            item => item.id === message.id,
-                          )
-                          if (channel && source && message.review)
-                            actions.onOpenDrawer({
-                              kind: 'review',
-                              review: message.review,
-                              channel,
-                              message: source,
-                            })
-                        }}
-                        type="button"
-                      >
-                        审查交付 <ArrowRight size={15} />
-                      </button>
-                    </section>
-                  )}
+                    )}
                 </div>
                 <div className="message-meta">
                   <time dateTime={message.at}>
@@ -1194,6 +1230,212 @@ interface QueuedMessage {
   id: string
   text: string
   channelId: string
+}
+
+interface FactCardMessage {
+  id: string
+  text: string
+  taskId?: string
+  lane: ConversationLane
+  anchor?: ConversationAnchor
+  resolved: boolean
+  clarification?: string[]
+  review?: ReturnType<typeof reviewProjection>
+  source?: OutboxMessage
+}
+
+function factCardHeading(message: FactCardMessage): {
+  icon: typeof Check
+  label: string
+} {
+  if (message.lane === 'decide') {
+    if (message.resolved) return { icon: CheckCircle2, label: '已处理' }
+    if (message.review) return { icon: CheckCircle2, label: '需要你审查' }
+    if (message.clarification)
+      return { icon: CircleQuestionMark, label: '需要你补充' }
+    if (message.source && isReconciliationMessage(message.source))
+      return { icon: ShieldCheck, label: '需要你核对' }
+    return { icon: ShieldCheck, label: '需要你决定' }
+  }
+  const type =
+    message.source?.payload &&
+    typeof message.source.payload === 'object' &&
+    typeof (message.source.payload as { type?: unknown }).type === 'string'
+      ? (message.source.payload as { type: string }).type
+      : undefined
+  if (type === 'run.failed' || type === 'action.failed')
+    return { icon: CircleAlert, label: '执行失败' }
+  if (message.review) return { icon: CheckCircle2, label: '交付可审查' }
+  if (type === 'run.completed') return { icon: CheckCircle2, label: '已完成' }
+  return { icon: Layers3, label: '工作进展' }
+}
+
+function FactCard({
+  message,
+  snapshot,
+  actions,
+  expanded,
+  onToggleExpanded,
+  onJumpToMessage,
+  onOpenTask,
+  onAnswerClarification,
+  onOpenAttention,
+}: {
+  message: FactCardMessage
+  snapshot: Snapshot
+  actions: PageActions
+  expanded: boolean
+  onToggleExpanded: () => void
+  onJumpToMessage: (messageId: string) => void
+  onOpenTask: (taskId: string | undefined) => void
+  onAnswerClarification: (channel: Snapshot['channels'][number]) => void
+  onOpenAttention: (message: OutboxMessage) => Promise<void>
+}) {
+  const heading = factCardHeading(message)
+  const Icon = heading.icon
+  const channel = message.taskId
+    ? snapshot.channels.find(item => item.id === message.taskId)
+    : undefined
+  const summary = message.source
+    ? attentionSummary(message.source)
+    : { title: message.text }
+  const decideLabel = message.review
+    ? '审查交付'
+    : (message.clarification ||
+          (message.source &&
+            attentionKind(message.source) === 'input' &&
+            channel)) &&
+        channel
+      ? '去回答'
+      : message.source && needsOutboxResolution(message.source)
+        ? '核对投递'
+        : message.source && isReconciliationMessage(message.source)
+          ? '去核对'
+          : message.source && attentionKind(message.source) === 'approval'
+            ? '查看内容'
+            : '去处理'
+  const collapsedBody =
+    message.text.length > 520 ? `${message.text.slice(0, 520)}…` : message.text
+  const originEventId = message.anchor?.eventId
+  const originVisible =
+    originEventId !== undefined &&
+    snapshot.events.some(
+      event => event.id === originEventId && event.type === 'user.message',
+    )
+  return (
+    <section
+      aria-label={`${heading.label}：${channel?.title ?? summary.title}`}
+      className={[
+        'fact-card',
+        `is-${message.lane}`,
+        message.resolved ? 'is-resolved' : '',
+      ]
+        .filter(Boolean)
+        .join(' ')}
+    >
+      <header className="fact-card-header">
+        <Icon size={16} />
+        <strong>{heading.label}</strong>
+        {channel && (
+          <button
+            className="fact-card-task"
+            onClick={() => onOpenTask(message.taskId)}
+            type="button"
+          >
+            {channel.title}
+          </button>
+        )}
+        {originVisible && originEventId && (
+          <button
+            aria-label="回到发起消息"
+            className="fact-card-origin"
+            onClick={() => onJumpToMessage(originEventId)}
+            type="button"
+          >
+            <Link2 size={14} />
+          </button>
+        )}
+      </header>
+      <div className="fact-card-body">
+        <MarkdownMessage content={expanded ? message.text : collapsedBody} />
+        {message.text.length > 520 && (
+          <button
+            className="inline-link"
+            onClick={onToggleExpanded}
+            type="button"
+          >
+            {expanded ? '收起' : '展开完整内容'}
+          </button>
+        )}
+      </div>
+      {message.lane === 'decide' && !message.resolved && (
+        <div className="fact-card-actions">
+          <button
+            className="primary-button"
+            onClick={() => {
+              if (message.review && channel && message.source) {
+                actions.onOpenDrawer({
+                  kind: 'review',
+                  review: message.review,
+                  channel,
+                  message: message.source,
+                })
+                return
+              }
+              if (message.clarification && channel) {
+                onAnswerClarification(channel)
+                return
+              }
+              if (
+                message.source &&
+                attentionKind(message.source) === 'input' &&
+                channel
+              ) {
+                onAnswerClarification(channel)
+                return
+              }
+              if (
+                message.source &&
+                (attentionKind(message.source) === 'approval' ||
+                  isReconciliationMessage(message.source) ||
+                  needsOutboxResolution(message.source))
+              ) {
+                void onOpenAttention(message.source)
+                return
+              }
+              onOpenTask(message.taskId)
+            }}
+            type="button"
+          >
+            {decideLabel} <ArrowRight size={15} />
+          </button>
+        </div>
+      )}
+      {message.lane === 'work' && channel && (
+        <div className="fact-card-actions">
+          <button
+            className="secondary-button"
+            onClick={() => {
+              if (message.review && message.source) {
+                actions.onOpenDrawer({
+                  kind: 'review',
+                  review: message.review,
+                  channel,
+                  message: message.source,
+                })
+                return
+              }
+              onOpenTask(message.taskId)
+            }}
+            type="button"
+          >
+            {message.review ? '审查交付' : '查看工作详情'}{' '}
+            <ArrowRight size={15} />
+          </button>
+        </div>
+      )}
+    </section>
+  )
 }
 
 function escapeHtml(value: string): string {

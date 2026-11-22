@@ -755,8 +755,96 @@ a {
   color: var(--ink);
   font-weight: 500;
 }
-.message-context-cue small {
+
+.fact-card {
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  display: grid;
+  font-size: var(--text-caption);
+  gap: 10px;
+  max-width: 560px;
+  min-width: 0;
+  padding: 12px 14px;
+}
+.fact-card.is-decide {
+  border-color: var(--line-strong);
+}
+.fact-card.is-resolved {
+  opacity: 0.72;
+}
+.fact-card-header {
+  align-items: center;
   color: var(--muted);
+  display: flex;
+  font-size: var(--text-caption);
+  gap: 8px;
+  min-width: 0;
+}
+.fact-card-header strong {
+  color: var(--ink);
+  font-weight: 500;
+  white-space: nowrap;
+}
+.fact-card.is-decide .fact-card-header > svg {
+  color: var(--accent-ink, var(--accent));
+}
+.fact-card-task {
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--text-small);
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fact-card-task:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+.fact-card-origin {
+  align-items: center;
+  background: transparent;
+  border-radius: 8px;
+  color: var(--muted);
+  display: inline-flex;
+  height: 24px;
+  justify-content: center;
+  margin-left: auto;
+  padding: 0;
+  width: 24px;
+}
+.fact-card-origin:hover {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+.fact-card-body {
+  display: grid;
+  gap: 4px;
+  justify-items: start;
+  min-width: 0;
+}
+.fact-card-actions {
+  display: flex;
+  gap: 8px;
+}
+.message-row.is-anchor-highlight .message-content {
+  animation: anchor-flash 1.6s ease-out;
+}
+@keyframes anchor-flash {
+  0%,
+  35% {
+    background: var(--surface-hover);
+    box-shadow: 0 0 0 6px var(--surface-hover);
+    border-radius: 10px;
+  }
+  100% {
+    background: transparent;
+    box-shadow: 0 0 0 6px transparent;
+    border-radius: 10px;
+  }
 }
 
 .drawer-timeline {

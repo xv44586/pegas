@@ -3734,7 +3734,7 @@ describe('sealed Pegas UI', () => {
     ).toBeNull()
   })
 
-  it('cues the task origin and latest user input above terminal results', async () => {
+  it('anchors terminal result cards back to the origin message', async () => {
     const source = snapshot.messages[0]
     const originEvent = snapshot.events[0]
     if (!source || !originEvent) throw new Error('missing chat fixtures')
@@ -3759,17 +3759,32 @@ describe('sealed Pegas UI', () => {
             text: '价格表格已生成。',
           },
           createdAt: '2026-11-19T08:05:00.000Z',
+          projection: {
+            lane: 'work',
+            weight: 'card',
+            anchor: { taskId: channel.id, eventId: originEvent.id },
+          },
         },
       ],
     })
     render(<App />)
     expect(await screen.findByText('价格表格已生成。')).toBeTruthy()
-    const cue = document.querySelector('.message-context-cue')
-    expect(cue?.textContent).toContain(channel.title)
-    expect(cue?.textContent).toContain(
-      '原始请求：帮我设计一个安全的自更新流程。',
-    )
-    expect(cue?.textContent).toContain('你最近补充：重点看团队版，输出成表格')
+    const card = document.querySelector('.fact-card.is-work')
+    expect(card?.textContent).toContain(channel.title)
+    expect(card?.textContent).not.toContain('原始请求：')
+    expect(card?.textContent).not.toContain('你最近补充：')
+    fireEvent.click(screen.getByRole('button', { name: '回到发起消息' }))
+    expect(
+      document.querySelector(
+        `[data-message-id="${originEvent.id}"].is-anchor-highlight`,
+      ),
+    ).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '查看进展' }))
+    expect(
+      document.querySelector(
+        '[data-message-id="result-cue"].is-anchor-highlight',
+      ),
+    ).toBeTruthy()
   })
 
   it('shows router and rewrite metering with honest unreported tokens', async () => {
@@ -5734,6 +5749,11 @@ describe('sealed Pegas UI', () => {
         questions: ['发布窗口是哪个时间段？'],
         text: '发布窗口是哪个时间段？',
       },
+      projection: {
+        lane: 'decide' as const,
+        weight: 'card' as const,
+        anchor: { taskId: channel.id, eventId: 'event-1' },
+      },
     }
     installSnapshotFetch({
       ...snapshot,
@@ -5741,7 +5761,8 @@ describe('sealed Pegas UI', () => {
       messages: [clarificationMessage],
     })
     render(<App />)
-    expect(await screen.findByText('开始执行前，需要你补充几点')).toBeTruthy()
+    const card = await screen.findByLabelText(/需要你补充：/)
+    expect(card.textContent).toContain('发布窗口是哪个时间段？')
     fireEvent.click(screen.getByRole('button', { name: /去回答/ }))
     expect(await screen.findByText(/继续事情：/)).toBeTruthy()
   })
@@ -5765,7 +5786,7 @@ describe('sealed Pegas UI', () => {
     })
     render(<App />)
     await screen.findByText('你的私人智能工作伙伴')
-    expect(screen.queryByText('开始执行前，需要你补充几点')).toBeNull()
+    expect(screen.queryByRole('button', { name: /去回答/ })).toBeNull()
   })
 
   it('shows a compact review card in the conversation for review.ready', async () => {
@@ -5780,10 +5801,16 @@ describe('sealed Pegas UI', () => {
         text: '候选版本已交付，请审查。',
         review: reviewProjectionFixture,
       },
+      projection: {
+        lane: 'work' as const,
+        weight: 'card' as const,
+        anchor: { taskId: channel.id, eventId: 'event-1' },
+      },
     }
     installSnapshotFetch({ ...snapshot, messages: [reviewMessage] })
     render(<App />)
-    expect(await screen.findByText('这件事有一份交付可以审查')).toBeTruthy()
+    const card = await screen.findByLabelText(/交付可审查：/)
+    expect(card.textContent).toContain('候选版本已交付，请审查。')
     fireEvent.click(screen.getByRole('button', { name: /审查交付/ }))
     expect(await screen.findByText('按完成标准审查交付')).toBeTruthy()
   })

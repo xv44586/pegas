@@ -37,6 +37,7 @@ function renderWelcome(options?: {
       draft={options?.draft ?? ''}
       models={[]}
       onAnswerClarification={() => undefined}
+      onOpenAttention={() => Promise.resolve()}
       onClearContinuation={() => undefined}
       onClearSourceContext={() => undefined}
       onConfigureVoice={() => undefined}
