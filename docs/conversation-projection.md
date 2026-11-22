@@ -2,7 +2,7 @@
 
 > Feature：`CONV-006`（投影合同）、`CONV-007`（任务托盘与锚点导航）
 >
-> 状态：CONV-006 Partial（服务端派生层 + 投影 API + Web 三声道渲染 + anchor 双向导航已落地；say 流式未实现）；CONV-007 Partial（任务托盘 + 选中指向已落地；thread 分组未实现）
+> 状态：CONV-006 Partial（服务端派生层 + 投影 API + Web 三声道渲染 + anchor 双向导航已落地；say 流式未实现）；CONV-007 Usable（任务托盘 + 选中指向 + thread 结构分组已落地，验收 1–6 全覆盖）
 >
 > 更新日期：2026-11-23
 
@@ -114,4 +114,12 @@
 - **几何修复**：托盘使 composer 变高，`.composer-model-picker` 桌面/移动 `max-block-size` 扣减量各 +50px，保证向上弹出不越 viewport（review:ui 几何断言覆盖）。
 - **review:ui 种子确定性**：`scripts/capture-ui-review.mjs` 改用 dsh fixture executor（`PEGAS_ROUTER=rules`、collect window 0）；fixture 对托盘任务在 run 内用自身 claim token 走真实 `POST /v1/runs/:id/goal-proposals` 提交 Goal Contract，run 完成后服务端依合同停在 `awaiting_evidence`，托盘实拍稳定可见等待中任务；连续 4 次 `--force` 全绿。
 - **自动化证据**：`ChatExperience.test.tsx` 19 测试（CONV-007 新增 4：托盘列出/隐藏终态/切换选中、输入跟随选中而非最活跃、steer/queue 指向选中、空托盘不占布局与终态自动清除；既有 steer/queue 3 用例改为经托盘选中）；`App.test.tsx` 2 用例断言改 `findAllByText` 适配托盘标题重复；`pnpm check` 99 文件/1013 测试、`pnpm smoke`、`pnpm a11y:review` 0 违例。
-- **仍未实现（CONV-007 剩余缺口）**：同一任务连续事实的 thread 分组渲染（缩进/竖线/嵌套）；选中上下文条沿用「继续事情」横幅形态；托盘任务多时横向滚动、无分页/收纳。
+- **仍未实现（CONV-007 当时缺口）**：同一任务连续事实的 thread 分组渲染（缩进/竖线/嵌套）——已由下方 thread 分组补齐；选中上下文条沿用「继续事情」横幅形态；托盘任务多时横向滚动、无分页/收纳。
+
+## 已落地实现（2026-11-23，CONV-007：thread 分组渲染）
+
+- **结构分组规则**：`web/src/sealed/MainPages.tsx` 纯函数 `groupMessageThreads` 把连续 ≥2 条同 `taskId` 的 pegas 非 say 事实卡合成一个 thread 块；单卡、任务交错（A-B-A）、用户消息与 say 均不成组、并打断分组。分组只在客户端呈现层做，不改服务端投影与消息序。
+- **结构表达而非文案**：thread 渲染为 `<section class="message-thread">`（aria-label「事情进展：<任务名>」），左侧竖线用既有 `--line-strong` token + 14px 缩进（`web/src/sealed-ui.css`），无任何「你说过/来龙去脉」式解释性文案。
+- **去重复任务名**：thread 内首卡保留任务名按钮（打开事情详情），第 2 张起 `FactCard hideTaskTitle` 隐藏任务名；每张卡的锚点回链保留，归属由结构 + 锚点表达。thread 内除末卡外沿用 `grouped-next` 紧凑间距。
+- **自动化证据**：`ChatExperience.test.tsx` 21 测试（新增 2：连续同任务事实合成一个 thread 且任务名按钮仅 1 个、锚点按钮每卡保留；单卡/交错任务不成组）。`pnpm check` 100 文件/1031 测试、`pnpm smoke`、`pnpm review:ui --force`（既有 attention 种子含同任务连续 4 事实，桌面/390px 移动实拍竖线分组可见、几何断言通过）、`pnpm a11y:review` 0 违例。
+- **仍未实现（非验收缺口）**：选中上下文条沿用「继续事情」横幅形态；托盘任务多时横向滚动、无分页/收纳；thread 只收拢当前已加载消息，不跨分页合并。

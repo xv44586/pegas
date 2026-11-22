@@ -654,7 +654,19 @@ a {
 .message-row.grouped-next {
   margin-bottom: 4px;
 }
+.message-thread {
+  border-inline-start: 2px solid var(--line-strong);
+  contain: inline-size;
+  margin: 0 0 12px;
+  padding-inline-start: 14px;
+}
+.message-thread > .message-row:last-child {
+  margin-bottom: 0;
+}
 .conversation-flow > .message-row:last-child {
+  margin-bottom: 32px;
+}
+.conversation-flow > .message-thread:last-child {
   margin-bottom: 32px;
 }
 .message-row.is-user {
