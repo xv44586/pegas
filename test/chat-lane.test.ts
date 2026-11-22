@@ -612,6 +612,74 @@ describe('EXEC-005 conversation lane', () => {
     store.close()
   })
 
+  it('continues a conversation Task on the read-only lane without requiring a Worker Profile', async () => {
+    const store = new PegasStore(':memory:')
+    initializeSettings(store, true)
+    const event = store.enqueueEvent({
+      userId: 'owner',
+      type: 'user.message',
+      source: 'web',
+      authenticatedActor: 'human',
+      payload: { text: '你好' },
+    }).event
+    const claimedEvent = store.claimNextEvent('setup-router')
+    if (!claimedEvent) throw new Error('Expected the setup event claim')
+    const { task } = store.applyRoutingDecision(
+      claimedEvent,
+      { kind: 'reply', input: '你好', reason: 'casual' },
+      'echo-test',
+      conversationContext(),
+    )
+    store.completeEvent(event.id, 'setup-router')
+    const initialRun = store.listRuns(task.id)[0]
+    if (!initialRun) throw new Error('Expected the setup Run')
+    const claimedRun = store.claimNextRun('setup-executor')
+    if (!claimedRun) throw new Error('Expected the setup Run claim')
+    store.completeRun(claimedRun.run.id, 'setup-executor', {
+      executorRef: 'session-setup',
+      output: '你好！',
+    })
+
+    store.enqueueEvent({
+      userId: 'owner',
+      type: 'user.message',
+      source: 'web',
+      authenticatedActor: 'human',
+      payload: { taskId: task.id, text: '再讲讲' },
+    })
+    const handler = new RoutingEventHandler(
+      new ModelTaskRouter({
+        provider: new StubProvider({
+          kind: 'continue_task',
+          taskId: task.id,
+          title: '',
+          goal: '',
+          reason: 'explicit reference',
+        }),
+      }),
+      'echo-test',
+      profileTask =>
+        store.resolveWorkerExecutionContext(profileTask.id, 'owner', {
+          executor: 'echo-test',
+          workspace: '/workspace',
+          protocol: 'dsh-headless-v1',
+        }),
+    )
+    await processNextEvent(store, handler, 'router-continue')
+
+    const runs = store.listRuns(task.id)
+    const continuation = runs.find(run => run.originEventId !== event.id)
+    if (!continuation) throw new Error('Expected the continuation Run')
+    expect(continuation.executionContext).toMatchObject({
+      protocol: 'conversation-v1',
+    })
+    expect(continuation.executionContext.permissions).toContain('read-only')
+    expect(() => store.getWorkerProfile(task.id, 'owner')).toThrow(
+      'has no Worker Profile',
+    )
+    store.close()
+  })
+
   it('hides conversation Tasks from Channel search and the Channel list', async () => {
     const store = new PegasStore(':memory:')
     initializeSettings(store, true)
