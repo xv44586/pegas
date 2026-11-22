@@ -1,5 +1,11 @@
 import type { ExecutionContext } from '../core/domain.js'
 import type { RuntimeSettingsSelection } from '../settings/runtime-settings-selection.js'
+import {
+  globalDefaultPoolModel,
+  resolveExecutionPool,
+  type ExecutionPool,
+  type PoolResolution,
+} from './execution-pools.js'
 
 type WorkerProfileModelMode = 'inherit' | 'override'
 
@@ -10,6 +16,8 @@ export interface WorkerProfile {
   modelMode: WorkerProfileModelMode
   modelProvider?: string
   modelName?: string
+  pool?: ExecutionPool
+  effort?: string
   createdAt: string
   updatedAt: string
 }
@@ -20,6 +28,8 @@ export interface WorkerProfileUpdate {
   modelMode: WorkerProfileModelMode
   modelProvider?: string
   modelName?: string
+  pool?: ExecutionPool
+  effort?: string
 }
 
 export interface EffectiveWorkerProfile {
@@ -29,6 +39,9 @@ export interface EffectiveWorkerProfile {
   modelProvider?: string
   modelName?: string
   modelRef: string
+  pool?: ExecutionPool
+  effort?: string
+  poolResolution?: PoolResolution
 }
 
 export function parseWorkerProfileUpdate(value: unknown): WorkerProfileUpdate {
@@ -51,12 +64,22 @@ export function parseWorkerProfileUpdate(value: unknown): WorkerProfileUpdate {
     throw new Error('模型覆盖需要 provider 和 model')
   if (modelMode === 'inherit' && (modelProvider || modelName))
     throw new Error('继承全局设置时不能同时指定模型覆盖')
+  const poolValue = optionalString(input.pool, 'pool', 20)
+  const allowedPools: readonly string[] = ['fast', 'balanced', 'deep']
+  if (poolValue !== undefined && !allowedPools.includes(poolValue))
+    throw new Error('pool must be fast, balanced or deep')
+  const pool = poolValue as ExecutionPool | undefined
+  const effort = optionalString(input.effort, 'effort', 20)
+  if (modelMode === 'override' && pool)
+    throw new Error('模型覆盖与执行池不能同时指定')
   return {
     commandId,
     expectedRevision,
     modelMode,
     ...(modelProvider ? { modelProvider } : {}),
     ...(modelName ? { modelName } : {}),
+    ...(pool ? { pool } : {}),
+    ...(effort ? { effort } : {}),
   }
 }
 
@@ -65,6 +88,30 @@ export function effectiveWorkerProfile(
   settings: RuntimeSettingsSelection,
 ): EffectiveWorkerProfile {
   const taskOverride = profile.modelMode === 'override'
+  if (!taskOverride && profile.pool) {
+    const resolution = resolveExecutionPool(
+      profile.pool,
+      settings.executionPools ?? {},
+      globalDefaultPoolModel(settings),
+    )
+    if (!resolution.model) {
+      throw new Error(
+        resolution.downgradeReason ??
+          `Execution pool ${profile.pool} cannot be resolved`,
+      )
+    }
+    return {
+      profile,
+      source: 'task',
+      modelMode: 'override',
+      modelProvider: resolution.model.provider,
+      modelName: resolution.model.model,
+      modelRef: `${resolution.model.provider}/${resolution.model.model}`,
+      pool: resolution.actual ?? profile.pool,
+      ...(profile.effort ? { effort: profile.effort } : {}),
+      poolResolution: resolution,
+    }
+  }
   const modelMode = taskOverride ? 'override' : settings.agentModelMode
   const modelProvider = taskOverride
     ? profile.modelProvider
@@ -78,6 +125,7 @@ export function effectiveWorkerProfile(
     modelMode,
     ...(modelProvider ? { modelProvider } : {}),
     ...(modelName ? { modelName } : {}),
+    ...(profile.effort ? { effort: profile.effort } : {}),
     modelRef:
       modelMode === 'override' && modelProvider && modelName
         ? `${modelProvider}/${modelName}`
@@ -108,6 +156,14 @@ export function workerExecutionContext(
       ? { modelProvider: effective.modelProvider }
       : {}),
     ...(effective.modelName ? { modelName: effective.modelName } : {}),
+    ...(effective.pool ? { executionPool: effective.pool } : {}),
+    ...(effective.profile.pool && effective.profile.pool !== effective.pool
+      ? { requestedPool: effective.profile.pool }
+      : {}),
+    ...(effective.poolResolution?.downgradeReason
+      ? { poolDowngradeReason: effective.poolResolution.downgradeReason }
+      : {}),
+    ...(effective.effort ? { reasoningEffort: effective.effort } : {}),
     settingsRevision,
     workerProfile: effective.profile.id,
     workerProfileRevision: effective.profile.revision,
@@ -118,7 +174,12 @@ export function workerExecutionContext(
 export function workerProfileFingerprint(
   update: Pick<
     WorkerProfileUpdate,
-    'expectedRevision' | 'modelMode' | 'modelProvider' | 'modelName'
+    | 'expectedRevision'
+    | 'modelMode'
+    | 'modelProvider'
+    | 'modelName'
+    | 'pool'
+    | 'effort'
   >,
 ): string {
   return JSON.stringify({
@@ -126,6 +187,8 @@ export function workerProfileFingerprint(
     modelMode: update.modelMode,
     modelProvider: update.modelProvider ?? '',
     modelName: update.modelName ?? '',
+    pool: update.pool ?? '',
+    effort: update.effort ?? '',
   })
 }
 

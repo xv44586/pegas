@@ -1,6 +1,10 @@
 import { resolve } from 'node:path'
 
 import { loadConfig } from '../core/config.js'
+import {
+  createDshModelConfiguration,
+  ensureDshProfileHome,
+} from '../executor/dsh-home.js'
 import { loadDshModelCatalog } from '../executor/dsh-model-catalog.js'
 import { loadModelCredentialVault } from '../model/model-credential-vault.js'
 import { initializeConfiguredModelProvider } from '../model/provider-factory.js'
@@ -37,6 +41,9 @@ if (!store.hasRuntimeSettings()) {
   assertRuntimeSettingsAvailable(defaults, capabilities())
 }
 store.initializeRuntimeSettings(defaults)
+if (config.executorMode !== 'echo') {
+  ensureDshProfileHome(config.dshHome, config.dshProfile)
+}
 store.initializeSpeechConnection({
   provider: config.speechProvider,
   baseUrl: config.speechBaseUrl ?? '',
@@ -63,12 +70,31 @@ const server = createControlPlane({
     baseUrl: config.recoveryBaseUrl,
     ...(config.recoveryToken ? { token: config.recoveryToken } : {}),
   },
-  agentModelCatalog: () =>
-    loadDshModelCatalog({
+  agentModelCatalog: () => loadAgentModelCatalog(),
+})
+
+async function loadAgentModelCatalog() {
+  const settings = store.getRuntimeSettings()
+  const modelConfiguration = createDshModelConfiguration({
+    connections: store.listModelProviderConnections(),
+    vault: modelCredentialVault,
+    agentModel: {
+      provider: settings.modelProvider,
+      model: settings.modelName,
+    },
+  })
+  try {
+    return await loadDshModelCatalog({
       command: config.dshCommand,
       profile: config.dshProfile,
-    }),
-})
+      home: config.dshHome,
+      patchPath: modelConfiguration.patchPath,
+      environment: modelConfiguration.environment,
+    })
+  } finally {
+    modelConfiguration.remove()
+  }
+}
 
 server.listen(config.apiPort, config.apiHost, () => {
   logger.info('service.started', {

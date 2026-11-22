@@ -68,6 +68,7 @@ export function App() {
   const [page, setPage] = useState<AppPage>(() => pageFromLocation())
   const [drawer, setDrawer] = useState<DrawerView>()
   const [continuationTaskId, setContinuationTaskId] = useState<string>()
+  const [sourceContextTaskId, setSourceContextTaskId] = useState<string>()
   const [composerDraft, setComposerDraft] = useState('')
   const [settingsSection, setSettingsSection] = useState<SettingsSection>(() =>
     settingsSectionFromLocation(),
@@ -432,10 +433,17 @@ export function App() {
         : undefined) ??
       latestRunForTask(runs, channel.id) ??
       view.run
-    const records =
-      data.usage?.records.filter(record => record.runId === run?.id) ?? []
+    const taskRecords =
+      data.usage?.records.filter(record => record.taskId === channel.id) ?? []
+    const records = taskRecords.filter(record => record.runId === run?.id)
     if (!records.length)
-      return { ...view, channel, run, runs, usage: undefined }
+      return {
+        ...view,
+        channel,
+        run,
+        runs,
+        usage: taskRecords.length ? { records: taskRecords } : undefined,
+      }
     const sum = (key: 'totalTokens' | 'durationMs' | 'costUsd') => {
       const values = records
         .map(record => record[key])
@@ -466,6 +474,7 @@ export function App() {
           : undefined,
         durationMs: sum('durationMs'),
         costUsd: sum('costUsd'),
+        records: taskRecords,
       },
     }
   }
@@ -630,6 +639,98 @@ export function App() {
     if (view.kind === 'review' && !view.goal) loadReviewGoal(view)
     if (view.kind === 'runtime') loadRuntimeNodes()
   }
+  const runActivityRequestRef = useRef(new Map<string, number>())
+  const loadRunActivity = useCallback(
+    async (runId: string) => {
+      const requestId = (runActivityRequestRef.current.get(runId) ?? 0) + 1
+      runActivityRequestRef.current.set(runId, requestId)
+      try {
+        const activity = await api.runActivity(runId)
+        if (runActivityRequestRef.current.get(runId) !== requestId) return
+        setDrawer(current => {
+          if (current?.kind !== 'task') return current
+          const known =
+            current.runs?.some(item => item.id === runId) ??
+            current.run?.id === runId
+          if (!known) return current
+          const restErrors = Object.fromEntries(
+            Object.entries(current.activityErrorByRun ?? {}).filter(
+              ([key]) => key !== runId,
+            ),
+          )
+          return {
+            ...current,
+            activityByRun: {
+              ...current.activityByRun,
+              [runId]: activity,
+            },
+            activityErrorByRun: restErrors,
+          }
+        })
+      } catch (caught) {
+        if (runActivityRequestRef.current.get(runId) !== requestId) return
+        setDrawer(current =>
+          current?.kind === 'task'
+            ? {
+                ...current,
+                activityErrorByRun: {
+                  ...current.activityErrorByRun,
+                  [runId]:
+                    caught instanceof Error
+                      ? caught.message
+                      : '读取执行记录失败。',
+                },
+              }
+            : current,
+        )
+      }
+    },
+    [api],
+  )
+  const subagentRequestRef = useRef(new Map<string, number>())
+  const loadRunSubagents = useCallback(
+    async (runId: string) => {
+      const requestId = (subagentRequestRef.current.get(runId) ?? 0) + 1
+      subagentRequestRef.current.set(runId, requestId)
+      try {
+        const report = await api.runSubagents(runId)
+        if (subagentRequestRef.current.get(runId) !== requestId) return
+        setDrawer(current => {
+          if (current?.kind !== 'task') return current
+          const restErrors = Object.fromEntries(
+            Object.entries(current.subagentErrorByRun ?? {}).filter(
+              ([key]) => key !== runId,
+            ),
+          )
+          return {
+            ...current,
+            subagentsByRun: {
+              ...current.subagentsByRun,
+              [runId]: report,
+            },
+            subagentErrorByRun: restErrors,
+          }
+        })
+      } catch (caught) {
+        if (subagentRequestRef.current.get(runId) !== requestId) return
+        setDrawer(current =>
+          current?.kind === 'task'
+            ? {
+                ...current,
+                subagentErrorByRun: {
+                  ...current.subagentErrorByRun,
+                  [runId]:
+                    caught instanceof Error
+                      ? caught.message
+                      : '读取子任务记录失败。',
+                },
+              }
+            : current,
+        )
+      }
+    },
+    [api],
+  )
   function loadRuntimeNodes() {
     const requestId = nodesRequestRef.current + 1
     nodesRequestRef.current = requestId
@@ -688,6 +789,18 @@ export function App() {
     }
     setDrawer(view)
   }
+  const loadRunActivityRef = useRef(loadRunActivity)
+  loadRunActivityRef.current = loadRunActivity
+  const loadRunSubagentsRef = useRef(loadRunSubagents)
+  loadRunSubagentsRef.current = loadRunSubagents
+  const openRunWorkflow = useCallback((runId: string) => {
+    void loadRunActivityRef.current(runId).then(() => {
+      void loadRunSubagentsRef.current(runId)
+    })
+  }, [])
+  const openSubagentTranscript = useCallback((runId: string) => {
+    void loadRunSubagentsRef.current(runId)
+  }, [])
   function openSearch() {
     rememberFocus()
     setSearchOpen(true)
@@ -718,6 +831,28 @@ export function App() {
 
   const openDrawerChannelId = drawer?.kind === 'task' ? drawer.channel.id : ''
   const openApprovalId = drawer?.kind === 'approval' ? drawer.approval.id : ''
+  const openTaskLiveRunId =
+    drawer?.kind === 'task'
+      ? ((drawer.runs ?? (drawer.run ? [drawer.run] : [])).findLast(item =>
+          ['queued', 'running', 'waiting'].includes(item.status),
+        )?.id ?? '')
+      : ''
+  useEffect(() => {
+    if (!openTaskLiveRunId) return
+    const interval = window.setInterval(
+      () => void loadRunActivity(openTaskLiveRunId),
+      5_000,
+    )
+    return () => window.clearInterval(interval)
+  }, [loadRunActivity, openTaskLiveRunId])
+  useEffect(() => {
+    if (!openTaskLiveRunId) return
+    const interval = window.setInterval(
+      () => void loadRunSubagents(openTaskLiveRunId),
+      10_000,
+    )
+    return () => window.clearInterval(interval)
+  }, [loadRunSubagents, openTaskLiveRunId])
   const openReconciliationActionId =
     drawer?.kind === 'reconciliation' ? drawer.action.id : ''
   useEffect(() => {
@@ -1112,6 +1247,7 @@ export function App() {
   }
   function continueChannel(channelId: string) {
     setContinuationTaskId(channelId)
+    setSourceContextTaskId(undefined)
     const url = new URL(window.location.href)
     url.searchParams.delete('channel')
     url.searchParams.delete('task')
@@ -1191,11 +1327,19 @@ export function App() {
             actions={actions}
             api={api}
             continuationChannel={continuationChannel}
+            sourceContextChannel={
+              sourceContextTaskId
+                ? data.snapshot.channels.find(
+                    channel => channel.id === sourceContextTaskId,
+                  )
+                : undefined
+            }
             draft={composerDraft}
             modelProvider={selectedAgentProvider}
             models={availableAgentModels}
             onAnswerClarification={channel => continueChannel(channel.id)}
             onClearContinuation={() => setContinuationTaskId(undefined)}
+            onClearSourceContext={() => setSourceContextTaskId(undefined)}
             onConfigureVoice={() => {
               setSettingsSection('voice')
               navigate('settings', 'voice')
@@ -1405,7 +1549,15 @@ export function App() {
           onChange={changeDrawer}
           onClose={closeDrawer}
           onOpenView={openNestedDrawer}
+          onLoadRunActivity={openRunWorkflow}
+          onLoadRunSubagents={openSubagentTranscript}
           onContinue={channel => continueChannel(channel.id)}
+          onCreateRelated={channel => {
+            setSourceContextTaskId(channel.id)
+            setContinuationTaskId(undefined)
+            setDrawer(undefined)
+            navigate('conversation')
+          }}
           onResolveOutbox={resolveOutbox}
           onDecideApproval={async (approvalId, optionId, rationale) => {
             approvalProjectionRequestRef.current += 1

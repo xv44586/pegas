@@ -204,6 +204,42 @@
 - Enforcement：尚未晋升为全仓规则；本次以短查询回归测试约束该分支。
 - Owner / next action：后续给 `searchChannels` 或其他条件拼接查询增加分支时，必须为每个分支补参数绑定回归；同类问题在三个独立日期出现后晋升为门禁。
 
+### LESSON-20261122-01：快速结束的进程边界必须验证下一跳的独占资源交接
+
+- Rule：一个 Run 以「提前结束当前 Executor 进程、由 successor 恢复同一持久 session」为协议时，必须用真实进程验证 park→resume 交接：前一进程的资源释放（如 DSH session 内核写锁的 bounded dispose 窗口）与 successor 的获取时机要能闭环，mock Executor 测试不能替代。
+- Why：APPROVAL-001 桥接在 fake DSH 全链路测试与全部门禁通过后，真实 DSH 联调发现 park 进程在 turn 结束后仍持有 session flock 最长约 5 秒（DSH 设计上的 bounded shutdown），用户秒批时 successor 立即 resume 撞 `already owned by an active write handle`，Run 失败且 authorized Action 被 fence 转为 unknown，需要人工核对。修复为 Executor 对该确定性错误做有界重试（默认 20s，可配置，abort 即停）。
+- Feature：APPROVAL-001
+- Evidence：2026-11-22 真实 DSH 0.2.2-rc.5 + Pegas dist 联调（隔离 home + 受管模型配置）；park 成功创建 `dsh.tool.bash` Approval，approve 后 successor 报 session write handle 冲突；`dsh-session-persistence-jsonl` lease 注释与 `profile-boot` `PROCESS_SHUTDOWN_TIMEOUT_MS=5000` 证实窗口；`test/dsh-cli-executor.test.ts` 新增锁释放后重试成功与超窗失败两条回归。
+- Seen：1（2026-11-22）
+- Severity：recovery
+- Status：Observed
+- Enforcement：本次以两条确定性回归 + 真实进程 park→approve→resume 联调作为该路径验收；后续同类进程交接 Feature 必须包含真实进程交接验证。
+- Owner / next action：同类问题再次出现时晋升为「进程交接必须真实进程验证」的仓库条款或 smoke 场景（把 park→resume 加入 smoke:crash 类脚本）。
+
+### LESSON-20261122-02：服务入口的运行时装配必须有真实进程验证
+
+- Rule：`src/*/main.ts` 等服务入口新增运行时装配（类、闭包、初始化顺序）时，必须至少有一条真实进程路径（smoke 或等价启动验证）覆盖新装配；单元测试与 `pnpm check` 不能替代入口初始化顺序验证。
+- Why：EXEC-007 把 `ManagedDshExecutor` 类声明放在 worker 入口主循环之后，主循环同步启动即引用该类触发 TDZ `ReferenceError`，每个 Run 执行失败；`pnpm check`（708 测试）全绿，缺陷由 `pnpm smoke:crash` 真实进程暴露。main.ts 不在单元测试 import 图内，此类错误对 typecheck/lint/coverage 全部不可见。
+- Feature：EXEC-007
+- Evidence：2026-11-22 EXEC-007 worktree；修复前 `pnpm smoke:crash` 报 `worker did not reach the event-claim crash point`，worker 日志 `Cannot access 'ManagedDshExecutor' before initialization`；把类声明移到主循环之前后 smoke:crash 三崩溃点通过。
+- Seen：1（2026-11-22）
+- Severity：normal
+- Status：Observed
+- Enforcement：尚未晋升为全仓规则；本次以 `pnpm smoke` + `pnpm smoke:crash` 作为该入口改动的完成门禁。
+- Owner / next action：同类问题再次出现时评估把「入口改动必须跑进程级 smoke」晋升为 AGENTS.md 条款或 CI 条件门禁。
+
+### LESSON-20261122-03：以 prop 为 key 的组件内重置 effect 会吞掉挂载后立刻发起的异步状态
+
+- Rule：组件用 `useState('') + useEffect 比较 key` 做「切换对象时重置」时，重置 effect 会在首次挂载后必然运行一次；若用户在首帧内触发异步加载（点击展开、自动预取），结果会被这次重置清空。key 状态应初始化为当前 prop（`useState(channelId)`），或改用父层 `key` 强制重挂载。
+- Why：DESIGN-002 详情抽屉 `DeliverySection` 的 `historyKey` 初始为 `''`，挂载后的重置 effect 与「查看历史修订」的 fetch 竞争：CI 慢机器上 fetch 在重置前完成时 `setHistoryOpen(false)`/`setHistory(undefined)` 吞掉结果，历史修订间歇性打不开；本地快机器 fetch 慢于重置所以全绿。
+- Feature：DESIGN-002
+- Evidence：2026-11-22 CI run 44982291853 `drills into goal and review pack history` 失败；本地插桩日志证实 `TOGGLE-OPEN → RESET → HISTORY-SET` 顺序；`historyKey` 改为 `useState(channelId)` 后完整 App 套件连续 5 次全绿（修复前 3 次内可复现失败）。同 run 还暴露 UTC 时区 `-0` 断言问题（`-getTimezoneOffset()` 在 UTC 下为 `-0`），断言改为 `|| 0` 归一化。
+- Seen：1（2026-11-22）
+- Severity：normal
+- Status：Observed
+- Enforcement：尚未晋升为全仓规则；本次以组件修复 + 既有回归作为门禁。
+- Owner / next action：同类问题再次出现时晋升为「key-reset effect 必须初始化自当前 prop」的 Lint 规则或 review checklist。
+
 <!--
 ### LESSON-YYYYMMDD-NN：简短标题
 

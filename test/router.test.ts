@@ -45,11 +45,13 @@ describe('ModelTaskRouter', () => {
     expect(provider.calls).toBe(1)
   })
 
-  it('lets the model recall a completed task but never a stopped task', async () => {
+  it('never offers completed or stopped tasks as default candidates', async () => {
     const provider = new CapturingProvider({
-      kind: 'continue_task',
-      taskId: 'task-completed',
-      reason: 'The user is continuing completed work.',
+      kind: 'create_task',
+      taskId: '',
+      title: 'One more check',
+      goal: 'Add one more check as new work.',
+      reason: 'No open task matches.',
     })
     const router = new ModelTaskRouter({ provider })
 
@@ -59,10 +61,9 @@ describe('ModelTaskRouter', () => {
     ])
 
     expect(decision).toMatchObject({
-      kind: 'continue_task',
-      taskId: 'task-completed',
+      kind: 'create_task',
     })
-    expect(provider.input).toContain('task-completed')
+    expect(provider.input).not.toContain('task-completed')
     expect(provider.input).not.toContain('task-stopped')
   })
 
@@ -160,6 +161,7 @@ function task(
     title,
     goal: title,
     status,
+    kind: 'work',
     workerIconId: 'computer',
     mandate: {
       strength: 'explicit',

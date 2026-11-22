@@ -2,22 +2,39 @@ import type {
   ClaimedRun,
   ExecutionContext,
   InboxEvent,
+  SubagentTranscript,
   Task,
 } from '../core/domain.js'
-import type { RunExecutor } from '../executor/executor.js'
+import type { RunExecutor, ToolApprovalGrant } from '../executor/executor.js'
 import type { Logger } from '../observability/logger.js'
 import type { MetricsRegistry } from '../observability/metrics.js'
 import type { TaskRouter } from '../router/router.js'
+import { prefilterDecision } from '../router/prefilter.js'
+import {
+  deriveTaskSourceContext,
+  sourceContextInput,
+} from '../collaboration/source-context.js'
 import {
   EventClaimError,
   TaskActionBlockedError,
   type PegasStore,
 } from '../storage/sqlite-store.js'
 import { runExecutionWorkspace } from './run-execution-snapshot.js'
+import { isTerminalProviderError } from './provider-errors.js'
 
 export interface EventHandler {
   handle(event: InboxEvent, store: PegasStore): Promise<void>
 }
+
+/**
+ * Reads a finished Run's delegated child-session transcripts. Injected by the
+ * worker runtime (DSH durable logs + privacy restore); absent in tests and
+ * non-DSH deployments, where subagent detail is simply not collected.
+ */
+export type SubagentTranscriptCollector = (input: {
+  rootSessionId: string
+  workspace: string
+}) => SubagentTranscript[]
 
 export function localControlPlaneBaseUrl(host: string, port: number): string {
   if (host === '0.0.0.0') return `http://127.0.0.1:${String(port)}`
@@ -60,17 +77,105 @@ export class RoutingEventHandler implements EventHandler {
       await this.#handleCollaborationEvent(event, store)
       return
     }
-    const decision = await this.#router.route(
-      event,
-      store.listTasks(event.userId),
-    )
+    if (event.type === 'conversation.suggest_task') {
+      this.#handleConversationSuggestion(event, store)
+      return
+    }
+    const candidates = store.listRoutingCandidates(event.userId)
+    const routingContext = {
+      resolveExplicitTask: (taskId: string) =>
+        store.findTask(taskId, event.userId),
+      resolveSourceContext: (sourceTaskId: string) =>
+        deriveTaskSourceContext(store, sourceTaskId, event.userId),
+    }
+    const decision =
+      prefilterDecision(event, candidates, {
+        chatLaneEnabled:
+          store.hasRuntimeSettings() &&
+          store.getRuntimeSettings().chatLaneEnabled === true,
+      }) ?? (await this.#router.route(event, candidates, routingContext))
     if (!decision) return
+    const sourceReference = sourceTaskReference(event)
+    if (sourceReference && decision.kind !== 'create_task') {
+      const sourceContext = routingContext.resolveSourceContext(sourceReference)
+      if (!sourceContext) {
+        throw new Error(
+          `Source task ${sourceReference} has no terminal facts to hand off`,
+        )
+      }
+      const text = userMessageText(event)
+      store.applyRoutingDecision(
+        event,
+        {
+          kind: 'create_task',
+          title: text.replaceAll(/\s+/g, ' ').slice(0, 120),
+          goal: text,
+          input: text,
+          reason:
+            'The message explicitly references an ended source Task; a related Task is required.',
+          sourceContext,
+        },
+        this.#executorName,
+        task => this.#executionContext(task),
+      )
+      return
+    }
     if (decision.kind === 'steer_task' || decision.kind === 'cancel_task') {
       store.applyControlIntent(event, decision)
       return
     }
+    if (
+      decision.kind === 'reply' &&
+      !store.getRuntimeSettings().chatLaneEnabled
+    ) {
+      store.applyRoutingDecision(
+        event,
+        {
+          kind: 'create_task',
+          title: decision.input.trim().replaceAll(/\s+/g, ' ').slice(0, 120),
+          goal: decision.input,
+          input: decision.input,
+          reason: `Chat lane disabled; reply fell back to a Task. ${decision.reason}`,
+        },
+        this.#executorName,
+        task => this.#executionContext(task),
+      )
+      return
+    }
+    if (decision.kind === 'reply') {
+      const settings = store.getRuntimeSettings()
+      store.applyRoutingDecision(event, decision, this.#executorName, {
+        executor: this.#executorName,
+        protocol: 'conversation-v1',
+        permissions: JSON.stringify({
+          mode: 'read-only',
+          approvalPolicy: 'never',
+          additionalDirectories: [],
+          privacyMode: settings.privacyMode,
+        }),
+      })
+      return
+    }
     store.applyRoutingDecision(event, decision, this.#executorName, task =>
       this.#executionContext(task),
+    )
+  }
+
+  #handleConversationSuggestion(event: InboxEvent, store: PegasStore): void {
+    const payload = recordPayload(event.payload, 'conversation.suggest_task')
+    const text = requiredPayloadString(payload, 'text')
+    store.applyRoutingDecision(
+      event,
+      {
+        kind: 'create_task',
+        title: text.replaceAll(/\s+/g, ' ').slice(0, 120),
+        goal: text,
+        input: text,
+        reason:
+          'Conversation executor suggested a Task for work with side effects.',
+      },
+      this.#executorName,
+      task => this.#executionContext(task),
     )
   }
 
@@ -170,11 +275,16 @@ export class RoutingEventHandler implements EventHandler {
       )
       const decision = await this.#router.route(
         { ...event, type: 'user.message', payload: { text } },
-        candidates,
+        store.listRoutingCandidates(event.userId, {
+          excludeTaskId: sourceTaskId,
+        }),
       )
       if (!decision) throw new Error('Router did not classify handback input')
       if (decision.kind === 'steer_task' || decision.kind === 'cancel_task') {
         throw new Error('Handback routing cannot mint control intents')
+      }
+      if (decision.kind === 'reply') {
+        throw new Error('Handback routing cannot mint instant replies')
       }
       if (
         decision.kind === 'continue_task' &&
@@ -204,12 +314,27 @@ export class RoutingEventHandler implements EventHandler {
         source.status === 'cancelled'
       )
         return
+      const targetTaskId = optionalPayloadString(payload, 'targetTaskId')
+      const sourceContext =
+        event.type === 'collaboration.returned' && targetTaskId
+          ? deriveTaskSourceContext(
+              store,
+              targetTaskId,
+              event.userId,
+              relationId,
+            )
+          : undefined
       store.applyRoutingDecision(
         event,
         {
           kind: 'continue_task',
           taskId: source.id,
-          input: collaborationInput(event.type, payload),
+          input: sourceContext
+            ? sourceContextInput(
+                collaborationInput(event.type, payload),
+                sourceContext,
+              )
+            : collaborationInput(event.type, payload),
           reason: `Control Plane delivered ${event.type}.`,
         },
         this.#executorName,
@@ -227,6 +352,134 @@ function recordPayload(value: unknown, field: string): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value))
     throw new Error(`${field} must be an object`)
   return value as Record<string, unknown>
+}
+
+function sourceTaskReference(event: InboxEvent): string | undefined {
+  if (event.type !== 'user.message') return undefined
+  const payload = event.payload
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload))
+    return undefined
+  const value = (payload as Record<string, unknown>).sourceTaskId
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function userMessageText(event: InboxEvent): string {
+  return requiredPayloadString(
+    recordPayload(event.payload, 'user.message'),
+    'text',
+  )
+}
+
+/**
+ * EXEC-005: the conversation lane. The Run executes on the user's rolling
+ * conversation session with a read-only tool surface; the reply goes through
+ * the normal Outbox. A structured suggest_task marker upgrades the request
+ * into a full Task through the Durable Inbox instead of executing side
+ * effects here.
+ */
+async function executeConversationRun(
+  store: PegasStore,
+  executor: RunExecutor,
+  claimed: ClaimedRun,
+  workerId: string,
+  workingDirectory: string,
+  signal: AbortSignal,
+  telemetry?: { logger?: Logger; metrics?: MetricsRegistry },
+): Promise<void> {
+  const runStartedAt = performance.now()
+  const leaseHeartbeat = setInterval(() => {
+    try {
+      store.renewRunLease(claimed.run.id, workerId)
+    } catch (error) {
+      telemetry?.logger?.error('conversation.lease_renew_failed', error, {
+        runId: claimed.run.id,
+        workerId,
+      })
+    }
+  }, 10_000)
+  leaseHeartbeat.unref()
+  const memories = store.memoryContextEntriesForTask(
+    claimed.task.userId,
+    claimed.task.id,
+  )
+  const workRules = store.workRuleContextForUser(claimed.task.userId)
+  const resumeSessionId = store.conversationSessionRef(claimed.task.userId)
+  let result
+  try {
+    result = await executor.execute({
+      runId: claimed.run.id,
+      taskId: claimed.task.id,
+      prompt: claimed.run.input,
+      workingDirectory,
+      executionContext: claimed.run.executionContext,
+      executionContractVersion: claimed.run.executionContractVersion,
+      mandate: claimed.task.mandate,
+      ...(memories.length > 0 ? { memories } : {}),
+      ...(workRules.rules.length > 0 || workRules.customInstructions
+        ? { workRules }
+        : {}),
+      ...(resumeSessionId ? { resumeSessionId } : {}),
+      onExecutorRef: executorRef => {
+        store.recordExecutorRef(claimed.run.id, workerId, executorRef)
+        store.recordConversationSessionRef(claimed.task.userId, executorRef)
+      },
+      signal,
+    })
+  } catch (error) {
+    clearInterval(leaseHeartbeat)
+    if (signal.aborted) return
+    if (!store.ownsRun(claimed.run.id, workerId)) return
+    const message = error instanceof Error ? error.message : String(error)
+    store.failRun(claimed.run.id, workerId, message)
+    telemetry?.logger?.error('conversation.execution_failed', error, {
+      runId: claimed.run.id,
+      taskId: claimed.task.id,
+      workerId,
+    })
+    telemetry?.metrics?.increment('pegas_runs_total', { outcome: 'failed' })
+    return
+  }
+  clearInterval(leaseHeartbeat)
+  if (!store.ownsRun(claimed.run.id, workerId)) return
+  store.recordConversationSessionRef(claimed.task.userId, result.executorRef)
+  const suggestion = conversationSuggestion(result.output)
+  if (suggestion) {
+    store.completeRun(claimed.run.id, workerId, {
+      ...result,
+      output: suggestion.reply ?? '这件事需要作为正式任务处理，我已为你创建。',
+    })
+    store.enqueueEvent({
+      userId: claimed.task.userId,
+      type: 'conversation.suggest_task',
+      source: 'conversation',
+      dedupeKey: `suggest-task:${claimed.run.id}`,
+      payload: { text: suggestion.goal, fromTaskId: claimed.task.id },
+    })
+    telemetry?.metrics?.increment('pegas_runs_total', { outcome: 'completed' })
+    return
+  }
+  store.completeRun(claimed.run.id, workerId, result)
+  telemetry?.metrics?.increment('pegas_runs_total', { outcome: 'completed' })
+  telemetry?.metrics?.observe(
+    'pegas_run_duration_seconds',
+    (performance.now() - runStartedAt) / 1000,
+    { outcome: 'completed' },
+  )
+}
+
+export function conversationSuggestion(
+  output: string,
+): { goal: string; reply?: string } | undefined {
+  const trimmed = output.trim()
+  const match =
+    /^PEGAS_SUGGEST_TASK_BEGIN\s*\n([\s\S]*?)\nPEGAS_SUGGEST_TASK_END\s*$/m.exec(
+      trimmed,
+    )
+  if (!match) return undefined
+  const goal = (match[1] ?? '').trim()
+  if (!goal) return undefined
+  const reply = trimmed.slice(0, match.index).trim()
+  return { goal, ...(reply ? { reply } : {}) }
 }
 
 function collaborationPayload(value: unknown): Record<string, unknown> {
@@ -305,13 +558,22 @@ export async function processNextEvent(
   handler: EventHandler,
   workerId: string,
   telemetry?: { logger?: Logger; metrics?: MetricsRegistry },
+  options: { collectWindowMs?: number } = {},
 ): Promise<boolean> {
   const event = store.claimNextEvent(workerId)
   if (!event) return false
 
+  const batch = await collectMessageBatch(
+    store,
+    event,
+    workerId,
+    options.collectWindowMs ?? 0,
+  )
+  const routedEvent = batch.merged ?? event
   const leaseHeartbeat = setInterval(() => {
     try {
-      store.renewEventLease(event.id, workerId)
+      for (const member of batch.events)
+        store.renewEventLease(member.id, workerId)
     } catch (error) {
       telemetry?.logger?.error('event.lease_renew_failed', error, {
         eventId: event.id,
@@ -326,8 +588,8 @@ export async function processNextEvent(
   leaseHeartbeat.unref()
 
   try {
-    await handler.handle(event, store)
-    store.completeEvent(event.id, workerId)
+    await handler.handle(routedEvent, store)
+    for (const member of batch.events) store.completeEvent(member.id, workerId)
     telemetry?.metrics?.increment('pegas_events_processed_total', {
       outcome: 'processed',
     })
@@ -343,14 +605,19 @@ export async function processNextEvent(
       return true
     }
     if (error instanceof TaskActionBlockedError) {
-      store.parkEventForBlockedAction(event.id, workerId, error.taskId)
+      store.parkEventForBlockedAction(routedEvent.id, workerId, error.taskId)
+      for (const member of batch.events) {
+        if (member.id !== routedEvent.id)
+          store.completeEvent(member.id, workerId)
+      }
       telemetry?.metrics?.increment('pegas_events_processed_total', {
         outcome: 'parked',
       })
       return true
     }
     const message = error instanceof Error ? error.message : String(error)
-    store.failEvent(event.id, workerId, message)
+    for (const member of batch.events)
+      store.failEvent(member.id, workerId, message)
     telemetry?.logger?.error('event.processing_failed', error, {
       eventId: event.id,
       workerId,
@@ -368,6 +635,78 @@ export async function processNextEvent(
   return true
 }
 
+interface MessageBatch {
+  events: InboxEvent[]
+  merged?: InboxEvent
+}
+
+/**
+ * PLAN-001 P2: a short claim-side collect window merges consecutive plain
+ * user messages from the same authenticated human into one routing input.
+ * Explicit taskId references, control-command candidates and any
+ * non-message events are never delayed or merged. Event persistence is
+ * unchanged: every member keeps its own durable row and terminal state.
+ */
+async function collectMessageBatch(
+  store: PegasStore,
+  first: InboxEvent,
+  workerId: string,
+  windowMs: number,
+): Promise<MessageBatch> {
+  if (windowMs <= 0 || !mergeableMessage(first)) return { events: [first] }
+  const events = [first]
+  const deadline = performance.now() + windowMs
+  while (performance.now() < deadline) {
+    const next = store.claimNextEvent(workerId)
+    if (!next) {
+      await new Promise(resolve =>
+        setTimeout(
+          resolve,
+          Math.min(25, Math.max(1, deadline - performance.now())),
+        ),
+      )
+      continue
+    }
+    if (!mergeableMessage(next) || next.userId !== first.userId) {
+      store.releaseEventClaim(next.id, workerId)
+      break
+    }
+    events.push(next)
+  }
+  if (events.length === 1) return { events }
+  const texts = events.map(member => messageText(member))
+  return {
+    events,
+    merged: {
+      ...first,
+      payload: { text: texts.join('\n') },
+    },
+  }
+}
+
+function mergeableMessage(event: InboxEvent): boolean {
+  if (event.type !== 'user.message') return false
+  if (event.authenticatedActor !== 'human') return false
+  if (event.source === 'collaboration' || event.source === 'automation')
+    return false
+  if (!isRecordPayload(event.payload)) return false
+  if (event.payload.taskId !== undefined) return false
+  const text = event.payload.text
+  if (typeof text !== 'string' || !text.trim()) return false
+  return !/^(?:停掉|停止|取消)\s*\S/.test(text.trim())
+}
+
+function messageText(event: InboxEvent): string {
+  const payload = event.payload
+  if (isRecordPayload(payload) && typeof payload.text === 'string')
+    return payload.text.trim()
+  throw new Error('user.message payload requires non-empty text')
+}
+
+function isRecordPayload(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
 export async function executeClaimedRun(
   store: PegasStore,
   executor: RunExecutor,
@@ -377,6 +716,7 @@ export async function executeClaimedRun(
   signal: AbortSignal,
   controlPlaneBaseUrl: string,
   telemetry?: { logger?: Logger; metrics?: MetricsRegistry },
+  collectSubagents?: SubagentTranscriptCollector,
 ): Promise<void> {
   const runStartedAt = performance.now()
   const observeRun = (outcome: string) => {
@@ -414,11 +754,47 @@ export async function executeClaimedRun(
     })
     return
   }
+  if (claimed.task.kind === 'conversation') {
+    await executeConversationRun(
+      store,
+      executor,
+      claimed,
+      workerId,
+      workingDirectory,
+      signal,
+      telemetry,
+    )
+    return
+  }
   const runAbort = new AbortController()
   const abortRun = () => runAbort.abort(signal.reason)
   if (signal.aborted) abortRun()
   else signal.addEventListener('abort', abortRun, { once: true })
   const steeringState = { pending: false }
+  const activityState = {
+    recent: [] as string[],
+    toolCalls: 0,
+    steps: 0,
+    events: 0,
+  }
+  let liveExecutorRef: string | undefined =
+    claimed.run.executorRef ?? claimed.run.resumeFromRef
+  let lastSubagentSweepAt = 0
+  const sweepSubagentTranscripts = () => {
+    if (!collectSubagents || !liveExecutorRef) return
+    const now = Date.now()
+    if (now - lastSubagentSweepAt < 8_000) return
+    lastSubagentSweepAt = now
+    collectSubagentTranscripts(
+      store,
+      claimed,
+      workerId,
+      workingDirectory,
+      liveExecutorRef,
+      collectSubagents,
+      telemetry,
+    )
+  }
   const leaseHeartbeat = setInterval(() => {
     try {
       if (store.renewRunLeaseAndCheckSteering(claimed.run.id, workerId)) {
@@ -447,6 +823,7 @@ export async function executeClaimedRun(
       claimed.task.id,
     )
     const workRules = store.workRuleContextForUser(claimed.task.userId)
+    const toolApprovalGrant = resolveToolApprovalGrant(store, claimed)
     result = await executor.execute({
       runId: claimed.run.id,
       taskId: claimed.task.id,
@@ -464,6 +841,7 @@ export async function executeClaimedRun(
         baseUrl: controlPlaneBaseUrl,
         claimToken: claimed.claimToken,
       },
+      ...(toolApprovalGrant ? { toolApprovalGrant } : {}),
       ...(claimed.run.executorRef || claimed.run.resumeFromRef
         ? {
             resumeSessionId:
@@ -471,20 +849,102 @@ export async function executeClaimedRun(
           }
         : {}),
       onExecutorRef: executorRef => {
+        liveExecutorRef = executorRef
         store.recordExecutorRef(claimed.run.id, workerId, executorRef)
       },
       onProgress: event => {
         if (!store.ownsRun(claimed.run.id, workerId)) return
+        sweepSubagentTranscripts()
+        if (event.type === 'message') {
+          store.appendRunActivity(claimed.run.id, workerId, {
+            kind: 'text',
+            label: event.text.replaceAll(/\s+/g, ' ').slice(0, 120),
+            detail: event.text,
+          })
+          return
+        }
+        if (event.type === 'thinking') {
+          store.appendRunActivity(claimed.run.id, workerId, {
+            kind: 'thinking',
+            label: event.text.replaceAll(/\s+/g, ' ').slice(0, 120),
+            detail: event.text,
+          })
+          return
+        }
+        if (event.type === 'tool_call') {
+          store.appendRunActivity(claimed.run.id, workerId, {
+            kind: 'tool_call',
+            status: 'started',
+            callId: event.callId,
+            tool: event.tool,
+            label: event.tool,
+            ...(event.input !== undefined ? { detail: event.input } : {}),
+          })
+          return
+        }
+        if (event.type === 'tool_result') {
+          store.completeRunActivityToolCall(
+            claimed.run.id,
+            workerId,
+            event.callId,
+            {
+              status: event.status,
+              ...(event.result !== undefined ? { result: event.result } : {}),
+            },
+          )
+          return
+        }
+        if (event.type === 'step') {
+          store.appendRunActivity(claimed.run.id, workerId, {
+            kind: 'step',
+            status: event.phase === 'start' ? 'started' : 'completed',
+            ...(event.step !== undefined ? { step: event.step } : {}),
+            label:
+              event.phase === 'start'
+                ? `第 ${String(event.step ?? '?')} 步开始`
+                : `第 ${String(event.step ?? '?')} 步完成`,
+          })
+          return
+        }
+        if (event.type === 'acknowledgement') {
+          store.appendRunActivity(claimed.run.id, workerId, {
+            kind: 'text',
+            label: event.text.replaceAll(/\s+/g, ' ').slice(0, 120),
+            detail: event.text,
+          })
+          store.enqueueOutbox({
+            userId: claimed.task.userId,
+            taskId: claimed.task.id,
+            channel: 'conversation',
+            dedupeKey: `run-acknowledged:${claimed.run.id}`,
+            payload: {
+              type: 'run.acknowledged',
+              taskId: claimed.task.id,
+              runId: claimed.run.id,
+              text: event.text,
+            },
+          })
+          return
+        }
+        if (event.label.startsWith('调用工具')) activityState.toolCalls += 1
+        if (event.label.startsWith('完成第')) activityState.steps += 1
+        activityState.recent.push(event.label)
+        if (activityState.recent.length > 20) activityState.recent.shift()
+        activityState.events += 1
         store.enqueueOutbox({
           userId: claimed.task.userId,
           taskId: claimed.task.id,
           channel: 'conversation',
-          dedupeKey: `run-acknowledged:${claimed.run.id}`,
+          dedupeKey: `run-progress:${claimed.run.id}:${String(activityState.events)}`,
+          coalesceKey: `run-progress:${claimed.run.id}`,
           payload: {
-            type: 'run.acknowledged',
+            type: 'run.progress',
             taskId: claimed.task.id,
             runId: claimed.run.id,
-            text: event.text,
+            toolCalls: activityState.toolCalls,
+            steps: activityState.steps,
+            recent: [...activityState.recent],
+            text: `执行中 · 工具调用 ${String(activityState.toolCalls)} 次 · 已完成 ${String(activityState.steps)} 步推理`,
           },
         })
       },
@@ -503,7 +963,9 @@ export async function executeClaimedRun(
     if (signal.aborted) return
     if (!store.ownsRun(claimed.run.id, workerId)) return
     const message = error instanceof Error ? error.message : String(error)
-    store.failRun(claimed.run.id, workerId, message)
+    store.failRun(claimed.run.id, workerId, message, {
+      terminalProvider: isTerminalProviderError(message),
+    })
     telemetry?.logger?.error('run.execution_failed', error, {
       runId: claimed.run.id,
       taskId: claimed.task.id,
@@ -528,8 +990,18 @@ export async function executeClaimedRun(
     observeRun('steered')
     return
   }
+  collectSubagentTranscripts(
+    store,
+    claimed,
+    workerId,
+    workingDirectory,
+    result.executorRef || claimed.run.executorRef,
+    collectSubagents,
+    telemetry,
+  )
   store.completeRun(claimed.run.id, workerId, result)
   observeRun('completed')
+  if (result.approvalPending) return
   const persistedRun = store
     .listRuns(claimed.task.id)
     .find(run => run.id === claimed.run.id)
@@ -561,4 +1033,93 @@ export async function executeClaimedRun(
       ],
     })
   }
+}
+
+function collectSubagentTranscripts(
+  store: PegasStore,
+  claimed: ClaimedRun,
+  workerId: string,
+  workingDirectory: string,
+  executorRef: string | undefined,
+  collect: SubagentTranscriptCollector | undefined,
+  telemetry?: { logger?: Logger; metrics?: MetricsRegistry },
+): void {
+  if (!collect || !executorRef) return
+  try {
+    const transcripts = collect({
+      rootSessionId: executorRef,
+      workspace: runExecutionWorkspace(claimed.run, workingDirectory),
+    })
+    if (transcripts.length > 0) {
+      store.recordRunSubagents(claimed.run.id, workerId, transcripts)
+    }
+  } catch (error) {
+    // Observability is best-effort: a torn or unknown child log must never
+    // fail the Run whose work already succeeded.
+    telemetry?.logger?.error('run.subagent_transcript_failed', error, {
+      runId: claimed.run.id,
+      workerId,
+    })
+    telemetry?.metrics?.increment('pegas_errors_total', {
+      component: 'worker',
+      kind: 'subagent_transcript',
+    })
+  }
+}
+
+function resolveToolApprovalGrant(
+  store: PegasStore,
+  claimed: ClaimedRun,
+): ToolApprovalGrant | undefined {
+  const context = parseApprovalDecisionContext(claimed.run.input)
+  if (context?.decision !== 'approve') return undefined
+  if (!context.action.kind.startsWith('dsh.tool.')) return undefined
+  const action = store.getAction(context.actionId, claimed.task.userId)
+  if (
+    action?.status !== 'authorized' ||
+    action.resumeRunId !== claimed.run.id
+  ) {
+    return undefined
+  }
+  const tool = action.request.tool
+  const argumentsHash = action.request.argumentsHash
+  if (typeof tool !== 'string' || typeof argumentsHash !== 'string') {
+    return undefined
+  }
+  return { actionId: action.id, tool, argumentsHash }
+}
+
+function parseApprovalDecisionContext(input: string):
+  | {
+      decision: string
+      actionId: string
+      action: { kind: string }
+    }
+  | undefined {
+  const trimmed = input.trimStart()
+  if (!trimmed.startsWith('{"type":"approval.decision"')) return undefined
+  try {
+    const parsed: unknown = JSON.parse(trimmed)
+    if (
+      isRecord(parsed) &&
+      parsed.type === 'approval.decision' &&
+      typeof parsed.decision === 'string' &&
+      typeof parsed.actionId === 'string' &&
+      isRecord(parsed.action) &&
+      typeof parsed.action.kind === 'string'
+    ) {
+      return {
+        decision: parsed.decision,
+        actionId: parsed.actionId,
+        action: { kind: parsed.action.kind },
+      }
+    }
+  } catch {
+    return undefined
+  }
+  return undefined
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

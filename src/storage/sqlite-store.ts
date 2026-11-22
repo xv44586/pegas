@@ -19,6 +19,7 @@ import {
   type CollaborationStatus,
   type WorkerCollaborationRequest,
 } from '../collaboration/collaboration.js'
+import { sourceContextInput } from '../collaboration/source-context.js'
 import type {
   ActionOutcomeDraft,
   ActionReconciliation,
@@ -38,15 +39,28 @@ import type {
   InboxEvent,
   ModelUsageRecord,
   ModelUsageReport,
+  RunActivityEntry,
+  RunActivityReport,
   NewInboxEvent,
   NotificationPreferences,
   OutboxMessage,
   OutboxResolutionDraft,
+  OwedDelivery,
+  ReconciliationFinding,
   RoutingDecision,
+  RoutingCandidate,
+  RouterUsageRecord,
+  RouterUsageReport,
   Run,
+  RunSubagentReport,
+  SubagentTranscript,
   Task,
 } from '../core/domain.js'
 import type { ExecutorResult } from '../executor/executor.js'
+import {
+  parseExecutionPools,
+  type ExecutionPools,
+} from '../worker/execution-pools.js'
 import type {
   ArtifactDraft,
   EvidenceVerification,
@@ -672,6 +686,156 @@ CREATE TABLE behavior_preferences (
   revision INTEGER NOT NULL DEFAULT 1,
   updated_at TEXT NOT NULL
 );
+`
+
+const migration33 = `
+CREATE TABLE router_usage_records (
+  call_id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  component TEXT NOT NULL CHECK (component IN ('router', 'rewrite')),
+  event_id TEXT,
+  model_ref TEXT NOT NULL,
+  completeness TEXT NOT NULL CHECK (completeness IN ('complete', 'unavailable')),
+  token_source TEXT CHECK (token_source IN ('provider_reported')),
+  input_tokens INTEGER CHECK (input_tokens >= 0),
+  output_tokens INTEGER CHECK (output_tokens >= 0),
+  total_tokens INTEGER CHECK (total_tokens >= 0),
+  cache_read_tokens INTEGER CHECK (cache_read_tokens >= 0),
+  cache_write_tokens INTEGER CHECK (cache_write_tokens >= 0),
+  reasoning_tokens INTEGER CHECK (reasoning_tokens >= 0),
+  duration_ms INTEGER CHECK (duration_ms >= 0),
+  latency_source TEXT CHECK (latency_source IN ('pegas_observed')),
+  outcome TEXT NOT NULL CHECK (outcome IN ('ok', 'error')),
+  observed_at TEXT NOT NULL
+);
+
+CREATE INDEX router_usage_by_user_time
+ON router_usage_records (user_id, observed_at DESC);
+`
+
+const migration34 = `
+ALTER TABLE runtime_settings ADD COLUMN execution_pools_json TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE worker_profiles ADD COLUMN pool TEXT
+CHECK (pool IN ('fast', 'balanced', 'deep'));
+ALTER TABLE worker_profiles ADD COLUMN effort TEXT;
+`
+
+const migration35 = `
+CREATE TABLE run_activity_entries (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL REFERENCES runs(id),
+  seq INTEGER NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('text', 'thinking', 'tool_call', 'step')),
+  status TEXT CHECK (status IN ('started', 'completed', 'error')),
+  call_id TEXT,
+  tool TEXT,
+  step INTEGER,
+  label TEXT NOT NULL,
+  detail_json TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (run_id, seq)
+);
+
+CREATE INDEX run_activity_by_run_call
+ON run_activity_entries (run_id, call_id);
+`
+
+const migration36 = `
+CREATE TABLE run_subagent_transcripts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL REFERENCES runs(id),
+  session_id TEXT NOT NULL,
+  parent_session_id TEXT NOT NULL,
+  delegation_depth INTEGER NOT NULL DEFAULT 1,
+  session_created_at TEXT NOT NULL,
+  transcript_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (run_id, session_id)
+);
+
+CREATE INDEX run_subagents_by_run
+ON run_subagent_transcripts (run_id);
+`
+
+const migration32 = `
+ALTER TABLE tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'work'
+CHECK (kind IN ('work', 'conversation'));
+
+ALTER TABLE runtime_settings ADD COLUMN chat_lane_enabled INTEGER NOT NULL DEFAULT 0
+CHECK (chat_lane_enabled IN (0, 1));
+
+CREATE TABLE conversation_sessions (
+  user_id TEXT PRIMARY KEY,
+  executor_ref TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+DROP TRIGGER IF EXISTS worker_profiles_after_task_insert;
+CREATE TRIGGER worker_profiles_after_task_insert
+AFTER INSERT ON tasks
+WHEN NEW.kind <> 'conversation'
+BEGIN
+  INSERT OR IGNORE INTO worker_profiles
+    (id, task_id, revision, model_mode, created_at, updated_at)
+  VALUES ('worker-profile:' || NEW.id, NEW.id, 1, 'inherit', NEW.created_at, NEW.updated_at);
+END;
+
+DROP TRIGGER IF EXISTS channel_search_tasks_after_insert;
+CREATE TRIGGER channel_search_tasks_after_insert
+AFTER INSERT ON tasks
+WHEN NEW.kind <> 'conversation'
+BEGIN
+  INSERT INTO channel_search_documents
+    (task_id, source_kind, source_id, text, updated_at)
+  VALUES
+    (NEW.id, 'channel', NEW.id, NEW.title || char(10) || NEW.goal, NEW.updated_at);
+END;
+
+DROP TRIGGER IF EXISTS channel_search_tasks_after_update;
+CREATE TRIGGER channel_search_tasks_after_update
+AFTER UPDATE OF title, goal ON tasks
+WHEN NEW.kind <> 'conversation'
+BEGIN
+  INSERT OR REPLACE INTO channel_search_documents
+    (task_id, source_kind, source_id, text, updated_at)
+  VALUES
+    (NEW.id, 'channel', NEW.id, NEW.title || char(10) || NEW.goal, NEW.updated_at);
+END;
+
+DROP TRIGGER IF EXISTS channel_search_routed_input_after_insert;
+CREATE TRIGGER channel_search_routed_input_after_insert
+AFTER INSERT ON task_events
+BEGIN
+  INSERT OR REPLACE INTO channel_search_documents
+    (task_id, source_kind, source_id, text, updated_at)
+  SELECT
+    NEW.task_id,
+    'input',
+    inbox_events.id,
+    json_extract(inbox_events.payload_json, '$.text'),
+    inbox_events.created_at
+  FROM inbox_events
+  INNER JOIN tasks ON tasks.id = NEW.task_id
+  WHERE inbox_events.id = NEW.event_id
+    AND tasks.user_id = inbox_events.user_id
+    AND tasks.kind <> 'conversation'
+    AND inbox_events.type = 'user.message'
+    AND json_valid(inbox_events.payload_json)
+    AND json_type(inbox_events.payload_json, '$.text') = 'text';
+END;
+
+DROP TRIGGER IF EXISTS channel_search_run_output_after_update;
+CREATE TRIGGER channel_search_run_output_after_update
+AFTER UPDATE OF output_json ON runs
+WHEN NEW.output_json IS NOT NULL
+  AND (SELECT kind FROM tasks WHERE id = NEW.task_id) <> 'conversation'
+BEGIN
+  INSERT OR REPLACE INTO channel_search_documents
+    (task_id, source_kind, source_id, text, updated_at)
+  VALUES
+    (NEW.task_id, 'run', NEW.id, json_extract(NEW.output_json, '$'), NEW.updated_at);
+END;
 `
 
 const migration2 = `
@@ -1793,6 +1957,7 @@ interface TaskRow {
   title: string
   goal: string
   status: Task['status']
+  kind?: string | null
   worker_icon_id: string | null
   status_reason: string | null
   target_resource?: string | null
@@ -2162,9 +2327,31 @@ interface ModelUsageRow {
   run_updated_at: string
 }
 
+interface RouterUsageRow {
+  call_id: string
+  user_id: string
+  component: 'router' | 'rewrite'
+  event_id: string | null
+  model_ref: string
+  completeness: 'complete' | 'unavailable'
+  token_source: 'provider_reported' | null
+  input_tokens: number | null
+  output_tokens: number | null
+  total_tokens: number | null
+  cache_read_tokens: number | null
+  cache_write_tokens: number | null
+  reasoning_tokens: number | null
+  duration_ms: number
+  latency_source: 'pegas_observed'
+  outcome: 'ok' | 'error'
+  observed_at: string
+}
+
 interface RuntimeSettingsRow {
   revision: number
   router_mode: RuntimeSettings['routerMode']
+  chat_lane_enabled?: number | null
+  execution_pools_json?: string | null
   model_provider: string
   model_connection_id: string | null
   model_name: string
@@ -2183,6 +2370,8 @@ interface WorkerProfileRow {
   model_mode: WorkerProfile['modelMode']
   model_provider: string | null
   model_name: string | null
+  pool: WorkerProfile['pool'] | null
+  effort: string | null
   created_at: string
   updated_at: string
 }
@@ -2363,6 +2552,11 @@ export class PegasStore {
     this.#migrate(29, migration29)
     this.#migrate(30, migration30)
     this.#migrate(31, migration31)
+    this.#migrate(32, migration32)
+    this.#migrate(33, migration33)
+    this.#migrate(34, migration34)
+    this.#migrate(35, migration35)
+    this.#migrate(36, migration36)
   }
 
   #backfillWorkerIconIds(): void {
@@ -2478,8 +2672,8 @@ export class PegasStore {
         `INSERT OR IGNORE INTO runtime_settings
           (id, revision, router_mode, model_provider, model_connection_id, model_name,
            agent_model_mode, agent_model_provider, agent_model_name,
-           privacy_mode, rewrite_mode, updated_at)
-         VALUES (1, 1, ?, 'openai-compatible', ?, ?, ?, ?, ?, ?, ?, ?)`,
+           privacy_mode, rewrite_mode, chat_lane_enabled, execution_pools_json, updated_at)
+         VALUES (1, 1, ?, 'openai-compatible', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         defaults.routerMode,
@@ -2490,6 +2684,8 @@ export class PegasStore {
         defaults.agentModelName,
         defaults.privacyMode,
         defaults.rewriteMode,
+        defaults.chatLaneEnabled ? 1 : 0,
+        JSON.stringify(defaults.executionPools ?? {}),
         now,
       )
     return this.getRuntimeSettings()
@@ -2573,20 +2769,24 @@ export class PegasStore {
       const unchanged =
         current.modelMode === update.modelMode &&
         current.modelProvider === update.modelProvider &&
-        current.modelName === update.modelName
+        current.modelName === update.modelName &&
+        current.pool === update.pool &&
+        current.effort === update.effort
       const now = this.#clock.now().toISOString()
       if (!unchanged) {
         this.#database
           .prepare(
             `UPDATE worker_profiles
              SET revision = revision + 1, model_mode = ?, model_provider = ?,
-                 model_name = ?, updated_at = ?
+                 model_name = ?, pool = ?, effort = ?, updated_at = ?
              WHERE task_id = ? AND revision = ?`,
           )
           .run(
             update.modelMode,
             update.modelProvider ?? null,
             update.modelName ?? null,
+            update.pool ?? null,
+            update.effort ?? null,
             now,
             taskId,
             update.expectedRevision,
@@ -3148,15 +3348,119 @@ export class PegasStore {
     excludeTaskId: string,
     limit = 20,
   ): Task[] {
+    return this.listRoutingCandidates(userId, { excludeTaskId, limit }).map(
+      candidate => candidate.task,
+    )
+  }
+
+  /**
+   * ROUTE-003: the single open-task candidate query shared by main
+   * conversation routing and collaboration handback. Completed and cancelled
+   * Tasks never enter default candidates; explicit completed-task resume
+   * keeps its own mandate-revalidated path in applyRoutingDecision.
+   */
+  listRoutingCandidates(
+    userId: string,
+    options: { excludeTaskId?: string; limit?: number } = {},
+  ): RoutingCandidate[] {
+    const limit = options.limit ?? 20
     const rows = this.#database
       .prepare(
         `SELECT * FROM tasks
-         WHERE user_id = ? AND id <> ?
-           AND status NOT IN ('completed','cancelled')
-         ORDER BY updated_at DESC LIMIT ?`,
+         WHERE user_id = ? AND (? IS NULL OR id <> ?)
+           AND status IN ('backlog','unstarted','started')
+           AND kind = 'work'
+         ORDER BY
+           CASE WHEN status_reason IN (
+             'awaiting_approval','awaiting_goal_clarification',
+             'awaiting_user_input','awaiting_user_review'
+           ) THEN 0 ELSE 1 END,
+           updated_at DESC
+         LIMIT ?`,
       )
-      .all(userId, excludeTaskId, limit) as unknown as TaskRow[]
-    return rows.map(toTask)
+      .all(
+        userId,
+        options.excludeTaskId ?? null,
+        options.excludeTaskId ?? null,
+        limit,
+      ) as unknown as TaskRow[]
+    return rows.map(row => this.#routingCandidate(toTask(row)))
+  }
+
+  #routingCandidate(task: Task): RoutingCandidate {
+    const candidate: RoutingCandidate = { task }
+    const awaiting = this.#taskAwaitingSummary(task)
+    if (awaiting) candidate.awaiting = awaiting
+    const delivery = this.#database
+      .prepare(
+        `SELECT output_json FROM runs
+         WHERE task_id = ? AND status = 'completed' AND output_json IS NOT NULL
+         ORDER BY updated_at DESC, rowid DESC LIMIT 1`,
+      )
+      .get(task.id) as { output_json: string } | undefined
+    if (delivery) {
+      const output = JSON.parse(delivery.output_json) as string
+      const firstLine = firstSummaryLine(output, 120)
+      if (firstLine) candidate.lastDelivery = firstLine
+    }
+    const input = this.#database
+      .prepare(
+        `SELECT e.payload_json FROM task_events te
+         JOIN inbox_events e ON e.id = te.event_id
+         WHERE te.task_id = ? AND e.type = 'user.message'
+         ORDER BY te.created_at DESC, te.rowid DESC LIMIT 1`,
+      )
+      .get(task.id) as { payload_json: string } | undefined
+    if (input) {
+      const payload = JSON.parse(input.payload_json) as { text?: unknown }
+      if (typeof payload.text === 'string') {
+        const firstLine = firstSummaryLine(payload.text, 120)
+        if (firstLine) candidate.recentInput = firstLine
+      }
+    }
+    return candidate
+  }
+
+  #taskAwaitingSummary(task: Task): string | undefined {
+    const approval = this.#database
+      .prepare(
+        `SELECT prompt_json FROM approvals
+         WHERE task_id = ? AND status = 'pending' AND protocol_version = 1
+         ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+      )
+      .get(task.id) as { prompt_json: string } | undefined
+    if (approval) {
+      const prompt = JSON.parse(approval.prompt_json) as ApprovalPrompt
+      return firstSummaryLine(prompt.summary, 160)
+    }
+    const steering = this.#database
+      .prepare(
+        `SELECT steering_json FROM runs
+         WHERE task_id = ? AND steering_json IS NOT NULL
+         ORDER BY updated_at DESC, rowid DESC LIMIT 1`,
+      )
+      .get(task.id) as { steering_json: string } | undefined
+    if (steering) {
+      const directives = JSON.parse(steering.steering_json) as {
+        text: string
+      }[]
+      const latest = directives.at(-1)
+      if (latest) return firstSummaryLine(latest.text, 160)
+    }
+    if (task.statusReason === 'awaiting_goal_clarification') {
+      const contract = this.#database
+        .prepare(
+          `SELECT contract_json FROM goal_contracts
+           WHERE task_id = ? ORDER BY revision DESC LIMIT 1`,
+        )
+        .get(task.id) as { contract_json: string } | undefined
+      if (contract) {
+        const draft = JSON.parse(contract.contract_json) as GoalContractDraft
+        const question = draft.unknowns.find(unknown => unknown.blocking)
+        if (question) return firstSummaryLine(question.question, 160)
+      }
+    }
+    return undefined
   }
 
   listAutomations(userId: string): Automation[] {
@@ -4436,7 +4740,10 @@ export class PegasStore {
          SET revision = revision + 1, router_mode = ?,
              model_provider = 'openai-compatible', model_connection_id = ?,
              model_name = ?, agent_model_mode = ?, agent_model_provider = ?,
-             agent_model_name = ?, privacy_mode = ?, rewrite_mode = ?, updated_at = ?
+             agent_model_name = ?, privacy_mode = ?, rewrite_mode = ?,
+             chat_lane_enabled = COALESCE(?, chat_lane_enabled),
+             execution_pools_json = COALESCE(?, execution_pools_json),
+             updated_at = ?
          WHERE id = 1 AND revision = ?`,
       )
       .run(
@@ -4448,6 +4755,14 @@ export class PegasStore {
         settings.agentModelName,
         settings.privacyMode,
         settings.rewriteMode,
+        settings.chatLaneEnabled === undefined
+          ? null
+          : settings.chatLaneEnabled
+            ? 1
+            : 0,
+        settings.executionPools === undefined
+          ? null
+          : JSON.stringify(settings.executionPools),
         this.#clock.now().toISOString(),
         expectedRevision,
       )
@@ -4597,7 +4912,10 @@ export class PegasStore {
            SET revision = revision + 1, router_mode = ?,
                model_provider = 'openai-compatible', model_connection_id = ?,
                model_name = ?, agent_model_mode = ?, agent_model_provider = ?,
-               agent_model_name = ?, privacy_mode = ?, rewrite_mode = ?, updated_at = ?
+               agent_model_name = ?, privacy_mode = ?, rewrite_mode = ?,
+               chat_lane_enabled = COALESCE(?, chat_lane_enabled),
+               execution_pools_json = COALESCE(?, execution_pools_json),
+               updated_at = ?
            WHERE id = 1 AND revision = ?`,
         )
         .run(
@@ -4609,6 +4927,14 @@ export class PegasStore {
           settings.agentModelName,
           settings.privacyMode,
           settings.rewriteMode,
+          settings.chatLaneEnabled === undefined
+            ? null
+            : settings.chatLaneEnabled
+              ? 1
+              : 0,
+          settings.executionPools === undefined
+            ? null
+            : JSON.stringify(settings.executionPools),
           now,
           expectedRevision,
         )
@@ -4744,6 +5070,19 @@ export class PegasStore {
         `Worker ${workerId} cannot renew event ${eventId}`,
       )
     }
+  }
+
+  releaseEventClaim(eventId: string, workerId: string): void {
+    this.#assertEventClaim(eventId, workerId)
+    this.#database
+      .prepare(
+        `UPDATE inbox_events
+         SET status = 'pending', claimed_by = NULL, lease_until = NULL,
+             claimed_contract_version = NULL,
+             attempts = CASE WHEN attempts > 0 THEN attempts - 1 ELSE 0 END
+         WHERE id = ? AND status = 'processing' AND claimed_by = ?`,
+      )
+      .run(eventId, workerId)
   }
 
   #assertEventClaim(eventId: string, workerId: string): void {
@@ -5256,7 +5595,7 @@ export class PegasStore {
     event: InboxEvent,
     decision: Extract<
       RoutingDecision,
-      { kind: 'create_task' | 'continue_task' }
+      { kind: 'create_task' | 'continue_task' | 'reply' }
     >,
     executor: string,
     executionContext: ExecutionContext | ((task: Task) => ExecutionContext),
@@ -5276,6 +5615,12 @@ export class PegasStore {
         .get(event.id) as unknown as RunRow | undefined
       if (existingRun) {
         const existingTask = this.#taskById(existingRun.task_id)
+        const existingDecision = this.#database
+          .prepare('SELECT kind FROM routing_decisions WHERE event_id = ?')
+          .get(event.id) as { kind: string } | undefined
+        if (existingDecision && existingDecision.kind !== decision.kind) {
+          throw new Error('Event already routed with a different decision')
+        }
         if (collaboration) {
           if (collaboration.target_event_id === event.id) {
             this.#markCollaborationDispatchedInTransaction(
@@ -5291,13 +5636,24 @@ export class PegasStore {
 
       const now = this.#clock.now().toISOString()
       let task: Task
-      if (decision.kind === 'create_task') {
+      if (decision.kind === 'create_task' || decision.kind === 'reply') {
+        if (
+          decision.kind === 'reply' &&
+          !this.getRuntimeSettings().chatLaneEnabled
+        ) {
+          throw new Error('Reply routing requires the chat lane to be enabled')
+        }
         const taskId = randomUUID()
         const workerIconId = assignWorkerIconId(taskId)
         const mandate = collaboration
           ? this.#taskById(collaboration.source_task_id).mandate
-          : createMandate(event, decision.goal, 'router')
+          : createMandate(
+              event,
+              decision.kind === 'reply' ? decision.input : decision.goal,
+              'router',
+            )
         if (
+          decision.kind === 'create_task' &&
           decision.targetResource === 'pegas_repository' &&
           (collaboration || event.authenticatedActor !== 'human')
         ) {
@@ -5306,22 +5662,28 @@ export class PegasStore {
         this.#database
           .prepare(
             `INSERT INTO tasks
-              (id, user_id, origin_event_id, title, goal, status, worker_icon_id, target_resource, mandate_json, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, 'unstarted', ?, ?, ?, ?, ?)`,
+              (id, user_id, origin_event_id, title, goal, status, kind, worker_icon_id, target_resource, mandate_json, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, 'unstarted', ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             taskId,
             event.userId,
             event.id,
-            decision.title,
-            decision.goal,
+            decision.kind === 'reply'
+              ? conversationTitle(decision.input)
+              : decision.title,
+            decision.kind === 'reply' ? decision.input : decision.goal,
+            decision.kind === 'reply' ? 'conversation' : 'work',
             workerIconId,
-            decision.targetResource ?? null,
+            decision.kind === 'create_task'
+              ? (decision.targetResource ?? null)
+              : null,
             JSON.stringify(mandate),
             now,
             now,
           )
-        this.#ensureWorkerProfile(taskId, now)
+        if (decision.kind === 'create_task')
+          this.#ensureWorkerProfile(taskId, now)
         task = this.#taskById(taskId)
       } else {
         task = this.#taskById(decision.taskId)
@@ -5374,6 +5736,74 @@ export class PegasStore {
         throw new TaskActionBlockedError(task.id, blockingAction.status)
       }
 
+      if (
+        decision.kind === 'continue_task' &&
+        !collaboration &&
+        event.source !== 'automation'
+      ) {
+        const activeRun = this.#database
+          .prepare(
+            `SELECT id, status FROM runs
+             WHERE task_id = ? AND status IN ('queued','running')
+             ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+          )
+          .get(task.id) as { id: string; status: string } | undefined
+        if (activeRun) {
+          if (activeRun.status === 'queued') {
+            const run = this.#runById(activeRun.id)
+            this.#database
+              .prepare(
+                'UPDATE runs SET input_json = ?, updated_at = ? WHERE id = ?',
+              )
+              .run(
+                JSON.stringify(
+                  `${run.input}\n\n[用户补充] 用户在执行开始前补充了以下要求，必须与原始目标合并处理：\n${decision.input}`,
+                ),
+                now,
+                activeRun.id,
+              )
+          } else {
+            const row = this.#database
+              .prepare('SELECT steering_json FROM runs WHERE id = ?')
+              .get(activeRun.id) as { steering_json: string | null }
+            const directive = {
+              eventId: event.id,
+              text: decision.input,
+              at: now,
+            }
+            const directives = row.steering_json
+              ? (JSON.parse(row.steering_json) as (typeof directive)[])
+              : []
+            directives.push(directive)
+            this.#database
+              .prepare(
+                'UPDATE runs SET steering_json = ?, updated_at = ? WHERE id = ?',
+              )
+              .run(JSON.stringify(directives), now, activeRun.id)
+          }
+          this.#database
+            .prepare(
+              `INSERT INTO task_events (event_id, task_id, relation, created_at)
+               VALUES (?, ?, 'steering', ?)
+               ON CONFLICT(event_id) DO UPDATE SET
+                 task_id = excluded.task_id,
+                 relation = excluded.relation,
+                 created_at = excluded.created_at`,
+            )
+            .run(event.id, task.id, now)
+          this.#database
+            .prepare(
+              `INSERT INTO routing_decisions (event_id, kind, task_id, reason, created_at)
+               VALUES (?, ?, ?, ?, ?)`,
+            )
+            .run(event.id, decision.kind, task.id, decision.reason, now)
+          const redirectedTask = this.#taskById(task.id)
+          const redirectedRun = this.#runById(activeRun.id)
+          this.#database.exec('COMMIT')
+          return { task: redirectedTask, run: redirectedRun }
+        }
+      }
+
       const existingTaskEvent = this.#database
         .prepare('SELECT relation FROM task_events WHERE event_id = ?')
         .get(event.id) as { relation: string } | undefined
@@ -5389,6 +5819,7 @@ export class PegasStore {
               : resumed
                 ? 'resumed'
                 : 'continuation'
+      const relation = decision.kind === 'reply' ? 'origin' : taskEventRelation
 
       this.#database
         .prepare(
@@ -5399,7 +5830,7 @@ export class PegasStore {
              relation = excluded.relation,
              created_at = excluded.created_at`,
         )
-        .run(event.id, task.id, taskEventRelation, now)
+        .run(event.id, task.id, relation, now)
       this.#database
         .prepare(
           `INSERT INTO routing_decisions (event_id, kind, task_id, reason, created_at)
@@ -5430,6 +5861,10 @@ export class PegasStore {
           .get(task.id) as { revision: number | null }
       ).revision
       const runId = randomUUID()
+      const runInput =
+        decision.kind === 'create_task' && decision.sourceContext
+          ? sourceContextInput(decision.input, decision.sourceContext)
+          : decision.input
       this.#database
         .prepare(
           `INSERT INTO runs
@@ -5444,7 +5879,7 @@ export class PegasStore {
           executor,
           compatible ? previous.executor_ref : null,
           goalRevision,
-          JSON.stringify(decision.input),
+          JSON.stringify(runInput),
           JSON.stringify(resolvedExecutionContext),
           executionContractVersion,
           now,
@@ -5833,6 +6268,27 @@ export class PegasStore {
     return rows.map(row => toTask(row as unknown as TaskRow))
   }
 
+  conversationSessionRef(userId: string): string | undefined {
+    const row = this.#database
+      .prepare(
+        'SELECT executor_ref FROM conversation_sessions WHERE user_id = ?',
+      )
+      .get(userId) as { executor_ref: string } | undefined
+    return row?.executor_ref
+  }
+
+  recordConversationSessionRef(userId: string, executorRef: string): void {
+    this.#database
+      .prepare(
+        `INSERT INTO conversation_sessions (user_id, executor_ref, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(user_id) DO UPDATE SET
+           executor_ref = excluded.executor_ref,
+           updated_at = excluded.updated_at`,
+      )
+      .run(userId, executorRef, this.#clock.now().toISOString())
+  }
+
   searchChannels(
     userId: string,
     options: ChannelSearchOptions,
@@ -5859,6 +6315,7 @@ export class PegasStore {
 
     const where = [
       'tasks.user_id = ?',
+      "tasks.kind <> 'conversation'",
       statuses
         ? `tasks.status IN (${statuses.map(() => '?').join(',')})`
         : '1 = 1',
@@ -8536,6 +8993,7 @@ export class PegasStore {
     workerId: string,
     leaseMs = 30_000,
     nodeId?: string,
+    lane?: Task['kind'],
   ): ClaimedRun | undefined {
     const now = this.#clock.now()
     const leaseUntil = new Date(now.getTime() + leaseMs).toISOString()
@@ -8548,6 +9006,7 @@ export class PegasStore {
           `SELECT * FROM runs
            WHERE task_id IN (SELECT id FROM tasks WHERE status NOT IN ('completed','cancelled'))
            AND execution_contract_version <= 2
+           AND (? IS NULL OR task_id IN (SELECT id FROM tasks WHERE kind = ?))
            AND (json_extract(execution_context_json, '$.nodeId') IS NULL
              OR json_extract(execution_context_json, '$.nodeId') = ?)
            AND ((status = 'queued' AND NOT EXISTS (
@@ -8565,6 +9024,8 @@ export class PegasStore {
            ORDER BY created_at ASC, rowid ASC LIMIT 1`,
         )
         .get(
+          lane ?? null,
+          lane ?? null,
           nodeId ?? null,
           now.toISOString(),
           now.toISOString(),
@@ -9058,7 +9519,56 @@ export class PegasStore {
     return { summary: summarizeModelUsage(records), records }
   }
 
-  failRun(runId: string, workerId: string, error: string): void {
+  recordRouterUsage(record: RouterUsageRecord): void {
+    this.#database
+      .prepare(
+        `INSERT INTO router_usage_records
+          (call_id, user_id, component, event_id, model_ref, completeness,
+           token_source, input_tokens, output_tokens, total_tokens,
+           cache_read_tokens, cache_write_tokens, reasoning_tokens,
+           duration_ms, latency_source, outcome, observed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(call_id) DO NOTHING`,
+      )
+      .run(
+        record.callId,
+        record.userId,
+        record.component,
+        record.eventId ?? null,
+        record.modelRef,
+        record.usage ? 'complete' : 'unavailable',
+        record.usage ? 'provider_reported' : null,
+        record.usage?.inputTokens ?? null,
+        record.usage?.outputTokens ?? null,
+        record.usage?.totalTokens ?? null,
+        record.usage?.cacheReadTokens ?? null,
+        record.usage?.cacheWriteTokens ?? null,
+        record.usage?.reasoningTokens ?? null,
+        record.durationMs,
+        'pegas_observed',
+        record.outcome,
+        this.#clock.now().toISOString(),
+      )
+  }
+
+  listRouterUsage(userId: string): RouterUsageReport {
+    const rows = this.#database
+      .prepare(
+        `SELECT * FROM router_usage_records
+         WHERE user_id = ?
+         ORDER BY observed_at DESC, call_id DESC`,
+      )
+      .all(userId) as unknown as RouterUsageRow[]
+    const records = rows.map(toRouterUsageRecord)
+    return { summary: summarizeRouterUsage(records), records }
+  }
+
+  failRun(
+    runId: string,
+    workerId: string,
+    error: string,
+    options: { terminalProvider?: boolean } = {},
+  ): void {
     const now = this.#clock.now().toISOString()
     this.#database.exec('BEGIN IMMEDIATE')
     try {
@@ -9067,6 +9577,16 @@ export class PegasStore {
         throw new Error(`Worker ${workerId} does not own run ${runId}`)
       }
       const task = this.#taskById(run.taskId)
+      const terminalProvider =
+        options.terminalProvider === true &&
+        task.kind !== 'conversation' &&
+        !this.#database
+          .prepare(
+            `SELECT 1 FROM actions WHERE resume_run_id = ?
+             AND protocol_version = 1
+             AND status IN ('authorized','succeeded','failed','unknown')`,
+          )
+          .get(runId)
       const resumedActionRow = this.#database
         .prepare(
           `SELECT * FROM actions WHERE resume_run_id = ?
@@ -9100,13 +9620,15 @@ export class PegasStore {
            WHERE id = ?`,
         )
         .run(
-          actionStatus === 'unknown'
-            ? 'action_outcome_unknown'
-            : actionStatus === 'failed'
-              ? 'action_failed'
-              : actionStatus === 'succeeded'
-                ? 'action_resume_interrupted'
-                : 'last_run_failed',
+          terminalProvider
+            ? 'awaiting_provider_condition'
+            : actionStatus === 'unknown'
+              ? 'action_outcome_unknown'
+              : actionStatus === 'failed'
+                ? 'action_failed'
+                : actionStatus === 'succeeded'
+                  ? 'action_resume_interrupted'
+                  : 'last_run_failed',
           now,
           task.id,
         )
@@ -9115,16 +9637,24 @@ export class PegasStore {
         userId: task.userId,
         taskId: task.id,
         channel: 'conversation',
-        dedupeKey:
-          actionStatus === 'unknown'
+        dedupeKey: terminalProvider
+          ? `provider-terminal:${runId}`
+          : actionStatus === 'unknown'
             ? `action-outcome-unknown:${actionId ?? runId}`
             : actionStatus === 'failed'
               ? `action-failed:${actionId ?? runId}`
               : actionStatus === 'succeeded'
                 ? `action-reconciliation-required:${actionId ?? runId}`
                 : `run-failed:${runId}`,
-        payload:
-          actionStatus === 'unknown'
+        payload: terminalProvider
+          ? {
+              type: 'run.provider_terminal',
+              taskId: task.id,
+              runId,
+              text: '模型服务拒绝了这次执行（密钥、权限或模型配置问题）。重试不会自愈：请修正模型连接或执行池设置后再继续。',
+              error,
+            }
+          : actionStatus === 'unknown'
             ? {
                 type: 'action.outcome_unknown',
                 taskId: task.id,
@@ -9227,6 +9757,39 @@ export class PegasStore {
         .run(now, task.id)
       this.#database.exec('COMMIT')
       return run
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  retryEvent(eventId: string, userId: string): InboxEvent {
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const row = this.#database
+        .prepare('SELECT * FROM inbox_events WHERE id = ?')
+        .get(eventId) as unknown as InboxRow | undefined
+      if (row?.user_id !== userId)
+        throw new Error(`Event ${eventId} does not exist`)
+      if (row.type !== 'user.message')
+        throw new Error('Only user messages can be retried')
+      if (row.status !== 'failed') {
+        this.#database.exec('COMMIT')
+        return toInboxEvent(row)
+      }
+      this.#database
+        .prepare(
+          `UPDATE inbox_events
+           SET status = 'pending', attempts = 0, claimed_by = NULL,
+               lease_until = NULL, last_error = NULL, processed_at = NULL
+           WHERE id = ? AND status = 'failed'`,
+        )
+        .run(eventId)
+      const updated = this.#database
+        .prepare('SELECT * FROM inbox_events WHERE id = ?')
+        .get(eventId) as unknown as InboxRow
+      this.#database.exec('COMMIT')
+      return toInboxEvent(updated)
     } catch (error) {
       this.#database.exec('ROLLBACK')
       throw error
@@ -9417,6 +9980,211 @@ export class PegasStore {
         )
         .get(runId, workerId),
     )
+  }
+
+  appendRunActivity(
+    runId: string,
+    workerId: string,
+    entry: {
+      kind: 'text' | 'thinking' | 'tool_call' | 'step'
+      status?: 'started' | 'completed' | 'error'
+      callId?: string
+      tool?: string
+      step?: number
+      label: string
+      detail?: string
+    },
+  ): void {
+    if (!this.ownsRun(runId, workerId)) return
+    const now = this.#clock.now().toISOString()
+    this.#database
+      .prepare(
+        `INSERT INTO run_activity_entries
+          (run_id, seq, kind, status, call_id, tool, step, label, detail_json,
+           created_at, updated_at)
+         VALUES (?, COALESCE(
+           (SELECT MAX(seq) + 1 FROM run_activity_entries WHERE run_id = ?), 1
+         ), ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        runId,
+        runId,
+        entry.kind,
+        entry.status ?? null,
+        entry.callId ?? null,
+        entry.tool ?? null,
+        entry.step ?? null,
+        entry.label.slice(0, 400),
+        entry.detail === undefined ? null : JSON.stringify(entry.detail),
+        now,
+        now,
+      )
+  }
+
+  completeRunActivityToolCall(
+    runId: string,
+    workerId: string,
+    callId: string,
+    outcome: { status: 'completed' | 'error'; result?: string },
+  ): void {
+    if (!this.ownsRun(runId, workerId)) return
+    const row = this.#database
+      .prepare(
+        `SELECT id, detail_json FROM run_activity_entries
+         WHERE run_id = ? AND call_id = ? AND kind = 'tool_call'
+         ORDER BY seq DESC LIMIT 1`,
+      )
+      .get(runId, callId) as
+      { id: number; detail_json: string | null } | undefined
+    if (!row) return
+    const detail = row.detail_json
+      ? (JSON.parse(row.detail_json) as string)
+      : ''
+    const merged = [detail, outcome.result ? `\n[结果]\n${outcome.result}` : '']
+      .join('')
+      .slice(0, 16_384)
+    this.#database
+      .prepare(
+        `UPDATE run_activity_entries
+         SET status = ?, detail_json = ?, updated_at = ? WHERE id = ?`,
+      )
+      .run(
+        outcome.status,
+        JSON.stringify(merged),
+        this.#clock.now().toISOString(),
+        row.id,
+      )
+  }
+
+  listRunActivity(
+    runId: string,
+    userId: string,
+    options: { limit?: number } = {},
+  ): RunActivityReport | undefined {
+    const run = this.#database
+      .prepare(
+        `SELECT runs.id, runs.task_id FROM runs
+         JOIN tasks ON tasks.id = runs.task_id
+         WHERE runs.id = ? AND tasks.user_id = ?`,
+      )
+      .get(runId, userId) as { id: string; task_id: string } | undefined
+    if (!run) return undefined
+    const limit = Math.min(Math.max(options.limit ?? 400, 1), 1000)
+    const total = this.#database
+      .prepare(
+        'SELECT COUNT(*) AS count FROM run_activity_entries WHERE run_id = ?',
+      )
+      .get(runId) as { count: number }
+    const rows = this.#database
+      .prepare(
+        `SELECT seq, kind, status, call_id, tool, step, label, detail_json,
+           created_at, updated_at
+         FROM run_activity_entries WHERE run_id = ?
+         ORDER BY seq DESC LIMIT ?`,
+      )
+      .all(runId, limit) as unknown as {
+      seq: number
+      kind: RunActivityEntry['kind']
+      status: RunActivityEntry['status'] | null
+      call_id: string | null
+      tool: string | null
+      step: number | null
+      label: string
+      detail_json: string | null
+      created_at: string
+      updated_at: string
+    }[]
+    const entries = rows
+      .map(row => ({
+        seq: row.seq,
+        kind: row.kind,
+        ...(row.status ? { status: row.status } : {}),
+        ...(row.call_id ? { callId: row.call_id } : {}),
+        ...(row.tool ? { tool: row.tool } : {}),
+        ...(row.step !== null ? { step: row.step } : {}),
+        label: row.label,
+        ...(row.detail_json
+          ? { detail: JSON.parse(row.detail_json) as string }
+          : {}),
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      }))
+      .reverse()
+    return {
+      runId,
+      taskId: run.task_id,
+      entries,
+      totalEntries: total.count,
+      truncated: total.count > entries.length,
+    }
+  }
+
+  recordRunSubagents(
+    runId: string,
+    workerId: string,
+    transcripts: readonly SubagentTranscript[],
+  ): void {
+    const owned = this.#database
+      .prepare(
+        `SELECT 1 FROM runs
+         WHERE id = ? AND claimed_by = ? AND status IN ('running', 'waiting')`,
+      )
+      .get(runId, workerId)
+    if (!owned) return
+    const insert = this.#database.prepare(
+      `INSERT INTO run_subagent_transcripts
+        (run_id, session_id, parent_session_id, delegation_depth,
+         session_created_at, transcript_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (run_id, session_id) DO UPDATE SET
+         transcript_json = excluded.transcript_json`,
+    )
+    const now = this.#clock.now().toISOString()
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      for (const transcript of transcripts) {
+        insert.run(
+          runId,
+          transcript.sessionId,
+          transcript.parentSessionId,
+          transcript.delegationDepth,
+          transcript.createdAt,
+          JSON.stringify(transcript),
+          now,
+        )
+      }
+      this.#database.exec('COMMIT')
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  listRunSubagents(
+    runId: string,
+    userId: string,
+  ): RunSubagentReport | undefined {
+    const run = this.#database
+      .prepare(
+        `SELECT runs.id, runs.task_id FROM runs
+         JOIN tasks ON tasks.id = runs.task_id
+         WHERE runs.id = ? AND tasks.user_id = ?`,
+      )
+      .get(runId, userId) as { id: string; task_id: string } | undefined
+    if (!run) return undefined
+    const rows = this.#database
+      .prepare(
+        `SELECT transcript_json FROM run_subagent_transcripts
+         WHERE run_id = ? ORDER BY session_created_at ASC, id ASC`,
+      )
+      .all(runId) as { transcript_json: string }[]
+    return {
+      runId,
+      taskId: run.task_id,
+      subagents: rows.map(
+        row => JSON.parse(row.transcript_json) as SubagentTranscript,
+      ),
+    }
   }
 
   #claimForCapability(
@@ -9625,6 +10393,275 @@ export class PegasStore {
           )
           .all(userId)
     return rows.map(row => toOutboxMessage(row as unknown as OutboxRow))
+  }
+
+  /**
+   * NOTIFY-006: read-only owed-delivery ledger. Terminal Runs whose durable
+   * user-facing notification has not been confirmed sent (pending, sending,
+   * failed, unknown or merged into an unconfirmed message) remain owed.
+   * Delivery failure never settles the debt; only a sent confirmation or a
+   * human resolution does. This query never writes product state.
+   */
+  listOwedDeliveries(
+    userId?: string,
+    options: { limit?: number } = {},
+  ): OwedDelivery[] {
+    const limit = options.limit ?? 200
+    const rows = this.#database
+      .prepare(
+        `SELECT r.id AS run_id, r.task_id, r.status AS run_status,
+                r.updated_at AS run_updated_at, r.last_error,
+                t.user_id, t.title,
+                o.id AS message_id, o.dedupe_key, o.status AS delivery_status,
+                o.attempts, o.last_error AS delivery_error, o.created_at,
+                o.merged_into_id, m.status AS merged_status
+         FROM runs r
+         INNER JOIN tasks t ON t.id = r.task_id
+         INNER JOIN outbox_messages o
+           ON o.task_id = r.task_id
+          AND json_extract(o.payload_json, '$.runId') = r.id
+         LEFT JOIN outbox_messages m ON m.id = o.merged_into_id
+         WHERE r.status IN ('completed','failed')
+           AND (? IS NULL OR t.user_id = ?)
+           AND (o.status IN ('pending','sending','failed','unknown')
+             OR (o.status = 'merged'
+               AND (m.id IS NULL OR m.status <> 'sent')))
+         ORDER BY r.updated_at ASC, r.rowid ASC
+         LIMIT ?`,
+      )
+      .all(userId ?? null, userId ?? null, limit) as unknown as {
+      run_id: string
+      task_id: string
+      run_status: 'completed' | 'failed'
+      run_updated_at: string
+      last_error: string | null
+      user_id: string
+      title: string
+      message_id: string
+      dedupe_key: string
+      delivery_status: OutboxMessage['status']
+      attempts: number
+      delivery_error: string | null
+      created_at: string
+      merged_into_id: string | null
+      merged_status: OutboxMessage['status'] | null
+    }[]
+    return rows.map(row => ({
+      userId: row.user_id,
+      taskId: row.task_id,
+      taskTitle: row.title,
+      runId: row.run_id,
+      runStatus: row.run_status,
+      runEndedAt: row.run_updated_at,
+      ...(row.last_error ? { runError: row.last_error } : {}),
+      messageId: row.message_id,
+      dedupeKey: row.dedupe_key,
+      deliveryStatus: row.delivery_status,
+      attempts: row.attempts,
+      ...(row.delivery_error ? { deliveryError: row.delivery_error } : {}),
+      messageCreatedAt: row.created_at,
+      ...(row.merged_into_id
+        ? {
+            mergedIntoId: row.merged_into_id,
+            ...(row.merged_status
+              ? { mergedIntoStatus: row.merged_status }
+              : {}),
+          }
+        : {}),
+    }))
+  }
+
+  /**
+   * NOTIFY-006: read-only reconciliation findings, the second safety net
+   * behind the existing lease/retry recovery chain. Findings never trigger
+   * automatic repair; they surface durable identifiers for operators.
+   */
+  listReconciliationFindings(
+    options: {
+      unreportedAfterMs?: number
+      neverStartedAfterMs?: number
+      strandedAfterMs?: number
+      staleWaitingAfterMs?: number
+      nodeOnlineWithinMs?: number
+      limit?: number
+    } = {},
+  ): ReconciliationFinding[] {
+    const now = this.#clock.now()
+    const cutoff = (ms: number): string =>
+      new Date(now.getTime() - ms).toISOString()
+    const unreportedCutoff = cutoff(options.unreportedAfterMs ?? 300_000)
+    const neverStartedCutoff = cutoff(options.neverStartedAfterMs ?? 300_000)
+    const strandedCutoff = cutoff(options.strandedAfterMs ?? 120_000)
+    const staleWaitingCutoff = cutoff(options.staleWaitingAfterMs ?? 300_000)
+    const onlineCutoff = cutoff(options.nodeOnlineWithinMs ?? 90_000)
+    const limit = options.limit ?? 200
+    const findings: ReconciliationFinding[] = []
+
+    const unreported = this.#database
+      .prepare(
+        `SELECT r.id AS run_id, r.task_id, r.status AS run_status,
+                r.updated_at, t.user_id
+         FROM runs r
+         INNER JOIN tasks t ON t.id = r.task_id
+         WHERE r.status IN ('completed','failed')
+           AND r.updated_at <= ?
+           AND NOT EXISTS (
+             SELECT 1 FROM runs successor
+             WHERE successor.retry_of_run_id = r.id
+               OR successor.steering_of_run_id = r.id)
+           AND NOT EXISTS (
+             SELECT 1 FROM outbox_messages o
+             WHERE o.task_id = r.task_id
+               AND json_extract(o.payload_json, '$.runId') = r.id
+               AND (o.status = 'sent'
+                 OR (o.status = 'merged' AND EXISTS (
+                   SELECT 1 FROM outbox_messages m
+                   WHERE m.id = o.merged_into_id AND m.status = 'sent'))))
+         ORDER BY r.updated_at ASC, r.rowid ASC LIMIT ?`,
+      )
+      .all(unreportedCutoff, limit) as unknown as {
+      run_id: string
+      task_id: string
+      run_status: string
+      updated_at: string
+      user_id: string
+    }[]
+    for (const row of unreported)
+      findings.push({
+        kind: 'unreported',
+        userId: row.user_id,
+        taskId: row.task_id,
+        runId: row.run_id,
+        since: row.updated_at,
+        detail: `Run ${row.run_status} without a confirmed user delivery`,
+      })
+
+    const neverStarted = this.#database
+      .prepare(
+        `SELECT t.id, t.user_id, t.created_at
+         FROM tasks t
+         WHERE t.status IN ('backlog','unstarted','started')
+           AND t.kind = 'work'
+           AND t.created_at <= ?
+           AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.task_id = t.id)
+         ORDER BY t.created_at ASC, t.rowid ASC LIMIT ?`,
+      )
+      .all(neverStartedCutoff, limit) as unknown as {
+      id: string
+      user_id: string
+      created_at: string
+    }[]
+    for (const row of neverStarted)
+      findings.push({
+        kind: 'never_started',
+        userId: row.user_id,
+        taskId: row.id,
+        since: row.created_at,
+        detail: 'Open Task has no Run',
+      })
+
+    const stranded = this.#database
+      .prepare(
+        `SELECT r.id AS run_id, r.task_id, r.created_at, r.execution_context_json,
+                t.user_id
+         FROM runs r
+         INNER JOIN tasks t ON t.id = r.task_id
+         WHERE r.status = 'queued'
+           AND r.created_at <= ?
+           AND t.status NOT IN ('completed','cancelled')
+           AND EXISTS (
+             SELECT 1 FROM execution_nodes n
+             WHERE n.last_heartbeat_at > ?
+               AND (json_extract(r.execution_context_json, '$.nodeId') IS NULL
+                 OR json_extract(r.execution_context_json, '$.nodeId') = n.id))
+         ORDER BY r.created_at ASC, r.rowid ASC LIMIT ?`,
+      )
+      .all(strandedCutoff, onlineCutoff, limit) as unknown as {
+      run_id: string
+      task_id: string
+      created_at: string
+      execution_context_json: string | null
+      user_id: string
+    }[]
+    for (const row of stranded) {
+      const context = row.execution_context_json
+        ? parseExecutionContext(row.execution_context_json)
+        : undefined
+      findings.push({
+        kind: 'stranded',
+        userId: row.user_id,
+        taskId: row.task_id,
+        runId: row.run_id,
+        since: row.created_at,
+        detail:
+          'Queued Run unclaimed past the lease window while a node is online',
+        ...(context?.nodeId ? { nodeId: context.nodeId } : {}),
+      })
+    }
+
+    const staleWaiting = this.#database
+      .prepare(
+        `SELECT r.id AS run_id, r.task_id, r.updated_at, t.user_id,
+                'approval_resolved' AS condition
+         FROM runs r
+         INNER JOIN tasks t ON t.id = r.task_id
+         WHERE r.status = 'waiting' AND r.updated_at <= ?
+           AND t.status NOT IN ('completed','cancelled')
+           AND EXISTS (
+             SELECT 1 FROM actions a
+             INNER JOIN approvals ap ON ap.action_id = a.id
+             WHERE (a.run_id = r.id OR a.resume_run_id = r.id)
+               AND a.protocol_version = 1
+               AND ap.status IN ('approved','rejected','revision_requested'))
+         UNION ALL
+         SELECT r.id, r.task_id, r.updated_at, t.user_id,
+                'dependency_settled'
+         FROM runs r
+         INNER JOIN tasks t ON t.id = r.task_id
+         WHERE r.status = 'waiting' AND r.updated_at <= ?
+           AND t.status NOT IN ('completed','cancelled')
+           AND r.last_error = 'waiting_on_dependency'
+           AND NOT EXISTS (
+             SELECT 1 FROM channel_relations cr
+             WHERE cr.source_run_id = r.id AND cr.kind = 'delegate'
+               AND cr.status IN ('pending','active'))
+         UNION ALL
+         SELECT r.id, r.task_id, r.updated_at, t.user_id, 'user_input_arrived'
+         FROM runs r
+         INNER JOIN tasks t ON t.id = r.task_id
+         WHERE r.status = 'waiting' AND r.updated_at <= ?
+           AND t.status NOT IN ('completed','cancelled')
+           AND t.status_reason = 'awaiting_user_input'
+           AND EXISTS (
+             SELECT 1 FROM task_events te
+             INNER JOIN inbox_events e ON e.id = te.event_id
+             WHERE te.task_id = r.task_id AND e.type = 'user.message'
+               AND te.created_at > r.updated_at)
+         ORDER BY 3 ASC LIMIT ?`,
+      )
+      .all(
+        staleWaitingCutoff,
+        staleWaitingCutoff,
+        staleWaitingCutoff,
+        limit,
+      ) as unknown as {
+      run_id: string
+      task_id: string
+      updated_at: string
+      user_id: string
+      condition: string
+    }[]
+    for (const row of staleWaiting)
+      findings.push({
+        kind: 'stale_waiting',
+        userId: row.user_id,
+        taskId: row.task_id,
+        runId: row.run_id,
+        since: row.updated_at,
+        detail: `Waiting condition already satisfied: ${row.condition}`,
+      })
+
+    return findings.slice(0, limit)
   }
 
   markOutboxRead(messageId: string, userId: string): OutboxMessage {
@@ -11046,6 +12083,8 @@ function toRuntimeSettings(row: RuntimeSettingsRow): RuntimeSettings {
     agentModelName: row.agent_model_name,
     privacyMode: row.privacy_mode,
     rewriteMode: row.rewrite_mode,
+    chatLaneEnabled: row.chat_lane_enabled === 1,
+    executionPools: parseStoredExecutionPools(row.execution_pools_json),
     updatedAt: row.updated_at,
   }
 }
@@ -11058,8 +12097,21 @@ function toWorkerProfile(row: WorkerProfileRow): WorkerProfile {
     modelMode: row.model_mode,
     ...(row.model_provider ? { modelProvider: row.model_provider } : {}),
     ...(row.model_name ? { modelName: row.model_name } : {}),
+    ...(row.pool ? { pool: row.pool } : {}),
+    ...(row.effort ? { effort: row.effort } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  }
+}
+
+function parseStoredExecutionPools(
+  value: string | null | undefined,
+): ExecutionPools {
+  if (!value) return {}
+  try {
+    return parseExecutionPools(JSON.parse(value))
+  } catch {
+    return {}
   }
 }
 
@@ -11108,6 +12160,19 @@ function toModelProviderConnection(
   }
 }
 
+function firstSummaryLine(value: string, limit: number): string | undefined {
+  const line = value
+    .split('\n')
+    .map(part => part.trim())
+    .find(part => part.length > 0)
+  if (!line) return undefined
+  return Array.from(line).slice(0, limit).join('')
+}
+
+function conversationTitle(input: string): string {
+  return (firstSummaryLine(input, 60) ?? '即时对话').trim()
+}
+
 function toTask(row: TaskRow): Task {
   const workerIconId = row.worker_icon_id ?? assignWorkerIconId(row.id)
   if (!isWorkerIconId(workerIconId))
@@ -11119,6 +12184,7 @@ function toTask(row: TaskRow): Task {
     title: row.title,
     goal: row.goal || row.title,
     status: row.status,
+    kind: row.kind === 'conversation' ? 'conversation' : 'work',
     workerIconId,
     ...(row.status_reason ? { statusReason: row.status_reason } : {}),
     ...(row.target_resource === 'pegas_repository'
@@ -11665,6 +12731,57 @@ function summarizeModelUsage(
   addKnownUsageTotal(summary, records, 'reasoningTokens')
   addKnownUsageTotal(summary, records, 'costUsd')
   return summary
+}
+
+function toRouterUsageRecord(
+  row: RouterUsageRow,
+): RouterUsageReport['records'][number] {
+  return {
+    callId: row.call_id,
+    userId: row.user_id,
+    component: row.component,
+    ...(row.event_id ? { eventId: row.event_id } : {}),
+    modelRef: row.model_ref,
+    completeness: row.completeness,
+    ...(row.token_source ? { tokenSource: row.token_source } : {}),
+    ...(row.input_tokens === null ? {} : { inputTokens: row.input_tokens }),
+    ...(row.output_tokens === null ? {} : { outputTokens: row.output_tokens }),
+    ...(row.total_tokens === null ? {} : { totalTokens: row.total_tokens }),
+    ...(row.cache_read_tokens === null
+      ? {}
+      : { cacheReadTokens: row.cache_read_tokens }),
+    ...(row.cache_write_tokens === null
+      ? {}
+      : { cacheWriteTokens: row.cache_write_tokens }),
+    ...(row.reasoning_tokens === null
+      ? {}
+      : { reasoningTokens: row.reasoning_tokens }),
+    durationMs: row.duration_ms,
+    latencySource: row.latency_source,
+    outcome: row.outcome,
+    observedAt: row.observed_at,
+  }
+}
+
+function summarizeRouterUsage(
+  records: RouterUsageReport['records'],
+): RouterUsageReport['summary'] {
+  return {
+    calls: records.length,
+    okCalls: records.filter(record => record.outcome === 'ok').length,
+    errorCalls: records.filter(record => record.outcome === 'error').length,
+    reportedCalls: records.filter(record => record.completeness === 'complete')
+      .length,
+    inputTokens: records.reduce(
+      (total, record) => total + (record.inputTokens ?? 0),
+      0,
+    ),
+    outputTokens: records.reduce(
+      (total, record) => total + (record.outputTokens ?? 0),
+      0,
+    ),
+    durationMs: records.reduce((total, record) => total + record.durationMs, 0),
+  }
 }
 
 function addKnownUsageTotal(

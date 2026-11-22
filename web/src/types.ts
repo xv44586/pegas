@@ -127,7 +127,7 @@ export interface ChannelTimeline {
   runs: Run[]
 }
 
-interface ModelUsageRecord {
+export interface ModelUsageRecord {
   runId: string
   taskId: string
   userId: string
@@ -168,6 +168,79 @@ interface ModelUsageSummary {
 export interface ModelUsageReport {
   summary: ModelUsageSummary
   records: ModelUsageRecord[]
+  router?: RouterUsageReport
+}
+
+export interface RunActivityEntry {
+  seq: number
+  kind: 'text' | 'thinking' | 'tool_call' | 'step'
+  status?: 'started' | 'completed' | 'error'
+  callId?: string
+  tool?: string
+  step?: number
+  label: string
+  detail?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface RunActivityReport {
+  runId: string
+  taskId: string
+  entries: RunActivityEntry[]
+  totalEntries: number
+  truncated: boolean
+}
+
+export interface SubagentTranscript {
+  sessionId: string
+  parentSessionId: string
+  delegationDepth: number
+  label?: string
+  prompt?: string
+  createdAt: string
+  entries: RunActivityEntry[]
+  totalEntries: number
+  truncated: boolean
+}
+
+export interface RunSubagentReport {
+  runId: string
+  taskId: string
+  subagents: SubagentTranscript[]
+}
+
+interface RouterUsageRecord {
+  callId: string
+  userId: string
+  component: 'router' | 'rewrite'
+  eventId?: string
+  modelRef: string
+  completeness: 'complete' | 'unavailable'
+  tokenSource?: 'provider_reported'
+  inputTokens?: number
+  outputTokens?: number
+  totalTokens?: number
+  cacheReadTokens?: number
+  cacheWriteTokens?: number
+  reasoningTokens?: number
+  durationMs: number
+  latencySource: 'pegas_observed'
+  outcome: 'ok' | 'error'
+  observedAt: string
+}
+
+interface RouterUsageReport {
+  summary: {
+    calls: number
+    okCalls: number
+    errorCalls: number
+    reportedCalls: number
+    inputTokens: number
+    outputTokens: number
+    durationMs: number
+  }
+  records: RouterUsageRecord[]
 }
 
 export interface RuntimeSettings {
@@ -180,6 +253,10 @@ export interface RuntimeSettings {
   agentModelName: string
   privacyMode: 'disabled' | 'mask'
   rewriteMode: 'disabled' | 'light'
+  chatLaneEnabled?: boolean
+  executionPools?: Partial<
+    Record<'fast' | 'balanced' | 'deep', { provider: string; model: string }>
+  >
   updatedAt: string
 }
 

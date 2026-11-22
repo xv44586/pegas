@@ -1,16 +1,23 @@
-import type { InboxEvent, RoutingDecision, Task } from '../core/domain.js'
+import type {
+  InboxEvent,
+  RoutingCandidate,
+  RoutingDecision,
+  Task,
+} from '../core/domain.js'
 import type {
   ExecutorInput,
   ExecutorResult,
   RunExecutor,
 } from '../executor/executor.js'
-import type { TaskRouter } from '../router/router.js'
+import type { ExplicitTaskResolver, TaskRouter } from '../router/router.js'
+import type { MeteredProviderContext } from '../model/metered-provider.js'
 import type { PegasStore } from '../storage/sqlite-store.js'
 import type { RuntimeSettings } from './runtime-settings.js'
 
 export class SettingsAwareTaskRouter implements TaskRouter {
   readonly #store: PegasStore
   readonly #resolve: (settings: RuntimeSettings) => TaskRouter
+  #meteringContext: MeteredProviderContext | undefined
 
   constructor(
     store: PegasStore,
@@ -20,12 +27,22 @@ export class SettingsAwareTaskRouter implements TaskRouter {
     this.#resolve = resolve
   }
 
+  meteringContext(): MeteredProviderContext | undefined {
+    return this.#meteringContext
+  }
+
   route(
     event: InboxEvent,
-    tasks: Task[],
+    tasks: RoutingCandidate[] | Task[],
+    context: { resolveExplicitTask?: ExplicitTaskResolver } = {},
   ): Promise<RoutingDecision | undefined> {
     const settings = this.#store.getRuntimeSettings()
-    return this.#resolve(settings).route(event, tasks)
+    this.#meteringContext = {
+      userId: event.userId,
+      eventId: event.id,
+      modelRef: `${settings.modelProvider}/${settings.modelName}`,
+    }
+    return this.#resolve(settings).route(event, tasks, context)
   }
 }
 

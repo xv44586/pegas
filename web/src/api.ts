@@ -27,6 +27,8 @@ import type {
   RecoveryStatus,
   ReviewPack,
   Run,
+  RunActivityReport,
+  RunSubagentReport,
   ModelProviderDraft,
   RuntimeSettings,
   SettingsResponse,
@@ -74,6 +76,20 @@ export class PegasApi {
       `/v1/link-preview?url=${encodeURIComponent(url)}`,
     )
     return projectLinkPreview(raw)
+  }
+
+  async runActivity(runId: string): Promise<RunActivityReport> {
+    const user = encodeURIComponent(this.#userId)
+    return this.#get<RunActivityReport>(
+      `/v1/runs/${encodeURIComponent(runId)}/activity?userId=${user}&limit=400`,
+    )
+  }
+
+  async runSubagents(runId: string): Promise<RunSubagentReport> {
+    const user = encodeURIComponent(this.#userId)
+    return this.#get<RunSubagentReport>(
+      `/v1/runs/${encodeURIComponent(runId)}/subagents?userId=${user}`,
+    )
   }
 
   async channelTimeline(channelId: string): Promise<ChannelTimeline> {
@@ -182,7 +198,11 @@ export class PegasApi {
     }))
   }
 
-  async sendMessage(text: string, taskId?: string): Promise<InboxEvent> {
+  async sendMessage(
+    text: string,
+    taskId?: string,
+    sourceTaskId?: string,
+  ): Promise<InboxEvent> {
     const response = await fetch('/v1/events', {
       method: 'POST',
       headers: this.#headers(true),
@@ -191,9 +211,44 @@ export class PegasApi {
         type: 'user.message',
         source: 'web',
         dedupeKey: crypto.randomUUID(),
-        payload: { text, ...(taskId ? { taskId } : {}) },
+        payload: {
+          text,
+          ...(taskId ? { taskId } : {}),
+          ...(sourceTaskId ? { sourceTaskId } : {}),
+        },
       }),
     })
+    if (!response.ok) await throwResponse(response)
+    const body = (await response.json()) as { event: InboxEvent }
+    return body.event
+  }
+
+  async sendSteerMessage(text: string, taskId: string): Promise<InboxEvent> {
+    const response = await fetch('/v1/events', {
+      method: 'POST',
+      headers: this.#headers(true),
+      body: JSON.stringify({
+        userId: this.#userId,
+        type: 'user.message',
+        source: 'web',
+        dedupeKey: crypto.randomUUID(),
+        payload: { text, taskId, intent: 'steer' },
+      }),
+    })
+    if (!response.ok) await throwResponse(response)
+    const body = (await response.json()) as { event: InboxEvent }
+    return body.event
+  }
+
+  async retryEvent(eventId: string): Promise<InboxEvent> {
+    const response = await fetch(
+      `/v1/events/${encodeURIComponent(eventId)}/retry`,
+      {
+        method: 'POST',
+        headers: this.#headers(true),
+        body: JSON.stringify({ userId: this.#userId }),
+      },
+    )
     if (!response.ok) await throwResponse(response)
     const body = (await response.json()) as { event: InboxEvent }
     return body.event
@@ -471,6 +526,8 @@ export class PegasApi {
       modelMode: 'inherit' | 'override'
       modelProvider?: string
       modelName?: string
+      pool?: 'fast' | 'balanced' | 'deep'
+      effort?: string
     },
   ): Promise<WorkerProfileResponse> {
     const response = await fetch(
@@ -825,6 +882,12 @@ export class PegasApi {
         agentModelName: settings.agentModelName,
         privacyMode: settings.privacyMode,
         rewriteMode: settings.rewriteMode,
+        ...(settings.chatLaneEnabled === undefined
+          ? {}
+          : { chatLaneEnabled: settings.chatLaneEnabled }),
+        ...(settings.executionPools === undefined
+          ? {}
+          : { executionPools: settings.executionPools }),
         provider,
         ...(speech ? { speech } : {}),
         ...(rewrite ? { rewrite } : {}),

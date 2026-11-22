@@ -1,5 +1,10 @@
-import type { InboxEvent, RoutingDecision, Task } from '../core/domain.js'
-import type { TaskRouter } from '../router/router.js'
+import type {
+  InboxEvent,
+  RoutingCandidate,
+  RoutingDecision,
+  Task,
+} from '../core/domain.js'
+import type { ExplicitTaskResolver, TaskRouter } from '../router/router.js'
 import type { InputRewriter } from './model-input-rewriter.js'
 
 /** Builds an execution view without modifying the canonical Inbox Event. */
@@ -14,14 +19,15 @@ export class RewritingTaskRouter implements TaskRouter {
 
   async route(
     event: InboxEvent,
-    tasks: Task[],
+    tasks: RoutingCandidate[] | Task[],
+    context: { resolveExplicitTask?: ExplicitTaskResolver } = {},
   ): Promise<RoutingDecision | undefined> {
     if (event.type !== 'user.message' || !isRecord(event.payload)) {
-      return this.#router.route(event, tasks)
+      return this.#router.route(event, tasks, context)
     }
     const text = event.payload.text
     if (typeof text !== 'string' || !text.trim()) {
-      return this.#router.route(event, tasks)
+      return this.#router.route(event, tasks, context)
     }
     const rewritten = await this.#rewriter.rewrite(text.trim())
     return this.#router.route(
@@ -30,6 +36,7 @@ export class RewritingTaskRouter implements TaskRouter {
         payload: { ...event.payload, text: rewritten },
       },
       tasks,
+      context,
     )
   }
 }

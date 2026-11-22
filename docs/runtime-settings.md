@@ -40,10 +40,13 @@
     不覆盖手工输入，界面给出可恢复错误。模型测试必须使用当前 Provider、凭证和精确
     模型名执行最小结构化请求，并返回成功状态与耗时。
 11. Router 模型与 Agent 模型在界面和持久化中分别命名。Router 与轻量改写只使用
-    Pegas Provider；Agent 默认跟随 DSH profile，也可以选择 DSH profile 暴露的
-    provider/model 组合。
-12. Agent 模型覆盖只应用于新建 DSH session。已有 Task 恢复原 session 时不注入新
-    覆盖，避免同一个恢复链路中途切换模型；保存设置不会中断正在执行的 Run。
+    Pegas Provider；Agent 默认使用当前 Router 连接与模型，也可以选择事情级
+    provider/model 覆盖。两者都必须引用已保存的 Pegas 模型连接：Worker 把连接
+    目录与所选模型生成受管 DSH 配置（EXEC-007），所选 provider 未配置连接时
+    执行失败并提示先保存连接，不回落本机 DSH 配置。
+12. Agent 模型覆盖只应用于新建 DSH session 的模型快照。已有 Task 恢复原 session
+    时按保存的快照生成同一份受管配置，避免同一个恢复链路中途切换模型；保存设置
+    不会中断正在执行的 Run。
 13. 获取模型目录后立即展示可搜索、可点选的模型列表；选择仅更新尚未保存的 Router 模型，仍需用户保存。目录为空或获取失败时保留手动填写模型 ID 的路径；更换连接配置时清除过期目录。
 14. 模型测试结果先给出可理解的结论与下一步：连接正常时显示响应时间；404、鉴权失败、限流和服务故障分别提示模型选择、密钥权限、额度与稍后重试。供应商原始错误不得直接铺到页面或回显凭证。
 15. 开启轻量改写后可选择沿用 Router 模型，或填写独立的协议、API 根地址、模型名和可选密钥。测试使用未保存的表单值与可编辑示例文本，返回原文、改写结果及耗时；不保存设置，不写入 Conversation 或 Event。
@@ -69,6 +72,23 @@ Environment / encrypted provider connection store
 运行设置是当前 Pegas 实例的全局单例，适合现阶段单用户部署。未来多租户化时需要增加
 scope 与 owner，不应把当前表误当作用户偏好表。
 
+即时应答车道（PLAN-001 P1，ROUTE-004/EXEC-005）由 `chatLaneEnabled` 控制，默认关闭。
+新实例可用 `PEGAS_CHAT_LANE=on` 生成开启的默认记录；此后以服务端保存值为准，
+`PUT /v1/settings` 省略该字段时保留现值（不会因旧客户端保存而意外关闭）。关闭后
+reply 决策兜底为完整 Task，行为回到现状；历史 conversation Task 数据保留可读。
+chat 车道的并发预算独立于重任务：`PEGAS_CHAT_CONCURRENCY`（默认 1）只影响本进程
+领取 conversation Run 的数量，不进入运行设置单例。Web 设置页开关属后续缺口，当前
+经环境变量（首次启动）或设置 API 启停。
+
+执行池（PLAN-001 P3 第一阶段，WORKER-002）在“Pegas”页 Agent 模型区配置：
+fast/balanced/deep 三池各指向一个已配置的 provider/model，允许只配 1–3 个，
+未配置的池按 fast→balanced→全局 Agent 默认降级，降级原因记入 Run 快照；
+三池全空且无全局默认时显式拒绝执行，不静默换模型。事情详情在“继承全局设置”
+模式下可为单个 Task 选择执行池与推理 effort，与模型覆盖互斥；effort 仅在
+存在生效模型时随 DSH patch 透传。保存省略 `executionPools` 字段时保留现值。
+密钥/权限/模型不存在类 Provider 错误首次即停放 Task（awaiting_provider_condition）
+并通知用户，修正模型连接或池设置后再继续；限流与服务故障仍走既有重试链。
+
 ## 保存、失败与恢复
 
 - PUT 使用客户端读到的 `revision` 做乐观并发控制；revision 不一致返回冲突，避免旧
@@ -76,8 +96,10 @@ scope 与 owner，不应把当前表误当作用户偏好表。
 - Provider 连接与设置保存使用同一事务更新；校验失败或 revision 冲突时原记录和凭证均
   保持不变。
 - Worker 每次只读取一个完整快照。设置变更不终止已经进行的模型调用或 Run。
-- Agent 模型覆盖通过临时 DSH patch 注入新 session；patch 文件在子进程退出后删除。
-  恢复已有 session 时忽略当前覆盖并继续使用 session 原来的模型。
+- Agent 模型配置（连接目录 + 默认模型）通过受管临时 DSH patch 注入每次执行与
+  模型目录读取；patch 文件在子进程退出后删除，明文 key 只经子进程环境传递。
+  恢复已有 session 时忽略当前覆盖并按保存的模型快照重建配置。DSH 运行在
+  `<dataDir>/dsh` 隔离 home 内（`PEGAS_DSH_HOME` 可覆盖），不读写本机 `~/.dsh`。
 - 凭证密钥位于数据目录的权限受限文件；文件缺失或密文损坏时连接标记为不可用，不用
   空值覆盖密文，也不把解密错误降级为明文读取。
 - 回滚应用版本不需要删除新增连接表；旧版本继续读取环境变量。恢复新版本后再次读取

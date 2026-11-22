@@ -5,6 +5,8 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import type { ClaimedRun } from '../src/core/domain.js'
+import { loadConfig } from '../src/core/config.js'
+import { runtimeSettingsDefaults } from '../src/settings/runtime-settings.js'
 import { PegasStore } from '../src/storage/sqlite-store.js'
 import {
   assertRollbackCompatible,
@@ -174,6 +176,63 @@ describe('durable state rollback compatibility', () => {
         RollbackCompatibilityError,
       )
       expect(() => assertRollbackCompatible(path, 23)).not.toThrow()
+    } finally {
+      store.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('blocks a pre-v32 rollback while conversation Runs are active', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'pegas-rollback-chat-'))
+    const path = join(directory, 'pegas.sqlite')
+    const store = new PegasStore(path)
+    try {
+      store.initializeRuntimeSettings({
+        ...runtimeSettingsDefaults(loadConfig({})),
+        chatLaneEnabled: true,
+      })
+      const event = store.enqueueEvent({
+        userId: 'owner',
+        type: 'user.message',
+        source: 'web',
+        authenticatedActor: 'human',
+        payload: { text: '今天星期几' },
+      }).event
+      const claimedEvent = store.claimNextEvent('chat-router')
+      if (!claimedEvent) throw new Error('Expected Event claim')
+      store.applyRoutingDecision(
+        claimedEvent,
+        { kind: 'reply', input: '今天星期几', reason: 'casual' },
+        'echo',
+        {
+          executor: 'echo',
+          protocol: 'conversation-v1',
+          permissions: JSON.stringify({
+            mode: 'read-only',
+            approvalPolicy: 'never',
+            additionalDirectories: [],
+            privacyMode: 'disabled',
+          }),
+        },
+      )
+      store.completeEvent(event.id, 'chat-router')
+      expect(() => assertRollbackCompatible(path, 31)).toThrow(
+        RollbackCompatibilityError,
+      )
+      expect(() => assertRollbackCompatible(path, 32)).not.toThrow()
+
+      const claimed = store.claimNextRun(
+        'chat-worker',
+        30_000,
+        undefined,
+        'conversation',
+      )
+      if (!claimed) throw new Error('Expected conversation Run claim')
+      store.completeRun(claimed.run.id, 'chat-worker', {
+        executorRef: 'chat-session',
+        output: '星期六',
+      })
+      expect(() => assertRollbackCompatible(path, 31)).not.toThrow()
     } finally {
       store.close()
       rmSync(directory, { recursive: true, force: true })

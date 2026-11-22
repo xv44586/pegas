@@ -100,7 +100,11 @@ describe('runtime settings validation', () => {
       ),
     ).toEqual({
       expectedRevision: 2,
-      settings: { ...defaults, privacyMode: 'mask', rewriteMode: 'light' },
+      settings: {
+        ...defaults,
+        privacyMode: 'mask',
+        rewriteMode: 'light',
+      },
       provider: {
         id: 'openai',
         name: 'OpenAI',

@@ -651,7 +651,7 @@ describe('PegasStore', () => {
       store.enqueueEvent({
         id,
         userId: 'owner',
-        source: 'web',
+        source: 'automation',
         type: 'user.message',
         payload: { text: id },
       }).event
@@ -666,8 +666,6 @@ describe('PegasStore', () => {
       },
       'test-executor',
     )
-    const claimedFirst = store.claimNextRun('worker')
-    expect(claimedFirst?.run.id).toBe(first.run.id)
     const second = store.applyRoutingDecision(
       nextEvent('second'),
       {
@@ -678,6 +676,8 @@ describe('PegasStore', () => {
       },
       'test-executor',
     )
+    const claimedFirst = store.claimNextRun('worker')
+    expect(claimedFirst?.run.id).toBe(first.run.id)
 
     store.completeRun(first.run.id, 'worker', {
       executorRef: 'session-one',
@@ -737,7 +737,7 @@ describe('PegasStore', () => {
     const event = () =>
       store.enqueueEvent({
         userId: 'owner',
-        source: 'web',
+        source: 'automation',
         type: 'user.message',
         payload: { text: 'Build' },
       }).event
@@ -752,7 +752,6 @@ describe('PegasStore', () => {
       },
       'test',
     )
-    store.claimNextRun('worker')
     const continuation = store.applyRoutingDecision(
       event(),
       {
@@ -763,6 +762,7 @@ describe('PegasStore', () => {
       },
       'test',
     )
+    store.claimNextRun('worker')
     expect(store.claimNextRun('worker-2')).toBeUndefined()
     store.failRun(initial.run.id, 'worker', 'error')
     expect(() => store.retryRun(initial.run.id, 'owner')).toThrow('active work')
@@ -924,7 +924,7 @@ describe('PegasStore', () => {
           .all() as { version: number }[]
         expect(versions.map(row => row.version)).toEqual([
           1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
-          21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
+          21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36,
         ])
         expect(
           db
