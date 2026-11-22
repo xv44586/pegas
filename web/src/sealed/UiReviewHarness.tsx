@@ -77,6 +77,7 @@ function activityEntry(
     semantic?: ToolSemantic
     kind?: RunActivityEntry['kind']
     meta?: RunActivityEntry['meta']
+    step?: RunActivityEntry['step']
   },
 ): RunActivityEntry {
   return {
@@ -86,6 +87,7 @@ function activityEntry(
     ...(partial.tool
       ? { tool: partial.tool, callId: `call-${String(seq)}` }
       : {}),
+    ...(partial.step !== undefined ? { step: partial.step } : {}),
     label: partial.label,
     ...(partial.detail !== undefined ? { detail: partial.detail } : {}),
     ...(partial.semantic ? { semantic: partial.semantic } : {}),
@@ -119,6 +121,18 @@ function activityEntries(running: boolean): RunActivityEntry[] {
       detail:
         '按顺序来：先合 **CONV-005**，再合 **DESKTOP-001** smoke 修复，最后清理旧 worktree（脏改动先存档再删）。',
     }),
+    activityEntry(12, {
+      kind: 'step',
+      status: 'started',
+      step: 1,
+      label: '第 1 步开始',
+    }),
+    activityEntry(13, {
+      kind: 'thinking',
+      label: '先确认工作区状态，再决定合并顺序。',
+      detail:
+        '先确认工作区状态，再决定合并顺序。冲突大概率出现在 api.ts，需要先 grep 冲突标记。',
+    }),
     fixtureShell(
       2,
       `cd ${workspace} && git status --short | grep -v node_modules | head -3`,
@@ -130,6 +144,12 @@ function activityEntries(running: boolean): RunActivityEntry[] {
       'Auto-merging web/src/api.ts\nCONFLICT (content): Merge conflict in web/src/api.ts\nAutomatic merge failed; fix conflicts and then commit the result.',
       'error',
     ),
+    activityEntry(14, {
+      kind: 'step',
+      status: 'completed',
+      step: 1,
+      label: '第 1 步完成',
+    }),
     activityEntry(4, {
       tool: 'grep',
       label: 'grep',

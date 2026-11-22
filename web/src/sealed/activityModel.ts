@@ -45,6 +45,23 @@ export function isDelegationEntry(entry: RunActivityEntry): boolean {
   return entry.tool === 'subagent' || entry.tool === 'subagent_fork'
 }
 
+export function thinkingHeadline(entry: RunActivityEntry): string {
+  const source = entry.label.trim() || (entry.detail ?? '').trim()
+  const firstLine =
+    source
+      .split('\n')
+      .map(line => line.trim())
+      .find(line => line.length > 0) ?? ''
+  const cleaned = firstLine
+    .replace(/^#{1,6}\s+/u, '')
+    .replace(/^[*>-]\s+/u, '')
+    .replaceAll(/\*\*|__|`|\*/gu, '')
+    .replaceAll(/\s+/gu, ' ')
+    .trim()
+  if (!cleaned) return '推理'
+  return cleaned.length > 64 ? `${cleaned.slice(0, 64)}…` : cleaned
+}
+
 export interface RunChangeSummary {
   files: {
     path: string
