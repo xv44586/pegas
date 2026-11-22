@@ -50,7 +50,8 @@ const dshFixture = resolve(dataDirectory, 'ui-review-dsh')
 writeFileSync(
   dshFixture,
   `#!/usr/bin/env node
-process.stdout.write(\`- id: agent-default-model
+if (process.argv.includes('--dump-config')) {
+  process.stdout.write(\`- id: agent-default-model
   config:
     provider: fixture
     model: deepseek-v4.1-flash
@@ -62,6 +63,96 @@ process.stdout.write(\`- id: agent-default-model
           - id: deepseek-v4.1-flash
             name: DeepSeek V4.1 Flash
 \`)
+  process.exit(0)
+}
+let input = ''
+process.stdin.setEncoding('utf8')
+process.stdin.on('data', chunk => {
+  input += chunk
+})
+process.stdin.on('end', async () => {
+  const sessionId = 'ui-review-' + process.env.PEGAS_RUN_ID
+  const text = input.split('\\n')[0]
+  if (
+    text.includes('调研托盘常驻显示方案') &&
+    process.env.PEGAS_CONTROL_PLANE_URL &&
+    process.env.PEGAS_RUN_ID &&
+    process.env.PEGAS_RUN_CLAIM_TOKEN &&
+    process.env.PEGAS_INPUT_EVENT_ID
+  ) {
+    const goal = {
+      basedOnEventIds: [process.env.PEGAS_INPUT_EVENT_ID],
+      desiredOutcome: '托盘常驻显示方案通过评审。',
+      beneficiaries: ['owner'],
+      successCriteria: [
+        {
+          criterionId: 'criterion-tray',
+          observableStatement: '托盘截图与交互合同一致。',
+          required: true,
+          evidencePlanRef: 'plan-tray',
+        },
+      ],
+      nonGoals: ['不对外发布。'],
+      constraints: ['保持用户数据私有。'],
+      contextSources: [
+        {
+          sourceRef: process.env.PEGAS_INPUT_EVENT_ID,
+          freshness: 'current',
+          authority: 'user',
+          conflictPriority: 0,
+        },
+      ],
+      assumptions: [],
+      unknowns: [],
+      prerequisites: [],
+      permissionBoundary: { externalWrites: false },
+      reviewCheckpoints: ['final'],
+      evidencePlan: [
+        {
+          id: 'plan-tray',
+          criterionId: 'criterion-tray',
+          acceptedKinds: ['screenshot'],
+          acceptedTrustClasses: ['control-plane'],
+          minimumCount: 1,
+          presentation: 'inline',
+        },
+      ],
+      failureAndRecovery: '保留事情并等待有效证据。',
+      feedbackSignals: ['user_acceptance'],
+    }
+    const response = await fetch(
+      process.env.PEGAS_CONTROL_PLANE_URL +
+        '/v1/runs/' +
+        process.env.PEGAS_RUN_ID +
+        '/goal-proposals',
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-pegas-run-claim-token': process.env.PEGAS_RUN_CLAIM_TOKEN,
+        },
+        body: JSON.stringify({ commandId: 'feature-review-tray-goal', goal }),
+      },
+    )
+    if (response.status !== 201) {
+      console.log(
+        JSON.stringify({
+          type: 'error',
+          message: 'tray goal proposal failed: ' + response.status,
+        }),
+      )
+      process.exit(1)
+    }
+  }
+  console.log(
+    JSON.stringify({
+      type: 'final',
+      sessionId,
+      text,
+      reason: { kind: 'completed' },
+    }),
+  )
+})
 `,
 )
 chmodSync(dshFixture, 0o755)
@@ -74,10 +165,12 @@ const environment = {
   PEGAS_DATA_DIR: dataDirectory,
   PEGAS_DSH_COMMAND: dshFixture,
   PEGAS_EVENT_POLL_MS: '25',
-  PEGAS_EXECUTOR: 'echo',
+  PEGAS_EXECUTOR: 'dsh',
   PEGAS_RECOVERY_BASE_URL: `http://127.0.0.1:${String(recoveryPort)}`,
   PEGAS_SPEECH_PROVIDER: 'disabled',
   PEGAS_PUSH_MODE: 'disabled',
+  PEGAS_ROUTE_COLLECT_WINDOW_MS: '0',
+  PEGAS_ROUTER: 'rules',
 }
 const children = [
   spawn(
@@ -734,6 +827,39 @@ async function seedConversation(apiPort) {
     if (body.channels?.length >= 2) break
     await wait(50)
   }
+  const trayEventResponse = await fetch(
+    `http://127.0.0.1:${String(apiPort)}/v1/events`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        userId: 'owner',
+        type: 'user.message',
+        source: 'web',
+        dedupeKey: 'feature-review-tray',
+        payload: { text: '调研托盘常驻显示方案' },
+      }),
+    },
+  )
+  if (trayEventResponse.status !== 202)
+    throw new Error('Unable to seed UI review tray task')
+  const trayDeadline = Date.now() + 30_000
+  let trayReady = false
+  while (Date.now() < trayDeadline) {
+    const response = await fetch(
+      `http://127.0.0.1:${String(apiPort)}/v1/channels?userId=owner`,
+    )
+    const body = await response.json()
+    const channel = body.channels?.find(
+      item => item.title === '调研托盘常驻显示方案',
+    )
+    if (channel?.statusReason === 'awaiting_evidence') {
+      trayReady = true
+      break
+    }
+    await wait(50)
+  }
+  if (!trayReady) throw new Error('UI review tray task never opened up')
   const automationResponse = await fetch(
     `http://127.0.0.1:${String(apiPort)}/v1/automations`,
     {
@@ -818,7 +944,9 @@ async function seedConversation(apiPort) {
     `http://127.0.0.1:${String(apiPort)}/v1/channels?userId=owner`,
   )
   const channelsBody = await channelsResponse.json()
-  const firstChannel = channelsBody.channels?.[0]
+  const firstChannel = channelsBody.channels?.find(
+    item => item.title === '为 Pegas 封板新的白底界面',
+  )
   if (!firstChannel) throw new Error('Unable to seed UI review attention')
   const attentionFixtures = [
     {

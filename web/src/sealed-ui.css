@@ -1192,6 +1192,65 @@ a {
   padding: 12px 42px 24px;
   position: relative;
 }
+.task-tray {
+  display: flex;
+  gap: 8px;
+  margin: 0 auto 8px;
+  max-width: 1040px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+}
+.task-tray-item {
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  display: inline-flex;
+  flex-shrink: 0;
+  font-size: var(--text-caption);
+  gap: 7px;
+  height: 34px;
+  max-width: 260px;
+  padding: 0 12px;
+}
+.task-tray-item:hover {
+  background: var(--surface-hover);
+  border-color: var(--line-strong);
+}
+.task-tray-item[aria-pressed='true'] {
+  background: var(--accent-softer);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+  color: var(--accent-ink, var(--accent));
+}
+.task-tray-item > i {
+  background: var(--faint);
+  border-radius: 50%;
+  flex-shrink: 0;
+  height: 8px;
+  width: 8px;
+}
+.task-tray-item[data-status='active'] > i {
+  animation: status-dot-pulse 1.6s ease-in-out infinite;
+  background: var(--accent);
+}
+.task-tray-item[data-status='attention'] > i {
+  background: var(--caution);
+}
+.task-tray-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-tray-item small {
+  color: var(--muted);
+  flex-shrink: 0;
+  font-size: var(--text-tiny);
+}
+.task-tray-item[aria-pressed='true'] small {
+  color: inherit;
+}
 .composer-queue {
   display: grid;
   gap: 6px;
@@ -1469,7 +1528,7 @@ a {
   grid-template-rows: auto auto minmax(0, 1fr) auto auto;
   inset-block-end: 48px;
   inset-inline-end: 0;
-  max-block-size: min(520px, calc(100dvh - 230px));
+  max-block-size: min(520px, calc(100dvh - 280px));
   overflow: hidden;
   padding: 16px 10px 10px;
   position: absolute;
@@ -5343,7 +5402,7 @@ kbd {
     border-radius: 14px;
     inset-block-end: 82px;
     inset-inline: 14px;
-    max-block-size: min(460px, calc(100dvh - 210px));
+    max-block-size: min(460px, calc(100dvh - 260px));
     padding-top: 14px;
     position: fixed;
     width: auto;

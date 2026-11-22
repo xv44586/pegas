@@ -485,6 +485,9 @@ describe('DESIGN-003 chat page', () => {
   it('sends a steer intent when the user chooses 插话 during a run', async () => {
     const fetchMock = installChatFetch(baseSnapshot)
     render(<App />)
+    fireEvent.click(
+      await screen.findByRole('button', { name: /整理季度数据.*进行中/ }),
+    )
     const composer =
       await screen.findByLabelText<HTMLTextAreaElement>('给 Pegas 发消息')
     fireEvent.change(composer, { target: { value: '先只做华东区' } })
@@ -538,6 +541,9 @@ describe('DESIGN-003 chat page', () => {
       return undefined
     })
     render(<App />)
+    fireEvent.click(
+      await screen.findByRole('button', { name: /整理季度数据.*进行中/ }),
+    )
     const composer =
       await screen.findByLabelText<HTMLTextAreaElement>('给 Pegas 发消息')
     fireEvent.change(composer, { target: { value: '完成后顺便发我一份摘要' } })
@@ -580,6 +586,9 @@ describe('DESIGN-003 chat page', () => {
   it('lets the user edit or delete a queued message before it sends', async () => {
     installChatFetch(baseSnapshot)
     render(<App />)
+    fireEvent.click(
+      await screen.findByRole('button', { name: /整理季度数据.*进行中/ }),
+    )
     const composer =
       await screen.findByLabelText<HTMLTextAreaElement>('给 Pegas 发消息')
     fireEvent.change(composer, { target: { value: '第一条排队' } })
@@ -590,6 +599,145 @@ describe('DESIGN-003 chat page', () => {
     fireEvent.click(screen.getByRole('button', { name: '排队' }))
     fireEvent.click(screen.getByRole('button', { name: '删除排队消息 1' }))
     expect(screen.queryByLabelText('排队消息')).toBeNull()
+  })
+
+  it('CONV-007: tray lists open tasks, hides terminal ones and toggles selection', async () => {
+    const secondChannel: WorkChannel = {
+      ...channel,
+      id: 'task-2',
+      taskId: 'task-2',
+      title: '整理供应商合同',
+      goal: '整理供应商合同',
+      latestActivityAt: '2026-11-22T08:05:00.000Z',
+    }
+    const doneChannel: WorkChannel = {
+      ...channel,
+      id: 'task-3',
+      taskId: 'task-3',
+      title: '已经完成的旧事情',
+      status: 'completed',
+    }
+    installChatFetch({
+      ...baseSnapshot,
+      channels: [channel, secondChannel, doneChannel],
+      runs: [
+        runningRun,
+        { ...runningRun, id: 'run-2', taskId: 'task-2', status: 'waiting' },
+      ],
+    })
+    render(<App />)
+    const tray = await screen.findByRole('group', { name: '进行中的事情' })
+    expect(within(tray).getByText('整理季度数据')).toBeTruthy()
+    expect(within(tray).getByText('整理供应商合同')).toBeTruthy()
+    expect(within(tray).queryByText('已经完成的旧事情')).toBeNull()
+    const second = within(tray).getByRole('button', {
+      name: /整理供应商合同/,
+    })
+    expect(second.getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(second)
+    expect(second.getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByText(/继续事情：/)).toBeTruthy()
+    fireEvent.click(second)
+    expect(second.getAttribute('aria-pressed')).toBe('false')
+    expect(screen.queryByText(/继续事情：/)).toBeNull()
+  })
+
+  it('CONV-007: input follows the selected task even when another is more active', async () => {
+    const idleSelected: WorkChannel = {
+      ...channel,
+      id: 'task-idle',
+      taskId: 'task-idle',
+      title: '等待中的调研',
+      statusReason: 'awaiting_goal_clarification',
+    }
+    const fetchMock = installChatFetch({
+      ...baseSnapshot,
+      channels: [idleSelected, channel],
+      runs: [
+        {
+          ...runningRun,
+          id: 'run-idle',
+          taskId: 'task-idle',
+          status: 'waiting',
+        },
+        runningRun,
+      ],
+    })
+    render(<App />)
+    const tray = await screen.findByRole('group', { name: '进行中的事情' })
+    fireEvent.click(within(tray).getByRole('button', { name: /等待中的调研/ }))
+    const composer =
+      screen.getByLabelText<HTMLTextAreaElement>('给 Pegas 发消息')
+    fireEvent.change(composer, { target: { value: '补充：只做华东区' } })
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([path, init]) => {
+          if (path !== '/v1/events' || init?.method !== 'POST') return false
+          const body = JSON.parse(
+            typeof init.body === 'string' ? init.body : '{}',
+          ) as { payload?: { taskId?: string; intent?: string } }
+          return (
+            body.payload?.taskId === 'task-idle' &&
+            body.payload.intent === undefined
+          )
+        }),
+      ).toBe(true),
+    )
+    expect(screen.queryByRole('button', { name: /插话/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: '排队' })).toBeNull()
+  })
+
+  it('CONV-007: steer and queue target the selected active task, not the busiest one', async () => {
+    const secondActive: WorkChannel = {
+      ...channel,
+      id: 'task-busy',
+      taskId: 'task-busy',
+      title: '更活跃的执行',
+      latestActivityAt: '2026-11-22T08:09:00.000Z',
+    }
+    const fetchMock = installChatFetch({
+      ...baseSnapshot,
+      channels: [secondActive, channel],
+      runs: [
+        { ...runningRun, id: 'run-busy', taskId: 'task-busy' },
+        runningRun,
+      ],
+    })
+    render(<App />)
+    const tray = await screen.findByRole('group', { name: '进行中的事情' })
+    fireEvent.click(within(tray).getByRole('button', { name: /整理季度数据/ }))
+    const composer =
+      screen.getByLabelText<HTMLTextAreaElement>('给 Pegas 发消息')
+    fireEvent.change(composer, { target: { value: '改成按月汇总' } })
+    fireEvent.click(await screen.findByRole('button', { name: /插话/ }))
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([path, init]) => {
+          if (path !== '/v1/events' || init?.method !== 'POST') return false
+          const body = JSON.parse(
+            typeof init.body === 'string' ? init.body : '{}',
+          ) as { payload?: { taskId?: string; intent?: string } }
+          return (
+            body.payload?.taskId === 'task-1' && body.payload.intent === 'steer'
+          )
+        }),
+      ).toBe(true),
+    )
+    fireEvent.change(composer, { target: { value: '完成后发我摘要' } })
+    fireEvent.click(await screen.findByRole('button', { name: '排队' }))
+    expect(await screen.findByLabelText('排队消息')).toBeTruthy()
+  })
+
+  it('CONV-007: an empty tray takes no layout and terminal selection auto-clears', async () => {
+    installChatFetch({
+      ...baseSnapshot,
+      channels: [{ ...channel, status: 'completed' }],
+      runs: [{ ...runningRun, status: 'completed', output: 'done' }],
+    })
+    render(<App />)
+    await screen.findByText('你的私人智能工作伙伴')
+    expect(screen.queryByRole('group', { name: '进行中的事情' })).toBeNull()
   })
 
   it('retries a failed user message in place', async () => {

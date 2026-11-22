@@ -2,9 +2,9 @@
 
 > Feature：`CONV-006`（投影合同）、`CONV-007`（任务托盘与锚点导航）
 >
-> 状态：CONV-006 Partial（服务端派生层 + 投影 API + Web 三声道渲染 + anchor 双向导航已落地；say 流式未实现）；CONV-007 Planned
+> 状态：CONV-006 Partial（服务端派生层 + 投影 API + Web 三声道渲染 + anchor 双向导航已落地；say 流式未实现）；CONV-007 Partial（任务托盘 + 选中指向已落地；thread 分组未实现）
 >
-> 更新日期：2026-11-22
+> 更新日期：2026-11-23
 
 ## 用户结果
 
@@ -105,3 +105,13 @@
 - **自动化证据（第二阶段新增/更新）**：`web/src/sealed/types.test.ts` +4 测试（lane/anchor 只读服务端、缺投影降级、approval/reconciliation 已决匹配）；`ChatExperience.test.tsx` +2 测试（decide 已决态无动作、未决有显式动作与锚点缺失不伪造）；`App.test.tsx` 3 个旧 cue/内联卡用例改写为投影驱动合同（含锚点双向往返断言）。
 - **门禁（第二阶段）**：`pnpm check` 99 文件 / 1008 测试全绿；`pnpm smoke`、`pnpm smoke:crash`、`pnpm review:ui -- --force`（桌面/移动/三主题几何断言）、`pnpm a11y:review`（0 违例）通过。
 - **仍未实现（CONV-006 剩余缺口）**：`say` 正文流式输出（现状仍是一次性完整文本）；work 卡内嵌 criteria 摘要（现经「审查交付/查看工作详情」抽屉下钻）；「待你处理」计数与聊天内就地解决的联动扣减仍以整页快照刷新为准。
+
+## 已落地实现（2026-11-23，CONV-007：任务托盘与选中指向）
+
+- **托盘只读投影**：`web/src/sealed/MainPages.tsx` 在输入器上方渲染 `.task-tray`（`role=group` 「进行中的事情」），列出当前 owner 非终态任务（completed/cancelled 过滤），按 `latestActivityAt` 降序；每项为 `aria-pressed` 胶囊按钮，状态点区分 active（运行/排队，脉冲）、attention（有 `statusReason`，caution 色）、idle，附 `statusLabel`。空托盘不渲染、不占布局。
+- **选中态与控制权**：选中是客户端本地偏好（`App.tsx` `onSelectTask` 设置 continuationTaskId，不落库）；`steerTarget` 严格跟随选中任务而非最活跃任务；未选中时输入走 Router 默认归属。选中项自动清除仅在 cancelled 时触发（completed 保留选中以保护「继续事情」resume 流程）。
+- **插话/排队指向选中**：`canSteer` 要求选中任务的最新 run 处于 running/queued，走既有 `sendSteerMessage`（`payload.intent:'steer'`）；`canQueue` 要求显式选中 + 非终态 + 活跃 run，排队消息在任务完成后经既有 `sendMessage` 发出。不新增服务端意图。
+- **几何修复**：托盘使 composer 变高，`.composer-model-picker` 桌面/移动 `max-block-size` 扣减量各 +50px，保证向上弹出不越 viewport（review:ui 几何断言覆盖）。
+- **review:ui 种子确定性**：`scripts/capture-ui-review.mjs` 改用 dsh fixture executor（`PEGAS_ROUTER=rules`、collect window 0）；fixture 对托盘任务在 run 内用自身 claim token 走真实 `POST /v1/runs/:id/goal-proposals` 提交 Goal Contract，run 完成后服务端依合同停在 `awaiting_evidence`，托盘实拍稳定可见等待中任务；连续 4 次 `--force` 全绿。
+- **自动化证据**：`ChatExperience.test.tsx` 19 测试（CONV-007 新增 4：托盘列出/隐藏终态/切换选中、输入跟随选中而非最活跃、steer/queue 指向选中、空托盘不占布局与终态自动清除；既有 steer/queue 3 用例改为经托盘选中）；`App.test.tsx` 2 用例断言改 `findAllByText` 适配托盘标题重复；`pnpm check` 99 文件/1013 测试、`pnpm smoke`、`pnpm a11y:review` 0 违例。
+- **仍未实现（CONV-007 剩余缺口）**：同一任务连续事实的 thread 分组渲染（缩进/竖线/嵌套）；选中上下文条沿用「继续事情」横幅形态；托盘任务多时横向滚动、无分页/收纳。

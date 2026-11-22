@@ -1339,6 +1339,10 @@ export function App() {
             models={availableAgentModels}
             onAnswerClarification={channel => continueChannel(channel.id)}
             onOpenAttention={openAttentionMessage}
+            onSelectTask={taskId => {
+              setContinuationTaskId(taskId)
+              setSourceContextTaskId(undefined)
+            }}
             onClearContinuation={() => setContinuationTaskId(undefined)}
             onClearSourceContext={() => setSourceContextTaskId(undefined)}
             onConfigureVoice={() => {

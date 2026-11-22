@@ -38,6 +38,7 @@ function renderWelcome(options?: {
       models={[]}
       onAnswerClarification={() => undefined}
       onOpenAttention={() => Promise.resolve()}
+      onSelectTask={() => undefined}
       onClearContinuation={() => undefined}
       onClearSourceContext={() => undefined}
       onConfigureVoice={() => undefined}
