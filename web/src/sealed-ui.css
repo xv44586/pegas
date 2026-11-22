@@ -865,7 +865,7 @@ a {
 }
 .link-preview-unavailable p {
   color: var(--ink-soft);
-  font-size: 12.5px;
+  font-size: var(--text-caption);
   margin: 0;
 }
 .link-preview-retry {
@@ -874,7 +874,7 @@ a {
   border-radius: 999px;
   color: var(--accent);
   cursor: pointer;
-  font-size: 12.5px;
+  font-size: var(--text-small);
   padding: 3px 12px;
 }
 .link-preview-retry:hover {
