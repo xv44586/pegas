@@ -390,6 +390,9 @@ function createExecutor(
           timeoutMs: config.dshTimeoutMs,
           home: config.dshHome,
           modelConfiguration,
+          ...(privacyMode === 'mask'
+            ? { privacyMasker: createPrivacyMasker() }
+            : {}),
         }),
       ),
       modelConfiguration,

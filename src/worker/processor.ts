@@ -19,6 +19,7 @@ import {
   TaskActionBlockedError,
   type PegasStore,
 } from '../storage/sqlite-store.js'
+import { decodeLegacyExecutionPermissions } from '../core/execution-permissions.js'
 import { runExecutionWorkspace } from './run-execution-snapshot.js'
 import { isTerminalProviderError } from './provider-errors.js'
 
@@ -401,6 +402,7 @@ async function executeConversationRun(
   workerId: string,
   workingDirectory: string,
   signal: AbortSignal,
+  controlPlaneBaseUrl: string,
   telemetry?: { logger?: Logger; metrics?: MetricsRegistry },
 ): Promise<void> {
   const runStartedAt = performance.now()
@@ -431,6 +433,12 @@ async function executeConversationRun(
       executionContext: claimed.run.executionContext,
       executionContractVersion: claimed.run.executionContractVersion,
       mandate: claimed.task.mandate,
+      conversationStateCapability: {
+        baseUrl: controlPlaneBaseUrl,
+        runId: claimed.run.id,
+        claimToken: claimed.claimToken,
+        privacyMode: conversationPrivacyMode(claimed.run.executionContext),
+      },
       ...(memories.length > 0 ? { memories } : {}),
       ...(workRules.rules.length > 0 || workRules.customInstructions
         ? { workRules }
@@ -497,6 +505,13 @@ export function conversationSuggestion(
   if (!goal) return undefined
   const reply = trimmed.slice(0, match.index).trim()
   return { goal, ...(reply ? { reply } : {}) }
+}
+
+function conversationPrivacyMode(
+  context: ExecutionContext | undefined,
+): 'mask' | 'disabled' {
+  const permissions = decodeLegacyExecutionPermissions(context?.permissions)
+  return permissions?.privacyMode === 'mask' ? 'mask' : 'disabled'
 }
 
 function collaborationPayload(value: unknown): Record<string, unknown> {
@@ -779,6 +794,7 @@ export async function executeClaimedRun(
       workerId,
       workingDirectory,
       signal,
+      controlPlaneBaseUrl,
       telemetry,
     )
     return
