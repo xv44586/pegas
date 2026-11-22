@@ -28,6 +28,10 @@ import type {
 } from '../core/domain.js'
 import type { Logger } from '../observability/logger.js'
 import type { MetricsRegistry } from '../observability/metrics.js'
+import {
+  LinkPreviewService,
+  type LinkPreviewOptions,
+} from '../link-preview/link-preview.js'
 import type {
   ChannelSearchSort,
   ChannelSearchOptions,
@@ -146,6 +150,7 @@ export interface ControlPlaneOptions {
   recoveryStatus?: RecoveryStatusSource
   logger?: Logger
   metrics?: MetricsRegistry
+  linkPreview?: LinkPreviewOptions
 }
 
 interface RecoveryStatusSource {
@@ -299,7 +304,8 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
   )
   const logger = options.logger
   const metrics = options.metrics
-  return createServer(async (request, response) => {
+  const linkPreviews = new LinkPreviewService(options.linkPreview)
+  const server = createServer(async (request, response) => {
     const startedAt = performance.now()
     const method = request.method ?? 'GET'
     const path = request.url
@@ -369,6 +375,24 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         request.method === 'POST'
       ) {
         return await acceptVoiceTranscription(request, response, options)
+      }
+
+      if (
+        request.url === '/v1/link-preview' ||
+        request.url?.startsWith('/v1/link-preview?')
+      ) {
+        if (request.method !== 'GET') {
+          return sendJson(response, 405, { error: 'method_not_allowed' })
+        }
+        const target = new URL(
+          request.url,
+          'http://localhost',
+        ).searchParams.get('url')
+        if (!target) {
+          return sendJson(response, 400, { error: 'url_required' })
+        }
+        const preview = await linkPreviews.get(target)
+        return sendJson(response, 200, preview)
       }
 
       if (
@@ -1893,6 +1917,10 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
       return sendJson(response, 400, { error: 'bad_request', message })
     }
   })
+  server.on('close', () => {
+    linkPreviews.dispose()
+  })
+  return server
 }
 
 /** Normalizes dynamic path segments so metrics stay low-cardinality. */
