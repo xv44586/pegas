@@ -494,6 +494,57 @@ console.log(JSON.stringify({
     expect(observedSessions).toEqual(['session-fresh'])
   })
 
+  it('starts a fresh session when the resumed session no longer exists in the isolated home', async () => {
+    const command = fakeDsh(`
+if (process.argv.includes('--session-id')) {
+  console.error('dsh: all_proxy names a SOCKS proxy, which is not supported; connecting directly for that scheme — set an http:// or https:// proxy URL instead')
+  console.error('dsh: session "session-legacy" does not exist; omit --session-id to start a new Session')
+  process.exit(1)
+}
+console.log(JSON.stringify({
+  type: 'final',
+  sessionId: 'session-reopened',
+  text: 'reopened after the isolated home switch',
+  reason: { kind: 'completed' }
+}))
+`)
+    const executor = new DshCliExecutor({ command })
+    const observedSessions: string[] = []
+
+    const result = await executor.execute({
+      runId: 'run-legacy-home',
+      taskId: 'task-legacy',
+      prompt: 'continue the work',
+      workingDirectory: process.cwd(),
+      resumeSessionId: 'session-legacy',
+      onExecutorRef: value => observedSessions.push(value),
+    })
+
+    expect(result).toMatchObject({
+      executorRef: 'session-reopened',
+      output: 'reopened after the isolated home switch',
+    })
+    expect(observedSessions).toEqual(['session-reopened'])
+  })
+
+  it('still fails when the missing-session error names a different session', async () => {
+    const command = fakeDsh(`
+console.error('dsh: session "session-other" does not exist; omit --session-id to start a new Session')
+process.exit(1)
+`)
+    const executor = new DshCliExecutor({ command })
+
+    await expect(
+      executor.execute({
+        runId: 'run-unrelated-missing',
+        taskId: 'task-legacy',
+        prompt: 'continue the work',
+        workingDirectory: process.cwd(),
+        resumeSessionId: 'session-legacy',
+      }),
+    ).rejects.toThrow('does not exist')
+  })
+
   it('retries a resume while the previous DSH process still holds the session write lock', async () => {
     const lockDirectory = mkdtempSync(join(tmpdir(), 'pegas-session-busy-'))
     temporaryDirectories.push(lockDirectory)
