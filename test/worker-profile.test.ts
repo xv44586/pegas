@@ -369,6 +369,51 @@ describe('WORKER-001 profile contracts', () => {
       rmSync(directory, { recursive: true, force: true })
     }
   })
+
+  it('lazily restores an inherit profile for legacy tasks without a profile row', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'pegas-legacy-profile-'))
+    const path = join(directory, 'pegas.sqlite')
+    try {
+      const store = new PegasStore(path)
+      store.initializeRuntimeSettings(settings)
+      const task = createTask(store, 'owner')
+      store.close()
+
+      const database = new DatabaseSync(path)
+      database
+        .prepare('DELETE FROM worker_profiles WHERE task_id = ?')
+        .run(task.id)
+      database.close()
+
+      const reopened = new PegasStore(path)
+      reopened.initializeRuntimeSettings(settings)
+      const profile = reopened.getWorkerProfile(task.id, 'owner')
+      expect(profile).toMatchObject({
+        taskId: task.id,
+        revision: 1,
+        modelMode: 'inherit',
+        createdAt: task.createdAt,
+      })
+      const context = reopened.resolveWorkerExecutionContext(task.id, 'owner', {
+        executor: 'dsh-headless',
+        workspace: '/workspace',
+        protocol: 'dsh-headless-v1',
+      })
+      expect(context).toMatchObject({
+        model: 'discovery-api/deepseek-v4.1-flash-1017',
+        workerProfileSource: 'global',
+      })
+      const updated = reopened.updateWorkerProfile(task.id, 'owner', {
+        commandId: 'legacy-profile-update',
+        expectedRevision: 1,
+        modelMode: 'inherit',
+      })
+      expect(updated.revision).toBe(1)
+      reopened.close()
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
 })
 
 function createTask(store: PegasStore, userId: string) {

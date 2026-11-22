@@ -2710,6 +2710,8 @@ export class PegasStore {
   getWorkerProfile(taskId: string, userId: string): WorkerProfile {
     const task = this.#taskById(taskId)
     if (task.userId !== userId) throw new Error('Task belongs to another user')
+    if ((task.kind ?? 'work') === 'work')
+      this.#ensureWorkerProfile(taskId, task.createdAt)
     return this.#workerProfileByTaskId(taskId)
   }
 
