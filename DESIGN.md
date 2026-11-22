@@ -28,6 +28,10 @@ typography:
   label: '500 12px/1.4'
   button: '500 13px/1.4'
   weights: '400 body, 500 headings/labels/buttons; no 600/700'
+  heading-wrap: 'balance'
+  display-line-height: '1.2'
+  title-line-height: '1.25'
+  tracking: '-0.03em at 26px, -0.02em at 20px, 0 below'
 radius:
   control: '10px'
   card: '14px'
@@ -59,6 +63,7 @@ The approved implementation contract is [docs/sealed-ui-rebuild.md](docs/sealed-
 - Prefer plain rows, type and dividers over nested cards.
 - Use one primary action per region. Secondary actions are quiet buttons or links.
 - Typography follows the DESIGN-004 scale: every `font-size` references a `--text-*` token; headings and emphasis use weight 500, body 400. Section titles (14px) outrank card titles (13px); card body and button text sit one step (−1px) below adjacent outside body copy. Text inputs stay at 16px to avoid iOS focus zoom.
+- Headings use `text-wrap: balance`; display titles (26px) use line-height 1.2 and −0.03em tracking, section titles (20px) use 1.25 and −0.02em. No eyebrow labels above headings, no decorative count/position pills; status is plain text.
 - Status always has text; color and icons are supplemental.
 - Drawers and dialogs own a header, close action, scroll body and optional action footer.
 - Loading preserves layout. Empty states explain what is absent and whether the capability exists yet.

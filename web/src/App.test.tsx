@@ -5496,7 +5496,9 @@ describe('sealed Pegas UI', () => {
     )
     fireEvent.click(screen.getByRole('button', { name: /^审查交付：/ }))
     expect(await screen.findByText('按完成标准审查交付')).toBeTruthy()
-    expect(screen.getByText('部分完成')).toBeTruthy()
+    expect(
+      screen.getByText(/部分完成：结论来自服务端 Review Pack/),
+    ).toBeTruthy()
     const criteria = screen.getByLabelText('完成标准')
     expect(within(criteria).getByText('已满足')).toBeTruthy()
     expect(within(criteria).getByText('未验证')).toBeTruthy()

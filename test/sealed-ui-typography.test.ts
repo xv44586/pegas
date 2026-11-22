@@ -155,4 +155,70 @@ describe('sealed UI typography scale (DESIGN-004)', () => {
       expect(fontSizeOf(selector), selector).toBe('var(--text-display)')
     }
   })
+
+  it('balances heading line breaks', () => {
+    const headingReset = /h1,\s*h2,\s*h3,\s*h4\s*\{([^}]+)\}/.exec(stylesheet)
+    expect(headingReset?.[1]).toContain('text-wrap: balance;')
+  })
+
+  it('gives display and title steps compact line heights', () => {
+    for (const selector of [
+      '.page-header h1',
+      '.conversation-welcome h2',
+      '.about-pane h2',
+      '.setup-body h1',
+      '.access-page h1',
+      '.settings-heading h2',
+    ]) {
+      expect(declarationOf(selector, 'line-height'), selector).toBe('1.2')
+    }
+    for (const selector of [
+      '.drawer-header h2',
+      '.empty-capability h2',
+      '.settings-nav-title h1',
+      '.usage-metrics strong',
+    ]) {
+      expect(declarationOf(selector, 'line-height'), selector).toBe('1.25')
+    }
+  })
+
+  it('maps tracking to font size steps consistently', () => {
+    for (const selector of [
+      '.page-header h1',
+      '.conversation-welcome h2',
+      '.about-pane h2',
+      '.setup-body h1',
+      '.access-page h1',
+      '.settings-heading h2',
+    ]) {
+      expect(declarationOf(selector, 'letter-spacing'), selector).toBe(
+        '-0.03em',
+      )
+    }
+    for (const selector of [
+      '.drawer-header h2',
+      '.empty-capability h2',
+      '.settings-nav-title h1',
+      '.provider-detail > header h3',
+    ]) {
+      expect(declarationOf(selector, 'letter-spacing'), selector).toBe(
+        '-0.02em',
+      )
+    }
+  })
+
+  it('drops the dead serif file-preview block', () => {
+    expect(stylesheet).not.toContain('.file-preview')
+    expect(stylesheet).not.toContain('ui-serif')
+  })
+
+  it('removes decorative count and position pills', () => {
+    expect(stylesheet).not.toContain('.provider-detail h4 b')
+    expect(stylesheet).not.toContain('.composer-queue-position')
+  })
+
+  it('removes the drawer eyebrow and redundant state-hero status label', () => {
+    expect(stylesheet).not.toContain('.drawer-header small')
+    expect(stylesheet).not.toContain('.state-hero small')
+  })
 })

@@ -137,6 +137,7 @@ h2,
 h3,
 h4 {
   font-weight: 500;
+  text-wrap: balance;
 }
 .visually-hidden {
   border: 0 !important;
@@ -415,7 +416,7 @@ a {
 }
 .page-header h1 {
   font-size: var(--text-display);
-  letter-spacing: -0.04em;
+  letter-spacing: -0.03em;
   line-height: 1.2;
   margin: 0;
 }
@@ -635,6 +636,7 @@ a {
 .conversation-welcome h2 {
   font-size: var(--text-display);
   letter-spacing: -0.03em;
+  line-height: 1.2;
   margin: 18px 0 8px;
 }
 .conversation-welcome p {
@@ -1065,19 +1067,6 @@ a {
   gap: 8px;
   min-height: 36px;
   padding: 4px 8px;
-}
-.composer-queue-position {
-  align-items: center;
-  background: var(--accent-soft);
-  border-radius: 50%;
-  color: var(--accent-ink, var(--accent));
-  display: inline-flex;
-  flex-shrink: 0;
-  font-size: var(--text-tiny);
-  font-weight: 500;
-  height: 20px;
-  justify-content: center;
-  width: 20px;
 }
 .composer-queue-preview {
   color: var(--ink-soft);
@@ -1858,6 +1847,8 @@ a {
 }
 .empty-capability h2 {
   font-size: var(--text-title);
+  letter-spacing: -0.02em;
+  line-height: 1.25;
   margin: 18px 0 7px;
 }
 .empty-capability p {
@@ -2047,6 +2038,8 @@ kbd {
 }
 .settings-nav-title h1 {
   font-size: var(--text-title);
+  letter-spacing: -0.02em;
+  line-height: 1.25;
   margin: 0;
 }
 .settings-nav .settings-nav-title > button {
@@ -2108,6 +2101,7 @@ kbd {
 .settings-heading h2 {
   font-size: var(--text-display);
   letter-spacing: -0.03em;
+  line-height: 1.2;
   margin: 0 0 5px;
 }
 .settings-heading p {
@@ -2652,6 +2646,7 @@ kbd {
 .provider-detail > header h3 {
   display: inline;
   font-size: var(--text-title);
+  letter-spacing: -0.02em;
   margin: 0 10px 0 0;
 }
 .provider-detail h4 {
@@ -2659,12 +2654,6 @@ kbd {
   font-size: var(--text-body);
   margin: 18px 0 6px;
   padding-top: 14px;
-}
-.provider-detail h4 b {
-  background: var(--surface);
-  border-radius: 99px;
-  font-size: var(--text-micro);
-  padding: 3px 7px;
 }
 .health-badge {
   background: var(--surface);
@@ -2952,6 +2941,8 @@ kbd {
 }
 .usage-metrics strong {
   font-size: var(--text-title);
+  letter-spacing: -0.02em;
+  line-height: 1.25;
 }
 .usage-table {
   font-size: var(--text-small);
@@ -2996,6 +2987,8 @@ kbd {
 }
 .about-pane h2 {
   font-size: var(--text-display);
+  letter-spacing: -0.03em;
+  line-height: 1.2;
   margin: 12px 0 7px;
 }
 .about-pane > p {
@@ -3044,11 +3037,10 @@ kbd {
   min-height: 82px;
   padding: 16px 22px;
 }
-.drawer-header small {
-  color: var(--muted);
-}
 .drawer-header h2 {
   font-size: var(--text-title);
+  letter-spacing: -0.02em;
+  line-height: 1.25;
   margin: 4px 0 0;
 }
 .drawer-header button {
@@ -3079,10 +3071,6 @@ kbd {
 }
 .state-hero > span {
   color: var(--accent-ink, var(--accent));
-}
-.state-hero small {
-  color: var(--accent-ink, var(--accent));
-  font-weight: 500;
 }
 .state-hero h3 {
   font-size: var(--text-caption);
@@ -4095,19 +4083,6 @@ kbd {
   color: var(--muted);
   line-height: 1.6;
 }
-.file-preview {
-  font-family: ui-serif, Georgia, serif;
-  line-height: 1.75;
-  padding: 8px 12px 24px;
-}
-.file-preview h1 {
-  font-size: var(--text-display);
-}
-.file-preview h2 {
-  font-size: var(--text-title);
-  margin-top: 26px;
-}
-
 .onboarding-backdrop {
   align-items: center;
   padding-top: 20px;
@@ -4168,6 +4143,8 @@ kbd {
 }
 .setup-body h1 {
   font-size: var(--text-display);
+  letter-spacing: -0.03em;
+  line-height: 1.2;
   margin: 20px 0 8px;
 }
 .setup-body > p {
@@ -4284,6 +4261,8 @@ kbd {
 }
 .access-page h1 {
   font-size: var(--text-display);
+  letter-spacing: -0.03em;
+  line-height: 1.2;
   margin: 24px 0 8px;
 }
 .access-page p {

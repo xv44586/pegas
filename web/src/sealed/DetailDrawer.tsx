@@ -149,7 +149,6 @@ export function DetailDrawer({
       >
         <header className="drawer-header">
           <div>
-            <small>{drawerEyebrow(view)}</small>
             <h2>{drawerTitle(view)}</h2>
           </div>
           <button
@@ -325,17 +324,6 @@ function runProgressFromPayload(
   }
 }
 
-function drawerEyebrow(view: DrawerView): string {
-  if (view.kind === 'task') return '工作详情'
-  if (view.kind === 'message') return '待你处理'
-  if (view.kind === 'approval') return '需要确认'
-  if (view.kind === 'reconciliation') return '需要核对'
-  if (view.kind === 'review') return '交付审查'
-  if (view.kind === 'clarification') return '需要补充'
-  if (view.kind === 'runtime') return 'Pegas'
-  if (view.kind === 'rule') return '行为与规则'
-  return '内容预览'
-}
 function drawerTitle(view: DrawerView): string {
   if (view.kind === 'task') return view.channel.title
   if (view.kind === 'message') return 'Pegas 消息'
@@ -1028,7 +1016,6 @@ function TaskDetail({
       <section className={`state-hero state-${state}`}>
         <span>{stateIcon(state)}</span>
         <div>
-          <small>{state}</small>
           <h3>{stateHeadline(state)}</h3>
           {completedOutput ? (
             <div className="state-hero-markdown">
@@ -1999,9 +1986,11 @@ function ReviewDetail({
           )}
         </span>
         <div>
-          <small>{outcomeLabel(review.finalOutcome)}</small>
           <h3>目标修订 v{String(review.goalRevision)} 的交付审查</h3>
-          <p>结论来自服务端 Review Pack，按完成标准与证据生成。</p>
+          <p>
+            {outcomeLabel(review.finalOutcome)}
+            ：结论来自服务端 Review Pack，按完成标准与证据生成。
+          </p>
         </div>
       </section>
       <section className="detail-section">
