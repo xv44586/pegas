@@ -3327,7 +3327,9 @@ describe('sealed Pegas UI', () => {
     const heroStrong = taskDrawer.querySelector('.state-hero-markdown strong')
     expect(heroStrong?.textContent).toBe('结论')
     fireEvent.click(await within(taskDrawer).findByText(/工作流程记录/))
-    expect(await within(taskDrawer).findByText('第 1 步开始')).toBeTruthy()
+    expect(await within(taskDrawer).findByText('核对价格口径')).toBeTruthy()
+    expect(within(taskDrawer).queryByText('第 1 步开始')).toBeNull()
+    expect(taskDrawer.querySelector('.activity-step')).toBeNull()
     expect(screen.queryByRole('dialog', { name: '运行详情' })).toBeNull()
     expect(
       within(taskDrawer).queryByRole('button', { name: /查看完整记录/ }),
@@ -3342,7 +3344,7 @@ describe('sealed Pegas UI', () => {
     expect(
       within(taskDrawer).getByRole('button', { name: '复制命令与输出' }),
     ).toBeTruthy()
-    fireEvent.click(within(taskDrawer).getByText('推理'))
+    fireEvent.click(within(taskDrawer).getByText('核对价格口径'))
     expect(within(taskDrawer).getByText('年付').tagName).toBe('EM')
     const messageStrong = taskDrawer.querySelectorAll(
       '.activity-message strong',
@@ -6067,7 +6069,7 @@ describe('sealed Pegas UI', () => {
     )
     fireEvent.click(await within(drawer).findByText('已读取'))
     expect(within(drawer).getAllByText('README.md').length).toBeGreaterThan(0)
-    expect(within(drawer).getByText('第 1 步完成')).toBeTruthy()
+    expect(within(drawer).queryByText('第 1 步完成')).toBeNull()
     fireEvent.click(within(drawer).getByText('test'))
     expect(within(drawer).getByText(/pnpm test/)).toBeTruthy()
     expect(within(drawer).getByText('已读取文档，正在跑测试。')).toBeTruthy()

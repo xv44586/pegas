@@ -3605,19 +3605,6 @@ kbd {
 .activity-timeline details {
   min-width: 0;
 }
-.activity-step {
-  align-items: center;
-  color: var(--muted);
-  display: flex;
-  font-size: var(--text-small);
-  gap: 8px;
-  min-height: 28px;
-  padding: 2px 8px;
-}
-.activity-step small {
-  color: var(--faint);
-  margin-left: auto;
-}
 .activity-message {
   padding: 4px 8px;
 }

@@ -3,13 +3,13 @@ import {
   Check,
   ChevronDown,
   CircleHelp,
-  Clock3,
   Copy,
   FilePen,
   FileText,
   Globe,
   History,
   Image as ImageIcon,
+  Lightbulb,
   ListChecks,
   LoaderCircle,
   MessageSquarePlus,
@@ -30,6 +30,7 @@ import {
   groupActivityEntries,
   shellFooter,
   summarizeRunChanges,
+  thinkingHeadline,
   toolHeadline,
   type ActivityGroupKind,
 } from './activityModel'
@@ -203,15 +204,7 @@ function ActivityEntryRow({
         </li>
       )
     }
-    return (
-      <li className="activity-step">
-        <span className="activity-icon" aria-hidden="true">
-          <Clock3 size={13} />
-        </span>
-        <span className="activity-label">{entry.label}</span>
-        <small>{formatRelativeTime(entry.createdAt)}</small>
-      </li>
-    )
+    return null
   }
   if (entry.kind === 'thinking') {
     return (
@@ -219,9 +212,9 @@ function ActivityEntryRow({
         <details>
           <summary>
             <span className="activity-icon" aria-hidden="true">
-              <CircleHelp size={14} />
+              <Lightbulb size={14} />
             </span>
-            <span className="activity-label">推理</span>
+            <span className="activity-label">{thinkingHeadline(entry)}</span>
             <ChevronDown
               aria-hidden="true"
               className="activity-chevron"
