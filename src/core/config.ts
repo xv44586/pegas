@@ -1,5 +1,5 @@
-import { hostname } from 'node:os'
-import { resolve } from 'node:path'
+import { homedir, hostname } from 'node:os'
+import { join, resolve } from 'node:path'
 
 import {
   modelProviderPreset,
@@ -21,6 +21,7 @@ export interface PegasConfig {
   dshProfile: string
   dshAdditionalDirectories: string[]
   dshTimeoutMs: number
+  dshSessionsRoot: string
   workspaceRoot: string
   workerConcurrency: number
   nodeId: string
@@ -142,6 +143,12 @@ export function loadConfig(
       environment.PEGAS_DSH_TIMEOUT_MS,
       60 * 60 * 1000,
       'PEGAS_DSH_TIMEOUT_MS',
+    ),
+    dshSessionsRoot: resolve(
+      nonemptyOr(
+        environment.PEGAS_DSH_SESSIONS_ROOT,
+        join(homedir(), '.dsh', 'sessions'),
+      ),
     ),
     workspaceRoot: resolve(environment.PEGAS_WORKSPACE_ROOT ?? '.'),
     workerConcurrency: parsePositiveInteger(

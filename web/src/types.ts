@@ -192,6 +192,22 @@ export interface RunActivityReport {
   truncated: boolean
 }
 
+export interface SubagentTranscript {
+  sessionId: string
+  parentSessionId: string
+  delegationDepth: number
+  createdAt: string
+  entries: RunActivityEntry[]
+  totalEntries: number
+  truncated: boolean
+}
+
+export interface RunSubagentReport {
+  runId: string
+  taskId: string
+  subagents: SubagentTranscript[]
+}
+
 interface RouterUsageRecord {
   callId: string
   userId: string

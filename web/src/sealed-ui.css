@@ -2981,6 +2981,35 @@ kbd {
   cursor: pointer;
   font-size: 12px;
 }
+.transcript-subagent > details > summary {
+  align-items: center;
+  color: var(--ink);
+  cursor: pointer;
+  display: flex;
+  gap: 6px;
+  list-style: none;
+}
+.transcript-subagent > details > summary small {
+  color: var(--muted);
+  margin-left: auto;
+}
+.transcript-subagent {
+  border-left: 2px solid var(--accent);
+  padding-left: 10px;
+}
+.subagent-prompt summary,
+.subagent-transcript summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  margin-top: 6px;
+}
+.progress-list .subagent-transcript .run-transcript li {
+  min-height: 0;
+}
+.progress-list .subagent-transcript .run-transcript li::after {
+  display: none;
+}
 .artifact-row {
   align-items: center;
   background: var(--surface-raised);

@@ -2,6 +2,7 @@ import type {
   ClaimedRun,
   ExecutionContext,
   InboxEvent,
+  SubagentTranscript,
   Task,
 } from '../core/domain.js'
 import type { RunExecutor } from '../executor/executor.js'
@@ -24,6 +25,16 @@ import { isTerminalProviderError } from './provider-errors.js'
 export interface EventHandler {
   handle(event: InboxEvent, store: PegasStore): Promise<void>
 }
+
+/**
+ * Reads a finished Run's delegated child-session transcripts. Injected by the
+ * worker runtime (DSH durable logs + privacy restore); absent in tests and
+ * non-DSH deployments, where subagent detail is simply not collected.
+ */
+export type SubagentTranscriptCollector = (input: {
+  rootSessionId: string
+  workspace: string
+}) => SubagentTranscript[]
 
 export function localControlPlaneBaseUrl(host: string, port: number): string {
   if (host === '0.0.0.0') return `http://127.0.0.1:${String(port)}`
@@ -705,6 +716,7 @@ export async function executeClaimedRun(
   signal: AbortSignal,
   controlPlaneBaseUrl: string,
   telemetry?: { logger?: Logger; metrics?: MetricsRegistry },
+  collectSubagents?: SubagentTranscriptCollector,
 ): Promise<void> {
   const runStartedAt = performance.now()
   const observeRun = (outcome: string) => {
@@ -956,6 +968,15 @@ export async function executeClaimedRun(
     observeRun('steered')
     return
   }
+  collectSubagentTranscripts(
+    store,
+    claimed,
+    workerId,
+    workingDirectory,
+    result.executorRef || claimed.run.executorRef,
+    collectSubagents,
+    telemetry,
+  )
   store.completeRun(claimed.run.id, workerId, result)
   observeRun('completed')
   const persistedRun = store
@@ -987,6 +1008,38 @@ export async function executeClaimedRun(
           ? ['在必需证据被采集并通过验证之前，这个目标会保持未完成。']
           : []),
       ],
+    })
+  }
+}
+
+function collectSubagentTranscripts(
+  store: PegasStore,
+  claimed: ClaimedRun,
+  workerId: string,
+  workingDirectory: string,
+  executorRef: string | undefined,
+  collect: SubagentTranscriptCollector | undefined,
+  telemetry?: { logger?: Logger; metrics?: MetricsRegistry },
+): void {
+  if (!collect || !executorRef) return
+  try {
+    const transcripts = collect({
+      rootSessionId: executorRef,
+      workspace: runExecutionWorkspace(claimed.run, workingDirectory),
+    })
+    if (transcripts.length > 0) {
+      store.recordRunSubagents(claimed.run.id, workerId, transcripts)
+    }
+  } catch (error) {
+    // Observability is best-effort: a torn or unknown child log must never
+    // fail the Run whose work already succeeded.
+    telemetry?.logger?.error('run.subagent_transcript_failed', error, {
+      runId: claimed.run.id,
+      workerId,
+    })
+    telemetry?.metrics?.increment('pegas_errors_total', {
+      component: 'worker',
+      kind: 'subagent_transcript',
     })
   }
 }

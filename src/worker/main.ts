@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { loadConfig } from '../core/config.js'
 import { ConversationExecutor } from '../executor/conversation-executor.js'
 import { DshCliExecutor } from '../executor/dsh-cli-executor.js'
+import { readDshSubagentTranscripts } from '../executor/dsh-subagent-transcript.js'
 import { EchoExecutor } from '../executor/echo-executor.js'
 import type { ExecutorInput, RunExecutor } from '../executor/executor.js'
 import { loadModelCredentialVault } from '../model/model-credential-vault.js'
@@ -43,6 +44,7 @@ import {
   localControlPlaneBaseUrl,
   processNextEvent,
   RoutingEventHandler,
+  type SubagentTranscriptCollector,
 } from './processor.js'
 import {
   decodeDshExecutionSnapshot,
@@ -92,7 +94,7 @@ const selfChangeExecutor = config.selfChangeEnabled
       recoveryBaseUrl: config.recoveryBaseUrl,
       ...(config.recoveryToken ? { recoveryToken: config.recoveryToken } : {}),
       editor: executor,
-      compatibility: { minimumSchema: 1, maximumSchema: 35 },
+      compatibility: { minimumSchema: 1, maximumSchema: 36 },
       reviewer: 'pegas-self-change-gate',
       controlPlaneBaseUrl,
     })
@@ -108,6 +110,22 @@ const laneExecutor: RunExecutor = {
       ? conversationExecutor.execute(input)
       : runExecutor.execute(input),
 }
+const collectSubagents: SubagentTranscriptCollector | undefined =
+  config.executorMode === 'echo'
+    ? undefined
+    : input => {
+        const settings = store.getRuntimeSettings()
+        const masker =
+          settings.privacyMode === 'mask' ? createPrivacyMasker() : undefined
+        return readDshSubagentTranscripts(
+          input.rootSessionId,
+          input.workspace,
+          {
+            sessionsRoot: config.dshSessionsRoot,
+            ...(masker ? { restore: text => masker.restore(text) } : {}),
+          },
+        )
+      }
 const settingsRouter = new SettingsAwareTaskRouter(store, createRouter)
 const router: TaskRouter = settingsRouter
 const eventHandler = new RoutingEventHandler(router, executor.name, task => {
@@ -189,6 +207,7 @@ while (!lifecycle.stopping) {
       shutdown.signal,
       controlPlaneBaseUrl,
       telemetry,
+      collectSubagents,
     )
       .catch((error: unknown) => {
         logger.error('run.persistence_failed', error, {
@@ -224,6 +243,7 @@ while (!lifecycle.stopping) {
       shutdown.signal,
       controlPlaneBaseUrl,
       telemetry,
+      collectSubagents,
     )
       .catch((error: unknown) => {
         logger.error('conversation.persistence_failed', error, {

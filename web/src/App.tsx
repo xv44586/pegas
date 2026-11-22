@@ -687,6 +687,50 @@ export function App() {
     },
     [api],
   )
+  const subagentRequestRef = useRef(new Map<string, number>())
+  const loadRunSubagents = useCallback(
+    async (runId: string) => {
+      const requestId = (subagentRequestRef.current.get(runId) ?? 0) + 1
+      subagentRequestRef.current.set(runId, requestId)
+      try {
+        const report = await api.runSubagents(runId)
+        if (subagentRequestRef.current.get(runId) !== requestId) return
+        setDrawer(current => {
+          if (current?.kind !== 'task') return current
+          const restErrors = Object.fromEntries(
+            Object.entries(current.subagentErrorByRun ?? {}).filter(
+              ([key]) => key !== runId,
+            ),
+          )
+          return {
+            ...current,
+            subagentsByRun: {
+              ...current.subagentsByRun,
+              [runId]: report,
+            },
+            subagentErrorByRun: restErrors,
+          }
+        })
+      } catch (caught) {
+        if (subagentRequestRef.current.get(runId) !== requestId) return
+        setDrawer(current =>
+          current?.kind === 'task'
+            ? {
+                ...current,
+                subagentErrorByRun: {
+                  ...current.subagentErrorByRun,
+                  [runId]:
+                    caught instanceof Error
+                      ? caught.message
+                      : '读取子任务记录失败。',
+                },
+              }
+            : current,
+        )
+      }
+    },
+    [api],
+  )
   function loadRuntimeNodes() {
     const requestId = nodesRequestRef.current + 1
     nodesRequestRef.current = requestId
@@ -747,8 +791,15 @@ export function App() {
   }
   const loadRunActivityRef = useRef(loadRunActivity)
   loadRunActivityRef.current = loadRunActivity
+  const loadRunSubagentsRef = useRef(loadRunSubagents)
+  loadRunSubagentsRef.current = loadRunSubagents
   const openRunWorkflow = useCallback((runId: string) => {
-    void loadRunActivityRef.current(runId)
+    void loadRunActivityRef.current(runId).then(() => {
+      void loadRunSubagentsRef.current(runId)
+    })
+  }, [])
+  const openSubagentTranscript = useCallback((runId: string) => {
+    void loadRunSubagentsRef.current(runId)
   }, [])
   function openSearch() {
     rememberFocus()
@@ -1491,6 +1542,7 @@ export function App() {
           onClose={closeDrawer}
           onOpenView={openNestedDrawer}
           onLoadRunActivity={openRunWorkflow}
+          onLoadRunSubagents={openSubagentTranscript}
           onContinue={channel => continueChannel(channel.id)}
           onCreateRelated={channel => {
             setSourceContextTaskId(channel.id)

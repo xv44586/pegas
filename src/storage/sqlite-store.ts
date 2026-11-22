@@ -52,6 +52,8 @@ import type {
   RouterUsageRecord,
   RouterUsageReport,
   Run,
+  RunSubagentReport,
+  SubagentTranscript,
   Task,
 } from '../core/domain.js'
 import type { ExecutorResult } from '../executor/executor.js'
@@ -737,6 +739,23 @@ CREATE TABLE run_activity_entries (
 
 CREATE INDEX run_activity_by_run_call
 ON run_activity_entries (run_id, call_id);
+`
+
+const migration36 = `
+CREATE TABLE run_subagent_transcripts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL REFERENCES runs(id),
+  session_id TEXT NOT NULL,
+  parent_session_id TEXT NOT NULL,
+  delegation_depth INTEGER NOT NULL DEFAULT 1,
+  session_created_at TEXT NOT NULL,
+  transcript_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (run_id, session_id)
+);
+
+CREATE INDEX run_subagents_by_run
+ON run_subagent_transcripts (run_id);
 `
 
 const migration32 = `
@@ -2537,6 +2556,7 @@ export class PegasStore {
     this.#migrate(33, migration33)
     this.#migrate(34, migration34)
     this.#migrate(35, migration35)
+    this.#migrate(36, migration36)
   }
 
   #backfillWorkerIconIds(): void {
@@ -10063,6 +10083,74 @@ export class PegasStore {
       entries,
       totalEntries: total.count,
       truncated: total.count > entries.length,
+    }
+  }
+
+  recordRunSubagents(
+    runId: string,
+    workerId: string,
+    transcripts: readonly SubagentTranscript[],
+  ): void {
+    const owned = this.#database
+      .prepare(
+        `SELECT 1 FROM runs
+         WHERE id = ? AND claimed_by = ? AND status IN ('running', 'waiting')`,
+      )
+      .get(runId, workerId)
+    if (!owned) return
+    const insert = this.#database.prepare(
+      `INSERT INTO run_subagent_transcripts
+        (run_id, session_id, parent_session_id, delegation_depth,
+         session_created_at, transcript_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (run_id, session_id) DO UPDATE SET
+         transcript_json = excluded.transcript_json`,
+    )
+    const now = this.#clock.now().toISOString()
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      for (const transcript of transcripts) {
+        insert.run(
+          runId,
+          transcript.sessionId,
+          transcript.parentSessionId,
+          transcript.delegationDepth,
+          transcript.createdAt,
+          JSON.stringify(transcript),
+          now,
+        )
+      }
+      this.#database.exec('COMMIT')
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  listRunSubagents(
+    runId: string,
+    userId: string,
+  ): RunSubagentReport | undefined {
+    const run = this.#database
+      .prepare(
+        `SELECT runs.id, runs.task_id FROM runs
+         JOIN tasks ON tasks.id = runs.task_id
+         WHERE runs.id = ? AND tasks.user_id = ?`,
+      )
+      .get(runId, userId) as { id: string; task_id: string } | undefined
+    if (!run) return undefined
+    const rows = this.#database
+      .prepare(
+        `SELECT transcript_json FROM run_subagent_transcripts
+         WHERE run_id = ? ORDER BY session_created_at ASC, id ASC`,
+      )
+      .all(runId) as { transcript_json: string }[]
+    return {
+      runId,
+      taskId: run.task_id,
+      subagents: rows.map(
+        row => JSON.parse(row.transcript_json) as SubagentTranscript,
+      ),
     }
   }
 

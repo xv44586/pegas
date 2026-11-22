@@ -13,6 +13,7 @@ import type {
   ReviewProjection,
   Run,
   RunActivityReport,
+  RunSubagentReport,
   SettingsResponse,
   Snapshot,
   TaskDelivery,
@@ -63,6 +64,8 @@ export type DrawerView =
       }
       activityByRun?: Record<string, RunActivityReport>
       activityErrorByRun?: Record<string, string>
+      subagentsByRun?: Record<string, RunSubagentReport>
+      subagentErrorByRun?: Record<string, string>
     }
   | { kind: 'runtime'; run?: Run; nodes?: ExecutionNode[]; nodesError?: string }
   | { kind: 'message'; message: OutboxMessage }

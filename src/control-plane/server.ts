@@ -1654,6 +1654,19 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
           if (!report) throw new Error('Run not found')
           return sendJson(response, 200, report)
         }
+        const subagentsMatch = /^\/v1\/runs\/([^/]+)\/subagents$/.exec(
+          url.pathname,
+        )
+        if (subagentsMatch) {
+          const userId = url.searchParams.get('userId')
+          if (!userId) throw new Error('userId is required')
+          const report = options.store.listRunSubagents(
+            decodeURIComponent(subagentsMatch[1] ?? ''),
+            userId,
+          )
+          if (!report) throw new Error('Run not found')
+          return sendJson(response, 200, report)
+        }
         const userId = url.searchParams.get('userId')
         if (!userId) throw new Error('userId is required')
         const taskId = url.searchParams.get('taskId') ?? undefined

@@ -3102,6 +3102,111 @@ describe('sealed Pegas UI', () => {
     ).toBe(true)
   })
 
+  it('renders a subagent delegation card with the child execution transcript', async () => {
+    installSnapshotFetch(
+      {
+        ...snapshot,
+        channels: [{ ...channel, status: 'completed', canStop: false }],
+        runs: [
+          {
+            ...run,
+            status: 'completed',
+            output: 'docs 共 29 个文件。',
+          },
+        ],
+      },
+      path => {
+        if (path.startsWith('/v1/runs/run-1/activity?')) {
+          return Response.json({
+            runId: 'run-1',
+            taskId: channel.id,
+            totalEntries: 1,
+            truncated: false,
+            entries: [
+              {
+                seq: 1,
+                kind: 'tool_call',
+                status: 'completed',
+                callId: 'call-delegate',
+                tool: 'subagent',
+                label: 'subagent',
+                detail:
+                  '{"description":"统计 docs 文件","prompt":"数一下 docs 目录的文件数","name":"agent-1"}\n[结果]\nstarted subagent agent-1\ndocs 目录共 **29** 个文件。',
+                createdAt: '2026-11-19T08:00:10.000Z',
+                updatedAt: '2026-11-19T08:00:40.000Z',
+              },
+            ],
+          })
+        }
+        if (path.startsWith('/v1/runs/run-1/subagents?')) {
+          return Response.json({
+            runId: 'run-1',
+            taskId: channel.id,
+            subagents: [
+              {
+                sessionId: 'session-child',
+                parentSessionId: 'session-root',
+                delegationDepth: 1,
+                createdAt: '2026-11-19T08:00:12.000Z',
+                totalEntries: 2,
+                truncated: false,
+                entries: [
+                  {
+                    seq: 1,
+                    kind: 'tool_call',
+                    status: 'completed',
+                    callId: 'call-child',
+                    tool: 'bash',
+                    label: 'bash',
+                    detail: '{"command":"ls docs | wc -l"}\n[结果]\n29',
+                    createdAt: '2026-11-19T08:00:15.000Z',
+                    updatedAt: '2026-11-19T08:00:16.000Z',
+                  },
+                  {
+                    seq: 2,
+                    kind: 'text',
+                    label: 'docs 目录共 29 个文件。',
+                    detail: 'docs 目录共 29 个文件。',
+                    createdAt: '2026-11-19T08:00:18.000Z',
+                    updatedAt: '2026-11-19T08:00:18.000Z',
+                  },
+                ],
+              },
+            ],
+          })
+        }
+        return undefined
+      },
+    )
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: new RegExp(channel.title) }),
+    )
+    const taskDrawer = await screen.findByRole('dialog', { name: '工作详情' })
+    fireEvent.click(await within(taskDrawer).findByText(/工作流程记录/))
+    const card = await within(taskDrawer).findByText(/子任务 · 统计 docs 文件/)
+    fireEvent.click(card)
+    fireEvent.click(within(taskDrawer).getByText('任务书'))
+    expect(
+      within(taskDrawer).getByText(/数一下 docs 目录的文件数/),
+    ).toBeTruthy()
+    expect(
+      [...taskDrawer.querySelectorAll('.transcript-subagent strong')].some(
+        node => node.textContent === '29',
+      ),
+    ).toBe(true)
+    fireEvent.click(
+      await within(taskDrawer).findByText(/子 agent 执行记录 · 工具 1 次/),
+    )
+    fireEvent.click(within(taskDrawer).getByText('bash'))
+    expect(within(taskDrawer).getByText(/ls docs \| wc -l/)).toBeTruthy()
+    expect(
+      within(taskDrawer).getAllByText('docs 目录共 29 个文件。').length,
+    ).toBeGreaterThan(0)
+  })
+
   it('cues the task origin and latest user input above terminal results', async () => {
     const source = snapshot.messages[0]
     const originEvent = snapshot.events[0]

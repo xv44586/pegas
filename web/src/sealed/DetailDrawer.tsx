@@ -35,6 +35,8 @@ import type {
   Run,
   RunActivityEntry,
   RunActivityReport,
+  RunSubagentReport,
+  SubagentTranscript,
   TaskDelivery,
   WorkerProfileResponse,
 } from '../types'
@@ -55,6 +57,7 @@ export function DetailDrawer({
   onChange,
   onOpenView,
   onLoadRunActivity,
+  onLoadRunSubagents,
   onRetry,
   onContinue,
   onCreateRelated,
@@ -69,6 +72,7 @@ export function DetailDrawer({
   onChange: (view: DrawerView) => void
   onOpenView?: (view: DrawerView) => void
   onLoadRunActivity?: (runId: string) => void
+  onLoadRunSubagents?: (runId: string) => void
   onRetry: (run: Run) => Promise<void>
   onContinue?: (
     channel: Extract<DrawerView, { kind: 'task' }>['channel'],
@@ -170,6 +174,7 @@ export function DetailDrawer({
             onContinue={onContinue}
             onCreateRelated={onCreateRelated}
             onLoadRunActivity={onLoadRunActivity}
+            onLoadRunSubagents={onLoadRunSubagents}
             onOpenEvidence={
               onOpenView
                 ? evidence => onOpenView(evidencePreviewView(evidence))
@@ -194,6 +199,8 @@ export function DetailDrawer({
             onStop={onStop}
             run={view.run}
             runs={view.runs}
+            subagentsByRun={view.subagentsByRun}
+            subagentErrorByRun={view.subagentErrorByRun}
             timeline={view.timeline}
             timelineError={view.timelineError}
             usage={view.usage}
@@ -864,6 +871,8 @@ function TaskDetail({
   deliveryError,
   run,
   runs,
+  subagentsByRun,
+  subagentErrorByRun,
   timeline,
   timelineError,
   usage,
@@ -873,6 +882,7 @@ function TaskDetail({
   onOpenTarget,
   onOpenView,
   onLoadRunActivity,
+  onLoadRunSubagents,
   onRetry,
   onContinue,
   onCreateRelated,
@@ -888,6 +898,8 @@ function TaskDetail({
   deliveryError?: string
   run?: Run
   runs?: Run[]
+  subagentsByRun?: Record<string, RunSubagentReport>
+  subagentErrorByRun?: Record<string, string>
   timeline?: Extract<DrawerView, { kind: 'task' }>['timeline']
   timelineError?: string
   usage?: Extract<DrawerView, { kind: 'task' }>['usage']
@@ -897,6 +909,7 @@ function TaskDetail({
   onOpenTarget?: (targetTaskId: string) => Promise<void>
   onOpenView?: (view: DrawerView) => void
   onLoadRunActivity?: (runId: string) => void
+  onLoadRunSubagents?: (runId: string) => void
   onRetry: (run: Run) => Promise<void>
   onContinue?: (
     channel: Extract<DrawerView, { kind: 'task' }>['channel'],
@@ -1080,6 +1093,8 @@ function TaskDetail({
               const runUsage = usageByRun.get(historyRun.id)
               const activity = activityByRun?.[historyRun.id]
               const activityError = activityErrorByRun?.[historyRun.id]
+              const subagents = subagentsByRun?.[historyRun.id]?.subagents
+              const subagentError = subagentErrorByRun?.[historyRun.id]
               const runLabel =
                 runHistory.length === 1
                   ? `Run · ${historyRun.id.slice(0, 8)}`
@@ -1144,10 +1159,19 @@ function TaskDetail({
                                 <TranscriptEntry
                                   entry={entry}
                                   key={entry.seq}
+                                  runId={historyRun.id}
+                                  subagents={subagents}
+                                  subagentError={subagentError}
+                                  onLoadSubagents={onLoadRunSubagents}
                                 />
                               ))}
                             </ol>
                           </>
+                        )}
+                        {subagentError && (
+                          <p className="drawer-footnote" role="alert">
+                            子任务记录读取失败：{subagentError}
+                          </p>
                         )}
                         {historyRun.output && (
                           <details className="run-final-output">
@@ -1537,6 +1561,7 @@ function DeliverySection({
   onOpenEvidence?: (evidence: ReviewEvidencePreview) => void
 }) {
   const [historyOpen, setHistoryOpen] = useState(false)
+
   const [history, setHistory] = useState<{
     contracts: GoalContract[]
     reviewPacks: ReviewPack[]
@@ -2543,7 +2568,19 @@ function stateDescription(state: string, run?: Run): string {
   return '上下文已保存，服务端尚未返回可执行的下一步。'
 }
 
-function TranscriptEntry({ entry }: { entry: RunActivityEntry }) {
+function TranscriptEntry({
+  entry,
+  runId,
+  subagents,
+  subagentError,
+  onLoadSubagents,
+}: {
+  entry: RunActivityEntry
+  runId?: string
+  subagents?: SubagentTranscript[]
+  subagentError?: string
+  onLoadSubagents?: (runId: string) => void
+}) {
   if (entry.kind === 'step') {
     return (
       <li className="transcript-step">
@@ -2554,6 +2591,22 @@ function TranscriptEntry({ entry }: { entry: RunActivityEntry }) {
     )
   }
   if (entry.kind === 'tool_call') {
+    const delegation =
+      entry.tool === 'subagent' || entry.tool === 'subagent_fork'
+        ? parseDelegation(entry.detail)
+        : undefined
+    if (delegation) {
+      return (
+        <SubagentCard
+          delegation={delegation}
+          entry={entry}
+          runId={runId}
+          subagents={subagents}
+          subagentError={subagentError}
+          onLoadSubagents={onLoadSubagents}
+        />
+      )
+    }
     return (
       <li className="transcript-tool">
         <details>
@@ -2601,6 +2654,122 @@ function TranscriptEntry({ entry }: { entry: RunActivityEntry }) {
         <MarkdownMessage content={entry.detail ?? entry.label} />
       </div>
       <small>{formatRelativeTime(entry.createdAt)}</small>
+    </li>
+  )
+}
+
+interface DelegationDetail {
+  description?: string
+  prompt?: string
+  name?: string
+  result?: string
+}
+
+function parseDelegation(detail: string | undefined): DelegationDetail {
+  if (!detail) return {}
+  const separator = detail.indexOf('\n[结果]\n')
+  const inputText = separator >= 0 ? detail.slice(0, separator) : detail
+  const result = separator >= 0 ? detail.slice(separator + 5) : undefined
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(inputText)
+  } catch {
+    return { prompt: inputText, ...(result ? { result } : {}) }
+  }
+  if (typeof parsed !== 'object' || parsed === null) {
+    return { prompt: inputText, ...(result ? { result } : {}) }
+  }
+  const value = parsed as Record<string, unknown>
+  return {
+    ...(typeof value.description === 'string'
+      ? { description: value.description }
+      : {}),
+    ...(typeof value.prompt === 'string' ? { prompt: value.prompt } : {}),
+    ...(typeof value.name === 'string' ? { name: value.name } : {}),
+    ...(result ? { result } : {}),
+  }
+}
+
+function SubagentCard({
+  delegation,
+  entry,
+  runId,
+  subagents,
+  subagentError,
+  onLoadSubagents,
+}: {
+  delegation: DelegationDetail
+  entry: RunActivityEntry
+  runId?: string
+  subagents?: SubagentTranscript[]
+  subagentError?: string
+  onLoadSubagents?: (runId: string) => void
+}) {
+  const children = subagents ?? []
+  return (
+    <li className="transcript-subagent">
+      <details>
+        <summary>
+          <Network size={13} />
+          <span>
+            子任务 · {delegation.description ?? delegation.name ?? '委派'}
+            {entry.status === 'error' && (
+              <em className="transcript-error">失败</em>
+            )}
+            {entry.status === 'started' && (
+              <em className="transcript-pending">执行中</em>
+            )}
+          </span>
+          <small>{formatRelativeTime(entry.createdAt)}</small>
+        </summary>
+        {delegation.prompt && (
+          <details className="subagent-prompt">
+            <summary>任务书</summary>
+            <pre className="transcript-detail">{delegation.prompt}</pre>
+          </details>
+        )}
+        {delegation.result && (
+          <div className="transcript-markdown">
+            <MarkdownMessage content={delegation.result} />
+          </div>
+        )}
+        {subagentError && (
+          <p className="drawer-footnote" role="alert">
+            子任务执行记录读取失败：{subagentError}
+          </p>
+        )}
+        {children.length > 0 ? (
+          children.map(child => (
+            <details className="subagent-transcript" key={child.sessionId}>
+              <summary>
+                子 agent 执行记录 · 工具{' '}
+                {child.entries.filter(item => item.kind === 'tool_call').length}{' '}
+                次{child.truncated && ' · 仅显示部分记录'}
+              </summary>
+              <ol className="run-transcript">
+                {child.entries.map(item => (
+                  <TranscriptEntry entry={item} key={item.seq} />
+                ))}
+              </ol>
+            </details>
+          ))
+        ) : (
+          <p className="drawer-footnote">
+            {entry.status === 'started'
+              ? '子 agent 运行中；完整执行记录将在运行结束后留存。'
+              : '没有留存子 agent 执行记录（旧版本运行或日志不可读）。'}
+            {runId && onLoadSubagents && (
+              <button
+                className="inline-link"
+                onClick={() => onLoadSubagents(runId)}
+                type="button"
+              >
+                重新读取
+              </button>
+            )}
+          </p>
+        )}
+      </details>
     </li>
   )
 }

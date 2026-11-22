@@ -27,6 +27,7 @@ import type {
   ReviewPack,
   Run,
   RunActivityReport,
+  RunSubagentReport,
   ModelProviderDraft,
   RuntimeSettings,
   SettingsResponse,
@@ -73,6 +74,13 @@ export class PegasApi {
     const user = encodeURIComponent(this.#userId)
     return this.#get<RunActivityReport>(
       `/v1/runs/${encodeURIComponent(runId)}/activity?userId=${user}&limit=400`,
+    )
+  }
+
+  async runSubagents(runId: string): Promise<RunSubagentReport> {
+    const user = encodeURIComponent(this.#userId)
+    return this.#get<RunSubagentReport>(
+      `/v1/runs/${encodeURIComponent(runId)}/subagents?userId=${user}`,
     )
   }
 
