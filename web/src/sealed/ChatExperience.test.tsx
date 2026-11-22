@@ -285,6 +285,67 @@ describe('DESIGN-003 chat page', () => {
     expect(document.querySelector('.run-status-bar[data-active]')).toBeTruthy()
   })
 
+  it('CONV-006: keeps server-marked silent facts out of the chat stream', async () => {
+    const projected: Snapshot = {
+      ...baseSnapshot,
+      messages: [
+        {
+          ...baseMessage,
+          projection: {
+            lane: 'work',
+            weight: 'silent',
+            anchor: { taskId: channel.id, eventId: 'event-1' },
+          },
+        },
+        {
+          id: 'message-future-silent',
+          userId: 'owner',
+          taskId: channel.id,
+          payload: { type: 'future.process', text: '过程噪声不应出现' },
+          status: 'sent',
+          createdAt: '2026-11-22T08:01:30.000Z',
+          projection: { lane: 'work', weight: 'silent' },
+        },
+        {
+          id: 'message-say',
+          userId: 'owner',
+          taskId: channel.id,
+          payload: { type: 'run.completed', text: '报表已完成' },
+          status: 'sent',
+          createdAt: '2026-11-22T08:03:00.000Z',
+          projection: {
+            lane: 'work',
+            weight: 'card',
+            anchor: { taskId: channel.id, eventId: 'event-1' },
+          },
+        },
+      ],
+    }
+    installChatFetch(projected)
+    render(<App />)
+    expect(await screen.findByText('报表已完成')).toBeTruthy()
+    expect(screen.queryByText('过程噪声不应出现')).toBeNull()
+    expect(
+      screen.queryByText('正在核对数据来源', {
+        selector: '.message-content *',
+      }),
+    ).toBeNull()
+  })
+
+  it('CONV-006: old servers without projection keep the legacy filter', async () => {
+    installChatFetch(baseSnapshot)
+    render(<App />)
+    const bar = await screen.findByRole('button', {
+      name: /进行中 · 整理季度数据/,
+    })
+    expect(bar.textContent).toContain('正在核对数据来源')
+    expect(
+      screen.queryByText('正在核对数据来源', {
+        selector: '.message-content *',
+      }),
+    ).toBeNull()
+  })
+
   it('hides stale progress once the run reaches a terminal state', async () => {
     const completed: Snapshot = {
       ...baseSnapshot,

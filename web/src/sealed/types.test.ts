@@ -1,7 +1,67 @@
 import { describe, expect, it } from 'vitest'
 
 import type { OutboxMessage } from '../types'
-import { attentionKind, attentionSummary, isAttentionMessage } from './types'
+import {
+  attentionKind,
+  attentionSummary,
+  isAttentionMessage,
+  isSilentConversationMessage,
+} from './types'
+
+describe('CONV-006 silent conversation projection', () => {
+  const base: OutboxMessage = {
+    id: 'message-silent',
+    userId: 'owner',
+    taskId: 'task-1',
+    payload: { type: 'run.progress', text: '执行中' },
+    status: 'pending',
+    createdAt: '2026-11-22T00:00:00.000Z',
+  }
+
+  it('trusts the server projection when present', () => {
+    expect(
+      isSilentConversationMessage({
+        ...base,
+        projection: { lane: 'work', weight: 'silent' },
+      }),
+    ).toBe(true)
+    expect(
+      isSilentConversationMessage({
+        ...base,
+        payload: { type: 'future.process', text: '未知过程事实' },
+        projection: { lane: 'work', weight: 'silent' },
+      }),
+    ).toBe(true)
+    expect(
+      isSilentConversationMessage({
+        ...base,
+        projection: { lane: 'say', weight: 'inline' },
+      }),
+    ).toBe(false)
+  })
+
+  it('falls back to legacy payload types without projection attributes', () => {
+    expect(isSilentConversationMessage(base)).toBe(true)
+    expect(
+      isSilentConversationMessage({
+        ...base,
+        payload: { type: 'run.acknowledged', text: '接单' },
+      }),
+    ).toBe(true)
+    expect(
+      isSilentConversationMessage({
+        ...base,
+        payload: { type: 'run.completed', text: '完成' },
+      }),
+    ).toBe(false)
+    expect(
+      isSilentConversationMessage({
+        ...base,
+        payload: { type: 'future.process', text: '未知事实' },
+      }),
+    ).toBe(false)
+  })
+})
 
 describe('Goal delivery attention messages', () => {
   it.each([

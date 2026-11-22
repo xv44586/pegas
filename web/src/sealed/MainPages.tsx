@@ -49,7 +49,7 @@ import {
   formatRelativeTime,
   formatRunDuration,
   isReconciliationMessage,
-  isRunProgressMessage,
+  isSilentConversationMessage,
   latestRunForTask,
   latestRunProgressText,
   needsOutboxResolution,
@@ -395,7 +395,7 @@ export function ConversationPage({
         cue: undefined as TaskContextCue | undefined,
       }))
     const pegas = snapshot.messages
-      .filter(message => !isRunProgressMessage(message))
+      .filter(message => !isSilentConversationMessage(message))
       .map(message => {
         const channel = snapshot.channels.find(
           item => item.id === message.taskId,

@@ -559,6 +559,27 @@ export interface OutboxMessage {
   coalescedCount?: number
   mergedIntoId?: string
   resolution?: OutboxResolution
+  /**
+   * CONV-006: read-only conversation projection derived by the server.
+   * Never persisted and never accepted from clients; delivery payloads
+   * and durable rows stay unchanged.
+   */
+  projection?: ConversationProjection
+}
+
+export type ConversationLane = 'say' | 'work' | 'decide'
+
+export type ConversationWeight = 'inline' | 'card' | 'silent'
+
+export interface ConversationAnchor {
+  taskId: string
+  eventId?: string
+}
+
+export interface ConversationProjection {
+  lane: ConversationLane
+  weight: ConversationWeight
+  anchor?: ConversationAnchor
 }
 
 export interface NotificationPreferences {

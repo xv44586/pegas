@@ -3,6 +3,7 @@ import type {
   BehaviorPreferences,
   ChannelTimeline,
   ChannelRelation,
+  ConversationProjection,
   DurableAction,
   ExecutionNode,
   GoalContract,
@@ -387,6 +388,18 @@ function firstCueLine(text: string): string | undefined {
 
 export function isRunProgressMessage(message: OutboxMessage): boolean {
   return payloadType(message.payload) === 'run.acknowledged'
+}
+
+/**
+ * CONV-006: a message stays out of the chat stream when the server
+ * projection marks it silent. Old servers without projection attributes
+ * fall back to the legacy payload-type filter so nothing breaks or floods.
+ */
+export function isSilentConversationMessage(message: OutboxMessage): boolean {
+  const projection: ConversationProjection | undefined = message.projection
+  if (projection) return projection.weight === 'silent'
+  const type = payloadType(message.payload)
+  return type === 'run.progress' || type === 'run.acknowledged'
 }
 
 export function latestRunProgressText(

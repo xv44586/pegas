@@ -2,7 +2,7 @@
 
 > Feature：`CONV-006`（投影合同）、`CONV-007`（任务托盘与锚点导航）
 >
-> 状态：Planned（需求登记，尚未实现）
+> 状态：CONV-006 Partial（服务端派生层 + 投影 API + Web silent 过滤已落地）；CONV-007 Planned
 >
 > 更新日期：2026-11-22
 
@@ -86,3 +86,12 @@
 3. anchor 双向导航与 thread 分组、任务托盘（CONV-007）。
 
 交互形态已在本地研究原型验证（`research/conversation-page-design/`，gitignored，不作为实现事实来源）。正式实现需在独立 Feature worktree 补自动化证据。
+
+## 已落地实现（2026-11-22，第一阶段最小闭环）
+
+- **派生层**：`src/conversation/projection.ts` 的 `deriveConversationProjection` 是纯函数（payload 类型 + Task kind + Run origin event → lane/weight/anchor），无 I/O、无 schema 变更。映射：`run.progress`/`run.acknowledged` → `work/silent`；审批/澄清/核对/等待类 → `decide/card`；Run 终态与协作回送 → `work/card`；`agent.message` 与 conversation Task 事实 → `say/inline`；未知类型兼容默认（conversation Task 为 `say/inline`，其余 `work/card`），不伪造 anchor。
+- **读取路径接线**：`PegasStore.listOutbox`、`markOutboxRead`、`resolveOutboxMessage`（经 `#outboxForUser`）在返回前附加 `projection`；Task/Run 行读取失败降级为无 context 派生，不阻断消息。durable payload、`claimNextOutbox`（dispatcher 领取）与 external 投递（`externalDeliveryPayload`）均不携带投影属性。
+- **API**：`GET /v1/outbox` 与 `GET /v1/channels/:id/timeline` 的 messages 自动携带 `projection`；`POST /v1/outbox` 忽略客户端提交的 projection 字段（`parseNewOutboxMessage` 白名单不接收）。
+- **Web 最小接入**：`isSilentConversationMessage`（`web/src/sealed/types.ts`）优先信任服务端 `projection.weight === 'silent'`，无投影属性时回退既有 payload 类型过滤（`run.progress`/`run.acknowledged`）；聊天流过滤已切换。三声道卡片渲染、anchor 双向导航尚未实现（第二阶段）。
+- **自动化证据**：`test/conversation-projection.test.ts` 27 测试（三类 lane 映射、silent 过滤、兼容默认、anchor 不伪造、重放幂等、durable payload 不落投影、dispatcher/external 不带投影、read/resolve 投影、API 返回与客户端写入忽略）；`web/src/sealed/types.test.ts` CONV-006 2 测试（信任服务端投影 / 旧服务端回退）；`web/src/sealed/ChatExperience.test.tsx` CONV-006 2 测试（服务端 silent 事实不进聊天流含未知类型 / 旧服务端兼容）。
+- **门禁（2026-11-22）**：`pnpm check` format/brand/lint/typecheck/deadcode/build 通过；vitest 99 文件 / 1002 测试全绿（statement 85.01%、line 88.32%；并行满载下既有 dsh SIGKILL 计时用例抖动，隔离与串行复跑稳定通过，与本次改动无关）；`pnpm smoke`、`pnpm smoke:crash` 通过。

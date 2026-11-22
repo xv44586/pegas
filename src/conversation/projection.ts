@@ -1,0 +1,138 @@
+import type {
+  ConversationAnchor,
+  ConversationLane,
+  ConversationProjection,
+  ConversationWeight,
+  OutboxMessage,
+} from '../core/domain.js'
+
+/**
+ * CONV-006: deterministic, read-only conversation projection. The server
+ * derives lane/anchor/weight for every fact that reaches the conversation
+ * stream; clients render by these attributes instead of inferring shape
+ * from payload text. Derivation never writes product state, never changes
+ * which events enter the Outbox, and never travels to external channels.
+ */
+
+interface ConversationTaskFacts {
+  id: string
+  kind?: 'work' | 'conversation'
+  originEventId?: string
+}
+
+export interface ConversationProjectionContext {
+  task?: ConversationTaskFacts
+  /** Origin event of the Run that produced this fact, when known. */
+  runOriginEventId?: string
+}
+
+const DECIDE_TYPES = new Set([
+  'approval.required',
+  'approval.requested',
+  'approval.pending',
+  'input.required',
+  'input.requested',
+  'goal.clarification_required',
+  'goal.clarification_wait',
+  'goal.evidence_required',
+  'goal.report_required',
+  'run.blocked',
+  'run.waiting',
+  'action.outcome_unknown',
+  'action.outcome_pending',
+  'action.reconciliation_required',
+])
+
+const WORK_TYPES = new Set([
+  'run.completed',
+  'run.failed',
+  'action.failed',
+  'review.ready',
+  'approval.resolved',
+  'action.reconciled',
+  'collaboration.returned',
+  'collaboration.completed',
+  'collaboration.failed',
+  'collaboration.delivery_failed',
+])
+
+const SILENT_TYPES = new Set(['run.progress', 'run.acknowledged'])
+
+const SAY_TYPES = new Set(['agent.message'])
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function payloadType(payload: unknown): string | undefined {
+  if (!isRecord(payload)) return undefined
+  return typeof payload.type === 'string' ? payload.type : undefined
+}
+
+function payloadTaskId(payload: unknown): string | undefined {
+  if (!isRecord(payload)) return undefined
+  return typeof payload.taskId === 'string' && payload.taskId.trim()
+    ? payload.taskId
+    : undefined
+}
+
+function anchorFor(
+  message: Pick<OutboxMessage, 'taskId' | 'payload'>,
+  context: ConversationProjectionContext,
+): ConversationAnchor | undefined {
+  const taskId = message.taskId ?? payloadTaskId(message.payload)
+  if (!taskId) return undefined
+  const eventId =
+    context.runOriginEventId ??
+    (context.task?.id === taskId ? context.task.originEventId : undefined)
+  return { taskId, ...(eventId ? { eventId } : {}) }
+}
+
+/**
+ * Pure derivation: same message plus same authoritative facts always yield
+ * the same projection. Unknown payload types fall back to the compatible
+ * default (inline say for conversation Tasks, card work otherwise) so an
+ * unrecognised fact never blocks delivery and never floods the stream.
+ */
+export function deriveConversationProjection(
+  message: Pick<OutboxMessage, 'taskId' | 'payload'>,
+  context: ConversationProjectionContext = {},
+): ConversationProjection {
+  const type = payloadType(message.payload)
+  const anchor = anchorFor(message, context)
+  let lane: ConversationLane
+  let weight: ConversationWeight
+  if (type && SILENT_TYPES.has(type)) {
+    lane = 'work'
+    weight = 'silent'
+  } else if (type && DECIDE_TYPES.has(type)) {
+    lane = 'decide'
+    weight = 'card'
+  } else if (type && WORK_TYPES.has(type)) {
+    lane = 'work'
+    weight = 'card'
+  } else if (type && SAY_TYPES.has(type)) {
+    lane = 'say'
+    weight = 'inline'
+  } else if (context.task?.kind === 'conversation') {
+    lane = 'say'
+    weight = 'inline'
+  } else if (type === undefined && typeof message.payload === 'string') {
+    lane = 'say'
+    weight = 'inline'
+  } else {
+    lane = 'work'
+    weight = 'card'
+  }
+  return { lane, weight, ...(anchor ? { anchor } : {}) }
+}
+
+export function withConversationProjection(
+  message: OutboxMessage,
+  context: ConversationProjectionContext = {},
+): OutboxMessage {
+  return {
+    ...message,
+    projection: deriveConversationProjection(message, context),
+  }
+}
