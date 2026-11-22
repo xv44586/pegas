@@ -6220,7 +6220,7 @@ describe('sealed Pegas UI', () => {
       within(commandBatch as HTMLElement).getByText(/1 条失败/),
     ).toBeTruthy()
     expect(within(drawer).getByText('读取了 2 个文件')).toBeTruthy()
-    expect(within(drawer).getByText('已编辑')).toBeTruthy()
+    expect(within(drawer).getAllByText('已编辑').length).toBeGreaterThan(0)
     expect(within(drawer).getAllByText('+2').length).toBeGreaterThan(0)
     expect(within(drawer).getAllByText('-3').length).toBeGreaterThan(0)
     fireEvent.click(within(drawer).getByText(/运行了 2 条命令/))
@@ -6244,7 +6244,9 @@ describe('sealed Pegas UI', () => {
     expect(runningRow.querySelector('.activity-spinner')).toBeTruthy()
     fireEvent.click(smokeHeadline)
     expect(within(runningRow as HTMLElement).getByText('执行中')).toBeTruthy()
-    fireEvent.click(within(drawer).getByText('已编辑'))
+    const editHeadline = within(drawer).getAllByText('已编辑')[0]
+    if (!editHeadline) throw new Error('expected edit headline')
+    fireEvent.click(editHeadline)
     const diffCard = drawer.querySelector('.diff-card')
     if (!diffCard) throw new Error('expected diff card')
     expect(diffCard.querySelectorAll('.diff-line.is-add').length).toBe(2)
@@ -6709,6 +6711,164 @@ describe('sealed Pegas UI', () => {
     if (!runningHeadline) throw new Error('expected running headline')
     fireEvent.click(runningHeadline)
     expect(within(drawer).getByText('等待回答中')).toBeTruthy()
+  })
+
+  it('renders run change summaries, image metadata, deliverables and lifecycle markers', async () => {
+    const editEntry = (
+      seq: number,
+      path: string,
+      additions: number,
+      deletions: number,
+    ): RunActivityEntry => ({
+      seq,
+      kind: 'tool_call',
+      status: 'completed',
+      callId: `call-edit-${String(seq)}`,
+      tool: 'edit',
+      label: 'edit',
+      semantic: {
+        kind: 'file_edit',
+        path,
+        mode: 'edit',
+        additions,
+        deletions,
+        hunks: [
+          {
+            oldStart: 1,
+            newStart: 1,
+            lines: [
+              { type: 'del', text: 'old line' },
+              { type: 'add', text: 'new line' },
+            ],
+          },
+        ],
+      },
+      createdAt: '2026-11-19T08:00:10.000Z',
+      updatedAt: '2026-11-19T08:00:12.000Z',
+    })
+    const entries: RunActivityEntry[] = [
+      editEntry(1, 'web/src/api.ts', 2, 3),
+      editEntry(2, 'web/src/types.ts', 5, 0),
+      editEntry(3, 'web/src/api.ts', 1, 1),
+      {
+        seq: 4,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-image',
+        tool: 'read_image',
+        label: 'read_image',
+        semantic: {
+          kind: 'image',
+          path: '/repo/assets/flow.png',
+          mediaType: 'image/png',
+          width: 1200,
+          height: 800,
+          bytes: 245_760,
+          originalWidth: 2400,
+          originalHeight: 1600,
+        },
+        createdAt: '2026-11-19T08:00:14.000Z',
+        updatedAt: '2026-11-19T08:00:16.000Z',
+      },
+      {
+        seq: 5,
+        kind: 'step',
+        status: 'completed',
+        label: '上下文已压缩',
+        meta: { kind: 'compaction', note: '自动触发' },
+        createdAt: '2026-11-19T08:00:18.000Z',
+        updatedAt: '2026-11-19T08:00:18.000Z',
+      },
+      {
+        seq: 6,
+        kind: 'tool_call',
+        status: 'completed',
+        callId: 'call-present',
+        tool: 'present',
+        label: 'present',
+        semantic: {
+          kind: 'delivery',
+          files: [
+            { path: 'output/report.md', description: '调研报告' },
+            { path: 'output/summary.csv' },
+          ],
+        },
+        createdAt: '2026-11-19T08:00:20.000Z',
+        updatedAt: '2026-11-19T08:00:22.000Z',
+      },
+      {
+        seq: 7,
+        kind: 'step',
+        status: 'completed',
+        label: '用户插话，本次运行由后继接管',
+        meta: { kind: 'steered', note: '改成对比团队版价格' },
+        createdAt: '2026-11-19T08:00:24.000Z',
+        updatedAt: '2026-11-19T08:00:24.000Z',
+      },
+    ]
+    installSnapshotFetch(
+      {
+        ...snapshot,
+        channels: [{ ...channel, status: 'completed', canStop: false }],
+        runs: [{ ...run, status: 'completed', output: '完成。' }],
+      },
+      path => {
+        if (!path.startsWith('/v1/runs/run-1/activity?')) return undefined
+        return Response.json({
+          runId: 'run-1',
+          taskId: channel.id,
+          totalEntries: entries.length,
+          truncated: false,
+          entries,
+        })
+      },
+    )
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: new RegExp(channel.title) }),
+    )
+    const drawer = await screen.findByRole('dialog', { name: '工作详情' })
+    fireEvent.click(await within(drawer).findByText(/工作流程记录/))
+    const changesHeadline =
+      await within(drawer).findByText(/本次运行修改了 2 个文件/)
+    fireEvent.click(changesHeadline)
+    expect(within(drawer).getByText('文件变更汇总')).toBeTruthy()
+    const changesCard = drawer.querySelector('.changes-card')
+    if (!changesCard) throw new Error('expected changes card')
+    expect(
+      within(changesCard as HTMLElement).getAllByText('web/src/api.ts').length,
+    ).toBeGreaterThan(0)
+    expect(
+      within(changesCard as HTMLElement).getAllByText('+3').length,
+    ).toBeGreaterThan(0)
+    expect(
+      within(changesCard as HTMLElement).getAllByText('-4').length,
+    ).toBeGreaterThan(0)
+    const imageHeadline = within(drawer).getAllByText('查看了图片')[0]
+    if (!imageHeadline) throw new Error('expected image headline')
+    fireEvent.click(imageHeadline)
+    expect(
+      within(drawer).getByText(/image\/png · 1200×800 px · 240\.0 KB/),
+    ).toBeTruthy()
+    expect(within(drawer).getByText(/由 2400×1600 px 原图缩小/)).toBeTruthy()
+    expect(
+      within(drawer).getByText('图片内容未随执行记录留存，此处仅展示元数据。'),
+    ).toBeTruthy()
+    expect(within(drawer).getByText('上下文已压缩')).toBeTruthy()
+    expect(within(drawer).getByText(/自动触发/)).toBeTruthy()
+    const deliveryHeadline = within(drawer).getAllByText('声明了交付物')[0]
+    if (!deliveryHeadline) throw new Error('expected delivery headline')
+    fireEvent.click(deliveryHeadline)
+    expect(within(drawer).getByText('output/report.md')).toBeTruthy()
+    expect(within(drawer).getByText('调研报告')).toBeTruthy()
+    expect(within(drawer).getByText('output/summary.csv')).toBeTruthy()
+    expect(
+      within(drawer).getByText('用户插话，本次运行由后继接管'),
+    ).toBeTruthy()
+    expect(within(drawer).getByText(/改成对比团队版价格/)).toBeTruthy()
+    expect(drawer.querySelectorAll('.activity-meta-row').length).toBe(2)
   })
 
   it('keeps honest fallbacks for legacy and unknown tool records', async () => {

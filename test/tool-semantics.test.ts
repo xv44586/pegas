@@ -554,6 +554,166 @@ describe('EXEC-006 tool semantics projection', () => {
     })
     expect(splitToolDetail(undefined)).toEqual({})
   })
+
+  it('prefers structured durable-log meta over render-text parsing', () => {
+    const grep = buildToolSemantic(
+      { tool: 'grep', input: '{"pattern":"runActivity"}' },
+      {
+        status: 'completed',
+        result: 'Found 1 of 9 matches\n\nsrc/a.ts\nLine 3: hit',
+        meta: {
+          shape: 'matches',
+          total: 9,
+          truncated: true,
+          files: [
+            {
+              path: 'src/a.ts',
+              matches: [
+                { lineNumber: 3, line: 'hit' },
+                { lineNumber: 8, line: 'second hit only in meta' },
+              ],
+            },
+          ],
+        },
+      },
+    )
+    expect(grep).toMatchObject({
+      kind: 'search',
+      shape: 'matches',
+      total: 9,
+      resultTruncated: true,
+      files: [
+        {
+          path: 'src/a.ts',
+          matches: [
+            { line: 3, text: 'hit' },
+            { line: 8, text: 'second hit only in meta' },
+          ],
+        },
+      ],
+    })
+    const glob = buildToolSemantic(
+      { tool: 'glob', input: '{"pattern":"**/*.ts"}' },
+      {
+        status: 'completed',
+        result: 'src/a.ts',
+        meta: {
+          shape: 'paths',
+          total: 2,
+          truncated: false,
+          paths: ['src/a.ts', 'src/b.ts'],
+        },
+      },
+    )
+    expect(glob).toMatchObject({
+      kind: 'search',
+      shape: 'paths',
+      total: 2,
+      paths: ['src/a.ts', 'src/b.ts'],
+    })
+    const search = buildToolSemantic(
+      { tool: 'web_search', input: '{"queries":["成都 社保"]}' },
+      {
+        status: 'completed',
+        result: 'Sources:\n- [人民网](http://a.example) — 摘要',
+        meta: {
+          sources: [
+            { url: 'http://a.example', title: '人民网', snippet: '摘要' },
+            { url: 'http://b.example', title: 'http://b.example' },
+          ],
+          truncated: true,
+        },
+      },
+    )
+    expect(search).toMatchObject({
+      kind: 'web',
+      sources: [
+        { url: 'http://a.example', title: '人民网', snippet: '摘要' },
+        { url: 'http://b.example' },
+      ],
+      sourcesTruncated: true,
+    })
+    const fetch = buildToolSemantic(
+      { tool: 'web_fetch', input: '{"url":"https://example.com"}' },
+      {
+        status: 'completed',
+        result: 'body without header',
+        meta: { url: 'https://example.com', statusCode: 404, truncated: false },
+      },
+    )
+    expect(fetch).toMatchObject({ kind: 'web', statusCode: 404 })
+    const malformed = buildToolSemantic(
+      { tool: 'grep', input: '{"pattern":"x"}' },
+      {
+        status: 'completed',
+        result: 'Found 1 match\n\nsrc/a.ts\nLine 1: x',
+        meta: { shape: 'matches', files: 'not-an-array' },
+      },
+    )
+    expect(malformed).toMatchObject({
+      kind: 'search',
+      shape: 'matches',
+      total: 1,
+      files: [{ path: 'src/a.ts', matches: [{ line: 1, text: 'x' }] }],
+    })
+  })
+
+  it('projects read_image envelopes into honest image metadata', () => {
+    const semantic = buildToolSemantic(
+      { tool: 'read_image', input: '{"file_path":"/repo/assets/flow.png"}' },
+      {
+        status: 'completed',
+        result:
+          '<path>/repo/assets/flow.png</path>\n<type>image</type>\n<content>\nimage/png image, 1200x800 px, 245760 bytes (downscaled from 2400x1600 px; multiply coordinates by 2.00 to locate features in the original file)\n</content>',
+      },
+    )
+    expect(semantic).toEqual({
+      kind: 'image',
+      path: '/repo/assets/flow.png',
+      mediaType: 'image/png',
+      width: 1200,
+      height: 800,
+      bytes: 245_760,
+      originalWidth: 2400,
+      originalHeight: 1600,
+    })
+    const running = buildToolSemantic({
+      tool: 'read_image',
+      input: '{"file_path":"/repo/a.jpg"}',
+    })
+    expect(running).toEqual({ kind: 'image', path: '/repo/a.jpg' })
+    expect(buildToolSemantic({ tool: 'read_image', input: '{}' })).toEqual({
+      kind: 'unknown',
+    })
+  })
+
+  it('projects present calls into the declared deliverable list', () => {
+    const semantic = buildToolSemantic(
+      {
+        tool: 'present',
+        input: JSON.stringify({
+          files: [
+            { path: 'output/report.md', description: '调研报告' },
+            { path: 'output/summary.csv' },
+          ],
+        }),
+      },
+      {
+        status: 'completed',
+        result: 'Presented output/report.md\nPresented output/summary.csv',
+      },
+    )
+    expect(semantic).toMatchObject({
+      kind: 'delivery',
+      files: [
+        { path: 'output/report.md', description: '调研报告' },
+        { path: 'output/summary.csv' },
+      ],
+    })
+    expect(
+      buildToolSemantic({ tool: 'present', input: '{"files":[]}' }),
+    ).toEqual({ kind: 'unknown' })
+  })
 })
 
 describe('EXEC-006 store semantic persistence and legacy derivation', () => {

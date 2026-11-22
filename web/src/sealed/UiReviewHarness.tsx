@@ -12,6 +12,7 @@ export type ReviewFixture =
   | 'task-activity-running'
   | 'task-web-agent'
   | 'task-todo-search'
+  | 'task-run-artifacts'
   | 'preview-file'
   | 'preview-image'
   | 'preview-video'
@@ -75,6 +76,7 @@ function activityEntry(
     status?: RunActivityEntry['status']
     semantic?: ToolSemantic
     kind?: RunActivityEntry['kind']
+    meta?: RunActivityEntry['meta']
   },
 ): RunActivityEntry {
   return {
@@ -87,6 +89,7 @@ function activityEntry(
     label: partial.label,
     ...(partial.detail !== undefined ? { detail: partial.detail } : {}),
     ...(partial.semantic ? { semantic: partial.semantic } : {}),
+    ...(partial.meta ? { meta: partial.meta } : {}),
     createdAt: '2026-11-20T00:02:00.000Z',
     updatedAt: '2026-11-20T00:02:30.000Z',
   }
@@ -599,9 +602,132 @@ function todoSearchView(): DrawerView {
   }
 }
 
+function runArtifactsEntries(): RunActivityEntry[] {
+  const edit = (
+    seq: number,
+    path: string,
+    oldText: string,
+    newText: string,
+  ): RunActivityEntry =>
+    activityEntry(seq, {
+      tool: 'edit',
+      label: 'edit',
+      detail: JSON.stringify({
+        file_path: path,
+        old_string: oldText,
+        new_string: newText,
+      }),
+      semantic: {
+        kind: 'file_edit',
+        path,
+        mode: 'edit',
+        additions: newText.split('\n').length,
+        deletions: oldText.split('\n').length,
+        hunks: [
+          {
+            oldStart: 90 + seq,
+            newStart: 90 + seq,
+            lines: [
+              ...oldText
+                .split('\n')
+                .map(text => ({ type: 'del' as const, text })),
+              ...newText
+                .split('\n')
+                .map(text => ({ type: 'add' as const, text })),
+            ],
+          },
+        ],
+      },
+    })
+  return [
+    activityEntry(1, {
+      kind: 'text',
+      label: '修改 API 与类型，然后核对截图并交付。',
+      detail: '修改 **API 与类型**，然后核对截图并交付。',
+    }),
+    edit(
+      2,
+      'web/src/api.ts',
+      'async runActivity(runId: string) {',
+      'async runActivity(runId: string): Promise<RunActivityReport> {\n    return this.get(`/v1/runs/${runId}/activity`)',
+    ),
+    edit(
+      3,
+      'web/src/types.ts',
+      'interface RunActivityReport {',
+      'interface RunActivityReport {\n  totalEntries: number\n  truncated: boolean',
+    ),
+    activityEntry(4, {
+      tool: 'read_image',
+      label: 'read_image',
+      detail: '{"file_path":"/repo/output/desktop-task-web-agent.png"}',
+      semantic: {
+        kind: 'image',
+        path: '/repo/output/desktop-task-web-agent.png',
+        mediaType: 'image/png',
+        width: 1440,
+        height: 900,
+        bytes: 92_038,
+      },
+    }),
+    activityEntry(5, {
+      kind: 'step',
+      label: '上下文已压缩',
+      meta: { kind: 'compaction', note: '自动触发' },
+    }),
+    edit(
+      6,
+      'web/src/api.ts',
+      'return this.get(`/v1/runs/${runId}/activity`)',
+      'return this.get(`/v1/runs/${runId}/activity?limit=400`)',
+    ),
+    activityEntry(7, {
+      tool: 'present',
+      label: 'present',
+      detail: JSON.stringify({
+        files: [
+          { path: 'output/report.md', description: '执行记录语义化调研结论' },
+          { path: 'output/comparison/after.png', description: '改造后截图' },
+        ],
+      }),
+      semantic: {
+        kind: 'delivery',
+        files: [
+          { path: 'output/report.md', description: '执行记录语义化调研结论' },
+          { path: 'output/comparison/after.png', description: '改造后截图' },
+        ],
+      },
+    }),
+    activityEntry(8, {
+      kind: 'step',
+      label: '用户插话，本次运行由后继接管',
+      meta: { kind: 'steered', note: '顺带把移动端截图也补上' },
+    }),
+  ]
+}
+
+function runArtifactsView(): DrawerView {
+  const base = taskView('completed')
+  if (base.kind !== 'task' || !base.run) return base
+  const entries = runArtifactsEntries()
+  return {
+    ...base,
+    activityByRun: {
+      [base.run.id]: {
+        runId: base.run.id,
+        taskId: channel.id,
+        entries,
+        totalEntries: entries.length,
+        truncated: false,
+      },
+    },
+  }
+}
+
 function fixtureView(fixture: ReviewFixture): DrawerView {
   if (fixture === 'task-web-agent') return webAgentView()
   if (fixture === 'task-todo-search') return todoSearchView()
+  if (fixture === 'task-run-artifacts') return runArtifactsView()
   if (
     fixture === 'task-activity' ||
     fixture === 'task-activity-open' ||

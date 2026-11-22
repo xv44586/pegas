@@ -557,6 +557,7 @@ try {
     'task-activity-running',
     'task-web-agent',
     'task-todo-search',
+    'task-run-artifacts',
     'preview-file',
     'preview-image',
     'preview-video',
@@ -592,12 +593,14 @@ try {
             .locator('summary')
             .click()
           await fixturePage
-            .locator('.activity-tool')
+            .locator('.activity-timeline > .activity-tool')
             .filter({ hasText: '已编辑' })
             .locator('summary')
+            .first()
             .click()
           await fixturePage
             .locator('.activity-card.diff-card')
+            .first()
             .scrollIntoViewIfNeeded()
         }
       }
@@ -658,6 +661,29 @@ try {
         await fixturePage
           .locator('.activity-card.ask-card')
           .first()
+          .scrollIntoViewIfNeeded()
+      }
+      if (fixture === 'task-run-artifacts') {
+        await fixturePage.getByText('工作流程记录', { exact: false }).click()
+        await fixturePage
+          .locator('.activity-changes > details > summary')
+          .click()
+        await fixturePage
+          .locator('.changes-files > li > details > summary')
+          .first()
+          .click()
+        await fixturePage
+          .locator('.activity-tool')
+          .filter({ hasText: '查看了图片' })
+          .locator('summary')
+          .click()
+        await fixturePage
+          .locator('.activity-tool')
+          .filter({ hasText: '声明了交付物' })
+          .locator('summary')
+          .click()
+        await fixturePage
+          .locator('.activity-card.delivery-card')
           .scrollIntoViewIfNeeded()
       }
       await capture(fixturePage, `${size}-${fixture}.png`, `${size}-${fixture}`)

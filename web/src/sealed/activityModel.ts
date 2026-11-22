@@ -45,6 +45,61 @@ export function isDelegationEntry(entry: RunActivityEntry): boolean {
   return entry.tool === 'subagent' || entry.tool === 'subagent_fork'
 }
 
+export interface RunChangeSummary {
+  files: {
+    path: string
+    additions: number
+    deletions: number
+    entries: RunActivityEntry[]
+  }[]
+  additions: number
+  deletions: number
+}
+
+/**
+ * Aggregates every file_edit semantic of one run into a per-file change
+ * summary (Codex turn-diff / Cursor Files Changed parity). Counts sum the
+ * recorded edit attempts honestly; running or failed edits stay included
+ * because their planned change is what the record holds.
+ */
+export function summarizeRunChanges(
+  entries: readonly RunActivityEntry[],
+): RunChangeSummary | undefined {
+  const byPath = new Map<
+    string,
+    {
+      path: string
+      additions: number
+      deletions: number
+      entries: RunActivityEntry[]
+    }
+  >()
+  for (const entry of entries) {
+    const semantic = entry.semantic
+    if (entry.kind !== 'tool_call' || semantic?.kind !== 'file_edit') continue
+    const existing = byPath.get(semantic.path)
+    if (existing) {
+      existing.additions += semantic.additions
+      existing.deletions += semantic.deletions
+      existing.entries.push(entry)
+    } else {
+      byPath.set(semantic.path, {
+        path: semantic.path,
+        additions: semantic.additions,
+        deletions: semantic.deletions,
+        entries: [entry],
+      })
+    }
+  }
+  if (byPath.size === 0) return undefined
+  const files = [...byPath.values()]
+  return {
+    files,
+    additions: files.reduce((sum, file) => sum + file.additions, 0),
+    deletions: files.reduce((sum, file) => sum + file.deletions, 0),
+  }
+}
+
 /**
  * Groups consecutive same-kind tool calls (≥2) into one collapsible batch.
  * Text, thinking, steps, delegations and unknown tools keep their position
@@ -172,6 +227,16 @@ export function toolHeadline(entry: RunActivityEntry): ToolHeadline {
       return {
         title: entry.status === 'started' ? '正在读取' : '已读取',
         subject: baseName(semantic.path),
+      }
+    case 'image':
+      return {
+        title: entry.status === 'started' ? '正在查看图片' : '查看了图片',
+        subject: baseName(semantic.path),
+      }
+    case 'delivery':
+      return {
+        title: entry.status === 'started' ? '正在整理交付物' : '声明了交付物',
+        subject: `${String(semantic.files.length)} 个文件`,
       }
     case 'file_edit':
       return {

@@ -4059,6 +4059,118 @@ kbd {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.activity-meta-row {
+  align-items: baseline;
+  color: var(--muted);
+  display: flex;
+  font-size: var(--text-tiny);
+  gap: 6px;
+  min-width: 0;
+}
+.activity-meta-row .activity-label {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.activity-meta-row.is-steered {
+  color: var(--accent-ink, var(--accent));
+}
+.activity-meta-row.is-error {
+  color: var(--critical);
+}
+.activity-meta-note {
+  color: var(--muted);
+}
+.activity-meta-row small {
+  color: var(--muted);
+  flex: none;
+}
+.changes-files {
+  display: grid;
+  list-style: none;
+  margin: 0;
+  padding: 6px 12px 10px;
+}
+.changes-files > li {
+  border-bottom: 1px dashed var(--line);
+  min-width: 0;
+  padding: 4px 0;
+}
+.changes-files > li:last-child {
+  border-bottom: none;
+}
+.changes-files summary {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  font-size: var(--text-small);
+  gap: 8px;
+  list-style: none;
+  min-width: 0;
+}
+.changes-path {
+  flex: 1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.changes-files details[open] > summary .activity-chevron {
+  transform: rotate(180deg);
+}
+.image-facts {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  padding: 12px;
+}
+.image-glyph {
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--muted);
+  display: inline-flex;
+  flex: none;
+  height: 44px;
+  justify-content: center;
+  width: 44px;
+}
+.image-facts p {
+  font-size: var(--text-small);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.image-facts small {
+  color: var(--muted);
+  display: block;
+  font-size: var(--text-tiny);
+  margin-top: 2px;
+}
+.delivery-files {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 10px 12px;
+}
+.delivery-files li {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.delivery-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--text-small);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.delivery-files small {
+  color: var(--muted);
+  font-size: var(--text-tiny);
+}
 .preview-body {
   color: var(--ink-soft);
 }

@@ -281,6 +281,8 @@ export interface RunActivityEntry {
   label: string
   detail?: string
   semantic?: ToolSemantic
+  /** Lightweight lifecycle marker (compaction / steering); no tool payload. */
+  meta?: { kind: 'compaction' | 'steered'; note?: string }
   createdAt: string
   updatedAt: string
 }
@@ -300,6 +302,22 @@ export type ToolSemantic =
       kind: 'file_read'
       path: string
       lineCount?: number
+      preview?: string
+      previewTruncated?: boolean
+    }
+  | {
+      kind: 'image'
+      path: string
+      mediaType?: string
+      width?: number
+      height?: number
+      bytes?: number
+      originalWidth?: number
+      originalHeight?: number
+    }
+  | {
+      kind: 'delivery'
+      files: { path: string; description?: string }[]
       preview?: string
       previewTruncated?: boolean
     }

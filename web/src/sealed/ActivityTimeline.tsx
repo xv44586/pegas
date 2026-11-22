@@ -9,9 +9,13 @@ import {
   FileText,
   Globe,
   History,
+  Image as ImageIcon,
   ListChecks,
   LoaderCircle,
+  MessageSquarePlus,
+  Minimize2,
   Network,
+  PackageCheck,
   Search,
   SquareTerminal,
 } from 'lucide-react'
@@ -25,6 +29,7 @@ import {
   diffToText,
   groupActivityEntries,
   shellFooter,
+  summarizeRunChanges,
   toolHeadline,
   type ActivityGroupKind,
 } from './activityModel'
@@ -38,8 +43,10 @@ export function ActivityTimeline({
   renderDelegation?: (entry: RunActivityEntry) => ReactNode
 }) {
   const units = groupActivityEntries(entries)
+  const changes = summarizeRunChanges(entries)
   return (
     <ol className="activity-timeline" role="list">
+      {changes && <RunChangesCard changes={changes} />}
       {units.map(unit =>
         unit.kind === 'batch' ? (
           <ActivityBatch
@@ -90,6 +97,10 @@ function entryIcon(entry: RunActivityEntry) {
       return groupIcon('command')
     case 'file_read':
       return groupIcon('read')
+    case 'image':
+      return <ImageIcon size={14} />
+    case 'delivery':
+      return <PackageCheck size={14} />
     case 'file_edit':
       return groupIcon('edit')
     case 'search':
@@ -168,6 +179,30 @@ function ActivityEntryRow({
   renderDelegation?: (entry: RunActivityEntry) => ReactNode
 }) {
   if (entry.kind === 'step') {
+    if (entry.meta) {
+      const steered = entry.meta.kind === 'steered'
+      const failed = entry.status === 'error'
+      return (
+        <li
+          className={`activity-meta-row ${steered ? 'is-steered' : 'is-compaction'}${failed ? ' is-error' : ''}`}
+        >
+          <span className="activity-icon" aria-hidden="true">
+            {steered ? (
+              <MessageSquarePlus size={13} />
+            ) : (
+              <Minimize2 size={13} />
+            )}
+          </span>
+          <span className="activity-label">
+            {entry.label}
+            {entry.meta.note && (
+              <span className="activity-meta-note"> · {entry.meta.note}</span>
+            )}
+          </span>
+          <small>{formatRelativeTime(entry.createdAt)}</small>
+        </li>
+      )
+    }
     return (
       <li className="activity-step">
         <span className="activity-icon" aria-hidden="true">
@@ -283,6 +318,10 @@ function ToolResultBody({ entry }: { entry: RunActivityEntry }) {
       return <TodoCard entry={entry} semantic={semantic} />
     case 'ask_user':
       return <AskUserCard entry={entry} semantic={semantic} />
+    case 'image':
+      return <ImageCard entry={entry} semantic={semantic} />
+    case 'delivery':
+      return <DeliveryCard entry={entry} semantic={semantic} />
     case 'search':
       return semantic.shape ? (
         <SearchCard entry={entry} semantic={semantic} />
@@ -520,6 +559,166 @@ function PreviewCard({
       )}
       {semantic.previewTruncated && (
         <p className="activity-empty">内容过长，仅保留前段预览。</p>
+      )}
+    </div>
+  )
+}
+
+function RunChangesCard({
+  changes,
+}: {
+  changes: NonNullable<ReturnType<typeof summarizeRunChanges>>
+}) {
+  return (
+    <li className="activity-tool activity-changes">
+      <details>
+        <summary>
+          <span className="activity-icon" aria-hidden="true">
+            <FilePen size={14} />
+          </span>
+          <span className="activity-label">
+            <span className="activity-title">
+              本次运行修改了 {String(changes.files.length)} 个文件
+            </span>
+            <span className="activity-diffstat">
+              {' '}
+              <b className="is-add">+{String(changes.additions)}</b>{' '}
+              <b className="is-del">-{String(changes.deletions)}</b>
+            </span>
+          </span>
+          <ChevronDown
+            aria-hidden="true"
+            className="activity-chevron"
+            size={14}
+          />
+        </summary>
+        <div className="activity-card changes-card">
+          <header className="activity-card-header">
+            <span>文件变更汇总</span>
+            <span className="preview-meta">按记录的编辑尝试累计</span>
+          </header>
+          <ol className="changes-files" role="list">
+            {changes.files.map(file => (
+              <li key={file.path}>
+                <details>
+                  <summary>
+                    <span className="changes-path" title={file.path}>
+                      {file.path}
+                    </span>
+                    <span className="activity-diffstat">
+                      <b className="is-add">+{String(file.additions)}</b>{' '}
+                      <b className="is-del">-{String(file.deletions)}</b>
+                    </span>
+                    <ChevronDown
+                      aria-hidden="true"
+                      className="activity-chevron"
+                      size={13}
+                    />
+                  </summary>
+                  <ol className="activity-batch-items" role="list">
+                    {file.entries.map(entry => (
+                      <ActivityEntryRow entry={entry} key={entry.seq} />
+                    ))}
+                  </ol>
+                </details>
+              </li>
+            ))}
+          </ol>
+        </div>
+      </details>
+    </li>
+  )
+}
+
+function ImageCard({
+  entry,
+  semantic,
+}: {
+  entry: RunActivityEntry
+  semantic: Extract<ToolSemantic, { kind: 'image' }>
+}) {
+  const facts = [
+    semantic.mediaType,
+    semantic.width !== undefined && semantic.height !== undefined
+      ? `${String(semantic.width)}×${String(semantic.height)} px`
+      : undefined,
+    semantic.bytes !== undefined ? formatBytes(semantic.bytes) : undefined,
+  ].filter(Boolean)
+  return (
+    <div className="activity-card image-card">
+      <header className="activity-card-header">
+        <span className="diff-path" title={semantic.path}>
+          {semantic.path}
+        </span>
+        <CopyAction label="复制路径" text={semantic.path} />
+      </header>
+      <div className="image-facts">
+        <span aria-hidden="true" className="image-glyph">
+          <ImageIcon size={22} />
+        </span>
+        <div>
+          <p>{facts.length > 0 ? facts.join(' · ') : '图片元数据未留存。'}</p>
+          {semantic.originalWidth !== undefined &&
+            semantic.originalHeight !== undefined && (
+              <small>
+                由 {String(semantic.originalWidth)}×
+                {String(semantic.originalHeight)} px 原图缩小
+              </small>
+            )}
+          <small>图片内容未随执行记录留存，此处仅展示元数据。</small>
+        </div>
+      </div>
+      {entry.status === 'started' && <p className="activity-empty">读取中…</p>}
+      {entry.status === 'error' && (
+        <footer className="shell-footer is-error">
+          <span>失败</span>
+        </footer>
+      )}
+    </div>
+  )
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1)} MB`
+  if (bytes >= 1_024) return `${(bytes / 1_024).toFixed(1)} KB`
+  return `${String(bytes)} B`
+}
+
+function DeliveryCard({
+  entry,
+  semantic,
+}: {
+  entry: RunActivityEntry
+  semantic: Extract<ToolSemantic, { kind: 'delivery' }>
+}) {
+  const copyText = semantic.files
+    .map(file =>
+      file.description ? `${file.path} — ${file.description}` : file.path,
+    )
+    .join('\n')
+  return (
+    <div className="activity-card delivery-card">
+      <header className="activity-card-header">
+        <span>交付物</span>
+        <span className="preview-meta">
+          {String(semantic.files.length)} 个文件
+        </span>
+        <CopyAction label="复制交付清单" text={copyText} />
+      </header>
+      <ol className="delivery-files" role="list">
+        {semantic.files.map(file => (
+          <li key={file.path}>
+            <span className="delivery-path" title={file.path}>
+              {file.path}
+            </span>
+            {file.description && <small>{file.description}</small>}
+          </li>
+        ))}
+      </ol>
+      {entry.status === 'error' && (
+        <p className="activity-empty is-error">
+          交付声明未成功，以下为尝试的文件。
+        </p>
       )}
     </div>
   )

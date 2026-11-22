@@ -5492,6 +5492,16 @@ export class PegasStore {
       const task = this.#taskById(row.task_id)
       if (task.status === 'completed' || task.status === 'cancelled')
         throw new Error('Task is closed')
+      const directives = JSON.parse(row.steering_json) as {
+        eventId: string
+        text: string
+        at: string
+      }[]
+      this.#appendSteeringMarker(
+        runId,
+        directives,
+        this.#clock.now().toISOString(),
+      )
       const existing = this.#database
         .prepare(`SELECT * FROM runs WHERE steering_of_run_id = ? LIMIT 1`)
         .get(runId) as unknown as RunRow | undefined
@@ -5505,11 +5515,6 @@ export class PegasStore {
         this.#database.exec('COMMIT')
         return successor
       }
-      const directives = JSON.parse(row.steering_json) as {
-        eventId: string
-        text: string
-        at: string
-      }[]
       const now = this.#clock.now().toISOString()
       const steeringText = directives
         .map(directive => directive.text)
@@ -10098,6 +10103,57 @@ export class PegasStore {
     },
   ): void {
     if (!this.ownsRun(runId, workerId)) return
+    this.#completeRunActivityToolCall(runId, callId, outcome)
+  }
+
+  /**
+   * Appends the honest steering marker inside the supersede transaction.
+   * Idempotent: a replayed supersede (existing successor) never duplicates it.
+   */
+  #appendSteeringMarker(
+    runId: string,
+    directives: { text: string }[],
+    now: string,
+  ): void {
+    const existing = this.#database
+      .prepare(
+        `SELECT 1 FROM run_activity_entries
+         WHERE run_id = ? AND tool = 'steered' LIMIT 1`,
+      )
+      .get(runId)
+    if (existing) return
+    const note = directives
+      .map(directive => directive.text)
+      .join('\n')
+      .slice(0, 2_000)
+    this.#database
+      .prepare(
+        `INSERT INTO run_activity_entries
+          (run_id, seq, kind, status, call_id, tool, step, label, detail_json,
+           created_at, updated_at)
+         VALUES (?, COALESCE(
+           (SELECT MAX(seq) + 1 FROM run_activity_entries WHERE run_id = ?), 1
+         ), 'step', 'completed', NULL, 'steered', NULL, ?, ?, ?, ?)`,
+      )
+      .run(
+        runId,
+        runId,
+        '用户插话，本次运行由后继接管',
+        JSON.stringify({ detail: note }),
+        now,
+        now,
+      )
+  }
+
+  #completeRunActivityToolCall(
+    runId: string,
+    callId: string,
+    outcome: {
+      status: 'completed' | 'error'
+      result?: string
+      semantic?: ToolSemantic
+    },
+  ): void {
     const row = this.#database
       .prepare(
         `SELECT id, tool, detail_json FROM run_activity_entries
@@ -13011,7 +13067,16 @@ function projectActivityDetail(row: {
   status: RunActivityEntry['status'] | null
   tool: string | null
   detail_json: string | null
-}): Pick<RunActivityEntry, 'detail' | 'semantic'> {
+}): Pick<RunActivityEntry, 'detail' | 'semantic' | 'meta'> {
+  if (row.kind === 'step' && row.tool === 'steered') {
+    const stored = row.detail_json ? decodeActivityDetail(row.detail_json) : {}
+    return {
+      meta: {
+        kind: 'steered',
+        ...(stored.detail ? { note: stored.detail } : {}),
+      },
+    }
+  }
   if (!row.detail_json) return {}
   const stored = decodeActivityDetail(row.detail_json)
   if (row.kind !== 'tool_call') {

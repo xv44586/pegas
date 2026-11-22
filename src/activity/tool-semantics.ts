@@ -25,6 +25,7 @@ const MAX_TODO_CONTENT_CHARACTERS = 300
 const MAX_ASK_QUESTIONS = 8
 const MAX_ASK_OPTIONS = 8
 const MAX_ASK_TEXT_CHARACTERS = 500
+const MAX_DELIVERY_FILES = 8
 const CONTEXT_LINES = 3
 const RESULT_SEPARATOR = '\n[结果]\n'
 
@@ -36,6 +37,8 @@ interface ToolCallInput {
 interface ToolOutcome {
   status: 'completed' | 'error'
   result?: string
+  /** Structured `tool/result.meta` from the durable log, when available. */
+  meta?: unknown
 }
 
 /**
@@ -56,6 +59,10 @@ export function buildToolSemantic(
       return shellSemantic(args, result, call.input)
     case 'read':
       return fileReadSemantic(args, result)
+    case 'read_image':
+      return imageSemantic(args, result)
+    case 'present':
+      return deliverySemantic(args, result)
     case 'edit':
     case 'write':
     case 'apply_patch':
@@ -63,7 +70,7 @@ export function buildToolSemantic(
     case 'grep':
     case 'glob':
     case 'search':
-      return searchSemantic(call.tool, args, result)
+      return searchSemantic(call.tool, args, result, outcome?.meta)
     case 'todo_write':
       return todoSemantic(args)
     case 'ask_user_question':
@@ -71,7 +78,7 @@ export function buildToolSemantic(
     case 'web_fetch':
     case 'web_search':
     case 'web_run':
-      return webSemantic(args, result)
+      return webSemantic(args, result, outcome?.meta)
     case 'wait_agent':
     case 'send_message':
     case 'list_agents':
@@ -406,17 +413,19 @@ function searchSemantic(
   tool: string,
   args: Record<string, unknown>,
   result: string | undefined,
+  meta?: unknown,
 ): ToolSemantic {
   const query = stringField(args, 'pattern', 'query', 'glob')
   if (query === undefined) return { kind: 'unknown' }
   const path = stringField(args, 'path')
   const include = stringField(args, 'include')
   const structured =
-    tool === 'grep'
+    searchMetaStructure(meta) ??
+    (tool === 'grep'
       ? grepResultSemantic(result)
       : tool === 'glob'
         ? globResultSemantic(result)
-        : undefined
+        : undefined)
   const preview =
     result === undefined ? undefined : clip(result, MAX_PREVIEW_CHARACTERS)
   return {
@@ -437,14 +446,24 @@ function searchSemantic(
 function webSemantic(
   args: Record<string, unknown>,
   result: string | undefined,
+  meta?: unknown,
 ): ToolSemantic {
   const url = stringField(args, 'url')
   const query = stringField(args, 'query') ?? firstQuery(args.queries)
   const queries = queryList(args.queries)
   if (url === undefined && query === undefined) return { kind: 'unknown' }
-  const statusCode = url !== undefined ? fetchStatusCode(result) : undefined
+  const metaRecord = isMetaRecord(meta) ? meta : undefined
+  const metaStatus =
+    typeof metaRecord?.statusCode === 'number' &&
+    Number.isSafeInteger(metaRecord.statusCode)
+      ? metaRecord.statusCode
+      : undefined
+  const statusCode =
+    url !== undefined ? (metaStatus ?? fetchStatusCode(result)) : undefined
   const parsedSources =
-    url === undefined ? parseSearchSources(result) : undefined
+    url === undefined
+      ? (webMetaSources(metaRecord) ?? parseSearchSources(result))
+      : undefined
   const preview =
     result === undefined ? undefined : clip(result, MAX_PREVIEW_CHARACTERS)
   return {
@@ -898,4 +917,188 @@ function parseAskOutcome(
     })
   }
   return { answers }
+}
+
+function isMetaRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+/**
+ * Reads the structured grep/glob `tool/result.meta` from the durable log.
+ * This is the faithful route (the `--json` stream drops meta); malformed
+ * shapes return undefined so the render-text parsers stay the fallback.
+ */
+function searchMetaStructure(meta: unknown): SearchStructure | undefined {
+  if (!isMetaRecord(meta)) return undefined
+  const total =
+    typeof meta.total === 'number' && Number.isSafeInteger(meta.total)
+      ? meta.total
+      : undefined
+  const truncated = meta.truncated === true
+  if (meta.shape === 'matches' && Array.isArray(meta.files)) {
+    const files: SearchFileHits[] = []
+    let dropped = false
+    for (const entry of meta.files) {
+      if (files.length >= MAX_SEARCH_FILES) {
+        dropped = true
+        break
+      }
+      if (!isMetaRecord(entry) || typeof entry.path !== 'string') continue
+      const matches: { line: number; text: string }[] = []
+      if (Array.isArray(entry.matches)) {
+        for (const match of entry.matches) {
+          if (matches.length >= MAX_SEARCH_MATCHES_PER_FILE) {
+            dropped = true
+            break
+          }
+          if (
+            !isMetaRecord(match) ||
+            typeof match.lineNumber !== 'number' ||
+            typeof match.line !== 'string'
+          ) {
+            continue
+          }
+          matches.push({
+            line: match.lineNumber,
+            text: match.line.slice(0, MAX_SEARCH_LINE_CHARACTERS),
+          })
+        }
+      }
+      files.push({ path: entry.path, matches })
+    }
+    return {
+      shape: 'matches',
+      ...(total !== undefined ? { total } : {}),
+      ...(truncated || dropped ? { resultTruncated: true } : {}),
+      files,
+    }
+  }
+  if (meta.shape === 'paths' && Array.isArray(meta.paths)) {
+    const paths: string[] = []
+    let dropped = false
+    for (const entry of meta.paths) {
+      if (typeof entry !== 'string') continue
+      if (paths.length >= MAX_SEARCH_PATHS) {
+        dropped = true
+        break
+      }
+      paths.push(entry)
+    }
+    return {
+      shape: 'paths',
+      ...(total !== undefined ? { total } : {}),
+      ...(truncated || dropped ? { resultTruncated: true } : {}),
+      paths,
+    }
+  }
+  return undefined
+}
+
+/** Reads the structured web_search sources from the durable-log meta. */
+function webMetaSources(
+  meta: Record<string, unknown> | undefined,
+): { sources: WebSource[]; truncated?: boolean } | undefined {
+  if (!meta || !Array.isArray(meta.sources)) return undefined
+  const sources: WebSource[] = []
+  for (const entry of meta.sources) {
+    if (sources.length >= MAX_WEB_SOURCES) break
+    if (!isMetaRecord(entry) || typeof entry.url !== 'string') continue
+    const title = entry.title
+    const snippet = entry.snippet
+    sources.push({
+      url: entry.url,
+      ...(typeof title === 'string' && title && title !== entry.url
+        ? { title }
+        : {}),
+      ...(typeof snippet === 'string' && snippet ? { snippet } : {}),
+    })
+  }
+  if (sources.length === 0) return undefined
+  return {
+    sources,
+    ...(meta.truncated === true ? { truncated: true } : {}),
+  }
+}
+
+/**
+ * Projects read_image calls from the faithful envelope
+ * `<path>…</path><type>image</type><content>media, WxH px, N bytes…</content>`.
+ * The image bytes never ride the transcript; only honest metadata is kept.
+ */
+function imageSemantic(
+  args: Record<string, unknown>,
+  result: string | undefined,
+): ToolSemantic {
+  const path =
+    stringField(args, 'file_path', 'path') ??
+    (result === undefined
+      ? undefined
+      : /<path>([^<]+)<\/path>/u.exec(result)?.[1])
+  if (path === undefined) return { kind: 'unknown' }
+  const content =
+    result === undefined
+      ? undefined
+      : /<content>\s*([\s\S]*?)\s*<\/content>/u.exec(result)?.[1]
+  const facts =
+    content === undefined
+      ? undefined
+      : /^(image\/[a-z+]+) image, (\d+)x(\d+) px, (\d+) bytes/u.exec(content)
+  const original =
+    content === undefined
+      ? undefined
+      : /downscaled from (\d+)x(\d+) px/u.exec(content)
+  return {
+    kind: 'image',
+    path,
+    ...(facts?.[1] ? { mediaType: facts[1] } : {}),
+    ...(facts?.[2] && facts[3]
+      ? {
+          width: Number.parseInt(facts[2], 10),
+          height: Number.parseInt(facts[3], 10),
+        }
+      : {}),
+    ...(facts?.[4] ? { bytes: Number.parseInt(facts[4], 10) } : {}),
+    ...(original?.[1] && original[2]
+      ? {
+          originalWidth: Number.parseInt(original[1], 10),
+          originalHeight: Number.parseInt(original[2], 10),
+        }
+      : {}),
+  }
+}
+
+/** Projects present calls into the declared deliverable file list. */
+function deliverySemantic(
+  args: Record<string, unknown>,
+  result: string | undefined,
+): ToolSemantic {
+  const raw = args.files
+  const files: { path: string; description?: string }[] = []
+  if (Array.isArray(raw)) {
+    for (const entry of raw) {
+      if (files.length >= MAX_DELIVERY_FILES) break
+      if (!isMetaRecord(entry) || typeof entry.path !== 'string') continue
+      if (!entry.path.trim()) continue
+      const description = entry.description
+      files.push({
+        path: entry.path,
+        ...(typeof description === 'string' && description.trim()
+          ? { description: description.trim().slice(0, 300) }
+          : {}),
+      })
+    }
+  }
+  if (files.length === 0) return { kind: 'unknown' }
+  const preview =
+    result === undefined ? undefined : clip(result, MAX_PREVIEW_CHARACTERS)
+  return {
+    kind: 'delivery',
+    files,
+    ...(preview
+      ? {
+          preview: preview.text,
+          ...(preview.truncated ? { previewTruncated: true } : {}),
+        }
+      : {}),
+  }
 }
