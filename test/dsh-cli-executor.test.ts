@@ -396,6 +396,81 @@ console.log(JSON.stringify({
     expect(observedSessions).toEqual(['session-fresh'])
   })
 
+  it('retries a resume while the previous DSH process still holds the session write lock', async () => {
+    const lockDirectory = mkdtempSync(join(tmpdir(), 'pegas-session-busy-'))
+    temporaryDirectories.push(lockDirectory)
+    const lockPath = join(lockDirectory, 'held')
+    writeFileSync(lockPath, 'held')
+    const command = fakeDsh(`
+const fs = require('node:fs')
+const lockPath = ${JSON.stringify(lockPath)}
+if (fs.existsSync(lockPath)) {
+  fs.unlinkSync(lockPath)
+  console.error('session "session-busy" is already owned by an active write handle')
+  process.exit(1)
+}
+console.log(JSON.stringify({
+  type: 'final',
+  sessionId: 'session-busy',
+  text: 'resumed after the lock drained',
+  reason: { kind: 'completed' }
+}))
+`)
+    const previousRetry = process.env.PEGAS_DSH_SESSION_BUSY_RETRY_MS
+    process.env.PEGAS_DSH_SESSION_BUSY_RETRY_MS = '20'
+    try {
+      const executor = new DshCliExecutor({ command })
+      const result = await executor.execute({
+        runId: 'run-busy-resume',
+        taskId: 'task-busy',
+        prompt: 'continue after approval',
+        workingDirectory: process.cwd(),
+        resumeSessionId: 'session-busy',
+      })
+      expect(result.output).toBe('resumed after the lock drained')
+    } finally {
+      if (previousRetry === undefined) {
+        delete process.env.PEGAS_DSH_SESSION_BUSY_RETRY_MS
+      } else {
+        process.env.PEGAS_DSH_SESSION_BUSY_RETRY_MS = previousRetry
+      }
+    }
+  })
+
+  it('fails a resume when the session write lock stays held past the bounded wait', async () => {
+    const command = fakeDsh(`
+console.error('session "session-held" is already owned by an active write handle')
+process.exit(1)
+`)
+    const previousWait = process.env.PEGAS_DSH_SESSION_BUSY_WAIT_MS
+    const previousRetry = process.env.PEGAS_DSH_SESSION_BUSY_RETRY_MS
+    process.env.PEGAS_DSH_SESSION_BUSY_WAIT_MS = '60'
+    process.env.PEGAS_DSH_SESSION_BUSY_RETRY_MS = '20'
+    try {
+      const executor = new DshCliExecutor({ command })
+      await expect(
+        executor.execute({
+          runId: 'run-held-resume',
+          taskId: 'task-held',
+          prompt: 'continue after approval',
+          workingDirectory: process.cwd(),
+          resumeSessionId: 'session-held',
+        }),
+      ).rejects.toThrow('already owned by an active write handle')
+    } finally {
+      if (previousWait === undefined) {
+        delete process.env.PEGAS_DSH_SESSION_BUSY_WAIT_MS
+      } else {
+        process.env.PEGAS_DSH_SESSION_BUSY_WAIT_MS = previousWait
+      }
+      if (previousRetry === undefined) {
+        delete process.env.PEGAS_DSH_SESSION_BUSY_RETRY_MS
+      } else {
+        process.env.PEGAS_DSH_SESSION_BUSY_RETRY_MS = previousRetry
+      }
+    }
+  })
+
   it('patches the selected agent model only for a new session', async () => {
     const command = fakeDsh(`
 const fs = require('node:fs')

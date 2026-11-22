@@ -102,20 +102,34 @@ export class DshCliExecutor implements RunExecutor {
   }
 
   async execute(input: ExecutorInput): Promise<ExecutorResult> {
-    try {
-      return await this.#executeOnce(input)
-    } catch (error) {
-      if (
-        input.resumeSessionId &&
-        error instanceof DshExecutionError &&
-        error.sessionId === input.resumeSessionId &&
-        isWorkspaceSessionMismatch(error.message)
-      ) {
-        const freshInput = { ...input }
-        delete freshInput.resumeSessionId
-        return this.#executeOnce(freshInput)
+    const sessionBusyDeadline = Date.now() + sessionBusyWaitMs()
+    for (;;) {
+      try {
+        return await this.#executeOnce(input)
+      } catch (error) {
+        if (
+          input.resumeSessionId &&
+          error instanceof DshExecutionError &&
+          error.sessionId === input.resumeSessionId &&
+          isWorkspaceSessionMismatch(error.message)
+        ) {
+          const freshInput = { ...input }
+          delete freshInput.resumeSessionId
+          return this.#executeOnce(freshInput)
+        }
+        if (
+          input.resumeSessionId &&
+          error instanceof DshExecutionError &&
+          error.sessionId === input.resumeSessionId &&
+          isSessionWriteHandleBusy(error.message) &&
+          !input.signal?.aborted &&
+          Date.now() < sessionBusyDeadline
+        ) {
+          await delay(sessionBusyRetryDelayMs())
+          continue
+        }
+        throw error
       }
-      throw error
     }
   }
 
@@ -378,6 +392,26 @@ function isWorkspaceSessionMismatch(message: string): boolean {
   return /^session "[^"]+" was recorded in "[^"]+", not "[^"]+"$/.test(
     message.trim(),
   )
+}
+
+function isSessionWriteHandleBusy(message: string): boolean {
+  return /^session "[^"]+" is already owned by an active write handle$/.test(
+    message.trim(),
+  )
+}
+
+function sessionBusyWaitMs(): number {
+  const parsed = Number(process.env.PEGAS_DSH_SESSION_BUSY_WAIT_MS)
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 20_000
+}
+
+function sessionBusyRetryDelayMs(): number {
+  const parsed = Number(process.env.PEGAS_DSH_SESSION_BUSY_RETRY_MS)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 500
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, milliseconds))
 }
 
 function createAgentModelPatch(model: { provider: string; model: string }): {
