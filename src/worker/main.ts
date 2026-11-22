@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { mkdirSync } from 'node:fs'
 
 import { loadConfig } from '../core/config.js'
 import { ModelThinkingSummarizer } from '../activity/thinking-summary.js'
@@ -107,6 +108,7 @@ store.initializeRuntimeSettings(defaults)
 if (config.executorMode !== 'echo') {
   ensureDshProfileHome(config.dshHome, config.dshProfile)
 }
+mkdirSync(config.workspaceRoot, { recursive: true })
 const workerId = `worker-${randomUUID()}`
 const baseExecutor: RunExecutor =
   config.executorMode === 'echo'
