@@ -154,6 +154,7 @@ claim token 只经进程环境传给 DSH 主进程，DSH 自身的 subprocess �
 - 同一 DSH 进程只停放第一个越权调用；并行的其余审批请求 fall through 到 DSH 默认 `unavailable`，fail closed。
 - 批准后恢复的是同一 DSH session，但模型需要重新发起同参数调用才能命中一次性 grant；grant 不预执行任何工具。
 - 拒绝或要求修改时不注入 grant，Action 走既有 `rejected`/修订路径。
+- 停放的 DSH 进程在 turn 结束后仍有最长约 5 秒的 bounded dispose 窗口，期间持有 session 内核写锁。successor 恢复同一 session 时若遇到 `already owned by an active write handle`，Executor 在有限窗口内有界重试（默认 20s，`PEGAS_DSH_SESSION_BUSY_WAIT_MS`/`PEGAS_DSH_SESSION_BUSY_RETRY_MS` 可调，abort 立即停止）；超时仍按执行失败结算，绝不绕过写锁或强杀持锁进程。
 
 ## 当前限制
 
