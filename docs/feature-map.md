@@ -291,6 +291,7 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - **数据与权限边界**：默认工作区属于 Pegas 数据目录，随备份/删除语义管理；`workspace-write` 沙箱边界随之收敛到数据目录内，开发仓库默认不可写。显式覆盖是用户主动授权，`.env.example` 注明不要指向开发仓库。无数据库迁移。
 - **失败与恢复**：工作区创建失败时 Worker 启动即报错（fail closed），不静默回退到启动目录；回滚本 Feature 即恢复 `'.'` 旧默认，数据目录内已生成的工作区文件保留不删除。存量 Run 不受影响（快照不可变）。
 - **当前证据（2026-11-23）**：worktree `exec-008-default-workspace`（分支 `fix/EXEC-008-default-agent-workspace`，基线 `5b9fc44`）。回归先行：`test/config.test.ts` 安全默认断言 +2 用例（默认/custom dataDir 派生、显式覆盖独立）、`test/desktop-runtime.test.ts` +1（注入且覆盖父进程残留），旧实现上 4 断言失败、修复后通过。`scripts/smoke.mjs` 新增 Run 快照 workspace 与目录存在断言（真实进程链路）。完整门禁：`pnpm check` 99 个测试文件 / 1012 个测试全绿（statement 84.9%、branch 77.61%、function 89.38%、line 88.22%）；`pnpm smoke`（含新 workspace 快照断言）、`pnpm smoke:desktop`（Electron 真实启动，工作区落 userData 数据目录）、`pnpm smoke:crash`（三崩溃点恢复）全部通过。经验复盘：新增 LESSON-20261123-01（Candidate，Seen 2）。
+- **合并复验（2026-11-23）**：合入最新 `origin/main`（`fe0d7cf`，EXEC-006 中文思考标题与计量摘要账本）无冲突，diff 仍仅含 EXEC-008 的 11 个文件。合并态完整门禁：`pnpm check` 100 个测试文件 / 1025 个测试全绿（statement 84.97%、branch 77.62%、function 89.45%、line 88.26%）；`pnpm smoke`、`pnpm smoke:desktop`、`pnpm smoke:crash` 全部通过。
 - **下一缺口**：DSH `dsh-agent-instructions` 候选收紧（防误设 workspace 到仓库子目录时向上吸入开发文档）；运行时工作区的设置面/引导。
 
 ### CONV-001：设备身份、附件与跨端游标（2026-11-21）
