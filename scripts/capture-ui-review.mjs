@@ -149,7 +149,36 @@ try {
     .getByRole('button', { name: '待你处理' })
     .click()
   await page.getByRole('heading', { name: '待你处理', exact: true }).waitFor()
+  await page.getByLabel('待处理列表').getByRole('article').first().waitFor()
   await capture(page, 'desktop-attention.png', 'desktop-attention')
+  await page.getByRole('button', { name: /^需要确认 / }).click()
+  await page.getByLabel('待处理列表').getByRole('article').first().waitFor()
+  await capture(
+    page,
+    'desktop-attention-approval-filter.png',
+    'desktop-attention-approval-filter',
+  )
+  await page.getByRole('button', { name: /^全部 / }).click()
+  await page.getByLabel('搜索待处理内容').fill('不存在的关键词')
+  await page.getByText('当前筛选下没有待处理项').waitFor()
+  await capture(
+    page,
+    'desktop-attention-search-empty.png',
+    'desktop-attention-search-empty',
+  )
+  await page.getByLabel('搜索待处理内容').fill('')
+  const filterRow = page.getByRole('group', { name: '筛选' })
+  await filterRow.evaluate(element => {
+    element.scrollLeft = element.scrollWidth
+  })
+  await page.getByRole('button', { name: /^重要结果 / }).click()
+  await page.getByLabel('待处理列表').getByRole('article').first().waitFor()
+  await capture(
+    page,
+    'desktop-attention-result-filter.png',
+    'desktop-attention-result-filter',
+  )
+  await page.getByRole('button', { name: /^全部 / }).click()
 
   await page
     .getByLabel('主导航')
@@ -171,7 +200,7 @@ try {
     .filter({ hasText: '封板' })
     .first()
     .click()
-  await page.getByLabel('工作详情').waitFor()
+  await page.getByRole('dialog', { name: '工作详情' }).waitFor()
   await capture(page, 'desktop-work-detail.png', 'desktop-work-detail')
   const artifact = page.getByRole('button', { name: /执行方案\.md/u })
   if (await artifact.count()) {
@@ -309,6 +338,19 @@ try {
   await capture(darkPage, 'desktop-dark.png', 'desktop-dark')
   await darkPage
     .getByLabel('主导航')
+    .getByRole('button', { name: '待你处理' })
+    .click()
+  await darkPage
+    .getByRole('heading', { name: '待你处理', exact: true })
+    .waitFor()
+  await darkPage.getByLabel('待处理列表').getByRole('article').first().waitFor()
+  await capture(
+    darkPage,
+    'desktop-dark-attention.png',
+    'desktop-dark-attention',
+  )
+  await darkPage
+    .getByLabel('主导航')
     .getByRole('button', { name: '设置', exact: true })
     .click()
   await darkPage
@@ -340,6 +382,23 @@ try {
     await themedPage.goto(`http://127.0.0.1:${String(port)}/`)
     await themedPage.getByRole('textbox', { name: '给 Pegas 发消息' }).waitFor()
     await capture(themedPage, `desktop-${theme}.png`, `desktop-${theme}`)
+    await themedPage
+      .getByLabel('主导航')
+      .getByRole('button', { name: '待你处理' })
+      .click()
+    await themedPage
+      .getByRole('heading', { name: '待你处理', exact: true })
+      .waitFor()
+    await themedPage
+      .getByLabel('待处理列表')
+      .getByRole('article')
+      .first()
+      .waitFor()
+    await capture(
+      themedPage,
+      `desktop-${theme}-attention.png`,
+      `desktop-${theme}-attention`,
+    )
     await themed.close()
   }
 
@@ -382,13 +441,67 @@ try {
     .getByRole('heading', { name: '所有事情', exact: true })
     .waitFor()
   await capture(mobilePage, 'mobile-all-work.png', 'mobile-all-work')
+  await mobilePage
+    .getByLabel('移动端主导航')
+    .getByRole('button', { name: '待你处理' })
+    .click()
+  await mobilePage
+    .getByRole('heading', { name: '待你处理', exact: true })
+    .waitFor()
+  await mobilePage
+    .getByLabel('待处理列表')
+    .getByRole('article')
+    .first()
+    .waitFor()
+  await capture(mobilePage, 'mobile-attention.png', 'mobile-attention')
+  const mobileFilters = mobilePage.getByRole('group', { name: '筛选' })
+  await mobileFilters.evaluate(element => {
+    element.scrollLeft = element.scrollWidth
+  })
+  await mobilePage.getByRole('button', { name: /^重要结果 / }).click()
+  await mobilePage
+    .getByLabel('待处理列表')
+    .getByRole('article')
+    .first()
+    .waitFor()
+  await mobileFilters.evaluate(element => {
+    element.scrollLeft = element.scrollWidth
+  })
+  await capture(
+    mobilePage,
+    'mobile-attention-result-filter.png',
+    'mobile-attention-result-filter',
+  )
+  await mobilePage.getByRole('button', { name: /^全部 / }).click()
+  await mobileFilters.evaluate(element => {
+    element.scrollLeft = 0
+  })
+  await mobilePage
+    .getByLabel('待处理列表')
+    .getByRole('button', { name: /^打开事情：/ })
+    .first()
+    .click()
+  await mobilePage.getByRole('dialog', { name: '工作详情' }).waitFor()
+  await capture(
+    mobilePage,
+    'mobile-attention-detail.png',
+    'mobile-attention-detail',
+  )
+  await mobilePage.getByRole('button', { name: '关闭详情' }).click()
+  await mobilePage
+    .getByLabel('移动端主导航')
+    .getByRole('button', { name: '所有事情' })
+    .click()
+  await mobilePage
+    .getByRole('heading', { name: '所有事情', exact: true })
+    .waitFor()
   const mobileWork = mobilePage
     .getByLabel('事情列表')
     .getByRole('button')
     .first()
   if (await mobileWork.count()) {
     await mobileWork.click()
-    await mobilePage.getByLabel('工作详情').waitFor()
+    await mobilePage.getByRole('dialog', { name: '工作详情' }).waitFor()
     await capture(mobilePage, 'mobile-work-detail.png', 'mobile-work-detail')
     await mobilePage.getByRole('button', { name: '关闭详情' }).click()
   }
@@ -589,6 +702,76 @@ async function seedConversation(apiPort) {
   )
   if (behaviorResponse.status !== 200)
     throw new Error('Unable to seed UI review behavior preferences')
+  const channelsResponse = await fetch(
+    `http://127.0.0.1:${String(apiPort)}/v1/channels?userId=owner`,
+  )
+  const channelsBody = await channelsResponse.json()
+  const firstChannel = channelsBody.channels?.[0]
+  if (!firstChannel) throw new Error('Unable to seed UI review attention')
+  const attentionFixtures = [
+    {
+      dedupeKey: 'feature-review-attention-result',
+      taskId: firstChannel.id,
+      payload: {
+        type: 'run.completed',
+        taskId: firstChannel.id,
+        text: '这是测试相关事情的入口。我目前可以处理你在这条对话里提出的测试类需求，例如：\n\n- **测试规划**：要测什么、验收条件、非目标、风险边界\n- **测试编写**：为某个 Feature 写自动化测试\n- **测试执行与门禁**：跑 `pnpm check`、`pnpm smoke`',
+      },
+    },
+    {
+      dedupeKey: 'feature-review-attention-approval',
+      taskId: firstChannel.id,
+      payload: {
+        type: 'approval.required',
+        taskId: firstChannel.id,
+        approvalId: 'feature-review-approval',
+        summary: '发布前需要确认影响范围',
+        text: '完整审批说明：本次操作会影响候选版本的发布窗口。',
+      },
+    },
+    {
+      dedupeKey: 'feature-review-attention-input',
+      taskId: firstChannel.id,
+      payload: {
+        type: 'goal.clarification_required',
+        taskId: firstChannel.id,
+        questions: ['发布窗口是哪个时间段？', '允许影响哪些用户？'],
+        text: '发布窗口是哪个时间段？\n允许影响哪些用户？',
+      },
+    },
+    {
+      dedupeKey: 'feature-review-attention-failed',
+      taskId: firstChannel.id,
+      payload: {
+        type: 'run.failed',
+        taskId: firstChannel.id,
+        error: '上游模型超时，请稍后重试。',
+      },
+    },
+    {
+      dedupeKey: 'feature-review-attention-delivery',
+      payload: {
+        type: 'run.failed',
+        error: '通知投递结果未知，需要人工核对。',
+      },
+    },
+  ]
+  for (const fixture of attentionFixtures) {
+    const response = await fetch(
+      `http://127.0.0.1:${String(apiPort)}/v1/outbox`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          userId: 'owner',
+          channel: 'conversation',
+          ...fixture,
+        }),
+      },
+    )
+    if (response.status !== 202)
+      throw new Error('Unable to seed UI review attention')
+  }
 }
 
 async function capture(page, name, label) {
@@ -611,7 +794,7 @@ async function capture(page, name, label) {
 }
 
 async function assertGeometry(page, label) {
-  const failures = await page.evaluate(() => {
+  const failures = await page.evaluate(async () => {
     const out = []
     const root = globalThis.document.documentElement
     if (root.scrollWidth > root.clientWidth + 1)
@@ -629,7 +812,7 @@ async function assertGeometry(page, label) {
         )
     }
     for (const element of globalThis.document.querySelectorAll(
-      '.page-header, .setting-summary-row, .compact-field-row, .artifact-row, .work-list > button',
+      '.page-header, .setting-summary-row, .compact-field-row, .artifact-row, .work-list > button, .attention-list article',
     )) {
       if (element.scrollWidth > element.clientWidth + 1)
         out.push(
@@ -667,14 +850,54 @@ async function assertGeometry(page, label) {
     }
     if (globalThis.matchMedia('(pointer: coarse)').matches) {
       for (const control of globalThis.document.querySelectorAll(
-        '.page-toolbar button',
+        '.page-toolbar button, .attention-action, .attention-title, .filter-row button',
       )) {
         const rect = control.getBoundingClientRect()
         if (rect.width && (rect.width < 44 || rect.height < 44))
           out.push(
-            `toolbar touch target is too small (${String(Math.round(rect.width))}x${String(Math.round(rect.height))})`,
+            `touch target is too small (${String(Math.round(rect.width))}x${String(Math.round(rect.height))})`,
           )
       }
+    }
+    for (const title of globalThis.document.querySelectorAll(
+      '.attention-title',
+    )) {
+      const style = globalThis.getComputedStyle(title)
+      if (style.webkitLineClamp !== '2')
+        out.push('attention title is not clamped to two lines')
+      if (title.scrollHeight > title.clientHeight + 1)
+        out.push('attention title overflows its clamp')
+    }
+    for (const filters of globalThis.document.querySelectorAll(
+      '.attention-filters',
+    )) {
+      const initialScrollLeft = filters.scrollLeft
+      const style = globalThis.getComputedStyle(filters)
+      if (
+        filters.scrollWidth > filters.clientWidth + 1 &&
+        style.overflowX !== 'auto'
+      )
+        out.push('overflowing filters cannot scroll')
+      for (const control of filters.querySelectorAll('button')) {
+        control.focus()
+        const controlRect = control.getBoundingClientRect()
+        const filtersRect = filters.getBoundingClientRect()
+        if (
+          controlRect.left < filtersRect.left - 1 ||
+          controlRect.right > filtersRect.right + 1
+        ) {
+          control.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+          const settledRect = control.getBoundingClientRect()
+          const settledFiltersRect = filters.getBoundingClientRect()
+          if (
+            settledRect.left < settledFiltersRect.left - 1 ||
+            settledRect.right > settledFiltersRect.right + 1
+          )
+            out.push('focused filter remains outside its scrollport')
+        }
+      }
+      filters.querySelector('button')?.focus()
+      filters.scrollLeft = initialScrollLeft
     }
     for (const row of globalThis.document.querySelectorAll('.test-row')) {
       const button = row.querySelector('button')

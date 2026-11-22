@@ -42,6 +42,7 @@ import { PegasMascot } from './PegasMascot'
 import { EmptyCapability, PageToolbar } from './Shell'
 import {
   attentionKind,
+  attentionSummary,
   clarificationQuestions,
   formatRelativeTime,
   isReconciliationMessage,
@@ -971,6 +972,26 @@ function attentionAction(message: OutboxMessage): {
   return { label: '打开事情', icon: ArrowRight }
 }
 
+function attentionKindLabel(kind: ReturnType<typeof attentionKind>): string {
+  if (kind === 'approval') return '需要确认'
+  if (kind === 'input') return '需要补充'
+  if (kind === 'failed') return '执行失败'
+  if (kind === 'result') return '重要结果'
+  return '更新'
+}
+
+function attentionDeliveryNote(message: OutboxMessage): string | undefined {
+  if (needsOutboxResolution(message))
+    return message.status === 'unknown'
+      ? '投递结果未知，待核对'
+      : '投递失败，待核对'
+  if (message.resolution)
+    return message.resolution.resolution === 'sent'
+      ? '人工核对：已送达'
+      : '人工核对：未送达'
+  return undefined
+}
+
 export function AttentionPage({
   snapshot,
   actions,
@@ -983,117 +1004,186 @@ export function AttentionPage({
   const [filter, setFilter] = useState<
     'all' | 'approval' | 'input' | 'failed' | 'result'
   >('all')
+  const [query, setQuery] = useState('')
   const attentionMessages = unresolvedAttentionMessages(
     snapshot.messages,
   ).toSorted(
     (left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt),
   )
+  const counts = {
+    all: attentionMessages.length,
+    approval: attentionMessages.filter(
+      message => attentionKind(message) === 'approval',
+    ).length,
+    input: attentionMessages.filter(
+      message => attentionKind(message) === 'input',
+    ).length,
+    failed: attentionMessages.filter(
+      message => attentionKind(message) === 'failed',
+    ).length,
+    result: attentionMessages.filter(
+      message => attentionKind(message) === 'result',
+    ).length,
+  }
+  const normalizedQuery = query.trim().toLocaleLowerCase()
   const visible = attentionMessages.filter(message => {
-    if (filter === 'all') return true
-    return attentionKind(message) === filter
+    if (filter !== 'all' && attentionKind(message) !== filter) return false
+    if (!normalizedQuery) return true
+    const channel = snapshot.channels.find(item => item.id === message.taskId)
+    const summary = attentionSummary(message)
+    return `${summary.title} ${summary.preview ?? ''} ${textFromPayload(message.payload)} ${channel?.title ?? 'Pegas'}`
+      .toLocaleLowerCase()
+      .includes(normalizedQuery)
   })
+  const unreadCount = attentionMessages.filter(
+    message => !message.readAt,
+  ).length
+  const hasAttention = attentionMessages.length > 0
   return (
     <div className="standard-page">
       <PageHeader
         actions={actions}
-        description="Pegas 现在需要你处理的事情"
+        description={
+          hasAttention
+            ? `${String(attentionMessages.length)} 项待处理 · ${String(unreadCount)} 项未读`
+            : 'Pegas 现在需要你处理的事情'
+        }
         title="待你处理"
-      />
-      <div className="filter-row" role="group" aria-label="筛选">
-        <button
-          aria-pressed={filter === 'all'}
-          onClick={() => setFilter('all')}
-          type="button"
-        >
-          全部 {attentionMessages.length}
-        </button>
-        <button
-          aria-pressed={filter === 'approval'}
-          onClick={() => setFilter('approval')}
-          type="button"
-        >
-          需要确认
-        </button>
-        <button
-          aria-pressed={filter === 'input'}
-          onClick={() => setFilter('input')}
-          type="button"
-        >
-          需要补充
-        </button>
-        <button
-          aria-pressed={filter === 'failed'}
-          onClick={() => setFilter('failed')}
-          type="button"
-        >
-          失败
-        </button>
-        <button
-          aria-pressed={filter === 'result'}
-          onClick={() => setFilter('result')}
-          type="button"
-        >
-          重要结果
-        </button>
+      >
+        <label className="page-search">
+          <Search size={17} />
+          <input
+            aria-label="搜索待处理内容"
+            onChange={event => setQuery(event.target.value)}
+            placeholder="搜索内容或来源"
+            type="search"
+            value={query}
+          />
+        </label>
+      </PageHeader>
+      <div
+        className="filter-row attention-filters"
+        role="group"
+        aria-label="筛选"
+      >
+        {(
+          [
+            ['all', '全部'],
+            ['approval', '需要确认'],
+            ['input', '需要补充'],
+            ['failed', '失败'],
+            ['result', '重要结果'],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            aria-pressed={filter === id}
+            key={id}
+            onClick={event => {
+              setFilter(id)
+              if ('scrollIntoView' in event.currentTarget)
+                event.currentTarget.scrollIntoView({
+                  block: 'nearest',
+                  inline: 'nearest',
+                })
+            }}
+            type="button"
+          >
+            {label} {counts[id]}
+          </button>
+        ))}
       </div>
-      <section className="attention-list">
+      <section className="attention-list" aria-label="待处理列表">
         {visible.length ? (
-          visible.map(message => {
-            const channel = snapshot.channels.find(
-              item => item.id === message.taskId,
-            )
-            const action = attentionAction(message)
-            const Icon = action.icon
-            const kind = attentionKind(message)
-            return (
-              <article key={message.id}>
-                <span className={`attention-icon is-${kind}`}>
-                  {kind === 'result' ? (
-                    <CheckCircle2 size={20} />
-                  ) : kind === 'failed' ? (
-                    <CircleAlert size={20} />
-                  ) : kind === 'approval' ? (
-                    <ShieldCheck size={20} />
-                  ) : (
-                    <CircleQuestionMark size={20} />
-                  )}
-                </span>
-                <div>
-                  <strong>
-                    {textFromPayload(message.payload) || 'Pegas 有一项更新'}
-                  </strong>
-                  <small>
-                    {message.readAt ? '已读' : '未读'} · 来自：
-                    {channel?.title ?? 'Pegas'} ·{' '}
-                    {formatRelativeTime(message.createdAt)}
-                    {needsOutboxResolution(message)
-                      ? message.status === 'unknown'
-                        ? ' · 投递结果未知，待核对'
-                        : ' · 投递失败，待核对'
-                      : message.resolution
-                        ? message.resolution.resolution === 'sent'
-                          ? ' · 人工核对：已送达'
-                          : ' · 人工核对：未送达'
-                        : ''}
-                  </small>
-                </div>
-                <button
-                  onClick={() => {
-                    void onOpen(message)
-                  }}
-                  type="button"
-                >
-                  <Icon size={15} />
-                  {action.label}
-                </button>
-              </article>
-            )
-          })
+          <ul className="attention-items" role="list">
+            {visible.map(message => {
+              const channel = snapshot.channels.find(
+                item => item.id === message.taskId,
+              )
+              const action = attentionAction(message)
+              const Icon = action.icon
+              const kind = attentionKind(message)
+              const summary = attentionSummary(message)
+              const deliveryNote = attentionDeliveryNote(message)
+              const source = channel?.title ?? 'Pegas'
+              const titleId = `attention-title-${message.id}`
+              return (
+                <li key={message.id}>
+                  <article
+                    aria-labelledby={titleId}
+                    className={message.readAt ? 'is-read' : 'is-unread'}
+                  >
+                    <span className={`attention-icon is-${kind}`}>
+                      {kind === 'result' ? (
+                        <CheckCircle2 size={18} />
+                      ) : kind === 'failed' ? (
+                        <CircleAlert size={18} />
+                      ) : kind === 'approval' ? (
+                        <ShieldCheck size={18} />
+                      ) : (
+                        <CircleQuestionMark size={18} />
+                      )}
+                    </span>
+                    <div className="attention-copy">
+                      <div className="attention-heading">
+                        <span className={`attention-kind is-${kind}`}>
+                          {attentionKindLabel(kind)}
+                        </span>
+                        <h2>
+                          <button
+                            className="attention-title"
+                            id={titleId}
+                            onClick={() => {
+                              void onOpen(message)
+                            }}
+                            type="button"
+                          >
+                            {summary.title}
+                          </button>
+                        </h2>
+                      </div>
+                      {summary.preview && (
+                        <p className="attention-preview">{summary.preview}</p>
+                      )}
+                      <div className="attention-meta">
+                        <span className="attention-read-state">
+                          {message.readAt ? '已读' : '未读'}
+                        </span>
+                        <span>来自：{source}</span>
+                        <time dateTime={message.createdAt}>
+                          {formatRelativeTime(message.createdAt)}
+                        </time>
+                        {deliveryNote && (
+                          <span className="attention-delivery-note">
+                            {deliveryNote}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      aria-label={`${action.label}：${summary.title}`}
+                      className="attention-action"
+                      onClick={() => {
+                        void onOpen(message)
+                      }}
+                      type="button"
+                    >
+                      <Icon size={15} />
+                      {action.label}
+                    </button>
+                  </article>
+                </li>
+              )
+            })}
+          </ul>
         ) : (
           <EmptyCapability
-            mascot="celebrate"
-            title="现在没有待处理项"
-            description="需要确认、补充信息或处理失败时，Pegas 会把它放在这里。"
+            mascot={hasAttention ? 'waiting' : 'celebrate'}
+            title={hasAttention ? '当前筛选下没有待处理项' : '现在没有待处理项'}
+            description={
+              hasAttention
+                ? '切换其他筛选，或清除搜索词后再看看。'
+                : '需要确认、补充信息或处理失败时，Pegas 会把它放在这里。'
+            }
           />
         )}
       </section>
