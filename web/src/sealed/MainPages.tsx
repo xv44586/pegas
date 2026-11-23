@@ -1947,7 +1947,7 @@ export function AttentionPage({
     const groupTitle = group.taskId ? source : latestSummary.title
     const isExpanded = expanded.has(group.key)
     const expandedAll = showAll.has(group.key)
-    const timeline = group.messages.slice(1)
+    const timeline = group.messages
     const visibleTimeline = expandedAll ? timeline : timeline.slice(0, 3)
     const action = attentionAction(group.latest)
     const ActionIcon = action.icon
@@ -1987,7 +1987,17 @@ export function AttentionPage({
                 </button>
               </h2>
             </div>
-            <p className="attention-preview">最新：{latestSummary.title}</p>
+            <p className="attention-preview">
+              <button
+                className="attention-latest"
+                onClick={() => {
+                  void onOpen(group.latest)
+                }}
+                type="button"
+              >
+                最新：{latestSummary.title}
+              </button>
+            </p>
             <div className="attention-meta">
               {group.taskId && <span>来自：{source}</span>}
               <time dateTime={group.latest.createdAt}>
@@ -2000,7 +2010,7 @@ export function AttentionPage({
                 </span>
               )}
             </div>
-            {isExpanded && timeline.length > 0 && (
+            {isExpanded && (
               <div className="attention-group-timeline">
                 <ul role="list">
                   {visibleTimeline.map(message => {

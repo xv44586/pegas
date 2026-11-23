@@ -1530,7 +1530,8 @@ describe('sealed Pegas UI', () => {
       .filter(
         button =>
           !button.classList.contains('attention-title') &&
-          !button.classList.contains('attention-toggle'),
+          !button.classList.contains('attention-toggle') &&
+          !button.classList.contains('attention-latest'),
       )
       .map(button => button.getAttribute('aria-label'))
     expect(new Set(actionNames).size).toBe(actionNames.length)
@@ -5534,9 +5535,9 @@ describe('sealed Pegas UI', () => {
       .getAllByRole('button')
       .filter(button => button.classList.contains('attention-group-entry'))
     expect(entries.map(entry => entry.textContent)).toEqual([
+      expect.stringContaining('第 11 个数：11'),
       expect.stringContaining('第 10 个数：10'),
       expect.stringContaining('第 9 个数：9'),
-      expect.stringContaining('第 8 个数：8'),
     ])
     expect(
       within(list).getByRole('button', { name: '查看全部 5 条' }),
@@ -5546,8 +5547,116 @@ describe('sealed Pegas UI', () => {
     expect(
       within(list).getByRole('button', { name: '收起更早通知' }),
     ).toBeTruthy()
+    const allEntries = within(list)
+      .getAllByRole('button')
+      .filter(button => button.classList.contains('attention-group-entry'))
+    expect(allEntries).toHaveLength(5)
+    expect(allEntries[4]?.textContent).toContain('第 7 个数：7')
     expect(within(list).getByText('第 7 个数：7')).toBeTruthy()
     expect(readRequests).toBe(0)
+  })
+
+  it('opens the latest grouped failure from its summary line and marks only that message read', async () => {
+    const source = snapshot.messages[0]
+    if (!source) throw new Error('missing attention fixture')
+    const older = {
+      ...source,
+      id: 'fail-old',
+      createdAt: '2026-11-19T08:01:00.000Z',
+      payload: { type: 'run.failed', error: '首次失败' },
+    }
+    const latest = {
+      ...source,
+      id: 'fail-latest',
+      createdAt: '2026-11-19T08:02:00.000Z',
+      payload: { type: 'run.failed', error: '重试仍失败' },
+    }
+    const readPaths: string[] = []
+    installSnapshotFetch({ ...snapshot, messages: [older, latest] }, path => {
+      if (!path.endsWith('/read')) return undefined
+      readPaths.push(path)
+      return Response.json({
+        message: { ...latest, readAt: '2026-11-19T09:00:00.000Z' },
+      })
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    const list = screen.getByLabelText('待处理列表')
+    expect(within(list).getByText('2 条 · 2 未读')).toBeTruthy()
+    fireEvent.click(
+      within(list).getByRole('button', { name: '最新：重试仍失败' }),
+    )
+    expect(await screen.findByLabelText('工作详情')).toBeTruthy()
+    expect(readPaths).toEqual([`/v1/outbox/${latest.id}/read`])
+    fireEvent.click(screen.getByRole('button', { name: '关闭详情' }))
+    await waitFor(() =>
+      expect(within(list).getByText('2 条 · 1 未读')).toBeTruthy(),
+    )
+    fireEvent.click(
+      within(list).getByRole('button', { name: `展开：${channel.title}` }),
+    )
+    const entries = within(list)
+      .getAllByRole('button')
+      .filter(button => button.classList.contains('attention-group-entry'))
+    expect(entries.map(entry => entry.textContent)).toEqual([
+      expect.stringContaining('重试仍失败'),
+      expect.stringContaining('首次失败'),
+    ])
+    expect(
+      entries[0]?.querySelector('.attention-group-entry-dot.is-unread'),
+    ).toBeNull()
+    expect(
+      entries[1]?.querySelector('.attention-group-entry-dot.is-unread'),
+    ).toBeTruthy()
+    expect(readPaths).toHaveLength(1)
+  })
+
+  it('opens the newest routine result of a group from its summary line and reduces the unread count', async () => {
+    const source = snapshot.messages[0]
+    if (!source) throw new Error('missing attention fixture')
+    const older = {
+      ...source,
+      id: 'result-old',
+      createdAt: '2026-11-19T08:01:00.000Z',
+      payload: { type: 'run.completed', text: '第 1 个数：1' },
+    }
+    const latest = {
+      ...source,
+      id: 'result-latest',
+      createdAt: '2026-11-19T08:02:00.000Z',
+      payload: { type: 'run.completed', text: '第 2 个数：2' },
+    }
+    const readPaths: string[] = []
+    installSnapshotFetch({ ...snapshot, messages: [older, latest] }, path => {
+      if (!path.endsWith('/read')) return undefined
+      readPaths.push(path)
+      return Response.json({
+        message: { ...latest, readAt: '2026-11-19T09:00:00.000Z' },
+      })
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    const list = screen.getByLabelText('待处理列表')
+    expect(within(list).getByText('2 条 · 2 未读')).toBeTruthy()
+    expect(screen.getByText(/2 条未读/)).toBeTruthy()
+    fireEvent.click(
+      within(list).getByRole('button', { name: '最新：第 2 个数：2' }),
+    )
+    expect(await screen.findByLabelText('工作详情')).toBeTruthy()
+    expect(readPaths).toEqual([`/v1/outbox/${latest.id}/read`])
+    fireEvent.click(screen.getByRole('button', { name: '关闭详情' }))
+    await waitFor(() =>
+      expect(within(list).getByText('2 条 · 1 未读')).toBeTruthy(),
+    )
+    expect(screen.getByText(/1 条未读/)).toBeTruthy()
   })
 
   it('merges repeated failures of one task into a single pinned failure row', async () => {
