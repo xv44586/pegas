@@ -3093,6 +3093,138 @@ describe('sealed Pegas UI', () => {
     expect(localStorage.getItem('pegas-setup-complete')).toBe('true')
   })
 
+  it('lets first-run setup configure the model connection before picking a model', async () => {
+    localStorage.removeItem('pegas-setup-complete')
+    let keySaved = false
+    const unconfigured: SettingsResponse = {
+      ...settingsResponse,
+      settings: {
+        ...settingsResponse.settings,
+        modelName: '',
+        agentModelMode: 'profile',
+        agentModelProvider: '',
+        agentModelName: '',
+      },
+      capabilities: {
+        ...settingsResponse.capabilities,
+        providers: settingsResponse.capabilities.providers.map(provider =>
+          provider.id === 'magpie'
+            ? {
+                ...provider,
+                hasApiKey: false,
+                available: false,
+                reason: '需要 API key',
+              }
+            : provider,
+        ),
+      },
+    }
+    const configured: SettingsResponse = {
+      ...settingsResponse,
+      settings: { ...settingsResponse.settings, revision: 2 },
+    }
+    let currentSettings = unconfigured
+    const fetchMock = installFetch((path, init) => {
+      if (path === '/v1/settings' && init?.method !== 'PUT')
+        return Response.json(currentSettings)
+      if (path === '/v1/settings/agent-models')
+        return keySaved
+          ? Response.json({
+              defaultProvider: 'Magpie',
+              defaultModel: 'deepseek-v4.1-flash',
+              models: [
+                {
+                  provider: 'Magpie',
+                  id: 'deepseek-v4.1-flash',
+                  name: 'DeepSeek V4.1 Flash',
+                },
+                { provider: 'Magpie', id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol' },
+              ],
+            })
+          : Response.json(
+              { error: 'agent_models_unavailable' },
+              { status: 503 },
+            )
+      if (path === '/v1/settings/models/test' && init?.method === 'POST') {
+        const body = JSON.parse(
+          typeof init.body === 'string' ? init.body : '{}',
+        ) as { provider?: { apiKey?: string } }
+        return body.provider?.apiKey === 'sk-onboarding'
+          ? Response.json({ ok: true, latencyMs: 42 })
+          : Response.json({ message: '需要 API key' }, { status: 400 })
+      }
+      if (path === '/v1/settings' && init?.method === 'PUT') {
+        const body = JSON.parse(
+          typeof init.body === 'string' ? init.body : '{}',
+        ) as {
+          provider?: { apiKey?: string }
+          agentModelMode?: string
+          agentModelProvider?: string
+          agentModelName?: string
+        }
+        if (!keySaved) {
+          if (body.provider?.apiKey !== 'sk-onboarding')
+            return Response.json({ message: '需要 API key' }, { status: 400 })
+          keySaved = true
+          currentSettings = configured
+          return Response.json(configured)
+        }
+        currentSettings = {
+          ...currentSettings,
+          settings: {
+            ...currentSettings.settings,
+            revision: currentSettings.settings.revision + 1,
+            ...(body.agentModelMode
+              ? {
+                  agentModelMode: body.agentModelMode as 'profile' | 'override',
+                }
+              : {}),
+            ...(body.agentModelProvider
+              ? { agentModelProvider: body.agentModelProvider }
+              : {}),
+            ...(body.agentModelName
+              ? { agentModelName: body.agentModelName }
+              : {}),
+          },
+        }
+        return Response.json(currentSettings)
+      }
+      return undefined
+    })
+    render(<App />)
+    await screen.findByText('欢迎使用 Pegas')
+    fireEvent.click(screen.getByRole('button', { name: /^继续$/ }))
+    expect(screen.getByText('连接模型服务')).toBeTruthy()
+    expect(screen.getByText(/尚未配置模型连接/)).toBeTruthy()
+    const keyInput = await screen.findByLabelText('API Key')
+    fireEvent.change(keyInput, { target: { value: 'sk-onboarding' } })
+    fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
+    expect(await screen.findByText(/连接正常 · 42 ms/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '保存连接' }))
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([path, init]) => {
+          if (path !== '/v1/settings' || init?.method !== 'PUT') return false
+          const body = JSON.parse(
+            typeof init.body === 'string' ? init.body : '{}',
+          ) as { provider?: { apiKey?: string } }
+          return body.provider?.apiKey === 'sk-onboarding'
+        }),
+      ).toBe(true),
+    )
+    const trigger = await screen.findByRole('button', { name: /，默认模型$/ })
+    await waitFor(() => expect(trigger).toHaveProperty('disabled', false))
+    fireEvent.click(trigger)
+    const dialog = await screen.findByRole('dialog', { name: '选择模型' })
+    fireEvent.click(within(dialog).getByRole('option', { name: /GPT-6.1 Sol/ }))
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: /，默认模型$/ }).textContent,
+      ).toContain('GPT-6.1 Sol'),
+    )
+    expect(screen.queryByText(/尚未配置模型连接/)).toBeNull()
+  })
+
   it.each([
     ['completed', '工作已完成', 'is-done'],
     ['waiting', '等待下一步条件', 'is-waiting'],
