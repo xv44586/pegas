@@ -283,3 +283,10 @@
 ### 设计图
 
 - 交互稿（本地研究材料，不入库）：`research/design-006-lifecycle-history/mockups.html`——桌面列表（删除确认态）、触发记录展开（摘要 + 查看事情 + 加载更多）、390px 移动端三帧，使用 §5 视觉 token 与既有 record-list 结构。
+
+## 21. 标准页内容列宽上限（2026-11-23，DESIGN-006 宽屏缺陷修复）
+
+- 缺陷：`.standard-page > :not(.page-header)` 只有左右 42px margin、没有 max-width，宽屏（用户实测约 2560px 视口）下自动化列表与触发记录面板被拉到 2000px+，摘要单行超长、「查看事情」被推出可视区，与对话页 980px / composer 1040px 的居中内容列不一致。
+- 修复：标准页（所有事情/待你处理/自动化/记忆）内容统一 `max-width: 1040px` 居中（`margin-inline: auto; width: calc(100% - 84px)`），与 composer/tray 同一列宽口径；`.page-header` 同步 `max-width: 1124px`（1040 + 2×42 padding）居中，保证标题与内容左缘对齐。≤820px 保持 20px gutter（`width: calc(100% - 40px)`，header max-width 1080px）。≤1124px 视口行为与修复前完全一致。
+- 回归：`test/sealed-ui-page-width.test.ts` 3 测试先红后绿（内容列上限/居中/移动 gutter）；2560px 实拍对比——修复前运行实例触发记录面板 2170px 宽，修复后 966px（1040 列内），无横向溢出（实拍存 `research/design-006-lifecycle-history/live/wide-2560-*.png`，本地）。
+- 门禁：`pnpm check` 109 文件 / 1150 测试全绿；`pnpm smoke`、`pnpm review:ui --force`（几何断言含 1440px 桌面与 390px 移动端）、`pnpm a11y:review` 0 违例。
