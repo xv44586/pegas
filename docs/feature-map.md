@@ -112,6 +112,7 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - **验收条件 / 非目标 / 数据与权限边界 / 失败与恢复**：见 `docs/sealed-ui-rebuild.md` §20（用户裁决：仅手动删除、仅已结束可删、保留聊天历史、limit 25 加载更多、不做定义列表分页/搜索/排序菜单）。
 - **当前证据（2026-11-23）**：worktree `design-006-lifecycle-history`（基线 `76d4d3c`）。`test/automation-lifecycle.test.ts` 6 测试先红后绿（删除语义/幂等重放/revision fence/owner 隔离/HTTP 错误表；分页 seek/limit 边界/非法 cursor/taskId+summary 投影/HTTP 透传）；`web/src/sealed/AutomationPage.test.tsx` 6→11 测试（删除两步确认仅已结束、摘要+事情入口、失败行不编造摘要、加载更多追加/耗尽/失败重试保留已加载页、固定排序）。schema 迁移 v39（`automation_commands.automation_id` 可空 + ON DELETE SET NULL，命令账本保留）；worker compatibility maximumSchema 39。门禁：`pnpm check` 108 文件 / 1115 测试全绿（statement 85.25%、branch 77.9%、function 89.51%、line 88.47%）；`pnpm smoke`、`pnpm smoke:crash`（3 Task exactly-once）、`pnpm review:ui --force`（新增 desktop-automation-delete-confirm/history、mobile-automation-history 实拍；种子经真实 scheduler+worker 单次触发产出 Run 摘要）、`pnpm a11y:review` 0 违例。
 - **下一缺口**：合并主分支 + 远程 CI + Candidate 发布（SELF-001）+ 运行实例真机验证；「查看指令」摘要语义化。
+- **合并态复验（2026-11-23）**：合入 `origin/main`（`89be111`，含 DESIGN-007 收件箱聚合、EXEC-006 r4、SETTINGS-001 composer 修复）后复跑完整门禁：`pnpm check` 108 文件 / 1147 测试全绿（statement 85.51%、branch 78.17%、function 89.58%、line 88.67%）；`pnpm smoke`、`pnpm smoke:crash`（event-claim/tool-call/write-back exactly-once）、`pnpm review:ui --force`、`pnpm a11y:review`（0 违例）全部通过。feature-map 更新日期行冲突按双方保留解决；迁移号无撞车（v39 唯一）。
 
 - **用户结果**：全站 UI 使用一套小而一致的字号阶梯（消灭 15/17/19/23/24/27px 等一次性字号）；正文 400、标题与强调 400/500（消灭 520/550/600/700）；层级不倒挂——章节标题大于卡片标题，卡片正文比外部同类正文小 1px，按钮文本比邻近文本小 1px。
 - **验收条件**：
