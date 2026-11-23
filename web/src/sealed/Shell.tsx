@@ -44,7 +44,7 @@ interface AppShellProps {
   connectionStatus: 'connecting' | 'online' | 'offline'
   onNavigate: (page: AppPage) => void
   channels: WorkChannel[]
-  unreadCount: number
+  attentionTodoCount: number
   onOpenChannel: (channel: WorkChannel) => void
   children: React.ReactNode
 }
@@ -54,7 +54,7 @@ export function AppShell({
   connectionStatus,
   onNavigate,
   channels,
-  unreadCount,
+  attentionTodoCount,
   onOpenChannel,
   children,
 }: AppShellProps) {
@@ -91,8 +91,10 @@ export function AppShell({
             >
               <Icon size={19} strokeWidth={1.8} />
               <span>{label}</span>
-              {id === 'attention' && unreadCount > 0 && (
-                <b>{Math.min(unreadCount, 99)}</b>
+              {id === 'attention' && attentionTodoCount > 0 && (
+                <b aria-label={`${String(attentionTodoCount)} 件待办`}>
+                  {Math.min(attentionTodoCount, 99)}
+                </b>
               )}
             </button>
           ))}

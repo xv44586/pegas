@@ -2395,8 +2395,10 @@ a {
   color: var(--ink);
 }
 .attention-list article.is-expanded {
+  background: transparent;
+}
+.attention-list article.is-expanded:hover {
   background: var(--surface);
-  border-radius: 12px;
 }
 .attention-group-timeline {
   border-top: 1px solid var(--line);
