@@ -10,6 +10,7 @@ import {
   FileText,
   Layers3,
   Link2,
+  LoaderCircle,
   Mic,
   PauseCircle,
   Plus,
@@ -81,17 +82,19 @@ function PageHeader({
   description,
   actions,
   children,
+  compact = false,
 }: {
   title: string
   description: string
   actions: PageActions
   children?: React.ReactNode
+  compact?: boolean
 }) {
   return (
     <header className="page-header">
       <div>
         <h1>{title}</h1>
-        <p>{description}</p>
+        {!compact && <p>{description}</p>}
       </div>
       <div className="page-header-actions">
         {children}
@@ -832,23 +835,6 @@ export function ConversationPage({
               {formatFileSize(message.attachment.byteSize)}
             </span>
           )}
-          {message.role === 'user' && message.derivedIds.length > 0 && (
-            <button
-              className="inline-link is-derived-jump"
-              onClick={() =>
-                jumpToMessage(
-                  message.derivedIds[message.derivedIds.length - 1] ??
-                    message.id,
-                )
-              }
-              type="button"
-            >
-              <Link2 size={14} />
-              {message.derivedIds.length === 1
-                ? '查看进展'
-                : `查看进展 · ${String(message.derivedIds.length)}`}
-            </button>
-          )}
           {message.text.length > 520 && message.lane === 'say' && (
             <button
               className="inline-link"
@@ -882,12 +868,16 @@ export function ConversationPage({
             )}
         </div>
         <div className="message-meta">
-          <time dateTime={message.at}>{formatRelativeTime(message.at)}</time>
           {message.role === 'user' && (
-            <small className="message-delivery">
-              {deliveryStatusLabel(message.status)}
-            </small>
+            <UserMessageStatus
+              message={message}
+              onJumpToMessage={jumpToMessage}
+              onRetry={() => void retryMessage(message.id)}
+              retrying={retryingMessageId === message.id}
+              snapshot={snapshot}
+            />
           )}
+          <time dateTime={message.at}>{formatRelativeTime(message.at)}</time>
           <button
             aria-label={copiedMessageId === message.id ? '已复制' : '复制消息'}
             className="message-action"
@@ -900,17 +890,6 @@ export function ConversationPage({
               <Copy size={14} />
             )}
           </button>
-          {message.role === 'user' && message.status === 'failed' && (
-            <button
-              className="message-action is-retry"
-              disabled={retryingMessageId === message.id}
-              onClick={() => void retryMessage(message.id)}
-              type="button"
-            >
-              <RotateCw size={14} />
-              {retryingMessageId === message.id ? '重试中…' : '重试'}
-            </button>
-          )}
         </div>
       </article>
     )
@@ -920,6 +899,7 @@ export function ConversationPage({
     <div className="conversation-page">
       <PageHeader
         actions={actions}
+        compact
         description="你的私人智能工作伙伴"
         title="Pegas"
       />
@@ -1791,8 +1771,192 @@ function deliveryStatusLabel(
 ): string {
   if (status === 'pending') return '已送达'
   if (status === 'processing') return '正在分配'
-  if (status === 'failed') return '处理失败'
-  return '已进入事情'
+  return '发送失败'
+}
+
+function UserMessageStatus({
+  message,
+  snapshot,
+  retrying,
+  onJumpToMessage,
+  onRetry,
+}: {
+  message: {
+    id: string
+    status: Snapshot['events'][number]['status']
+    derivedIds: string[]
+  }
+  snapshot: Snapshot
+  retrying: boolean
+  onJumpToMessage: (messageId: string) => void
+  onRetry: () => void
+}) {
+  const [menuOpen, setMenuOpen] = useState(false)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const menuId = useId()
+
+  useEffect(() => {
+    if (!menuOpen) return
+    const dismiss = (event: PointerEvent) => {
+      const target = event.target
+      if (!(target instanceof Node)) return
+      if (
+        menuRef.current?.contains(target) ||
+        triggerRef.current?.contains(target)
+      )
+        return
+      setMenuOpen(false)
+    }
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      setMenuOpen(false)
+      triggerRef.current?.focus()
+    }
+    document.addEventListener('pointerdown', dismiss)
+    document.addEventListener('keydown', escape)
+    return () => {
+      document.removeEventListener('pointerdown', dismiss)
+      document.removeEventListener('keydown', escape)
+    }
+  }, [menuOpen])
+
+  if (message.status === 'failed') {
+    return (
+      <span className="message-status">
+        <span
+          aria-label="发送失败"
+          className="message-status-icon is-failed"
+          role="img"
+          title="发送失败"
+        >
+          <CircleAlert size={14} />
+        </span>
+        <button
+          className="message-action is-retry"
+          disabled={retrying}
+          onClick={onRetry}
+          type="button"
+        >
+          <RotateCw size={14} />
+          {retrying ? '重试中…' : '重试'}
+        </button>
+      </span>
+    )
+  }
+  if (message.status === 'pending' || message.status === 'processing') {
+    const label = deliveryStatusLabel(message.status)
+    return (
+      <span className="message-status">
+        <span
+          aria-label={label}
+          className={`message-status-icon${
+            message.status === 'processing' ? ' is-processing' : ''
+          }`}
+          role="img"
+          title={label}
+        >
+          {message.status === 'processing' ? (
+            <LoaderCircle size={14} />
+          ) : (
+            <Check size={14} />
+          )}
+        </span>
+      </span>
+    )
+  }
+  if (message.derivedIds.length === 0) return null
+  if (message.derivedIds.length === 1) {
+    const targetId = message.derivedIds[0] ?? message.id
+    return (
+      <span className="message-status">
+        <button
+          aria-label="查看进展"
+          className="message-derived-trigger"
+          onClick={() => onJumpToMessage(targetId)}
+          title="查看进展"
+          type="button"
+        >
+          <Link2 size={14} />
+        </button>
+      </span>
+    )
+  }
+  const derived = message.derivedIds
+    .map(id => snapshot.messages.find(item => item.id === id))
+    .filter((item): item is OutboxMessage => Boolean(item))
+  const entries = derived.map(fact => {
+    const channel = fact.taskId
+      ? snapshot.channels.find(item => item.id === fact.taskId)
+      : undefined
+    const run = channel
+      ? latestRunForTask(snapshot.runs, channel.id)
+      : undefined
+    const state =
+      channel?.status === 'completed'
+        ? 'done'
+        : channel?.statusReason?.startsWith('awaiting')
+          ? 'wait'
+          : run?.status === 'failed'
+            ? 'failed'
+            : 'run'
+    return {
+      id: fact.id,
+      title: channel?.title ?? attentionSummary(fact).title,
+      state,
+      label: channel ? statusLabel(channel, run) : '工作进展',
+    }
+  })
+  if (entries.length === 0) return null
+  return (
+    <span className="message-status">
+      <button
+        aria-controls={menuId}
+        aria-expanded={menuOpen}
+        aria-haspopup="menu"
+        aria-label={`查看进展：${String(message.derivedIds.length)} 个事情`}
+        className="message-derived-trigger"
+        onClick={() => setMenuOpen(current => !current)}
+        ref={triggerRef}
+        title={`查看进展 · ${String(message.derivedIds.length)} 个事情`}
+        type="button"
+      >
+        <Link2 size={14} />
+        <span className="message-derived-count">
+          {message.derivedIds.length}
+        </span>
+      </button>
+      {menuOpen && (
+        <div
+          aria-label="这条消息派生的事情"
+          className="message-derived-menu"
+          id={menuId}
+          ref={menuRef}
+          role="menu"
+        >
+          {entries.map(entry => (
+            <button
+              key={entry.id}
+              onClick={() => {
+                setMenuOpen(false)
+                onJumpToMessage(entry.id)
+              }}
+              role="menuitem"
+              type="button"
+            >
+              <span className="derived-task-name">
+                <FileText size={14} />
+                <span>{entry.title}</span>
+              </span>
+              <span className={`status-text status-${entry.label}`}>
+                {entry.label}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </span>
+  )
 }
 
 function formatFileSize(bytes: number): string {

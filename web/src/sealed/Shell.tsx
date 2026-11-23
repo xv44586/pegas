@@ -67,7 +67,7 @@ export function AppShell({
       </a>
       <aside className="primary-rail" aria-label="主导航">
         <div className="brand-lockup">
-          <PegasMark size={42} />
+          <PegasMark size={30} />
           <div>
             <strong>Pegas</strong>
             <span className={`connection-${connectionStatus}`}>
