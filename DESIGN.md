@@ -52,9 +52,13 @@ The approved implementation contract is [docs/sealed-ui-rebuild.md](docs/sealed-
 ## Structure
 
 - Desktop: persistent primary navigation, fluid page canvas, optional right detail drawer.
+- Rail: 232px on wide desktop (200px below 1120px); the brand lockup uses a 30px mark with a 16px/500 name and an 11px status line, so navigation rows stay compact and the conversation keeps the width.
 - Mobile: compact primary navigation and full-height detail overlay, with the same information order and actions.
 - Settings: dedicated page with a stable category rail; model services, classification Router and Pegas runtime are separate destinations.
 - Conversation: editorial message flow and bottom composer; execution events are inspectable facts, not fake assistant bubbles.
+- Conversation header: a compact single line — 16px/500 title over a hairline divider, no tagline; the rail brand already carries identity.
+- User messages: a neutral warm-grey bubble (`--message-bubble`, derived from `--surface`) with 18px radii and a 6px tail corner; no accent-tinted fill and no interactive elements inside the bubble.
+- Message lifecycle slot: each user message owns one icon-only slot in its always-visible meta row (`status · time · copy`). Pending shows a check, processing a spinner, failure an alert plus an always-visible retry; status wording lives in the hover title and accessible label. On success the slot becomes the derived-work entry: one task renders a link icon that jumps to its fact card; multiple tasks render a link icon with a count and open a small menu listing each task's title and live status. Zero derived tasks show no link. Touch keeps icons tappable with labels; hover text is supplemental, never the only failure signal.
 - Composer: use a quiet Codex-like two-level surface: the growing message field occupies the upper area and a single bottom toolbar holds attachment, real model identity, voice and send actions. The model control opens an anchored, searchable picker containing every model returned by the current execution endpoint; selection is saved in place and never navigates away from the conversation. Keyboard focus belongs to the outer surface rather than drawing a second rectangle around the text field; the field grows vertically without changing its horizontal footprint.
 - Search remains a small, focused overlay. The header appearance control toggles the rendered light/dark scheme directly; complete system, light, warm and dark choices live in the dedicated Appearance settings page. First-run setup is a guided flow, not a settings dump.
 

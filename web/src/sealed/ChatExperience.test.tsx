@@ -736,7 +736,7 @@ describe('DESIGN-003 chat page', () => {
       runs: [{ ...runningRun, status: 'completed', output: 'done' }],
     })
     render(<App />)
-    await screen.findByText('你的私人智能工作伙伴')
+    await screen.findByLabelText('给 Pegas 发消息')
     expect(screen.queryByRole('group', { name: '进行中的事情' })).toBeNull()
   })
 
@@ -896,6 +896,146 @@ describe('DESIGN-003 chat page', () => {
         ),
       ).toBe(true),
     )
+  })
+
+  it('DESIGN-005: keeps the status slot out of the bubble and links a single derived task', async () => {
+    const originEvent: InboxEvent = {
+      ...baseEvent,
+      id: 'event-origin',
+      status: 'processed',
+      payload: { text: '帮我整理季度数据' },
+    }
+    const derivedFact: OutboxMessage = {
+      ...baseMessage,
+      id: 'fact-done',
+      payload: { type: 'run.completed', text: '报表已完成' },
+      createdAt: '2026-11-22T08:05:00.000Z',
+      projection: {
+        lane: 'work',
+        weight: 'card',
+        anchor: { taskId: channel.id, eventId: originEvent.id },
+      },
+    }
+    installChatFetch({
+      ...baseSnapshot,
+      events: [originEvent],
+      messages: [derivedFact],
+    })
+    render(<App />)
+    const trigger = await screen.findByRole('button', { name: '查看进展' })
+    expect(trigger.closest('.message-content')).toBeNull()
+    expect(trigger.closest('.message-row.is-user')).toBeTruthy()
+    expect(trigger.getAttribute('title')).toBe('查看进展')
+    expect(
+      document.querySelector('.message-row.is-user .message-content button'),
+    ).toBeNull()
+    expect(screen.queryByText('已进入事情')).toBeNull()
+    fireEvent.click(trigger)
+    expect(
+      document.querySelector(
+        '[data-message-id="fact-done"].is-anchor-highlight',
+      ),
+    ).toBeTruthy()
+  })
+
+  it('DESIGN-005: multiple derived tasks open a menu with per-task state and jump target', async () => {
+    const secondChannel: WorkChannel = {
+      ...channel,
+      id: 'task-2',
+      taskId: 'task-2',
+      title: '账单提醒归档策略',
+      status: 'started',
+      statusReason: 'awaiting_goal_clarification',
+    }
+    const originEvent: InboxEvent = {
+      ...baseEvent,
+      id: 'event-origin',
+      status: 'processed',
+      payload: { text: '帮我整理季度数据' },
+    }
+    const factOne: OutboxMessage = {
+      ...baseMessage,
+      id: 'fact-one',
+      payload: { type: 'run.completed', text: '报表已完成' },
+      createdAt: '2026-11-22T08:05:00.000Z',
+      projection: {
+        lane: 'work',
+        weight: 'card',
+        anchor: { taskId: channel.id, eventId: originEvent.id },
+      },
+    }
+    const factTwo: OutboxMessage = {
+      ...baseMessage,
+      id: 'fact-two',
+      taskId: secondChannel.id,
+      payload: {
+        type: 'goal.clarification_required',
+        taskId: secondChannel.id,
+        questions: ['保留原件吗？'],
+        text: '保留原件吗？',
+      },
+      createdAt: '2026-11-22T08:06:00.000Z',
+      projection: {
+        lane: 'decide',
+        weight: 'card',
+        anchor: { taskId: secondChannel.id, eventId: originEvent.id },
+      },
+    }
+    installChatFetch({
+      ...baseSnapshot,
+      channels: [
+        { ...channel, status: 'completed', canStop: false },
+        secondChannel,
+      ],
+      runs: [{ ...runningRun, status: 'completed', output: 'done' }],
+      events: [originEvent],
+      messages: [factOne, factTwo],
+    })
+    render(<App />)
+    const trigger = await screen.findByRole('button', {
+      name: '查看进展：2 个事情',
+    })
+    expect(trigger.textContent).toContain('2')
+    fireEvent.click(trigger)
+    const menu = await screen.findByRole('menu', {
+      name: '这条消息派生的事情',
+    })
+    const items = within(menu).getAllByRole('menuitem')
+    expect(items).toHaveLength(2)
+    expect(items[0]?.textContent).toContain(channel.title)
+    expect(items[0]?.textContent).toContain('已完成')
+    expect(items[1]?.textContent).toContain(secondChannel.title)
+    const secondItem = items[1]
+    if (!secondItem) throw new Error('expected two derived task entries')
+    fireEvent.click(secondItem)
+    expect(
+      document.querySelector(
+        '[data-message-id="fact-two"].is-anchor-highlight',
+      ),
+    ).toBeTruthy()
+    expect(
+      screen.queryByRole('menu', { name: '这条消息派生的事情' }),
+    ).toBeNull()
+  })
+
+  it('DESIGN-005: failed messages keep an always-visible retry and never a progress link', async () => {
+    installChatFetch({
+      ...baseSnapshot,
+      events: [
+        {
+          ...baseEvent,
+          id: 'event-failed-2',
+          status: 'failed',
+          payload: { text: '这条发送失败了' },
+        },
+      ],
+    })
+    render(<App />)
+    const icon = await screen.findByRole('img', { name: '发送失败' })
+    expect(icon.closest('.message-meta')).toBeTruthy()
+    const retry = screen.getByRole('button', { name: /重试/ })
+    expect(retry.closest('.message-meta')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /查看进展/ })).toBeNull()
   })
 
   it('copies the full message text including collapsed content', async () => {

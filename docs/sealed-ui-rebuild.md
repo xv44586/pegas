@@ -199,3 +199,11 @@
 - 可访问性补齐语义列表、条目标题、可区分的上下文操作名称和粗指针标题目标；筛选保持单行滚动并在选择后回到可见区域。三主题继续使用语义 token，移动端不产生横向页面溢出。
 - 证据：以上验证均在候选 worktree 完成。31 项定向回归通过；完整 `pnpm check` 全绿（76 个测试文件 / 710 个测试，statement 85.22%、line 88.26%）；`pnpm smoke`、`pnpm build`、`pnpm review:ui -- --force`（66 张截图）和 `pnpm a11y:review`（light/warm/dark 待处理页与移动端 0 违例）通过。额外 `pnpm smoke:desktop` 被既有发送按钮选择器歧义阻塞，未修改无关脚本。详见 `docs/feature-map.md` DESIGN-002「待处理收件箱 refinement」小节。
 - 仍缺：服务端全文搜索、游标分页/虚拟列表、批量处理与通知优先级；VoiceOver/NVDA 实机验证；DESIGN-002 整体 validity、协作操作和真实 ASR 缺口。以上均已登记 `docs/engineering-todo.md`「DESIGN-002 待处理收件箱后续」。改动已隔离提交并进入主线集成流程；未部署到正在运行的 Pegas，不能把候选验证表述为线上验证。
+
+## 18. 对话页安静视觉身份（2026-11-23，DESIGN-005）
+
+- 用户气泡从 accent 10% 淡紫底 + 22px 圆角改为中性 `--message-bubble`（派生自 `--surface`）+ 18px 圆角、右下 6px 尾巴角；气泡内不再包含任何按钮或链接。附件元信息从 canvas 混色改为 `--muted`，保证暖灰底上的对比度。
+- 每条用户消息在 meta 行拥有唯一的 icon 状态槽（`状态 · 时间 · 复制`，用户行常显）：pending ✓「已送达」、processing 旋转「正在分配」、failed ⚠「发送失败」+ 常显重试；文字收进 hover title 与 aria-label。「已进入事情」文案废除。
+- 成功且派生事情时，状态槽原位升级为入口：单事情渲染 🔗 直接锚点跳转事实卡；多事情渲染 🔗+数量角标，点击向下弹出菜单，逐项列出事情标题与实时状态（statusLabel），选择后跳转并关闭；零事情不渲染假链接。菜单支持 Esc 与点击外部关闭。
+- 对话顶栏收敛为单行 16px/500 标题 + 细分隔线，标语移除（PageHeader 新增 compact，仅对话页使用；其余页面标题不变）。侧栏 286px→232px（≤1120px 200px），品牌 30px mark + 16px/500 名称 + 11px 状态行，导航行高 46→38px。
+- 门禁：`test/sealed-ui-message-identity.test.ts` 固化 CSS 合同；`ChatExperience.test.tsx` 新增状态槽 DOM 归属、单/多事情入口与失败常显重试回归。触屏无 hover，状态文字不可见但失败重试常显、入口有 aria-label，属可接受权衡（DESIGN.md 已注明）。
