@@ -207,3 +207,11 @@
 - 成功且派生事情时，状态槽原位升级为入口：单事情渲染 🔗 直接锚点跳转事实卡；多事情渲染 🔗+数量角标，点击向下弹出菜单，逐项列出事情标题与实时状态（statusLabel），选择后跳转并关闭；零事情不渲染假链接。菜单支持 Esc 与点击外部关闭。
 - 对话顶栏收敛为单行 16px/500 标题 + 细分隔线，标语移除（PageHeader 新增 compact，仅对话页使用；其余页面标题不变）。侧栏 286px→232px（≤1120px 200px），品牌 30px mark + 16px/500 名称 + 11px 状态行，导航行高 46→38px。
 - 门禁：`test/sealed-ui-message-identity.test.ts` 固化 CSS 合同；`ChatExperience.test.tsx` 新增状态槽 DOM 归属、单/多事情入口与失败常显重试回归。触屏无 hover，状态文字不可见但失败重试常显、入口有 aria-label，属可接受权衡（DESIGN.md 已注明）。
+
+## 19. 自动化列表安静化（2026-11-23，DESIGN-006）
+
+- 机器 prompt 不再整段摊在列表：每行只显示折叠空白后的单行摘要（`automationPromptSummary` ≤120 字 + CSS 单行截断），完整指令收进「查看指令」disclosure（`aria-expanded`/`aria-controls`，`pre-wrap` 保留步骤换行，`--surface-subtle` 底、最高 320px 内滚动）。参考 Codex automations 的「不向用户展示原始调度表达」原则：列表是人读的责任摘要，不是执行合同原文。
+- 元信息合并为单行 plain text：`每 N 分钟 · 续接：<事情>/每次创建新事情 · 下次触发/保留历史记录 · 最近触发`；状态并入标题行右端（`.record-title` flex），不再单独占位。
+- 已结束的 Automation 默认收进「已结束 N」disclosure（ChevronDown 旋转指示），进行中/暂停的保持平铺；全部已结束时不折叠、直接平铺历史。行结构仍是 icon + 正文 + 操作按钮的平铺行，无嵌套卡片。
+- 移动端（≤820px）修复既有网格缺陷：两列布局下 `.record-icon`/`.record-copy` 显式指定列，正文不再被自动放置进 34px 图标列挤成竖排单字（记忆页同受益）。
+- 门禁：`web/src/sealed/AutomationPage.test.tsx` 6 测试（摘要折叠/指令 disclosure/单行 meta/已结束分组/全结束平铺/暂停与结束命令）；`scripts/capture-ui-review.mjs` 新增长 prompt + 已结束种子与 `desktop-automation-prompt/ended`、`mobile-automation` 实拍。

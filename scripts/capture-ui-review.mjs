@@ -304,6 +304,14 @@ try {
   await page.getByRole('heading', { name: '自动化', exact: true }).waitFor()
   await page.getByText('晨间简报').waitFor()
   await capture(page, 'desktop-automation.png', 'desktop-automation')
+  await page.getByRole('button', { name: '查看指令' }).first().click()
+  await page.locator('.automation-prompt').first().waitFor()
+  await capture(page, 'desktop-automation-prompt.png', 'desktop-automation')
+  await page.getByRole('button', { name: '收起指令' }).first().click()
+  await page.getByRole('button', { name: /已结束 1/ }).click()
+  await page.getByText('每分钟报数 1→10').waitFor()
+  await capture(page, 'desktop-automation-ended.png', 'desktop-automation')
+  await page.getByRole('button', { name: /已结束 1/ }).click()
 
   await page.getByLabel('主导航').getByRole('button', { name: '记忆' }).click()
   await page.getByRole('heading', { name: '记忆', exact: true }).waitFor()
@@ -623,6 +631,17 @@ try {
     await capture(mobilePage, 'mobile-work-detail.png', 'mobile-work-detail')
     await mobilePage.getByRole('button', { name: '关闭详情' }).click()
   }
+  await mobilePage
+    .getByLabel('移动端主导航')
+    .getByRole('button', { name: '自动化' })
+    .click()
+  await mobilePage
+    .getByRole('heading', { name: '自动化', exact: true })
+    .waitFor()
+  await mobilePage.getByText('晨间简报').waitFor()
+  await mobilePage.getByRole('button', { name: /已结束 1/ }).click()
+  await mobilePage.getByText('每分钟报数 1→10').waitFor()
+  await capture(mobilePage, 'mobile-automation.png', 'mobile-automation')
   await mobilePage
     .getByLabel('移动端主导航')
     .getByRole('button', { name: '设置' })
@@ -1075,6 +1094,41 @@ async function seedConversation(apiPort) {
   )
   if (automationResponse.status !== 201)
     throw new Error('Unable to seed UI review automation')
+  const longPromptResponse = await fetch(
+    `http://127.0.0.1:${String(apiPort)}/v1/automations`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        userId: 'owner',
+        commandId: 'feature-review-automation-counting',
+        automation: {
+          title: '每分钟报数 1→10',
+          prompt:
+            '这是「从 1 数到 10」周期自动化的本次触发，是独立的机器输入。严格按以下步骤执行，禁止用 sleep/循环模拟周期等待：\n1. 读取状态文件 count-automation-state.json，字段为 {count, automationId, revision}。\n2. 将 count 加 1，写回状态文件。\n3. 报数：使用本次触发 Run 自己的环境变量与 capability 文件中的 claimToken，调用 POST /v1/runs/:runId/messages，text 只包含该数字本身。\n4. 若加 1 后的 count 等于 10，报数完成后取消本自动化。\n5. 若 count 小于 10，报数后直接结束本次 Run，把等待交给调度器。',
+          schedule: { kind: 'interval', everySeconds: 60 },
+          target: { kind: 'new_task' },
+        },
+      }),
+    },
+  )
+  if (longPromptResponse.status !== 201)
+    throw new Error('Unable to seed UI review counting automation')
+  const countingAutomation = (await longPromptResponse.json()).automation
+  const countingCancelResponse = await fetch(
+    `http://127.0.0.1:${String(apiPort)}/v1/automations/${countingAutomation.id}/cancel`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        userId: 'owner',
+        commandId: 'feature-review-automation-counting-cancel',
+        expectedRevision: countingAutomation.revision,
+      }),
+    },
+  )
+  if (countingCancelResponse.status !== 200)
+    throw new Error('Unable to end UI review counting automation')
   const memoryResponse = await fetch(
     `http://127.0.0.1:${String(apiPort)}/v1/memories`,
     {
