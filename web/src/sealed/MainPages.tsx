@@ -2532,6 +2532,8 @@ export function AutomationPage({
   const [invocations, setInvocations] = useState<AutomationInvocation[]>()
   const [historyError, setHistoryError] = useState('')
   const [historyLoading, setHistoryLoading] = useState(false)
+  const [promptId, setPromptId] = useState<string>()
+  const [showEnded, setShowEnded] = useState(false)
   const historyRequestRef = useRef(0)
   async function toggleHistory(automation: Automation) {
     if (!onLoadInvocations) return
@@ -2641,168 +2643,79 @@ export function AutomationPage({
         />
       )}
       {automations && automations.length > 0 && (
-        <section className="record-list" aria-label="自动化列表">
-          {automations.map(automation => (
-            <article key={automation.id}>
-              <span className={`record-icon is-${automation.status}`}>
-                <Zap size={18} />
-              </span>
-              <div className="record-copy">
-                <strong>{automation.title}</strong>
-                <small>{automation.prompt}</small>
-                <small className="record-meta">
-                  {describeSchedule(automation)} ·{' '}
-                  {automation.target.kind === 'new_task'
-                    ? '每次创建新事情'
-                    : `续接：${
-                        channels.find(
-                          channel =>
-                            channel.id ===
-                            (automation.target as { taskId: string }).taskId,
-                        )?.title ?? '已有事情'
-                      }`}
-                </small>
-                <small className="record-meta">
-                  {automation.status === 'active' && automation.nextFireAt
-                    ? `下次触发 ${formatDateTime(automation.nextFireAt)}`
-                    : automation.status === 'paused'
-                      ? '已暂停，恢复后重新计算触发时间'
-                      : '已结束，保留历史记录'}
-                  {automation.lastFiredAt
-                    ? ` · 最近触发 ${formatRelativeTime(automation.lastFiredAt)}`
-                    : ''}
-                </small>
-              </div>
-              <span
-                className={`status-text status-${automationStatusLabel(automation.status)}`}
+        <div className="automation-lists">
+          <section className="record-list" aria-label="自动化列表">
+            {(hasLiveAutomations(automations)
+              ? automations.filter(item => !isEndedAutomation(item))
+              : automations
+            ).map(automation => (
+              <AutomationRow
+                automation={automation}
+                busyId={busyId}
+                channels={channels}
+                confirmCancelId={confirmCancelId}
+                historyError={historyError}
+                historyId={historyId}
+                historyLoading={historyLoading}
+                invocations={invocations}
+                onCancelConfirm={() => setConfirmCancelId(undefined)}
+                onConfirmCancel={() => setConfirmCancelId(automation.id)}
+                onEdit={() => setForm({ mode: 'edit', automation })}
+                onRunStatus={runStatus}
+                onToggleHistory={toggleHistory}
+                onTogglePrompt={() =>
+                  setPromptId(current =>
+                    current === automation.id ? undefined : automation.id,
+                  )
+                }
+                promptOpen={promptId === automation.id}
+              />
+            ))}
+          </section>
+          {hasLiveAutomations(automations) && endedCount > 0 && (
+            <section className="automation-ended" aria-label="已结束的自动化">
+              <button
+                aria-expanded={showEnded}
+                className="quiet-button automation-ended-toggle"
+                onClick={() => setShowEnded(current => !current)}
+                type="button"
               >
-                {automationStatusLabel(automation.status)}
-              </span>
-              <div className="record-actions">
-                {onLoadInvocations && (
-                  <button
-                    aria-expanded={historyId === automation.id}
-                    className="quiet-button"
-                    onClick={() => void toggleHistory(automation)}
-                    type="button"
-                  >
-                    触发记录
-                  </button>
-                )}
-                {(automation.status === 'active' ||
-                  automation.status === 'paused') && (
-                  <button
-                    className="secondary-button"
-                    disabled={busyId === automation.id}
-                    onClick={() => setForm({ mode: 'edit', automation })}
-                    type="button"
-                  >
-                    编辑
-                  </button>
-                )}
-                {automation.status === 'active' && (
-                  <button
-                    className="secondary-button"
-                    disabled={busyId === automation.id}
-                    onClick={() => void runStatus(automation, 'pause')}
-                    type="button"
-                  >
-                    暂停
-                  </button>
-                )}
-                {automation.status === 'paused' && (
-                  <button
-                    className="secondary-button"
-                    disabled={busyId === automation.id}
-                    onClick={() => void runStatus(automation, 'resume')}
-                    type="button"
-                  >
-                    恢复
-                  </button>
-                )}
-                {(automation.status === 'active' ||
-                  automation.status === 'paused') &&
-                  (confirmCancelId === automation.id ? (
-                    <>
-                      <button
-                        className="danger-button"
-                        disabled={busyId === automation.id}
-                        onClick={() => void runStatus(automation, 'cancel')}
-                        type="button"
-                      >
-                        确认结束
-                      </button>
-                      <button
-                        className="quiet-button"
-                        onClick={() => setConfirmCancelId(undefined)}
-                        type="button"
-                      >
-                        保留
-                      </button>
-                    </>
-                  ) : (
-                    <button
-                      className="quiet-button"
-                      disabled={busyId === automation.id}
-                      onClick={() => setConfirmCancelId(automation.id)}
-                      type="button"
-                    >
-                      结束
-                    </button>
+                <ChevronDown
+                  className={showEnded ? 'is-open' : undefined}
+                  size={15}
+                />
+                已结束 {endedCount}
+              </button>
+              {showEnded && (
+                <div className="record-list">
+                  {automations.filter(isEndedAutomation).map(automation => (
+                    <AutomationRow
+                      automation={automation}
+                      busyId={busyId}
+                      channels={channels}
+                      confirmCancelId={confirmCancelId}
+                      historyError={historyError}
+                      historyId={historyId}
+                      historyLoading={historyLoading}
+                      invocations={invocations}
+                      onCancelConfirm={() => setConfirmCancelId(undefined)}
+                      onConfirmCancel={() => setConfirmCancelId(automation.id)}
+                      onEdit={() => setForm({ mode: 'edit', automation })}
+                      onRunStatus={runStatus}
+                      onToggleHistory={toggleHistory}
+                      onTogglePrompt={() =>
+                        setPromptId(current =>
+                          current === automation.id ? undefined : automation.id,
+                        )
+                      }
+                      promptOpen={promptId === automation.id}
+                    />
                   ))}
-              </div>
-              {historyId === automation.id && (
-                <div className="record-history">
-                  {historyLoading && <small>正在读取触发记录…</small>}
-                  {historyError && (
-                    <small className="record-history-error" role="alert">
-                      {historyError}
-                      <button
-                        className="inline-link"
-                        onClick={() => {
-                          setHistoryId(undefined)
-                          void toggleHistory(automation)
-                        }}
-                        type="button"
-                      >
-                        重试
-                      </button>
-                    </small>
-                  )}
-                  {!historyLoading &&
-                    !historyError &&
-                    invocations &&
-                    (invocations.length ? (
-                      <ul aria-label="触发记录">
-                        {invocations.map(invocation => (
-                          <li key={invocation.id}>
-                            <span
-                              className={`invocation-status is-${invocation.status}`}
-                            >
-                              {invocationStatusLabel(invocation.status)}
-                            </span>
-                            <span>
-                              计划 {formatDateTime(invocation.scheduledFor)}
-                            </span>
-                            {invocation.attempts > 1 && (
-                              <span>尝试 {invocation.attempts} 次</span>
-                            )}
-                            {invocation.lastError && (
-                              <span className="invocation-error">
-                                {invocation.lastError}
-                              </span>
-                            )}
-                          </li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <small>还没有触发记录</small>
-                    ))}
                 </div>
               )}
-            </article>
-          ))}
-        </section>
+            </section>
+          )}
+        </div>
       )}
       {form && (
         <AutomationForm
@@ -2817,6 +2730,226 @@ export function AutomationPage({
         />
       )}
     </div>
+  )
+}
+
+function isEndedAutomation(automation: Automation): boolean {
+  return automation.status === 'completed' || automation.status === 'cancelled'
+}
+
+function hasLiveAutomations(automations: Automation[]): boolean {
+  return automations.some(item => !isEndedAutomation(item))
+}
+
+function automationPromptSummary(prompt: string): string {
+  const collapsed = prompt.replaceAll(/\s+/g, ' ').trim()
+  return collapsed.length > 120 ? `${collapsed.slice(0, 120)}…` : collapsed
+}
+
+function AutomationRow({
+  automation,
+  busyId,
+  channels,
+  confirmCancelId,
+  historyError,
+  historyId,
+  historyLoading,
+  invocations,
+  onCancelConfirm,
+  onConfirmCancel,
+  onEdit,
+  onRunStatus,
+  onToggleHistory,
+  onTogglePrompt,
+  promptOpen,
+}: {
+  automation: Automation
+  busyId: string
+  channels: WorkChannel[]
+  confirmCancelId?: string
+  historyError: string
+  historyId?: string
+  historyLoading: boolean
+  invocations?: AutomationInvocation[]
+  onCancelConfirm: () => void
+  onConfirmCancel: () => void
+  onEdit: () => void
+  onRunStatus: (
+    automation: Automation,
+    action: 'pause' | 'resume' | 'cancel',
+  ) => Promise<void>
+  onToggleHistory: (automation: Automation) => Promise<void>
+  onTogglePrompt: () => void
+  promptOpen: boolean
+}) {
+  const promptRegionId = useId()
+  return (
+    <article key={automation.id}>
+      <span className={`record-icon is-${automation.status}`}>
+        <Zap size={18} />
+      </span>
+      <div className="record-copy">
+        <div className="record-title">
+          <strong>{automation.title}</strong>
+          <span
+            className={`status-text status-${automationStatusLabel(automation.status)}`}
+          >
+            {automationStatusLabel(automation.status)}
+          </span>
+        </div>
+        <p className="automation-summary">
+          {automationPromptSummary(automation.prompt)}
+        </p>
+        <small className="record-meta">
+          {describeSchedule(automation)} ·{' '}
+          {automation.target.kind === 'new_task'
+            ? '每次创建新事情'
+            : `续接：${
+                channels.find(
+                  channel =>
+                    channel.id ===
+                    (automation.target as { taskId: string }).taskId,
+                )?.title ?? '已有事情'
+              }`}
+          {' · '}
+          {automation.status === 'active' && automation.nextFireAt
+            ? `下次触发 ${formatDateTime(automation.nextFireAt)}`
+            : automation.status === 'paused'
+              ? '恢复后重新计算触发时间'
+              : '保留历史记录'}
+          {automation.lastFiredAt
+            ? ` · 最近触发 ${formatRelativeTime(automation.lastFiredAt)}`
+            : ''}
+        </small>
+        {promptOpen && (
+          <pre className="automation-prompt" id={promptRegionId}>
+            {automation.prompt}
+          </pre>
+        )}
+      </div>
+      <div className="record-actions">
+        <button
+          aria-controls={promptRegionId}
+          aria-expanded={promptOpen}
+          className="quiet-button"
+          onClick={onTogglePrompt}
+          type="button"
+        >
+          {promptOpen ? '收起指令' : '查看指令'}
+        </button>
+        <button
+          aria-expanded={historyId === automation.id}
+          className="quiet-button"
+          onClick={() => void onToggleHistory(automation)}
+          type="button"
+        >
+          触发记录
+        </button>
+        {(automation.status === 'active' || automation.status === 'paused') && (
+          <button
+            className="secondary-button"
+            disabled={busyId === automation.id}
+            onClick={onEdit}
+            type="button"
+          >
+            编辑
+          </button>
+        )}
+        {automation.status === 'active' && (
+          <button
+            className="secondary-button"
+            disabled={busyId === automation.id}
+            onClick={() => void onRunStatus(automation, 'pause')}
+            type="button"
+          >
+            暂停
+          </button>
+        )}
+        {automation.status === 'paused' && (
+          <button
+            className="secondary-button"
+            disabled={busyId === automation.id}
+            onClick={() => void onRunStatus(automation, 'resume')}
+            type="button"
+          >
+            恢复
+          </button>
+        )}
+        {(automation.status === 'active' || automation.status === 'paused') &&
+          (confirmCancelId === automation.id ? (
+            <>
+              <button
+                className="danger-button"
+                disabled={busyId === automation.id}
+                onClick={() => void onRunStatus(automation, 'cancel')}
+                type="button"
+              >
+                确认结束
+              </button>
+              <button
+                className="quiet-button"
+                onClick={onCancelConfirm}
+                type="button"
+              >
+                保留
+              </button>
+            </>
+          ) : (
+            <button
+              className="quiet-button"
+              disabled={busyId === automation.id}
+              onClick={onConfirmCancel}
+              type="button"
+            >
+              结束
+            </button>
+          ))}
+      </div>
+      {historyId === automation.id && (
+        <div className="record-history">
+          {historyLoading && <small>正在读取触发记录…</small>}
+          {historyError && (
+            <small className="record-history-error" role="alert">
+              {historyError}
+              <button
+                className="inline-link"
+                onClick={() => void onToggleHistory(automation)}
+                type="button"
+              >
+                重试
+              </button>
+            </small>
+          )}
+          {!historyLoading &&
+            !historyError &&
+            invocations &&
+            (invocations.length ? (
+              <ul aria-label="触发记录">
+                {invocations.map(invocation => (
+                  <li key={invocation.id}>
+                    <span
+                      className={`invocation-status is-${invocation.status}`}
+                    >
+                      {invocationStatusLabel(invocation.status)}
+                    </span>
+                    <span>计划 {formatDateTime(invocation.scheduledFor)}</span>
+                    {invocation.attempts > 1 && (
+                      <span>尝试 {invocation.attempts} 次</span>
+                    )}
+                    {invocation.lastError && (
+                      <span className="invocation-error">
+                        {invocation.lastError}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <small>还没有触发记录</small>
+            ))}
+        </div>
+      )}
+    </article>
   )
 }
 

@@ -518,12 +518,74 @@ a {
   font-size: var(--text-body);
   overflow-wrap: anywhere;
 }
+.record-title {
+  align-items: baseline;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+.record-title .status-text {
+  flex: 0 0 auto;
+}
 .record-copy small {
   color: var(--muted);
   overflow-wrap: anywhere;
 }
 .record-meta {
   font-size: var(--text-small);
+}
+.automation-summary {
+  color: var(--muted);
+  display: -webkit-box;
+  font-size: var(--text-caption);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
+  margin: 0;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.automation-prompt {
+  background: var(--surface-subtle);
+  border-radius: 10px;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: var(--text-caption);
+  line-height: 1.65;
+  margin: 4px 0 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: 12px 14px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.automation-ended {
+  margin: 12px 0 0;
+}
+.automation-lists {
+  margin-bottom: 40px;
+}
+.automation-lists .record-list {
+  margin-bottom: 0;
+}
+.automation-ended-toggle {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+  margin: 0 0 4px 10px;
+}
+.automation-ended-toggle svg {
+  transition: transform 140ms ease;
+}
+.automation-ended-toggle svg.is-open {
+  transform: rotate(180deg);
+}
+.automation-ended .record-list {
+  margin-bottom: 0;
+}
+.automation-ended .record-icon {
+  background: var(--surface);
+  color: var(--muted);
 }
 .record-actions {
   align-items: center;
@@ -5722,7 +5784,10 @@ kbd {
   .record-list article {
     grid-template-columns: 34px minmax(0, 1fr);
   }
-  .record-list .status-text {
+  .record-list .record-icon {
+    grid-column: 1;
+  }
+  .record-list .record-copy {
     grid-column: 2;
   }
   .record-actions {

@@ -246,20 +246,23 @@ describe('EXEC-006 P1b full-output archive and paging', () => {
       archivedCharacters: 40_000,
       truncatedArchive: false,
     })
-    expect(first?.content).toHaveLength(12_000)
+    const gapStart = first?.gapStart ?? -1
+    const gapEnd = first?.gapEnd ?? -1
+    expect(gapEnd).toBeGreaterThan(gapStart)
+    expect(first?.content).toHaveLength(Math.min(12_000, gapStart))
     const second = await store.readRunActivityOutput(
       claimed.run.id,
       'owner',
       'call-long',
-      { offset: 12_000, limit: 32_768 },
+      { offset: 12_000, until: gapEnd, limit: 32_768 },
     )
-    expect(second?.content).toHaveLength(28_000)
+    expect(second?.content).toHaveLength(gapStart - 12_000)
     expect(second?.offset).toBe(12_000)
     const beyond = await store.readRunActivityOutput(
       claimed.run.id,
       'owner',
       'call-long',
-      { offset: 40_000 },
+      { offset: gapEnd, until: gapEnd },
     )
     expect(beyond?.content).toBe('')
     expect(
@@ -523,6 +526,72 @@ describe('EXEC-006 round-18 executor spill-file channel', () => {
     expect(page?.totalCharacters).toBe(fullText.length)
     store.close()
   })
+
+  it('bounds pages at the omission gap so the inline tail never repeats', async () => {
+    const store = new PegasStore(':memory:')
+    const claimed = seedClaimedRun(store)
+    const fullText = Array.from({ length: 8_000 }, (_, index) =>
+      String(index + 1),
+    ).join('\n')
+    store.appendRunActivity(claimed.run.id, 'enhance-worker', {
+      kind: 'tool_call',
+      status: 'started',
+      callId: 'call-headtail',
+      tool: 'bash',
+      label: 'bash',
+      detail: JSON.stringify({ command: 'seq 1 8000' }),
+    })
+    store.completeRunActivityToolCall(
+      claimed.run.id,
+      'enhance-worker',
+      'call-headtail',
+      { status: 'completed', result: fullText },
+    )
+    const first = await store.readRunActivityOutput(
+      claimed.run.id,
+      'owner',
+      'call-headtail',
+      { limit: 32_768 },
+    )
+    expect(first?.gapStart).toBeDefined()
+    expect(first?.gapEnd).toBeDefined()
+    const gapStart = first?.gapStart ?? -1
+    const gapEnd = first?.gapEnd ?? -1
+    expect(gapEnd).toBeGreaterThan(gapStart)
+    expect(first?.content).toBe(fullText.slice(0, gapStart))
+    const middle = await store.readRunActivityOutput(
+      claimed.run.id,
+      'owner',
+      'call-headtail',
+      { offset: gapStart, until: gapEnd, limit: 32_768 },
+    )
+    expect(middle?.offset).toBe(gapStart)
+    expect(middle?.content).toBe(fullText.slice(gapStart, gapEnd))
+    const lastMiddle = await store.readRunActivityOutput(
+      claimed.run.id,
+      'owner',
+      'call-headtail',
+      { offset: gapEnd - 100, until: gapEnd },
+    )
+    expect(lastMiddle?.content).toBe(fullText.slice(gapEnd - 100, gapEnd))
+    expect(lastMiddle?.content.endsWith('\n')).toBe(false)
+    const atTail = await store.readRunActivityOutput(
+      claimed.run.id,
+      'owner',
+      'call-headtail',
+      { offset: gapEnd, until: gapEnd },
+    )
+    expect(atTail?.content).toBe('')
+    const beyond = await store.readRunActivityOutput(
+      claimed.run.id,
+      'owner',
+      'call-headtail',
+      { offset: gapEnd },
+    )
+    expect(beyond?.content).toBe(fullText.slice(gapEnd))
+    expect(beyond?.content.endsWith('8000')).toBe(true)
+    store.close()
+  })
 })
 
 describe('EXEC-006 child thinking summary write-back', () => {
@@ -677,13 +746,24 @@ describe('EXEC-006 activity output/image HTTP surface', () => {
       { status: 'completed', result: 'a'.repeat(20_000) },
     )
     const base = await openServer(store)
+    const head = await fetch(
+      `${base}/v1/runs/${claimed.run.id}/activity/call-http/output?userId=owner&offset=0`,
+    )
+    const headPage = (await head.json()) as {
+      content: string
+      gapStart?: number
+      gapEnd?: number
+    }
+    expect(headPage.gapStart).toBeDefined()
+    expect(headPage.gapEnd).toBeDefined()
+    expect(headPage.content).toHaveLength(headPage.gapStart ?? -1)
     const ok = await fetch(
-      `${base}/v1/runs/${claimed.run.id}/activity/call-http/output?userId=owner&offset=12000`,
+      `${base}/v1/runs/${claimed.run.id}/activity/call-http/output?userId=owner&offset=${String(headPage.gapEnd ?? 0)}`,
     )
     expect(ok.status).toBe(200)
     const page = (await ok.json()) as { content: string; offset: number }
-    expect(page.offset).toBe(12_000)
-    expect(page.content).toHaveLength(8_000)
+    expect(page.offset).toBe(headPage.gapEnd)
+    expect(page.content).toHaveLength(20_000 - (headPage.gapEnd ?? 0))
     const denied = await fetch(
       `${base}/v1/runs/${claimed.run.id}/activity/call-http/output?userId=intruder`,
     )
@@ -809,6 +889,17 @@ describe('EXEC-006 activity output/image HTTP surface', () => {
     }
     expect(body.content).toBe('final error summary')
     expect(body.archivedCharacters).toBe(fullText.length)
+    const bounded = await fetch(
+      `${base}/v1/runs/${claimed.run.id}/activity/call-spill-http/output?userId=owner&offset=0&until=5`,
+    )
+    expect(bounded.status).toBe(200)
+    expect(((await bounded.json()) as { content: string }).content).toBe(
+      fullText.slice(0, 5),
+    )
+    const invalidUntil = await fetch(
+      `${base}/v1/runs/${claimed.run.id}/activity/call-spill-http/output?userId=owner&offset=0&until=abc`,
+    )
+    expect(invalidUntil.status).toBeGreaterThanOrEqual(400)
     rmSync(spillPath)
     const gone = await fetch(
       `${base}/v1/runs/${claimed.run.id}/activity/call-spill-http/output-file?userId=owner`,
