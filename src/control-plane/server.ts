@@ -21,6 +21,7 @@ import {
   parseApprovalDecisionDraft,
   type ApprovalStatus,
 } from '../approval/approval.js'
+import { parseApprovalRuleRevocation } from '../approval/approval-rule.js'
 import type {
   NewInboxEvent,
   OutboxResolutionDraft,
@@ -1350,6 +1351,49 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
               : {}),
           },
         })
+      }
+
+      const approvalRulesMatch = /^\/v1\/tasks\/([^/]+)\/approval-rules$/.exec(
+        taskResourceUrl.pathname,
+      )
+      if (approvalRulesMatch && request.method === 'GET') {
+        const taskId = decodeURIComponent(approvalRulesMatch[1] ?? '')
+        const userId = requiredQuery(taskResourceUrl, 'userId')
+        if (!options.store.findTask(taskId, userId))
+          return sendJson(response, 404, { error: 'not_found' })
+        return sendJson(response, 200, {
+          rules: options.store.listApprovalRules(taskId, userId),
+        })
+      }
+      const approvalRuleRevokeMatch =
+        /^\/v1\/tasks\/([^/]+)\/approval-rules\/([^/]+)\/revoke$/.exec(
+          taskResourceUrl.pathname,
+        )
+      if (approvalRuleRevokeMatch && request.method === 'POST') {
+        const taskId = decodeURIComponent(approvalRuleRevokeMatch[1] ?? '')
+        const ruleId = decodeURIComponent(approvalRuleRevokeMatch[2] ?? '')
+        const body = await readJson(request)
+        if (!isRecord(body)) throw new Error('Request body must be an object')
+        const userId = requiredString(body.userId, 'userId')
+        if (!options.store.findTask(taskId, userId))
+          return sendJson(response, 404, { error: 'not_found' })
+        try {
+          const rule = options.store.revokeApprovalRule(
+            taskId,
+            ruleId,
+            userId,
+            parseApprovalRuleRevocation(body),
+          )
+          return sendJson(response, 200, { rule })
+        } catch (error) {
+          if (
+            error instanceof Error &&
+            error.message === 'Approval rule does not exist'
+          ) {
+            return sendJson(response, 404, { error: 'not_found' })
+          }
+          throw error
+        }
       }
 
       if (request.url?.startsWith('/v1/tasks') && request.method === 'GET') {

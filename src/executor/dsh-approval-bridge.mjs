@@ -1,9 +1,11 @@
 import { createHash } from 'node:crypto'
 
-import { classifyToolCall } from './policy-gate.mjs'
+import { canonicalRuleTarget, classifyToolCall } from './policy-gate.mjs'
 
 /** @typedef {{ baseUrl: string, runId: string, claimToken: string }} BridgeCapability */
 /** @typedef {{ actionId: string, tool: string, argumentsHash: string }} ToolGrant */
+/** @typedef {{ id: string, tool: string, category: string, targets: string[], fingerprint: string }} ApprovalRule */
+/** @typedef {{ tier: import('./policy-gate.d.ts').PolicyTier, generation: string, mismatch: boolean, rules: ApprovalRule[] }} TierState */
 /** @typedef {{ tool: string, argumentsHash: string, classification?: import('./policy-gate.d.ts').ToolCallClassification }} CapturedCall */
 /** @typedef {{ callId?: string | number, name: string, arguments?: unknown, agent?: unknown }} ToolExecution */
 /** @typedef {{ callId?: string | number, toolName: string, reason?: string, signal?: { aborted?: boolean } }} ApprovalRequest */
@@ -31,7 +33,7 @@ export function apply(ctx, config = {}) {
   const grantedCalls = new Map()
   /** @type {Map<string, import('./policy-gate.d.ts').ToolCallClassification>} */
   const gateDecisions = new Map()
-  /** @type {Map<string, { tier: string, generation: string, mismatch: boolean }>} */
+  /** @type {Map<string, TierState>} */
   const gateTiers = new Map()
   let grantConsumed = false
   let parked = false
@@ -66,6 +68,7 @@ export function apply(ctx, config = {}) {
             tier: /** @type {const} */ ('standard'),
             generation: '',
             mismatch: false,
+            rules: [],
           }
       const classification = classifyToolCall(exec, policy, tierState.tier)
       if (callKey !== undefined) {
@@ -79,6 +82,7 @@ export function apply(ctx, config = {}) {
           tier: tierState.tier,
           generation: tierState.generation,
           mismatch: tierState.mismatch,
+          rules: tierState.rules,
         })
       }
       if (capability && callKey !== undefined) {
@@ -92,6 +96,29 @@ export function apply(ctx, config = {}) {
           grantConsumed = true
           grantedCalls.set(callKey, grant.actionId)
           return next()
+        }
+        const matchedRule = matchApprovalRule(
+          tierState,
+          exec,
+          classification,
+          policy,
+        )
+        if (matchedRule) {
+          emit({
+            type: 'policy_decision',
+            callId: callKey,
+            tool: exec.name,
+            category: classification.category,
+            risk: classification.risk,
+            decision: 'allow',
+            reason: `命中本事情已批准规则：${matchedRule.tool}（${matchedRule.targets.join('、')}）。`,
+            ruleId: matchedRule.id,
+            tier: tierState.tier,
+            generation: tierState.generation,
+            mismatch: tierState.mismatch,
+          })
+          if (exec.agent !== undefined) return next()
+          return { kind: 'allow' }
         }
         if (classification.action === 'allow') {
           emit({
@@ -214,6 +241,20 @@ export function apply(ctx, config = {}) {
       if (callKey !== undefined && grantedCalls.has(callKey)) {
         return 'allowed-once'
       }
+      if (callKey !== undefined && classification !== undefined) {
+        const tierState = gateTiers.get(callKey)
+        if (
+          tierState &&
+          matchApprovalRule(
+            tierState,
+            { name: request.toolName },
+            classification,
+            policy,
+          )
+        ) {
+          return 'allowed-once'
+        }
+      }
       if (!capability || callKey === undefined || parked) return next()
       parked = true
       const reason = request.reason ?? `工具 ${request.toolName} 请求越权执行`
@@ -296,7 +337,7 @@ function escalateClassification(reason) {
  * @param {import('./policy-gate.d.ts').ToolCallClassification} classification
  * @param {CapturedCall | undefined} captured
  * @param {(event: Record<string, unknown>) => void} emit
- * @param {{ tier: string, generation: string, mismatch: boolean } | undefined} [tierState]
+ * @param {TierState | undefined} [tierState]
  * @returns {Promise<boolean>}
  */
 async function parkCall(
@@ -332,7 +373,7 @@ function writeEvent(event) {
 
 /**
  * @param {BridgeCapability} capability
- * @returns {Promise<{ tier: import('./policy-gate.d.ts').PolicyTier, generation: string, mismatch: boolean }>}
+ * @returns {Promise<TierState>}
  */
 async function readTierState(capability) {
   try {
@@ -356,10 +397,82 @@ async function readTierState(capability) {
       generation:
         typeof projection.generation === 'string' ? projection.generation : '',
       mismatch: projection.mismatch === true,
+      rules: normalizeRules(projection.rules),
     }
   } catch {
-    return { tier: 'strict', generation: '', mismatch: true }
+    return { tier: 'strict', generation: '', mismatch: true, rules: [] }
   }
+}
+
+/**
+ * @param {unknown} value
+ * @returns {ApprovalRule[]}
+ */
+function normalizeRules(value) {
+  if (!Array.isArray(value)) return []
+  /** @type {ApprovalRule[]} */
+  const rules = []
+  const entries = /** @type {unknown[]} */ (value)
+  for (const entry of entries) {
+    if (!entry || typeof entry !== 'object') continue
+    const record = /** @type {Record<string, unknown>} */ (entry)
+    const targets = record.targets
+    if (
+      typeof record.id === 'string' &&
+      typeof record.tool === 'string' &&
+      typeof record.category === 'string' &&
+      typeof record.fingerprint === 'string' &&
+      Array.isArray(targets) &&
+      targets.every(target => typeof target === 'string')
+    ) {
+      rules.push({
+        id: record.id,
+        tool: record.tool,
+        category: record.category,
+        targets: /** @type {string[]} */ (targets),
+        fingerprint: record.fingerprint,
+      })
+    }
+  }
+  return rules
+}
+
+/**
+ * @param {TierState} tierState
+ * @param {{ name: string, arguments?: unknown }} execution
+ * @param {import('./policy-gate.d.ts').ToolCallClassification} classification
+ * @param {import('./policy-gate.d.ts').PolicyRoots} policy
+ * @returns {ApprovalRule | undefined}
+ */
+function matchApprovalRule(tierState, execution, classification, policy) {
+  if (tierState.mismatch) return undefined
+  if (classification.risk !== 'high') return undefined
+  if (
+    classification.category !== 'out-of-workspace-write' &&
+    classification.category !== 'network-egress'
+  ) {
+    return undefined
+  }
+  const targets = classification.targets
+    .map(target => canonicalRuleTarget(target, policy))
+    .filter(target => target !== undefined)
+  if (targets.length === 0 || targets.length !== classification.targets.length)
+    return undefined
+  const fingerprint = createHash('sha256')
+    .update(
+      JSON.stringify({
+        tool: execution.name,
+        category: classification.category,
+        targets: [...new Set(targets)].sort(),
+      }),
+    )
+    .digest('hex')
+  return tierState.rules.find(
+    rule =>
+      rule.tool === execution.name &&
+      rule.category === classification.category &&
+      rule.fingerprint === fingerprint,
+  )
 }
 
 /**
@@ -442,6 +555,11 @@ function normalizePolicy(value) {
  * @returns {Promise<{ actionId: string, approvalId: string }>}
  */
 async function createApproval(capability, input) {
+  const ruleEligible =
+    input.classification.risk === 'high' &&
+    (input.classification.category === 'out-of-workspace-write' ||
+      input.classification.category === 'network-egress') &&
+    input.classification.targets.length > 0
   const action = {
     kind: `dsh.tool.${input.tool}`,
     risk: input.classification.risk === 'critical' ? 'critical' : 'high',
@@ -468,6 +586,16 @@ async function createApproval(capability, input) {
       recommendedOptionId: 'approve',
       options: [
         { id: 'approve', label: '批准执行一次', kind: 'approve' },
+        ...(ruleEligible
+          ? [
+              {
+                id: 'approve_rule',
+                label: '本事情内同类不再询问',
+                kind: 'approve_rule',
+                description: `仅覆盖 ${input.tool} 对相同目标（${input.classification.targets.join('、')}）的同类操作；参数内容变化不影响命中，目标变化会重新审批，可在事情详情撤销。`,
+              },
+            ]
+          : []),
         { id: 'reject', label: '不执行', kind: 'reject' },
       ],
     },

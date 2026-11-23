@@ -29,3 +29,8 @@ export declare function classifyToolCall(
   roots: PolicyRoots,
   tier?: PolicyTier,
 ): ToolCallClassification
+
+export declare function canonicalRuleTarget(
+  value: unknown,
+  roots: PolicyRoots,
+): string | undefined

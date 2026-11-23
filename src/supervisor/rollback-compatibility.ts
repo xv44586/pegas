@@ -9,6 +9,7 @@ const actionReconciliationSchemaVersion = 23
 const steeringSchemaVersion = 24
 const chatLaneSchemaVersion = 32
 const permissionTierSchemaVersion = 40
+const approvalRuleSchemaVersion = 41
 
 export class RollbackCompatibilityError extends Error {}
 
@@ -178,6 +179,19 @@ export function assertRollbackCompatible(
       if (nonDefaultGlobalTier || taskTierOverride) {
         throw new RollbackCompatibilityError(
           'Rollback is unsafe while non-default permission tiers are configured',
+        )
+      }
+    }
+    if (
+      currentVersion >= approvalRuleSchemaVersion &&
+      targetMaximumSchema < approvalRuleSchemaVersion
+    ) {
+      const activeRules = database
+        .prepare(`SELECT 1 FROM approval_rules WHERE status = 'active' LIMIT 1`)
+        .get()
+      if (activeRules) {
+        throw new RollbackCompatibilityError(
+          'Rollback is unsafe while active approval rules exist',
         )
       }
     }

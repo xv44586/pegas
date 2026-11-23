@@ -1,5 +1,6 @@
 import type {
   Approval,
+  ApprovalRule,
   Automation,
   AutomationDraft,
   AutomationInvocation,
@@ -903,6 +904,35 @@ export class PegasApi {
     )
     if (!response.ok) await throwResponse(response)
     return ((await response.json()) as { approval: Approval }).approval
+  }
+
+  async approvalRules(taskId: string): Promise<ApprovalRule[]> {
+    const params = new URLSearchParams({ userId: this.#userId })
+    const response = await fetch(
+      `/v1/tasks/${encodeURIComponent(taskId)}/approval-rules?${params.toString()}`,
+      { headers: this.#headers(true) },
+    )
+    if (!response.ok) await throwResponse(response)
+    return ((await response.json()) as { rules: ApprovalRule[] }).rules
+  }
+
+  async revokeApprovalRule(
+    taskId: string,
+    ruleId: string,
+  ): Promise<ApprovalRule> {
+    const response = await fetch(
+      `/v1/tasks/${encodeURIComponent(taskId)}/approval-rules/${encodeURIComponent(ruleId)}/revoke`,
+      {
+        method: 'POST',
+        headers: this.#headers(true),
+        body: JSON.stringify({
+          userId: this.#userId,
+          commandId: crypto.randomUUID(),
+        }),
+      },
+    )
+    if (!response.ok) await throwResponse(response)
+    return ((await response.json()) as { rule: ApprovalRule }).rule
   }
 
   modelUsage(taskId?: string): Promise<ModelUsageReport> {

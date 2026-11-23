@@ -35,6 +35,15 @@ import type {
   ApprovalPrompt,
   DurableAction,
 } from '../approval/approval.js'
+import {
+  type ApprovalRule,
+  type ApprovalRuleProjection,
+  type ApprovalRuleRevocationDraft,
+} from '../approval/approval-rule.js'
+import {
+  approvalRuleFingerprint,
+  approvalRuleRevocationFingerprint,
+} from '../approval/approval-rule-fingerprint.js'
 import type {
   ClaimedRun,
   EventAttachment,
@@ -870,6 +879,84 @@ CREATE TABLE worker_profile_changes (
 
 CREATE INDEX worker_profile_changes_by_task_time
 ON worker_profile_changes (task_id, created_at DESC);
+`
+
+const migration41 = `
+-- APPROVAL-001 P3: task-scoped approval rules created by approve_rule
+-- decisions. Rules are append-only facts; revocation flips status only.
+CREATE TABLE approval_decisions_v41 (
+  id TEXT PRIMARY KEY,
+  approval_id TEXT NOT NULL UNIQUE REFERENCES approvals(id),
+  event_id TEXT NOT NULL UNIQUE REFERENCES inbox_events(id),
+  command_id TEXT NOT NULL UNIQUE,
+  user_id TEXT NOT NULL,
+  option_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('approve','approve_rule','reject','revise')),
+  rationale TEXT,
+  decided_at TEXT NOT NULL,
+  applied_at TEXT
+);
+
+INSERT INTO approval_decisions_v41
+  (id, approval_id, event_id, command_id, user_id, option_id, kind,
+   rationale, decided_at, applied_at)
+SELECT id, approval_id, event_id, command_id, user_id, option_id, kind,
+       rationale, decided_at, applied_at
+FROM approval_decisions;
+
+DROP TABLE approval_decisions;
+ALTER TABLE approval_decisions_v41 RENAME TO approval_decisions;
+
+CREATE TABLE approval_rules (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES tasks(id),
+  tool TEXT NOT NULL,
+  category TEXT NOT NULL,
+  targets_json TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','revoked')),
+  created_from_approval_id TEXT NOT NULL REFERENCES approvals(id),
+  created_from_decision_id TEXT NOT NULL UNIQUE REFERENCES approval_decisions(id),
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  revoked_at TEXT,
+  revoked_by TEXT
+);
+
+CREATE UNIQUE INDEX approval_rules_active_fingerprint
+ON approval_rules (task_id, fingerprint) WHERE status = 'active';
+
+CREATE INDEX approval_rules_by_task_time
+ON approval_rules (task_id, created_at DESC, id DESC);
+
+CREATE TABLE approval_rule_revocations (
+  rule_id TEXT NOT NULL REFERENCES approval_rules(id),
+  command_id TEXT NOT NULL UNIQUE,
+  fingerprint TEXT NOT NULL,
+  response_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (rule_id, command_id)
+);
+
+CREATE TRIGGER approval_rules_revoke_only
+BEFORE UPDATE ON approval_rules
+WHEN OLD.status <> 'active' OR NEW.status <> 'revoked'
+  OR NEW.id <> OLD.id OR NEW.task_id <> OLD.task_id
+  OR NEW.tool <> OLD.tool OR NEW.category <> OLD.category
+  OR NEW.targets_json <> OLD.targets_json
+  OR NEW.fingerprint <> OLD.fingerprint
+  OR NEW.created_from_approval_id <> OLD.created_from_approval_id
+  OR NEW.created_from_decision_id <> OLD.created_from_decision_id
+  OR NEW.created_by <> OLD.created_by OR NEW.created_at <> OLD.created_at
+BEGIN
+  SELECT RAISE(ABORT, 'approval_rules rows are append-only except revocation');
+END;
+
+CREATE TRIGGER approval_rules_no_delete
+BEFORE DELETE ON approval_rules
+BEGIN
+  SELECT RAISE(ABORT, 'approval_rules rows cannot be deleted');
+END;
 `
 
 const migration32 = `
@@ -2261,6 +2348,30 @@ interface ApprovalDecisionRow {
   applied_at: string | null
 }
 
+interface ApprovalRuleRow {
+  id: string
+  task_id: string
+  tool: string
+  category: string
+  targets_json: string
+  fingerprint: string
+  status: ApprovalRule['status']
+  created_from_approval_id: string
+  created_from_decision_id: string
+  created_by: string
+  created_at: string
+  revoked_at: string | null
+  revoked_by: string | null
+}
+
+interface ApprovalRuleRevocationRow {
+  rule_id: string
+  command_id: string
+  fingerprint: string
+  response_json: string
+  created_at: string
+}
+
 interface ApprovalProjectionRow extends ApprovalRow {
   request_run_id: string
   decision_id: string | null
@@ -2679,6 +2790,7 @@ export class PegasStore {
     this.#migrate(38, migration38)
     this.#migrate(39, migration39)
     this.#migrate(40, migration40)
+    this.#migrate(41, migration41)
   }
 
   #backfillWorkerIconIds(): void {
@@ -3053,6 +3165,186 @@ export class PegasStore {
     }))
   }
 
+  #createApprovalRuleInTransaction(
+    approval: Approval,
+    decisionId: string,
+    userId: string,
+    now: string,
+  ): void {
+    const action = this.#actionById(approval.actionId)
+    const tool = action.request.tool
+    const category = action.request.category
+    const targets = action.request.targets
+    if (
+      typeof tool !== 'string' ||
+      typeof category !== 'string' ||
+      !Array.isArray(targets) ||
+      !targets.every(target => typeof target === 'string')
+    ) {
+      throw new Error(
+        'Action request does not carry rule fingerprint facts (tool/category/targets)',
+      )
+    }
+    const fingerprint = approvalRuleFingerprint({ tool, category, targets })
+    const existing = this.#database
+      .prepare(
+        `SELECT id FROM approval_rules
+         WHERE task_id = ? AND fingerprint = ? AND status = 'active'`,
+      )
+      .get(approval.taskId, fingerprint) as { id: string } | undefined
+    if (existing) return
+    const ruleId = randomUUID()
+    this.#database
+      .prepare(
+        `INSERT INTO approval_rules
+          (id, task_id, tool, category, targets_json, fingerprint, status,
+           created_from_approval_id, created_from_decision_id, created_by,
+           created_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)`,
+      )
+      .run(
+        ruleId,
+        approval.taskId,
+        tool,
+        category,
+        JSON.stringify([...new Set(targets)].sort()),
+        fingerprint,
+        approval.id,
+        decisionId,
+        userId,
+        now,
+      )
+    this.enqueueOutbox({
+      userId,
+      taskId: approval.taskId,
+      channel: 'timeline',
+      dedupeKey: `approval-rule-created:${ruleId}`,
+      payload: {
+        type: 'task.approval_rule_changed',
+        taskId: approval.taskId,
+        ruleId,
+        change: 'created',
+        tool,
+        category,
+        targets: [...new Set(targets)].sort(),
+        approvalId: approval.id,
+        text: `已批准本事情内同类操作：${tool}（${approvalRuleTargetsSummary(targets)}），可在事情详情随时撤销。`,
+      },
+    })
+  }
+
+  listApprovalRules(taskId: string, userId: string): ApprovalRule[] {
+    const task = this.#taskById(taskId)
+    if (task.userId !== userId) throw new Error('Task belongs to another user')
+    const rows = this.#database
+      .prepare(
+        `SELECT * FROM approval_rules
+         WHERE task_id = ?
+         ORDER BY created_at DESC, id DESC
+         LIMIT 100`,
+      )
+      .all(taskId) as unknown as ApprovalRuleRow[]
+    return rows.map(row => toApprovalRule(row))
+  }
+
+  revokeApprovalRule(
+    taskId: string,
+    ruleId: string,
+    userId: string,
+    draft: ApprovalRuleRevocationDraft,
+  ): ApprovalRule {
+    const fingerprint = approvalRuleRevocationFingerprint(draft.commandId)
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const task = this.#taskById(taskId)
+      if (task.userId !== userId)
+        throw new Error('Task belongs to another user')
+      const replay = this.#database
+        .prepare(
+          `SELECT * FROM approval_rule_revocations
+           WHERE rule_id = ? AND command_id = ?`,
+        )
+        .get(ruleId, draft.commandId) as unknown as
+        ApprovalRuleRevocationRow | undefined
+      if (replay) {
+        if (replay.fingerprint !== fingerprint) {
+          throw new Error('Revocation command ID is already used')
+        }
+        this.#database.exec('COMMIT')
+        return JSON.parse(replay.response_json) as ApprovalRule
+      }
+      const row = this.#database
+        .prepare('SELECT * FROM approval_rules WHERE id = ? AND task_id = ?')
+        .get(ruleId, taskId) as unknown as ApprovalRuleRow | undefined
+      if (!row) throw new Error('Approval rule does not exist')
+      const now = this.#clock.now().toISOString()
+      if (row.status === 'active') {
+        this.#database
+          .prepare(
+            `UPDATE approval_rules
+             SET status = 'revoked', revoked_at = ?, revoked_by = ?
+             WHERE id = ? AND status = 'active'`,
+          )
+          .run(now, userId, ruleId)
+        this.enqueueOutbox({
+          userId,
+          taskId,
+          channel: 'timeline',
+          dedupeKey: `approval-rule-revoked:${ruleId}`,
+          payload: {
+            type: 'task.approval_rule_changed',
+            taskId,
+            ruleId,
+            change: 'revoked',
+            tool: row.tool,
+            category: row.category,
+            text: `已撤销同类操作规则：${row.tool}，后续同类调用将重新请求你的审批。`,
+          },
+        })
+      }
+      const updated = this.#database
+        .prepare('SELECT * FROM approval_rules WHERE id = ?')
+        .get(ruleId) as unknown as ApprovalRuleRow
+      const rule = toApprovalRule(updated)
+      this.#database
+        .prepare(
+          `INSERT INTO approval_rule_revocations
+            (rule_id, command_id, fingerprint, response_json, created_at)
+           VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run(ruleId, draft.commandId, fingerprint, JSON.stringify(rule), now)
+      this.#database.exec('COMMIT')
+      return rule
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  #activeApprovalRuleProjections(taskId: string): ApprovalRuleProjection[] {
+    const rows = this.#database
+      .prepare(
+        `SELECT id, tool, category, targets_json, fingerprint
+         FROM approval_rules
+         WHERE task_id = ? AND status = 'active'
+         ORDER BY created_at, id`,
+      )
+      .all(taskId) as unknown as {
+      id: string
+      tool: string
+      category: string
+      targets_json: string
+      fingerprint: string
+    }[]
+    return rows.map(row => ({
+      id: row.id,
+      tool: row.tool,
+      category: row.category,
+      targets: JSON.parse(row.targets_json) as string[],
+      fingerprint: row.fingerprint,
+    }))
+  }
+
   runPermissionProjection(
     runId: string,
     claimToken: string,
@@ -3064,6 +3356,7 @@ export class PegasStore {
     mismatch: boolean
     generation: string
     source: 'global' | 'task'
+    rules: ApprovalRuleProjection[]
   } {
     this.#claimForCapability(runId, claimToken)
     const run = this.#runById(runId)
@@ -3080,6 +3373,7 @@ export class PegasStore {
       ...(snapshotTier ? { snapshotTier } : {}),
       liveTier: effective.permissionTier,
     })
+    const rules = this.#activeApprovalRuleProjections(task.id)
     const generation = createHash('sha256')
       .update(
         JSON.stringify({
@@ -3087,6 +3381,7 @@ export class PegasStore {
           workerProfileRevision: effective.profile.revision,
           liveTier: effective.permissionTier,
           snapshotTier: snapshotTier ?? null,
+          ruleFingerprints: rules.map(rule => rule.fingerprint),
         }),
       )
       .digest('hex')
@@ -3099,6 +3394,7 @@ export class PegasStore {
       mismatch: combination.mismatch,
       generation,
       source: effective.permissionSource,
+      rules,
     }
   }
 
@@ -9195,6 +9491,14 @@ export class PegasStore {
         option => option.id === draft.optionId,
       )
       if (!option) throw new Error('Approval option does not exist')
+      if (option.kind === 'approve_rule') {
+        const action = this.#actionById(approval.actionId)
+        if (action.risk !== 'high') {
+          throw new Error(
+            'Persistent approval rules are only available for high-risk actions',
+          )
+        }
+      }
 
       const now = this.#clock.now().toISOString()
       const decisionId = randomUUID()
@@ -9229,6 +9533,9 @@ export class PegasStore {
            WHERE id = ? AND status = 'pending'`,
         )
         .run(approvalId)
+      if (option.kind === 'approve_rule') {
+        this.#createApprovalRuleInTransaction(approval, decisionId, userId, now)
+      }
       this.#applyApprovalDecisionInTransaction(event)
       const decision = this.#decisionByApprovalId(approvalId)
       const updated = this.#approvalById(approvalId)
@@ -9343,7 +9650,9 @@ export class PegasStore {
         )
         .run(
           successorId,
-          row.kind === 'approve' ? 'authorized' : 'rejected',
+          row.kind === 'approve' || row.kind === 'approve_rule'
+            ? 'authorized'
+            : 'rejected',
           now,
           action.id,
         )
@@ -9360,7 +9669,7 @@ export class PegasStore {
     this.#database
       .prepare(`UPDATE approvals SET status = ?, resolved_at = ? WHERE id = ?`)
       .run(
-        row.kind === 'approve'
+        row.kind === 'approve' || row.kind === 'approve_rule'
           ? 'approved'
           : row.kind === 'reject'
             ? 'rejected'
@@ -13717,6 +14026,31 @@ function toApprovalDecision(row: ApprovalDecisionRow): ApprovalDecision {
     decidedAt: row.decided_at,
     ...(row.applied_at ? { appliedAt: row.applied_at } : {}),
   }
+}
+
+function toApprovalRule(row: ApprovalRuleRow): ApprovalRule {
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    tool: row.tool,
+    category: row.category,
+    targets: JSON.parse(row.targets_json) as string[],
+    fingerprint: row.fingerprint,
+    status: row.status,
+    createdFromApprovalId: row.created_from_approval_id,
+    createdFromDecisionId: row.created_from_decision_id,
+    createdBy: row.created_by,
+    createdAt: row.created_at,
+    ...(row.revoked_at ? { revokedAt: row.revoked_at } : {}),
+    ...(row.revoked_by ? { revokedBy: row.revoked_by } : {}),
+  }
+}
+
+function approvalRuleTargetsSummary(targets: string[]): string {
+  const summary = targets.slice(0, 3).join('、')
+  return targets.length > 3
+    ? `${summary} 等 ${String(targets.length)} 个目标`
+    : summary
 }
 
 function cursorPage<Row extends { id: string }, Value>(

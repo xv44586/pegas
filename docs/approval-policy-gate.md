@@ -1,6 +1,6 @@
 # 权限档位与审批 Policy Gate（APPROVAL-001 第二阶段）
 
-> 状态：P1 Gate 覆盖面、P2 权限档位对象已实现（见下方实现记录）；P3–P5 仍为 Intake
+> 状态：P1 Gate 覆盖面、P2 权限档位对象、P3 规则批准已实现（见下方实现记录）；P4–P5 仍为 Intake
 > 更新日期：2026-11-23
 > 基线：`origin/main` `74c2f8c`（Intake 初稿基线 `4baab43`）
 > 外部调研：`research/approval-permissions-codex-cindy/NOTES.md`（本地，不入库；Codex CLI/webview、Cindy Apache-2.0 docs、DSH MIT 源码）
@@ -130,6 +130,19 @@
 - **证据**：`test/permission-profile.test.ts` 16 项 + `test/permission-bridge.test.ts` 2 项（收紧下一次调用立即生效、断网 fail closed、strict 网络 ask、全档位 control-plane deny；先红后绿）+ Web `App.test.tsx` 事情级/全局档位切换与完全访问风险确认 2 项（先红后绿）；P1 探针 `test/policy-gate-integration.test.ts` 更新为带档位快照的 Run 后真实 DSH 复跑通过；`test/sqlite-store.test.ts`（v40 迁移清单）、`test/worker-profile.test.ts`（快照含 permissionTier）同步更新。`pnpm check`（合并最新 `origin/main` `6c0f013` 后复跑）113 文件 / 1205 测试全绿（statement 85.64%、branch 78.55%、function 89.8%、line 88.77%），`pnpm smoke`、`pnpm smoke:crash` 通过；合并后首轮门禁暴露两处测试基建计时抖动并修复：SIGKILL 升级回归隔离复跑稳定（P1 已登记同类抖动）、真实 DSH 探针补 Run lease 心跳（默认 30s lease 短于慢模型 turn，生产 Worker 本有心跳，探针直连 executor 缺模拟；心跳对停放后的 Run 停跳，不掩盖真实失败）。验收条件 3（收紧/放宽下界/错配 fail closed/幂等/owner 隔离/时间线审计）已满足；条件 2 的三档 guard 有单测覆盖（真实 DSH 三档探针未跑）；条件 4–7 属 P3–P5 与后续验证。
 - **剩余风险**：每工具调用一次现读 HTTP 的时延与控制面负载（本地回环，未压测）；strict 档 bash 一律 ask 会产生高频审批（预期行为，P3 规则批准缓解）；full 档下 Gate 不再拦截区外写（如实披露，风险确认弹层承担告知）；旧 Run fail-closed 全量 ask 可能让存量等待中的 Run 恢复后审批变多。
 - **回滚**：schema v40 additive（两列 + 审计表），旧代码忽略新列；Supervisor Guard 在存在非默认全局档位或 Task 覆盖时拒绝回滚到 <v40 的 Release（先切回 standard/inherit 再回滚）；revert 提交即恢复 P1 行为，审计数据保留不删除。
+
+## P3 实现记录（2026-11-23）
+
+- **实现**：决定词表扩展 `approve_rule`（`src/approval/approval.ts`，语义=批准一次 + 建立本事情内同类规则）；规则一等对象 `src/approval/approval-rule.ts`（类型/撤销命令解析）+ `src/approval/approval-rule-fingerprint.ts`（sha256 指纹，纯校验在 approval.ts 供 Web 复用）；migration v41：`approval_decisions` CHECK 重建含 approve_rule + append-only `approval_rules`（触发器只允许 active→revoked 翻转，禁删禁改）+ `approval_rule_revocations` 幂等账本；`decideApproval` 同事务建规则（重复指纹去重）+ `task.approval_rule_changed` 时间线事件；`runPermissionProjection` 返回 active 规则集并入 generation 指纹；HTTP `GET /v1/tasks/:id/approval-rules`、`POST /v1/tasks/:id/approval-rules/:ruleId/revoke`（bearer + owner，幂等撤销）；桥 `createApproval` 对可规则类别附加 approve_rule 选项（说明指纹范围），pre-execute 现读规则集按指纹放行（`policy_decision` 带 ruleId），seam 对已命中 callId 返回 allowed-once；Web 事情抽屉「已批准规则」列表 + 撤销，审批卡决定选项由 prompt 通用渲染。
+- **与 Intake 的差异（如实记录）**：
+  - 未新增独立 decide 端点：approve_rule 是既有决定 option kind，复用唯一 decision/幂等 command/successor 链路；规则创建与决定同事务，崩溃后不会出现「已批准但无规则」或反之。
+  - 规则范围=工具 + 类别 + canonical 目标集合指纹（参数内容变体命中，目标变体不命中）；Intake 提到的「命令前缀」未实现——bash 命令前缀匹配无法确定性保证范围不扩大，P3 只对 out-of-workspace-write / network-egress 且 targets 非空的 high 动作开放规则；destructive-command（critical）、unknown、control-plane-mutation 一律不提供也不接受规则（服务端 risk 守卫 + 桥类别守卫 + guard 硬拦三层）。
+  - strict 档下规则不放行：分类 reason/targets 语义随档位变化，指纹天然不匹配（fail closed 方向）；mismatch 时规则集视为空。
+  - 规则命中复用 Gate allow 路径（Activity `policy_decision` 记录 ruleId），不逐次创建 Action/outcome；撤销后下一次调用重新审批（现读无缓存）。
+  - 规则撤销是状态翻转 + append-only 历史（创建决定引用保留）；回滚 Guard：存在 active 规则时拒绝回滚到 <v41。
+- **证据**：`test/approval-rules.test.ts` 10 项（指纹稳定性/类别守卫/决定建规则/幂等重放/critical 拒绝/无选项拒绝/撤销幂等与 owner 隔离/投影只含本 Task active 规则且 generation 变化/回滚 Guard/HTTP 面）+ `test/approval-rule-bridge.test.ts` 2 项（停放带规则选项→approve_rule→successor 同目标参数变体放行、目标变体 re-ask、撤销后 re-ask；control-plane 不提供规则）+ Web 2 项（审批抽屉选规则提交、抽屉规则列表撤销），均先红后绿；`pnpm check` 115 文件 / 1219 测试全绿（statement 85.72%、branch 78.61%、function 89.96%、line 88.87%），`pnpm smoke`、`pnpm smoke:crash` 通过。验收条件 4 已满足（指纹绑定/变体不命中/撤销 re-ask/critical 与 control-plane 拒绝豁免/owner 隔离）。
+- **剩余风险**：规则命中不创建逐次 Action 审计（只有 Activity 记录 + 规则创建/撤销审计），逐调用独立审计表仍是登记缺口；规则目标集合精确匹配对「同目录新文件」不命中（保守方向，宁可多问）；真实 DSH approve_rule 全链路探针未跑（fake harness 覆盖）。
+- **回滚**：revert 提交恢复一次性 grant 行为；v41 additive（新表 + decisions CHECK 重建保数据），旧代码忽略新表；Guard 在存在 active 规则时拒回滚（先撤销全部规则再回滚）。
 
 ## UI 设计合同（P4 输入）
 

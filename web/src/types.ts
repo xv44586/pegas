@@ -118,6 +118,7 @@ export interface ConversationProjection {
 
 export type Approval = ServerApproval
 export type DurableAction = ServerDurableAction
+export type ApprovalRule = ServerApprovalRule
 
 export interface Snapshot {
   events: InboxEvent[]
@@ -680,6 +681,7 @@ import type {
   Approval as ServerApproval,
   DurableAction as ServerDurableAction,
 } from '../../src/approval/approval'
+import type { ApprovalRule as ServerApprovalRule } from '../../src/approval/approval-rule'
 import type {
   GoalContract as ServerGoalContract,
   ReviewPack as ServerReviewPack,

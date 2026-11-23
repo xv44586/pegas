@@ -5437,6 +5437,31 @@ kbd {
 .approval-rationale span {
   color: var(--muted);
 }
+.approval-rule-list {
+  display: grid;
+  gap: 10px;
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+}
+.approval-rule-item {
+  align-items: flex-start;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 12px 14px;
+}
+.approval-rule-item div {
+  display: grid;
+  gap: 3px;
+  min-inline-size: 0;
+}
+.approval-rule-item small {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
 .approval-rationale {
   display: grid;
   gap: 8px;

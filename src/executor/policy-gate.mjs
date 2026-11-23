@@ -159,6 +159,19 @@ function canonicalize(absolute) {
 }
 
 /**
+ * @param {unknown} value
+ * @param {PolicyRoots} roots
+ * @returns {string | undefined}
+ */
+export function canonicalRuleTarget(value, roots) {
+  return canonicalTarget(value, {
+    workspaceRoot: canonicalRoot(roots.workspaceRoot),
+    protectedRoots: [],
+    protectedAliases: [],
+  })
+}
+
+/**
  * @param {string} target
  * @param {string | undefined} root
  * @returns {boolean}

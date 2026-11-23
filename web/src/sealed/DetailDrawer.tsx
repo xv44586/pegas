@@ -22,6 +22,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ApiError, type PegasApi } from '../api'
 import { MarkdownMessage } from '../MarkdownMessage'
 import type {
+  ApprovalRule,
   ChannelEvidencePage,
   ChannelRelation,
   DurableAction,
@@ -1347,6 +1348,7 @@ function TaskDetail({
         profile={workerProfile}
         profileError={workerProfileError}
       />
+      <ApprovalRulesSection api={api} channel={channel} />
       {confirmingStop && (
         <section
           aria-labelledby="stop-confirmation-title"
@@ -2639,6 +2641,113 @@ function permissionTierLabel(tier?: 'strict' | 'standard' | 'full') {
   if (tier === 'strict') return '严格'
   if (tier === 'full') return '完全访问'
   return '标准'
+}
+
+function ApprovalRulesSection({
+  api,
+  channel,
+}: {
+  api?: PegasApi
+  channel: Extract<DrawerView, { kind: 'task' }>['channel']
+}) {
+  const [rules, setRules] = useState<ApprovalRule[]>()
+  const [loadError, setLoadError] = useState('')
+  const [revokingId, setRevokingId] = useState('')
+  const [revokeError, setRevokeError] = useState('')
+  useEffect(() => {
+    setRules(undefined)
+    setLoadError('')
+    setRevokeError('')
+    if (!api) return
+    let cancelled = false
+    api
+      .approvalRules(channel.id)
+      .then(loaded => {
+        if (!cancelled) setRules(loaded)
+      })
+      .catch((caught: unknown) => {
+        if (!cancelled)
+          setLoadError(
+            caught instanceof Error ? caught.message : '规则读取失败。',
+          )
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [api, channel.id])
+  if (!api) return null
+  async function revoke(rule: ApprovalRule) {
+    if (!api || revokingId) return
+    setRevokingId(rule.id)
+    setRevokeError('')
+    try {
+      const updated = await api.revokeApprovalRule(channel.id, rule.id)
+      setRules(current =>
+        current?.map(item => (item.id === updated.id ? updated : item)),
+      )
+    } catch (caught) {
+      setRevokeError(
+        caught instanceof Error ? caught.message : '撤销失败，请重试。',
+      )
+    } finally {
+      setRevokingId('')
+    }
+  }
+  return (
+    <section className="detail-section">
+      <h3>已批准规则</h3>
+      {loadError ? (
+        <p className="drawer-footnote" role="alert">
+          {loadError}
+        </p>
+      ) : !rules ? (
+        <p className="drawer-footnote">正在读取规则…</p>
+      ) : rules.length === 0 ? (
+        <p className="drawer-footnote">
+          还没有持久规则。批准审批时选择「本事情内同类不再询问」会在这里生成可撤销的规则。
+        </p>
+      ) : (
+        <ul className="approval-rule-list">
+          {rules.map(rule => (
+            <li className="approval-rule-item" key={rule.id}>
+              <div>
+                <strong>
+                  {rule.tool} · {approvalRuleCategoryLabel(rule.category)}
+                </strong>
+                <small>{rule.targets.join('、')}</small>
+                <small>
+                  {rule.status === 'active'
+                    ? `生效中 · ${formatRelativeTime(rule.createdAt)}批准`
+                    : `已撤销${rule.revokedAt ? ` · ${formatRelativeTime(rule.revokedAt)}` : ''}`}
+                </small>
+              </div>
+              {rule.status === 'active' && (
+                <button
+                  className="secondary-button"
+                  disabled={revokingId !== ''}
+                  onClick={() => void revoke(rule)}
+                  type="button"
+                >
+                  {revokingId === rule.id ? '撤销中…' : '撤销规则'}
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {revokeError && (
+        <p className="drawer-footnote" role="alert">
+          {revokeError}
+        </p>
+      )}
+    </section>
+  )
+}
+
+function approvalRuleCategoryLabel(category: string): string {
+  if (category === 'out-of-workspace-write') return '工作区外写入'
+  if (category === 'network-egress') return '对外网络发送'
+  return category
 }
 
 function ExecutionProfileMeta({ run }: { run?: Run }) {

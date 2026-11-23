@@ -163,6 +163,12 @@ Gate 的边界事实来自 Executor 注入的 patch config `policy { workspaceRo
 
 档位映射：`strict`→read-only 沙箱且 write/edit/apply_patch/bash/web_fetch/web_search 全部 ask；`standard`→workspace-write 沙箱 + Gate 分级；`full`→danger-full-access 沙箱 + ask（Web 启用前强制风险确认）。control-plane-mutation 的 guard 硬拦在三档一致。切档走 `PUT /v1/tasks/:id/worker-profile`（`permissionMode` 字段，commandId+expectedRevision 幂等），权限变更写 append-only `worker_profile_changes` 审计并发 `task.permission_changed` 时间线事件；判定时的 tier/generation/mismatch 随 `policy_decision` 事件与 Action request 持久化。
 
+### 规则批准（APPROVAL-001 P3）
+
+批准审批时可选「本事情内同类不再询问」（决定 option kind `approve_rule`）：决定与规则创建同事务，规则是一等持久对象（`approval_rules`，append-only，触发器只允许 active→revoked 翻转）。规则范围=工具 + 类别 + canonical 目标集合的 sha256 指纹：参数内容变体命中，目标变体不命中。只有 high 风险的 out-of-workspace-write / network-egress 且目标非空的动作提供规则选项；critical、unknown、control-plane-mutation 在桥（不给选项）与服务端（risk 守卫拒绝 approve_rule）双层拒绝，guard 硬拦不受规则影响。
+
+桥每次 pre-execute 现读的权限投影包含本 Task active 规则集（并入 generation 指纹）；分类后按指纹匹配放行，`policy_decision` 事件带 ruleId，seam 对已命中 callId 返回 allowed-once。规则命中不逐次创建 Action/outcome（Activity 记录 + 规则创建/撤销审计）；strict 档与 mismatch 下规则不放行。撤销走 `POST /v1/tasks/:id/approval-rules/:ruleId/revoke`（commandId 幂等、owner 隔离），下一次调用立即重新审批；规则列表与撤销入口在事情抽屉「已批准规则」。存在 active 规则时 Supervisor 拒绝回滚到 <v41。
+
 ### 停放与恢复（seam 共用链路）
 
 1. **停放**：插件用当前 Run 的 claim capability 调 `POST /v1/runs/:runId/approvals` 创建持久 Approval。Action `kind` 为 `dsh.tool.<tool>`，risk 由 Gate 分级写入（`high`/`critical`；seam 越权无 Gate 判定时按 `high`），`request` 保存 `tool`、`callId`、`reason`、`category`、`targets` 与 `argumentsHash`（工具参数的稳定序列化 SHA-256），幂等键为 `dsh-tool:<runId>:<callId>`。创建成功后向 headless JSON 流写入 `approval_pending` 事件并对本次调用返回 `rejected`；Executor 识别该事件后按持久等待结算 Run（服务端已把 Run 置为 `waiting` 并清除 lease），不再提交 Report。创建失败时写入 `approval_bridge_error` 事件，Executor 将其作为执行失败处理，不放行工具。
@@ -176,7 +182,7 @@ claim token 只经进程环境传给 DSH 主进程，DSH 自身的 subprocess �
 
 - Policy Gate 覆盖全部工具调用，但 bash 只做确定性静态分类：未命中模式的复杂命令按低风险交由沙箱边界执行，间接执行按 unknown 强制人工确认；execpolicy 级完整命令语义解析属后续阶段。
 - Gate 的 allow 记录目前经 `policy_decision` 事件进入 Run Activity 进度流（含档位与代次指纹），逐调用独立审计表仍未落；切档动作本身已有 append-only 审计。
-- 档位对象与运行中热切换已落地（P2）；持久规则批准（approve_rule）、审批卡结构化渲染与自动审阅分别属 P3/P4/P5。
+- 档位对象与运行中热切换已落地（P2），持久规则批准（approve_rule）已落地（P3）；审批卡结构化渲染与自动审阅分别属 P4/P5。
 - 桥现读档位是每工具调用一次本地 HTTP 往返；控制面不可达时该 Run 的工具全部按 strict 升审批，不会静默放行。
 - 同一 DSH 进程只停放第一个越权调用；并行的其余审批请求 fall through 到 DSH 默认 `unavailable`，fail closed。
 - 批准后恢复的是同一 DSH session，但模型需要重新发起同参数调用才能命中一次性 grant；grant 不预执行任何工具。
@@ -185,7 +191,7 @@ claim token 只经进程环境传给 DSH 主进程，DSH 自身的 subprocess �
 
 ## 当前限制
 
-持久对象、策略边界、API、Web 决策、恢复协议与人工核对闭环已可用；Policy Gate 覆盖全部工具调用并做确定性 risk 分级（P1），权限档位（全局默认 + 事情覆盖 + Run 快照下界 + 运行中热切换）已落地（P2）。仍标记为 `Partial`：持久规则批准（approve_rule）、审批卡结构化渲染、自动审阅与由验证器主动探测外部状态的自动对账属于后续阶段。组织级 RBAC、多人会签、超时策略与可配置风险阈值同样不在当前范围内。
+持久对象、策略边界、API、Web 决策、恢复协议与人工核对闭环已可用；Policy Gate 覆盖全部工具调用并做确定性 risk 分级（P1），权限档位（全局默认 + 事情覆盖 + Run 快照下界 + 运行中热切换）已落地（P2），本事情内同类规则批准与撤销已落地（P3）。仍标记为 `Partial`：审批卡结构化渲染、自动审阅与由验证器主动探测外部状态的自动对账属于后续阶段。组织级 RBAC、多人会签、超时策略与可配置风险阈值同样不在当前范围内。
 
 ## 回滚
 
