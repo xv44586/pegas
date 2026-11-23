@@ -93,6 +93,14 @@ describe('sealed UI layout contracts', () => {
       new URL('../web/src/sealed/SettingsPage.tsx', import.meta.url),
       'utf8',
     )
+    const detailDrawer = readFileSync(
+      new URL('../web/src/sealed/DetailDrawer.tsx', import.meta.url),
+      'utf8',
+    )
+    const modelPicker = readFileSync(
+      new URL('../web/src/sealed/ModelPicker.tsx', import.meta.url),
+      'utf8',
+    )
     const app = readFileSync(
       new URL('../web/src/App.tsx', import.meta.url),
       'utf8',
@@ -100,16 +108,55 @@ describe('sealed UI layout contracts', () => {
     const pageSizeMatches = [
       ...mainPages.matchAll(/const pageSize = (\d+)/g),
       ...settingsPage.matchAll(/const pageSize = (\d+)/g),
+      ...modelPicker.matchAll(/export const MODEL_PICKER_PAGE_SIZE = (\d+)/g),
     ].map(match => match[1])
     expect(pageSizeMatches.length).toBeGreaterThanOrEqual(2)
     for (const size of pageSizeMatches) expect(size).toBe('30')
-    expect(mainPages).toContain('filteredModels.length > pageSize')
-    expect(mainPages).toContain('上一页')
-    expect(mainPages).toContain('下一页')
+    expect(modelPicker).toContain('filteredModels.length > pageSize')
+    expect(modelPicker).toContain('上一页')
+    expect(modelPicker).toContain('下一页')
+    for (const consumer of [mainPages, settingsPage, detailDrawer]) {
+      expect(consumer).toContain("from './ModelPicker'")
+      expect(consumer).toContain('<ModelPicker')
+    }
+    const settingsModelSelects = [
+      ...settingsPage.matchAll(/aria-label="([^"]*模型[^"]*)"/g),
+    ].map(match => match[1])
+    expect(settingsModelSelects).toContain('归类模型服务')
+    expect(detailDrawer).not.toMatch(/<select[^>]*>\s*\{catalog\?\.models\.map/)
+    expect(settingsPage).toContain('手动输入模型 ID')
+    expect(settingsPage).toContain('visibleModels.length > pageSize')
     expect(app).toContain(
       'const availableAgentModels = agentModels?.models ?? []',
     )
     expect(uiReviewScript).toContain('assertPickerPagination')
     expect(uiReviewScript).toContain('PEGAS_MODEL_BASE_URL')
+  })
+
+  it('keeps search inputs on the single container-owned focus treatment', () => {
+    expect(sealedUi).toMatch(
+      /\.model-search\s*\{[^}]*border:\s*1px solid transparent;/,
+    )
+    expect(sealedUi).toMatch(
+      /\.model-search:focus-within\s*\{[^}]*border-color:\s*var\(--accent\);/,
+    )
+    expect(sealedUi).toMatch(/\.model-search input\s*\{[^}]*border:\s*0;/)
+    expect(sealedUi).toMatch(
+      /\.model-search input:focus-visible\s*\{[^}]*outline:\s*none;/,
+    )
+    expect(sealedUi).toMatch(
+      /\.model-search input::placeholder\s*\{[^}]*color:\s*var\(--muted\);/,
+    )
+    expect(sealedUi).not.toContain('.provider-list input')
+    const settingsPage = readFileSync(
+      new URL('../web/src/sealed/SettingsPage.tsx', import.meta.url),
+      'utf8',
+    )
+    const searchLabels = [
+      ...settingsPage.matchAll(
+        /<label className="model-search">[\s\S]*?<\/label>/g,
+      ),
+    ]
+    expect(searchLabels.length).toBeGreaterThanOrEqual(2)
   })
 })

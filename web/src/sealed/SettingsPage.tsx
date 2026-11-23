@@ -46,6 +46,7 @@ import type {
   WorkRuleRecord,
 } from '../types'
 import { useVoiceDictation } from '../useVoiceDictation'
+import { ModelPicker, modelSelectionKey } from './ModelPicker'
 import { PegasMark } from './PegasMark'
 import { PegasMascot } from './PegasMascot'
 import {
@@ -333,6 +334,7 @@ export function SettingsPage({
                 )}
                 {section === 'router' && (
                   <RouterSettings
+                    agentModels={agentModels}
                     draft={draft}
                     response={response}
                     onChange={next => {
@@ -623,6 +625,7 @@ function PegasSettings({
   onSaveBehavior?: (customInstructions: string) => Promise<void>
 }) {
   const [tab, setTab] = useState<'model' | 'behavior' | 'autonomy'>('model')
+  const [modelPickerRequest, setModelPickerRequest] = useState(0)
   const models = agentModels?.models ?? []
   const selectedModel = draft.agentModelName.trim()
     ? draft.agentModelName
@@ -636,6 +639,13 @@ function PegasSettings({
       : selectedProvider && selectedModel
         ? `${selectedProvider}::${selectedModel}`
         : ''
+  const selectedCatalogModel = models.find(
+    model =>
+      modelSelectionKey(model) === selectedModelValue ||
+      (model.id === selectedModel &&
+        model.provider.toLocaleLowerCase() ===
+          selectedProvider.toLocaleLowerCase()),
+  )
   const selectedModelAvailable = agentModels?.models.some(
     model =>
       model.provider.toLocaleLowerCase() ===
@@ -668,7 +678,10 @@ function PegasSettings({
         </em>
         <button
           className="secondary-button"
-          onClick={() => setTab('model')}
+          onClick={() => {
+            setTab('model')
+            setModelPickerRequest(request => request + 1)
+          }}
           type="button"
         >
           更换模型
@@ -722,12 +735,21 @@ function PegasSettings({
       {tab === 'model' && (
         <div className="setting-section">
           <h3>新建执行会话</h3>
-          <label className="field-label">
-            模型
-            <select
-              value={selectedModelValue}
-              onChange={event => {
-                if (event.target.value === 'profile') {
+          <div className="field-label">
+            <span>模型</span>
+            <ModelPicker
+              ariaLabel="模型"
+              fixedOptions={[
+                {
+                  value: 'profile',
+                  label: '隔离环境默认模型（Pegas 专属 profile）',
+                  hint: '跟随隔离执行环境的默认配置',
+                },
+              ]}
+              footer="选择后仍需点击「保存更改」生效"
+              models={models}
+              onSelect={(value, model) => {
+                if (value === 'profile') {
                   onChange({
                     ...draft,
                     agentModelMode: 'profile',
@@ -736,9 +758,6 @@ function PegasSettings({
                   })
                   return
                 }
-                const model = models.find(
-                  item => `${item.provider}::${item.id}` === event.target.value,
-                )
                 if (!model) return
                 onChange({
                   ...draft,
@@ -747,24 +766,15 @@ function PegasSettings({
                   agentModelName: model.id,
                 })
               }}
-            >
-              <option value="profile">
-                隔离环境默认模型（Pegas 专属 profile）
-              </option>
-              {models.length ? (
-                models.map(model => (
-                  <option
-                    key={`${model.provider}/${model.id}`}
-                    value={`${model.provider}::${model.id}`}
-                  >
-                    {model.name} · {model.provider}
-                  </option>
-                ))
-              ) : (
-                <option value="">服务端未提供可选模型</option>
-              )}
-            </select>
-          </label>
+              openRequest={modelPickerRequest}
+              placeholder={models.length ? '选择模型' : '服务端未提供可选模型'}
+              value={
+                selectedCatalogModel
+                  ? modelSelectionKey(selectedCatalogModel)
+                  : selectedModelValue
+              }
+            />
+          </div>
           <p className="field-hint">
             凭证由 Pegas 的模型服务或隔离的 DSH profile 提供，不读取个人默认
             profile。
@@ -779,13 +789,29 @@ function PegasSettings({
             const value = poolModel
               ? `${poolModel.provider}::${poolModel.model}`
               : ''
+            const poolCatalogModel = models.find(
+              model =>
+                modelSelectionKey(model) === value ||
+                (model.id === poolModel?.model &&
+                  model.provider.toLocaleLowerCase() ===
+                    poolModel.provider.toLocaleLowerCase()),
+            )
             return (
-              <label className="field-label" key={poolKey}>
-                {poolKey} 池模型
-                <select
-                  value={value}
-                  onChange={event => {
-                    if (!event.target.value) {
+              <div className="field-label" key={poolKey}>
+                <span>{poolKey} 池模型</span>
+                <ModelPicker
+                  ariaLabel={`${poolKey} 池模型`}
+                  fixedOptions={[
+                    {
+                      value: '',
+                      label: '未配置（按降级链处理）',
+                      hint: '清除该池的覆盖',
+                    },
+                  ]}
+                  footer="选择后仍需点击「保存更改」生效"
+                  models={models}
+                  onSelect={(nextValue, model) => {
+                    if (!nextValue) {
                       const next = Object.fromEntries(
                         Object.entries(draft.executionPools ?? {}).filter(
                           ([key]) => key !== poolKey,
@@ -794,10 +820,6 @@ function PegasSettings({
                       onChange({ ...draft, executionPools: next })
                       return
                     }
-                    const model = models.find(
-                      item =>
-                        `${item.provider}::${item.id}` === event.target.value,
-                    )
                     if (!model) return
                     const next = {
                       ...(draft.executionPools ?? {}),
@@ -808,18 +830,15 @@ function PegasSettings({
                     }
                     onChange({ ...draft, executionPools: next })
                   }}
-                >
-                  <option value="">未配置（按降级链处理）</option>
-                  {models.map(model => (
-                    <option
-                      key={`${model.provider}/${model.id}`}
-                      value={`${model.provider}::${model.id}`}
-                    >
-                      {model.name} · {model.provider}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                  placeholder="未配置（按降级链处理）"
+                  title={`${poolKey} 池模型`}
+                  value={
+                    poolCatalogModel
+                      ? modelSelectionKey(poolCatalogModel)
+                      : value
+                  }
+                />
+              </div>
             )
           })}
         </div>
@@ -1195,6 +1214,23 @@ function ModelServices({
   )
   const rangeStart = visibleModels.length ? modelPage * pageSize + 1 : 0
   const rangeEnd = Math.min((modelPage + 1) * pageSize, visibleModels.length)
+  const referencedModelId =
+    active?.id === response.settings.modelProvider
+      ? response.settings.modelName
+      : undefined
+  const executionReferenced = new Set(
+    [
+      draft.agentModelMode === 'override'
+        ? `${draft.agentModelProvider}::${draft.agentModelName}`
+        : '',
+      ...Object.values(draft.executionPools ?? {}).map(
+        pool => `${pool.provider}::${pool.model}`,
+      ),
+    ].filter(Boolean),
+  )
+  const executionReferencesModel = (model: ModelCatalogItem) =>
+    executionReferenced.has(`${active?.name ?? ''}::${model.id}`) ||
+    executionReferenced.has(`${active?.id ?? ''}::${model.id}`)
   return (
     <div className="settings-pane">
       <SettingsHeading
@@ -1203,7 +1239,7 @@ function ModelServices({
       />
       <div className="model-service-layout">
         <aside className="provider-list">
-          <label>
+          <label className="model-search">
             <Search size={16} />
             <input
               aria-label="搜索模型服务"
@@ -1411,68 +1447,86 @@ function ModelServices({
               </div>
             </dl>
             <h4>可用模型（{models.length}）</h4>
-            <button
-              className="secondary-button"
-              disabled={Boolean(busy) || !canProbe}
-              onClick={() => void discover()}
-              type="button"
-            >
-              {busy === 'discover' ? '读取中…' : '获取模型目录'}
-            </button>
-            <label className="model-search">
-              <Search size={16} />
-              <input
-                onChange={event => {
-                  setModelQuery(event.target.value)
-                  setModelPage(0)
-                }}
-                placeholder="按名称或模型 ID 搜索"
-                value={modelQuery}
-              />
-            </label>
+            <div className="model-catalog-toolbar">
+              <button
+                className="secondary-button"
+                disabled={Boolean(busy) || !canProbe}
+                onClick={() => void discover()}
+                type="button"
+              >
+                {busy === 'discover' ? '读取中…' : '获取模型目录'}
+              </button>
+              <label className="model-search">
+                <Search size={16} />
+                <input
+                  aria-label="按名称或模型 ID 搜索"
+                  onChange={event => {
+                    setModelQuery(event.target.value)
+                    setModelPage(0)
+                  }}
+                  placeholder="按名称或模型 ID 搜索"
+                  value={modelQuery}
+                />
+              </label>
+            </div>
             <div className="model-table">
               <div>
                 <b>模型</b>
                 <b>能力</b>
                 <b>状态</b>
               </div>
-              {pageModels.map(model => (
-                <div key={model.id}>
-                  <span>{model.name}</span>
-                  <span>{model.id}</span>
-                  <span className="is-good">
-                    <i />
-                    已发现
-                  </span>
-                </div>
-              ))}
+              {pageModels.map(model => {
+                const isRouterModel = model.id === referencedModelId
+                const isExecutionModel = executionReferencesModel(model)
+                return (
+                  <div
+                    className={
+                      isRouterModel || isExecutionModel ? 'is-selected' : ''
+                    }
+                    key={model.id}
+                  >
+                    <span>{model.name}</span>
+                    <span>{model.id}</span>
+                    <span className="is-good">
+                      <i />
+                      {isRouterModel
+                        ? '当前归类模型'
+                        : isExecutionModel
+                          ? '执行引用'
+                          : '已发现'}
+                    </span>
+                  </div>
+                )
+              })}
               {!visibleModels.length && (
                 <p className="table-empty">
                   点击“获取模型目录”读取服务端数据。
                 </p>
               )}
             </div>
-            <div className="pagination">
-              <span>
-                {rangeStart}–{rangeEnd} / {visibleModels.length}
-              </span>
-              <button
-                disabled={modelPage === 0}
-                onClick={() => setModelPage(page => Math.max(0, page - 1))}
-                type="button"
-              >
-                上一页
-              </button>
-              <button
-                disabled={modelPage >= pageCount - 1}
-                onClick={() =>
-                  setModelPage(page => Math.min(pageCount - 1, page + 1))
-                }
-                type="button"
-              >
-                下一页
-              </button>
-            </div>
+            {visibleModels.length > pageSize && (
+              <div className="pagination">
+                <span>
+                  {rangeStart}–{rangeEnd} / {visibleModels.length}
+                </span>
+                <button
+                  disabled={modelPage === 0}
+                  onClick={() => setModelPage(page => Math.max(0, page - 1))}
+                  type="button"
+                >
+                  上一页
+                </button>
+                <button
+                  disabled={modelPage >= pageCount - 1}
+                  onClick={() =>
+                    setModelPage(page => Math.min(pageCount - 1, page + 1))
+                  }
+                  type="button"
+                >
+                  下一页
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -1483,12 +1537,29 @@ function ModelServices({
 function RouterSettings({
   draft,
   response,
+  agentModels,
   onChange,
 }: {
   draft: RuntimeSettings
   response: SettingsResponse
+  agentModels?: DshModelCatalog
   onChange: (settings: RuntimeSettings) => void
 }) {
+  const [manualModel, setManualModel] = useState(false)
+  const provider = response.capabilities.providers.find(
+    item => item.id === draft.modelProvider,
+  )
+  const providerAliases = new Set(
+    [draft.modelProvider, provider?.name]
+      .filter((alias): alias is string => Boolean(alias))
+      .map(alias => alias.toLocaleLowerCase()),
+  )
+  const providerModels = (agentModels?.models ?? []).filter(model =>
+    providerAliases.has(model.provider.toLocaleLowerCase()),
+  )
+  const selectedProviderModel = providerModels.find(
+    model => model.id === draft.modelName,
+  )
   return (
     <div className="settings-pane router-settings">
       <SettingsHeading
@@ -1516,35 +1587,70 @@ function RouterSettings({
       </div>
       <div className="compact-field-row">
         <span>归类模型</span>
-        <select
-          aria-label="归类模型服务"
-          value={draft.modelProvider}
-          onChange={event => {
-            const modelProvider = event.target
-              .value as RuntimeSettings['modelProvider']
-            const provider = response.capabilities.providers.find(
-              item => item.id === modelProvider,
-            )
-            onChange({
-              ...draft,
-              modelProvider,
-              modelName: provider?.defaultModel ?? '',
-            })
-          }}
-        >
-          {response.capabilities.providers.map(provider => (
-            <option key={provider.id} value={provider.id}>
-              {provider.name}
-            </option>
-          ))}
-        </select>
-        <input
-          aria-label="归类模型名称"
-          onChange={event =>
-            onChange({ ...draft, modelName: event.target.value })
-          }
-          value={draft.modelName}
-        />
+        <div className="router-model-fields">
+          <select
+            aria-label="归类模型服务"
+            value={draft.modelProvider}
+            onChange={event => {
+              const modelProvider = event.target
+                .value as RuntimeSettings['modelProvider']
+              const nextProvider = response.capabilities.providers.find(
+                item => item.id === modelProvider,
+              )
+              onChange({
+                ...draft,
+                modelProvider,
+                modelName: nextProvider?.defaultModel ?? '',
+              })
+            }}
+          >
+            {response.capabilities.providers.map(item => (
+              <option key={item.id} value={item.id}>
+                {item.name}
+              </option>
+            ))}
+          </select>
+          {manualModel ? (
+            <input
+              aria-label="归类模型名称"
+              onChange={event =>
+                onChange({ ...draft, modelName: event.target.value })
+              }
+              placeholder="输入模型 ID"
+              value={draft.modelName}
+            />
+          ) : (
+            <ModelPicker
+              ariaLabel="归类模型名称"
+              description={`${provider?.name ?? draft.modelProvider} 的完整模型目录`}
+              footer="选择后仍需点击「保存更改」生效"
+              models={providerModels}
+              onSelect={(_, model) => {
+                if (!model) return
+                onChange({ ...draft, modelName: model.id })
+              }}
+              placeholder={draft.modelName || '选择模型'}
+              placeholderDetail={
+                draft.modelName && !selectedProviderModel
+                  ? `${provider?.name ?? draft.modelProvider} · 目录外模型`
+                  : undefined
+              }
+              title="归类模型"
+              value={
+                selectedProviderModel
+                  ? modelSelectionKey(selectedProviderModel)
+                  : ''
+              }
+            />
+          )}
+          <button
+            className="router-model-manual-toggle"
+            onClick={() => setManualModel(manual => !manual)}
+            type="button"
+          >
+            {manualModel ? '从目录选择' : '手动输入模型 ID'}
+          </button>
+        </div>
       </div>
       <div className="compact-field-row">
         <span>不确定时</span>
