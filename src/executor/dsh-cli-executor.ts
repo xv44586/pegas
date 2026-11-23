@@ -287,6 +287,7 @@ export class DshCliExecutor implements RunExecutor {
 
     let sessionId = input.resumeSessionId
     let finalEvent: DshFinalEvent | undefined
+    const recycle = { afterFinal: false }
     let streamError: string | undefined
     let pendingAssistantText: string[] = []
     let acknowledgementEmitted = false
@@ -323,6 +324,19 @@ export class DshCliExecutor implements RunExecutor {
           finalEvent = event
           sessionId = event.sessionId
           input.onExecutorRef?.(event.sessionId)
+          if (isCompletedReason(event.reason)) {
+            // EXEC-005 idle recycle: the session lives in the store, not in
+            // this process. Once DSH commits its final answer the runtime is
+            // closed even if the child lingers; the next message resumes the
+            // persisted session in a fresh process.
+            recycle.afterFinal = true
+            child.kill('SIGTERM')
+            killTimer ??= setTimeout(
+              () => child.kill('SIGKILL'),
+              this.#terminationGraceMs,
+            )
+            killTimer.unref()
+          }
         }
         if (event.type === 'text' && !acknowledgementEmitted) {
           pendingAssistantText.push(event.text)
@@ -462,9 +476,11 @@ export class DshCliExecutor implements RunExecutor {
       }
     }
 
+    const exitedByRecycle =
+      recycle.afterFinal && (signal === 'SIGTERM' || signal === 'SIGKILL')
     if (
       terminationError !== undefined ||
-      code !== 0 ||
+      (code !== 0 && !exitedByRecycle) ||
       streamError !== undefined ||
       !finalEvent ||
       !isCompletedReason(finalEvent.reason)

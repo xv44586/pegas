@@ -84,8 +84,9 @@ scope 与 owner，不应把当前表误当作用户偏好表。
 `PUT /v1/settings` 省略该字段时保留现值（不会因旧客户端保存而意外关闭）。关闭后
 reply 决策兜底为完整 Task，行为回到现状；历史 conversation Task 数据保留可读。
 chat 车道的并发预算独立于重任务：`PEGAS_CHAT_CONCURRENCY`（默认 1）只影响本进程
-领取 conversation Run 的数量，不进入运行设置单例。Web 设置页开关属后续缺口，当前
-经环境变量（首次启动）或设置 API 启停。
+领取 conversation Run 的数量，不进入运行设置单例。Web 设置页「事情归类 → 即时应答」
+开关（2026-11-23，EXEC-005 收尾）直接读写该字段，与设置 API、环境变量默认值走同一
+保存语义；关闭后新输入回到完整 Task 路径，无需重启。
 
 执行池（PLAN-001 P3 第一阶段，WORKER-002）在“Pegas”页 Agent 模型区配置：
 fast/balanced/deep 三池各指向一个已配置的 provider/model，允许只配 1–3 个，

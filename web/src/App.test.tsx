@@ -995,6 +995,58 @@ describe('sealed Pegas UI', () => {
     await screen.findByText('更改已保存')
   })
 
+  it('EXEC-005: toggles the chat lane from settings and persists the switch', async () => {
+    let savedBody: Record<string, unknown> | undefined
+    let currentSettings: SettingsResponse = {
+      ...settingsResponse,
+      settings: { ...settingsResponse.settings, chatLaneEnabled: false },
+    }
+    installFetch((path, init) => {
+      if (path === '/v1/settings' && init?.method === 'PUT') {
+        savedBody = JSON.parse(
+          typeof init.body === 'string' ? init.body : '{}',
+        ) as Record<string, unknown>
+        currentSettings = {
+          ...currentSettings,
+          settings: {
+            ...currentSettings.settings,
+            revision: currentSettings.settings.revision + 1,
+            chatLaneEnabled: savedBody.chatLaneEnabled === true,
+          },
+        }
+        return Response.json(currentSettings)
+      }
+      if (path === '/v1/settings') return Response.json(currentSettings)
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(await screen.findByRole('button', { name: /事情归类/ }))
+    const toggle = screen.getByLabelText('启用即时应答')
+    expect(toggle).toHaveProperty('checked', false)
+    fireEvent.click(toggle)
+    expect(toggle).toHaveProperty('checked', true)
+    fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
+    await screen.findByText('更改已保存')
+    expect(savedBody?.chatLaneEnabled).toBe(true)
+    expect(screen.getByLabelText('启用即时应答')).toHaveProperty(
+      'checked',
+      true,
+    )
+    fireEvent.click(screen.getByLabelText('启用即时应答'))
+    fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
+    await screen.findByText('更改已保存')
+    expect(savedBody?.chatLaneEnabled).toBe(false)
+    expect(screen.getByLabelText('启用即时应答')).toHaveProperty(
+      'checked',
+      false,
+    )
+  })
+
   it('keeps model-service Router shortcuts in sync with the URL', async () => {
     installFetch()
     render(<App />)

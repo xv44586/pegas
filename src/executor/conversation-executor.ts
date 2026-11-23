@@ -20,10 +20,33 @@ export class ConversationExecutor implements RunExecutor {
     const result = await this.#inner.execute({
       ...input,
       prompt: conversationPrompt(input),
-      onProgress: undefined,
+      onProgress: input.onProgress
+        ? event => {
+            if (event.type !== 'message') return
+            input.onProgress?.(event)
+          }
+        : undefined,
     })
     return result
   }
+}
+
+const SUGGEST_MARKER = 'PEGAS_SUGGEST_TASK_BEGIN'
+
+/**
+ * EXEC-005 say streaming: body text safe to show while the Run is still
+ * executing. Everything from the upgrade marker onwards is withheld, and a
+ * trailing partial marker prefix is held back until more text arrives, so
+ * marker lines never leak into the conversation stream.
+ */
+export function conversationProgressText(text: string): string {
+  const markerIndex = text.indexOf(SUGGEST_MARKER)
+  if (markerIndex >= 0) return text.slice(0, markerIndex).trimEnd()
+  for (let length = SUGGEST_MARKER.length - 1; length > 0; length -= 1) {
+    if (text.endsWith(SUGGEST_MARKER.slice(0, length)))
+      return text.slice(0, text.length - length).trimEnd()
+  }
+  return text
 }
 
 export function conversationPrompt(

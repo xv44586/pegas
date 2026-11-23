@@ -780,6 +780,16 @@ a {
 .message-row.is-user {
   align-items: flex-end;
 }
+.say-stream-caret {
+  animation: status-dot-pulse 1.2s ease-in-out infinite;
+  background: var(--muted);
+  border-radius: 2px;
+  display: inline-block;
+  height: 14px;
+  margin-inline-start: 4px;
+  vertical-align: text-bottom;
+  width: 3px;
+}
 .message-content {
   font-size: var(--text-read);
   line-height: 1.78;
