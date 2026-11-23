@@ -186,6 +186,24 @@ const POLICY_SPILL_NOTICE =
   /\n?\(Omitted [^()\n]*?Full formatted result stored at: ([^()\n]+?)\. (?:Use [^()\n]*)\)\s*$/u
 
 /**
+ * EXEC-006 round 18 r4: the formatted spill copy keeps the bash tail
+ * notice at its end, so it is not the raw stream. Peeling the notice
+ * yields the same head+tail body the inline semantic clipped, which lets
+ * the output pager bound pages at the omission gap against the copy.
+ */
+export function spillBodyForGap(
+  text: string,
+): { body: string; rawPath?: string } | undefined {
+  const match = BASH_SPILL_NOTICE.exec(text)
+  if (!match?.[1]) return undefined
+  const locator = match[1].trim()
+  return {
+    body: text.slice(0, match.index).trimEnd(),
+    ...(locator.startsWith('/') ? { rawPath: locator } : {}),
+  }
+}
+
+/**
  * EXEC-006 round 18: recognizes the executor's persisted spill notices at
  * the very end of a result — the bash tail notice and the generic retention
  * notice. Real results chain both (retention wraps the bash render), so

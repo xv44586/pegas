@@ -10,6 +10,7 @@ import {
 import { extname, resolve, sep } from 'node:path'
 
 import { projectWorkChannel } from '../channel/work-channel.js'
+import { spillBodyForGap } from '../activity/tool-semantics.js'
 import { isWorkerIconId, type WorkerIconId } from '../brand/agent-icon.js'
 import { parseWorkerCollaborationRequest } from '../collaboration/collaboration.js'
 import {
@@ -1875,7 +1876,7 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
               'cache-control': 'private, max-age=300',
               'x-content-type-options': 'nosniff',
             })
-            return response.end(text)
+            return response.end(spillBodyForGap(text)?.body ?? text)
           }
           return sendJson(response, 404, { error: 'not_found' })
         }
