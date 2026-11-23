@@ -157,6 +157,12 @@ X-Pegas-Run-Claim-Token: <successor-capability>
 
 Gate 的边界事实来自 Executor 注入的 patch config `policy { workspaceRoot, protectedRoots }`：`workspaceRoot` 取 Run 的实际工作目录；`protectedRoots` 由 Worker 传 `dataDir`，Executor 追加受管 DSH home。缺少边界信息时写入类调用一律 ask。ask 经 DSH `approval/request` seam 进入下述同一停放/恢复/一次性放行链路；`policy_decision` 事件由 Executor 转为 Activity 进度（「安全检查通过 / 已拦截」）。静态分类只是审批路由，不是安全边界：真正的硬边界仍是 DSH sandbox 与 guard 底线。
 
+### 权限档位现读（APPROVAL-001 P2）
+
+桥在每次 `tools/pre-execute` 分级前，用 Run claim capability 现读 `GET /v1/runs/:runId/permissions`（3s 超时、无缓存），拿到「生效档位 + 代次指纹 + mismatch」。生效档位由服务端组合：全局默认（`runtime_settings.permission_tier`）→ Task 覆盖（`worker_profiles.permission_mode`）为 live 档位，Run 创建时冻结的 `executionContext.permissionTier` 为下界——运行中收紧立即生效；放宽被钳制在快照档位（`clamped: true`），要越过快照上限需新 Run。读取失败、代次错配或存量 Run 缺快照档位时按 `strict` 处置（fail closed），不静默放行。
+
+档位映射：`strict`→read-only 沙箱且 write/edit/apply_patch/bash/web_fetch/web_search 全部 ask；`standard`→workspace-write 沙箱 + Gate 分级；`full`→danger-full-access 沙箱 + ask（Web 启用前强制风险确认）。control-plane-mutation 的 guard 硬拦在三档一致。切档走 `PUT /v1/tasks/:id/worker-profile`（`permissionMode` 字段，commandId+expectedRevision 幂等），权限变更写 append-only `worker_profile_changes` 审计并发 `task.permission_changed` 时间线事件；判定时的 tier/generation/mismatch 随 `policy_decision` 事件与 Action request 持久化。
+
 ### 停放与恢复（seam 共用链路）
 
 1. **停放**：插件用当前 Run 的 claim capability 调 `POST /v1/runs/:runId/approvals` 创建持久 Approval。Action `kind` 为 `dsh.tool.<tool>`，risk 由 Gate 分级写入（`high`/`critical`；seam 越权无 Gate 判定时按 `high`），`request` 保存 `tool`、`callId`、`reason`、`category`、`targets` 与 `argumentsHash`（工具参数的稳定序列化 SHA-256），幂等键为 `dsh-tool:<runId>:<callId>`。创建成功后向 headless JSON 流写入 `approval_pending` 事件并对本次调用返回 `rejected`；Executor 识别该事件后按持久等待结算 Run（服务端已把 Run 置为 `waiting` 并清除 lease），不再提交 Report。创建失败时写入 `approval_bridge_error` 事件，Executor 将其作为执行失败处理，不放行工具。
@@ -169,8 +175,9 @@ claim token 只经进程环境传给 DSH 主进程，DSH 自身的 subprocess �
 桥接的已知边界：
 
 - Policy Gate 覆盖全部工具调用，但 bash 只做确定性静态分类：未命中模式的复杂命令按低风险交由沙箱边界执行，间接执行按 unknown 强制人工确认；execpolicy 级完整命令语义解析属后续阶段。
-- Gate 的 allow 记录目前经 `policy_decision` 事件进入 Run Activity 进度流，尚未落独立审计表（P2 档位对象引入代次与审计持久化）。
-- 档位仍是 Run 快照的 `read-only | workspace-write | danger-full-access × ask | never`；运行中热切换、持久规则批准（approve_rule）与自动审阅分别属 P2/P3/P5。
+- Gate 的 allow 记录目前经 `policy_decision` 事件进入 Run Activity 进度流（含档位与代次指纹），逐调用独立审计表仍未落；切档动作本身已有 append-only 审计。
+- 档位对象与运行中热切换已落地（P2）；持久规则批准（approve_rule）、审批卡结构化渲染与自动审阅分别属 P3/P4/P5。
+- 桥现读档位是每工具调用一次本地 HTTP 往返；控制面不可达时该 Run 的工具全部按 strict 升审批，不会静默放行。
 - 同一 DSH 进程只停放第一个越权调用；并行的其余审批请求 fall through 到 DSH 默认 `unavailable`，fail closed。
 - 批准后恢复的是同一 DSH session，但模型需要重新发起同参数调用才能命中一次性 grant；grant 不预执行任何工具。
 - 拒绝或要求修改时不注入 grant，Action 走既有 `rejected`/修订路径。
@@ -178,7 +185,7 @@ claim token 只经进程环境传给 DSH 主进程，DSH 自身的 subprocess �
 
 ## 当前限制
 
-持久对象、策略边界、API、Web 决策、恢复协议与人工核对闭环已可用，DSH 沙箱越权类工具调用已经由桥接插件自动接入 Action/Approval。仍标记为 `Partial`：沙箱内直接允许的工具调用不经过 Action Policy，自动 risk 分级（当前桥接一律 `high`）与由验证器主动探测外部状态的自动对账属于后续 Feature。组织级 RBAC、多人会签、超时策略与可配置风险阈值同样不在当前范围内。
+持久对象、策略边界、API、Web 决策、恢复协议与人工核对闭环已可用；Policy Gate 覆盖全部工具调用并做确定性 risk 分级（P1），权限档位（全局默认 + 事情覆盖 + Run 快照下界 + 运行中热切换）已落地（P2）。仍标记为 `Partial`：持久规则批准（approve_rule）、审批卡结构化渲染、自动审阅与由验证器主动探测外部状态的自动对账属于后续阶段。组织级 RBAC、多人会签、超时策略与可配置风险阈值同样不在当前范围内。
 
 ## 回滚
 

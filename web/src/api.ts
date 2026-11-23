@@ -575,6 +575,7 @@ export class PegasApi {
       modelName?: string
       pool?: 'fast' | 'balanced' | 'deep'
       effort?: string
+      permissionMode?: 'inherit' | 'strict' | 'standard' | 'full'
     },
   ): Promise<WorkerProfileResponse> {
     const response = await fetch(
@@ -932,6 +933,9 @@ export class PegasApi {
         ...(settings.chatLaneEnabled === undefined
           ? {}
           : { chatLaneEnabled: settings.chatLaneEnabled }),
+        ...(settings.permissionTier === undefined
+          ? {}
+          : { permissionTier: settings.permissionTier }),
         ...(settings.executionPools === undefined
           ? {}
           : { executionPools: settings.executionPools }),

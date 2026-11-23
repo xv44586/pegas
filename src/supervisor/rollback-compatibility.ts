@@ -8,6 +8,7 @@ const goalProposalSchemaVersion = 22
 const actionReconciliationSchemaVersion = 23
 const steeringSchemaVersion = 24
 const chatLaneSchemaVersion = 32
+const permissionTierSchemaVersion = 40
 
 export class RollbackCompatibilityError extends Error {}
 
@@ -153,6 +154,30 @@ export function assertRollbackCompatible(
       if (liveConversationRun) {
         throw new RollbackCompatibilityError(
           'Rollback is unsafe while conversation Runs are still active',
+        )
+      }
+    }
+    if (
+      currentVersion >= permissionTierSchemaVersion &&
+      targetMaximumSchema < permissionTierSchemaVersion
+    ) {
+      const nonDefaultGlobalTier = database
+        .prepare(
+          `SELECT 1 FROM runtime_settings
+           WHERE id = 1 AND permission_tier <> 'standard' LIMIT 1`,
+        )
+        .get()
+      const taskTierOverride = database
+        .prepare(
+          `SELECT 1 FROM worker_profiles
+           WHERE permission_mode IS NOT NULL
+             AND permission_mode <> 'inherit'
+           LIMIT 1`,
+        )
+        .get()
+      if (nonDefaultGlobalTier || taskTierOverride) {
+        throw new RollbackCompatibilityError(
+          'Rollback is unsafe while non-default permission tiers are configured',
         )
       }
     }

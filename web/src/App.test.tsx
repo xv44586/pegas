@@ -4816,6 +4816,84 @@ describe('sealed Pegas UI', () => {
     expect(screen.getByText(/服务端尚未配置隐私 HMAC key/)).toBeTruthy()
   })
 
+  it('switches the global permission tier from privacy settings with a full-access risk confirmation', async () => {
+    let submitted: unknown
+    installFetch((path, init) => {
+      if (path !== '/v1/settings') return undefined
+      if (init?.method !== 'PUT') {
+        return Response.json({
+          ...settingsResponse,
+          settings: {
+            ...settingsResponse.settings,
+            permissionTier: 'standard',
+          },
+        })
+      }
+      submitted = JSON.parse(typeof init.body === 'string' ? init.body : '{}')
+      const draft = submitted as {
+        expectedRevision: number
+        permissionTier?: 'strict' | 'standard' | 'full'
+      }
+      return Response.json({
+        ...settingsResponse,
+        settings: {
+          ...settingsResponse.settings,
+          revision: draft.expectedRevision + 1,
+          permissionTier: draft.permissionTier ?? 'standard',
+        },
+      })
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /隐私/ }))
+    const tierSelect = await screen.findByLabelText('全局权限档位')
+    expect(tierSelect).toHaveProperty('value', 'standard')
+
+    fireEvent.change(tierSelect, { target: { value: 'strict' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
+    expect(await screen.findByText('更改已保存')).toBeTruthy()
+    expect(submitted).toMatchObject({
+      expectedRevision: 1,
+      permissionTier: 'strict',
+    })
+    expect(screen.getByLabelText('全局权限档位')).toHaveProperty(
+      'value',
+      'strict',
+    )
+
+    fireEvent.change(screen.getByLabelText('全局权限档位'), {
+      target: { value: 'full' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
+    const riskDialog = await screen.findByRole('dialog', {
+      name: '确认完全访问风险',
+    })
+    expect(
+      within(riskDialog).getByText(/不再拦截工作区之外的写入/),
+    ).toBeTruthy()
+    expect(submitted).toMatchObject({ permissionTier: 'strict' })
+    fireEvent.click(
+      within(riskDialog).getByRole('button', {
+        name: '我已了解，启用完全访问',
+      }),
+    )
+    expect(await screen.findByText('更改已保存')).toBeTruthy()
+    await waitFor(() =>
+      expect(submitted).toMatchObject({
+        expectedRevision: 2,
+        permissionTier: 'full',
+      }),
+    )
+    expect(screen.getByLabelText('全局权限档位')).toHaveProperty(
+      'value',
+      'full',
+    )
+  })
+
   it('loads and renders the selected Channel timeline in the detail drawer', async () => {
     installFetch(path => {
       if (!path.startsWith('/v1/channels/task-1/timeline?')) return undefined
@@ -6985,6 +7063,98 @@ describe('sealed Pegas UI', () => {
       effort: 'low',
     })
     expect(await screen.findByText('magpie/flash')).toBeTruthy()
+  })
+
+  it('switches the task permission tier with a full-access risk confirmation', async () => {
+    let submitted: unknown
+    installFetch((path, init) => {
+      if (
+        path === '/v1/tasks/task-1/worker-profile' &&
+        init?.method === 'PUT'
+      ) {
+        submitted = JSON.parse(typeof init.body === 'string' ? init.body : '{}')
+        const draft = submitted as {
+          expectedRevision: number
+          modelMode: 'inherit' | 'override'
+          permissionMode?: string
+        }
+        const profile = {
+          id: 'worker-profile-1',
+          taskId: 'task-1',
+          revision: draft.expectedRevision + 1,
+          modelMode: draft.modelMode,
+          ...(draft.permissionMode && draft.permissionMode !== 'inherit'
+            ? { permissionMode: draft.permissionMode }
+            : {}),
+          createdAt: '2026-11-19T08:00:00.000Z',
+          updatedAt: '2026-11-23T00:00:00.000Z',
+        }
+        const tier =
+          draft.permissionMode === 'strict' ||
+          draft.permissionMode === 'standard' ||
+          draft.permissionMode === 'full'
+            ? draft.permissionMode
+            : 'standard'
+        return Response.json({
+          profile,
+          effective: {
+            profile,
+            source: 'global',
+            modelMode: 'profile',
+            modelRef: 'profile',
+            permissionTier: tier,
+            permissionSource:
+              draft.permissionMode && draft.permissionMode !== 'inherit'
+                ? 'task'
+                : 'global',
+          },
+        })
+      }
+      return undefined
+    })
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(screen.getByRole('button', { name: /安全自更新流程/ }))
+    expect(await screen.findByText('事情级执行设置')).toBeTruthy()
+    const tierSelect = await screen.findByLabelText('权限档位')
+    fireEvent.change(tierSelect, { target: { value: 'strict' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存执行设置' }))
+    expect(
+      await screen.findByText('执行设置已保存，对后续运行生效。'),
+    ).toBeTruthy()
+    expect(submitted).toMatchObject({
+      userId: 'owner',
+      expectedRevision: 1,
+      modelMode: 'inherit',
+      permissionMode: 'strict',
+    })
+    expect(await screen.findByText('严格 · 这件事情的覆盖设置')).toBeTruthy()
+
+    fireEvent.change(screen.getByLabelText('权限档位'), {
+      target: { value: 'full' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '保存执行设置' }))
+    const riskDialog = await screen.findByRole('dialog', {
+      name: '确认完全访问风险',
+    })
+    expect(
+      within(riskDialog).getByText(/不再拦截工作区之外的写入/),
+    ).toBeTruthy()
+    fireEvent.click(
+      within(riskDialog).getByRole('button', {
+        name: '我已了解，启用完全访问',
+      }),
+    )
+    await waitFor(() =>
+      expect(submitted).toMatchObject({
+        expectedRevision: 2,
+        permissionMode: 'full',
+      }),
+    )
+    expect(
+      await screen.findByText('完全访问 · 这件事情的覆盖设置'),
+    ).toBeTruthy()
   })
 
   it('creates a related task carrying the ended source context reference', async () => {

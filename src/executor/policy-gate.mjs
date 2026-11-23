@@ -59,9 +59,10 @@ const WRITE_COMMANDS = new Set([
 /**
  * @param {{ name: string, arguments?: unknown }} execution
  * @param {PolicyRoots} roots
+ * @param {import('./policy-gate.d.ts').PolicyTier} [tier]
  * @returns {ToolCallClassification}
  */
-export function classifyToolCall(execution, roots) {
+export function classifyToolCall(execution, roots, tier = 'standard') {
   const workspaceRoot = canonicalRoot(roots.workspaceRoot)
   const protectedRoots = (roots.protectedRoots ?? [])
     .map(root => canonicalRoot(root))
@@ -70,6 +71,32 @@ export function classifyToolCall(execution, roots) {
     .filter(root => typeof root === 'string' && root.length > 0)
     .map(root => resolve(root))
   const context = { workspaceRoot, protectedRoots, protectedAliases }
+  if (tier === 'strict') {
+    if (execution.name === 'web_fetch' || execution.name === 'web_search') {
+      return decision(
+        'network-egress',
+        'high',
+        'ask',
+        '严格档位下网络访问需要你确认。',
+        [],
+      )
+    }
+    if (
+      WRITE_TOOLS.has(execution.name) ||
+      execution.name === 'apply_patch' ||
+      execution.name === 'bash'
+    ) {
+      const standard = classifyToolCall(execution, roots, 'standard')
+      if (standard.action === 'deny') return standard
+      return decision(
+        standard.category === 'read' ? 'unknown' : standard.category,
+        standard.risk === 'low' ? 'high' : standard.risk,
+        'ask',
+        `严格档位下写操作与命令执行需要你确认。${standard.reason}`,
+        standard.targets,
+      )
+    }
+  }
   if (READ_TOOLS.has(execution.name)) {
     return decision('read', 'low', 'allow', '只读操作，无副作用。', [])
   }

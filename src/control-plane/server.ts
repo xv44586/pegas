@@ -409,6 +409,7 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
       if (
         !isRunCapabilityWrite(request) &&
         !isConversationStateRead(request) &&
+        !isRunPermissionRead(request) &&
         !isAuthorized(request, options.apiToken)
       ) {
         return sendJson(response, 401, { error: 'unauthorized' })
@@ -1005,6 +1006,25 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
       const runAutomationMatch = /^\/v1\/runs\/([^/]+)\/automations$/.exec(
         taskResourceUrl.pathname,
       )
+      const runPermissionsMatch = /^\/v1\/runs\/([^/]+)\/permissions$/.exec(
+        taskResourceUrl.pathname,
+      )
+      if (runPermissionsMatch && request.method === 'GET') {
+        const claimToken = runClaimToken(request)
+        if (!claimToken)
+          return sendJson(response, 403, { error: 'run_claim_required' })
+        try {
+          const projection = options.store.runPermissionProjection(
+            decodeURIComponent(runPermissionsMatch[1] ?? ''),
+            claimToken,
+          )
+          return sendJson(response, 200, projection)
+        } catch (error) {
+          if (error instanceof RunClaimError)
+            return sendJson(response, 403, { error: 'run_claim_invalid' })
+          throw error
+        }
+      }
       const runMessageMatch = /^\/v1\/runs\/([^/]+)\/messages$/.exec(
         taskResourceUrl.pathname,
       )
@@ -2748,6 +2768,12 @@ function isConversationStateRead(request: IncomingMessage): boolean {
   return /^\/v1\/runs\/[^/]+\/conversation-state\/(tasks|memories)$/.test(
     pathname,
   )
+}
+
+function isRunPermissionRead(request: IncomingMessage): boolean {
+  if (request.method !== 'GET' || !request.url) return false
+  const pathname = new URL(request.url, 'http://localhost').pathname
+  return /^\/v1\/runs\/[^/]+\/permissions$/.test(pathname)
 }
 
 function runClaimToken(request: IncomingMessage): string | undefined {

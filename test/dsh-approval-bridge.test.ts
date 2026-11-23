@@ -7,6 +7,8 @@ import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { createControlPlane } from '../src/control-plane/server.js'
+import { loadConfig } from '../src/core/config.js'
+import { runtimeSettingsDefaults } from '../src/settings/runtime-settings.js'
 import { DshCliExecutor } from '../src/executor/dsh-cli-executor.js'
 import type { ToolApprovalGrant } from '../src/executor/executor.js'
 import { PegasStore } from '../src/storage/sqlite-store.js'
@@ -736,6 +738,9 @@ main().catch(error => {
 }
 
 function createClaimedRun(store: PegasStore, userId: string, workerId: string) {
+  if (!store.hasRuntimeSettings()) {
+    store.initializeRuntimeSettings(runtimeSettingsDefaults(loadConfig({})))
+  }
   const event = store.enqueueEvent({
     userId,
     type: 'user.message',
@@ -755,7 +760,18 @@ function createClaimedRun(store: PegasStore, userId: string, workerId: string) {
       reason: 'test',
     },
     'dsh-headless',
-    { executor: 'dsh-headless' },
+    task =>
+      store.resolveWorkerExecutionContext(task.id, userId, {
+        executor: 'dsh-headless',
+        protocol: 'dsh-headless-v1',
+        workspace: process.cwd(),
+        permissions: JSON.stringify({
+          mode: 'workspace-write',
+          approvalPolicy: 'ask',
+          additionalDirectories: [],
+          privacyMode: 'disabled',
+        }),
+      }),
   )
   store.completeEvent(event.id, `setup-${workerId}`)
   const claimed = store.claimNextRun(workerId)

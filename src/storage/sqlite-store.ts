@@ -167,6 +167,11 @@ import {
   type WorkerProfile,
   type WorkerProfileUpdate,
 } from '../worker/worker-profile.js'
+import {
+  combinePermissionTiers,
+  isPermissionTier,
+  type PermissionTier,
+} from '../approval/permission-profile.js'
 
 const schema = `
 PRAGMA journal_mode = WAL;
@@ -842,6 +847,29 @@ FROM automation_commands;
 
 DROP TABLE automation_commands;
 ALTER TABLE automation_commands_v39 RENAME TO automation_commands;
+`
+
+const migration40 = `
+-- APPROVAL-001 P2: permission tiers. NULL on worker_profiles means inherit
+-- the global default; the audit ledger is append-only.
+ALTER TABLE runtime_settings ADD COLUMN permission_tier TEXT NOT NULL DEFAULT 'standard'
+CHECK (permission_tier IN ('strict', 'standard', 'full'));
+
+ALTER TABLE worker_profiles ADD COLUMN permission_mode TEXT
+CHECK (permission_mode IN ('inherit', 'strict', 'standard', 'full'));
+
+CREATE TABLE worker_profile_changes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id TEXT NOT NULL REFERENCES tasks(id),
+  command_id TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  permission_mode TEXT,
+  previous_permission_mode TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX worker_profile_changes_by_task_time
+ON worker_profile_changes (task_id, created_at DESC);
 `
 
 const migration32 = `
@@ -2438,6 +2466,7 @@ interface RuntimeSettingsRow {
   router_mode: RuntimeSettings['routerMode']
   chat_lane_enabled?: number | null
   execution_pools_json?: string | null
+  permission_tier?: string | null
   model_provider: string
   model_connection_id: string | null
   model_name: string
@@ -2458,6 +2487,7 @@ interface WorkerProfileRow {
   model_name: string | null
   pool: WorkerProfile['pool'] | null
   effort: string | null
+  permission_mode: WorkerProfile['permissionMode'] | null
   created_at: string
   updated_at: string
 }
@@ -2648,6 +2678,7 @@ export class PegasStore {
     this.#migrate(37, migration37)
     this.#migrate(38, migration38)
     this.#migrate(39, migration39)
+    this.#migrate(40, migration40)
   }
 
   #backfillWorkerIconIds(): void {
@@ -2763,8 +2794,9 @@ export class PegasStore {
         `INSERT OR IGNORE INTO runtime_settings
           (id, revision, router_mode, model_provider, model_connection_id, model_name,
            agent_model_mode, agent_model_provider, agent_model_name,
-           privacy_mode, rewrite_mode, chat_lane_enabled, execution_pools_json, updated_at)
-         VALUES (1, 1, ?, 'openai-compatible', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           privacy_mode, rewrite_mode, chat_lane_enabled, execution_pools_json,
+           permission_tier, updated_at)
+         VALUES (1, 1, ?, 'openai-compatible', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         defaults.routerMode,
@@ -2777,6 +2809,7 @@ export class PegasStore {
         defaults.rewriteMode,
         defaults.chatLaneEnabled ? 1 : 0,
         JSON.stringify(defaults.executionPools ?? {}),
+        defaults.permissionTier ?? 'standard',
         now,
       )
     return this.getRuntimeSettings()
@@ -2826,6 +2859,7 @@ export class PegasStore {
       | 'workerProfile'
       | 'workerProfileRevision'
       | 'workerProfileSource'
+      | 'permissionTier'
     >,
   ): ExecutionContext {
     const settings = this.getRuntimeSettings()
@@ -2864,14 +2898,17 @@ export class PegasStore {
         current.modelProvider === update.modelProvider &&
         current.modelName === update.modelName &&
         current.pool === update.pool &&
-        current.effort === update.effort
+        current.effort === update.effort &&
+        (current.permissionMode ?? 'inherit') ===
+          (update.permissionMode ?? 'inherit')
       const now = this.#clock.now().toISOString()
       if (!unchanged) {
         this.#database
           .prepare(
             `UPDATE worker_profiles
              SET revision = revision + 1, model_mode = ?, model_provider = ?,
-                 model_name = ?, pool = ?, effort = ?, updated_at = ?
+                 model_name = ?, pool = ?, effort = ?, permission_mode = ?,
+                 updated_at = ?
              WHERE task_id = ? AND revision = ?`,
           )
           .run(
@@ -2880,10 +2917,46 @@ export class PegasStore {
             update.modelName ?? null,
             update.pool ?? null,
             update.effort ?? null,
+            update.permissionMode ?? null,
             now,
             taskId,
             update.expectedRevision,
           )
+        if (
+          (current.permissionMode ?? 'inherit') !==
+          (update.permissionMode ?? 'inherit')
+        ) {
+          this.#database
+            .prepare(
+              `INSERT INTO worker_profile_changes
+                (task_id, command_id, revision, permission_mode,
+                 previous_permission_mode, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)`,
+            )
+            .run(
+              taskId,
+              update.commandId,
+              update.expectedRevision + 1,
+              update.permissionMode ?? null,
+              current.permissionMode ?? null,
+              now,
+            )
+          this.enqueueOutbox({
+            userId: task.userId,
+            taskId,
+            channel: 'timeline',
+            dedupeKey: `worker-profile-tier:${taskId}:${update.commandId}`,
+            payload: {
+              type: 'task.permission_changed',
+              taskId,
+              commandId: update.commandId,
+              revision: update.expectedRevision + 1,
+              permissionMode: update.permissionMode ?? 'inherit',
+              previousPermissionMode: current.permissionMode ?? 'inherit',
+              text: `权限档位已切换为${permissionTierLabel(update.permissionMode ?? 'inherit')}（原${permissionTierLabel(current.permissionMode ?? 'inherit')}）。`,
+            },
+          })
+        }
       }
       const profile = this.#workerProfileByTaskId(taskId)
       this.#database
@@ -2932,6 +3005,101 @@ export class PegasStore {
     )
       throw new Error('Worker Profile command ID is already used')
     return JSON.parse(replay.response_json) as WorkerProfile
+  }
+
+  listWorkerProfileChanges(
+    taskId: string,
+    userId: string,
+  ): {
+    commandId: string
+    revision: number
+    permissionMode?: PermissionTier | 'inherit'
+    previousPermissionMode?: PermissionTier | 'inherit'
+    createdAt: string
+  }[] {
+    const task = this.#taskById(taskId)
+    if (task.userId !== userId) throw new Error('Task belongs to another user')
+    const rows = this.#database
+      .prepare(
+        `SELECT command_id, revision, permission_mode,
+                previous_permission_mode, created_at
+         FROM worker_profile_changes
+         WHERE task_id = ?
+         ORDER BY created_at DESC, id DESC
+         LIMIT 100`,
+      )
+      .all(taskId) as unknown as {
+      command_id: string
+      revision: number
+      permission_mode: string | null
+      previous_permission_mode: string | null
+      created_at: string
+    }[]
+    return rows.map(row => ({
+      commandId: row.command_id,
+      revision: row.revision,
+      ...(row.permission_mode
+        ? {
+            permissionMode: row.permission_mode as PermissionTier | 'inherit',
+          }
+        : {}),
+      ...(row.previous_permission_mode
+        ? {
+            previousPermissionMode: row.previous_permission_mode as
+              PermissionTier | 'inherit',
+          }
+        : {}),
+      createdAt: row.created_at,
+    }))
+  }
+
+  runPermissionProjection(
+    runId: string,
+    claimToken: string,
+  ): {
+    snapshotTier?: PermissionTier
+    liveTier: PermissionTier
+    effectiveTier: PermissionTier
+    clamped: boolean
+    mismatch: boolean
+    generation: string
+    source: 'global' | 'task'
+  } {
+    this.#claimForCapability(runId, claimToken)
+    const run = this.#runById(runId)
+    const task = this.#taskById(run.taskId)
+    const settings = this.getRuntimeSettings()
+    const effective = effectiveWorkerProfile(
+      this.#workerProfileByTaskId(task.id),
+      settings,
+    )
+    const snapshotTier = isPermissionTier(run.executionContext.permissionTier)
+      ? run.executionContext.permissionTier
+      : undefined
+    const combination = combinePermissionTiers({
+      ...(snapshotTier ? { snapshotTier } : {}),
+      liveTier: effective.permissionTier,
+    })
+    const generation = createHash('sha256')
+      .update(
+        JSON.stringify({
+          settingsRevision: settings.revision,
+          workerProfileRevision: effective.profile.revision,
+          liveTier: effective.permissionTier,
+          snapshotTier: snapshotTier ?? null,
+        }),
+      )
+      .digest('hex')
+      .slice(0, 32)
+    return {
+      ...(snapshotTier ? { snapshotTier } : {}),
+      liveTier: effective.permissionTier,
+      effectiveTier: combination.tier,
+      clamped: combination.clamped,
+      mismatch: combination.mismatch,
+      generation,
+      source: effective.permissionSource,
+    }
   }
 
   createCollaboration(
@@ -4963,6 +5131,7 @@ export class PegasStore {
              agent_model_name = ?, privacy_mode = ?, rewrite_mode = ?,
              chat_lane_enabled = COALESCE(?, chat_lane_enabled),
              execution_pools_json = COALESCE(?, execution_pools_json),
+             permission_tier = COALESCE(?, permission_tier),
              updated_at = ?
          WHERE id = 1 AND revision = ?`,
       )
@@ -4983,6 +5152,7 @@ export class PegasStore {
         settings.executionPools === undefined
           ? null
           : JSON.stringify(settings.executionPools),
+        settings.permissionTier ?? null,
         this.#clock.now().toISOString(),
         expectedRevision,
       )
@@ -5135,6 +5305,7 @@ export class PegasStore {
                agent_model_name = ?, privacy_mode = ?, rewrite_mode = ?,
                chat_lane_enabled = COALESCE(?, chat_lane_enabled),
                execution_pools_json = COALESCE(?, execution_pools_json),
+               permission_tier = COALESCE(?, permission_tier),
                updated_at = ?
            WHERE id = 1 AND revision = ?`,
         )
@@ -5155,6 +5326,7 @@ export class PegasStore {
           settings.executionPools === undefined
             ? null
             : JSON.stringify(settings.executionPools),
+          settings.permissionTier ?? null,
           now,
           expectedRevision,
         )
@@ -13219,6 +13391,9 @@ function toRuntimeSettings(row: RuntimeSettingsRow): RuntimeSettings {
     rewriteMode: row.rewrite_mode,
     chatLaneEnabled: row.chat_lane_enabled === 1,
     executionPools: parseStoredExecutionPools(row.execution_pools_json),
+    permissionTier: isPermissionTier(row.permission_tier)
+      ? row.permission_tier
+      : 'standard',
     updatedAt: row.updated_at,
   }
 }
@@ -13233,8 +13408,24 @@ function toWorkerProfile(row: WorkerProfileRow): WorkerProfile {
     ...(row.model_name ? { modelName: row.model_name } : {}),
     ...(row.pool ? { pool: row.pool } : {}),
     ...(row.effort ? { effort: row.effort } : {}),
+    ...(row.permission_mode && row.permission_mode !== 'inherit'
+      ? { permissionMode: row.permission_mode }
+      : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  }
+}
+
+function permissionTierLabel(mode: PermissionTier | 'inherit'): string {
+  switch (mode) {
+    case 'strict':
+      return '严格'
+    case 'standard':
+      return '标准'
+    case 'full':
+      return '完全访问'
+    default:
+      return '跟随全局'
   }
 }
 

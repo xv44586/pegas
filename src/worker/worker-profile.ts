@@ -1,6 +1,10 @@
 import type { ExecutionContext } from '../core/domain.js'
 import type { RuntimeSettingsSelection } from '../settings/runtime-settings-selection.js'
 import {
+  isPermissionTier,
+  type PermissionTier,
+} from '../approval/permission-profile.js'
+import {
   globalDefaultPoolModel,
   resolveExecutionPool,
   type ExecutionPool,
@@ -18,6 +22,7 @@ export interface WorkerProfile {
   modelName?: string
   pool?: ExecutionPool
   effort?: string
+  permissionMode?: PermissionTier | 'inherit'
   createdAt: string
   updatedAt: string
 }
@@ -30,6 +35,7 @@ export interface WorkerProfileUpdate {
   modelName?: string
   pool?: ExecutionPool
   effort?: string
+  permissionMode?: PermissionTier | 'inherit'
 }
 
 export interface EffectiveWorkerProfile {
@@ -42,6 +48,8 @@ export interface EffectiveWorkerProfile {
   pool?: ExecutionPool
   effort?: string
   poolResolution?: PoolResolution
+  permissionTier: PermissionTier
+  permissionSource: 'global' | 'task'
 }
 
 export function parseWorkerProfileUpdate(value: unknown): WorkerProfileUpdate {
@@ -72,6 +80,17 @@ export function parseWorkerProfileUpdate(value: unknown): WorkerProfileUpdate {
   const effort = optionalString(input.effort, 'effort', 20)
   if (modelMode === 'override' && pool)
     throw new Error('模型覆盖与执行池不能同时指定')
+  let permissionMode: WorkerProfileUpdate['permissionMode']
+  if (input.permissionMode !== undefined) {
+    if (
+      input.permissionMode !== 'inherit' &&
+      !isPermissionTier(input.permissionMode)
+    )
+      throw new Error(
+        'permissionMode must be inherit, strict, standard or full',
+      )
+    permissionMode = input.permissionMode
+  }
   return {
     commandId,
     expectedRevision,
@@ -80,6 +99,7 @@ export function parseWorkerProfileUpdate(value: unknown): WorkerProfileUpdate {
     ...(modelName ? { modelName } : {}),
     ...(pool ? { pool } : {}),
     ...(effort ? { effort } : {}),
+    ...(permissionMode ? { permissionMode } : {}),
   }
 }
 
@@ -87,6 +107,14 @@ export function effectiveWorkerProfile(
   profile: WorkerProfile,
   settings: RuntimeSettingsSelection,
 ): EffectiveWorkerProfile {
+  const permissionSource =
+    profile.permissionMode && profile.permissionMode !== 'inherit'
+      ? ('task' as const)
+      : ('global' as const)
+  const permissionTier: PermissionTier =
+    permissionSource === 'task' && isPermissionTier(profile.permissionMode)
+      ? profile.permissionMode
+      : (settings.permissionTier ?? 'standard')
   const taskOverride = profile.modelMode === 'override'
   if (!taskOverride && profile.pool) {
     const resolution = resolveExecutionPool(
@@ -110,6 +138,8 @@ export function effectiveWorkerProfile(
       pool: resolution.actual ?? profile.pool,
       ...(profile.effort ? { effort: profile.effort } : {}),
       poolResolution: resolution,
+      permissionTier,
+      permissionSource,
     }
   }
   const modelMode = taskOverride ? 'override' : settings.agentModelMode
@@ -130,6 +160,8 @@ export function effectiveWorkerProfile(
       modelMode === 'override' && modelProvider && modelName
         ? `${modelProvider}/${modelName}`
         : 'profile',
+    permissionTier,
+    permissionSource,
   }
 }
 
@@ -145,6 +177,7 @@ export function workerExecutionContext(
     | 'workerProfile'
     | 'workerProfileRevision'
     | 'workerProfileSource'
+    | 'permissionTier'
   >,
   settingsRevision: number,
 ): ExecutionContext {
@@ -168,6 +201,7 @@ export function workerExecutionContext(
     workerProfile: effective.profile.id,
     workerProfileRevision: effective.profile.revision,
     workerProfileSource: effective.source,
+    permissionTier: effective.permissionTier,
   }
 }
 
@@ -180,6 +214,7 @@ export function workerProfileFingerprint(
     | 'modelName'
     | 'pool'
     | 'effort'
+    | 'permissionMode'
   >,
 ): string {
   return JSON.stringify({
@@ -189,6 +224,7 @@ export function workerProfileFingerprint(
     modelName: update.modelName ?? '',
     pool: update.pool ?? '',
     effort: update.effort ?? '',
+    permissionMode: update.permissionMode ?? 'inherit',
   })
 }
 

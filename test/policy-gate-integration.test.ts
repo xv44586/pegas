@@ -7,11 +7,13 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import { createControlPlane } from '../src/control-plane/server.js'
+import { loadConfig } from '../src/core/config.js'
 import {
   createDshModelConfiguration,
   ensureDshProfileHome,
 } from '../src/executor/dsh-home.js'
 import { DshCliExecutor } from '../src/executor/dsh-cli-executor.js'
+import { runtimeSettingsDefaults } from '../src/settings/runtime-settings.js'
 import { PegasStore } from '../src/storage/sqlite-store.js'
 
 const dshAvailable =
@@ -54,6 +56,7 @@ describe.skipIf(!dshAvailable || !gatewayReachable)(
         agentModel: { provider: 'magpie', model: 'qwen-cn-2/qwen4-max' },
       })
       const store = new PegasStore(':memory:')
+      store.initializeRuntimeSettings(runtimeSettingsDefaults(loadConfig({})))
       const server = createControlPlane({
         store,
         apiToken: 'bridge-test',
@@ -79,7 +82,18 @@ describe.skipIf(!dshAvailable || !gatewayReachable)(
             reason: 'probe',
           },
           'dsh-headless',
-          { executor: 'dsh-headless' },
+          task =>
+            store.resolveWorkerExecutionContext(task.id, 'owner', {
+              executor: 'dsh-headless',
+              protocol: 'dsh-headless-v1',
+              workspace,
+              permissions: JSON.stringify({
+                mode: 'workspace-write',
+                approvalPolicy: 'ask',
+                additionalDirectories: [],
+                privacyMode: 'disabled',
+              }),
+            }),
         )
         store.completeEvent(event.id, 'setup-p1')
         const claimed = store.claimNextRun('worker-p1')

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 
 import { loadConfig } from '../core/config.js'
+import { tierSandbox } from '../approval/permission-profile.js'
 import { ModelThinkingSummarizer } from '../activity/thinking-summary.js'
 import { ConversationExecutor } from '../executor/conversation-executor.js'
 import { DshCliExecutor } from '../executor/dsh-cli-executor.js'
@@ -206,13 +207,17 @@ const createThinkingSummarizer: ThinkingSummarizerFactory = context =>
   )
 const eventHandler = new RoutingEventHandler(router, executor.name, task => {
   const settings = store.getRuntimeSettings()
+  const tier = store.getEffectiveWorkerProfile(
+    task.id,
+    task.userId,
+  ).permissionTier
   return store.resolveWorkerExecutionContext(task.id, task.userId, {
     executor: executor.name,
     executorProfile: config.dshProfile,
     workspace: config.workspaceRoot,
     nodeId: config.nodeId,
     permissions: JSON.stringify({
-      mode: 'workspace-write',
+      mode: tierSandbox(tier).mode,
       approvalPolicy: 'ask',
       additionalDirectories: config.dshAdditionalDirectories,
       privacyMode: settings.privacyMode,

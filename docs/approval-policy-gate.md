@@ -1,6 +1,6 @@
 # 权限档位与审批 Policy Gate（APPROVAL-001 第二阶段）
 
-> 状态：P1 Gate 覆盖面已实现（见下方 P1 实现记录）；P2–P5 仍为 Intake
+> 状态：P1 Gate 覆盖面、P2 权限档位对象已实现（见下方实现记录）；P3–P5 仍为 Intake
 > 更新日期：2026-11-23
 > 基线：`origin/main` `74c2f8c`（Intake 初稿基线 `4baab43`）
 > 外部调研：`research/approval-permissions-codex-cindy/NOTES.md`（本地，不入库；Codex CLI/webview、Cindy Apache-2.0 docs、DSH MIT 源码）
@@ -115,6 +115,21 @@
 - **证据**：`test/policy-gate.test.ts` 17 项（先红后绿）+ `test/policy-gate-integration.test.ts` 真实 DSH 探针 1 项（区内写放行落盘、越界写停放 `high/out-of-workspace-write`）；`pnpm check`（合并最新 main 后复跑）111 文件 / 1183 测试全绿（statement 85.54%、branch 78.3%、function 89.9%、line 88.7%），`pnpm smoke`、`pnpm smoke:crash` 通过。验收条件 1（除独立审计表）、2 的 standard 档路径、8 已满足；条件 3–7 属 P2–P5 与后续验证。
 - **剩余风险**：bash 静态分类可被复杂构造绕过 ask 路由（硬边界仍是 DSH sandbox + guard，Intake 已声明非安全边界）；`rm -rf` 目标解析对变量/通配符不展开，此类命令落入 unknown 或依赖模式命中；探针网络发送路径未在真实 DSH 上覆盖（分类器单测覆盖）。
 - **回滚**：revert 本 Feature 提交即恢复「仅越权 seam 审批」旧行为；无迁移、无数据删除。
+
+## P2 实现记录（2026-11-23）
+
+- **实现**：`src/approval/permission-profile.ts`（档位代数：strict<standard<full、`tierSandbox` 沙箱映射（全部 approvalPolicy=ask）、`combinePermissionTiers` 下界组合）+ `src/worker/worker-profile.ts`（`permissionMode` 解析/effective/fingerprint）+ `src/settings/runtime-settings*.ts`（全局默认 `permissionTier`，默认 standard，保存省略保留现值）+ `src/storage/sqlite-store.ts`（migration v40、切档审计与时间线事件、`runPermissionProjection`、`listWorkerProfileChanges`）+ `src/worker/run-execution-snapshot.ts` / `src/core/domain.ts`（快照 additive `permissionTier`）+ `src/control-plane/server.ts`（claim-only `GET /v1/runs/:runId/permissions`）+ `src/executor/dsh-approval-bridge.mjs`（每次 pre-execute 现读档位）+ `src/worker/main.ts`（沙箱 mode 从生效档位推导）+ `src/supervisor/rollback-compatibility.ts`（回滚 Guard）+ Web（事情抽屉「权限档位」选择器、设置页隐私区「全局权限档位」，完全访问需显式风险确认弹层）。
+- **与 Intake 的差异（如实记录）**：
+  - 未新建独立 PermissionProfile 表：档位持久化复用 `runtime_settings.permission_tier`（全局默认）与 `worker_profiles.permission_mode`（Task 覆盖，NULL=inherit），沿用 WorkerProfile 既有 revision/commandId 幂等与 owner 隔离；切档不设独立端点，走既有 `PUT /v1/tasks/:id/worker-profile`（fingerprint 含 permissionMode）。
+  - 「代次」实现为 settingsRevision+profileRevision+双档位的 SHA-256 指纹（32 hex），不是单调递增计数；桥每次现读，mismatch/读取失败一律按 strict 处置（fail closed），不静默放行。
+  - 桥现读无缓存（2s TTL 会违反「收紧对下一次调用立即生效」）；代价是每个工具调用一次本地 HTTP 往返（3s 超时）。
+  - strict 档语义：read-only 沙箱；Gate 把 write/edit/apply_patch/bash 与 web_fetch/web_search 全部升为 ask；control-plane-mutation 的 guard 硬拦在任何档位（含 full）不变。full 档：danger-full-access 沙箱 + ask，Web 启用前强制风险确认；高风险动作仍走审批。
+  - 切档审计为 append-only `worker_profile_changes` 表 + `task.permission_changed` 时间线 outbox 事件（白话文案）；`listWorkerProfileChanges` 提供 owner 隔离读取，Web 审计列表 UI 属 P4。
+  - 审批时把当次 tier/generation/mismatch 写入 Action request（`policy_decision` 事件同步携带），审批卡可回看判定时的档位事实。
+  - 存量 Run（无快照档位）按 mismatch→strict 处置：旧 Run 在桥下运行会全量 ask（fail closed），不迁移不可变快照；Worker 新 Run 一律带档位快照。
+- **证据**：`test/permission-profile.test.ts` 16 项 + `test/permission-bridge.test.ts` 2 项（收紧下一次调用立即生效、断网 fail closed、strict 网络 ask、全档位 control-plane deny；先红后绿）+ Web `App.test.tsx` 事情级/全局档位切换与完全访问风险确认 2 项（先红后绿）；P1 探针 `test/policy-gate-integration.test.ts` 更新为带档位快照的 Run 后真实 DSH 复跑通过；`test/sqlite-store.test.ts`（v40 迁移清单）、`test/worker-profile.test.ts`（快照含 permissionTier）同步更新。`pnpm check` 113 文件 / 1203 测试全绿（statement 85.64%、branch 78.51%、function 89.88%、line 88.76%），`pnpm smoke`、`pnpm smoke:crash` 通过。验收条件 3（收紧/放宽下界/错配 fail closed/幂等/owner 隔离/时间线审计）已满足；条件 2 的三档 guard 有单测覆盖（真实 DSH 三档探针未跑）；条件 4–7 属 P3–P5 与后续验证。
+- **剩余风险**：每工具调用一次现读 HTTP 的时延与控制面负载（本地回环，未压测）；strict 档 bash 一律 ask 会产生高频审批（预期行为，P3 规则批准缓解）；full 档下 Gate 不再拦截区外写（如实披露，风险确认弹层承担告知）；旧 Run fail-closed 全量 ask 可能让存量等待中的 Run 恢复后审批变多。
+- **回滚**：schema v40 additive（两列 + 审计表），旧代码忽略新列；Supervisor Guard 在存在非默认全局档位或 Task 覆盖时拒绝回滚到 <v40 的 Release（先切回 standard/inherit 再回滚）；revert 提交即恢复 P1 行为，审计数据保留不删除。
 
 ## UI 设计合同（P4 输入）
 

@@ -1,5 +1,10 @@
 import type { ExecutionContext, Run } from '../core/domain.js'
 import {
+  isPermissionTier,
+  tierSandbox,
+  type PermissionTier,
+} from '../approval/permission-profile.js'
+import {
   decodeExecutionPermissions,
   decodeLegacyExecutionPermissions,
   ExecutionPermissionsDecodeError,
@@ -21,6 +26,7 @@ export interface DshExecutionDefaults {
 export interface DshExecutionSnapshot extends DshExecutionDefaults {
   agentModel?: { provider: string; model: string }
   reasoningEffort?: string
+  permissionTier?: PermissionTier
 }
 
 export function dshExecutorOptionsFromSnapshot(
@@ -34,11 +40,14 @@ export function dshExecutorOptionsFromSnapshot(
     | 'policyProtectedRoots'
   >,
 ): DshCliExecutorOptions {
+  const sandbox = snapshot.permissionTier
+    ? tierSandbox(snapshot.permissionTier)
+    : undefined
   return {
     ...runtime,
     profile: snapshot.executorProfile,
-    permissionMode: snapshot.permissionMode,
-    approvalPolicy: snapshot.approvalPolicy,
+    permissionMode: sandbox?.mode ?? snapshot.permissionMode,
+    approvalPolicy: sandbox?.approvalPolicy ?? snapshot.approvalPolicy,
     additionalDirectories: snapshot.additionalDirectories,
     ...(snapshot.agentModel ? { agentModel: snapshot.agentModel } : {}),
     ...(snapshot.reasoningEffort
@@ -107,6 +116,11 @@ function decodeVersion2(
   const permissions = parsePermissions(context.permissions, true)
   const reasoningEffort =
     context.reasoningEffort && agentModel ? context.reasoningEffort : undefined
+  if (
+    context.permissionTier !== undefined &&
+    !isPermissionTier(context.permissionTier)
+  )
+    throw new Error('Run execution contract v2 has an invalid permission tier')
   return {
     executorProfile,
     workspace,
@@ -114,6 +128,9 @@ function decodeVersion2(
     approvalPolicy: permissions.approvalPolicy,
     additionalDirectories: permissions.additionalDirectories,
     privacyMode: permissions.privacyMode,
+    ...(context.permissionTier
+      ? { permissionTier: context.permissionTier }
+      : {}),
     ...(agentModel ? { agentModel } : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
   }

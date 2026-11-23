@@ -2278,13 +2278,17 @@ function WorkerProfileSection({
   const [modelKey, setModelKey] = useState('')
   const [pool, setPool] = useState<'' | 'fast' | 'balanced' | 'deep'>('')
   const [effort, setEffort] = useState('')
+  const [permissionMode, setPermissionMode] = useState<
+    'inherit' | 'strict' | 'standard' | 'full'
+  >('inherit')
+  const [confirmingFullAccess, setConfirmingFullAccess] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
   const [saveNotice, setSaveNotice] = useState('')
   const [catalogLoading, setCatalogLoading] = useState(false)
   const current = response ?? profile
   const profileKey = current
-    ? `${current.profile.id}:${String(current.profile.revision)}:${current.profile.modelMode}:${current.profile.modelProvider ?? ''}:${current.profile.modelName ?? ''}:${current.profile.pool ?? ''}:${current.profile.effort ?? ''}`
+    ? `${current.profile.id}:${String(current.profile.revision)}:${current.profile.modelMode}:${current.profile.modelProvider ?? ''}:${current.profile.modelName ?? ''}:${current.profile.pool ?? ''}:${current.profile.effort ?? ''}:${current.profile.permissionMode ?? 'inherit'}`
     : ''
   useEffect(() => {
     setResponse(undefined)
@@ -2301,6 +2305,7 @@ function WorkerProfileSection({
       name = '',
       savedPool = '',
       savedEffort = '',
+      savedPermission = 'inherit',
     ] = profileKey.split(':')
     setModelMode(mode === 'override' ? 'override' : 'inherit')
     setModelKey(
@@ -2312,6 +2317,13 @@ function WorkerProfileSection({
         : '',
     )
     setEffort(savedEffort)
+    setPermissionMode(
+      savedPermission === 'strict' ||
+        savedPermission === 'standard' ||
+        savedPermission === 'full'
+        ? savedPermission
+        : 'inherit',
+    )
   }, [profileKey])
   const readOnly = channel.status === 'cancelled'
   if (!current && !profileError) return null
@@ -2344,10 +2356,18 @@ function WorkerProfileSection({
     if (!api || nextMode !== 'override' || catalog) return
     await loadCatalog()
   }
-  async function save() {
+  async function save(skipFullAccessConfirmation = false) {
     if (!api || !current || saving) return
     if (modelMode === 'override' && !selectedModel) {
       setSaveError('请选择一个目录中可用的执行模型。')
+      return
+    }
+    if (
+      permissionMode === 'full' &&
+      current.profile.permissionMode !== 'full' &&
+      !skipFullAccessConfirmation
+    ) {
+      setConfirmingFullAccess(true)
       return
     }
     setSaving(true)
@@ -2365,6 +2385,7 @@ function WorkerProfileSection({
           : {}),
         ...(modelMode === 'inherit' && pool ? { pool } : {}),
         ...(effort.trim() ? { effort: effort.trim() } : {}),
+        permissionMode,
       })
       setResponse(saved)
       setSaveNotice('执行设置已保存，对后续运行生效。')
@@ -2418,6 +2439,14 @@ function WorkerProfileSection({
               {current.effective.effort && (
                 <Meta label="推理档位" value={current.effective.effort} />
               )}
+              <Meta
+                label="权限档位"
+                value={`${permissionTierLabel(current.effective.permissionTier)} · ${
+                  current.effective.permissionSource === 'task'
+                    ? '这件事情的覆盖设置'
+                    : 'Pegas 全局设置'
+                }`}
+              />
             </dl>
           </div>
           {readOnly || !api ? (
@@ -2486,6 +2515,30 @@ function WorkerProfileSection({
                     )}
                 </select>
               </label>
+              <label className="field-label">
+                权限档位
+                <select
+                  disabled={saving}
+                  onChange={event =>
+                    setPermissionMode(
+                      event.target.value === 'strict' ||
+                        event.target.value === 'standard' ||
+                        event.target.value === 'full'
+                        ? event.target.value
+                        : 'inherit',
+                    )
+                  }
+                  value={permissionMode}
+                >
+                  <option value="inherit">跟随 Pegas 全局设置</option>
+                  <option value="standard">标准 · 区内放行，越界审批</option>
+                  <option value="strict">严格 · 只读，写与网络都审批</option>
+                  <option value="full">完全访问 · 显式风险披露</option>
+                </select>
+              </label>
+              <p className="drawer-footnote">
+                收紧对下一次工具调用立即生效；放宽只影响后续运行，不越过已排队运行的能力上限。
+              </p>
               {modelMode === 'override' && (
                 <div className="field-label">
                   <span>指定模型</span>
@@ -2541,8 +2594,51 @@ function WorkerProfileSection({
           )}
         </>
       )}
+      {confirmingFullAccess && (
+        <div
+          aria-labelledby="full-access-risk-title"
+          aria-modal="true"
+          className="stop-confirmation"
+          role="dialog"
+        >
+          <header>
+            <AlertTriangle size={18} />
+            <strong id="full-access-risk-title">确认完全访问风险</strong>
+          </header>
+          <p>
+            完全访问档位下，Pegas 不再拦截工作区之外的写入与命令副作用；
+            高风险动作仍会请求你的审批，控制面自修改仍被强制拦截。
+            请只在你信任这件事情的完整目标时启用。
+          </p>
+          <div className="stop-confirmation-actions">
+            <button
+              className="secondary-button"
+              onClick={() => setConfirmingFullAccess(false)}
+              type="button"
+            >
+              取消
+            </button>
+            <button
+              className="secondary-button is-danger"
+              onClick={() => {
+                setConfirmingFullAccess(false)
+                void save(true)
+              }}
+              type="button"
+            >
+              我已了解，启用完全访问
+            </button>
+          </div>
+        </div>
+      )}
     </section>
   )
+}
+
+function permissionTierLabel(tier?: 'strict' | 'standard' | 'full') {
+  if (tier === 'strict') return '严格'
+  if (tier === 'full') return '完全访问'
+  return '标准'
 }
 
 function ExecutionProfileMeta({ run }: { run?: Run }) {

@@ -7,6 +7,8 @@ import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { createControlPlane } from '../src/control-plane/server.js'
+import { loadConfig } from '../src/core/config.js'
+import { runtimeSettingsDefaults } from '../src/settings/runtime-settings.js'
 import { classifyToolCall } from '../src/executor/policy-gate.mjs'
 import type { ToolCallClassification } from '../src/executor/policy-gate.mjs'
 import { DshCliExecutor } from '../src/executor/dsh-cli-executor.js'
@@ -364,6 +366,9 @@ function bridgePolicy(roots: GateRoots): Record<string, unknown> {
 }
 
 function createClaimedRun(store: PegasStore, userId: string, workerId: string) {
+  if (!store.hasRuntimeSettings()) {
+    store.initializeRuntimeSettings(runtimeSettingsDefaults(loadConfig({})))
+  }
   const event = store.enqueueEvent({
     userId,
     type: 'user.message',
@@ -383,7 +388,18 @@ function createClaimedRun(store: PegasStore, userId: string, workerId: string) {
       reason: 'test',
     },
     'dsh-headless',
-    { executor: 'dsh-headless' },
+    task =>
+      store.resolveWorkerExecutionContext(task.id, userId, {
+        executor: 'dsh-headless',
+        protocol: 'dsh-headless-v1',
+        workspace: '/tmp/ws',
+        permissions: JSON.stringify({
+          mode: 'workspace-write',
+          approvalPolicy: 'ask',
+          additionalDirectories: [],
+          privacyMode: 'disabled',
+        }),
+      }),
   )
   store.completeEvent(event.id, `setup-${workerId}`)
   const claimed = store.claimNextRun(workerId)

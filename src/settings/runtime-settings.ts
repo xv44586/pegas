@@ -206,6 +206,15 @@ export function parseRuntimeSettingsUpdate(
     ...(value.executionPools === undefined
       ? {}
       : { executionPools: parseExecutionPools(value.executionPools) }),
+    ...(value.permissionTier === undefined
+      ? {}
+      : {
+          permissionTier: enumValue(value.permissionTier, 'permissionTier', [
+            'strict',
+            'standard',
+            'full',
+          ]),
+        }),
   }
   const hasApiKey = provider.apiKey
     ? true

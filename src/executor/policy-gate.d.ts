@@ -22,7 +22,10 @@ export interface ToolCallClassification {
   targets: string[]
 }
 
+export type PolicyTier = 'strict' | 'standard' | 'full'
+
 export declare function classifyToolCall(
   execution: { name: string; arguments?: unknown },
   roots: PolicyRoots,
+  tier?: PolicyTier,
 ): ToolCallClassification

@@ -1,5 +1,6 @@
 import type { ModelProviderId } from '../model/provider-catalog.js'
 import type { ExecutionPools } from '../worker/execution-pools.js'
+import type { PermissionTier } from '../approval/permission-profile.js'
 
 type RouterMode = 'model' | 'rules'
 type PrivacyMode = 'disabled' | 'mask'
@@ -19,4 +20,6 @@ export interface RuntimeSettingsSelection {
   chatLaneEnabled?: boolean
   /** Optional fast/balanced/deep pool mapping (PLAN-001 P3). */
   executionPools?: ExecutionPools
+  /** Global default permission tier (APPROVAL-001 P2); defaults to standard. */
+  permissionTier?: PermissionTier
 }

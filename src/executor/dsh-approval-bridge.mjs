@@ -31,6 +31,8 @@ export function apply(ctx, config = {}) {
   const grantedCalls = new Map()
   /** @type {Map<string, import('./policy-gate.d.ts').ToolCallClassification>} */
   const gateDecisions = new Map()
+  /** @type {Map<string, { tier: string, generation: string, mismatch: boolean }>} */
+  const gateTiers = new Map()
   let grantConsumed = false
   let parked = false
 
@@ -58,7 +60,14 @@ export function apply(ctx, config = {}) {
     async (exec, next) => {
       const callKey =
         exec.callId === undefined ? undefined : String(exec.callId)
-      const classification = classifyToolCall(exec, policy)
+      const tierState = capability
+        ? await readTierState(capability)
+        : {
+            tier: /** @type {const} */ ('standard'),
+            generation: '',
+            mismatch: false,
+          }
+      const classification = classifyToolCall(exec, policy, tierState.tier)
       if (callKey !== undefined) {
         toolCalls.set(callKey, {
           tool: exec.name,
@@ -66,6 +75,11 @@ export function apply(ctx, config = {}) {
           classification,
         })
         gateDecisions.set(callKey, classification)
+        gateTiers.set(callKey, {
+          tier: tierState.tier,
+          generation: tierState.generation,
+          mismatch: tierState.mismatch,
+        })
       }
       if (capability && callKey !== undefined) {
         const granted =
@@ -88,6 +102,9 @@ export function apply(ctx, config = {}) {
             risk: classification.risk,
             decision: 'allow',
             reason: classification.reason,
+            tier: tierState.tier,
+            generation: tierState.generation,
+            mismatch: tierState.mismatch,
           })
           return next()
         }
@@ -100,9 +117,24 @@ export function apply(ctx, config = {}) {
             risk: classification.risk,
             decision: 'deny',
             reason: classification.reason,
+            tier: tierState.tier,
+            generation: tierState.generation,
+            mismatch: tierState.mismatch,
           })
           return { kind: 'deny', reason: classification.reason }
         }
+        emit({
+          type: 'policy_decision',
+          callId: callKey,
+          tool: exec.name,
+          category: classification.category,
+          risk: classification.risk,
+          decision: 'ask',
+          reason: classification.reason,
+          tier: tierState.tier,
+          generation: tierState.generation,
+          mismatch: tierState.mismatch,
+        })
         if (exec.agent !== undefined) {
           return { kind: 'ask', reason: classification.reason }
         }
@@ -155,6 +187,7 @@ export function apply(ctx, config = {}) {
             classification,
             captured,
             emit,
+            gateTiers.get(callKey),
           )
           if (!pending) parked = false
         } catch (error) {
@@ -194,6 +227,7 @@ export function apply(ctx, config = {}) {
             : escalateClassification(reason),
           captured,
           emit,
+          gateTiers.get(callKey),
         )
         if (!pending) parked = false
       } catch (error) {
@@ -262,6 +296,7 @@ function escalateClassification(reason) {
  * @param {import('./policy-gate.d.ts').ToolCallClassification} classification
  * @param {CapturedCall | undefined} captured
  * @param {(event: Record<string, unknown>) => void} emit
+ * @param {{ tier: string, generation: string, mismatch: boolean } | undefined} [tierState]
  * @returns {Promise<boolean>}
  */
 async function parkCall(
@@ -271,12 +306,14 @@ async function parkCall(
   classification,
   captured,
   emit,
+  tierState,
 ) {
   const pending = await createApproval(capability, {
     callKey,
     tool,
     classification,
     captured,
+    tierState,
   })
   emit({
     type: 'approval_pending',
@@ -291,6 +328,38 @@ async function parkCall(
 /** @param {Record<string, unknown>} event */
 function writeEvent(event) {
   process.stdout.write(`${JSON.stringify(event)}\n`)
+}
+
+/**
+ * @param {BridgeCapability} capability
+ * @returns {Promise<{ tier: import('./policy-gate.d.ts').PolicyTier, generation: string, mismatch: boolean }>}
+ */
+async function readTierState(capability) {
+  try {
+    const response = await fetch(
+      `${capability.baseUrl}/v1/runs/${capability.runId}/permissions`,
+      {
+        headers: { 'x-pegas-run-claim-token': capability.claimToken },
+        signal: AbortSignal.timeout(3_000),
+      },
+    )
+    if (!response.ok) throw new Error(`tier read ${String(response.status)}`)
+    const projection = /** @type {Record<string, unknown>} */ (
+      await response.json()
+    )
+    const tier = projection.effectiveTier
+    if (tier !== 'strict' && tier !== 'standard' && tier !== 'full') {
+      throw new Error('tier read returned an invalid tier')
+    }
+    return {
+      tier,
+      generation:
+        typeof projection.generation === 'string' ? projection.generation : '',
+      mismatch: projection.mismatch === true,
+    }
+  } catch {
+    return { tier: 'strict', generation: '', mismatch: true }
+  }
 }
 
 /**
@@ -369,7 +438,7 @@ function normalizePolicy(value) {
 
 /**
  * @param {BridgeCapability} capability
- * @param {{ callKey: string, tool: string, classification: import('./policy-gate.d.ts').ToolCallClassification, captured?: CapturedCall }} input
+ * @param {{ callKey: string, tool: string, classification: import('./policy-gate.d.ts').ToolCallClassification, captured?: CapturedCall, tierState?: { tier: string, generation: string, mismatch: boolean } }} input
  * @returns {Promise<{ actionId: string, approvalId: string }>}
  */
 async function createApproval(capability, input) {
@@ -384,6 +453,13 @@ async function createApproval(capability, input) {
       category: input.classification.category,
       targets: input.classification.targets,
       argumentsHash: input.captured?.argumentsHash ?? null,
+      ...(input.tierState
+        ? {
+            tier: input.tierState.tier,
+            tierGeneration: input.tierState.generation,
+            tierMismatch: input.tierState.mismatch,
+          }
+        : {}),
     },
     recoveryPoint: { step: 'before_tool_call', callId: input.callKey },
     approval: {

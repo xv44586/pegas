@@ -425,6 +425,7 @@ export interface RuntimeSettings {
   privacyMode: 'disabled' | 'mask'
   rewriteMode: 'disabled' | 'light'
   chatLaneEnabled?: boolean
+  permissionTier?: 'strict' | 'standard' | 'full'
   executionPools?: Partial<
     Record<'fast' | 'balanced' | 'deep', { provider: string; model: string }>
   >
