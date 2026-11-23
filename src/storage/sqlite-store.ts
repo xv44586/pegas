@@ -155,6 +155,7 @@ import {
   type FollowUpCommand,
   type RunAutomationCommand,
   type RunAutomationStatusCommand,
+  type RunMessageCommand,
 } from '../schedule/schedule.js'
 import {
   effectiveWorkerProfile,
@@ -2500,6 +2501,8 @@ export class CollaborationActionPendingError extends Error {}
 export class CollaborationReconciliationRequiredError extends Error {}
 
 export class AutomationCommandConflictError extends Error {}
+
+export class RunMessageCommandConflictError extends Error {}
 
 export class AutomationRevisionConflictError extends Error {}
 
@@ -7752,6 +7755,49 @@ export class PegasStore {
     return { automation: updated }
   }
 
+  /**
+   * CONV-006: the Executor's say entry enqueues one user-visible agent.message
+   * into the conversation Outbox of the Run's own Task. Task/Run/lane are
+   * frozen server-side, the command replays idempotently by dedupe key, and
+   * the fact never settles Task or Run state.
+   */
+  sayFromRun(
+    runId: string,
+    claimToken: string,
+    command: RunMessageCommand,
+  ): { message: OutboxMessage } {
+    this.#claimForCapability(runId, claimToken)
+    const run = this.#runById(runId)
+    const task = this.#taskById(run.taskId)
+    const dedupeKey = `run-message:${runId}:${command.commandId}`
+    const existing = this.#database
+      .prepare('SELECT * FROM outbox_messages WHERE dedupe_key = ?')
+      .get(dedupeKey) as unknown as OutboxRow | undefined
+    if (existing) {
+      const payload = JSON.parse(existing.payload_json) as { text?: unknown }
+      if (payload.text !== command.text)
+        throw new RunMessageCommandConflictError(
+          'Run message commandId was already used with a different payload',
+        )
+      return {
+        message: this.#projectOutboxMessage(toOutboxMessage(existing)),
+      }
+    }
+    const message = this.enqueueOutbox({
+      userId: task.userId,
+      taskId: task.id,
+      channel: 'conversation',
+      dedupeKey,
+      payload: {
+        type: 'agent.message',
+        taskId: task.id,
+        runId,
+        text: command.text,
+      },
+    })
+    return { message: this.#projectOutboxMessage(message) }
+  }
+
   submitWorkerReport(
     runId: string,
     userId: string | undefined,
@@ -11246,10 +11292,17 @@ export class PegasStore {
         : undefined
     if (runId) {
       const runRow = this.#database
-        .prepare('SELECT origin_event_id FROM runs WHERE id = ?')
-        .get(runId) as { origin_event_id: string | null } | undefined
+        .prepare(
+          `SELECT runs.origin_event_id, inbox_events.source
+           FROM runs LEFT JOIN inbox_events
+             ON inbox_events.id = runs.origin_event_id
+           WHERE runs.id = ?`,
+        )
+        .get(runId) as
+        { origin_event_id: string | null; source: string | null } | undefined
       if (runRow?.origin_event_id)
         context.runOriginEventId = runRow.origin_event_id
+      if (runRow?.source) context.runOriginSource = runRow.source
     }
     return context
   }

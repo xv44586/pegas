@@ -325,6 +325,17 @@ console.log(JSON.stringify({
     expect(prompt).toContain('Run 结束时它会被自动删除')
   })
 
+  it('describes the say API for user-visible progress inside a Run', () => {
+    const prompt = executorPrompt('每分钟报一个数，从 1 数到 10')
+    expect(prompt).toContain('POST /v1/runs/:runId/messages')
+    expect(prompt).toContain(
+      '{"commandId":"stable-key","text":"要让用户看到的话"}',
+    )
+    expect(prompt).toContain('立即出现在对话正文')
+    expect(prompt).toContain('周期触发的 Run 必须')
+    expect(prompt).toContain('不会把 Run 或 Task 结算为完成')
+  })
+
   it('accepts only a completed final event and captures the session id', async () => {
     const command = fakeDsh(`
 console.log(JSON.stringify({ type: 'session', sessionId: 'session-test' }))
