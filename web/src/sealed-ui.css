@@ -1556,7 +1556,8 @@ a {
   box-shadow: var(--shadow-pop);
   display: grid;
   gap: 10px;
-  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+  grid-auto-rows: auto;
+  grid-template-rows: auto auto minmax(0, 1fr);
   inset-block-end: 48px;
   inset-inline-end: 0;
   max-block-size: min(520px, calc(100dvh - 280px));
@@ -1689,6 +1690,13 @@ a {
   color: var(--critical);
   padding: 9px 10px;
   text-align: left;
+}
+.composer-model-pagination {
+  margin: 0 2px;
+}
+.composer-model-pagination button {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 .composer-model-picker > footer {
   border-top: 1px solid var(--line);

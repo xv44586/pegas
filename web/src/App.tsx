@@ -1273,12 +1273,7 @@ export function App() {
     data.settings?.settings.agentModelMode === 'override'
       ? data.settings.settings.agentModelName
       : agentModels?.defaultModel
-  const availableAgentModels =
-    agentModels?.models.filter(
-      model =>
-        model.provider.toLocaleLowerCase() ===
-        selectedAgentProvider?.toLocaleLowerCase(),
-    ) ?? []
+  const availableAgentModels = agentModels?.models ?? []
   const continuationChannel = continuationTaskId
     ? data.snapshot.channels.find(channel => channel.id === continuationTaskId)
     : undefined

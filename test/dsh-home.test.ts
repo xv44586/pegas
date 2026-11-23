@@ -156,6 +156,83 @@ describe('createDshModelConfiguration', () => {
     ).toThrow('尚未配置模型服务「openai」')
   })
 
+  it('declares the full discovered catalog per connection with the selected model first', () => {
+    const configuration = createDshModelConfiguration({
+      connections: [
+        connection(),
+        connection({
+          id: 'anthropic',
+          name: 'Anthropic',
+          protocol: 'anthropic-messages',
+          baseUrl: 'https://api.anthropic.com',
+        }),
+      ],
+      vault,
+      agentModel: { provider: 'magpie', model: 'gateway/model-b' },
+      modelCatalog: {
+        magpie: [
+          { id: 'gateway/model-a', name: 'Model A' },
+          { id: 'gateway/model-b', name: 'Model B' },
+          { id: 'gateway/model-c', name: 'Model C' },
+        ],
+        anthropic: [{ id: 'claude-sonnet-4-5', name: 'Claude Sonnet 4.5' }],
+      },
+    })
+    try {
+      const entries = JSON.parse(
+        readFileSync(configuration.patchPath, 'utf8'),
+      ) as { id: string; config: Record<string, unknown> }[]
+      const providers = (entries[0]?.config.providers ?? {}) as Record<
+        string,
+        { models: { id: string; name: string; input?: string[] }[] }
+      >
+      expect(providers.magpie?.models).toEqual([
+        {
+          id: 'gateway/model-b',
+          name: 'Model B',
+          input: ['text', 'image'],
+        },
+        { id: 'gateway/model-a', name: 'Model A' },
+        { id: 'gateway/model-c', name: 'Model C' },
+      ])
+      expect(providers.anthropic?.models).toEqual([
+        { id: 'claude-sonnet-4-5', name: 'Claude Sonnet 4.5' },
+      ])
+    } finally {
+      configuration.remove()
+    }
+  })
+
+  it('falls back to the single selected or preset model without discovery results', () => {
+    const configuration = createDshModelConfiguration({
+      connections: [connection(), connection({ id: 'openai', name: 'OpenAI' })],
+      vault,
+      agentModel: { provider: 'magpie', model: 'gateway/model-a' },
+      modelCatalog: { magpie: [] },
+    })
+    try {
+      const entries = JSON.parse(
+        readFileSync(configuration.patchPath, 'utf8'),
+      ) as { id: string; config: Record<string, unknown> }[]
+      const providers = (entries[0]?.config.providers ?? {}) as Record<
+        string,
+        { models: { id: string }[] }
+      >
+      expect(providers.magpie?.models).toEqual([
+        {
+          id: 'gateway/model-a',
+          name: 'gateway/model-a',
+          input: ['text', 'image'],
+        },
+      ])
+      expect(providers.openai?.models).toEqual([
+        { id: 'gpt-5-mini', name: 'gpt-5-mini' },
+      ])
+    } finally {
+      configuration.remove()
+    }
+  })
+
   it('omits key environment entries for connections without credentials', () => {
     const configuration = createDshModelConfiguration({
       connections: [connection()],

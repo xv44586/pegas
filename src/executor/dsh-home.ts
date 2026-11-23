@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import type { ModelCredentialVault } from '../model/model-credential-vault.js'
+import type { ModelCatalogItem } from '../model/model-catalog.js'
 import { modelProviderPresets } from '../model/provider-catalog.js'
 import type { ModelProviderConnection } from '../settings/runtime-settings.js'
 
@@ -68,6 +69,7 @@ export function createDshModelConfiguration(options: {
   connections: readonly ModelProviderConnection[]
   vault: Pick<ModelCredentialVault, 'decrypt'>
   agentModel: DshAgentModel
+  modelCatalog?: Readonly<Record<string, readonly ModelCatalogItem[]>>
 }): DshModelConfiguration {
   const selected = options.connections.find(
     connection => connection.id === options.agentModel.provider,
@@ -90,6 +92,29 @@ export function createDshModelConfiguration(options: {
         ? options.agentModel.model
         : (modelProviderPresets.find(entry => entry.id === connection.id)
             ?.defaultModel ?? options.agentModel.model)
+    const isSelectedProvider = connection.id === options.agentModel.provider
+    const discovered = options.modelCatalog?.[connection.id] ?? []
+    const models: { id: string; name: string; input?: string[] }[] = []
+    const seen = new Set<string>()
+    const pushModel = (id: string, name: string) => {
+      if (seen.has(id)) return
+      seen.add(id)
+      models.push({
+        id,
+        name,
+        ...(isSelectedProvider && id === options.agentModel.model
+          ? { input: ['text', 'image'] }
+          : {}),
+      })
+    }
+    if (isSelectedProvider) {
+      pushModel(
+        catalogModel,
+        discovered.find(item => item.id === catalogModel)?.name ?? catalogModel,
+      )
+    }
+    for (const item of discovered) pushModel(item.id, item.name)
+    if (!models.length) pushModel(catalogModel, catalogModel)
     providers[connection.id] = {
       api:
         connection.protocol === 'anthropic-messages'
@@ -97,15 +122,7 @@ export function createDshModelConfiguration(options: {
           : 'openai-completions',
       baseURL: connection.baseUrl,
       ...(apiKey ? { apiKeyEnv: keyEnvironment } : {}),
-      models: [
-        {
-          id: catalogModel,
-          name: catalogModel,
-          ...(connection.id === options.agentModel.provider
-            ? { input: ['text', 'image'] }
-            : {}),
-        },
-      ],
+      models,
     }
   }
   const directory = mkdtempSync(join(tmpdir(), 'pegas-dsh-config-'))
