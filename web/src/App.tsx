@@ -1035,6 +1035,57 @@ export function App() {
     setData(current => ({ ...current, settings }))
   }
 
+  function onboardingConnectionDraft(
+    baseUrl: string,
+    apiKey: string,
+  ): { settings: RuntimeSettings; provider: ModelProviderDraft } {
+    const response = data.settings
+    if (!response) throw new Error('模型设置仍在加载，请稍后重试。')
+    const routerProvider = response.capabilities.providers.find(
+      provider => provider.id === response.settings.modelProvider,
+    )
+    if (!routerProvider) throw new Error('当前 Router 接入点不可用。')
+    return {
+      settings: response.settings,
+      provider: {
+        name: routerProvider.name,
+        protocol: routerProvider.protocol,
+        baseUrl,
+        apiKey,
+        clearApiKey: false,
+      },
+    }
+  }
+
+  async function testOnboardingConnection(
+    baseUrl: string,
+    apiKey: string,
+    modelName: string,
+  ) {
+    const { settings, provider } = onboardingConnectionDraft(baseUrl, apiKey)
+    return api.testModel(settings.modelProvider, modelName, provider)
+  }
+
+  async function saveOnboardingConnection(
+    baseUrl: string,
+    apiKey: string,
+    modelName: string,
+  ) {
+    const { settings, provider } = onboardingConnectionDraft(baseUrl, apiKey)
+    const response = await api.saveSettings(
+      { ...settings, modelName },
+      provider,
+      data.settings?.speech
+        ? { ...data.settings.speech, apiKey: '', clearApiKey: false }
+        : undefined,
+      data.settings?.rewrite
+        ? { ...data.settings.rewrite, apiKey: '', clearApiKey: false }
+        : undefined,
+    )
+    setData(current => ({ ...current, settings: response }))
+    await loadConfiguration(true)
+  }
+
   async function markRead(message: OutboxMessage) {
     const updated = await api.markOutboxRead(message.id)
     setData(current => ({
@@ -1734,6 +1785,8 @@ export function App() {
           catalog={agentModels}
           response={data.settings}
           onSelectModel={selectAgentModel}
+          onSaveConnection={saveOnboardingConnection}
+          onTestConnection={testOnboardingConnection}
           onContinueSettings={() => {
             setSetupOpen(false)
             localStorage.setItem('pegas-setup-complete', 'true')
