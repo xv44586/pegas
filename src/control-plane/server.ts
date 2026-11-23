@@ -81,6 +81,8 @@ import {
   parseAutomationStatusCommand,
   parseAutomationUpdate,
   parseFollowUpCommand,
+  parseRunAutomationCommand,
+  parseRunAutomationStatusCommand,
 } from '../schedule/schedule.js'
 import type {
   SpeechRecognitionProvider,
@@ -969,6 +971,58 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
             command,
           )
           return sendJson(response, 201, result)
+        } catch (error) {
+          if (error instanceof RunClaimError)
+            return sendJson(response, 403, { error: 'run_claim_invalid' })
+          return sendAutomationError(response, error)
+        }
+      }
+      const runAutomationMatch = /^\/v1\/runs\/([^/]+)\/automations$/.exec(
+        taskResourceUrl.pathname,
+      )
+      if (runAutomationMatch && request.method === 'POST') {
+        const claimToken = runClaimToken(request)
+        if (!claimToken)
+          return sendJson(response, 403, { error: 'run_claim_required' })
+        const runId = decodeURIComponent(runAutomationMatch[1] ?? '')
+        const command = parseRunAutomationCommand(await readJson(request))
+        try {
+          const result = options.store.createRunAutomation(
+            runId,
+            claimToken,
+            command,
+          )
+          return sendJson(response, 201, result)
+        } catch (error) {
+          if (error instanceof RunClaimError)
+            return sendJson(response, 403, { error: 'run_claim_invalid' })
+          return sendAutomationError(response, error)
+        }
+      }
+      const runAutomationStatusMatch =
+        /^\/v1\/runs\/([^/]+)\/automations\/([^/]+)\/(pause|resume|cancel)$/.exec(
+          taskResourceUrl.pathname,
+        )
+      if (runAutomationStatusMatch && request.method === 'POST') {
+        const claimToken = runClaimToken(request)
+        if (!claimToken)
+          return sendJson(response, 403, { error: 'run_claim_required' })
+        const runId = decodeURIComponent(runAutomationStatusMatch[1] ?? '')
+        const automationId = decodeURIComponent(
+          runAutomationStatusMatch[2] ?? '',
+        )
+        const operation = runAutomationStatusMatch[3] as
+          'pause' | 'resume' | 'cancel'
+        const command = parseRunAutomationStatusCommand(await readJson(request))
+        try {
+          const result = options.store.transitionRunAutomation(
+            runId,
+            claimToken,
+            automationId,
+            operation,
+            command,
+          )
+          return sendJson(response, 200, result)
         } catch (error) {
           if (error instanceof RunClaimError)
             return sendJson(response, 403, { error: 'run_claim_invalid' })
@@ -2600,6 +2654,10 @@ function isRunCapabilityWrite(request: IncomingMessage): boolean {
     /^\/v1\/runs\/[^/]+\/(reports|approvals|collaborations)$/.test(pathname) ||
     /^\/v1\/runs\/[^/]+\/goal-proposals$/.test(pathname) ||
     /^\/v1\/runs\/[^/]+\/follow-ups$/.test(pathname) ||
+    /^\/v1\/runs\/[^/]+\/automations$/.test(pathname) ||
+    /^\/v1\/runs\/[^/]+\/automations\/[^/]+\/(pause|resume|cancel)$/.test(
+      pathname,
+    ) ||
     /^\/v1\/actions\/[^/]+\/outcomes$/.test(pathname)
   )
 }
