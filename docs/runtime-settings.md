@@ -100,10 +100,14 @@ fast/balanced/deep 三池各指向一个已配置的 provider/model，允许只�
   模型目录读取；patch 文件在子进程退出后删除，明文 key 只经子进程环境传递。
   恢复已有 session 时忽略当前覆盖并按保存的模型快照重建配置。DSH 运行在
   `<dataDir>/dsh` 隔离 home 内（`PEGAS_DSH_HOME` 可覆盖），不读写本机 `~/.dsh`。
-- Agent 执行工作区默认是 `<dataDir>/workspace`（`PEGAS_WORKSPACE_ROOT` 可显式
-  覆盖），Worker 启动时幂等创建。工作区与代码 checkout 分离：DSH 会从 cwd 向上
-  加载 AGENTS.md 风格指令文件，把工作区指向开发仓库会把开发文档误当作 Agent
-  自身指令。既有 Run 的 workspace 快照不可变，改默认值只影响新 Run。
+- Agent 执行工作区默认是 `~/.pegas/workspaces/<dataDir 绝对路径 SHA-256 前
+12 位>`（`PEGAS_WORKSPACE_ROOT` 可显式覆盖），Worker 启动时幂等创建。工作区
+  物理上位于任何代码 checkout 之外：DSH 会从 cwd 向上走到最近 `.git` 根并加载
+  沿途 AGENTS.md 风格指令文件，工作区在仓库树内（含 `<dataDir>/workspace` 这类
+  仓库内数据目录）会把开发文档误当作 Agent 自身指令。按 dataDir 派生哈希保证
+  多实例工作区互不共享。工作区不属于 SQLite 备份合同（RECOVERY-002 只备份权威
+  库），删除数据目录不会删除工作区产物。既有 Run 的 workspace 快照不可变，改
+  默认值只影响新 Run。
 - 凭证密钥位于数据目录的权限受限文件；文件缺失或密文损坏时连接标记为不可用，不用
   空值覆盖密文，也不把解密错误降级为明文读取。
 - 回滚应用版本不需要删除新增连接表；旧版本继续读取环境变量。恢复新版本后再次读取

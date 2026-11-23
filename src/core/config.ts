@@ -1,4 +1,5 @@
-import { hostname } from 'node:os'
+import { createHash } from 'node:crypto'
+import { homedir, hostname } from 'node:os'
 import { join, resolve } from 'node:path'
 
 import {
@@ -7,6 +8,21 @@ import {
 } from '../model/provider-catalog.js'
 import { initialSpeechConnection } from '../speech/speech-settings.js'
 import { defaultMagpieRouterModel } from './model-defaults.js'
+
+/**
+ * Default agent execution workspace, anchored outside any code checkout.
+ * DSH discovers project instructions by walking upward from the session cwd
+ * to the nearest .git root; a workspace inside the repository tree would
+ * load the checkout's development AGENTS.md as the agent's own instructions.
+ * The per-dataDir hash keeps concurrent instances isolated.
+ */
+export function defaultAgentWorkspace(dataDir: string): string {
+  const instance = createHash('sha256')
+    .update(resolve(dataDir))
+    .digest('hex')
+    .slice(0, 12)
+  return join(homedir(), '.pegas', 'workspaces', instance)
+}
 
 export interface PegasConfig {
   apiHost: string
@@ -155,7 +171,10 @@ export function loadConfig(
       ),
     ),
     workspaceRoot: resolve(
-      nonemptyOr(environment.PEGAS_WORKSPACE_ROOT, join(dataDir, 'workspace')),
+      nonemptyOr(
+        environment.PEGAS_WORKSPACE_ROOT,
+        defaultAgentWorkspace(dataDir),
+      ),
     ),
     workerConcurrency: parsePositiveInteger(
       environment.PEGAS_WORKER_CONCURRENCY,
