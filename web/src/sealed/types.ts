@@ -329,6 +329,159 @@ export function runIdFromMessage(message: OutboxMessage): string | undefined {
   return typeof runId === 'string' && runId.trim() ? runId : undefined
 }
 
+export type AttentionActionKind = 'confirm' | 'answer' | 'review' | 'reconcile'
+
+export type AttentionSectionId = 'todo' | 'failed' | 'activity'
+
+export function attentionActionKind(
+  message: OutboxMessage,
+): AttentionActionKind | undefined {
+  if (
+    needsOutboxResolution(message) ||
+    isReconciliationMessage(message) ||
+    payloadType(message.payload) === 'action.outcome_unknown'
+  )
+    return 'reconcile'
+  switch (attentionKind(message)) {
+    case 'approval':
+      return 'confirm'
+    case 'input':
+      return 'answer'
+    case 'result':
+      return payloadType(message.payload) === 'review.ready'
+        ? 'review'
+        : undefined
+    default:
+      return undefined
+  }
+}
+
+export function attentionSection(
+  message: OutboxMessage,
+): AttentionSectionId | undefined {
+  if (attentionActionKind(message)) return 'todo'
+  const kind = attentionKind(message)
+  if (kind === 'failed') return 'failed'
+  if (kind === 'result') return 'activity'
+  return undefined
+}
+
+export interface AttentionGroup {
+  key: string
+  taskId?: string
+  section: 'failed' | 'activity'
+  messages: OutboxMessage[]
+  latest: OutboxMessage
+  unreadCount: number
+}
+
+export interface AttentionBoard {
+  todo: OutboxMessage[]
+  failed: AttentionGroup[]
+  activity: AttentionGroup[]
+  totalNotifications: number
+  totalUnread: number
+  totalThings: number
+}
+
+const ATTENTION_ACTIVITY_PAGE_SIZE = 20
+
+function attentionTimestamp(message: OutboxMessage): number {
+  const parsed = Date.parse(message.createdAt)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function byNewestAttention(left: OutboxMessage, right: OutboxMessage): number {
+  return attentionTimestamp(right) - attentionTimestamp(left)
+}
+
+function groupAttentionMessages(
+  messages: readonly OutboxMessage[],
+  section: 'failed' | 'activity',
+): AttentionGroup[] {
+  const groups = new Map<string, AttentionGroup>()
+  for (const message of messages) {
+    const key = message.taskId ?? `message:${message.id}`
+    const existing = groups.get(key)
+    if (existing) {
+      existing.messages.push(message)
+      continue
+    }
+    groups.set(key, {
+      key: `${section}:${key}`,
+      ...(message.taskId ? { taskId: message.taskId } : {}),
+      section,
+      messages: [message],
+      latest: message,
+      unreadCount: 0,
+    })
+  }
+  const result = [...groups.values()]
+  for (const group of result) {
+    group.messages.sort(byNewestAttention)
+    const [latest] = group.messages
+    if (latest) group.latest = latest
+    group.unreadCount = group.messages.filter(message => !message.readAt).length
+  }
+  result.sort(
+    (left, right) =>
+      attentionTimestamp(right.latest) - attentionTimestamp(left.latest),
+  )
+  return result
+}
+
+export function attentionBoard(
+  messages: readonly OutboxMessage[],
+): AttentionBoard {
+  const unresolved = unresolvedAttentionMessages(messages)
+  const todo: OutboxMessage[] = []
+  const failed: OutboxMessage[] = []
+  const activity: OutboxMessage[] = []
+  for (const message of unresolved) {
+    const section = attentionSection(message)
+    if (section === 'todo') todo.push(message)
+    else if (section === 'failed') failed.push(message)
+    else if (section === 'activity') activity.push(message)
+  }
+  todo.sort(byNewestAttention)
+  const failedGroups = groupAttentionMessages(failed, 'failed')
+  const activityGroups = groupAttentionMessages(activity, 'activity')
+  return {
+    todo,
+    failed: failedGroups,
+    activity: activityGroups,
+    totalNotifications: unresolved.length,
+    totalUnread: unresolved.filter(message => !message.readAt).length,
+    totalThings: todo.length + failedGroups.length + activityGroups.length,
+  }
+}
+
+export interface AttentionPageSlice {
+  page: number
+  pageCount: number
+  groups: AttentionGroup[]
+  rangeStart: number
+  rangeEnd: number
+}
+
+export function attentionActivityPage(
+  groups: readonly AttentionGroup[],
+  requestedPage: number,
+  pageSize: number = ATTENTION_ACTIVITY_PAGE_SIZE,
+): AttentionPageSlice {
+  const pageCount = Math.max(1, Math.ceil(groups.length / pageSize))
+  const page = Math.min(Math.max(1, Math.floor(requestedPage)), pageCount)
+  const start = (page - 1) * pageSize
+  const slice = groups.slice(start, start + pageSize)
+  return {
+    page,
+    pageCount,
+    groups: slice,
+    rangeStart: groups.length ? start + 1 : 0,
+    rangeEnd: start + slice.length,
+  }
+}
+
 const terminalCueTypes = new Set([
   'run.completed',
   'run.failed',

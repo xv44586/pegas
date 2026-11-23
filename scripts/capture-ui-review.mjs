@@ -268,14 +268,20 @@ try {
   await page.getByRole('heading', { name: '待你处理', exact: true }).waitFor()
   await page.getByLabel('待处理列表').getByRole('article').first().waitFor()
   await capture(page, 'desktop-attention.png', 'desktop-attention')
-  await page.getByRole('button', { name: /^需要确认 / }).click()
+  await page
+    .getByRole('group', { name: '筛选' })
+    .getByRole('button', { name: /^待你处理 / })
+    .click()
   await page.getByLabel('待处理列表').getByRole('article').first().waitFor()
   await capture(
     page,
     'desktop-attention-approval-filter.png',
     'desktop-attention-approval-filter',
   )
-  await page.getByRole('button', { name: /^全部 / }).click()
+  await page
+    .getByRole('group', { name: '筛选' })
+    .getByRole('button', { name: /^全部 / })
+    .click()
   await page.getByLabel('搜索待处理内容').fill('不存在的关键词')
   await page.getByText('当前筛选下没有待处理项').waitFor()
   await capture(
@@ -288,14 +294,20 @@ try {
   await filterRow.evaluate(element => {
     element.scrollLeft = element.scrollWidth
   })
-  await page.getByRole('button', { name: /^重要结果 / }).click()
+  await page
+    .getByRole('group', { name: '筛选' })
+    .getByRole('button', { name: /^事情动态 / })
+    .click()
   await page.getByLabel('待处理列表').getByRole('article').first().waitFor()
   await capture(
     page,
     'desktop-attention-result-filter.png',
     'desktop-attention-result-filter',
   )
-  await page.getByRole('button', { name: /^全部 / }).click()
+  await page
+    .getByRole('group', { name: '筛选' })
+    .getByRole('button', { name: /^全部 / })
+    .click()
 
   await page
     .getByLabel('主导航')
@@ -576,7 +588,7 @@ try {
   await mobileFilters.evaluate(element => {
     element.scrollLeft = element.scrollWidth
   })
-  await mobilePage.getByRole('button', { name: /^重要结果 / }).click()
+  await mobileFilters.getByRole('button', { name: /^事情动态 / }).click()
   await mobilePage
     .getByLabel('待处理列表')
     .getByRole('article')
@@ -590,7 +602,7 @@ try {
     'mobile-attention-result-filter.png',
     'mobile-attention-result-filter',
   )
-  await mobilePage.getByRole('button', { name: /^全部 / }).click()
+  await mobileFilters.getByRole('button', { name: /^全部 / }).click()
   await mobileFilters.evaluate(element => {
     element.scrollLeft = 0
   })

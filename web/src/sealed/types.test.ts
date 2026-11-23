@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest'
 
 import type { OutboxMessage } from '../types'
 import {
+  attentionActionKind,
+  attentionActivityPage,
+  attentionBoard,
   attentionKind,
+  attentionSection,
   attentionSummary,
   conversationAnchor,
   conversationLane,
@@ -262,5 +266,208 @@ describe('attention summaries', () => {
         payload: { type: 'run.waiting' },
       }),
     ).toEqual({ title: 'Pegas 有一项更新' })
+  })
+})
+
+describe('DESIGN-007 attention sections and grouping', () => {
+  const base: OutboxMessage = {
+    id: 'message-base',
+    userId: 'owner',
+    taskId: 'task-1',
+    payload: { type: 'run.completed', text: '完成' },
+    status: 'sent',
+    createdAt: '2026-11-23T00:00:00.000Z',
+  }
+  function outbox(
+    id: string,
+    type: string,
+    overrides: Partial<OutboxMessage> = {},
+  ): OutboxMessage {
+    return {
+      ...base,
+      id,
+      payload: { type, text: `内容 ${id}` },
+      ...overrides,
+    }
+  }
+
+  it.each([
+    ['approval.required', 'todo', 'confirm'],
+    ['input.required', 'todo', 'answer'],
+    ['goal.clarification_required', 'todo', 'answer'],
+    ['run.blocked', 'todo', 'answer'],
+    ['review.ready', 'todo', 'review'],
+    ['action.outcome_unknown', 'todo', 'reconcile'],
+    ['action.reconciliation_required', 'todo', 'reconcile'],
+    ['run.failed', 'failed', undefined],
+    ['action.failed', 'failed', undefined],
+    ['run.completed', 'activity', undefined],
+  ] as const)(
+    'maps %s to section %s with action %s',
+    (type, section, action) => {
+      const message = outbox(`kind-${type}`, type, {
+        payload: { type, actionId: 'action-1', approvalId: 'approval-1' },
+      })
+      expect(attentionSection(message)).toBe(section)
+      expect(attentionActionKind(message)).toBe(action)
+    },
+  )
+
+  it('routes delivery failures needing manual resolution to reconcile, not activity', () => {
+    const message = outbox('delivery-unknown', 'run.completed', {
+      status: 'unknown',
+    })
+    expect(attentionSection(message)).toBe('todo')
+    expect(attentionActionKind(message)).toBe('reconcile')
+    const resolved: OutboxMessage = {
+      ...message,
+      resolution: {
+        resolution: 'sent',
+        note: '人工确认已送达',
+        previousStatus: 'unknown',
+        resolvedBy: 'owner',
+        createdAt: '2026-11-23T00:01:00.000Z',
+      },
+    }
+    expect(attentionSection(resolved)).toBe('activity')
+  })
+
+  it('keeps update messages out of the board', () => {
+    const board = attentionBoard([outbox('agent-note', 'agent.message')])
+    expect(board.totalNotifications).toBe(0)
+    expect(board.todo).toHaveLength(0)
+    expect(board.failed).toHaveLength(0)
+    expect(board.activity).toHaveLength(0)
+  })
+
+  it('keeps every actionable message as its own pinned row', () => {
+    const board = attentionBoard([
+      outbox('approval-a', 'approval.required', {
+        payload: { type: 'approval.required', approvalId: 'approval-a' },
+      }),
+      outbox('approval-b', 'approval.required', {
+        payload: { type: 'approval.required', approvalId: 'approval-b' },
+      }),
+      outbox('review-a', 'review.ready'),
+    ])
+    expect(board.todo.map(message => message.id)).toEqual([
+      'approval-a',
+      'approval-b',
+      'review-a',
+    ])
+    expect(board.totalThings).toBe(3)
+  })
+
+  it('drops resolved approvals from the board', () => {
+    const board = attentionBoard([
+      outbox('approval-open', 'approval.required', {
+        payload: { type: 'approval.required', approvalId: 'approval-open' },
+      }),
+      outbox('approval-done', 'approval.required', {
+        payload: { type: 'approval.required', approvalId: 'approval-done' },
+      }),
+      outbox('approval-resolution', 'approval.resolved', {
+        payload: { type: 'approval.resolved', approvalId: 'approval-done' },
+      }),
+    ])
+    expect(board.todo.map(message => message.id)).toEqual(['approval-open'])
+  })
+
+  it('groups routine results per task, newest first inside and across groups', () => {
+    const board = attentionBoard([
+      outbox('count-8', 'run.completed', {
+        createdAt: '2026-11-23T00:08:00.000Z',
+      }),
+      outbox('count-10', 'run.completed', {
+        createdAt: '2026-11-23T00:10:00.000Z',
+      }),
+      outbox('count-9', 'run.completed', {
+        createdAt: '2026-11-23T00:09:00.000Z',
+        readAt: '2026-11-23T00:11:00.000Z',
+      }),
+      outbox('backup-result', 'run.completed', {
+        taskId: 'task-2',
+        createdAt: '2026-11-23T00:11:00.000Z',
+      }),
+    ])
+    expect(board.activity).toHaveLength(2)
+    const [first, second] = board.activity
+    expect(first?.taskId).toBe('task-2')
+    expect(second?.taskId).toBe('task-1')
+    expect(second?.messages.map(message => message.id)).toEqual([
+      'count-10',
+      'count-9',
+      'count-8',
+    ])
+    expect(second?.latest.id).toBe('count-10')
+    expect(second?.unreadCount).toBe(2)
+    expect(board.totalNotifications).toBe(4)
+    expect(board.totalUnread).toBe(3)
+    expect(board.totalThings).toBe(2)
+  })
+
+  it('groups repeated failures per task but keeps them in the failed section', () => {
+    const board = attentionBoard([
+      outbox('fail-1', 'run.failed', {
+        createdAt: '2026-11-23T00:01:00.000Z',
+      }),
+      outbox('fail-2', 'run.failed', {
+        createdAt: '2026-11-23T00:02:00.000Z',
+      }),
+      outbox('result-1', 'run.completed'),
+    ])
+    expect(board.failed).toHaveLength(1)
+    expect(board.failed[0]?.messages.map(message => message.id)).toEqual([
+      'fail-2',
+      'fail-1',
+    ])
+    expect(board.failed[0]?.unreadCount).toBe(2)
+    expect(board.activity).toHaveLength(1)
+  })
+
+  it('never merges messages without a task id', () => {
+    const board = attentionBoard([
+      outbox('loose-1', 'run.completed', { taskId: undefined }),
+      outbox('loose-2', 'run.completed', { taskId: undefined }),
+      outbox('loose-fail', 'run.failed', { taskId: undefined }),
+    ])
+    expect(board.activity).toHaveLength(2)
+    expect(board.failed).toHaveLength(1)
+    expect(board.totalThings).toBe(3)
+  })
+
+  it('pages activity groups by task with stable boundaries', () => {
+    const groups = attentionBoard(
+      Array.from({ length: 45 }, (_, index) =>
+        outbox(`result-${String(index)}`, 'run.completed', {
+          taskId: `task-${String(index)}`,
+          createdAt: new Date(Date.UTC(2026, 10, 23, 0, index)).toISOString(),
+        }),
+      ),
+    ).activity
+    const first = attentionActivityPage(groups, 1)
+    expect(first.pageCount).toBe(3)
+    expect(first.groups).toHaveLength(20)
+    expect(first.rangeStart).toBe(1)
+    expect(first.rangeEnd).toBe(20)
+    expect(first.groups[0]?.taskId).toBe('task-44')
+    const last = attentionActivityPage(groups, 3)
+    expect(last.groups).toHaveLength(5)
+    expect(last.rangeStart).toBe(41)
+    expect(last.rangeEnd).toBe(45)
+  })
+
+  it('clamps out-of-range pages instead of showing an empty page', () => {
+    const groups = attentionBoard([
+      outbox('only-result', 'run.completed'),
+    ]).activity
+    expect(attentionActivityPage(groups, 9).page).toBe(1)
+    expect(attentionActivityPage(groups, 0).page).toBe(1)
+    const empty = attentionActivityPage([], 4)
+    expect(empty.page).toBe(1)
+    expect(empty.pageCount).toBe(1)
+    expect(empty.groups).toHaveLength(0)
+    expect(empty.rangeStart).toBe(0)
+    expect(empty.rangeEnd).toBe(0)
   })
 })
