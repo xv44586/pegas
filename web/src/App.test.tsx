@@ -5833,7 +5833,7 @@ describe('sealed Pegas UI', () => {
     expect(readRequests).toBe(0)
   })
 
-  it('opens the latest grouped failure from its summary line and marks only that message read', async () => {
+  it('opens the latest grouped failure from its summary line and settles the whole group read', async () => {
     const source = snapshot.messages[0]
     if (!source) throw new Error('missing attention fixture')
     const older = {
@@ -5852,8 +5852,11 @@ describe('sealed Pegas UI', () => {
     installSnapshotFetch({ ...snapshot, messages: [older, latest] }, path => {
       if (!path.endsWith('/read')) return undefined
       readPaths.push(path)
+      const id = path.split('/')[3]
+      const member = [older, latest].find(item => item.id === id)
+      if (!member) throw new Error(`unexpected read path ${path}`)
       return Response.json({
-        message: { ...latest, readAt: '2026-11-19T09:00:00.000Z' },
+        message: { ...member, readAt: '2026-11-19T09:00:00.000Z' },
       })
     })
     render(<App />)
@@ -5868,11 +5871,12 @@ describe('sealed Pegas UI', () => {
       within(list).getByRole('button', { name: '最新：重试仍失败' }),
     )
     expect(await screen.findByLabelText('工作详情')).toBeTruthy()
-    expect(readPaths).toEqual([`/v1/outbox/${latest.id}/read`])
-    fireEvent.click(screen.getByRole('button', { name: '关闭详情' }))
-    await waitFor(() =>
-      expect(within(list).getByText('2 条 · 1 未读')).toBeTruthy(),
+    await waitFor(() => expect(readPaths).toHaveLength(2))
+    expect(new Set(readPaths)).toEqual(
+      new Set([older, latest].map(item => `/v1/outbox/${item.id}/read`)),
     )
+    fireEvent.click(screen.getByRole('button', { name: '关闭详情' }))
+    await waitFor(() => expect(within(list).getByText('2 条')).toBeTruthy())
     fireEvent.click(
       within(list).getByRole('button', { name: `展开：${channel.title}` }),
     )
@@ -5888,11 +5892,11 @@ describe('sealed Pegas UI', () => {
     ).toBeNull()
     expect(
       entries[1]?.querySelector('.attention-group-entry-dot.is-unread'),
-    ).toBeTruthy()
-    expect(readPaths).toHaveLength(1)
+    ).toBeNull()
+    expect(readPaths).toHaveLength(2)
   })
 
-  it('opens the newest routine result of a group from its summary line and reduces the unread count', async () => {
+  it('opens the newest routine result of a group from its summary line and settles the group unread count', async () => {
     const source = snapshot.messages[0]
     if (!source) throw new Error('missing attention fixture')
     const older = {
@@ -5911,8 +5915,11 @@ describe('sealed Pegas UI', () => {
     installSnapshotFetch({ ...snapshot, messages: [older, latest] }, path => {
       if (!path.endsWith('/read')) return undefined
       readPaths.push(path)
+      const id = path.split('/')[3]
+      const member = [older, latest].find(item => item.id === id)
+      if (!member) throw new Error(`unexpected read path ${path}`)
       return Response.json({
-        message: { ...latest, readAt: '2026-11-19T09:00:00.000Z' },
+        message: { ...member, readAt: '2026-11-19T09:00:00.000Z' },
       })
     })
     render(<App />)
@@ -5928,12 +5935,13 @@ describe('sealed Pegas UI', () => {
       within(list).getByRole('button', { name: '最新：第 2 个数：2' }),
     )
     expect(await screen.findByLabelText('工作详情')).toBeTruthy()
-    expect(readPaths).toEqual([`/v1/outbox/${latest.id}/read`])
-    fireEvent.click(screen.getByRole('button', { name: '关闭详情' }))
-    await waitFor(() =>
-      expect(within(list).getByText('2 条 · 1 未读')).toBeTruthy(),
+    await waitFor(() => expect(readPaths).toHaveLength(2))
+    expect(new Set(readPaths)).toEqual(
+      new Set([older, latest].map(item => `/v1/outbox/${item.id}/read`)),
     )
-    expect(screen.getByText(/1 条未读/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '关闭详情' }))
+    await waitFor(() => expect(within(list).getByText('2 条')).toBeTruthy())
+    expect(screen.getByText(/0 条未读/)).toBeTruthy()
   })
 
   it('merges repeated failures of one task into a single pinned failure row', async () => {
@@ -5967,6 +5975,197 @@ describe('sealed Pegas UI', () => {
     expect(screen.getByRole('button', { name: '失败 2' })).toBeTruthy()
     expect(within(list).getByText('2 条 · 2 未读')).toBeTruthy()
     expect(within(list).getByText('最新：磁盘空间不足（重试）')).toBeTruthy()
+  })
+
+  it('badges the rail with the todo row count instead of cross-section unread notifications', async () => {
+    const source = snapshot.messages[0]
+    if (!source) throw new Error('missing attention fixture')
+    installSnapshotFetch({
+      ...snapshot,
+      messages: [
+        {
+          ...source,
+          id: 'badge-todo-read',
+          readAt: '2026-11-22T00:01:00.000Z',
+          payload: {
+            type: 'approval.required',
+            approvalId: 'badge-approval',
+            summary: '已读但仍待确认',
+          },
+        },
+        {
+          ...source,
+          id: 'badge-todo-unread',
+          payload: {
+            type: 'goal.clarification_required',
+            questions: ['口径按哪个统计？'],
+          },
+        },
+        {
+          ...source,
+          id: 'badge-activity-unread',
+          taskId: 'badge-task-activity',
+          payload: { type: 'run.completed', text: '未读例行结果' },
+        },
+      ],
+    })
+    render(<App />)
+    const nav = await screen.findByLabelText('主导航')
+    await waitFor(() =>
+      expect(
+        within(nav)
+          .getByRole('button', { name: /待你处理/ })
+          .querySelector('b')?.textContent,
+      ).toBe('2'),
+    )
+    fireEvent.click(within(nav).getByRole('button', { name: /待你处理/ }))
+    expect(screen.getByRole('button', { name: '待你处理 2' })).toBeTruthy()
+    expect(screen.getByText('3 件事情 · 3 条通知 · 2 条未读')).toBeTruthy()
+  })
+
+  it('hides the rail badge when no todo remains even with unread activity', async () => {
+    const source = snapshot.messages[0]
+    if (!source) throw new Error('missing attention fixture')
+    installSnapshotFetch({
+      ...snapshot,
+      messages: [
+        {
+          ...source,
+          id: 'badge-activity-only',
+          taskId: 'badge-task-only',
+          payload: { type: 'run.completed', text: '只有未读动态' },
+        },
+      ],
+    })
+    render(<App />)
+    const nav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(nav).getByRole('button', { name: /待你处理/ }))
+    expect(
+      await screen.findByText('1 件事情 · 1 条通知 · 1 条未读'),
+    ).toBeTruthy()
+    expect(
+      within(nav)
+        .getByRole('button', { name: /待你处理/ })
+        .querySelector('b'),
+    ).toBeNull()
+  })
+
+  it('marks every unread member of a task group read when one entry opens the shared task detail', async () => {
+    const source = snapshot.messages[0]
+    if (!source) throw new Error('missing attention fixture')
+    const members = [1, 2, 3].map(minute => ({
+      ...source,
+      id: `group-read-${String(minute)}`,
+      createdAt: `2026-11-19T08:0${String(minute)}:00.000Z`,
+      payload: { type: 'run.completed', text: `第 ${String(minute)} 轮结果` },
+    }))
+    const readPaths: string[] = []
+    installSnapshotFetch({ ...snapshot, messages: members }, path => {
+      if (!path.endsWith('/read')) return undefined
+      readPaths.push(path)
+      const id = path.split('/')[3]
+      const member = members.find(item => item.id === id)
+      if (!member) throw new Error(`unexpected read path ${path}`)
+      return Response.json({
+        message: { ...member, readAt: '2026-11-19T09:00:00.000Z' },
+      })
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    const list = screen.getByLabelText('待处理列表')
+    expect(within(list).getByText('3 条 · 3 未读')).toBeTruthy()
+    fireEvent.click(
+      within(list).getByRole('button', { name: '最新：第 3 轮结果' }),
+    )
+    expect(await screen.findByLabelText('工作详情')).toBeTruthy()
+    await waitFor(() => expect(readPaths).toHaveLength(3))
+    expect(new Set(readPaths)).toEqual(
+      new Set(members.map(member => `/v1/outbox/${member.id}/read`)),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '关闭详情' }))
+    await waitFor(() => expect(within(list).getByText('3 条')).toBeTruthy())
+    expect(screen.getByText(/0 条未读/)).toBeTruthy()
+    readPaths.length = 0
+    fireEvent.click(
+      within(list).getByRole('button', { name: `展开：${channel.title}` }),
+    )
+    const entry = within(list)
+      .getAllByRole('button')
+      .find(button => button.classList.contains('attention-group-entry'))
+    if (!entry) throw new Error('expected timeline entry')
+    fireEvent.click(entry)
+    expect(await screen.findByLabelText('工作详情')).toBeTruthy()
+    expect(readPaths).toHaveLength(0)
+  })
+
+  it('marks the whole failure group read from a timeline entry but keeps todos per-message', async () => {
+    const source = snapshot.messages[0]
+    if (!source) throw new Error('missing attention fixture')
+    const failures = [1, 2].map(minute => ({
+      ...source,
+      id: `fail-group-${String(minute)}`,
+      createdAt: `2026-11-19T08:0${String(minute)}:00.000Z`,
+      payload: { type: 'run.failed', error: `失败原因 ${String(minute)}` },
+    }))
+    const todo = {
+      ...source,
+      id: 'todo-sibling',
+      taskId: failures[0]?.taskId,
+      createdAt: '2026-11-19T08:03:00.000Z',
+      payload: {
+        type: 'goal.clarification_required',
+        title: '同一事情的独立待办',
+        questions: ['口径按哪个统计？'],
+      },
+    }
+    const readPaths: string[] = []
+    installSnapshotFetch(
+      { ...snapshot, messages: [...failures, todo] },
+      path => {
+        if (!path.endsWith('/read')) return undefined
+        readPaths.push(path)
+        const id = path.split('/')[3]
+        const member = [...failures, todo].find(item => item.id === id)
+        if (!member) throw new Error(`unexpected read path ${path}`)
+        return Response.json({
+          message: { ...member, readAt: '2026-11-19T09:00:00.000Z' },
+        })
+      },
+    )
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    const list = screen.getByLabelText('待处理列表')
+    fireEvent.click(
+      within(list).getByRole('button', { name: `展开：${channel.title}` }),
+    )
+    const entry = within(list)
+      .getAllByRole('button')
+      .find(
+        button =>
+          button.classList.contains('attention-group-entry') &&
+          button.textContent.includes('失败原因 1'),
+      )
+    if (!entry) throw new Error('expected older failure entry')
+    fireEvent.click(entry)
+    expect(await screen.findByLabelText('工作详情')).toBeTruthy()
+    await waitFor(() => expect(readPaths).toHaveLength(2))
+    expect(new Set(readPaths)).toEqual(
+      new Set(failures.map(member => `/v1/outbox/${member.id}/read`)),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '关闭详情' }))
+    await waitFor(() => expect(within(list).getByText('2 条')).toBeTruthy())
+    expect(screen.getByText(/1 条未读/)).toBeTruthy()
+    expect(
+      within(list).getByRole('button', { name: '去回答：同一事情的独立待办' }),
+    ).toBeTruthy()
   })
 
   it('pages routine activity by task while keeping todos and failures unpaged', async () => {
