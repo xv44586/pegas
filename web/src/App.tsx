@@ -19,13 +19,13 @@ import {
   emptySnapshot,
   actionIdFromMessage,
   approvalIdFromMessage,
+  attentionBoard,
   clarificationQuestions,
   isReconciliationMessage,
   latestRunForTask,
   reviewProjection,
   runIdFromMessage,
   taskAutomationActive,
-  unresolvedAttentionMessages,
   type AppData,
   type AppPage,
   type DrawerView,
@@ -1140,11 +1140,23 @@ export function App() {
     )
     const restored = await restoreAttentionDrawer(message, requestId)
     if (!restored) return
-    if (message.readAt) return
-    try {
-      await markRead(message)
-    } catch (caught) {
-      handleAttentionError(caught)
+    const board = attentionBoard(data.snapshot.messages)
+    const group = message.taskId
+      ? [...board.failed, ...board.activity].find(
+          candidate => candidate.taskId === message.taskId,
+        )
+      : undefined
+    const targets = (group ? group.messages : [message]).filter(
+      item => !item.readAt,
+    )
+    for (const target of targets) {
+      if (requestId !== attentionRequestRef.current) return
+      try {
+        await markRead(target)
+      } catch (caught) {
+        handleAttentionError(caught)
+        return
+      }
     }
   }
 
@@ -1329,9 +1341,7 @@ export function App() {
       document.querySelector<HTMLTextAreaElement>('#pegas-message')?.focus(),
     )
   }
-  const unreadCount = unresolvedAttentionMessages(
-    data.snapshot.messages,
-  ).filter(message => !message.readAt).length
+  const attentionTodoCount = attentionBoard(data.snapshot.messages).todo.length
   const selectedAgentProvider =
     data.settings?.settings.agentModelMode === 'override'
       ? data.settings.settings.agentModelProvider
@@ -1365,7 +1375,7 @@ export function App() {
           })
         }
         page={page}
-        unreadCount={unreadCount}
+        attentionTodoCount={attentionTodoCount}
       >
         {loading && <div className="top-progress" aria-label="正在加载" />}
         {(error || configurationError) && (

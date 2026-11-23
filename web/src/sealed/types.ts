@@ -533,6 +533,19 @@ export function conversationLane(message: OutboxMessage): ConversationLane {
 }
 
 /**
+ * EXEC-005: server fact only. A streaming say draft carries `streaming:true`
+ * while the Run is still producing body text; the settled fact drops it.
+ * Clients never infer streaming from payload text.
+ */
+export function isStreamingSayMessage(message: OutboxMessage): boolean {
+  const record = payloadRecord(message.payload)
+  return (
+    payloadType(message.payload) === 'agent.message' &&
+    record?.streaming === true
+  )
+}
+
+/**
  * DESIGN-008: server fact only. A run.completed payload carries
  * automationActive when an active automation still targets the Task, so the
  * Run ending must not read as the whole thing being finished.

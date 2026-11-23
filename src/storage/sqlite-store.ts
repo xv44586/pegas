@@ -8543,6 +8543,68 @@ export class PegasStore {
     return { message: this.#projectOutboxMessage(message) }
   }
 
+  /**
+   * EXEC-005 say streaming: the Worker publishes the growing conversation
+   * body as one coalescing agent.message fact per Run. The text is the full
+   * accumulated body (monotonic), `streaming` marks an unfinished draft, and
+   * the final settle reuses the same dedupe key so the bubble never
+   * duplicates. Only the owning Worker of a running conversation Run may
+   * write; delivery/dispatcher semantics stay untouched.
+   */
+  streamSayFromRun(
+    runId: string,
+    workerId: string,
+    text: string,
+    options: { streaming: boolean },
+  ): void {
+    const run = this.#runById(runId)
+    if (run.claimedBy !== workerId || run.status !== 'running') return
+    const task = this.#taskById(run.taskId)
+    if (task.kind !== 'conversation') return
+    const dedupeKey = `run-say:${runId}`
+    const existing = this.#database
+      .prepare('SELECT * FROM outbox_messages WHERE dedupe_key = ?')
+      .get(dedupeKey) as unknown as OutboxRow | undefined
+    if (existing) {
+      const payload = JSON.parse(existing.payload_json) as { text?: unknown }
+      const previousText = typeof payload.text === 'string' ? payload.text : ''
+      if (options.streaming && !text.startsWith(previousText)) return
+      if (options.streaming && text.length <= previousText.length) return
+      this.#database
+        .prepare(
+          `UPDATE outbox_messages SET payload_json = ?, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(
+          JSON.stringify({
+            type: 'agent.message',
+            taskId: task.id,
+            runId,
+            text,
+            ...(options.streaming ? { streaming: true } : {}),
+          }),
+          this.#clock.now().toISOString(),
+          existing.id,
+        )
+      return
+    }
+    if (!text) return
+    this.enqueueOutbox({
+      userId: task.userId,
+      taskId: task.id,
+      channel: 'conversation',
+      dedupeKey,
+      coalesceKey: dedupeKey,
+      payload: {
+        type: 'agent.message',
+        taskId: task.id,
+        runId,
+        text,
+        ...(options.streaming ? { streaming: true } : {}),
+      },
+    })
+  }
+
   submitWorkerReport(
     runId: string,
     userId: string | undefined,
@@ -10588,7 +10650,12 @@ export class PegasStore {
           !hasActiveAutomation
             ? {}
             : { automationActive: true }),
-          text: result.output,
+          ...(task.kind === 'conversation' &&
+          !awaitingClarification &&
+          !actionBlocksCompletion &&
+          !requiresEvidence
+            ? {}
+            : { text: result.output }),
         },
       })
       if (

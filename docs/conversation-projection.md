@@ -2,7 +2,7 @@
 
 > Feature：`CONV-006`（投影合同）、`CONV-007`（任务托盘与锚点导航）
 >
-> 状态：CONV-006 Partial（服务端派生层 + 投影 API + Web 三声道渲染 + anchor 双向导航已落地；say 流式未实现）；CONV-007 Usable（任务托盘 + 选中指向 + thread 结构分组已落地，验收 1–6 全覆盖）
+> 状态：CONV-006 Partial（服务端派生层 + 投影 API + Web 三声道渲染 + anchor 双向导航 + say 流式已落地；work 卡 criteria 内嵌摘要与就地解决计数联动未实现）；CONV-007 Usable（任务托盘 + 选中指向 + thread 结构分组已落地，验收 1–6 全覆盖）
 >
 > 更新日期：2026-11-23
 
@@ -140,3 +140,13 @@
 - **锚点图标区分**：卡片右上「回到发起消息」从 Link2 改为 ArrowUpToLine（向上回溯语义），页内跳转只剩这一个入口；🔗 只表示离开当前位置去事情。
 - **卡片排版收敛**：`.fact-card` 行高 1.78（错误继承聊天正文）→ 1.55（DESIGN.md card-body 契约）；`.message-markdown strong/b` 浏览器默认 700 → 500（全站字重契约）。
 - **自动化证据**：`test/run-automations.test.ts` +2（automationActive 只在 active automation 存在时携带、取消后与一次性 Run 不携带）；`web/src/sealed/types.test.ts` +2（事实只读 run.completed、最新完成事实优先）；`ChatExperience.test.tsx` +2（已安排卡 + say/卡 meta icon 开抽屉 + 抽屉 hero 已安排；普通完成保持已完成）+3 既有用例改为抽屉目的地；`App.test.tsx` 锚点往返用例改为 🔗 开抽屉；`test/sealed-ui-work-entry.test.ts` 6 测试固化 CSS/DOM 合同（icon 槽规格、meta 常显、1.55 行高、500 字重、旧链接/按钮不回归、锚点图标区分）。
+
+## 已落地实现（2026-11-23，EXEC-005 收尾：say 流式输出）
+
+- **流式投影（服务端权威）**：conversation Run 执行期间，Worker 把 DSH `text` 增量累积为完整正文，经 `PegasStore.streamSayFromRun` 写入同一条 `agent.message` 事实（dedupe/coalesce `run-say:<runId>`）。文本单调增长（只追加、拒绝回退），草稿 payload 携带 `streaming:true`；最终结算复用同一 dedupe 键去掉该标记，气泡原位定格、不重复。写路径校验 owning Worker + running Run + conversation Task，失败不阻断 Run 结算。
+- **完成事实去重**：conversation Task 的 `run.completed` 保留为权威事实但 payload 不再携带正文，投影 `work/silent`（与 automation 完成卡同规则）；decide 类结算事实（审批/澄清/证据）不受影响仍可见。旧客户端把无文本完成事实过滤为空，不刷屏。
+- **升级标记防泄漏**：`conversationProgressText` 在流式路径上从 `PEGAS_SUGGEST_TASK_BEGIN` 起截断，并对尾部部分标记前缀保守持有，标记段永不作为正文流出；suggest_task 升级与幂等语义不变。零确认合同不变：`ConversationExecutor` 只放行 `message` 增量，acknowledgement/activity 等过程事件仍被抑制。
+- **中断诚实**：Worker 崩溃/Run 失败时已流出的部分正文保留（`streaming:true` 草稿原样可见），`run.failed` 照常投影为可见事实，不伪造完成。
+- **Web 渲染**：`isStreamingSayMessage` 只读服务端 `streaming` 事实；草稿气泡尾部渲染脉冲光标（`.say-stream-caret`，`role=status` 「正在输入」，prefers-reduced-motion 全局降级），结算后光标消失。读取沿用既有 5s snapshot 轮询 + coalesce 投影，无 SSE/WebSocket、无 schema 变更。
+- **自动化证据**：`test/chat-lane-stream.test.ts` 6 测试（增量原位增长/单气泡定格/silent 完成卡、崩溃保留部分正文 + 失败可见、标记段不流出 + 升级闭环、标记保守截断纯函数、acknowledgement 仍抑制、runtime 回收 + session resume）；`web/src/sealed/types.test.ts` +1（streaming 只认 agent.message 服务端事实）；`ChatExperience.test.tsx` +1（草稿光标 → 轮询结算无重复气泡）；`test/chat-lane.test.ts`/`test/conversation-projection.test.ts` 既有断言按新合同改写。
+- **仍未实现（CONV-006 剩余缺口）**：work 卡内嵌 criteria 摘要；「待你处理」计数与聊天内就地解决的即时联动（仍以整页快照刷新为准）。token 级推送为非目标（粒度=DSH text 事件）。

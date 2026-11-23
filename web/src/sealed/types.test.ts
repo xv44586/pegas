@@ -14,6 +14,7 @@ import {
   isAttentionMessage,
   isResolvedDecisionMessage,
   isSilentConversationMessage,
+  isStreamingSayMessage,
   taskAutomationActive,
 } from './types'
 
@@ -103,6 +104,30 @@ describe('CONV-006 lane and anchor projection helpers', () => {
 })
 
 describe('CONV-006 silent conversation projection', () => {
+  it('EXEC-005: streaming state is a server fact on agent.message only', () => {
+    const draft: OutboxMessage = {
+      id: 'message-stream',
+      userId: 'owner',
+      taskId: 'task-1',
+      payload: { type: 'agent.message', text: '今天是', streaming: true },
+      status: 'sent',
+      createdAt: '2026-11-23T00:00:00.000Z',
+    }
+    expect(isStreamingSayMessage(draft)).toBe(true)
+    expect(
+      isStreamingSayMessage({
+        ...draft,
+        payload: { type: 'agent.message', text: '今天是星期六。' },
+      }),
+    ).toBe(false)
+    expect(
+      isStreamingSayMessage({
+        ...draft,
+        payload: { type: 'run.progress', text: 'x', streaming: true },
+      }),
+    ).toBe(false)
+  })
+
   const base: OutboxMessage = {
     id: 'message-silent',
     userId: 'owner',
