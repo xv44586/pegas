@@ -167,7 +167,8 @@ describe('EXEC-005 say streaming', () => {
     expect(observed).toContain('今天')
     const outbox = store.listOutbox('owner')
     const say = outbox.filter(
-      message => (message.payload as { type?: string }).type === 'agent.message',
+      message =>
+        (message.payload as { type?: string }).type === 'agent.message',
     )
     expect(say).toHaveLength(1)
     expect(say[0]?.payload).toMatchObject({
@@ -176,9 +177,12 @@ describe('EXEC-005 say streaming', () => {
       text: '今天是星期六。',
     })
     expect(say[0]?.projection).toMatchObject({ lane: 'say', weight: 'inline' })
-    expect((say[0]?.payload as { streaming?: boolean }).streaming).not.toBe(true)
+    expect((say[0]?.payload as { streaming?: boolean }).streaming).not.toBe(
+      true,
+    )
     const completed = outbox.filter(
-      message => (message.payload as { type?: string }).type === 'run.completed',
+      message =>
+        (message.payload as { type?: string }).type === 'run.completed',
     )
     expect(completed).toHaveLength(1)
     expect((completed[0]?.payload as { text?: string }).text).toBeUndefined()
@@ -210,7 +214,8 @@ describe('EXEC-005 say streaming', () => {
     )
     const outbox = store.listOutbox('owner')
     const say = outbox.filter(
-      message => (message.payload as { type?: string }).type === 'agent.message',
+      message =>
+        (message.payload as { type?: string }).type === 'agent.message',
     )
     expect(say).toHaveLength(1)
     expect(say[0]?.payload).toMatchObject({ text: '今天', streaming: true })
@@ -245,7 +250,8 @@ describe('EXEC-005 say streaming', () => {
     )
     const outbox = store.listOutbox('owner')
     const say = outbox.filter(
-      message => (message.payload as { type?: string }).type === 'agent.message',
+      message =>
+        (message.payload as { type?: string }).type === 'agent.message',
     )
     expect(say).toHaveLength(1)
     const text = (say[0]?.payload as { text: string }).text
@@ -265,7 +271,9 @@ describe('EXEC-005 say streaming', () => {
     ).toBe('说明')
     expect(conversationProgressText('说明\nPEGAS_SUG')).toBe('说明')
     expect(
-      conversationProgressText('PEGAS_SUGGEST_TASK_BEGIN\n目标\nPEGAS_SUGGEST_TASK_END'),
+      conversationProgressText(
+        'PEGAS_SUGGEST_TASK_BEGIN\n目标\nPEGAS_SUGGEST_TASK_END',
+      ),
     ).toBe('')
   })
 

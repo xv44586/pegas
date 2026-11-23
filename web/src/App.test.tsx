@@ -1003,7 +1003,9 @@ describe('sealed Pegas UI', () => {
     }
     installFetch((path, init) => {
       if (path === '/v1/settings' && init?.method === 'PUT') {
-        savedBody = JSON.parse(String(init.body)) as Record<string, unknown>
+        savedBody = JSON.parse(
+          typeof init.body === 'string' ? init.body : '{}',
+        ) as Record<string, unknown>
         currentSettings = {
           ...currentSettings,
           settings: {

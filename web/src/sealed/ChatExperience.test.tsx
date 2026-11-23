@@ -389,7 +389,11 @@ describe('DESIGN-003 chat page', () => {
         id: 'message-chat-completed',
         userId: 'owner',
         taskId: channel.id,
-        payload: { type: 'run.completed', taskId: channel.id, runId: 'run-chat' },
+        payload: {
+          type: 'run.completed',
+          taskId: channel.id,
+          runId: 'run-chat',
+        },
         status: 'sent',
         createdAt: '2026-11-22T08:02:00.000Z',
         projection: {

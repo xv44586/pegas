@@ -281,7 +281,9 @@ describe('EXEC-005 conversation lane', () => {
     expect(outbox[0]?.payload).toMatchObject({
       type: 'agent.message',
     })
-    expect((outbox[0]?.payload as { text: string }).text).toContain('今天星期几')
+    expect((outbox[0]?.payload as { text: string }).text).toContain(
+      '今天星期几',
+    )
     expect(outbox[1]?.payload).toMatchObject({ type: 'run.completed' })
     expect(outbox[1]?.projection).toMatchObject({ weight: 'silent' })
     const sessionRef = store.conversationSessionRef('owner')

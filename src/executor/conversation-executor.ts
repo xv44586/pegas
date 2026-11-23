@@ -1,8 +1,4 @@
-import type {
-  ExecutorInput,
-  ExecutorResult,
-  RunExecutor,
-} from './executor.js'
+import type { ExecutorInput, ExecutorResult, RunExecutor } from './executor.js'
 
 /**
  * EXEC-005: resident conversation executor. It answers on the user's rolling
