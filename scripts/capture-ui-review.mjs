@@ -273,6 +273,41 @@ try {
     .getByRole('button', { name: '所有事情' })
     .click()
   await page.getByRole('heading', { name: '所有事情', exact: true }).waitFor()
+  const workSearchInput = page.getByLabel('搜索事情', { exact: true })
+  if ((await page.getByRole('button', { name: '全局搜索' }).count()) !== 0)
+    throw new Error('work page shows a duplicate global search entry')
+  await workSearchInput.focus()
+  const searchFocusGeometry = await page.evaluate(() => {
+    const container = globalThis.document.querySelector('.page-search')
+    const input = container?.querySelector('input')
+    if (!container || !input) throw new Error('work search is missing')
+    const inputStyle = globalThis.getComputedStyle(input)
+    return {
+      focused: container.matches(':focus-within'),
+      outline: inputStyle.outlineStyle,
+    }
+  })
+  if (!searchFocusGeometry.focused)
+    throw new Error('work search container does not own the focus state')
+  if (searchFocusGeometry.outline !== 'none')
+    throw new Error('work search input keeps its own focus outline')
+  await capture(
+    page,
+    'desktop-all-work-search-focus.png',
+    'desktop-all-work-search-focus',
+  )
+  await workSearchInput.blur()
+  await page.getByRole('button', { name: '排序：最近更新' }).click()
+  await page.getByRole('menu', { name: '排序方式' }).waitFor()
+  await capture(
+    page,
+    'desktop-all-work-sort-menu.png',
+    'desktop-all-work-sort-menu',
+  )
+  await page.getByRole('menuitemradio', { name: '最近创建' }).click()
+  await page.getByRole('button', { name: '排序：最近创建' }).waitFor()
+  await page.getByRole('button', { name: '排序：最近创建' }).click()
+  await page.getByRole('menuitemradio', { name: '最近更新' }).click()
   await capture(page, 'desktop-all-work.png', 'desktop-all-work')
 
   await page
@@ -757,6 +792,29 @@ try {
   await mobilePage
     .getByRole('heading', { name: '所有事情', exact: true })
     .waitFor()
+  const mobileSortTrigger = mobilePage.getByRole('button', {
+    name: '排序：最近更新',
+  })
+  await mobilePage.getByLabel('筛选').evaluate(element => {
+    element.scrollLeft = element.scrollWidth
+  })
+  const mobileSortRect = await mobileSortTrigger.boundingBox()
+  if (!mobileSortRect || mobileSortRect.height < 44)
+    throw new Error('mobile work sort trigger is missing or too short')
+  await mobileSortTrigger.click()
+  await mobilePage.getByRole('menu', { name: '排序方式' }).waitFor()
+  await capture(
+    mobilePage,
+    'mobile-all-work-sort-menu.png',
+    'mobile-all-work-sort-menu',
+  )
+  await mobilePage.getByRole('menuitemradio', { name: '最近结束' }).click()
+  await mobilePage.getByRole('button', { name: '排序：最近结束' }).waitFor()
+  await mobilePage.getByRole('button', { name: '排序：最近结束' }).click()
+  await mobilePage.getByRole('menuitemradio', { name: '最近更新' }).click()
+  await mobilePage.getByLabel('筛选').evaluate(element => {
+    element.scrollLeft = 0
+  })
   await capture(mobilePage, 'mobile-all-work.png', 'mobile-all-work')
   await mobilePage
     .getByLabel('移动端主导航')

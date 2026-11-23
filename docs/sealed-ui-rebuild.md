@@ -28,7 +28,9 @@
 
 ### 3.2 所有事情
 
-- 提供标题、状态筛选、搜索和按最近活动排序。
+- 提供标题、状态筛选、搜索和排序（最近更新/最近创建/最近结束，默认最近更新；排序对已加载列表生效，语义与 CHANNEL-003 服务端排序合同一致）。
+- 页内已有搜索框时，页头工具栏不再重复显示全局搜索放大镜（待你处理页同规则）；⌘K/Ctrl+K 全局搜索在所有页面保持可用。
+- 页内搜索框聚焦由容器统一表达（`:focus-within` 边框 accent，内部 input 不再画独立 outline），与模型选择搜索框同一合同。
 - 每个事情行展示名称、简短目标、状态、最近活动和执行上下文；整行可打开详情。
 - 服务端仍是 Task 状态事实来源，客户端不自行迁移状态。
 
@@ -299,3 +301,10 @@
 - 修复：标准页（所有事情/待你处理/自动化/记忆）内容统一 `max-width: 1040px` 居中（`margin-inline: auto; width: calc(100% - 84px)`），与 composer/tray 同一列宽口径；`.page-header` 同步 `max-width: 1124px`（1040 + 2×42 padding）居中，保证标题与内容左缘对齐。≤820px 保持 20px gutter（`width: calc(100% - 40px)`，header max-width 1080px）。≤1124px 视口行为与修复前完全一致。
 - 回归：`test/sealed-ui-page-width.test.ts` 3 测试先红后绿（内容列上限/居中/移动 gutter）；2560px 实拍对比——修复前运行实例触发记录面板 2170px 宽，修复后 966px（1040 列内），无横向溢出（实拍存 `research/design-006-lifecycle-history/live/wide-2560-*.png`，本地）。
 - 门禁：`pnpm check` 109 文件 / 1150 测试全绿；`pnpm smoke`、`pnpm review:ui --force`（几何断言含 1440px 桌面与 390px 移动端）、`pnpm a11y:review` 0 违例。
+
+## 23. 所有事情页搜索去重、聚焦合同与排序菜单（2026-11-23，DESIGN-002）
+
+- 用户报告三处缺陷：①「所有事情」页头同时出现页内搜索框与工具栏「全局搜索」放大镜，视觉上是两个搜索框；②页内搜索框聚焦时内部 input 画出独立 3px outline，在容器边框内形成「框中框」；③右侧「最近更新」排序按钮是 disabled 占位，无法使用。
+- 修复：①`PageHeader` 新增 `hasPageSearch`，「所有事情」「待你处理」两页工具栏不再重复渲染全局搜索按钮；⌘K/Ctrl+K 与其他页面入口不变。②`.page-search` 接入与 `model-search` 相同的容器聚焦合同（`:focus-within` 边框 accent、内部 `outline: none`、placeholder muted、search 原生外观清除），并把两页搜索 input 统一为 `type="search"`。③排序按钮改为真实菜单（`role="menu"` + `menuitemradio`，最近更新/最近创建/最近结束），语义与 CHANNEL-003 服务端 `sort` 合同一致：updated=`latestActivityAt`、created=`createdAt`、ended=`endedAt ?? updatedAt`，同刻按 id 倒序稳定排序；排序作用于已加载快照列表，是视图投影，不改服务端事实。Esc/外点关闭并还原焦点；≤520px 不再隐藏排序入口，随筛选行横向滚动可达。
+- 边界：排序菜单结构对齐既有 `.message-derived-menu` 弹层模式（局部 `position: relative` 包含块 + `--shadow-pop`）；纯前端交互适配，无服务端契约与存储变更；回滚 revert 即恢复。
+- 门禁：`web/src/App.test.tsx` +2（单页单搜索入口 + ⌘K 保留、三种排序顺序/菜单语义/Esc 焦点还原）；`web/src/sealed/types.test.ts` +2（排序投影不变更输入、ended 回退与 id 决胜）；`test/workspace-theme.test.ts` +2（page-search 容器聚焦合同、排序菜单局部包含块）；`scripts/capture-ui-review.mjs` 新增搜索聚焦几何断言与桌面/移动排序菜单 fixture（`desktop-all-work-search-focus`、`desktop-all-work-sort-menu`、`mobile-all-work-sort-menu`），移动端排序按钮 44px 触控断言。
