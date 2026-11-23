@@ -5226,6 +5226,10 @@ kbd {
 .approval-reason {
   margin-top: 10px;
 }
+.approval-review {
+  color: var(--muted);
+  margin-top: 10px;
+}
 .delivery-history {
   border: 1px solid var(--line);
   border-radius: 12px;

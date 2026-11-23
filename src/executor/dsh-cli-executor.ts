@@ -95,6 +95,15 @@ interface DshPolicyDecisionEvent {
   reason: string
 }
 
+interface DshAutoReviewEvent {
+  type: 'auto_review'
+  callId: string
+  tool: string
+  decision: 'allow' | 'deny' | 'failed'
+  risk?: string
+  reason?: string
+}
+
 interface DshStatusEvent {
   type: 'status'
   phase: string
@@ -424,6 +433,12 @@ export class DshCliExecutor implements RunExecutor {
             label: policyActivityLabel(event),
           })
         }
+        if (event.type === 'auto_review') {
+          input.onProgress?.({
+            type: 'activity',
+            label: autoReviewActivityLabel(event),
+          })
+        }
         if (event.type === 'approval_bridge_error') {
           streamError = `Approval bridge failed to ${event.stage}: ${event.message}`
         }
@@ -735,6 +750,7 @@ function parseDshEvent(
   | DshApprovalPendingEvent
   | DshApprovalBridgeErrorEvent
   | DshPolicyDecisionEvent
+  | DshAutoReviewEvent
   | DshStatusEvent
   | DshOtherEvent {
   const parsed = JSON.parse(line) as unknown
@@ -837,6 +853,25 @@ function parseDshEvent(
       reason: parsed.reason,
     }
   }
+  if (
+    parsed.type === 'auto_review' &&
+    typeof parsed.callId === 'string' &&
+    typeof parsed.tool === 'string' &&
+    (parsed.decision === 'allow' ||
+      parsed.decision === 'deny' ||
+      parsed.decision === 'failed')
+  ) {
+    return {
+      type: 'auto_review',
+      callId: parsed.callId,
+      tool: parsed.tool,
+      decision: parsed.decision,
+      ...(typeof parsed.risk === 'string' ? { risk: parsed.risk } : {}),
+      ...(typeof parsed.reason === 'string'
+        ? { reason: parsed.reason.slice(0, 2_000) }
+        : {}),
+    }
+  }
   if (parsed.type === 'status' && typeof parsed.phase === 'string') {
     return {
       type: 'status',
@@ -860,6 +895,18 @@ function policyActivityLabel(event: DshPolicyDecisionEvent): string {
     return `安全检查通过：${event.tool}（只读）`
   }
   return `安全检查通过：${event.tool}（工作区内写入）`
+}
+
+function autoReviewActivityLabel(event: DshAutoReviewEvent): string {
+  if (event.decision === 'allow') {
+    return `自动审阅已按你的原话授权放行 ${event.tool}`
+  }
+  if (event.decision === 'deny') {
+    return event.reason
+      ? `自动审阅未放行 ${event.tool}：${event.reason}`
+      : `自动审阅未放行 ${event.tool}，等待你的决定`
+  }
+  return `自动审阅未能给出结论（${event.tool}），等待你的决定`
 }
 
 function parseTokenUsage(value: unknown): ModelTokenUsage {

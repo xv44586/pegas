@@ -22,4 +22,6 @@ export interface RuntimeSettingsSelection {
   executionPools?: ExecutionPools
   /** Global default permission tier (APPROVAL-001 P2); defaults to standard. */
   permissionTier?: PermissionTier
+  /** Optional model pre-review of ask decisions (APPROVAL-001 P5); defaults to off. */
+  autoReviewEnabled?: boolean
 }

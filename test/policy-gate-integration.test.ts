@@ -159,5 +159,137 @@ describe.skipIf(!dshAvailable || !gatewayReachable)(
         rmSync(outside, { recursive: true, force: true })
       }
     }, 300_000)
+
+    it('auto-allows an explicitly authorized out-of-workspace write when auto review is enabled', async () => {
+      const home = mkdtempSync(join(tmpdir(), 'pegas-p5-home-'))
+      const workspace = mkdtempSync(join(tmpdir(), 'pegas-p5-ws-'))
+      const outside = mkdtempSync(join(tmpdir(), 'pegas-p5-outside-'))
+      ensureDshProfileHome(home, 'headless')
+      const configuration = createDshModelConfiguration({
+        connections: [
+          {
+            id: 'magpie',
+            name: 'magpie',
+            protocol: 'openai-chat',
+            baseUrl: 'http://127.0.0.1:3425/v1',
+            apiKeyCiphertext: 'placeholder',
+            updatedAt: new Date().toISOString(),
+          },
+        ],
+        vault: { decrypt: () => 'placeholder-key' },
+        agentModel: { provider: 'magpie', model: 'qwen-cn-2/qwen4-max' },
+      })
+      const store = new PegasStore(':memory:')
+      store.initializeRuntimeSettings(runtimeSettingsDefaults(loadConfig({})))
+      const settings = store.getRuntimeSettings()
+      store.updateRuntimeSettings(settings.revision, {
+        ...settings,
+        autoReviewEnabled: true,
+      })
+      const server = createControlPlane({
+        store,
+        apiToken: 'bridge-test',
+      })
+      await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+      const baseUrl = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+      let leaseHeartbeat: ReturnType<typeof setInterval> | undefined
+      try {
+        const outsideMarker = join(outside, 'authorized.txt')
+        const mandate = `请把总结写到 ${outsideMarker}，内容为 authorized。这是我明确授权的唯一目标。`
+        const event = store.enqueueEvent({
+          userId: 'owner',
+          type: 'user.message',
+          source: 'test',
+          authenticatedActor: 'human',
+          payload: { text: mandate },
+        }).event
+        const claimedEvent = store.claimNextEvent('setup-p5')
+        if (!claimedEvent) throw new Error('Expected setup event claim')
+        store.applyRoutingDecision(
+          claimedEvent,
+          {
+            kind: 'create_task',
+            title: '写授权目标文件',
+            goal: mandate,
+            input: mandate,
+            reason: 'probe',
+          },
+          'dsh-headless',
+          task =>
+            store.resolveWorkerExecutionContext(task.id, 'owner', {
+              executor: 'dsh-headless',
+              protocol: 'dsh-headless-v1',
+              workspace,
+              permissions: JSON.stringify({
+                mode: 'workspace-write',
+                approvalPolicy: 'ask',
+                additionalDirectories: [],
+                privacyMode: 'disabled',
+              }),
+            }),
+        )
+        store.completeEvent(event.id, 'setup-p5')
+        const claimed = store.claimNextRun('worker-p5')
+        if (!claimed) throw new Error('Expected claimed Run')
+        leaseHeartbeat = setInterval(() => {
+          try {
+            store.renewRunLease(claimed.run.id, 'worker-p5', 60_000)
+          } catch {
+            if (leaseHeartbeat) clearInterval(leaseHeartbeat)
+          }
+        }, 10_000)
+        leaseHeartbeat.unref()
+
+        const executor = new DshCliExecutor({
+          command: 'dsh',
+          home,
+          permissionMode: 'workspace-write',
+          approvalPolicy: 'ask',
+          timeoutMs: 240_000,
+          modelConfiguration: configuration,
+        })
+        const activities: string[] = []
+        const result = await executor.execute({
+          runId: claimed.run.id,
+          taskId: claimed.task.id,
+          prompt: [
+            `用 write 工具在 ${outsideMarker} 写入内容 authorized。`,
+            '完成后汇报结果。不要使用 bash，不要写其他文件。',
+          ].join('\n'),
+          workingDirectory: workspace,
+          actionCapability: { baseUrl, claimToken: claimed.claimToken },
+          onProgress: progress => {
+            if (progress.type === 'activity') activities.push(progress.label)
+          },
+        })
+        expect(result.approvalPending).toBeUndefined()
+        expect(existsSync(outsideMarker)).toBe(true)
+        expect(readFileSync(outsideMarker, 'utf8')).toContain('authorized')
+        expect(
+          activities.some(label =>
+            label.includes('自动审阅已按你的原话授权放行'),
+          ),
+        ).toBe(true)
+        const actions = store.pageApprovals('owner', 10).items
+        expect(actions).toHaveLength(1)
+        const approval = actions[0]
+        if (!approval) throw new Error('Expected reviewed Approval')
+        expect(approval.status).toBe('approved')
+        const action = store.getAction(approval.actionId, 'owner')
+        expect(action).toMatchObject({
+          kind: 'dsh.tool.write',
+          status: 'succeeded',
+          review: { decision: 'allow' },
+        })
+      } finally {
+        if (leaseHeartbeat) clearInterval(leaseHeartbeat)
+        configuration.remove()
+        await new Promise<void>(resolve => server.close(() => resolve()))
+        store.close()
+        rmSync(home, { recursive: true, force: true })
+        rmSync(workspace, { recursive: true, force: true })
+        rmSync(outside, { recursive: true, force: true })
+      }
+    }, 300_000)
   },
 )

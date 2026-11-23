@@ -20,6 +20,7 @@ import {
   RotateCw,
   Search,
   Shield,
+  ShieldCheck,
   SlidersHorizontal,
   Sparkles,
   Sun,
@@ -2288,6 +2289,34 @@ function PrivacySettings({
         </label>
         <p className="settings-help">
           收紧对下一次工具调用立即生效；放宽只影响后续运行。单个事情可以在执行设置里覆盖此默认值。
+        </p>
+      </div>
+      <div className="settings-card">
+        <div className="card-title">
+          <ShieldCheck size={20} />
+          <div>
+            <h3>自动审阅</h3>
+            <p>
+              待审批操作先交给模型按你的原话初审：明确授权的放行，其余仍由你决定。
+            </p>
+          </div>
+        </div>
+        <label className="switch-row">
+          启用自动审阅
+          <input
+            aria-label="启用自动审阅"
+            checked={draft.autoReviewEnabled === true}
+            onChange={event =>
+              onChange({
+                ...draft,
+                autoReviewEnabled: event.target.checked,
+              })
+            }
+            type="checkbox"
+          />
+        </label>
+        <p className="settings-help">
+          只认你认证输入的原话；定时跟进等机器输入不构成新授权。审阅超时或失败一律回到人工审批，不可逆命令与控制面修改始终需要你确认。
         </p>
       </div>
       <div className="settings-card">

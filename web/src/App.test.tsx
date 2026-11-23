@@ -4998,9 +4998,11 @@ describe('sealed Pegas UI', () => {
       expectedRevision: 1,
       permissionTier: 'strict',
     })
-    expect(screen.getByLabelText('全局权限档位')).toHaveProperty(
-      'value',
-      'strict',
+    await waitFor(() =>
+      expect(screen.getByLabelText('全局权限档位')).toHaveProperty(
+        'value',
+        'strict',
+      ),
     )
 
     fireEvent.change(screen.getByLabelText('全局权限档位'), {
@@ -5019,13 +5021,13 @@ describe('sealed Pegas UI', () => {
         name: '我已了解，启用完全访问',
       }),
     )
-    expect(await screen.findByText('更改已保存')).toBeTruthy()
     await waitFor(() =>
       expect(submitted).toMatchObject({
         expectedRevision: 2,
         permissionTier: 'full',
       }),
     )
+    expect(await screen.findByText('更改已保存')).toBeTruthy()
     expect(screen.getByLabelText('全局权限档位')).toHaveProperty(
       'value',
       'full',
@@ -7547,6 +7549,110 @@ describe('sealed Pegas UI', () => {
     await waitFor(() => expect(revokeBody).toMatchObject({ userId: 'owner' }))
     expect(await screen.findByText('已撤销')).toBeTruthy()
     expect(screen.queryByRole('button', { name: '撤销规则' })).toBeNull()
+  })
+
+  it('toggles the auto review switch from privacy settings', async () => {
+    let submitted: unknown
+    installFetch((path, init) => {
+      if (path !== '/v1/settings') return undefined
+      if (init?.method !== 'PUT') {
+        return Response.json({
+          ...settingsResponse,
+          settings: {
+            ...settingsResponse.settings,
+            autoReviewEnabled: false,
+          },
+        })
+      }
+      submitted = JSON.parse(typeof init.body === 'string' ? init.body : '{}')
+      const draft = submitted as {
+        expectedRevision: number
+        autoReviewEnabled?: boolean
+      }
+      return Response.json({
+        ...settingsResponse,
+        settings: {
+          ...settingsResponse.settings,
+          revision: draft.expectedRevision + 1,
+          autoReviewEnabled: draft.autoReviewEnabled ?? false,
+        },
+      })
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /隐私/ }))
+    const reviewSwitch = await screen.findByLabelText('启用自动审阅')
+    expect(reviewSwitch).toHaveProperty('checked', false)
+    fireEvent.click(reviewSwitch)
+    fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
+    expect(await screen.findByText('更改已保存')).toBeTruthy()
+    expect(submitted).toMatchObject({ autoReviewEnabled: true })
+    expect(screen.getByLabelText('启用自动审阅')).toHaveProperty(
+      'checked',
+      true,
+    )
+  })
+
+  it('shows the auto review verdict on the approval card', async () => {
+    const sourceMessage = snapshot.messages[0]
+    if (!sourceMessage) throw new Error('Expected an outbox message fixture')
+    const pending = approvalFixture('approval-reviewed')
+    const action: DurableAction = {
+      ...actionFixture(pending),
+      kind: 'dsh.tool.write',
+      request: {
+        tool: 'write',
+        callId: 'call-reviewed',
+        reason: '工具 write 将写入工作区之外（/tmp/shared/plan.md）。',
+        category: 'out-of-workspace-write',
+        targets: ['/tmp/shared/plan.md'],
+        argumentsHash: 'c'.repeat(64),
+        tier: 'standard',
+      },
+      review: {
+        id: 'review-1',
+        actionId: pending.actionId,
+        taskId: pending.taskId,
+        runId: pending.requestRunId,
+        decision: 'deny',
+        risk: 'medium',
+        reason: '目标超出原话授权范围。',
+        createdAt: '2026-11-23T14:00:00.000Z',
+      },
+    }
+    const approvalMessage = {
+      ...sourceMessage,
+      payload: { type: 'approval.required', approvalId: pending.id },
+    }
+    installSnapshotFetch({ ...snapshot, messages: [approvalMessage] }, path => {
+      if (path.startsWith(`/v1/approvals/${pending.id}?`))
+        return Response.json({ approval: pending })
+      if (path.startsWith(`/v1/actions/${pending.actionId}?`))
+        return Response.json({ action })
+      if (path.endsWith('/read'))
+        return Response.json({
+          message: {
+            ...approvalMessage,
+            readAt: '2026-11-23T14:00:00.000Z',
+          },
+        })
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /^查看内容：/ }))
+    expect(
+      await screen.findByText(/自动审阅未放行：目标超出原话授权范围。/),
+    ).toBeTruthy()
+    expect(screen.getByRole('button', { name: '提交决定' })).toBeTruthy()
   })
 
   it('creates a related task carrying the ended source context reference', async () => {

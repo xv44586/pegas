@@ -424,6 +424,11 @@ function ApprovalDetail({
           </p>
         )}
         <ApprovalOperationPreview action={view.action} />
+        {view.action.review && (
+          <p className="approval-review">
+            {approvalReviewLabel(view.action.review)}
+          </p>
+        )}
         <p className="approval-reason">需要你决定：{approvalReason(view)}</p>
         <dl>
           <Meta label="状态" value={approvalStatus(view.approval.status)} />
@@ -2872,6 +2877,20 @@ function approvalRuleCategoryLabel(category: string): string {
   if (category === 'out-of-workspace-write') return '工作区外写入'
   if (category === 'network-egress') return '对外网络发送'
   return category
+}
+
+function approvalReviewLabel(
+  review: NonNullable<DurableAction['review']>,
+): string {
+  if (review.decision === 'allow') {
+    return '自动审阅已按你的原话授权放行本次操作。'
+  }
+  if (review.decision === 'deny') {
+    return review.reason
+      ? `自动审阅未放行：${review.reason}`
+      : '自动审阅未放行，需要你亲自决定。'
+  }
+  return '自动审阅未能给出结论，需要你亲自决定。'
 }
 
 function ExecutionProfileMeta({ run }: { run?: Run }) {

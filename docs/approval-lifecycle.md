@@ -171,6 +171,10 @@ Gate 的边界事实来自 Executor 注入的 patch config `policy { workspaceRo
 
 审批卡在 Web 待处理抽屉以结构化形态渲染（P4）：来源事情入口（打开对应事情抽屉）、操作预览（类别 + 风险白话、工具 + 生效档位、bash 命令等宽块、canonical 目标列表、档位错配提示）与「需要你决定」reason 行；桥的 Action request 携带命令原串（`command`）。`approval.required` 通知经 external 投递（webhook 等）时，payload 投影为指向 `/?view=outbox&outbox=<messageId>` 的 deepLink（复用既有收件箱恢复参数），其余通知类型 payload 不变。
 
+### 自动审阅（APPROVAL-001 P5）
+
+设置页隐私区「自动审阅」开关（默认关，`runtime_settings.auto_review_enabled`，schema v42）。开启后，桥对 ask 且 high 的调用（开关开、无档位错配、存在认证人类原话）先做一次模型审阅：`ctx.llm.stream` 按桥内自写 REVIEW_POLICY 判定（provider/model 取自 session requestHeader，temperature 0，20s 超时），授权来源只认服务端投影的认证人类 user.message 原话（30000 字符预算从最旧整条丢弃并标记 omitted，机器输入永不构成授权）。输出必须是严格 JSON：allow 仅 low/medium 两键，deny medium/high 可带 reason，其余形状、流异常、超时一律 failed。allow 时桥创建 Action/Approval 但不停放 Run，经 `POST /v1/actions/:id/review`（claim 鉴权、append-only `approval_reviews` 幂等记录）同事务把 Action 置 authorized、Approval 置 approved 并发时间线事件，工具就地执行并记 outcome；登记失败 fail-closed 不执行。deny/failed 降级人工 ask，审阅结论随停放落库并在审批卡显示（「自动审阅未放行：{reason}」）。critical、control-plane-mutation、unknown 不进入审阅；开关开启时 Supervisor 拒绝回滚到 <v42。
+
 ### 停放与恢复（seam 共用链路）
 
 1. **停放**：插件用当前 Run 的 claim capability 调 `POST /v1/runs/:runId/approvals` 创建持久 Approval。Action `kind` 为 `dsh.tool.<tool>`，risk 由 Gate 分级写入（`high`/`critical`；seam 越权无 Gate 判定时按 `high`），`request` 保存 `tool`、`callId`、`reason`、`category`、`targets` 与 `argumentsHash`（工具参数的稳定序列化 SHA-256），幂等键为 `dsh-tool:<runId>:<callId>`。创建成功后向 headless JSON 流写入 `approval_pending` 事件并对本次调用返回 `rejected`；Executor 识别该事件后按持久等待结算 Run（服务端已把 Run 置为 `waiting` 并清除 lease），不再提交 Report。创建失败时写入 `approval_bridge_error` 事件，Executor 将其作为执行失败处理，不放行工具。
@@ -184,7 +188,7 @@ claim token 只经进程环境传给 DSH 主进程，DSH 自身的 subprocess �
 
 - Policy Gate 覆盖全部工具调用，但 bash 只做确定性静态分类：未命中模式的复杂命令按低风险交由沙箱边界执行，间接执行按 unknown 强制人工确认；execpolicy 级完整命令语义解析属后续阶段。
 - Gate 的 allow 记录目前经 `policy_decision` 事件进入 Run Activity 进度流（含档位与代次指纹），逐调用独立审计表仍未落；切档动作本身已有 append-only 审计。
-- 档位对象与运行中热切换已落地（P2），持久规则批准（approve_rule）已落地（P3），审批卡结构化渲染与通知深链已落地（P4）；自动审阅属 P5。
+- 档位对象与运行中热切换已落地（P2），持久规则批准（approve_rule）已落地（P3），审批卡结构化渲染与通知深链已落地（P4），模型自动审阅（默认关、失败降级人工）已落地（P5）。
 - 桥现读档位是每工具调用一次本地 HTTP 往返；控制面不可达时该 Run 的工具全部按 strict 升审批，不会静默放行。
 - 同一 DSH 进程只停放第一个越权调用；并行的其余审批请求 fall through 到 DSH 默认 `unavailable`，fail closed。
 - 批准后恢复的是同一 DSH session，但模型需要重新发起同参数调用才能命中一次性 grant；grant 不预执行任何工具。
@@ -193,7 +197,7 @@ claim token 只经进程环境传给 DSH 主进程，DSH 自身的 subprocess �
 
 ## 当前限制
 
-持久对象、策略边界、API、Web 决策、恢复协议与人工核对闭环已可用；Policy Gate 覆盖全部工具调用并做确定性 risk 分级（P1），权限档位（全局默认 + 事情覆盖 + Run 快照下界 + 运行中热切换）已落地（P2），本事情内同类规则批准与撤销已落地（P3），审批卡结构化渲染与通知深链已落地（P4）。仍标记为 `Partial`：自动审阅与由验证器主动探测外部状态的自动对账属于后续阶段。组织级 RBAC、多人会签、超时策略与可配置风险阈值同样不在当前范围内。
+持久对象、策略边界、API、Web 决策、恢复协议与人工核对闭环已可用；Policy Gate 覆盖全部工具调用并做确定性 risk 分级（P1），权限档位（全局默认 + 事情覆盖 + Run 快照下界 + 运行中热切换）已落地（P2），本事情内同类规则批准与撤销已落地（P3），审批卡结构化渲染与通知深链已落地（P4），模型自动审阅已落地（P5，默认关闭）。仍标记为 `Partial`：由验证器主动探测外部状态的自动对账、逐调用独立审计表与档位审计列表 UI 属于后续阶段。组织级 RBAC、多人会签、超时策略与可配置风险阈值同样不在当前范围内。
 
 ## 回滚
 

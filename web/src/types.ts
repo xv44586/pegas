@@ -427,6 +427,7 @@ export interface RuntimeSettings {
   rewriteMode: 'disabled' | 'light'
   chatLaneEnabled?: boolean
   permissionTier?: 'strict' | 'standard' | 'full'
+  autoReviewEnabled?: boolean
   executionPools?: Partial<
     Record<'fast' | 'balanced' | 'deep', { provider: string; model: string }>
   >

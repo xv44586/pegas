@@ -10,6 +10,7 @@ const steeringSchemaVersion = 24
 const chatLaneSchemaVersion = 32
 const permissionTierSchemaVersion = 40
 const approvalRuleSchemaVersion = 41
+const approvalReviewSchemaVersion = 42
 
 export class RollbackCompatibilityError extends Error {}
 
@@ -192,6 +193,22 @@ export function assertRollbackCompatible(
       if (activeRules) {
         throw new RollbackCompatibilityError(
           'Rollback is unsafe while active approval rules exist',
+        )
+      }
+    }
+    if (
+      currentVersion >= approvalReviewSchemaVersion &&
+      targetMaximumSchema < approvalReviewSchemaVersion
+    ) {
+      const enabledReview = database
+        .prepare(
+          `SELECT 1 FROM runtime_settings
+           WHERE id = 1 AND auto_review_enabled = 1 LIMIT 1`,
+        )
+        .get()
+      if (enabledReview) {
+        throw new RollbackCompatibilityError(
+          'Rollback is unsafe while auto review is enabled',
         )
       }
     }

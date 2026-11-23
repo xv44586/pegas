@@ -45,6 +45,11 @@ import {
   approvalRuleRevocationFingerprint,
 } from '../approval/approval-rule-fingerprint.js'
 import type {
+  ApprovalMandateProjection,
+  ApprovalReview,
+  ApprovalReviewDraft,
+} from '../approval/approval-review.js'
+import type {
   ClaimedRun,
   EventAttachment,
   ExecutionContext,
@@ -956,6 +961,42 @@ CREATE TRIGGER approval_rules_no_delete
 BEFORE DELETE ON approval_rules
 BEGIN
   SELECT RAISE(ABORT, 'approval_rules rows cannot be deleted');
+END;
+`
+
+const migration42 = `
+-- APPROVAL-001 P5: optional model pre-review of ask decisions. The switch
+-- defaults to off; review records are append-only, one per Action.
+ALTER TABLE runtime_settings ADD COLUMN auto_review_enabled INTEGER NOT NULL DEFAULT 0
+CHECK (auto_review_enabled IN (0, 1));
+
+CREATE TABLE approval_reviews (
+  id TEXT PRIMARY KEY,
+  action_id TEXT NOT NULL UNIQUE REFERENCES actions(id),
+  task_id TEXT NOT NULL REFERENCES tasks(id),
+  run_id TEXT NOT NULL REFERENCES runs(id),
+  decision TEXT NOT NULL CHECK (decision IN ('allow','deny','failed')),
+  risk TEXT CHECK (risk IN ('low','medium','high')),
+  reason TEXT,
+  mandate_chars INTEGER,
+  generation TEXT,
+  claim_token_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX approval_reviews_by_task_time
+ON approval_reviews (task_id, created_at DESC);
+
+CREATE TRIGGER approval_reviews_no_update
+BEFORE UPDATE ON approval_reviews
+BEGIN
+  SELECT RAISE(ABORT, 'approval_reviews rows are append-only');
+END;
+
+CREATE TRIGGER approval_reviews_no_delete
+BEFORE DELETE ON approval_reviews
+BEGIN
+  SELECT RAISE(ABORT, 'approval_reviews rows cannot be deleted');
 END;
 `
 
@@ -2364,6 +2405,20 @@ interface ApprovalRuleRow {
   revoked_by: string | null
 }
 
+interface ApprovalReviewRow {
+  id: string
+  action_id: string
+  task_id: string
+  run_id: string
+  decision: ApprovalReview['decision']
+  risk: ApprovalReview['risk'] | null
+  reason: string | null
+  mandate_chars: number | null
+  generation: string | null
+  claim_token_hash: string
+  created_at: string
+}
+
 interface ApprovalRuleRevocationRow {
   rule_id: string
   command_id: string
@@ -2578,6 +2633,7 @@ interface RuntimeSettingsRow {
   chat_lane_enabled?: number | null
   execution_pools_json?: string | null
   permission_tier?: string | null
+  auto_review_enabled?: number | null
   model_provider: string
   model_connection_id: string | null
   model_name: string
@@ -2791,6 +2847,7 @@ export class PegasStore {
     this.#migrate(39, migration39)
     this.#migrate(40, migration40)
     this.#migrate(41, migration41)
+    this.#migrate(42, migration42)
   }
 
   #backfillWorkerIconIds(): void {
@@ -2907,8 +2964,8 @@ export class PegasStore {
           (id, revision, router_mode, model_provider, model_connection_id, model_name,
            agent_model_mode, agent_model_provider, agent_model_name,
            privacy_mode, rewrite_mode, chat_lane_enabled, execution_pools_json,
-           permission_tier, updated_at)
-         VALUES (1, 1, ?, 'openai-compatible', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           permission_tier, auto_review_enabled, updated_at)
+         VALUES (1, 1, ?, 'openai-compatible', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         defaults.routerMode,
@@ -2922,6 +2979,7 @@ export class PegasStore {
         defaults.chatLaneEnabled ? 1 : 0,
         JSON.stringify(defaults.executionPools ?? {}),
         defaults.permissionTier ?? 'standard',
+        defaults.autoReviewEnabled ? 1 : 0,
         now,
       )
     return this.getRuntimeSettings()
@@ -3357,6 +3415,8 @@ export class PegasStore {
     generation: string
     source: 'global' | 'task'
     rules: ApprovalRuleProjection[]
+    autoReviewEnabled: boolean
+    mandate: ApprovalMandateProjection
   } {
     this.#claimForCapability(runId, claimToken)
     const run = this.#runById(runId)
@@ -3374,6 +3434,10 @@ export class PegasStore {
       liveTier: effective.permissionTier,
     })
     const rules = this.#activeApprovalRuleProjections(task.id)
+    const autoReviewEnabled = settings.autoReviewEnabled === true
+    const mandate = autoReviewEnabled
+      ? this.#taskMandateProjection(task.id)
+      : { instructions: [], omitted: false }
     const generation = createHash('sha256')
       .update(
         JSON.stringify({
@@ -3382,6 +3446,7 @@ export class PegasStore {
           liveTier: effective.permissionTier,
           snapshotTier: snapshotTier ?? null,
           ruleFingerprints: rules.map(rule => rule.fingerprint),
+          autoReviewEnabled,
         }),
       )
       .digest('hex')
@@ -3395,7 +3460,49 @@ export class PegasStore {
       generation,
       source: effective.permissionSource,
       rules,
+      autoReviewEnabled,
+      mandate,
     }
+  }
+
+  #taskMandateProjection(taskId: string): ApprovalMandateProjection {
+    const rows = this.#database
+      .prepare(
+        `SELECT inbox_events.id, inbox_events.payload_json,
+                inbox_events.created_at
+         FROM task_events
+         INNER JOIN inbox_events ON inbox_events.id = task_events.event_id
+         WHERE task_events.task_id = ?
+           AND inbox_events.type = 'user.message'
+           AND inbox_events.authenticated_actor = 'human'
+         ORDER BY inbox_events.created_at ASC, inbox_events.rowid ASC`,
+      )
+      .all(taskId) as unknown as {
+      id: string
+      payload_json: string
+      created_at: string
+    }[]
+    const budget = 30_000
+    const candidates: ApprovalMandateProjection['instructions'] = []
+    for (const row of rows) {
+      const payload = JSON.parse(row.payload_json) as { text?: unknown }
+      if (typeof payload.text !== 'string' || payload.text.trim() === '')
+        continue
+      candidates.push({
+        eventId: row.id,
+        text: payload.text,
+        createdAt: row.created_at,
+      })
+    }
+    let total = candidates.reduce((sum, item) => sum + item.text.length, 0)
+    let omitted = false
+    while (candidates.length > 0 && total > budget) {
+      const dropped = candidates.shift()
+      if (!dropped) break
+      total -= dropped.text.length
+      omitted = true
+    }
+    return { instructions: candidates, omitted }
   }
 
   createCollaboration(
@@ -5428,6 +5535,7 @@ export class PegasStore {
              chat_lane_enabled = COALESCE(?, chat_lane_enabled),
              execution_pools_json = COALESCE(?, execution_pools_json),
              permission_tier = COALESCE(?, permission_tier),
+             auto_review_enabled = COALESCE(?, auto_review_enabled),
              updated_at = ?
          WHERE id = 1 AND revision = ?`,
       )
@@ -5449,6 +5557,11 @@ export class PegasStore {
           ? null
           : JSON.stringify(settings.executionPools),
         settings.permissionTier ?? null,
+        settings.autoReviewEnabled === undefined
+          ? null
+          : settings.autoReviewEnabled
+            ? 1
+            : 0,
         this.#clock.now().toISOString(),
         expectedRevision,
       )
@@ -5602,6 +5715,7 @@ export class PegasStore {
                chat_lane_enabled = COALESCE(?, chat_lane_enabled),
                execution_pools_json = COALESCE(?, execution_pools_json),
                permission_tier = COALESCE(?, permission_tier),
+               auto_review_enabled = COALESCE(?, auto_review_enabled),
                updated_at = ?
            WHERE id = 1 AND revision = ?`,
         )
@@ -5623,6 +5737,11 @@ export class PegasStore {
             ? null
             : JSON.stringify(settings.executionPools),
           settings.permissionTier ?? null,
+          settings.autoReviewEnabled === undefined
+            ? null
+            : settings.autoReviewEnabled
+              ? 1
+              : 0,
           now,
           expectedRevision,
         )
@@ -9080,36 +9199,42 @@ export class PegasStore {
           JSON.stringify(draft.approval),
           now,
         )
-      this.#database
-        .prepare(
-          `UPDATE runs SET status = 'waiting', claimed_by = NULL,
-           lease_until = NULL, claim_token_hash = NULL, updated_at = ?
-           WHERE id = ? AND status = 'running' AND claimed_by = ?`,
-        )
-        .run(now, run.id, claim.workerId)
-      this.#database
-        .prepare(
-          `UPDATE tasks SET status = 'started', status_reason = 'awaiting_approval',
-           ended_json = NULL, updated_at = ? WHERE id = ?`,
-        )
-        .run(now, task.id)
-      this.enqueueOutbox({
-        userId: task.userId,
-        taskId: task.id,
-        channel: 'conversation',
-        dedupeKey: `approval-required:${approvalId}`,
-        payload: {
-          type: 'approval.required',
+      const autoReview =
+        this.hasRuntimeSettings() &&
+        this.getRuntimeSettings().autoReviewEnabled === true &&
+        draft.request.autoReview === true
+      if (!autoReview) {
+        this.#database
+          .prepare(
+            `UPDATE runs SET status = 'waiting', claimed_by = NULL,
+             lease_until = NULL, claim_token_hash = NULL, updated_at = ?
+             WHERE id = ? AND status = 'running' AND claimed_by = ?`,
+          )
+          .run(now, run.id, claim.workerId)
+        this.#database
+          .prepare(
+            `UPDATE tasks SET status = 'started', status_reason = 'awaiting_approval',
+             ended_json = NULL, updated_at = ? WHERE id = ?`,
+          )
+          .run(now, task.id)
+        this.enqueueOutbox({
+          userId: task.userId,
           taskId: task.id,
-          runId: run.id,
-          approvalId,
-          actionId,
-          risk: draft.risk,
-          summary: draft.approval.summary,
-          impact: draft.approval.impact,
-          prompt: draft.approval,
-        },
-      })
+          channel: 'conversation',
+          dedupeKey: `approval-required:${approvalId}`,
+          payload: {
+            type: 'approval.required',
+            taskId: task.id,
+            runId: run.id,
+            approvalId,
+            actionId,
+            risk: draft.risk,
+            summary: draft.approval.summary,
+            impact: draft.approval.impact,
+            prompt: draft.approval,
+          },
+        })
+      }
       const action = this.#actionById(actionId)
       const approval = this.#approvalById(approvalId)
       this.#database.exec('COMMIT')
@@ -9205,6 +9330,119 @@ export class PegasStore {
       )
       .get(actionId, userId) as unknown as ActionRow | undefined
     return row ? this.#actionWithReconciliation(row) : undefined
+  }
+
+  recordApprovalReview(
+    actionId: string,
+    claimToken: string,
+    draft: ApprovalReviewDraft,
+  ): ApprovalReview {
+    const fingerprint = createHash('sha256')
+      .update(stableJson(draft))
+      .digest('hex')
+    const suppliedClaimHash = hashClaimToken(claimToken)
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const actionRow = this.#database
+        .prepare('SELECT * FROM actions WHERE id = ? AND protocol_version = 1')
+        .get(actionId) as unknown as ActionRow | undefined
+      if (!actionRow?.request_claim_hash) {
+        throw new RunClaimError('Run claim capability is invalid')
+      }
+      if (!safeDigestEqual(suppliedClaimHash, actionRow.request_claim_hash)) {
+        throw new RunClaimError('Run claim capability is invalid')
+      }
+      const existing = this.#database
+        .prepare('SELECT * FROM approval_reviews WHERE action_id = ?')
+        .get(actionId) as unknown as ApprovalReviewRow | undefined
+      if (existing) {
+        if (
+          !safeDigestEqual(suppliedClaimHash, existing.claim_token_hash) ||
+          createHash('sha256')
+            .update(stableJson(reviewDraftFromRow(existing)))
+            .digest('hex') !== fingerprint
+        ) {
+          throw new Error(
+            'Action review already exists with a different payload',
+          )
+        }
+        this.#database.exec('COMMIT')
+        return toApprovalReview(existing)
+      }
+      if (draft.decision === 'allow') {
+        if (actionRow.status !== 'awaiting_approval') {
+          throw new Error('Only a pending Action can be auto-allowed')
+        }
+        this.#claimForCapability(actionRow.run_id, claimToken)
+        const approval = this.#database
+          .prepare('SELECT id FROM approvals WHERE action_id = ?')
+          .get(actionId) as { id: string } | undefined
+        if (!approval) throw new Error('Approval record is missing')
+        const authorizedAt = this.#clock.now().toISOString()
+        this.#database
+          .prepare(
+            `UPDATE actions SET status = 'authorized', resume_run_id = ?,
+             updated_at = ? WHERE id = ?`,
+          )
+          .run(actionRow.run_id, authorizedAt, actionId)
+        this.#database
+          .prepare(
+            `UPDATE approvals SET status = 'approved', resolved_at = ?
+             WHERE id = ?`,
+          )
+          .run(authorizedAt, approval.id)
+      }
+      const now = this.#clock.now().toISOString()
+      const reviewId = randomUUID()
+      this.#database
+        .prepare(
+          `INSERT INTO approval_reviews
+            (id, action_id, task_id, run_id, decision, risk, reason,
+             mandate_chars, generation, claim_token_hash, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          reviewId,
+          actionId,
+          actionRow.task_id,
+          actionRow.run_id,
+          draft.decision,
+          draft.risk ?? null,
+          draft.reason ?? null,
+          draft.mandateChars ?? null,
+          draft.generation ?? null,
+          suppliedClaimHash,
+          now,
+        )
+      const task = this.#taskById(actionRow.task_id)
+      this.enqueueOutbox({
+        userId: task.userId,
+        taskId: task.id,
+        channel: 'timeline',
+        dedupeKey: `approval-review:${reviewId}`,
+        payload: {
+          type: 'task.approval_reviewed',
+          taskId: task.id,
+          actionId,
+          decision: draft.decision,
+          ...(draft.risk === undefined ? {} : { risk: draft.risk }),
+          text:
+            draft.decision === 'allow'
+              ? '自动审阅已按你的原话授权放行一个待审批操作。'
+              : draft.decision === 'deny'
+                ? '自动审阅未放行一个操作，仍需你亲自决定。'
+                : '自动审阅未能给出结论，操作仍需你亲自决定。',
+        },
+      })
+      const row = this.#database
+        .prepare('SELECT * FROM approval_reviews WHERE id = ?')
+        .get(reviewId) as unknown as ApprovalReviewRow
+      this.#database.exec('COMMIT')
+      return toApprovalReview(row)
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
   }
 
   reconcileAction(
@@ -9352,9 +9590,15 @@ export class PegasStore {
     const reconciliation = this.#database
       .prepare('SELECT * FROM action_reconciliations WHERE action_id = ?')
       .get(row.id) as unknown as ActionReconciliationRow | undefined
-    return reconciliation
+    const withReconciliation = reconciliation
       ? { ...action, reconciliation: toActionReconciliation(reconciliation) }
       : action
+    const review = this.#database
+      .prepare('SELECT * FROM approval_reviews WHERE action_id = ?')
+      .get(row.id) as unknown as ApprovalReviewRow | undefined
+    return review
+      ? { ...withReconciliation, review: toApprovalReview(review) }
+      : withReconciliation
   }
 
   pageApprovals(
@@ -13703,6 +13947,7 @@ function toRuntimeSettings(row: RuntimeSettingsRow): RuntimeSettings {
     permissionTier: isPermissionTier(row.permission_tier)
       ? row.permission_tier
       : 'standard',
+    autoReviewEnabled: row.auto_review_enabled === 1,
     updatedAt: row.updated_at,
   }
 }
@@ -14043,6 +14288,31 @@ function toApprovalRule(row: ApprovalRuleRow): ApprovalRule {
     createdAt: row.created_at,
     ...(row.revoked_at ? { revokedAt: row.revoked_at } : {}),
     ...(row.revoked_by ? { revokedBy: row.revoked_by } : {}),
+  }
+}
+
+function toApprovalReview(row: ApprovalReviewRow): ApprovalReview {
+  return {
+    id: row.id,
+    actionId: row.action_id,
+    taskId: row.task_id,
+    runId: row.run_id,
+    decision: row.decision,
+    ...(row.risk ? { risk: row.risk } : {}),
+    ...(row.reason ? { reason: row.reason } : {}),
+    ...(row.mandate_chars === null ? {} : { mandateChars: row.mandate_chars }),
+    ...(row.generation ? { generation: row.generation } : {}),
+    createdAt: row.created_at,
+  }
+}
+
+function reviewDraftFromRow(row: ApprovalReviewRow): ApprovalReviewDraft {
+  return {
+    decision: row.decision,
+    ...(row.risk ? { risk: row.risk } : {}),
+    ...(row.reason ? { reason: row.reason } : {}),
+    ...(row.mandate_chars === null ? {} : { mandateChars: row.mandate_chars }),
+    ...(row.generation ? { generation: row.generation } : {}),
   }
 }
 

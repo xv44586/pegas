@@ -22,6 +22,7 @@ import {
   type ApprovalStatus,
 } from '../approval/approval.js'
 import { parseApprovalRuleRevocation } from '../approval/approval-rule.js'
+import { parseApprovalReviewDraft } from '../approval/approval-review.js'
 import type {
   NewInboxEvent,
   OutboxResolutionDraft,
@@ -1007,6 +1008,28 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
       const runAutomationMatch = /^\/v1\/runs\/([^/]+)\/automations$/.exec(
         taskResourceUrl.pathname,
       )
+      const actionReviewMatch = /^\/v1\/actions\/([^/]+)\/review$/.exec(
+        taskResourceUrl.pathname,
+      )
+      if (actionReviewMatch && request.method === 'POST') {
+        const claimToken = runClaimToken(request)
+        if (!claimToken)
+          return sendJson(response, 401, { error: 'unauthorized' })
+        const actionId = decodeURIComponent(actionReviewMatch[1] ?? '')
+        const draft = parseApprovalReviewDraft(await readJson(request))
+        try {
+          const review = options.store.recordApprovalReview(
+            actionId,
+            claimToken,
+            draft,
+          )
+          return sendJson(response, 201, { review })
+        } catch (error) {
+          if (error instanceof RunClaimError)
+            return sendJson(response, 403, { error: 'run_claim_invalid' })
+          throw error
+        }
+      }
       const runPermissionsMatch = /^\/v1\/runs\/([^/]+)\/permissions$/.exec(
         taskResourceUrl.pathname,
       )
@@ -2802,7 +2825,7 @@ function isRunCapabilityWrite(request: IncomingMessage): boolean {
     /^\/v1\/runs\/[^/]+\/automations\/[^/]+\/(pause|resume|cancel)$/.test(
       pathname,
     ) ||
-    /^\/v1\/actions\/[^/]+\/outcomes$/.test(pathname)
+    /^\/v1\/actions\/[^/]+\/(outcomes|review)$/.test(pathname)
   )
 }
 

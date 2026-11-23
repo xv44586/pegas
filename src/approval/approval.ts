@@ -80,6 +80,7 @@ export interface DurableAction {
   recoveryPoint: Record<string, unknown>
   result?: Record<string, unknown>
   reconciliation?: ActionReconciliation
+  review?: import('./approval-review.js').ApprovalReview
   createdAt: string
   updatedAt: string
 }

@@ -1,6 +1,6 @@
 # 权限档位与审批 Policy Gate（APPROVAL-001 第二阶段）
 
-> 状态：P1 Gate 覆盖面、P2 权限档位对象、P3 规则批准、P4 审批卡升级已实现（见下方实现记录）；P5 自动审阅仍为 Intake
+> 状态：P1 Gate 覆盖面、P2 权限档位对象、P3 规则批准、P4 审批卡升级、P5 自动审阅已实现（见下方实现记录）
 > 更新日期：2026-11-23
 > 基线：`origin/main` `74c2f8c`（Intake 初稿基线 `4baab43`）
 > 外部调研：`research/approval-permissions-codex-cindy/NOTES.md`（本地，不入库；Codex CLI/webview、Cindy Apache-2.0 docs、DSH MIT 源码）
@@ -57,7 +57,7 @@
 - 决定选项扩展：`approve_once`（现有语义）/ `approve_rule`（本事情内同类：工具 + 参数指纹或命令前缀，持久规则带 scope、创建决定引用、撤销入口）/ `reject` / `revise`。规则命中仍走 Gate 记录，critical 与 control-plane-mutation 永不接受规则豁免。
 - 授权来源：自动审阅与规则核对只认认证人类输入原话（Task Mandate/Goal/历史决策）；automation/协作机器输入不构成新授权（复用既有 provenance 边界）。
 
-### 自动审阅（第二阶段，独立评审后实施）
+### 自动审阅（第二阶段，已实现，见 P5 实现记录）
 
 - 在 Gate 与用户之间插入可选审阅阶段：候选优先评估 DSH `experimental-auto-review`（MIT、同进程、ask 政策下拒绝转人工）经 patch 组合；Pegas 侧负责把「用户原话授权投影」与审阅记录落库。
 - 审阅超时/失败/超预算一律降级 ask；不静默放行、不静默拦截、不为争取放行换模型。
@@ -79,7 +79,7 @@
 - 不做 execpolicy 完整规则语言、managed network proxy、组织级 requirements/多租户策略。
 - 不做 IM 渠道审批卡（渠道接入时复用共享决定语义）。
 - 不改 Router 职责（仍只归属 Task）；不让 Web 成为档位/规则事实来源。
-- 不在本 Feature 内实现模型自动审阅（第二阶段独立 Intake，先确定性 Gate 闭环）。
+- P1 提交内不实现模型自动审阅（第二阶段独立 Intake，先确定性 Gate 闭环；P5 已于同日后续提交实现）。
 - 不迁移存量 Run 快照（不可变契约）；旧 Run 按旧语义执行至结束。
 
 ## 数据与权限边界
@@ -102,7 +102,7 @@
 2. **P2 档位对象**：PermissionProfile 持久化 + 现读 API + 切档命令 + Run 快照下界 + Web 档位选择器。
 3. **P3 规则批准**：approve_rule + 规则持久化/撤销 + 指纹命中。
 4. **P4 审批卡升级**：结构化渲染 + reason + 移动端 + 通知深链（DESIGN 合同同步）。
-5. **P5 自动审阅**：独立 Intake（DSH auto-review 组合评估 + 授权投影 + 审阅记录）。
+5. **P5 自动审阅**：独立 Intake（DSH auto-review 组合评估 + 授权投影 + 审阅记录）。已实现，见「P5 实现记录」。
 
 ## P1 实现记录（2026-11-23）
 
@@ -154,6 +154,19 @@
 - **证据**：`test/external-delivery-projection.test.ts` +2（approval.required 带 messageId → deepLink 且去 prompt；无 messageId 原样透传）+ Web `App.test.tsx` +2（结构化卡渲染与来源事情入口跳转；bash 命令等宽块与 critical 文案），均先红后绿；`pnpm check` 115 文件 / 1223 测试全绿（statement 85.66%、branch 78.51%、function 89.92%、line 88.79%），`pnpm smoke`、`pnpm smoke:crash` 通过。`pnpm review:ui --force` 新增 approval-write / approval-command 桌面与 390px 截图（操作预览等待 + 提交决定 scrollIntoView + 390px 无横向溢出断言），截图在 `output/feature-review/media/{desktop,mobile}-approval-{write,command}.png`。验收条件 5 已满足（结构化渲染 + 移动端 390px 完成决定 + 多端唯一 decision 约束不回归）。
 - **剩余风险**：命令预览展示原始命令串，不做语义解析（超长命令在卡片内横向滚动）；深链依赖 outbox 消息仍在快照内，消息被移除后回退到收件箱定位，无独立审批路由。
 - **回滚**：revert 本提交恢复 prompt-only 审批卡与原通知 payload；无迁移、无数据删除。
+
+## P5 实现记录（2026-11-23）
+
+- **实现**：自动审阅在桥内自实现（`src/executor/dsh-approval-bridge.mjs`，inject 增 `llm`）：ask 且 high 的调用在开关开启、无档位错配且存在认证人类原话时，先经 `ctx.llm.stream`（provider/model 取自 `exec.agent.session.requestHeader()`，temperature 0、maxTokens 512、purpose `pegas-auto-review`、20s AbortSignal 超时）按自写 `REVIEW_POLICY` 审阅；输出经严格 JSON 解析（allow 只接受 `{risk:low|medium,decision:"allow"}` 两键；deny 接受 medium|high 两键或加 reason 三键；其余一律 failed），流读取容忍零或多个 reasoning 块 + 恰好一个 text 块 + 终态 stop，其他形状 fail closed。**allow**：`createReviewedAction` 创建 Action/Approval（request 带 `autoReview:true`+review）但**不 park Run、不发 approval.required**，随后 `POST /v1/actions/:id/review`（claim 鉴权）同事务把 Action 置 authorized（resume_run_id=本 run）、Approval 置 approved 并发 `task.approval_reviewed` 时间线事件，工具就地执行、post-execute 记 outcome；登记失败 fail-closed deny 不执行。**deny/failed**：降级 ask（reason 拼「自动审阅未放行/未能给出结论」），停放时把审阅结论一并落库，审批卡显示「自动审阅未放行：{reason}」。授权投影：`runPermissionProjection` 返回 `autoReviewEnabled` + `mandate`（task_events JOIN inbox_events 只取 `authenticated_actor='human'` 的 user.message 原话，30000 字符预算**从最旧整条丢弃**并标记 omitted），并入 generation 指纹；关闭时投影为空。审阅记录：migration v42 `runtime_settings.auto_review_enabled`（默认 0）+ append-only `approval_reviews`（action_id UNIQUE，触发器禁改禁删，claim hash 幂等重放、payload 冲突拒绝）；`recordApprovalReview` 以 Action 的 request_claim_hash 验 claim（park 后 run claim 已清，不能用 run 验证）。设置页隐私区「自动审阅」开关（默认关，说明失败降级人工）；Executor 把 `auto_review` 事件转 Activity 白话；回滚 Guard：开关开启时拒绝回滚到 <v42。
+- **与 Intake 的差异（如实记录）**：
+  - 未组合复用 DSH `experimental-auto-review` 插件：该插件绑定 AUTO_PRESET（danger-full-access）且授权来源是其 Session 内 creation prompts，与 Pegas「服务端认证人类原话投影」不一致；Pegas 在桥内自实现审阅阶段（REVIEW_POLICY 自写、协议同构：low allow / medium 需原话明确授权 / high 一律 deny），不整档切换沙箱。
+  - 授权投影预算 30000 字符从最旧整条丢弃（不是截断半条），omitted 作为 fact 告知审阅模型；机器输入（automation/协作）永不构成授权（对抗回归覆盖）。
+  - allow 就地授权不 park Run（同事务 authorized+approved+时间线事件），与「批准→successor」链路并存；审阅 allow 无逐次人工确认，审计依赖 append-only 审阅记录 + Action outcome。
+  - critical/control-plane-mutation/unknown 不进入审阅；审阅超时（20s）、流协议异常、JSON 形状不符一律 failed→ask，不静默放行、不换模型重试。
+  - 真实探针联调发现两处桥缺陷并修复：`llm.stream` 必须以 `llm.stream(...)` 方法调用（cordis 服务代理依赖 this 绑定，解构后调用抛 TypeError）；GenerateOptions 必须带 provider/model 路由（从 session requestHeader 现取，取不到时不审阅直接降级 ask）。
+- **证据**：`test/auto-review.test.ts` 9 项（设置默认/parse、投影只认 human+预算丢最旧+generation 指纹、机器 only 空原话、审阅记录幂等/冲突/claim 校验、回滚 Guard、HTTP review+projection、HTTP settings）+ `test/auto-review-bridge.test.ts` 7 项（allow 放行+路由断言+记录+outcome succeeded；机器输入不审阅直接 ask【对抗回归】；deny/malformed/prose 降级 ask+记录；开关关/critical 不审阅；无完整路由不审阅；reasoning 块容忍；终态 error finish 降级）+ `test/dsh-cli-executor.test.ts` +1（auto_review Activity）+ Web `App.test.tsx` +2（设置开关、审批卡审阅结论），先红后绿；`test/policy-gate-integration.test.ts` 新增真实 DSH 探针（magpie gateway + qwen4-max：human 原话明确授权写区外文件→审阅 allow→文件落盘→Action succeeded+review allow，不停放）。`pnpm check` 117 文件 / 1243 测试全绿（statement 85.66%、branch 78.58%、function 89.96%、line 88.78%），`pnpm smoke`、`pnpm smoke:crash` 通过。验收条件 6（机器输入不扩大授权）与 8 已满足。
+- **剩余风险**：每个符合条件的 ask 调用一次审阅模型调用（成本与时延，20s 超时降级）；审阅质量依赖模型对 REVIEW_POLICY 与严格 JSON 协议的遵守（形状不符 fail closed，但语义误判 allow 无法静态兜底——medium 授权判断本质是模型判断）；allow 无逐次人工确认，事后审计依赖审阅记录与 outcome；30000 字符预算丢弃最旧原话可能丢掉早期授权语境（omitted 已告知，保守方向是降级 ask）。
+- **回滚**：revert 本提交恢复「ask 一律人工审批」行为；v42 additive（一列+新表），旧代码忽略；Guard 在自动审阅开关开启时拒绝回滚到 <v42（先关开关再回滚），审阅记录保留不删除。
 
 ## UI 设计合同（P4 输入）
 

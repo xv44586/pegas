@@ -966,6 +966,9 @@ export class PegasApi {
         ...(settings.permissionTier === undefined
           ? {}
           : { permissionTier: settings.permissionTier }),
+        ...(settings.autoReviewEnabled === undefined
+          ? {}
+          : { autoReviewEnabled: settings.autoReviewEnabled }),
         ...(settings.executionPools === undefined
           ? {}
           : { executionPools: settings.executionPools }),
