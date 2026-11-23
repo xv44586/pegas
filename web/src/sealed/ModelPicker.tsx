@@ -201,7 +201,7 @@ export function ModelPicker({
         aria-controls={pickerId}
         aria-expanded={open}
         aria-haspopup="dialog"
-        aria-label={`${selection?.label ?? placeholder}${selection?.detail ? ` ${selection.detail}` : ''}，${ariaLabel}`}
+        aria-label={`${selection?.label ?? placeholder}${selection?.detail ?? ''}，${ariaLabel}`}
         className={
           variant === 'composer'
             ? 'composer-model-button'
