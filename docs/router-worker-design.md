@@ -99,6 +99,8 @@ fast/balanced/deep 三池全部用户可配可缺省，初始映射不硬编码�
 
 **验收**："今天星期几"→ reply → Outbox 回复，无重量级 DSH session（fixture 断言 executor 类型）；双向并发隔离；chat 中"帮我改 X 代码"→ suggest_task → 正常 create_task 全门禁；Worker 崩溃后 conversation session 可 resume（EXEC-003 崩溃注入手法）；chat 与 Task Executor 共享同一 prompt/记忆来源；决策 2 的零确认 fixture 断言。
 
+8. **say 流式与空闲回收（2026-11-23 收尾落地）**：conversation Run 的正文经 `streamSayFromRun` 以单条 coalesce `agent.message`（dedupe `run-say:<runId>`）流式投影，草稿带 `streaming:true`、结算原位定格；conversation `run.completed` 无正文、投影 silent。升级标记从流式路径截断（含尾部部分前缀保守持有）。`DshCliExecutor` 收到 completed final 后主动 SIGTERM→SIGKILL 回收子进程（session 权威在 store，`conversation_sessions.executor_ref` 持久），下条消息在新进程 resume 同一 session——「常驻=会话长驻，进程按 Run 起停」由 `test/chat-lane-stream.test.ts` 的 pid 存活断言 + resume 断言固化。Web 设置页「事情归类 → 即时应答」开关读写 `chatLaneEnabled`（保存省略保留语义不变）。
+
 **非目标**：Router 亲自回答（禁止）；chat 内执行副作用；群聊语义。**权限边界**：conversation Task 的 Mandate 为隐式最小只读授权，升级必须重新接单。**回滚**：settings 新增 `chatLaneEnabled`（默认关），关闭后 reply 兜底为 create_task，行为回到现状；轻量 Task 数据保留可读。
 
 ### P2 路由降本（并入 ROUTE-003/004 后续缺口）
