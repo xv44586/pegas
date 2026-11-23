@@ -292,3 +292,10 @@
 - 「已完成」不再对挂着 active automation 的事情撒谎：服务端 `run.completed` payload 携带 `automationActive` 事实，完成卡标题渲染「已安排」+ CalendarClock，事情抽屉 hero 显示「已安排，自动化仍会按周期推进」。旧消息无字段时诚实回退为已完成。
 - 卡片排版对齐既有契约：`.fact-card` 行高 1.55（原错误继承聊天正文 1.78）；`.message-markdown strong/b` 字重 500（原浏览器默认 700）。
 - 门禁：`test/sealed-ui-work-entry.test.ts` 6 测试固化 CSS/DOM 合同；`ChatExperience.test.tsx` 已安排/普通完成两场景 + 入口开抽屉回归；`test/run-automations.test.ts` 服务端事实两场景；`web/src/sealed/types.test.ts` 事实 helper 两场景。
+
+## 22. 标准页内容列宽上限（2026-11-23，DESIGN-006 宽屏缺陷修复）
+
+- 缺陷：`.standard-page > :not(.page-header)` 只有左右 42px margin、没有 max-width，宽屏（用户实测约 2560px 视口）下自动化列表与触发记录面板被拉到 2000px+，摘要单行超长、「查看事情」被推出可视区，与对话页 980px / composer 1040px 的居中内容列不一致。
+- 修复：标准页（所有事情/待你处理/自动化/记忆）内容统一 `max-width: 1040px` 居中（`margin-inline: auto; width: calc(100% - 84px)`），与 composer/tray 同一列宽口径；`.page-header` 同步 `max-width: 1124px`（1040 + 2×42 padding）居中，保证标题与内容左缘对齐。≤820px 保持 20px gutter（`width: calc(100% - 40px)`，header max-width 1080px）。≤1124px 视口行为与修复前完全一致。
+- 回归：`test/sealed-ui-page-width.test.ts` 3 测试先红后绿（内容列上限/居中/移动 gutter）；2560px 实拍对比——修复前运行实例触发记录面板 2170px 宽，修复后 966px（1040 列内），无横向溢出（实拍存 `research/design-006-lifecycle-history/live/wide-2560-*.png`，本地）。
+- 门禁：`pnpm check` 109 文件 / 1150 测试全绿；`pnpm smoke`、`pnpm review:ui --force`（几何断言含 1440px 桌面与 390px 移动端）、`pnpm a11y:review` 0 违例。
