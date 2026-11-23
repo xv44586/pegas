@@ -113,7 +113,9 @@ export function deriveConversationProjection(
   } else if (type && WORK_TYPES.has(type)) {
     lane = 'work'
     weight =
-      type === 'run.completed' && context.runOriginSource === 'automation'
+      type === 'run.completed' &&
+      (context.runOriginSource === 'automation' ||
+        context.task?.kind === 'conversation')
         ? 'silent'
         : 'card'
   } else if (type && SAY_TYPES.has(type)) {

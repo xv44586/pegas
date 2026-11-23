@@ -277,8 +277,13 @@ describe('EXEC-005 conversation lane', () => {
     const task = store.findTask(first.task.id, 'owner')
     expect(task?.status).toBe('completed')
     const outbox = store.listOutbox('owner')
-    expect(outbox).toHaveLength(1)
-    expect(outbox[0]?.payload).toMatchObject({ type: 'run.completed' })
+    expect(outbox).toHaveLength(2)
+    expect(outbox[0]?.payload).toMatchObject({
+      type: 'agent.message',
+    })
+    expect((outbox[0]?.payload as { text: string }).text).toContain('今天星期几')
+    expect(outbox[1]?.payload).toMatchObject({ type: 'run.completed' })
+    expect(outbox[1]?.projection).toMatchObject({ weight: 'silent' })
     const sessionRef = store.conversationSessionRef('owner')
     expect(sessionRef).toBeTruthy()
 
@@ -434,7 +439,7 @@ describe('EXEC-005 conversation lane', () => {
     expect(chatTask?.status).toBe('completed')
     const outbox = store.listOutbox('owner')
     expect(outbox[0]?.payload).toMatchObject({
-      type: 'run.completed',
+      type: 'agent.message',
       text: '这需要修改代码，我把它作为正式任务处理。',
     })
 
@@ -581,7 +586,7 @@ describe('EXEC-005 conversation lane', () => {
     expect(recovered.findTask(crashed.task.id, 'owner')?.status).toBe(
       'completed',
     )
-    expect(recovered.listOutbox('owner')).toHaveLength(2)
+    expect(recovered.listOutbox('owner')).toHaveLength(4)
     recovered.close()
     rmSync(directory, { recursive: true, force: true })
   })
