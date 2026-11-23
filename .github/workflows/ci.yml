@@ -45,6 +45,19 @@ jobs:
       - name: Capture temporary UI review media
         if: github.event_name == 'pull_request' && steps.changed.outputs.ui == 'true'
         run: pnpm review:ui -- --changed-from "origin/${{ github.base_ref }}"
+      - name: Detect external-service changes
+        id: external
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          if git diff --quiet "origin/${{ github.base_ref }}...HEAD" -- src/model src/speech src/notification services; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Collect redacted real-service canary
+        if: github.event_name == 'pull_request' && steps.external.outputs.changed == 'true'
+        run: pnpm review:canary -- --changed-from "origin/${{ github.base_ref }}"
       - name: Generate temporary review evidence
         if: github.event_name == 'pull_request'
         env:

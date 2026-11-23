@@ -31,6 +31,7 @@
     "lint": "eslint src test web scripts && pnpm lint:css-cascade",
     "lint:css-cascade": "tsx scripts/lint-css-cascade.ts",
     "review:evidence": "tsx scripts/generate-review-evidence.ts",
+    "review:canary": "node scripts/capture-dependency-canary.mjs",
     "review:ui": "node scripts/capture-ui-review.mjs",
     "smoke": "node scripts/smoke.mjs",
     "smoke:crash": "pnpm build && node scripts/smoke-crash-recovery.mjs",
