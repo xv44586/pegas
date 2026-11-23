@@ -138,8 +138,8 @@ function installChatFetch(
     if (path.startsWith('/v1/usage?'))
       return Promise.resolve(
         Response.json({
-          usage: [],
-          totals: { inputTokens: 0, outputTokens: 0 },
+          summary: { inputTokens: 0, outputTokens: 0 },
+          records: [],
         }),
       )
     if (path === '/v1/settings')
@@ -898,7 +898,7 @@ describe('DESIGN-003 chat page', () => {
     )
   })
 
-  it('DESIGN-005: keeps the status slot out of the bubble and links a single derived task', async () => {
+  it('DESIGN-005/008: keeps the status slot out of the bubble and opens the derived task drawer', async () => {
     const originEvent: InboxEvent = {
       ...baseEvent,
       id: 'event-origin',
@@ -916,29 +916,38 @@ describe('DESIGN-003 chat page', () => {
         anchor: { taskId: channel.id, eventId: originEvent.id },
       },
     }
-    installChatFetch({
-      ...baseSnapshot,
-      events: [originEvent],
-      messages: [derivedFact],
-    })
+    installChatFetch(
+      {
+        ...baseSnapshot,
+        events: [originEvent],
+        messages: [derivedFact],
+      },
+      path =>
+        path.startsWith(`/v1/channels/${channel.id}/timeline?`)
+          ? Response.json({
+              channel,
+              events: [originEvent],
+              messages: [derivedFact],
+              runs: baseSnapshot.runs,
+            })
+          : undefined,
+    )
     render(<App />)
-    const trigger = await screen.findByRole('button', { name: '查看进展' })
+    const trigger = await screen.findByRole('button', {
+      name: '查看工作详情',
+    })
     expect(trigger.closest('.message-content')).toBeNull()
     expect(trigger.closest('.message-row.is-user')).toBeTruthy()
-    expect(trigger.getAttribute('title')).toBe('查看进展')
+    expect(trigger.getAttribute('title')).toBe('查看工作详情')
     expect(
       document.querySelector('.message-row.is-user .message-content button'),
     ).toBeNull()
     expect(screen.queryByText('已进入事情')).toBeNull()
     fireEvent.click(trigger)
-    expect(
-      document.querySelector(
-        '[data-message-id="fact-done"].is-anchor-highlight',
-      ),
-    ).toBeTruthy()
+    expect(await screen.findByRole('dialog', { name: '工作详情' })).toBeTruthy()
   })
 
-  it('DESIGN-005: multiple derived tasks open a menu with per-task state and jump target', async () => {
+  it('DESIGN-005/008: multiple derived tasks open a menu with per-task state and drawer target', async () => {
     const secondChannel: WorkChannel = {
       ...channel,
       id: 'task-2',
@@ -981,19 +990,30 @@ describe('DESIGN-003 chat page', () => {
         anchor: { taskId: secondChannel.id, eventId: originEvent.id },
       },
     }
-    installChatFetch({
-      ...baseSnapshot,
-      channels: [
-        { ...channel, status: 'completed', canStop: false },
-        secondChannel,
-      ],
-      runs: [{ ...runningRun, status: 'completed', output: 'done' }],
-      events: [originEvent],
-      messages: [factOne, factTwo],
-    })
+    installChatFetch(
+      {
+        ...baseSnapshot,
+        channels: [
+          { ...channel, status: 'completed', canStop: false },
+          secondChannel,
+        ],
+        runs: [{ ...runningRun, status: 'completed', output: 'done' }],
+        events: [originEvent],
+        messages: [factOne, factTwo],
+      },
+      path =>
+        path.startsWith(`/v1/channels/${secondChannel.id}/timeline?`)
+          ? Response.json({
+              channel: secondChannel,
+              events: [],
+              messages: [factTwo],
+              runs: [],
+            })
+          : undefined,
+    )
     render(<App />)
     const trigger = await screen.findByRole('button', {
-      name: '查看进展：2 个事情',
+      name: '查看工作详情：2 个事情',
     })
     expect(trigger.textContent).toContain('2')
     fireEvent.click(trigger)
@@ -1008,11 +1028,7 @@ describe('DESIGN-003 chat page', () => {
     const secondItem = items[1]
     if (!secondItem) throw new Error('expected two derived task entries')
     fireEvent.click(secondItem)
-    expect(
-      document.querySelector(
-        '[data-message-id="fact-two"].is-anchor-highlight',
-      ),
-    ).toBeTruthy()
+    expect(await screen.findByRole('dialog', { name: '工作详情' })).toBeTruthy()
     expect(
       screen.queryByRole('menu', { name: '这条消息派生的事情' }),
     ).toBeNull()
@@ -1035,7 +1051,153 @@ describe('DESIGN-003 chat page', () => {
     expect(icon.closest('.message-meta')).toBeTruthy()
     const retry = screen.getByRole('button', { name: /重试/ })
     expect(retry.closest('.message-meta')).toBeTruthy()
-    expect(screen.queryByRole('button', { name: /查看进展/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /查看工作详情/ })).toBeNull()
+  })
+
+  it('DESIGN-008: scheduled completion reads 已安排 and every work entry is a meta-row icon opening the drawer', async () => {
+    const originEvent: InboxEvent = {
+      ...baseEvent,
+      id: 'event-origin',
+      status: 'processed',
+      payload: { text: '帮我建一个每分钟数数 1 到 10 的周期自动化' },
+    }
+    const scheduledFact: OutboxMessage = {
+      ...baseMessage,
+      id: 'fact-scheduled',
+      payload: {
+        type: 'run.completed',
+        taskId: channel.id,
+        automationActive: true,
+        text: '周期自动化已创建并生效：每分钟报数 1→10。',
+      },
+      createdAt: '2026-11-22T08:05:00.000Z',
+      projection: {
+        lane: 'work',
+        weight: 'card',
+        anchor: { taskId: channel.id, eventId: originEvent.id },
+      },
+    }
+    const sayTick: OutboxMessage = {
+      ...baseMessage,
+      id: 'say-tick-1',
+      payload: {
+        type: 'agent.message',
+        taskId: channel.id,
+        text: '1',
+      },
+      createdAt: '2026-11-22T08:06:00.000Z',
+      projection: {
+        lane: 'say',
+        weight: 'inline',
+        anchor: { taskId: channel.id, eventId: originEvent.id },
+      },
+    }
+    installChatFetch(
+      {
+        ...baseSnapshot,
+        runs: [
+          {
+            ...runningRun,
+            status: 'completed',
+            output: '周期自动化已创建并生效：每分钟报数 1→10。',
+          },
+        ],
+        events: [originEvent],
+        messages: [scheduledFact, sayTick],
+      },
+      path =>
+        path.startsWith(`/v1/channels/${channel.id}/timeline?`)
+          ? Response.json({
+              channel,
+              events: [originEvent],
+              messages: [scheduledFact, sayTick],
+              runs: [
+                {
+                  ...runningRun,
+                  status: 'completed',
+                  output: '周期自动化已创建并生效：每分钟报数 1→10。',
+                },
+              ],
+            })
+          : undefined,
+    )
+    render(<App />)
+    const card = await screen.findByLabelText(/已安排：/)
+    expect(card.textContent).toContain('已安排')
+    expect(card.textContent).not.toContain('已完成')
+    expect(
+      within(card).getByRole('button', { name: '回到发起消息' }),
+    ).toBeTruthy()
+    expect(
+      within(card).queryByRole('button', { name: /查看工作详情/ }),
+    ).toBeNull()
+    const cardRow = card.closest('.message-row')
+    const cardEntry = cardRow?.querySelector(
+      '.message-meta .message-work-entry',
+    )
+    expect(cardEntry).toBeTruthy()
+    expect(cardEntry?.getAttribute('title')).toBe('查看工作详情')
+    const sayRow = document.querySelector('[data-message-id="say-tick-1"]')
+    expect(sayRow?.querySelector('.message-content .inline-link')).toBeNull()
+    const sayEntry = sayRow?.querySelector('.message-meta .message-work-entry')
+    expect(sayEntry).toBeTruthy()
+    expect(sayRow?.classList.contains('has-work-entry')).toBe(true)
+    if (!(sayEntry instanceof HTMLButtonElement))
+      throw new Error('expected the say work entry button')
+    fireEvent.click(sayEntry)
+    const drawer = await screen.findByRole('dialog', { name: '工作详情' })
+    expect(
+      within(drawer).getByText('已安排，自动化仍会按周期推进'),
+    ).toBeTruthy()
+    expect(within(drawer).queryByText('工作已完成')).toBeNull()
+  })
+
+  it('DESIGN-008: plain completion keeps 已完成 and the drawer hero stays completed', async () => {
+    const doneFact: OutboxMessage = {
+      ...baseMessage,
+      id: 'fact-plain-done',
+      payload: {
+        type: 'run.completed',
+        taskId: channel.id,
+        text: '报表已完成',
+      },
+      createdAt: '2026-11-22T08:05:00.000Z',
+      projection: {
+        lane: 'work',
+        weight: 'card',
+        anchor: { taskId: channel.id, eventId: 'event-1' },
+      },
+    }
+    installChatFetch(
+      {
+        ...baseSnapshot,
+        channels: [{ ...channel, status: 'completed', canStop: false }],
+        runs: [{ ...runningRun, status: 'completed', output: '报表已完成' }],
+        messages: [doneFact],
+      },
+      path =>
+        path.startsWith(`/v1/channels/${channel.id}/timeline?`)
+          ? Response.json({
+              channel: { ...channel, status: 'completed', canStop: false },
+              events: baseSnapshot.events,
+              messages: [doneFact],
+              runs: [
+                { ...runningRun, status: 'completed', output: '报表已完成' },
+              ],
+            })
+          : undefined,
+    )
+    render(<App />)
+    const card = await screen.findByLabelText(/已完成：/)
+    expect(card.textContent).not.toContain('已安排')
+    const entry = card
+      .closest('.message-row')
+      ?.querySelector('.message-meta .message-work-entry')
+    if (!(entry instanceof HTMLButtonElement))
+      throw new Error('expected the card work entry button')
+    fireEvent.click(entry)
+    const drawer = await screen.findByRole('dialog', { name: '工作详情' })
+    expect(within(drawer).getByText('工作已完成')).toBeTruthy()
   })
 
   it('copies the full message text including collapsed content', async () => {
