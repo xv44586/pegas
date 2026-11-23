@@ -434,7 +434,11 @@ a {
   align-items: flex-start;
   display: flex;
   justify-content: space-between;
+  margin-left: auto;
+  margin-right: auto;
+  max-width: 1124px;
   padding: 30px 42px 24px;
+  width: 100%;
 }
 .page-header h1 {
   font-size: var(--text-display);
@@ -699,8 +703,10 @@ a {
   padding: 12px 18px;
 }
 .standard-page > :not(.page-header) {
-  margin-left: 42px;
-  margin-right: 42px;
+  margin-left: auto;
+  margin-right: auto;
+  max-width: 1040px;
+  width: calc(100% - 84px);
 }
 .conversation-page {
   display: grid;
@@ -2443,8 +2449,10 @@ a {
   color: var(--ink);
 }
 .attention-list article.is-expanded {
+  background: transparent;
+}
+.attention-list article.is-expanded:hover {
   background: var(--surface);
-  border-radius: 12px;
 }
 .attention-group-timeline {
   border-top: 1px solid var(--line);
@@ -6098,6 +6106,7 @@ kbd {
     display: none;
   }
   .page-header {
+    max-width: 1080px;
     padding: 22px 20px 16px;
   }
   .page-header:has(.page-search) {
@@ -6122,8 +6131,7 @@ kbd {
     order: 3;
   }
   .standard-page > :not(.page-header) {
-    margin-left: 20px;
-    margin-right: 20px;
+    width: calc(100% - 40px);
   }
   .record-list article {
     grid-template-columns: 34px minmax(0, 1fr);
