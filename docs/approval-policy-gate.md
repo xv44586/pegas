@@ -1,6 +1,6 @@
 # 权限档位与审批 Policy Gate（APPROVAL-001 第二阶段）
 
-> 状态：P1 Gate 覆盖面、P2 权限档位对象、P3 规则批准已实现（见下方实现记录）；P4–P5 仍为 Intake
+> 状态：P1 Gate 覆盖面、P2 权限档位对象、P3 规则批准、P4 审批卡升级已实现（见下方实现记录）；P5 自动审阅仍为 Intake
 > 更新日期：2026-11-23
 > 基线：`origin/main` `74c2f8c`（Intake 初稿基线 `4baab43`）
 > 外部调研：`research/approval-permissions-codex-cindy/NOTES.md`（本地，不入库；Codex CLI/webview、Cindy Apache-2.0 docs、DSH MIT 源码）
@@ -144,9 +144,21 @@
 - **剩余风险**：规则命中不创建逐次 Action 审计（只有 Activity 记录 + 规则创建/撤销审计），逐调用独立审计表仍是登记缺口；规则目标集合精确匹配对「同目录新文件」不命中（保守方向，宁可多问）；真实 DSH approve_rule 全链路探针未跑（fake harness 覆盖）。
 - **回滚**：revert 提交恢复一次性 grant 行为；v41 additive（新表 + decisions CHECK 重建保数据），旧代码忽略新表；Guard 在存在 active 规则时拒回滚（先撤销全部规则再回滚）。
 
+## P4 实现记录（2026-11-23）
+
+- **实现**：审批卡结构化渲染（`web/src/sealed/DetailDrawer.tsx` ApprovalDetail）：来源事情入口（「来自事情：{标题}」，跳转事情抽屉）、操作预览（`ApprovalOperationPreview`：类别 + 风险白话、工具 + 生效档位、bash 命令等宽代码块、canonical 目标列表、档位错配提示）、「需要你决定：{reason}」行（`action.request.reason` 优先，回退 `prompt.impact`）。桥 CapturedCall / Action request 增 `command` 字段（`exec.arguments.command` 为字符串时捕获）。通知深链：`src/notification/dispatcher.ts` 对 `approval.required` external 投递注入 messageId，`src/notification/delivery-projection.ts` 投影为 `deepLink: /?view=outbox&outbox=<messageId>`（去 prompt，复用既有 Web `?outbox=` 恢复机制）。Web approval view 增 channel 投影（App `restoreAttentionDrawer` 从 snapshot.channels 查找），支撑来源事情跳转。
+- **与 Intake 的差异（如实记录）**：
+  - 网络 egress 的「host + 方法」未做专门解析：targets 以 code 原样展示（URL 文本已含 host/path，方法不单独成列），不做非确定性的结构猜测。
+  - 档位审计列表 UI（`worker_profile_changes` 的 Web 展示，P2 记录标注属 P4）未实现：owner 隔离读取端点已存在，UI 属后续增量。
+  - 通知深链复用既有 outbox 恢复参数而非新增路由；其余通知类型 payload 原样透传不变。
+- **证据**：`test/external-delivery-projection.test.ts` +2（approval.required 带 messageId → deepLink 且去 prompt；无 messageId 原样透传）+ Web `App.test.tsx` +2（结构化卡渲染与来源事情入口跳转；bash 命令等宽块与 critical 文案），均先红后绿；`pnpm check` 115 文件 / 1223 测试全绿（statement 85.66%、branch 78.51%、function 89.92%、line 88.79%），`pnpm smoke`、`pnpm smoke:crash` 通过。`pnpm review:ui --force` 新增 approval-write / approval-command 桌面与 390px 截图（操作预览等待 + 提交决定 scrollIntoView + 390px 无横向溢出断言），截图在 `output/feature-review/media/{desktop,mobile}-approval-{write,command}.png`。验收条件 5 已满足（结构化渲染 + 移动端 390px 完成决定 + 多端唯一 decision 约束不回归）。
+- **剩余风险**：命令预览展示原始命令串，不做语义解析（超长命令在卡片内横向滚动）；深链依赖 outbox 消息仍在快照内，消息被移除后回退到收件箱定位，无独立审批路由。
+- **回滚**：revert 本提交恢复 prompt-only 审批卡与原通知 payload；无迁移、无数据删除。
+
 ## UI 设计合同（P4 输入）
 
 - 审批卡：标题=动作白话摘要；副行=来源事情 + 触发消息锚点；主体=结构化操作预览（命令等宽块/路径列表/网络 host+方法）；「需要你决定」reason 行；选项=仅这一次 / 本事情内同类（说明指纹范围）/ 拒绝；备注可选；主按钮一个。
 - 档位选择器：事情详情「执行」区 + 设置页全局默认；三档 radio 卡（标准/严格/完全访问），完全访问需显式风险确认弹层；当前档位与来源（全局/事情）常显文字。
 - 规则管理：事情详情「已批准规则」列表（工具+范围摘要+创建时间+撤销）；空态说明规则来自批准时的选择。
 - 视觉遵循 DESIGN.md 封板合同：白底、400/500 字重、--text-* 阶梯、状态纯文字+图标辅助、一个区域一个主按钮；移动端 390px 全功能。
+- 落地情况：审批卡/档位选择器/规则管理已随 P2–P4 实现；差异（网络 host+方法未专门解析、档位审计列表 UI 未做）见各阶段实现记录。

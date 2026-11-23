@@ -902,6 +902,8 @@ try {
     'task-todo-search',
     'task-run-artifacts',
     'task-output-archive',
+    'approval-write',
+    'approval-command',
     'preview-file',
     'preview-image',
     'preview-video',
@@ -1032,6 +1034,19 @@ try {
       }
       await fixturePage.goto(`http://127.0.0.1:${String(port)}/`)
       await fixturePage.getByRole('button', { name: '关闭详情' }).waitFor()
+      if (fixture.startsWith('approval-')) {
+        await fixturePage.getByLabel('操作预览').waitFor()
+        await fixturePage
+          .getByRole('button', { name: '提交决定' })
+          .scrollIntoViewIfNeeded()
+        const overflow = await fixturePage.evaluate(
+          () =>
+            globalThis.document.documentElement.scrollWidth >
+            globalThis.document.documentElement.clientWidth,
+        )
+        if (overflow)
+          throw new Error(`${size}-${fixture}: horizontal overflow detected`)
+      }
       if (fixture.startsWith('task-activity')) {
         await fixturePage.getByText('工作流程记录', { exact: false }).click()
         if (fixture === 'task-activity-open') {

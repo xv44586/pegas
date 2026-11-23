@@ -1707,7 +1707,9 @@ describe('sealed Pegas UI', () => {
       }),
     )
     fireEvent.click(screen.getByRole('button', { name: /^查看内容：/ }))
-    expect(await screen.findByText(approval.prompt.impact)).toBeTruthy()
+    expect(
+      await screen.findByText(`需要你决定：${approval.prompt.impact}`),
+    ).toBeTruthy()
     expect(screen.getByRole('button', { name: '提交决定' })).toBeTruthy()
   })
 
@@ -3435,7 +3437,9 @@ describe('sealed Pegas UI', () => {
       />,
     )
 
-    expect(screen.getByText(approval.prompt.impact)).toBeTruthy()
+    expect(
+      screen.getByText(`需要你决定：${approval.prompt.impact}`),
+    ).toBeTruthy()
     expect(
       screen.getByRole<HTMLInputElement>('radio', { name: /暂不发布/ }).checked,
     ).toBe(true)
@@ -7368,6 +7372,129 @@ describe('sealed Pegas UI', () => {
         optionId: 'approve_rule',
       }),
     )
+  })
+
+  it('renders the structured approval card with operation preview, reason, tier and source task entry', async () => {
+    const sourceMessage = snapshot.messages[0]
+    if (!sourceMessage) throw new Error('Expected an outbox message fixture')
+    const pending = approvalFixture('approval-structured')
+    const structured: Approval = {
+      ...pending,
+      prompt: {
+        summary: '批准工具 write 写入工作区之外',
+        impact: '工具 write 将写入工作区之外（/tmp/shared/plan.md）。',
+        recommendedOptionId: 'approve',
+        options: [
+          { id: 'approve', label: '批准执行一次', kind: 'approve' },
+          { id: 'reject', label: '不执行', kind: 'reject' },
+        ],
+      },
+    }
+    const action: DurableAction = {
+      ...actionFixture(structured),
+      kind: 'dsh.tool.write',
+      request: {
+        tool: 'write',
+        callId: 'call-structured',
+        reason: '工具 write 将写入工作区之外（/tmp/shared/plan.md）。',
+        category: 'out-of-workspace-write',
+        targets: ['/tmp/shared/plan.md'],
+        argumentsHash: 'a'.repeat(64),
+        tier: 'standard',
+        tierGeneration: 'g'.repeat(32),
+        tierMismatch: false,
+      },
+    }
+    const approvalMessage = {
+      ...sourceMessage,
+      payload: { type: 'approval.required', approvalId: structured.id },
+    }
+    installSnapshotFetch({ ...snapshot, messages: [approvalMessage] }, path => {
+      if (path.startsWith(`/v1/approvals/${structured.id}?`))
+        return Response.json({ approval: structured })
+      if (path.startsWith(`/v1/actions/${structured.actionId}?`))
+        return Response.json({ action })
+      if (path.endsWith('/read'))
+        return Response.json({
+          message: {
+            ...approvalMessage,
+            readAt: '2026-11-23T14:00:00.000Z',
+          },
+        })
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /^查看内容：/ }))
+    expect(
+      await screen.findByText(
+        '需要你决定：工具 write 将写入工作区之外（/tmp/shared/plan.md）。',
+      ),
+    ).toBeTruthy()
+    const preview = screen.getByLabelText('操作预览')
+    expect(within(preview).getByText('write')).toBeTruthy()
+    expect(within(preview).getByText('/tmp/shared/plan.md')).toBeTruthy()
+    expect(screen.getByText('工作区外写入 · 高风险')).toBeTruthy()
+    expect(screen.getByText(/标准档位/)).toBeTruthy()
+    expect(screen.queryByText(/argumentsHash/)).toBeNull()
+    const sourceEntry = screen.getByRole('button', { name: /来自事情：/ })
+    fireEvent.click(sourceEntry)
+    expect(await screen.findByText('事情级执行设置')).toBeTruthy()
+  })
+
+  it('previews bash commands as monospace blocks and network targets as hosts', async () => {
+    const sourceMessage = snapshot.messages[0]
+    if (!sourceMessage) throw new Error('Expected an outbox message fixture')
+    const pending = approvalFixture('approval-command')
+    const action: DurableAction = {
+      ...actionFixture(pending),
+      kind: 'dsh.tool.bash',
+      risk: 'critical',
+      request: {
+        tool: 'bash',
+        callId: 'call-command',
+        reason: '命令包含不可逆删除。',
+        category: 'destructive-command',
+        targets: ['/srv/data'],
+        argumentsHash: 'b'.repeat(64),
+        command: 'rm -rf /srv/data',
+        tier: 'standard',
+      },
+    }
+    const approvalMessage = {
+      ...sourceMessage,
+      payload: { type: 'approval.required', approvalId: pending.id },
+    }
+    installSnapshotFetch({ ...snapshot, messages: [approvalMessage] }, path => {
+      if (path.startsWith(`/v1/approvals/${pending.id}?`))
+        return Response.json({ approval: pending })
+      if (path.startsWith(`/v1/actions/${pending.actionId}?`))
+        return Response.json({ action })
+      if (path.endsWith('/read'))
+        return Response.json({
+          message: {
+            ...approvalMessage,
+            readAt: '2026-11-23T14:00:00.000Z',
+          },
+        })
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /^查看内容：/ }))
+    const preview = await screen.findByLabelText('操作预览')
+    const commandBlock = within(preview).getByText('rm -rf /srv/data')
+    expect(commandBlock.tagName).toBe('CODE')
+    expect(screen.getByText('不可逆命令 · 严重风险')).toBeTruthy()
+    expect(screen.getByText('需要你决定：命令包含不可逆删除。')).toBeTruthy()
   })
 
   it('lists approved task rules and revokes one with immediate feedback', async () => {

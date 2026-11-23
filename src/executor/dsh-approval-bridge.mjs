@@ -6,7 +6,7 @@ import { canonicalRuleTarget, classifyToolCall } from './policy-gate.mjs'
 /** @typedef {{ actionId: string, tool: string, argumentsHash: string }} ToolGrant */
 /** @typedef {{ id: string, tool: string, category: string, targets: string[], fingerprint: string }} ApprovalRule */
 /** @typedef {{ tier: import('./policy-gate.d.ts').PolicyTier, generation: string, mismatch: boolean, rules: ApprovalRule[] }} TierState */
-/** @typedef {{ tool: string, argumentsHash: string, classification?: import('./policy-gate.d.ts').ToolCallClassification }} CapturedCall */
+/** @typedef {{ tool: string, argumentsHash: string, command?: string, classification?: import('./policy-gate.d.ts').ToolCallClassification }} CapturedCall */
 /** @typedef {{ callId?: string | number, name: string, arguments?: unknown, agent?: unknown }} ToolExecution */
 /** @typedef {{ callId?: string | number, toolName: string, reason?: string, signal?: { aborted?: boolean } }} ApprovalRequest */
 /** @typedef {{ kind: 'accept' | 'block' }} PostToolDecision */
@@ -75,6 +75,12 @@ export function apply(ctx, config = {}) {
         toolCalls.set(callKey, {
           tool: exec.name,
           argumentsHash: stableHash(exec.arguments),
+          ...(typeof exec.arguments === 'object' &&
+          exec.arguments !== null &&
+          'command' in exec.arguments &&
+          typeof exec.arguments.command === 'string'
+            ? { command: exec.arguments.command }
+            : {}),
           classification,
         })
         gateDecisions.set(callKey, classification)
@@ -571,6 +577,9 @@ async function createApproval(capability, input) {
       category: input.classification.category,
       targets: input.classification.targets,
       argumentsHash: input.captured?.argumentsHash ?? null,
+      ...(input.captured?.command === undefined
+        ? {}
+        : { command: input.captured.command }),
       ...(input.tierState
         ? {
             tier: input.tierState.tier,

@@ -1217,7 +1217,16 @@ export function App() {
         if (requestId !== attentionRequestRef.current) return false
         const action = await api.action(approval.actionId)
         if (requestId !== attentionRequestRef.current) return false
-        setDrawer({ kind: 'approval', approval, action, message })
+        const sourceChannel = data.snapshot.channels.find(
+          item => item.id === approval.taskId,
+        )
+        setDrawer({
+          kind: 'approval',
+          approval,
+          action,
+          message,
+          ...(sourceChannel ? { channel: sourceChannel } : {}),
+        })
         return true
       } catch (caught) {
         if (requestId !== attentionRequestRef.current) return false

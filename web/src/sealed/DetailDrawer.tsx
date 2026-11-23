@@ -219,7 +219,9 @@ export function DetailDrawer({
         {view.kind === 'approval' && (
           <ApprovalDetail
             key={`${view.approval.id}:${view.approval.decision?.id ?? view.approval.status}`}
+            channel={view.channel}
             onDecide={onDecideApproval}
+            onOpenTask={approvalTaskOpener(view.channel, onOpenView)}
             onReconcile={onReconcileAction}
             view={view}
           />
@@ -346,6 +348,8 @@ function ApprovalDetail({
   view,
   onDecide,
   onReconcile,
+  channel,
+  onOpenTask,
 }: {
   view: Extract<DrawerView, { kind: 'approval' }>
   onDecide?: (
@@ -358,6 +362,8 @@ function ApprovalDetail({
     resolution: 'succeeded' | 'failed',
     note: string,
   ) => Promise<void>
+  channel?: Extract<DrawerView, { kind: 'task' }>['channel']
+  onOpenTask?: () => void
 }) {
   const pending = view.approval.status === 'pending'
   const [selected, setSelected] = useState(
@@ -402,7 +408,23 @@ function ApprovalDetail({
           )}
           <strong>{view.approval.prompt.summary}</strong>
         </header>
-        <p>{view.approval.prompt.impact}</p>
+        {channel && (
+          <p className="approval-source">
+            {onOpenTask ? (
+              <button
+                className="approval-source-link"
+                onClick={onOpenTask}
+                type="button"
+              >
+                来自事情：{channel.title}
+              </button>
+            ) : (
+              <span>来自事情：{channel.title}</span>
+            )}
+          </p>
+        )}
+        <ApprovalOperationPreview action={view.action} />
+        <p className="approval-reason">需要你决定：{approvalReason(view)}</p>
         <dl>
           <Meta label="状态" value={approvalStatus(view.approval.status)} />
           <Meta label="Action" value={actionStatus(view.action.status)} />
@@ -475,6 +497,108 @@ function ApprovalDetail({
       </footer>
     </div>
   )
+}
+
+function approvalReason(
+  view: Extract<DrawerView, { kind: 'approval' }>,
+): string {
+  const reason = view.action.request.reason
+  return typeof reason === 'string' && reason.trim() !== ''
+    ? reason
+    : view.approval.prompt.impact
+}
+
+function approvalTaskOpener(
+  channel: Extract<DrawerView, { kind: 'task' }>['channel'] | undefined,
+  onOpenView?: (view: DrawerView) => void,
+): (() => void) | undefined {
+  if (!channel || !onOpenView) return undefined
+  return () => onOpenView({ kind: 'task', channel })
+}
+
+function ApprovalOperationPreview({ action }: { action: DurableAction }) {
+  const request = action.request
+  const tool = typeof request.tool === 'string' ? request.tool : undefined
+  const category =
+    typeof request.category === 'string' ? request.category : undefined
+  const targets = Array.isArray(request.targets)
+    ? request.targets.filter(
+        (target): target is string => typeof target === 'string',
+      )
+    : []
+  const command =
+    typeof request.command === 'string' ? request.command : undefined
+  const tier =
+    request.tier === 'strict' ||
+    request.tier === 'standard' ||
+    request.tier === 'full'
+      ? request.tier
+      : undefined
+  if (!tool && !category && targets.length === 0 && !command) return null
+  return (
+    <section aria-label="操作预览" className="approval-operation">
+      {category && (
+        <p className="approval-operation-category">
+          {approvalCategoryLabel(category)} · {actionRiskLabel(action.risk)}
+        </p>
+      )}
+      {tool && (
+        <p className="approval-operation-tool">
+          工具 <code>{tool}</code>
+          {tier && <span> · {permissionTierLabel(tier)}档位</span>}
+          {request.tierMismatch === true && (
+            <span> · 档位读取异常，按严格处置</span>
+          )}
+        </p>
+      )}
+      {command && (
+        <pre className="approval-command">
+          <code>{command}</code>
+        </pre>
+      )}
+      {targets.length > 0 && (
+        <ul className="approval-targets">
+          {targets.map(target => (
+            <li key={target}>
+              <code>{target}</code>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
+function approvalCategoryLabel(category: string): string {
+  switch (category) {
+    case 'out-of-workspace-write':
+      return '工作区外写入'
+    case 'network-egress':
+      return '对外网络发送'
+    case 'destructive-command':
+      return '不可逆命令'
+    case 'control-plane-mutation':
+      return 'Pegas 控制面修改'
+    case 'workspace-write':
+      return '工作区内写入'
+    case 'read':
+      return '只读操作'
+    default:
+      return '无法静态判定'
+  }
+}
+
+function actionRiskLabel(risk: DurableAction['risk']): string {
+  switch (risk) {
+    case 'critical':
+      return '严重风险'
+    case 'high':
+      return '高风险'
+    case 'medium':
+      return '中风险'
+    default:
+      return '低风险'
+  }
 }
 
 function approvalFootnote(
