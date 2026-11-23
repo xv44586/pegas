@@ -59,6 +59,18 @@
 
 ## Lessons
 
+### LESSON-20261123-02：聚合行的每个计数成员必须有打开入口
+
+- Rule：列表聚合/折叠视图中，计数胶囊声称的 N 条成员必须全部经界面可达（展开时间线含全部成员，或有等价的独立入口）；摘要行引用的具体消息若可被用户理解为「一条记录」，必须可点打开详情并触发该条的已读语义，不得以纯文本呈现唯一副本。
+- Why：DESIGN-007 聚合组时间线取 `messages.slice(1)`，最新一条只存在于纯文本摘要「最新：…」中。用户点摘要无反应、未读数不减；展开只见 N-1 条与胶囊 N 不符，被报告为两个 bug（失败区与事情动态区同报）。
+- Feature：DESIGN-007
+- Evidence：2026-11-23 用户截图与运行实例 Playwright 复现（`research/design-007-live/repro-read.mjs`，本地不入库）；`web/src/App.test.tsx`「opens the latest grouped failure/routine result from its summary line」2 回归在修复前失败、修复后通过。
+- Seen：1（2026-11-23）
+- Severity：normal
+- Status：Observed
+- Enforcement：尚未晋升；本 Feature 回归测试 + 合同验收条件 4（时间线条数 = 胶囊计数）已落地。
+- Owner / next action：后续出现同类问题时补充独立日期证据；候选检查其他聚合/折叠视图（任务托盘、触发记录）是否存在「计数成员不可达」模式。
+
 ### LESSON-20261118-01：看板固定最小宽度导致整页横向位移
 
 - Rule：宽面板需要在实际主内容宽度下验证，不能只按完整视口宽度决定列数。
