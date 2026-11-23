@@ -1439,7 +1439,7 @@ describe('sealed Pegas UI', () => {
     expect(screen.queryByText('传输失败但不是执行失败')).toBeNull()
     expect(screen.queryByRole('button', { name: '稍后处理' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '失败 1' }))
-    expect(screen.getByRole('button', { name: '执行确实失败' })).toBeTruthy()
+    expect(screen.getByText('最新：执行确实失败')).toBeTruthy()
   })
 
   it('renders attention rows as compact summaries with semantic status and quiet actions', async () => {
@@ -1487,27 +1487,28 @@ describe('sealed Pegas UI', () => {
       }),
     )
     const list = screen.getByLabelText('待处理列表')
-    expect(within(list).getByRole('list')).toBeTruthy()
+    expect(within(list).getAllByRole('list')).toHaveLength(3)
     expect(within(list).getAllByRole('listitem')).toHaveLength(4)
     const rows = within(list).getAllByRole('article')
     expect(rows).toHaveLength(4)
     expect(
-      within(list).getByRole('heading', {
-        level: 2,
-        name: '这是测试相关事情的入口。',
-      }),
+      within(list).getByText('最新：这是测试相关事情的入口。'),
     ).toBeTruthy()
     expect(within(list).queryByText(longReply)).toBeNull()
-    for (const status of ['重要结果', '需要确认', '需要补充', '执行失败'])
+    for (const status of ['确认', '回答'])
       expect(within(list).getByText(status)).toBeTruthy()
-    for (const title of [
-      '发布前需要确认影响范围',
-      '发布窗口是哪个时间段？',
-      '上游模型超时',
-    ])
+    for (const section of ['待你处理', '失败', '事情动态'])
+      expect(
+        within(list).getByRole('heading', {
+          level: 3,
+          name: new RegExp(section),
+        }),
+      ).toBeTruthy()
+    for (const title of ['发布前需要确认影响范围', '发布窗口是哪个时间段？'])
       expect(
         within(list).getByRole('heading', { level: 2, name: title }),
       ).toBeTruthy()
+    expect(within(list).getByText('最新：上游模型超时')).toBeTruthy()
     expect(
       within(list).getAllByRole('button', { name: /^打开事情：/ }),
     ).toHaveLength(1)
@@ -1522,17 +1523,18 @@ describe('sealed Pegas UI', () => {
       }),
     ).toBeTruthy()
     expect(
-      within(list).getByRole('button', { name: '查看原因：上游模型超时' }),
+      within(list).getByRole('button', { name: `查看原因：${channel.title}` }),
     ).toBeTruthy()
     const actionNames = within(list)
       .getAllByRole('button')
-      .filter(button => !button.classList.contains('attention-title'))
+      .filter(
+        button =>
+          !button.classList.contains('attention-title') &&
+          !button.classList.contains('attention-toggle'),
+      )
       .map(button => button.getAttribute('aria-label'))
     expect(new Set(actionNames).size).toBe(actionNames.length)
     expect(list.querySelector('.attention-action.is-primary')).toBeNull()
-    expect(list.querySelector('.attention-title')?.textContent).toBe(
-      '这是测试相关事情的入口。',
-    )
   })
 
   it('summarizes unread attention separately from the full pending count', async () => {
@@ -1561,11 +1563,11 @@ describe('sealed Pegas UI', () => {
         name: /待你处理/,
       }),
     )
-    expect(screen.getByText('2 项待处理 · 1 项未读')).toBeTruthy()
+    expect(screen.getByText('2 件事情 · 2 条通知 · 1 条未读')).toBeTruthy()
     const list = screen.getByLabelText('待处理列表')
     expect(within(list).getAllByRole('listitem')).toHaveLength(2)
     expect(within(list).getByText('已读')).toBeTruthy()
-    expect(within(list).getByText('未读')).toBeTruthy()
+    expect(within(list).getByText('1 条 · 1 未读')).toBeTruthy()
   })
 
   it('shows live attention filter counts and distinguishes filtered empty from true empty', async () => {
@@ -1593,17 +1595,14 @@ describe('sealed Pegas UI', () => {
       }),
     )
     expect(screen.getByRole('button', { name: '全部 2' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: '需要确认 0' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: '需要补充 0' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '待你处理 0' })).toBeTruthy()
     expect(screen.getByRole('button', { name: '失败 1' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: '重要结果 1' })).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: '需要确认 0' }))
+    expect(screen.getByRole('button', { name: '事情动态 1' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '待你处理 0' }))
     expect(screen.getByText('当前筛选下没有待处理项')).toBeTruthy()
     expect(screen.queryByText('现在没有待处理项')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '全部 2' }))
-    expect(
-      screen.getByRole('heading', { level: 2, name: '验收结果已生成' }),
-    ).toBeTruthy()
+    expect(screen.getByText('最新：验收结果已生成')).toBeTruthy()
   })
 
   it('searches loaded attention content and source without claiming server search', async () => {
@@ -1633,14 +1632,10 @@ describe('sealed Pegas UI', () => {
     )
     const search = screen.getByLabelText('搜索待处理内容')
     fireEvent.change(search, { target: { value: '候选版本' } })
-    expect(
-      screen.getByRole('heading', { level: 2, name: '候选版本已交付' }),
-    ).toBeTruthy()
+    expect(screen.getByText('最新：候选版本已交付')).toBeTruthy()
     expect(screen.queryByText('上游模型超时')).toBeNull()
     fireEvent.change(search, { target: { value: 'Pegas' } })
-    expect(
-      screen.getByRole('heading', { level: 2, name: '上游模型超时' }),
-    ).toBeTruthy()
+    expect(screen.getByText('最新：上游模型超时')).toBeTruthy()
     fireEvent.change(search, { target: { value: '不存在的关键词' } })
     expect(screen.getByText('当前筛选下没有待处理项')).toBeTruthy()
     expect(screen.queryByText('现在没有待处理项')).toBeNull()
@@ -1669,15 +1664,15 @@ describe('sealed Pegas UI', () => {
         name: /待你处理/,
       }),
     )
-    const title = screen.getByRole('button', { name: '需要人工处理' })
+    const title = screen.getByRole('button', {
+      name: `查看原因：${channel.title}`,
+    })
     title.focus()
     fireEvent.click(title)
     expect(await screen.findByLabelText('工作详情')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '关闭详情' }))
     await waitFor(() => expect(document.activeElement).toBe(title))
-    expect(
-      screen.getByRole('heading', { level: 2, name: '需要人工处理' }),
-    ).toBeTruthy()
+    expect(screen.getByText('最新：需要人工处理')).toBeTruthy()
   })
 
   it('opens a structured Approval from the attention inbox', async () => {
@@ -3428,7 +3423,7 @@ describe('sealed Pegas UI', () => {
         name: /待你处理/,
       }),
     )
-    expect(screen.getByText('上游模型超时')).toBeTruthy()
+    expect(screen.getByText('最新：上游模型超时')).toBeTruthy()
     fireEvent.click(
       within(screen.getByLabelText('主导航')).getByRole('button', {
         name: /所有事情/,
@@ -4821,10 +4816,8 @@ describe('sealed Pegas UI', () => {
     fireEvent.click(screen.getByRole('button', { name: /^查看原因：/ }))
     expect(await screen.findByText('无法标记已读')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '关闭详情' }))
-    expect(
-      screen.getByRole('heading', { level: 2, name: '需要处理的失败' }),
-    ).toBeTruthy()
-    expect(screen.getByText('未读')).toBeTruthy()
+    expect(screen.getByText('最新：需要处理的失败')).toBeTruthy()
+    expect(screen.getByText('1 条 · 1 未读')).toBeTruthy()
     expect(screen.getByText(/来自：/)).toBeTruthy()
   })
 
@@ -4856,7 +4849,7 @@ describe('sealed Pegas UI', () => {
       expect(screen.getByRole('button', { name: '关闭详情' })).toBeTruthy(),
     )
     fireEvent.click(screen.getByRole('button', { name: '关闭详情' }))
-    expect(screen.getByText('已读但仍需处理')).toBeTruthy()
+    expect(screen.getByText('最新：已读但仍需处理')).toBeTruthy()
     expect(screen.getByText('已读')).toBeTruthy()
     expect(screen.getByText(/来自：/)).toBeTruthy()
   })
@@ -5315,12 +5308,14 @@ describe('sealed Pegas UI', () => {
         {
           ...source,
           id: 'older',
+          taskId: 'task-older',
           createdAt: '2026-11-19T08:00:00.000Z',
           payload: { type: 'run.failed', error: '较早失败' },
         },
         {
           ...source,
           id: 'newer',
+          taskId: 'task-newer',
           createdAt: '2026-11-19T09:00:00.000Z',
           payload: { type: 'run.failed', error: '最新失败' },
         },
@@ -5421,7 +5416,7 @@ describe('sealed Pegas UI', () => {
     )
   })
 
-  it('filters important results and marks them as results', async () => {
+  it('filters routine activity and marks results and failures semantically', async () => {
     const source = snapshot.messages[0]
     if (!source) throw new Error('missing attention fixture')
     installSnapshotFetch({
@@ -5447,9 +5442,195 @@ describe('sealed Pegas UI', () => {
     )
     expect(document.querySelector('.attention-icon.is-result')).toBeTruthy()
     expect(document.querySelector('.attention-icon.is-failed')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: '重要结果 1' }))
-    expect(screen.getByText('验收结果已生成')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '事情动态 1' }))
+    expect(screen.getByText('最新：验收结果已生成')).toBeTruthy()
     expect(screen.queryByText('执行失败原因')).toBeNull()
+  })
+
+  it('pins review.ready as an acceptance todo instead of routine activity', async () => {
+    const source = snapshot.messages[0]
+    if (!source) throw new Error('missing attention fixture')
+    installSnapshotFetch({
+      ...snapshot,
+      messages: [
+        {
+          ...source,
+          id: 'review-ready',
+          payload: {
+            type: 'review.ready',
+            title: '官网改版交付待验收',
+            text: 'Review Pack 已生成。',
+          },
+        },
+        {
+          ...source,
+          id: 'routine-result',
+          payload: { type: 'run.completed', text: '例行结果' },
+        },
+      ],
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    const list = screen.getByLabelText('待处理列表')
+    expect(within(list).getByText('验收')).toBeTruthy()
+    expect(
+      within(list).getByRole('heading', {
+        level: 2,
+        name: '官网改版交付待验收',
+      }),
+    ).toBeTruthy()
+    expect(screen.getByRole('button', { name: '待你处理 1' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '事情动态 1' })).toBeTruthy()
+    const sections = within(list).getAllByRole('heading', { level: 3 })
+    expect(sections[0]?.textContent).toContain('待你处理')
+  })
+
+  it('groups routine results per task with a newest-first timeline and per-message reads only', async () => {
+    const source = snapshot.messages[0]
+    if (!source) throw new Error('missing attention fixture')
+    let readRequests = 0
+    const counted = (id: string, minute: number, text: string) => ({
+      ...source,
+      id,
+      createdAt: `2026-11-19T08:${String(minute).padStart(2, '0')}:00.000Z`,
+      payload: { type: 'run.completed', text },
+    })
+    installSnapshotFetch(
+      {
+        ...snapshot,
+        messages: [
+          counted('count-7', 7, '第 7 个数：7'),
+          counted('count-8', 8, '第 8 个数：8'),
+          counted('count-9', 9, '第 9 个数：9'),
+          counted('count-10', 10, '第 10 个数：10'),
+          counted('count-11', 11, '第 11 个数：11'),
+        ],
+      },
+      path => {
+        if (!path.endsWith('/read')) return undefined
+        readRequests += 1
+        return Response.json({ message: { ...source, readAt: 'now' } })
+      },
+    )
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    const list = screen.getByLabelText('待处理列表')
+    expect(within(list).getAllByRole('article')).toHaveLength(1)
+    expect(within(list).getByText('5 条 · 5 未读')).toBeTruthy()
+    expect(within(list).getByText('最新：第 11 个数：11')).toBeTruthy()
+    fireEvent.click(
+      within(list).getByRole('button', { name: `展开：${channel.title}` }),
+    )
+    expect(readRequests).toBe(0)
+    const entries = within(list)
+      .getAllByRole('button')
+      .filter(button => button.classList.contains('attention-group-entry'))
+    expect(entries.map(entry => entry.textContent)).toEqual([
+      expect.stringContaining('第 10 个数：10'),
+      expect.stringContaining('第 9 个数：9'),
+      expect.stringContaining('第 8 个数：8'),
+    ])
+    expect(
+      within(list).getByRole('button', { name: '查看全部 5 条' }),
+    ).toBeTruthy()
+    expect(readRequests).toBe(0)
+    fireEvent.click(within(list).getByRole('button', { name: '查看全部 5 条' }))
+    expect(
+      within(list).getByRole('button', { name: '收起更早通知' }),
+    ).toBeTruthy()
+    expect(within(list).getByText('第 7 个数：7')).toBeTruthy()
+    expect(readRequests).toBe(0)
+  })
+
+  it('merges repeated failures of one task into a single pinned failure row', async () => {
+    const source = snapshot.messages[0]
+    if (!source) throw new Error('missing attention fixture')
+    installSnapshotFetch({
+      ...snapshot,
+      messages: [
+        {
+          ...source,
+          id: 'fail-1',
+          createdAt: '2026-11-19T08:01:00.000Z',
+          payload: { type: 'run.failed', error: '磁盘空间不足' },
+        },
+        {
+          ...source,
+          id: 'fail-2',
+          createdAt: '2026-11-19T08:02:00.000Z',
+          payload: { type: 'run.failed', error: '磁盘空间不足（重试）' },
+        },
+      ],
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    const list = screen.getByLabelText('待处理列表')
+    expect(within(list).getAllByRole('article')).toHaveLength(1)
+    expect(screen.getByRole('button', { name: '失败 2' })).toBeTruthy()
+    expect(within(list).getByText('2 条 · 2 未读')).toBeTruthy()
+    expect(within(list).getByText('最新：磁盘空间不足（重试）')).toBeTruthy()
+  })
+
+  it('pages routine activity by task while keeping todos and failures unpaged', async () => {
+    const source = snapshot.messages[0]
+    if (!source) throw new Error('missing attention fixture')
+    const activityMessages = Array.from({ length: 25 }, (_, index) => ({
+      ...source,
+      id: `activity-${String(index)}`,
+      taskId: `task-page-${String(index)}`,
+      createdAt: new Date(Date.UTC(2026, 10, 19, 8, index)).toISOString(),
+      payload: { type: 'run.completed', text: `结果 ${String(index)}` },
+    }))
+    installSnapshotFetch({
+      ...snapshot,
+      messages: [
+        {
+          ...source,
+          id: 'pinned-approval',
+          payload: {
+            type: 'approval.required',
+            approvalId: 'approval-paging',
+            summary: '发布前需要确认',
+          },
+        },
+        ...activityMessages,
+      ],
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    const list = screen.getByLabelText('待处理列表')
+    expect(screen.getByRole('button', { name: '事情动态 25' })).toBeTruthy()
+    expect(
+      within(list).getByRole('heading', { level: 2, name: '发布前需要确认' }),
+    ).toBeTruthy()
+    const pager = screen.getByLabelText('事情动态分页')
+    expect(within(pager).getByText('第 1–20 件事情，共 25 件')).toBeTruthy()
+    expect(within(list).getByText('最新：结果 24')).toBeTruthy()
+    expect(within(list).queryByText('最新：结果 0')).toBeNull()
+    fireEvent.click(within(pager).getByRole('button', { name: '下一页' }))
+    expect(within(pager).getByText('第 21–25 件事情，共 25 件')).toBeTruthy()
+    expect(within(list).getByText('最新：结果 0')).toBeTruthy()
+    expect(
+      within(list).getByRole('heading', { level: 2, name: '发布前需要确认' }),
+    ).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '事情动态 25' }))
+    expect(within(pager).getByText('第 1–20 件事情，共 25 件')).toBeTruthy()
   })
 
   it('labels long user messages as messages, not replies', async () => {
