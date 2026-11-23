@@ -10256,8 +10256,10 @@ export class PegasStore {
   /**
    * EXEC-006 P1b: the inline detail stays bounded at 16KB, but the faithful
    * full output is archived (capped at 256KB per call, honestly flagged) so
-   * the drawer can page through it. First write wins; a replayed completion
-   * never rewrites the archive.
+   * the drawer can page through it. The live stream clips results at 8KB,
+   * so a later durable-log outcome may carry the faithful full text: the
+   * archive keeps whichever write reports more original characters, and an
+   * equal-length replay never rewrites it.
    */
   #archiveToolOutput(runId: string, callId: string, result: string): void {
     const bounded = result.slice(0, 262_144)
@@ -10266,7 +10268,11 @@ export class PegasStore {
         `INSERT INTO run_activity_output_pages
           (run_id, call_id, content, total_characters, created_at)
          VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT (run_id, call_id) DO NOTHING`,
+         ON CONFLICT (run_id, call_id) DO UPDATE SET
+           content = excluded.content,
+           total_characters = excluded.total_characters
+         WHERE excluded.total_characters
+           > run_activity_output_pages.total_characters`,
       )
       .run(
         runId,
@@ -10421,8 +10427,10 @@ export class PegasStore {
    * EXEC-006 P1a: upgrades settled root tool rows with faithful durable-log
    * outcomes (result + structured meta). Only rows whose stored semantic
    * lacks the meta-derived structure are rewritten, and only with a matching
-   * call id; the inline detail keeps its 16KB bound while the full output is
-   * archived for paging. Idempotent: a replay applies the same projection.
+   * call id; the inline detail keeps its 16KB bound. Every faithful durable
+   * result also feeds the output archive (longest-original-wins), even when
+   * the row carries no structured meta, so 8KB stream clips get healed for
+   * paging. Idempotent: a replay applies the same projection.
    */
   upgradeRunToolSemantics(
     runId: string,
@@ -10447,7 +10455,6 @@ export class PegasStore {
     this.#database.exec('BEGIN IMMEDIATE')
     try {
       for (const outcome of outcomes) {
-        if (outcome.meta === undefined) continue
         const row = select.get(runId, outcome.callId) as
           | {
               id: number
@@ -10457,6 +10464,10 @@ export class PegasStore {
             }
           | undefined
         if (!row || row.status === 'started') continue
+        if (outcome.result !== undefined && outcome.result.length > 0) {
+          this.#archiveToolOutput(runId, outcome.callId, outcome.result)
+        }
+        if (outcome.meta === undefined) continue
         const stored = decodeActivityDetail(row.detail_json ?? '')
         const { input } = splitToolDetail(stored.detail)
         const semantic = buildToolSemantic(
@@ -10482,9 +10493,6 @@ export class PegasStore {
         ]
           .join('')
           .slice(0, 16_384)
-        if (outcome.result !== undefined && outcome.result.length > 0) {
-          this.#archiveToolOutput(runId, outcome.callId, outcome.result)
-        }
         update.run(
           outcome.status,
           JSON.stringify({ detail: merged, semantic }),

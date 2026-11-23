@@ -57,6 +57,13 @@ export function ensureDshProfileHome(home: string, profile: string): void {
   })
 }
 
+/**
+ * EXEC-006 P2a: the selected agent model declares image input so DSH's
+ * read_image capability gate reflects the gateway's actual multimodal
+ * routing. Pegas connections are OpenAI-compatible gateways whose models
+ * accept image parts; without this declaration the installed DSH catalog
+ * defaults to text-only and read_image fails before touching the file.
+ */
 export function createDshModelConfiguration(options: {
   connections: readonly ModelProviderConnection[]
   vault: Pick<ModelCredentialVault, 'decrypt'>
@@ -90,7 +97,15 @@ export function createDshModelConfiguration(options: {
           : 'openai-completions',
       baseURL: connection.baseUrl,
       ...(apiKey ? { apiKeyEnv: keyEnvironment } : {}),
-      models: [{ id: catalogModel, name: catalogModel }],
+      models: [
+        {
+          id: catalogModel,
+          name: catalogModel,
+          ...(connection.id === options.agentModel.provider
+            ? { input: ['text', 'image'] }
+            : {}),
+        },
+      ],
     }
   }
   const directory = mkdtempSync(join(tmpdir(), 'pegas-dsh-config-'))
