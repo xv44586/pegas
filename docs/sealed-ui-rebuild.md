@@ -218,7 +218,7 @@
 
 ## 20. 自动化生命周期与触发记录（2026-11-23，DESIGN-006 第二阶段）
 
-> 状态：已实现（worktree `design-006-lifecycle-history`，分支 `feat/DESIGN-006-automation-lifecycle-history`，基线 `76d4d3c`）。用户裁决（2026-11-23）：加删除入口让用户手动清理已结束自动化；触发记录做 limit + 加载更多。调研依据见本地研究笔记 `research/automation-list-scaling/NOTES.md`（Codex/Cindy 均不做定义列表页码分页：Codex 固定排序 + run 级 cursor 分页 + run 归档；Cindy 分组折叠 + quiet-run 自动归档）。
+> 状态：已实现并发布（合并 `fc72359`，Candidate `main-fc72359-r1`，运行实例 schema v39，真机 API/实拍验证通过；见 `docs/feature-map.md` DESIGN-006 第二阶段记录）。用户裁决（2026-11-23）：加删除入口让用户手动清理已结束自动化；触发记录做 limit + 加载更多。调研依据见本地研究笔记 `research/automation-list-scaling/NOTES.md`（Codex/Cindy 均不做定义列表页码分页：Codex 固定排序 + run 级 cursor 分页 + run 归档；Cindy 分组折叠 + quiet-run 自动归档）。
 
 ### 用户结果
 
