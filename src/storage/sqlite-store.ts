@@ -64,6 +64,7 @@ import type {
 import {
   buildToolSemantic,
   semanticSpillPaths,
+  spillBodyForGap,
   splitToolDetail,
 } from '../activity/tool-semantics.js'
 import { needsChineseSummary } from '../activity/thinking-summary.js'
@@ -10343,18 +10344,25 @@ export class PegasStore {
     const limit = Math.max(1, Math.min(options.limit ?? 12_000, 32_768))
     let archivedContent = row.content
     let totalCharacters = row.total_characters
+    let spillGapBody: string | undefined
     if (options.spillReader) {
       const spillPaths = semanticSpillPaths(
         decodeActivityDetail(row.detail_json ?? '').semantic,
       )
-      for (const spillPath of spillPaths) {
+      for (const [spillIndex, spillPath] of spillPaths.entries()) {
         const spillText = await options.spillReader(spillPath)
-        if (
-          spillText !== undefined &&
-          spillText.length >= row.total_characters
-        ) {
-          archivedContent = spillText.slice(0, 262_144)
-          totalCharacters = spillText.length
+        if (spillText === undefined) continue
+        const peeled = spillBodyForGap(spillText)
+        const body = peeled?.body ?? spillText
+        const coversArchive =
+          body.length >= row.total_characters ||
+          (row.content.length <= row.total_characters &&
+            row.content.startsWith(body)) ||
+          (peeled !== undefined && spillIndex === 0)
+        if (coversArchive) {
+          if (peeled) spillGapBody = body
+          archivedContent = body.slice(0, 262_144)
+          totalCharacters = body.length
           break
         }
       }
@@ -10385,9 +10393,17 @@ export class PegasStore {
       if (markerStart >= 0 && omitted !== undefined) {
         const tailStart = inlineText.indexOf('\n', markerStart + 1) + 1
         const tail = inlineText.slice(tailStart)
-        if (tail && archivedContent.endsWith(tail)) {
-          gapEnd = archivedContent.length - tail.length
-          gapStart = gapEnd - inlineText.length + markerStart
+        const gapBase = spillGapBody?.endsWith(tail)
+          ? spillGapBody
+          : archivedContent.endsWith(tail)
+            ? archivedContent
+            : undefined
+        if (tail && gapBase !== undefined) {
+          gapEnd = gapBase.length - tail.length
+          gapStart =
+            gapBase === spillGapBody
+              ? markerStart
+              : gapEnd - inlineText.length + markerStart
         }
       }
     }

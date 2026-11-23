@@ -592,6 +592,73 @@ describe('EXEC-006 round-18 executor spill-file channel', () => {
     expect(beyond?.content.endsWith('8000')).toBe(true)
     store.close()
   })
+
+  it('peels the bash notice from a formatted spill copy to bound the gap', async () => {
+    const store = new PegasStore(':memory:')
+    const claimed = seedClaimedRun(store)
+    const head = 'H'.repeat(8_000)
+    const middle = 'M'.repeat(20_000)
+    const tail = 'TAIL-SUMMARY\n80000'
+    const body = `${head}\n${middle}\n${tail}`
+    const formatted = `${body}\n\n[output truncated; full output: /tmp/raw/stdout.log]`
+    const streamResult = `${formatted}\n(Omitted 9000 bytes. Full formatted result stored at: /tmp/spill/formatted.txt. Use read with offset/limit, or grep this path to search within it.)`
+    store.appendRunActivity(claimed.run.id, 'enhance-worker', {
+      kind: 'tool_call',
+      status: 'started',
+      callId: 'call-formatted',
+      tool: 'bash',
+      label: 'bash',
+      detail: JSON.stringify({ command: 'seq 1 480' }),
+    })
+    store.completeRunActivityToolCall(
+      claimed.run.id,
+      'enhance-worker',
+      'call-formatted',
+      { status: 'completed', result: streamResult },
+    )
+    store.upgradeRunToolSemantics(claimed.run.id, [
+      {
+        callId: 'call-formatted',
+        status: 'completed',
+        result: streamResult,
+        meta: { truncated: true },
+      },
+    ])
+    const page = await store.readRunActivityOutput(
+      claimed.run.id,
+      'owner',
+      'call-formatted',
+      {
+        offset: 0,
+        spillReader: path =>
+          Promise.resolve(
+            path === '/tmp/spill/formatted.txt' ? formatted : undefined,
+          ),
+      },
+    )
+    const gapStart = 6_000
+    const gapEnd = body.length - 6_000
+    expect(page?.gapStart).toBe(gapStart)
+    expect(page?.gapEnd).toBe(gapEnd)
+    expect(page?.content).toBe(body.slice(0, gapStart))
+    expect(page?.totalCharacters).toBe(body.length)
+    const middlePage = await store.readRunActivityOutput(
+      claimed.run.id,
+      'owner',
+      'call-formatted',
+      {
+        offset: gapStart,
+        until: gapEnd,
+        limit: 32_768,
+        spillReader: path =>
+          Promise.resolve(
+            path === '/tmp/spill/formatted.txt' ? formatted : undefined,
+          ),
+      },
+    )
+    expect(middlePage?.content).toBe(body.slice(gapStart, gapEnd))
+    store.close()
+  })
 })
 
 describe('EXEC-006 child thinking summary write-back', () => {
