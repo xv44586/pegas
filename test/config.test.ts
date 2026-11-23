@@ -1,8 +1,9 @@
-import { resolve } from 'node:path'
+import { homedir } from 'node:os'
+import { join, resolve } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
-import { loadConfig } from '../src/core/config.js'
+import { defaultAgentWorkspace, loadConfig } from '../src/core/config.js'
 
 const privacyHmacKey = ['privacy', 'test', 'key', 'value', '2026'].join('-')
 
@@ -16,7 +17,7 @@ describe('loadConfig', () => {
       dshHome: resolve('data/dsh'),
       dshSessionsRoot: resolve('data/dsh/sessions'),
       dshProfile: 'headless',
-      workspaceRoot: resolve('data/workspace'),
+      workspaceRoot: defaultAgentWorkspace(resolve('data')),
       modelName: 'discovery-api/deepseek-v4.1-flash-1017',
       modelProvider: 'magpie',
       pushMode: 'disabled',
@@ -95,11 +96,22 @@ describe('loadConfig', () => {
     })
   })
 
-  it('derives the agent workspace from the data directory, never the checkout', () => {
-    expect(loadConfig({}).workspaceRoot).toBe(resolve('data/workspace'))
-    expect(loadConfig({ PEGAS_DATA_DIR: './custom-data' }).workspaceRoot).toBe(
-      resolve('./custom-data/workspace'),
+  it('keeps the default agent workspace outside the checkout tree', () => {
+    const workspace = loadConfig({}).workspaceRoot
+    expect(workspace).toBe(defaultAgentWorkspace(resolve('data')))
+    expect(workspace.startsWith(join(homedir(), '.pegas', 'workspaces'))).toBe(
+      true,
     )
+    expect(workspace.startsWith(resolve('data'))).toBe(false)
+    expect(workspace.startsWith(process.cwd())).toBe(false)
+  })
+
+  it('derives a distinct default workspace per data directory', () => {
+    const first = loadConfig({ PEGAS_DATA_DIR: './instance-a' }).workspaceRoot
+    const second = loadConfig({ PEGAS_DATA_DIR: './instance-b' }).workspaceRoot
+    expect(first).not.toBe(second)
+    expect(first).toBe(defaultAgentWorkspace(resolve('./instance-a')))
+    expect(second).toBe(defaultAgentWorkspace(resolve('./instance-b')))
   })
 
   it('keeps an explicit workspace override independent of the data directory', () => {

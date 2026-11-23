@@ -252,17 +252,17 @@
 - Enforcement：尚未晋升；按晋升规则 recovery 类一次确认即可晋升，Enforcement（构建器实体化依赖 + staging/清理前树外依赖校验的自动化门禁）需要独立 SELF-001 代码变更，已登记为下一缺口，不得以纯文档冒充门禁。
 - Owner / next action：下一个 SELF-001 迭代实现构建器自包含依赖与在役 Release 树外依赖检查，并同 commit 晋升本 Lesson；在此之前清理任何 worktree 前必须人工核查在役 Candidate 的 `node_modules` 指向。
 
-### LESSON-20261123-01：运行时默认目录不得继承进程启动目录
+### LESSON-20261123-01：Agent 工作区默认值必须物理隔离于代码 checkout
 
-- Rule：会被 Executor 当作 Agent 工作区/身份目录使用的配置默认值，必须派生自 Pegas 数据目录等受控位置，不得默认 `resolve('.')` 继承启动目录；服务入口对该目录幂等创建，桌面入口显式注入并覆盖父进程残留。
-- Why：`workspaceRoot` 默认 `'.'` 使开发仓库里拉起的 Pegas 把 checkout 当 Agent 工作区，DSH `dsh-agent-instructions` 从 cwd 向上加载了仓库的开发版 AGENTS.md/docs 作为 Agent 自身指令；本地库中 12 个 Run 快照 workspace 固化为主仓库路径。与 LESSON-20261119-03 中「运行代码 worktree 被误当成 DSH 稳定 Task workspace」同类（该次以流程规则处理，未落运行时约束）。
+- Rule：会被 Executor 当作 Agent 工作区/身份目录使用的配置默认值，不得默认 `resolve('.')` 继承启动目录，也不得落在任何代码 checkout 树内（含仓库内的数据目录子目录）——执行器会从 cwd 向上发现项目指令，"逻辑上属于数据目录"不构成隔离。默认位置须物理上在仓库外（如 `~/.pegas/workspaces/<dataDir 哈希>`），按实例派生互不共享；服务入口幂等创建，桌面入口显式注入并覆盖父进程残留。
+- Why：`workspaceRoot` 默认 `'.'` 使开发仓库里拉起的 Pegas 把 checkout 当 Agent 工作区，DSH `dsh-agent-instructions` 从 cwd 向上加载了仓库的开发版 AGENTS.md/docs 作为 Agent 自身指令；本地库中 12 个 Run 快照 workspace 固化为主仓库路径。第一轮修复改为 `<dataDir>/workspace` 后真实 DSH 探针（Run 9d2cd0f7）证实仍被吸入：DSH `findProjectRoot` 向上走到最近 `.git` 根，开发场景 dataDir 本身在仓库树内。与 LESSON-20261119-03 中「运行代码 worktree 被误当成 DSH 稳定 Task workspace」同类（该次以流程规则处理，未落运行时约束）。
 - Feature：EXEC-008
-- Evidence：EXEC-008 修复（`src/core/config.ts` workspaceRoot 默认 `<dataDir>/workspace`、`src/worker/main.ts` 幂等创建、`src/desktop/runtime.ts` 显式注入）；`test/config.test.ts`、`test/desktop-runtime.test.ts` 回归在旧默认值上失败；`scripts/smoke.mjs` Run 快照 workspace 断言；本地 `data/pegas.sqlite` runs 快照统计（脱敏：仅路径计数）。
-- Seen：2（2026-11-19 见 LESSON-20261119-03；2026-11-23 用户报告开发文档被运行时加载）
+- Evidence：EXEC-008 两轮修复（第一轮 `<dataDir>/workspace`；第二轮 `defaultAgentWorkspace`：`~/.pegas/workspaces/<dataDir SHA-256 前 12 位>`，`src/core/config.ts`、`src/desktop/runtime.ts`）；`test/config.test.ts`（checkout 树外断言 + 按 dataDir 互异）、`test/desktop-runtime.test.ts` 回归均在旧默认值上失败；`scripts/smoke.mjs` Run 快照 workspace 位置断言；真实 DSH 探针 Run 9d2cd0f7 输出（Agent 逐字引用仓库规则）；Cindy/Hermes 位置隔离一手源码调研（本地研究记录）。
+- Seen：2（2026-11-19 见 LESSON-20261119-03；2026-11-23 用户报告开发文档被运行时加载，同日两轮修复属同一事件不重复计数）
 - Severity：normal
 - Status：Candidate
-- Enforcement：尚未晋升；已有 config/desktop 回归与 smoke 快照断言守住 workspaceRoot 一处。第三个独立日期出现时晋升，并评估把「默认目录派生自数据目录」扩展为对 `selfChangeRepositoryRoot` 等其余 `resolve('.')` 默认值的统一检查（self-change 显式指仓库属预期，需区分）。
-- Owner / next action：EXEC-008 后续迭代评估 DSH instruction 候选收紧；再次出现同类默认目录泄漏时晋升本 Lesson。
+- Enforcement：尚未晋升；已有 config/desktop 回归与 smoke 快照断言守住 workspaceRoot 一处（断言 workspace 在 checkout 树外，而非仅"等于某派生路径"）。第三个独立日期出现时晋升，并评估把「默认目录物理隔离于 checkout」扩展为对 `selfChangeRepositoryRoot` 等其余 `resolve('.')` 默认值的统一检查（self-change 显式指仓库属预期，需区分）。
+- Owner / next action：再次出现同类默认目录泄漏时晋升本 Lesson；显式覆盖指向仓库子目录的场景已在 `.env.example` 警示，属用户主动授权。
 
 <!--
 ### LESSON-YYYYMMDD-NN：简短标题

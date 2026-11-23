@@ -2,6 +2,8 @@ import { createServer } from 'node:net'
 import { join } from 'node:path'
 import type { ChildProcess } from 'node:child_process'
 
+import { defaultAgentWorkspace } from '../core/config.js'
+
 export interface DesktopServiceOptions {
   port: number
   dataDir: string
@@ -100,7 +102,7 @@ export function desktopServiceEnvironment({
     PEGAS_API_PORT: String(port),
     PEGAS_API_TOKEN: apiToken,
     PEGAS_DATA_DIR: dataDir,
-    PEGAS_WORKSPACE_ROOT: join(dataDir, 'workspace'),
+    PEGAS_WORKSPACE_ROOT: defaultAgentWorkspace(dataDir),
     PEGAS_PUSH_MODE: 'disabled',
     ...(testMode
       ? {

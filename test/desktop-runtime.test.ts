@@ -14,6 +14,7 @@ import {
   terminateDesktopChildren,
   waitForControlPlane,
 } from '../src/desktop/runtime.js'
+import { defaultAgentWorkspace } from '../src/core/config.js'
 
 const desktopSmoke = readFileSync(
   new URL('../scripts/smoke-desktop.mjs', import.meta.url),
@@ -60,9 +61,11 @@ describe('desktop runtime', () => {
       PEGAS_API_PORT: '41234',
       PEGAS_API_TOKEN: 'desktop-instance-token',
       PEGAS_DATA_DIR: '/tmp/pegas-desktop-test',
-      PEGAS_WORKSPACE_ROOT: '/tmp/pegas-desktop-test/workspace',
       PEGAS_EXECUTOR: 'echo',
     })
+    expect(environment.PEGAS_WORKSPACE_ROOT).toBe(
+      defaultAgentWorkspace('/tmp/pegas-desktop-test'),
+    )
   })
 
   it('keeps the desktop agent workspace out of the application checkout', () => {
@@ -76,7 +79,7 @@ describe('desktop runtime', () => {
       },
     })
     expect(environment.PEGAS_WORKSPACE_ROOT).toBe(
-      '/tmp/pegas-desktop-test/workspace',
+      defaultAgentWorkspace('/tmp/pegas-desktop-test'),
     )
   })
 
