@@ -131,3 +131,12 @@
 - **去重复任务名**：thread 内首卡保留任务名按钮（打开事情详情），第 2 张起 `FactCard hideTaskTitle` 隐藏任务名；每张卡的锚点回链保留，归属由结构 + 锚点表达。thread 内除末卡外沿用 `grouped-next` 紧凑间距。
 - **自动化证据**：`ChatExperience.test.tsx` 21 测试（新增 2：连续同任务事实合成一个 thread 且任务名按钮仅 1 个、锚点按钮每卡保留；单卡/交错任务不成组）。`pnpm check` 100 文件/1031 测试、`pnpm smoke`、`pnpm review:ui --force`（既有 attention 种子含同任务连续 4 事实，桌面/390px 移动实拍竖线分组可见、几何断言通过）、`pnpm a11y:review` 0 违例。
 - **仍未实现（非验收缺口）**：选中上下文条沿用「继续事情」横幅形态；托盘任务多时横向滚动、无分页/收纳；thread 只收拢当前已加载消息，不跨分页合并。
+
+## 已落地实现（2026-11-23，DESIGN-008：work 入口语义统一与已安排事实）
+
+- **automationActive 服务端事实**：`PegasStore.completeRun` 在结算 `run.completed` 时，若该 Task 仍挂着 active 的 existing_task Automation（且无审批/证据/澄清阻塞），payload 携带 `automationActive: true`；自动化取消后的收尾完成与无自动化的一次性 Run 不携带。这是既有 `hasActiveAutomation` 判定（Task 保持 started 的依据）首次透出到消息层，不新增查询、不改投影 lane/weight。
+- **「已安排」语义**：Web `factCardHeading` 对携带该事实的完成卡渲染「已安排」+ CalendarClock（Run 已结束但事情仍会按周期推进）；事情抽屉 hero 经 `taskAutomationActive`（取该 Task 最新一条 run.completed 事实）同样显示「已安排，自动化仍会按周期推进」，不再误报「工作已完成」。旧消息无该字段时行为不变（诚实回退）。
+- **🔗 单一语义**：对话流中所有「去事情」入口统一为 meta 行 14px Link2 icon（`.message-work-entry`，22px 槽、hover title + aria-label）——say 正文下的大蓝「查看工作详情」链接与 work 卡内的描边按钮全部移除；用户消息派生入口（单事情/多事情菜单）从页内锚点跳转改为打开事情详情抽屉（review.ready 仍进审查抽屉）。凡 🔗 目的地都是抽屉。
+- **锚点图标区分**：卡片右上「回到发起消息」从 Link2 改为 ArrowUpToLine（向上回溯语义），页内跳转只剩这一个入口；🔗 只表示离开当前位置去事情。
+- **卡片排版收敛**：`.fact-card` 行高 1.78（错误继承聊天正文）→ 1.55（DESIGN.md card-body 契约）；`.message-markdown strong/b` 浏览器默认 700 → 500（全站字重契约）。
+- **自动化证据**：`test/run-automations.test.ts` +2（automationActive 只在 active automation 存在时携带、取消后与一次性 Run 不携带）；`web/src/sealed/types.test.ts` +2（事实只读 run.completed、最新完成事实优先）；`ChatExperience.test.tsx` +2（已安排卡 + say/卡 meta icon 开抽屉 + 抽屉 hero 已安排；普通完成保持已完成）+3 既有用例改为抽屉目的地；`App.test.tsx` 锚点往返用例改为 🔗 开抽屉；`test/sealed-ui-work-entry.test.ts` 6 测试固化 CSS/DOM 合同（icon 槽规格、meta 常显、1.55 行高、500 字重、旧链接/按钮不回归、锚点图标区分）。

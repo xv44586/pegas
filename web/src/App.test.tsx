@@ -4373,12 +4373,8 @@ describe('sealed Pegas UI', () => {
         `[data-message-id="${originEvent.id}"].is-anchor-highlight`,
       ),
     ).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: '查看进展' }))
-    expect(
-      document.querySelector(
-        '[data-message-id="result-cue"].is-anchor-highlight',
-      ),
-    ).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '查看工作详情' }))
+    expect(await screen.findByRole('dialog', { name: '工作详情' })).toBeTruthy()
   })
 
   it('shows router and rewrite metering with honest unreported tokens', async () => {
