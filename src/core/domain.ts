@@ -299,6 +299,7 @@ export type ToolSemantic =
       outputTruncated?: boolean
       outputOmittedCharacters?: number
       outputSpillPath?: string
+      outputRawSpillPath?: string
       exitCode?: number
       interrupted?: boolean
     }
@@ -310,6 +311,7 @@ export type ToolSemantic =
       previewTruncated?: boolean
       previewOmittedCharacters?: number
       previewSpillPath?: string
+      previewRawSpillPath?: string
     }
   | {
       kind: 'image'
@@ -328,6 +330,7 @@ export type ToolSemantic =
       previewTruncated?: boolean
       previewOmittedCharacters?: number
       previewSpillPath?: string
+      previewRawSpillPath?: string
     }
   | {
       kind: 'file_edit'
@@ -352,6 +355,7 @@ export type ToolSemantic =
       previewTruncated?: boolean
       previewOmittedCharacters?: number
       previewSpillPath?: string
+      previewRawSpillPath?: string
     }
   | {
       kind: 'todo'
@@ -367,6 +371,7 @@ export type ToolSemantic =
       previewTruncated?: boolean
       previewOmittedCharacters?: number
       previewSpillPath?: string
+      previewRawSpillPath?: string
     }
   | {
       kind: 'web'
@@ -380,6 +385,7 @@ export type ToolSemantic =
       previewTruncated?: boolean
       previewOmittedCharacters?: number
       previewSpillPath?: string
+      previewRawSpillPath?: string
     }
   | {
       kind: 'agent_control'
@@ -393,6 +399,7 @@ export type ToolSemantic =
       previewTruncated?: boolean
       previewOmittedCharacters?: number
       previewSpillPath?: string
+      previewRawSpillPath?: string
     }
   | { kind: 'unknown' }
 

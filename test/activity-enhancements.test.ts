@@ -379,13 +379,13 @@ describe('EXEC-006 round-18 executor spill-file channel', () => {
     const { claimed } = seedSpilledCall(store, '/tmp/spill/full.txt')
     expect(
       store.resolveRunOutputSpillPath(claimed.run.id, 'owner', 'call-spill'),
-    ).toBe('/tmp/spill/full.txt')
+    ).toEqual(['/tmp/spill/full.txt'])
     expect(
       store.resolveRunOutputSpillPath(claimed.run.id, 'intruder', 'call-spill'),
-    ).toBeUndefined()
+    ).toEqual([])
     expect(
       store.resolveRunOutputSpillPath(claimed.run.id, 'owner', 'call-none'),
-    ).toBeUndefined()
+    ).toEqual([])
     store.close()
   })
 
@@ -462,6 +462,65 @@ describe('EXEC-006 round-18 executor spill-file channel', () => {
       { offset: 0, spillReader: () => Promise.resolve(fullText.slice(0, 10)) },
     )
     expect(mismatched?.content).toContain('[output truncated; full output:')
+    store.close()
+  })
+
+  it('falls back from a formatted copy to the raw stream locator for paging', async () => {
+    const store = new PegasStore(':memory:')
+    const claimed = seedClaimedRun(store)
+    const fullText = `1\n${'q'.repeat(40_000)}\n60000`
+    const chained =
+      `59999\n60000\n[output truncated; full output: /tmp/raw/stdout.log]\n\n` +
+      '(Omitted 9000 bytes. Full formatted result stored at: /tmp/spill/formatted.txt. Use read with offset/limit, or grep this path to search within it.)'
+    store.appendRunActivity(claimed.run.id, 'enhance-worker', {
+      kind: 'tool_call',
+      status: 'started',
+      callId: 'call-chain',
+      tool: 'bash',
+      label: 'bash',
+      detail: JSON.stringify({ command: 'seq 1 60000' }),
+    })
+    store.completeRunActivityToolCall(
+      claimed.run.id,
+      'enhance-worker',
+      'call-chain',
+      {
+        status: 'completed',
+        result: chained,
+      },
+    )
+    store.upgradeRunToolSemantics(claimed.run.id, [
+      {
+        callId: 'call-chain',
+        status: 'completed',
+        result: chained,
+        meta: { truncated: true },
+      },
+    ])
+    expect(
+      store.resolveRunOutputSpillPath(claimed.run.id, 'owner', 'call-chain'),
+    ).toEqual(['/tmp/spill/formatted.txt', '/tmp/raw/stdout.log'])
+    const requested: string[] = []
+    const page = await store.readRunActivityOutput(
+      claimed.run.id,
+      'owner',
+      'call-chain',
+      {
+        offset: 0,
+        spillReader: path => {
+          requested.push(path)
+          return Promise.resolve(
+            path === '/tmp/raw/stdout.log' ? fullText : 'short copy',
+          )
+        },
+      },
+    )
+    expect(requested).toEqual([
+      '/tmp/spill/formatted.txt',
+      '/tmp/raw/stdout.log',
+    ])
+    expect(page?.content).toBe(fullText.slice(0, 12_000))
+    expect(page?.totalCharacters).toBe(fullText.length)
     store.close()
   })
 })
