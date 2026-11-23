@@ -112,7 +112,7 @@
   - network-egress 的「含敏感载荷 critical」未实现（载荷敏感性判定不做静态猜测），P1 一律 high。
   - bash 区内 `rm -rf` 判为低风险交由沙箱边界（Intake 表格只把「区外 rm -rf」列为 destructive）；间接执行（eval/管道 sh/解释器 -c/xargs）一律 unknown→ask，宁可误报不静默放行。
   - control-plane-mutation 的 deny 是「本次调用拦截 + 停放审批」；批准后的 successor 调用仍被 guard 拦（P1 不提供控制面修改的执行通道，属 P2+ 的显式设计决策）。
-- **证据**：`test/policy-gate.test.ts` 17 项（先红后绿）+ `test/policy-gate-integration.test.ts` 真实 DSH 探针 1 项（区内写放行落盘、越界写停放 `high/out-of-workspace-write`）；`pnpm check` 110 文件 / 1167 测试全绿（statement 85.49%、branch 78.18%、function 89.59%、line 88.68%），`pnpm smoke`、`pnpm smoke:crash` 通过。验收条件 1（除独立审计表）、2 的 standard 档路径、8 已满足；条件 3–7 属 P2–P5 与后续验证。
+- **证据**：`test/policy-gate.test.ts` 17 项（先红后绿）+ `test/policy-gate-integration.test.ts` 真实 DSH 探针 1 项（区内写放行落盘、越界写停放 `high/out-of-workspace-write`）；`pnpm check`（合并最新 main 后复跑）111 文件 / 1183 测试全绿（statement 85.54%、branch 78.3%、function 89.9%、line 88.7%），`pnpm smoke`、`pnpm smoke:crash` 通过。验收条件 1（除独立审计表）、2 的 standard 档路径、8 已满足；条件 3–7 属 P2–P5 与后续验证。
 - **剩余风险**：bash 静态分类可被复杂构造绕过 ask 路由（硬边界仍是 DSH sandbox + guard，Intake 已声明非安全边界）；`rm -rf` 目标解析对变量/通配符不展开，此类命令落入 unknown 或依赖模式命中；探针网络发送路径未在真实 DSH 上覆盖（分类器单测覆盖）。
 - **回滚**：revert 本 Feature 提交即恢复「仅越权 seam 审批」旧行为；无迁移、无数据删除。
 
