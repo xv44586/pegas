@@ -173,6 +173,15 @@ const modelGateway = createHttpServer((request, response) => {
     )
     return
   }
+  if (request.url?.endsWith('/chat/completions')) {
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(
+      JSON.stringify({
+        choices: [{ message: { content: '{"ok":true}' } }],
+      }),
+    )
+    return
+  }
   response.writeHead(404).end()
 })
 await new Promise(resolveListen =>
@@ -573,6 +582,58 @@ try {
       `desktop-onboarding-${slug}`,
     )
   }
+  const unconfigured = await browser.newContext({
+    viewport: { width: 1440, height: 900 },
+    reducedMotion: 'reduce',
+    deviceScaleFactor: 1,
+  })
+  const unconfiguredPage = await unconfigured.newPage()
+  unconfiguredPage.setDefaultTimeout(12_000)
+  await unconfiguredPage.route('**/v1/settings/agent-models', route =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        defaultProvider: 'magpie',
+        defaultModel: '',
+        models: [],
+      }),
+    }),
+  )
+  await unconfiguredPage.goto(`http://127.0.0.1:${String(port)}/?setup=1`)
+  await unconfiguredPage
+    .getByRole('heading', { name: '欢迎使用 Pegas', exact: true })
+    .waitFor()
+  await unconfiguredPage
+    .getByRole('button', { name: '继续', exact: true })
+    .click()
+  await unconfiguredPage
+    .getByRole('heading', { name: '连接模型服务', exact: true })
+    .waitFor()
+  const connectionGroup = unconfiguredPage.getByRole('group', {
+    name: '模型连接配置',
+  })
+  await connectionGroup.waitFor()
+  await capture(
+    unconfiguredPage,
+    'desktop-onboarding-connection.png',
+    'desktop-onboarding-connection',
+  )
+  await connectionGroup.getByLabel('API Key').fill('fixture-key')
+  await connectionGroup.getByRole('button', { name: '测试连接' }).click()
+  await connectionGroup.getByText(/连接正常 · \d+ ms/).waitFor()
+  await capture(
+    unconfiguredPage,
+    'desktop-onboarding-connection-tested.png',
+    'desktop-onboarding-connection-tested',
+  )
+  await unconfiguredPage.unroute('**/v1/settings/agent-models')
+  await connectionGroup.getByRole('button', { name: '保存连接' }).click()
+  await connectionGroup.waitFor({ state: 'detached' })
+  await unconfiguredPage.getByRole('button', { name: /，默认模型$/ }).click()
+  await assertPickerPagination(unconfiguredPage, 'onboarding connection picker')
+  await unconfigured.close()
+
   await desktop.close()
 
   const dark = await browser.newContext({
@@ -1621,6 +1682,13 @@ async function assertGeometry(page, label) {
       if (rect.left < -1 || rect.right > globalThis.innerWidth + 1)
         out.push(
           `${element.className} crosses viewport ${String(Math.round(rect.left))}..${String(Math.round(rect.right))} of ${String(globalThis.innerWidth)}`,
+        )
+      if (
+        element.classList.contains('onboarding-dialog') &&
+        (rect.top < -1 || rect.bottom > globalThis.innerHeight + 1)
+      )
+        out.push(
+          `onboarding dialog escapes viewport vertically ${String(Math.round(rect.top))}..${String(Math.round(rect.bottom))} of ${String(globalThis.innerHeight)}`,
         )
     }
     for (const element of globalThis.document.querySelectorAll(

@@ -175,6 +175,47 @@ describe('sealed UI layout contracts', () => {
     expect(a11yScript).toContain('PEGAS_MODEL_BASE_URL')
   })
 
+  it('keeps the onboarding connection setup on the shared save and probe path', () => {
+    const onboarding = readFileSync(
+      new URL('../web/src/sealed/Onboarding.tsx', import.meta.url),
+      'utf8',
+    )
+    const app = readFileSync(
+      new URL('../web/src/App.tsx', import.meta.url),
+      'utf8',
+    )
+    expect(onboarding).toContain('尚未配置模型连接')
+    expect(onboarding).toContain('测试连接')
+    expect(onboarding).toContain('保存连接')
+    expect(onboarding).toContain('type="password"')
+    expect(onboarding).toContain('connectionConfigured')
+    expect(app).toMatch(
+      /<Onboarding[\s\S]*?onSaveConnection=\{saveOnboardingConnection\}/,
+    )
+    expect(app).toMatch(
+      /<Onboarding[\s\S]*?onTestConnection=\{testOnboardingConnection\}/,
+    )
+    expect(app).toMatch(
+      /async function saveOnboardingConnection[\s\S]*?api\.saveSettings\([\s\S]*?loadConfiguration\(true\)/,
+    )
+    expect(app).toMatch(
+      /async function testOnboardingConnection[\s\S]*?api\.testModel\(/,
+    )
+    expect(sealedUi).toMatch(/\.setup-connection > label > input\s*\{/)
+    expect(sealedUi).not.toMatch(/\.setup-form input,/)
+    expect(sealedUi).toMatch(
+      /\.onboarding-dialog\s*\{[^}]*max-height:\s*calc\(100dvh - 12vh - 20px\);/,
+    )
+    expect(sealedUi).toMatch(/\.setup-body\s*\{[^}]*overflow-y:\s*auto;/)
+    expect(uiReviewScript).toContain('escapes viewport vertically')
+    expect(uiReviewScript).toContain('desktop-onboarding-connection')
+    const a11yScript = readFileSync(
+      new URL('../scripts/a11y-review.mjs', import.meta.url),
+      'utf8',
+    )
+    expect(a11yScript).toContain('onboarding-connection-setup')
+  })
+
   it('stacks the composer trigger name and provider detail instead of gluing them inline', () => {
     expect(sealedUi).toMatch(
       /\.composer-model-button > span\s*\{[^}]*display:\s*grid;/,
