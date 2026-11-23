@@ -23,7 +23,7 @@ import {
   X,
   Zap,
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 
 import type { PegasApi } from '../api'
 import { MarkdownMessage } from '../MarkdownMessage'
