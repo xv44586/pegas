@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   buildToolSemantic,
-  semanticSpillPath,
+  semanticSpillPaths,
   splitToolDetail,
 } from '../src/activity/tool-semantics.js'
 import { PegasStore } from '../src/storage/sqlite-store.js'
@@ -862,7 +862,7 @@ describe('EXEC-006 round-18 head+tail clipping and spill notices', () => {
     expect(semantic.output).toBe('tail line one\ntail line two')
     expect(semantic.outputTruncated).toBeUndefined()
     expect(semantic.outputSpillPath).toBe('/tmp/dsh-spill/out-1.txt')
-    expect(semanticSpillPath(semantic)).toBe('/tmp/dsh-spill/out-1.txt')
+    expect(semanticSpillPaths(semantic)).toEqual(['/tmp/dsh-spill/out-1.txt'])
   })
 
   it('recognizes the retention notice on previews and drops unavailable locators', () => {
@@ -889,7 +889,7 @@ describe('EXEC-006 round-18 head+tail clipping and spill notices', () => {
     if (unavailable.kind !== 'shell') throw new Error('expected shell')
     expect(unavailable.output).toBe('tail only')
     expect(unavailable.outputSpillPath).toBeUndefined()
-    expect(semanticSpillPath(unavailable)).toBeUndefined()
+    expect(semanticSpillPaths(unavailable)).toEqual([])
     const relative = buildToolSemantic(
       { tool: 'bash', input: '{"command":"ls"}' },
       {
@@ -912,5 +912,34 @@ describe('EXEC-006 round-18 head+tail clipping and spill notices', () => {
     expect(semantic.preview?.endsWith('99: last line')).toBe(true)
     expect(semantic.previewTruncated).toBe(true)
     expect(semantic.previewOmittedCharacters).toBeGreaterThan(5_000)
+  })
+
+  it('peels chained retention + bash notices and keeps both locators in order', () => {
+    const result =
+      '59998\n59999\n60000\n' +
+      '[output truncated; full output: /tmp/dsh-subprocess/stdout.log]\n\n' +
+      '(Omitted 14463 bytes. Full formatted result stored at: /tmp/dsh-spill/formatted.txt. Use read with offset/limit, or grep this path to search within it.)'
+    const semantic = buildToolSemantic(
+      { tool: 'bash', input: '{"command":"seq 1 60000"}' },
+      { status: 'completed', result },
+    )
+    if (semantic.kind !== 'shell') throw new Error('expected shell')
+    expect(semantic.output).toBe('59998\n59999\n60000')
+    expect(semantic.outputSpillPath).toBe('/tmp/dsh-spill/formatted.txt')
+    expect(semantic.outputRawSpillPath).toBe('/tmp/dsh-subprocess/stdout.log')
+    expect(semanticSpillPaths(semantic)).toEqual([
+      '/tmp/dsh-spill/formatted.txt',
+      '/tmp/dsh-subprocess/stdout.log',
+    ])
+    const web = buildToolSemantic(
+      { tool: 'web_fetch', input: '{"url":"https://example.com/x"}' },
+      {
+        status: 'completed',
+        result: `body tail\n\n${result.split('\n\n')[1] ?? ''}`,
+      },
+    )
+    if (web.kind !== 'web') throw new Error('expected web')
+    expect(web.previewSpillPath).toBe('/tmp/dsh-spill/formatted.txt')
+    expect(web.preview).toBe('body tail')
   })
 })

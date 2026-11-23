@@ -181,6 +181,25 @@ export interface RunAutomationStatusCommand {
   expectedRevision: number
 }
 
+export interface RunMessageCommand {
+  commandId: string
+  text: string
+}
+
+/**
+ * CONV-006: the Executor-facing say entry only expresses one user-visible
+ * message inside the Run's own Task. Task, Run and lane are frozen
+ * server-side; the payload cannot name another Task or pick a lane.
+ */
+export function parseRunMessageCommand(value: unknown): RunMessageCommand {
+  const input = record(value, 'Run message command')
+  exactKeys(input, ['commandId', 'text'])
+  return {
+    commandId: requiredString(input.commandId, 'commandId', 160),
+    text: requiredString(input.text, 'text', 8000),
+  }
+}
+
 export function parseRunAutomationStatusCommand(
   value: unknown,
 ): RunAutomationStatusCommand {

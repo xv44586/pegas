@@ -102,6 +102,56 @@ describe('CONV-006 deterministic projection derivation', () => {
     ).toMatchObject({ lane: 'work', weight: 'card' })
   })
 
+  it('keeps automation-triggered completion cards silent while failures and decisions stay visible', () => {
+    const completion = messageFixture({
+      taskId: 'task-1',
+      payload: {
+        type: 'run.completed',
+        taskId: 'task-1',
+        text: '第 2 个数：2',
+      },
+    })
+    expect(
+      deriveConversationProjection(completion, {
+        task: { id: 'task-1', kind: 'work', originEventId: 'event-1' },
+        runOriginSource: 'automation',
+      }),
+    ).toMatchObject({ lane: 'work', weight: 'silent' })
+    expect(
+      deriveConversationProjection(completion, {
+        task: { id: 'task-1', kind: 'work', originEventId: 'event-1' },
+        runOriginSource: 'web',
+      }),
+    ).toMatchObject({ lane: 'work', weight: 'card' })
+    expect(
+      deriveConversationProjection(
+        messageFixture({
+          taskId: 'task-1',
+          payload: { type: 'run.failed', taskId: 'task-1', text: '失败' },
+        }),
+        { runOriginSource: 'automation' },
+      ),
+    ).toMatchObject({ lane: 'work', weight: 'card' })
+    expect(
+      deriveConversationProjection(
+        messageFixture({
+          taskId: 'task-1',
+          payload: {
+            type: 'approval.required',
+            taskId: 'task-1',
+            text: '需要批准',
+          },
+        }),
+        { runOriginSource: 'automation' },
+      ),
+    ).toMatchObject({ lane: 'decide', weight: 'card' })
+    expect(
+      deriveConversationProjection(messageFixture({ taskId: 'task-1' }), {
+        runOriginSource: 'automation',
+      }),
+    ).toMatchObject({ lane: 'say', weight: 'inline' })
+  })
+
   it.each([
     'run.completed',
     'run.failed',

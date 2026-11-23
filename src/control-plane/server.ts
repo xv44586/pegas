@@ -83,6 +83,7 @@ import {
   parseFollowUpCommand,
   parseRunAutomationCommand,
   parseRunAutomationStatusCommand,
+  parseRunMessageCommand,
 } from '../schedule/schedule.js'
 import type {
   SpeechRecognitionProvider,
@@ -116,6 +117,7 @@ import {
   OutboxNotFoundError,
   OutboxResolutionConflictError,
   RunClaimError,
+  RunMessageCommandConflictError,
   SettingsRevisionConflictError,
   WorkerProfileReadOnlyError,
   WorkerProfileRevisionConflictError,
@@ -136,7 +138,7 @@ const maximumPageLimit = 200
 const defaultMaximumAudioBytes = 25 * 1024 * 1024
 const maximumAttachmentBytes = 25 * 1024 * 1024
 const maximumRunImageBytes = 10 * 1024 * 1024
-const maximumRunSpillFileBytes = 1024 * 1024
+const maximumRunSpillFileBytes = 4 * 1024 * 1024
 
 /**
  * EXEC-006 round 18: best-effort read of one executor spill file for output
@@ -997,6 +999,28 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
       const runAutomationMatch = /^\/v1\/runs\/([^/]+)\/automations$/.exec(
         taskResourceUrl.pathname,
       )
+      const runMessageMatch = /^\/v1\/runs\/([^/]+)\/messages$/.exec(
+        taskResourceUrl.pathname,
+      )
+      if (runMessageMatch && request.method === 'POST') {
+        const claimToken = runClaimToken(request)
+        if (!claimToken)
+          return sendJson(response, 403, { error: 'run_claim_required' })
+        const runId = decodeURIComponent(runMessageMatch[1] ?? '')
+        const command = parseRunMessageCommand(await readJson(request))
+        try {
+          const result = options.store.sayFromRun(runId, claimToken, command)
+          return sendJson(response, 201, result)
+        } catch (error) {
+          if (error instanceof RunClaimError)
+            return sendJson(response, 403, { error: 'run_claim_invalid' })
+          if (error instanceof RunMessageCommandConflictError)
+            return sendJson(response, 409, {
+              error: 'run_message_command_conflict',
+            })
+          throw error
+        }
+      }
       if (runAutomationMatch && request.method === 'POST') {
         const claimToken = runClaimToken(request)
         if (!claimToken)
@@ -1830,21 +1854,22 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
           )
         if (outputFileMatch) {
           const userId = requiredQuery(url, 'userId')
-          const path = options.store.resolveRunOutputSpillPath(
+          const paths = options.store.resolveRunOutputSpillPath(
             decodeURIComponent(outputFileMatch[1] ?? ''),
             userId,
             decodeURIComponent(outputFileMatch[2] ?? ''),
           )
-          if (!path) return sendJson(response, 404, { error: 'not_found' })
-          const text = await readRunSpillText(path)
-          if (text === undefined)
-            return sendJson(response, 404, { error: 'not_found' })
-          response.writeHead(200, {
-            'content-type': 'text/plain; charset=utf-8',
-            'cache-control': 'private, max-age=300',
-            'x-content-type-options': 'nosniff',
-          })
-          return response.end(text)
+          for (const path of paths) {
+            const text = await readRunSpillText(path)
+            if (text === undefined) continue
+            response.writeHead(200, {
+              'content-type': 'text/plain; charset=utf-8',
+              'cache-control': 'private, max-age=300',
+              'x-content-type-options': 'nosniff',
+            })
+            return response.end(text)
+          }
+          return sendJson(response, 404, { error: 'not_found' })
         }
         const imageMatch =
           /^\/v1\/runs\/([^/]+)\/activity\/([^/]+)\/image$/.exec(url.pathname)
@@ -2694,6 +2719,7 @@ function isRunCapabilityWrite(request: IncomingMessage): boolean {
     /^\/v1\/runs\/[^/]+\/(reports|approvals|collaborations)$/.test(pathname) ||
     /^\/v1\/runs\/[^/]+\/goal-proposals$/.test(pathname) ||
     /^\/v1\/runs\/[^/]+\/follow-ups$/.test(pathname) ||
+    /^\/v1\/runs\/[^/]+\/messages$/.test(pathname) ||
     /^\/v1\/runs\/[^/]+\/automations$/.test(pathname) ||
     /^\/v1\/runs\/[^/]+\/automations\/[^/]+\/(pause|resume|cancel)$/.test(
       pathname,

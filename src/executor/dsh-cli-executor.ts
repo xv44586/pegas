@@ -190,6 +190,22 @@ export class DshCliExecutor implements RunExecutor {
             this.#privacyMasker,
           )
         : undefined
+    const capabilitySource = input.actionCapability
+      ? {
+          baseUrl: input.actionCapability.baseUrl,
+          runId: input.runId,
+          claimToken: input.actionCapability.claimToken,
+        }
+      : input.conversationStateCapability
+        ? {
+            baseUrl: input.conversationStateCapability.baseUrl,
+            runId: input.conversationStateCapability.runId,
+            claimToken: input.conversationStateCapability.claimToken,
+          }
+        : undefined
+    const capabilityFile = capabilitySource
+      ? createRunCapabilityFile(capabilitySource)
+      : undefined
     const arguments_ = [
       '--profile',
       this.#profile,
@@ -216,6 +232,9 @@ export class DshCliExecutor implements RunExecutor {
       env: {
         ...executorEnvironment(process.env),
         ...(bridgeEnabled ? { PEGAS_APPROVAL_BRIDGE: '1' } : {}),
+        ...(capabilityFile
+          ? { PEGAS_RUN_CAPABILITY_FILE: capabilityFile.path }
+          : {}),
         ...(input.conversationStateCapability
           ? {
               PEGAS_CONTROL_PLANE_URL:
@@ -410,6 +429,7 @@ export class DshCliExecutor implements RunExecutor {
       patch?.remove()
       bridgePatch?.remove()
       readonlyPatch?.remove()
+      capabilityFile?.remove()
     }
     const { code, signal } = exit
     const stderr = Buffer.concat(stderrChunks).toString('utf8')
@@ -490,6 +510,7 @@ export function executorEnvironment(
     'PEGAS_TASK_ID',
     'PEGAS_INPUT_EVENT_ID',
     'PEGAS_RUN_CLAIM_TOKEN',
+    'PEGAS_RUN_CAPABILITY_FILE',
     'PEGAS_TOOL_APPROVAL_GRANT',
     'PEGAS_APPROVAL_BRIDGE',
     'DSH_HOME',
@@ -556,6 +577,23 @@ function createAgentModelPatch(
     ]),
     { mode: 0o600 },
   )
+  return {
+    path,
+    remove: () => rmSync(directory, { recursive: true, force: true }),
+  }
+}
+
+function createRunCapabilityFile(capability: {
+  baseUrl: string
+  runId: string
+  claimToken: string
+}): {
+  path: string
+  remove: () => void
+} {
+  const directory = mkdtempSync(join(tmpdir(), 'pegas-dsh-capability-'))
+  const path = join(directory, 'capability.json')
+  writeFileSync(path, JSON.stringify(capability), { mode: 0o600 })
   return {
     path,
     remove: () => rmSync(directory, { recursive: true, force: true }),
@@ -864,7 +902,9 @@ export function executorPrompt(
 
 如果任务无需工具即可直接回答，就直接给出最终答案，不要额外发送形式化回执。后续普通执行进度不需要反复汇报；只在需要用户决策、遇到无法自行解决的阻塞或取得最终结果时面向用户输出。
 
-需要执行高风险或不可逆副作用时，使用进程环境中的 PEGAS_CONTROL_PLANE_URL、PEGAS_RUN_ID 和 PEGAS_RUN_CLAIM_TOKEN 调用 Pegas Approval API。claim token 只能作为 x-pegas-run-claim-token 请求头发送给该本机 Control Plane，不能输出到对话、日志、文件或第三方服务。
+执行过程中需要让用户立即看到一句话（例如周期任务每次触发的报数、关键中间结果）时，用同一组本机环境变量和 claim header 调用 POST /v1/runs/:runId/messages，请求体为 {"commandId":"stable-key","text":"要让用户看到的话"}。该消息立即出现在对话正文（say 声道），不必等 Run 结束；它只是投影事实，不会把 Run 或 Task 结算为完成，也不代替最终答案。由机器输入（周期 Automation/Follow-up 到点）唤醒的周期触发的 Run 必须把本次要报告的内容经该接口发出，因为这类 Run 的完成卡片默认安静；人类输入驱动的 Run 的最终答案仍走正常收尾输出。commandId 是网络重试键，同一消息重试必须保持原键和完全相同的 payload。
+
+需要执行高风险或不可逆副作用时，使用进程环境中的 PEGAS_CONTROL_PLANE_URL、PEGAS_RUN_ID 和 PEGAS_RUN_CLAIM_TOKEN 调用 Pegas Approval API。注意：shell 工具可能按名字过滤含 TOKEN/KEY/SECRET 的环境变量，导致 shell 里读不到 PEGAS_RUN_CLAIM_TOKEN。此时读取 PEGAS_RUN_CAPABILITY_FILE 指向的本机 JSON 文件（字段 baseUrl、runId、claimToken）获取同一凭证，例如 claim=$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.env.PEGAS_RUN_CAPABILITY_FILE,"utf8")).claimToken)')。claim token 只能作为 x-pegas-run-claim-token 请求头发送给该本机 Control Plane，不能输出到对话、日志、文件或第三方服务；不要把该文件复制到别处，Run 结束时它会被自动删除。
 
 创建 Approval：POST /v1/runs/:runId/approvals。下面是可直接序列化的合法请求体，必须替换各字段的实际值；options 至少两个且必须同时包含 approve 和 reject，recommendedOptionId 必须引用其中一个 option：
 {"action":{"kind":"publish.release","risk":"high","idempotencyKey":"stable-action-key","request":{"target":"actual-target"},"recoveryPoint":{"step":"before-side-effect"},"approval":{"summary":"准备执行的具体动作","impact":"可见影响与范围","recommendedOptionId":"approve","options":[{"id":"approve","label":"批准执行","kind":"approve"},{"id":"reject","label":"不执行","kind":"reject"}]}}}
