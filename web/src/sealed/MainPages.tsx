@@ -63,6 +63,7 @@ import {
   isReconciliationMessage,
   isResolvedDecisionMessage,
   isSilentConversationMessage,
+  isStreamingSayMessage,
   latestRunForTask,
   latestRunProgressText,
   needsOutboxResolution,
@@ -189,6 +190,7 @@ export function ConversationPage({
         taskId: undefined as string | undefined,
         anchor: undefined as ConversationAnchor | undefined,
         resolved: false,
+        streaming: false,
         source: undefined as OutboxMessage | undefined,
       }))
     const pegas = snapshot.messages
@@ -213,6 +215,7 @@ export function ConversationPage({
           lane: conversationLane(message),
           anchor: conversationAnchor(message),
           resolved: isResolvedDecisionMessage(message, snapshot.messages),
+          streaming: isStreamingSayMessage(message),
           source: message,
         }
       })
@@ -573,6 +576,7 @@ export function ConversationPage({
           message.role === 'pegas' && message.lane !== 'say'
             ? `is-lane-${message.lane}`
             : '',
+          message.streaming ? 'is-streaming' : '',
           workEntry ? 'has-work-entry' : '',
           groupedNext ? 'grouped-next' : '',
           highlightedId === message.id ? 'is-anchor-highlight' : '',
@@ -618,6 +622,13 @@ export function ConversationPage({
                 }
                 linkPreviewLoader={url => api.linkPreview(url)}
               />
+              {message.streaming && (
+                <span
+                  aria-label="正在输入"
+                  className="say-stream-caret"
+                  role="status"
+                />
+              )}
             </>
           )}
           {message.role === 'user' && message.attachment && (

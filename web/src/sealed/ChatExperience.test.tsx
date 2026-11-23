@@ -347,6 +347,68 @@ describe('DESIGN-003 chat page', () => {
     ).toBeNull()
   })
 
+  it('EXEC-005: renders a streaming say draft in place and settles without a duplicate bubble', async () => {
+    const streamingMessage: OutboxMessage = {
+      id: 'message-say-stream',
+      userId: 'owner',
+      taskId: channel.id,
+      payload: {
+        type: 'agent.message',
+        taskId: channel.id,
+        runId: 'run-chat',
+        text: '今天是',
+        streaming: true,
+      },
+      status: 'sent',
+      createdAt: '2026-11-22T08:01:00.000Z',
+      projection: {
+        lane: 'say',
+        weight: 'inline',
+        anchor: { taskId: channel.id, eventId: 'event-1' },
+      },
+    }
+    const snapshot: Snapshot = {
+      ...baseSnapshot,
+      messages: [streamingMessage],
+    }
+    installChatFetch(snapshot)
+    render(<App />)
+    expect(await screen.findByText('今天是')).toBeTruthy()
+    expect(screen.getByRole('status', { name: '正在输入' })).toBeTruthy()
+    snapshot.messages = [
+      {
+        ...streamingMessage,
+        payload: {
+          type: 'agent.message',
+          taskId: channel.id,
+          runId: 'run-chat',
+          text: '今天是星期六。',
+        },
+      },
+      {
+        id: 'message-chat-completed',
+        userId: 'owner',
+        taskId: channel.id,
+        payload: { type: 'run.completed', taskId: channel.id, runId: 'run-chat' },
+        status: 'sent',
+        createdAt: '2026-11-22T08:02:00.000Z',
+        projection: {
+          lane: 'work',
+          weight: 'silent',
+          anchor: { taskId: channel.id, eventId: 'event-1' },
+        },
+      },
+    ]
+    await waitFor(
+      () => {
+        expect(screen.getByText('今天是星期六。')).toBeTruthy()
+      },
+      { timeout: 8_000 },
+    )
+    expect(screen.queryByRole('status', { name: '正在输入' })).toBeNull()
+    expect(screen.getAllByText('今天是星期六。')).toHaveLength(1)
+  }, 15_000)
+
   it('CONV-006: renders decide facts as action cards and marks them resolved', async () => {
     const decideSnapshot: Snapshot = {
       ...baseSnapshot,

@@ -24,6 +24,7 @@ import {
   Sun,
   Trash2,
   Volume2,
+  Zap,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
@@ -1584,6 +1585,28 @@ function RouterSettings({
             确定性规则
           </button>
         </div>
+      </div>
+      <div className="settings-card">
+        <div className="card-title">
+          <Zap size={20} />
+          <div>
+            <h3>即时应答</h3>
+            <p>
+              日常提问和闲聊直接在对话里回答，不创建正式事情；需要动手做事时仍会走完整接单流程。
+            </p>
+          </div>
+        </div>
+        <label className="switch-row">
+          启用即时应答
+          <input
+            aria-label="启用即时应答"
+            checked={draft.chatLaneEnabled === true}
+            onChange={event =>
+              onChange({ ...draft, chatLaneEnabled: event.target.checked })
+            }
+            type="checkbox"
+          />
+        </label>
       </div>
       <div className="compact-field-row">
         <span>归类模型</span>
