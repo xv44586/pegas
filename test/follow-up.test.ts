@@ -212,7 +212,7 @@ describe('SCHEDULE-001 conversational follow-up', () => {
       automations[0]?.id ?? '',
       'owner',
     )
-    expect(invocations[0]?.status).toBe('dispatched')
+    expect(invocations.items[0]?.status).toBe('dispatched')
   })
 
   it('serves the claim-authenticated HTTP endpoint', async () => {

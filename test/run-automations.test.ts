@@ -266,7 +266,7 @@ describe('SCHEDULE-001 executor recurring automations', () => {
     const runs = store.listRuns(task.id)
     expect(runs.at(-1)?.input).toContain('报出下一个数字')
     expect(
-      store.listAutomationInvocations(automation.id, 'owner')[0],
+      store.listAutomationInvocations(automation.id, 'owner').items[0],
     ).toMatchObject({
       status: 'dispatched',
       scheduledFor: '2026-11-23T02:01:00.000Z',

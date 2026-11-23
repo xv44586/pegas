@@ -645,6 +645,22 @@ a {
   color: var(--critical);
   overflow-wrap: anywhere;
 }
+.invocation-summary {
+  color: var(--ink-soft);
+  flex: 1 1 160px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.history-more {
+  display: flex;
+  justify-content: center;
+  margin-top: 10px;
+}
+.record-history .record-history-error {
+  margin-top: 8px;
+}
 .record-form {
   display: flex;
   flex-direction: column;

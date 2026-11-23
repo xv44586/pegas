@@ -424,16 +424,40 @@ export class PegasApi {
     return ((await response.json()) as { automation: Automation }).automation
   }
 
+  async deleteAutomation(
+    automationId: string,
+    expectedRevision: number,
+  ): Promise<void> {
+    const response = await fetch(
+      `/v1/automations/${encodeURIComponent(automationId)}/delete`,
+      {
+        method: 'POST',
+        headers: this.#headers(true),
+        body: JSON.stringify({
+          userId: this.#userId,
+          commandId: crypto.randomUUID(),
+          expectedRevision,
+        }),
+      },
+    )
+    if (!response.ok) await throwResponse(response)
+  }
+
   async automationInvocations(
     automationId: string,
-  ): Promise<AutomationInvocation[]> {
-    const user = encodeURIComponent(this.#userId)
-    const response = await this.#get<{
+    cursor?: string,
+  ): Promise<{ invocations: AutomationInvocation[]; nextCursor?: string }> {
+    const params = new URLSearchParams({
+      userId: this.#userId,
+      limit: '25',
+    })
+    if (cursor) params.set('cursor', cursor)
+    return this.#get<{
       invocations: AutomationInvocation[]
+      nextCursor?: string
     }>(
-      `/v1/automations/${encodeURIComponent(automationId)}/invocations?userId=${user}&limit=50`,
+      `/v1/automations/${encodeURIComponent(automationId)}/invocations?${params.toString()}`,
     )
-    return response.invocations
   }
 
   async searchChannels(

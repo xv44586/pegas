@@ -145,6 +145,7 @@ import {
   resumedFireAt,
   type Automation,
   type AutomationCreateCommand,
+  type AutomationDeletion,
   type AutomationInvocation,
   type AutomationInvocationStatus,
   type AutomationSchedule,
@@ -812,6 +813,34 @@ CREATE TABLE run_activity_output_pages (
   created_at TEXT NOT NULL,
   PRIMARY KEY (run_id, call_id)
 );
+`
+
+const migration39 = `
+-- DESIGN-006 phase 2: manual deletion of ended automations. The command
+-- ledger must survive the definition so frozen receipts stay replayable;
+-- rebuild the table with a nullable ON DELETE SET NULL reference.
+PRAGMA defer_foreign_keys = ON;
+
+CREATE TABLE automation_commands_v39 (
+  user_id TEXT NOT NULL,
+  command_id TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  operation TEXT NOT NULL,
+  automation_id TEXT REFERENCES automations(id) ON DELETE SET NULL,
+  response_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, command_id)
+);
+
+INSERT INTO automation_commands_v39
+  (user_id, command_id, fingerprint, operation, automation_id,
+   response_json, created_at)
+SELECT user_id, command_id, fingerprint, operation, automation_id,
+       response_json, created_at
+FROM automation_commands;
+
+DROP TABLE automation_commands;
+ALTER TABLE automation_commands_v39 RENAME TO automation_commands;
 `
 
 const migration32 = `
@@ -2617,6 +2646,7 @@ export class PegasStore {
     this.#migrate(36, migration36)
     this.#migrate(37, migration37)
     this.#migrate(38, migration38)
+    this.#migrate(39, migration39)
   }
 
   #backfillWorkerIconIds(): void {
@@ -3700,22 +3730,149 @@ export class PegasStore {
     return this.#transitionAutomation(automationId, command, 'cancel')
   }
 
+  deleteAutomation(
+    automationId: string,
+    command: AutomationStatusCommand,
+  ): AutomationDeletion {
+    const nowIso = this.#clock.now().toISOString()
+    const fingerprint = automationFingerprint({
+      operation: 'delete',
+      automationId,
+      expectedRevision: command.expectedRevision,
+    })
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const replay = this.#automationCommandReplay(
+        command.userId,
+        command.commandId,
+        fingerprint,
+      )
+      if (replay) {
+        this.#database.exec('COMMIT')
+        return replay as unknown as AutomationDeletion
+      }
+      const current = this.#automationByIdForUser(automationId, command.userId)
+      if (current.revision !== command.expectedRevision)
+        throw new AutomationRevisionConflictError()
+      if (current.status !== 'completed' && current.status !== 'cancelled')
+        throw new AutomationReadOnlyError()
+      // Drop queued-but-unprocessed due events so the scheduler cannot
+      // settle a trigger whose definition no longer exists. Processing or
+      // settled events stay: their Runs are independent happened facts.
+      const pendingEventIds = this.#database
+        .prepare(
+          `SELECT i.event_id FROM automation_invocations i
+           JOIN inbox_events e ON e.id = i.event_id
+           WHERE i.automation_id = ? AND i.user_id = ?
+             AND e.status = 'pending'`,
+        )
+        .all(automationId, command.userId) as { event_id: string }[]
+      const deleteInvocationByEvent = this.#database.prepare(
+        'DELETE FROM automation_invocations WHERE event_id = ?',
+      )
+      const deletePendingEvent = this.#database.prepare(
+        `DELETE FROM inbox_events WHERE id = ? AND status = 'pending'`,
+      )
+      for (const { event_id: eventId } of pendingEventIds) {
+        deleteInvocationByEvent.run(eventId)
+        deletePendingEvent.run(eventId)
+      }
+      this.#database
+        .prepare(
+          `DELETE FROM automation_invocations
+           WHERE automation_id = ? AND user_id = ?`,
+        )
+        .run(automationId, command.userId)
+      const result = this.#database
+        .prepare('DELETE FROM automations WHERE id = ? AND user_id = ?')
+        .run(automationId, command.userId)
+      if (result.changes !== 1) throw new AutomationNotFoundError()
+      const deletion: AutomationDeletion = {
+        id: automationId,
+        deleted: true,
+        deletedAt: nowIso,
+      }
+      this.#database
+        .prepare(
+          `INSERT INTO automation_commands
+            (user_id, command_id, fingerprint, operation, automation_id,
+             response_json, created_at)
+           VALUES (?, ?, ?, 'delete', NULL, ?, ?)`,
+        )
+        .run(
+          command.userId,
+          command.commandId,
+          fingerprint,
+          JSON.stringify(deletion),
+          nowIso,
+        )
+      this.#database.exec('COMMIT')
+      return deletion
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
   listAutomationInvocations(
     automationId: string,
     userId: string,
-    limit = 100,
-  ): AutomationInvocation[] {
+    page: { limit?: number; cursor?: string } = {},
+  ): CursorPage<AutomationInvocation> {
     this.#automationByIdForUser(automationId, userId)
+    const limit = page.limit ?? 50
     if (!Number.isSafeInteger(limit) || limit <= 0 || limit > 200)
       throw new Error('Invocation limit must be between 1 and 200')
+    const cursorRow = page.cursor
+      ? (this.#database
+          .prepare(
+            `SELECT rowid, scheduled_for FROM automation_invocations
+             WHERE id = ? AND automation_id = ? AND user_id = ?`,
+          )
+          .get(page.cursor, automationId, userId) as
+          { rowid: number; scheduled_for: string } | undefined)
+      : undefined
+    if (page.cursor && !cursorRow)
+      throw new Error('Invocation cursor is invalid')
     const rows = this.#database
       .prepare(
         `SELECT * FROM automation_invocations
          WHERE automation_id = ? AND user_id = ?
+           AND (? IS NULL OR scheduled_for < ?
+             OR (scheduled_for = ? AND rowid < ?))
          ORDER BY scheduled_for DESC, rowid DESC LIMIT ?`,
       )
-      .all(automationId, userId, limit) as unknown as AutomationInvocationRow[]
-    return rows.map(toAutomationInvocation)
+      .all(
+        automationId,
+        userId,
+        cursorRow?.scheduled_for ?? null,
+        cursorRow?.scheduled_for ?? null,
+        cursorRow?.scheduled_for ?? null,
+        cursorRow?.rowid ?? null,
+        limit + 1,
+      ) as unknown as AutomationInvocationRow[]
+    return cursorPage(rows, limit, row =>
+      this.#projectInvocation(toAutomationInvocation(row)),
+    )
+  }
+
+  #projectInvocation(invocation: AutomationInvocation): AutomationInvocation {
+    const run = this.#database
+      .prepare(
+        `SELECT task_id, output_json FROM runs
+         WHERE origin_event_id = ? LIMIT 1`,
+      )
+      .get(invocation.eventId) as
+      { task_id: string; output_json: string | null } | undefined
+    if (!run) return invocation
+    const summary = run.output_json
+      ? firstSummaryLine(JSON.parse(run.output_json) as string, 120)
+      : undefined
+    return {
+      ...invocation,
+      taskId: run.task_id,
+      ...(summary ? { summary } : {}),
+    }
   }
 
   automationInvocationForEvent(

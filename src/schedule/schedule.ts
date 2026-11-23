@@ -45,6 +45,16 @@ export interface AutomationInvocation {
   lastError?: string
   createdAt: string
   updatedAt: string
+  /** Read-only projection: the Task of the Run this invocation produced. */
+  taskId?: string
+  /** Read-only projection: first output line (≤120 chars) of that Run. */
+  summary?: string
+}
+
+export interface AutomationDeletion {
+  id: string
+  deleted: true
+  deletedAt: string
 }
 
 export interface AutomationCreateCommand {

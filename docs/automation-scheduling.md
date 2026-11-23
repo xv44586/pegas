@@ -4,7 +4,7 @@
 >
 > 状态：Partial
 >
-> 更新日期：2026-11-23（登记手动删除与触发记录分页的目标合同，标注「设计中」；实现与验收归属 DESIGN-006 第二阶段，见 `docs/sealed-ui-rebuild.md` §20）
+> 更新日期：2026-11-23（手动删除与触发记录分页落地：schema v39、`POST .../delete`、invocations cursor 分页与 `taskId`/`summary` 只读投影；实现与验收归属 DESIGN-006 第二阶段，见 `docs/sealed-ui-rebuild.md` §20）
 
 ## 用户结果
 
@@ -95,7 +95,7 @@ Invocation 保存：
 - `pending`、`processing`、`dispatched` 或 `failed` 状态；
 - Inbox 尝试次数与最近失败原因。
 
-展示层投影（设计中，DESIGN-006 第二阶段）：Invocation 读取响应附加两个只读派生字段，均不落盘：
+展示层投影（DESIGN-006 第二阶段）：Invocation 读取响应附加两个只读派生字段，均不落盘：
 
 - `taskId`：该次触发对应 Run 的 Task（经 `event_id → runs.origin_event_id` 关联；Run 尚未创建时缺省）；
 - `summary`：该 Run 已落盘输出（`output_json`）的首行摘要（≤120 字，与对话投影同一截断口径；Run 未完成或无输出时缺省）。
@@ -144,7 +144,7 @@ PUT /v1/automations/:automationId
 
 编辑必须携带 `userId`、`commandId`、`expectedRevision` 和完整 `automation`。旧 revision 返回 `409 automation_conflict`；不增加数量化的“last write wins”。
 
-### 触发记录分页（设计中，DESIGN-006 第二阶段）
+### 触发记录分页（DESIGN-006 第二阶段）
 
 ```http
 GET /v1/automations/:automationId/invocations?userId=owner&limit=25&cursor=<invocationId>
@@ -175,7 +175,7 @@ POST /v1/automations/:automationId/cancel
 
 暂停清空下一次触发时间；恢复从当前时间重新计算下一次触发；取消永久结束 Automation。删除仅适用于已结束状态（见下节）。这些命令失败都返回稳定错误（见「状态命令错误表」）。
 
-### 删除（设计中，DESIGN-006 第二阶段）
+### 删除（DESIGN-006 第二阶段）
 
 ```http
 POST /v1/automations/:automationId/delete
@@ -188,7 +188,7 @@ POST /v1/automations/:automationId/delete
 - **保留边界**：已产生的 Task、Run、对话消息与 `agent.message` 历史全部保留——删除清理的是「未来的责任与调度记录」，不是「已经发生的事实」。对话里的数数气泡不因删除消失。
 - **幂等**：按 `(userId, commandId)` 冻结首次响应重放；同 command 不同 payload 返回 `409 automation_command_conflict`；旧 `expectedRevision` 返回 `409 automation_conflict`。删除后同 command 重放仍返回冻结的删除回执（命令账本保留，不随定义删除）。
 - **回执**：`{ deletion: { id, deleted: true, deletedAt } }`。删除后 `GET` 该 Automation 返回 404。
-- **schema**：`automation_commands.automation_id` 的外键改为 `ON DELETE SET NULL`（列放宽为可空），命令账本在定义删除后仍可重放； additive 迁移，旧版本代码不读该列的空值场景，回滚无兼容负担。
+- **schema**：迁移 v39 重建 `automation_commands`，`automation_id` 放宽为可空并把外键改为 `ON DELETE SET NULL`，命令账本在定义删除后仍可重放；additive 迁移，旧版本代码不读该列的空值场景，回滚无兼容负担。删除事务内按 Event 逐条先删 Invocation 再删 pending Event（满足 `automation_invocations.event_id` 外键顺序），批量删除会因外键约束失败。
 
 ### 状态命令错误表
 

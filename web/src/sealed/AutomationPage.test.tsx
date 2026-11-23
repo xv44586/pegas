@@ -11,7 +11,7 @@ import {
 } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import type { Automation, WorkChannel } from '../types'
+import type { Automation, AutomationInvocation, WorkChannel } from '../types'
 import { AutomationPage } from './MainPages'
 
 afterEach(cleanup)
@@ -84,6 +84,23 @@ function renderPage(
   }
   render(<AutomationPage {...props} />)
   return props
+}
+
+function invocationFixture(
+  overrides: Partial<AutomationInvocation> = {},
+): AutomationInvocation {
+  return {
+    id: 'inv-1',
+    automationId: 'auto-1',
+    userId: 'owner',
+    scheduledFor: '2026-11-23T06:59:00.000Z',
+    eventId: 'event-inv-1',
+    status: 'dispatched',
+    attempts: 1,
+    createdAt: '2026-11-23T06:59:00.000Z',
+    updatedAt: '2026-11-23T06:59:00.000Z',
+    ...overrides,
+  }
 }
 
 describe('DESIGN-006 automation list', () => {
@@ -191,5 +208,178 @@ describe('DESIGN-006 automation list', () => {
         'cancel',
       ),
     )
+  })
+
+  it('offers two-step delete only on ended rows and removes the row after confirm', async () => {
+    const ended = automationFixture({
+      id: 'auto-ended',
+      status: 'cancelled',
+      nextFireAt: undefined,
+    })
+    const onDelete = vi.fn(() => Promise.resolve())
+    const props = renderPage([automationFixture(), ended], { onDelete })
+    fireEvent.click(screen.getByRole('button', { name: /已结束 1/ }))
+    const deleteButtons = screen.getAllByRole('button', { name: '删除' })
+    expect(deleteButtons).toHaveLength(1)
+    const deleteButton = deleteButtons[0]
+    if (!deleteButton) throw new Error('Expected delete button')
+    fireEvent.click(deleteButton)
+    expect(onDelete).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: '保留' }))
+    expect(screen.getAllByRole('button', { name: '删除' })).toHaveLength(1)
+    const reopenedDelete = screen.getAllByRole('button', { name: '删除' })[0]
+    if (!reopenedDelete) throw new Error('Expected delete button')
+    fireEvent.click(reopenedDelete)
+    fireEvent.click(screen.getByRole('button', { name: '确认删除' }))
+    await waitFor(() =>
+      expect(props.onDelete).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'auto-ended' }),
+      ),
+    )
+  })
+
+  it('shows the run summary and a channel link per invocation, without inventing facts for failed runs', async () => {
+    const onOpenChannel = vi.fn()
+    renderPage([automationFixture()], {
+      onLoadInvocations: () =>
+        Promise.resolve({
+          invocations: [
+            invocationFixture({
+              taskId: 'task-1',
+              summary: '9',
+            }),
+            invocationFixture({
+              id: 'inv-2',
+              status: 'failed',
+              attempts: 3,
+              lastError: '目标事情已停止',
+              scheduledFor: '2026-11-23T06:58:00.000Z',
+            }),
+          ],
+        }),
+      onOpenChannel,
+    })
+    fireEvent.click(screen.getByRole('button', { name: '触发记录' }))
+    await waitFor(() => expect(screen.getByText('9')).toBeTruthy())
+    expect(screen.getByText('目标事情已停止')).toBeTruthy()
+    const links = screen.getAllByRole('button', { name: '查看事情' })
+    expect(links).toHaveLength(1)
+    const channelLink = links[0]
+    if (!channelLink) throw new Error('Expected channel link')
+    fireEvent.click(channelLink)
+    expect(onOpenChannel).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'task-1' }),
+    )
+  })
+
+  it('loads more invocations with the returned cursor and stops when exhausted', async () => {
+    const onLoadInvocations = vi
+      .fn()
+      .mockResolvedValueOnce({
+        invocations: [invocationFixture()],
+        nextCursor: 'inv-1',
+      })
+      .mockResolvedValueOnce({
+        invocations: [
+          invocationFixture({
+            id: 'inv-2',
+            scheduledFor: '2026-11-23T06:58:00.000Z',
+          }),
+        ],
+      })
+    renderPage([automationFixture()], { onLoadInvocations })
+    fireEvent.click(screen.getByRole('button', { name: '触发记录' }))
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '加载更多' })).toBeTruthy(),
+    )
+    expect(onLoadInvocations.mock.calls[0]?.[0]).toMatchObject({
+      id: 'auto-1',
+    })
+    expect(onLoadInvocations.mock.calls[0]?.[1]).toBeUndefined()
+    fireEvent.click(screen.getByRole('button', { name: '加载更多' }))
+    await waitFor(() => expect(onLoadInvocations).toHaveBeenCalledTimes(2))
+    expect(onLoadInvocations).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: 'auto-1' }),
+      'inv-1',
+    )
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: '加载更多' })).toBeNull(),
+    )
+    expect(screen.getAllByText(/计划/)).toHaveLength(2)
+  })
+
+  it('keeps loaded pages and offers retry when loading more fails', async () => {
+    const onLoadInvocations = vi
+      .fn()
+      .mockResolvedValueOnce({
+        invocations: [invocationFixture()],
+        nextCursor: 'inv-1',
+      })
+      .mockRejectedValueOnce(new Error('网络中断'))
+      .mockResolvedValueOnce({
+        invocations: [invocationFixture({ id: 'inv-2' })],
+      })
+    renderPage([automationFixture()], { onLoadInvocations })
+    fireEvent.click(screen.getByRole('button', { name: '触发记录' }))
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '加载更多' })).toBeTruthy(),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '加载更多' }))
+    await waitFor(() => expect(screen.getByText(/网络中断/)).toBeTruthy())
+    expect(screen.getAllByText(/计划/)).toHaveLength(1)
+    fireEvent.click(screen.getByRole('button', { name: '重试' }))
+    await waitFor(() => expect(onLoadInvocations).toHaveBeenCalledTimes(3))
+    await waitFor(() => expect(screen.getAllByText(/计划/)).toHaveLength(2))
+  })
+
+  it('orders live rows by next fire and ended rows by recency without a sort menu', () => {
+    const later = automationFixture({
+      id: 'auto-later',
+      title: '晚触发',
+      nextFireAt: '2026-11-23T08:00:00.000Z',
+    })
+    const sooner = automationFixture({
+      id: 'auto-sooner',
+      title: '早触发',
+      nextFireAt: '2026-11-23T07:00:00.000Z',
+    })
+    const paused = automationFixture({
+      id: 'auto-paused',
+      title: '已暂停项',
+      status: 'paused',
+      nextFireAt: undefined,
+    })
+    const endedOld = automationFixture({
+      id: 'auto-ended-old',
+      title: '早结束',
+      status: 'completed',
+      nextFireAt: undefined,
+      updatedAt: '2026-11-23T05:00:00.000Z',
+    })
+    const endedNew = automationFixture({
+      id: 'auto-ended-new',
+      title: '晚结束',
+      status: 'cancelled',
+      nextFireAt: undefined,
+      updatedAt: '2026-11-23T06:30:00.000Z',
+    })
+    renderPage([endedOld, paused, later, endedNew, sooner])
+    const liveTitles = screen
+      .getByLabelText('自动化列表')
+      .querySelectorAll('.record-title strong')
+    expect([...liveTitles].map(node => node.textContent)).toEqual([
+      '早触发',
+      '晚触发',
+      '已暂停项',
+    ])
+    fireEvent.click(screen.getByRole('button', { name: /已结束 2/ }))
+    const endedTitles = screen
+      .getByLabelText('已结束的自动化')
+      .querySelectorAll('.record-title strong')
+    expect([...endedTitles].map(node => node.textContent)).toEqual([
+      '晚结束',
+      '早结束',
+    ])
+    expect(screen.queryByRole('button', { name: /排序/ })).toBeNull()
   })
 })
