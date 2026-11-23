@@ -133,10 +133,65 @@ export function parseFollowUpCommand(value: unknown): FollowUpCommand {
   return {
     commandId: requiredString(input.commandId, 'commandId', 160),
     prompt: requiredString(input.prompt, 'prompt', 8000),
-    at: isoTimestamp(input.at, 'at'),
+    at: zonedIsoTimestamp(input.at, 'at'),
     ...(input.title === undefined
       ? {}
       : { title: requiredString(input.title, 'title', 120) }),
+  }
+}
+
+export interface RunAutomationCommand {
+  commandId: string
+  title?: string
+  prompt: string
+  everySeconds: number
+  startsAt?: string
+}
+
+/**
+ * SCHEDULE-001: the Executor-facing recurring entry only expresses an
+ * interval continuation of the Run's own Task. Owner and target are frozen
+ * server-side; the payload cannot name another Task or new_task.
+ */
+export function parseRunAutomationCommand(
+  value: unknown,
+): RunAutomationCommand {
+  const input = record(value, 'Run automation command')
+  exactKeys(input, ['commandId', 'title', 'prompt', 'everySeconds', 'startsAt'])
+  return {
+    commandId: requiredString(input.commandId, 'commandId', 160),
+    ...(input.title === undefined
+      ? {}
+      : { title: requiredString(input.title, 'title', 120) }),
+    prompt: requiredString(input.prompt, 'prompt', 8000),
+    everySeconds: boundedInteger(
+      input.everySeconds,
+      'everySeconds',
+      minimumIntervalSeconds,
+      maximumIntervalSeconds,
+    ),
+    ...(input.startsAt === undefined
+      ? {}
+      : { startsAt: zonedIsoTimestamp(input.startsAt, 'startsAt') }),
+  }
+}
+
+export interface RunAutomationStatusCommand {
+  commandId: string
+  expectedRevision: number
+}
+
+export function parseRunAutomationStatusCommand(
+  value: unknown,
+): RunAutomationStatusCommand {
+  const input = record(value, 'Run automation status command')
+  exactKeys(input, ['commandId', 'expectedRevision'])
+  return {
+    commandId: requiredString(input.commandId, 'commandId', 160),
+    expectedRevision: positiveInteger(
+      input.expectedRevision,
+      'expectedRevision',
+    ),
   }
 }
 
@@ -246,6 +301,21 @@ function isoTimestamp(value: unknown, field: string): string {
   const milliseconds = Date.parse(value)
   if (!Number.isFinite(milliseconds)) throw new Error(`${field} is invalid`)
   return new Date(milliseconds).toISOString()
+}
+
+/**
+ * Run-capability time inputs must carry an explicit zone. A bare local
+ * wall-clock string would be silently reinterpreted in the server zone and
+ * has shifted scheduled runs by whole hours before; reject it instead.
+ */
+function zonedIsoTimestamp(value: unknown, field: string): string {
+  if (typeof value !== 'string' || !value.trim())
+    throw new Error(`${field} is required`)
+  if (!/(?:Z|[+-]\d{2}:?\d{2})$/iu.test(value.trim()))
+    throw new Error(
+      `${field} must include a timezone offset or Z (for example 2026-11-24T14:00:00+08:00); bare local times are ambiguous`,
+    )
+  return isoTimestamp(value, field)
 }
 
 function positiveInteger(value: unknown, field: string): number {

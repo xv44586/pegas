@@ -153,6 +153,8 @@ import {
   type AutomationTarget,
   type AutomationUpdateCommand,
   type FollowUpCommand,
+  type RunAutomationCommand,
+  type RunAutomationStatusCommand,
 } from '../schedule/schedule.js'
 import {
   effectiveWorkerProfile,
@@ -7686,6 +7688,70 @@ export class PegasStore {
     return { automation }
   }
 
+  createRunAutomation(
+    runId: string,
+    claimToken: string,
+    command: RunAutomationCommand,
+  ): { automation: Automation } {
+    this.#claimForCapability(runId, claimToken)
+    const run = this.#runById(runId)
+    const task = this.#taskById(run.taskId)
+    if (task.status === 'completed' || task.status === 'cancelled')
+      throw new AutomationTargetUnavailableError()
+    if (
+      command.startsAt !== undefined &&
+      Date.parse(command.startsAt) <= this.#clock.now().getTime()
+    )
+      throw new Error('Automation startsAt must be in the future')
+    const automation = this.createAutomation({
+      userId: task.userId,
+      commandId: `run-automation:${runId}:${command.commandId}`,
+      automation: {
+        title: (command.title ?? `周期跟进: ${task.title}`).slice(0, 120),
+        prompt: command.prompt,
+        schedule: {
+          kind: 'interval',
+          everySeconds: command.everySeconds,
+          ...(command.startsAt === undefined
+            ? {}
+            : { startsAt: command.startsAt }),
+        },
+        target: { kind: 'existing_task', taskId: task.id },
+      },
+    })
+    return { automation }
+  }
+
+  transitionRunAutomation(
+    runId: string,
+    claimToken: string,
+    automationId: string,
+    operation: 'pause' | 'resume' | 'cancel',
+    command: RunAutomationStatusCommand,
+  ): { automation: Automation } {
+    this.#claimForCapability(runId, claimToken)
+    const run = this.#runById(runId)
+    const task = this.#taskById(run.taskId)
+    const automation = this.#automationByIdForUser(automationId, task.userId)
+    if (
+      automation.target.kind !== 'existing_task' ||
+      automation.target.taskId !== task.id
+    )
+      throw new AutomationNotFoundError()
+    const statusCommand: AutomationStatusCommand = {
+      userId: task.userId,
+      commandId: `run-automation:${runId}:${command.commandId}`,
+      expectedRevision: command.expectedRevision,
+    }
+    const updated =
+      operation === 'pause'
+        ? this.pauseAutomation(automationId, statusCommand)
+        : operation === 'resume'
+          ? this.resumeAutomation(automationId, statusCommand)
+          : this.cancelAutomation(automationId, statusCommand)
+    return { automation: updated }
+  }
+
   submitWorkerReport(
     runId: string,
     userId: string | undefined,
@@ -9430,6 +9496,17 @@ export class PegasStore {
           )
           .get(task.id, runId),
       )
+      const hasActiveAutomation = Boolean(
+        this.#database
+          .prepare(
+            `SELECT 1 FROM automations
+             WHERE user_id = ? AND status = 'active'
+               AND json_extract(target_json, '$.kind') = 'existing_task'
+               AND json_extract(target_json, '$.taskId') = ?
+             LIMIT 1`,
+          )
+          .get(task.userId, task.id),
+      )
       const requiresEvidence = Boolean(
         this.currentGoalContract(task.id, task.userId),
       )
@@ -9510,7 +9587,10 @@ export class PegasStore {
            WHERE id = ?`,
         )
         .run(
-          actionBlocksCompletion || requiresEvidence || hasPendingWork
+          actionBlocksCompletion ||
+            requiresEvidence ||
+            hasPendingWork ||
+            hasActiveAutomation
             ? 'started'
             : 'completed',
           awaitingClarification
@@ -9526,7 +9606,10 @@ export class PegasStore {
                     : requiresEvidence
                       ? 'awaiting_evidence'
                       : null,
-          actionBlocksCompletion || requiresEvidence || hasPendingWork
+          actionBlocksCompletion ||
+            requiresEvidence ||
+            hasPendingWork ||
+            hasActiveAutomation
             ? null
             : JSON.stringify({
                 at: now,
@@ -9573,7 +9656,12 @@ export class PegasStore {
           text: result.output,
         },
       })
-      if (!actionBlocksCompletion && !requiresEvidence && !hasPendingWork) {
+      if (
+        !actionBlocksCompletion &&
+        !requiresEvidence &&
+        !hasPendingWork &&
+        !hasActiveAutomation
+      ) {
         this.#settleInboundCollaborations(
           task.id,
           'completed',
