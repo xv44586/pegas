@@ -355,6 +355,81 @@ describe('SCHEDULE-001 executor recurring automations', () => {
     expect(store.fireDueAutomations()).toEqual([])
   })
 
+  it('DESIGN-008: run.completed carries automationActive only while an active automation targets the Task', async () => {
+    const clock = new MutableClock('2026-11-23T02:00:00.000Z')
+    const store = new PegasStore(':memory:', { clock })
+    cleanups.push(() => store.close())
+    const { task, claimed } = await seedClaimedRun(store, '每分钟报数 1 到 10')
+    const { automation } = store.createRunAutomation(
+      claimed.run.id,
+      claimed.claimToken,
+      { commandId: 'ra-fact', prompt: '报出下一个数字', everySeconds: 60 },
+    )
+    store.completeRun(claimed.run.id, 'worker-1', {
+      executorRef: 'session-1',
+      output: '周期自动化已创建并生效',
+    })
+    const scheduled = store
+      .listOutbox('owner', task.id)
+      .find(
+        message =>
+          (message.payload as { type?: string }).type === 'run.completed',
+      )
+    expect(scheduled?.payload).toMatchObject({
+      type: 'run.completed',
+      automationActive: true,
+    })
+
+    clock.step(61 * 1000)
+    store.fireDueAutomations()
+    await processNextEvent(
+      store,
+      new RoutingEventHandler(new RuleBasedTaskRouter(), 'echo-test'),
+      'worker-2',
+    )
+    const firedClaim = store.claimNextRun('worker-2')
+    if (!firedClaim) throw new Error('expected the fired invocation run')
+    store.transitionRunAutomation(
+      firedClaim.run.id,
+      firedClaim.claimToken,
+      automation.id,
+      'cancel',
+      { commandId: 'ra-fact-stop', expectedRevision: 1 },
+    )
+    store.completeRun(firedClaim.run.id, 'worker-2', {
+      executorRef: 'session-2',
+      output: '已数到 10，周期自动化已自动取消。',
+    })
+    const completions = store
+      .listOutbox('owner', task.id)
+      .filter(
+        message =>
+          (message.payload as { type?: string }).type === 'run.completed',
+      )
+    const final = completions.at(-1)
+    expect(final?.payload).toMatchObject({ type: 'run.completed' })
+    expect(final?.payload).not.toHaveProperty('automationActive')
+  })
+
+  it('DESIGN-008: plain runs without automations never carry automationActive', async () => {
+    const clock = new MutableClock('2026-11-23T02:00:00.000Z')
+    const store = new PegasStore(':memory:', { clock })
+    cleanups.push(() => store.close())
+    const { task, claimed } = await seedClaimedRun(store, '一次性整理任务')
+    store.completeRun(claimed.run.id, 'worker-1', {
+      executorRef: 'session-1',
+      output: '整理完成',
+    })
+    const completion = store
+      .listOutbox('owner', task.id)
+      .find(
+        message =>
+          (message.payload as { type?: string }).type === 'run.completed',
+      )
+    expect(completion?.payload).toMatchObject({ type: 'run.completed' })
+    expect(completion?.payload).not.toHaveProperty('automationActive')
+  })
+
   it('serves claim-authenticated HTTP create and status endpoints', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'pegas-run-automation-'))
     cleanups.push(() => rmSync(directory, { recursive: true, force: true }))

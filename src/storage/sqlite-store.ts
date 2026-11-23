@@ -9857,6 +9857,12 @@ export class PegasStore {
           taskId: task.id,
           runId,
           ...(blockingAction ? { actionId: blockingAction.id } : {}),
+          ...(awaitingClarification ||
+          actionBlocksCompletion ||
+          requiresEvidence ||
+          !hasActiveAutomation
+            ? {}
+            : { automationActive: true }),
           text: result.output,
         },
       })

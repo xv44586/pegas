@@ -1,6 +1,8 @@
 import {
   ArrowUp,
+  ArrowUpToLine,
   ArrowRight,
+  CalendarClock,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -57,6 +59,7 @@ import {
   conversationLane,
   formatRelativeTime,
   formatRunDuration,
+  hasActiveAutomationFact,
   isReconciliationMessage,
   isResolvedDecisionMessage,
   isSilentConversationMessage,
@@ -550,6 +553,18 @@ export function ConversationPage({
     groupedNext: boolean,
     inThreadContinuation: boolean,
   ) {
+    const workEntryChannel =
+      message.role === 'pegas' && message.taskId
+        ? snapshot.channels.find(item => item.id === message.taskId)
+        : undefined
+    const messageReview = message.role === 'pegas' ? message.review : undefined
+    const workEntry =
+      workEntryChannel &&
+      (message.lane === 'say' || (message.lane === 'work' && !messageReview))
+        ? { channel: workEntryChannel, label: '查看工作详情' }
+        : workEntryChannel && message.lane === 'work' && messageReview
+          ? { channel: workEntryChannel, label: '审查交付' }
+          : undefined
     return (
       <article
         className={[
@@ -558,6 +573,7 @@ export function ConversationPage({
           message.role === 'pegas' && message.lane !== 'say'
             ? `is-lane-${message.lane}`
             : '',
+          workEntry ? 'has-work-entry' : '',
           groupedNext ? 'grouped-next' : '',
           highlightedId === message.id ? 'is-anchor-highlight' : '',
         ]
@@ -631,27 +647,42 @@ export function ConversationPage({
                   : '展开完整回复'}
             </button>
           )}
-          {message.role === 'pegas' &&
-            message.lane === 'say' &&
-            message.taskId && (
-              <button
-                className="inline-link"
-                onClick={() => openTaskDetails(message.taskId)}
-                type="button"
-              >
-                查看工作详情 <ArrowRight size={15} />
-              </button>
-            )}
         </div>
         <div className="message-meta">
           {message.role === 'user' && (
             <UserMessageStatus
               message={message}
-              onJumpToMessage={jumpToMessage}
+              onOpenTask={openTaskDetails}
               onRetry={() => void retryMessage(message.id)}
               retrying={retryingMessageId === message.id}
               snapshot={snapshot}
             />
+          )}
+          {workEntry && (
+            <button
+              aria-label={`${workEntry.label}：${workEntry.channel.title}`}
+              className="message-work-entry"
+              onClick={() => {
+                if (
+                  workEntry.label === '审查交付' &&
+                  messageReview &&
+                  message.source
+                ) {
+                  actions.onOpenDrawer({
+                    kind: 'review',
+                    review: messageReview,
+                    channel: workEntry.channel,
+                    message: message.source,
+                  })
+                  return
+                }
+                openTaskDetails(workEntry.channel.id)
+              }}
+              title={workEntry.label}
+              type="button"
+            >
+              <Link2 size={14} />
+            </button>
           )}
           <time dateTime={message.at}>{formatRelativeTime(message.at)}</time>
           <button
@@ -1174,7 +1205,11 @@ function factCardHeading(message: FactCardMessage): {
   if (type === 'run.failed' || type === 'action.failed')
     return { icon: CircleAlert, label: '执行失败' }
   if (message.review) return { icon: CheckCircle2, label: '交付可审查' }
-  if (type === 'run.completed') return { icon: CheckCircle2, label: '已完成' }
+  if (type === 'run.completed') {
+    if (message.source && hasActiveAutomationFact(message.source.payload))
+      return { icon: CalendarClock, label: '已安排' }
+    return { icon: CheckCircle2, label: '已完成' }
+  }
   return { icon: Layers3, label: '工作进展' }
 }
 
@@ -1260,9 +1295,10 @@ function FactCard({
             aria-label="回到发起消息"
             className="fact-card-origin"
             onClick={() => onJumpToMessage(originEventId)}
+            title="回到发起消息"
             type="button"
           >
-            <Link2 size={14} />
+            <ArrowUpToLine size={14} />
           </button>
         )}
       </header>
@@ -1318,29 +1354,6 @@ function FactCard({
             type="button"
           >
             {decideLabel} <ArrowRight size={15} />
-          </button>
-        </div>
-      )}
-      {message.lane === 'work' && channel && (
-        <div className="fact-card-actions">
-          <button
-            className="secondary-button"
-            onClick={() => {
-              if (message.review && message.source) {
-                actions.onOpenDrawer({
-                  kind: 'review',
-                  review: message.review,
-                  channel,
-                  message: message.source,
-                })
-                return
-              }
-              onOpenTask(message.taskId)
-            }}
-            type="button"
-          >
-            {message.review ? '审查交付' : '查看工作详情'}{' '}
-            <ArrowRight size={15} />
           </button>
         </div>
       )}
@@ -1577,7 +1590,7 @@ function UserMessageStatus({
   message,
   snapshot,
   retrying,
-  onJumpToMessage,
+  onOpenTask,
   onRetry,
 }: {
   message: {
@@ -1587,7 +1600,7 @@ function UserMessageStatus({
   }
   snapshot: Snapshot
   retrying: boolean
-  onJumpToMessage: (messageId: string) => void
+  onOpenTask: (taskId: string | undefined) => void
   onRetry: () => void
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
@@ -1667,13 +1680,14 @@ function UserMessageStatus({
   if (message.derivedIds.length === 0) return null
   if (message.derivedIds.length === 1) {
     const targetId = message.derivedIds[0] ?? message.id
+    const fact = snapshot.messages.find(item => item.id === targetId)
     return (
       <span className="message-status">
         <button
-          aria-label="查看进展"
+          aria-label="查看工作详情"
           className="message-derived-trigger"
-          onClick={() => onJumpToMessage(targetId)}
-          title="查看进展"
+          onClick={() => onOpenTask(fact?.taskId)}
+          title="查看工作详情"
           type="button"
         >
           <Link2 size={14} />
@@ -1701,6 +1715,7 @@ function UserMessageStatus({
             : 'run'
     return {
       id: fact.id,
+      taskId: fact.taskId,
       title: channel?.title ?? attentionSummary(fact).title,
       state,
       label: channel ? statusLabel(channel, run) : '工作进展',
@@ -1713,11 +1728,11 @@ function UserMessageStatus({
         aria-controls={menuId}
         aria-expanded={menuOpen}
         aria-haspopup="menu"
-        aria-label={`查看进展：${String(message.derivedIds.length)} 个事情`}
+        aria-label={`查看工作详情：${String(message.derivedIds.length)} 个事情`}
         className="message-derived-trigger"
         onClick={() => setMenuOpen(current => !current)}
         ref={triggerRef}
-        title={`查看进展 · ${String(message.derivedIds.length)} 个事情`}
+        title={`查看工作详情 · ${String(message.derivedIds.length)} 个事情`}
         type="button"
       >
         <Link2 size={14} />
@@ -1738,7 +1753,7 @@ function UserMessageStatus({
               key={entry.id}
               onClick={() => {
                 setMenuOpen(false)
-                onJumpToMessage(entry.id)
+                onOpenTask(entry.taskId)
               }}
               role="menuitem"
               type="button"

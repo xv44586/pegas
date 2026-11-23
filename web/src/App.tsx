@@ -24,6 +24,7 @@ import {
   latestRunForTask,
   reviewProjection,
   runIdFromMessage,
+  taskAutomationActive,
   unresolvedAttentionMessages,
   type AppData,
   type AppPage,
@@ -433,12 +434,17 @@ export function App() {
         : undefined) ??
       latestRunForTask(runs, channel.id) ??
       view.run
+    const automationActive = taskAutomationActive(
+      [...data.snapshot.messages, ...(view.timeline?.messages ?? [])],
+      channel.id,
+    )
     const taskRecords =
       data.usage?.records.filter(record => record.taskId === channel.id) ?? []
     const records = taskRecords.filter(record => record.runId === run?.id)
     if (!records.length)
       return {
         ...view,
+        automationActive,
         channel,
         run,
         runs,
@@ -465,6 +471,7 @@ export function App() {
       .filter((value): value is number => value !== undefined)
     return {
       ...view,
+      automationActive,
       channel,
       run,
       runs,
