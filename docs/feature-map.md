@@ -147,11 +147,11 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
   2. CI 在 `pnpm check`/`pnpm smoke` 之后、review:evidence 之前，按同一目录集合检测 diff 并运行采集器；artifact 文件名含 `real-service`，满足 generate-review-evidence 的 canary 检查。
   3. 采集器起真实 control-plane/worker/notification 进程（echo Executor、独立临时数据目录、不读运行实例数据），失败时仍写出 `status: failed` 的脱敏结果并非零退出；finally 全量清理进程、webhook 接收器与临时目录。
   4. 产物只含 schemaVersion/kind/transport/redaction/headCommit/generatedAt/字段名列表/断言名与布尔结论/状态，不含用户原文、payload 值、token、URL 或环境变量。
-  5. 新增 `test/dependency-canary.test.ts` 3 回归（script 入口、CI 触发条件、真实 dispatcher + 脱敏产物合同），先红后绿。
+  5. 新增 `test/dependency-canary.test.ts` 4 回归（script 入口、CI 触发条件、真实 dispatcher + 脱敏产物合同、UI collector 不得清掉已采集 canary），先红后绿；`capture-ui-review.mjs` 改为只清理旧截图/录屏而保留 canary artifact（此前整目录 rmSync 会在 CI 顺序中吞掉先采集的 canary，本地复现后修复）。
 - **非目标**：不实现模型/ASR 真实凭证 canary（GitHub 托管 CI 无生产凭证，仍登记为缺口）；不改门禁判定逻辑、阈值或 Candidate 绑定语义；不动 UI collector 与既有截图流程（PEGAS_PUSH_MODE 仍为 disabled，互不影响）。
 - **数据与权限边界**：临时目录 + loopback webhook，无外部网络副作用、无生产凭证；产物进 7 天短期 artifact，`.gitignore` 排除 `output/`。
 - **失败与恢复**：投递超时/断言失败→脚本非零退出且 CI 失败，报告保留真实失败证据；回滚 revert 本提交即回到「外部服务改动缺 canary 即 incomplete」的旧行为，不影响其他门禁。
-- **当前证据（2026-11-24）**：worktree `approval-001-auto-review`（随 APPROVAL-001 PR #63 交付，因该 PR 触及 src/notification 触发门禁）。`pnpm review:canary -- --force` 实跑通过：六断言全 true、payload 字段名 [approvalId, deepLink, messageId, summary, type]、无 prompt 值外泄；generate-review-evidence 实测 canary 关键 Not tried 消失（仅剩本地未采截图的 UI media 项，CI 上由 review:ui 覆盖）。`test/dependency-canary.test.ts` 先红（3 failed）后绿（3 passed）。
+- **当前证据（2026-11-24）**：worktree `approval-001-auto-review`（随 APPROVAL-001 PR #63 交付，因该 PR 触及 src/notification 触发门禁）。`pnpm review:canary -- --force` 实跑通过：六断言全 true、payload 字段名 [approvalId, deepLink, messageId, summary, type]、无 prompt 值外泄；generate-review-evidence 实测 canary 关键 Not tried 消失（仅剩本地未采截图的 UI media 项，CI 上由 review:ui 覆盖）。`test/dependency-canary.test.ts` 先红后绿（4 passed）；本地按 CI 顺序 canary→UI→evidence 实跑生成 `ready-for-review`（101 artifacts，无关键 Not tried）。
 - **交付状态**：随 PR #63 待 CI 验证；合并后 LESSON-20261119-03 的「补通用 Candidate canary runner」缺口收窄为模型/语音部分。
 
 ### QUALITY-001：CI actions 升级 node24 运行时（2026-11-22）

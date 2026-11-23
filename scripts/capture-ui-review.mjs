@@ -1,8 +1,10 @@
 import { execFileSync, spawn } from 'node:child_process'
 import {
   chmodSync,
+  existsSync,
   mkdtempSync,
   mkdirSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from 'node:fs'
@@ -43,7 +45,15 @@ if (
 ) {
   throw new Error('UI review output must stay under output/feature-review/')
 }
-rmSync(outputDirectory, { recursive: true, force: true })
+if (existsSync(outputDirectory)) {
+  for (const entry of readdirSync(outputDirectory, { withFileTypes: true })) {
+    if (/\.(?:png|jpe?g|webp|mp4|webm)$/iu.test(entry.name))
+      rmSync(resolve(outputDirectory, entry.name), {
+        recursive: true,
+        force: true,
+      })
+  }
+}
 mkdirSync(outputDirectory, { recursive: true })
 
 const dataDirectory = mkdtempSync(resolve(tmpdir(), 'pegas-ui-review-'))

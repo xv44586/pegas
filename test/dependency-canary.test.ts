@@ -46,4 +46,18 @@ describe('dependency canary collector', () => {
       'deliveredPayloadFieldNames: Object.keys(payload ?? {}).sort()',
     )
   })
+
+  it('does not let the UI collector wipe an already collected canary artifact', () => {
+    const uiCollector = readFileSync(
+      join(repositoryRoot, 'scripts', 'capture-ui-review.mjs'),
+      'utf8',
+    )
+
+    expect(uiCollector).not.toContain(
+      'rmSync(outputDirectory, { recursive: true, force: true })',
+    )
+    expect(uiCollector).toContain(
+      'readdirSync(outputDirectory, { withFileTypes: true })',
+    )
+  })
 })
