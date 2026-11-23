@@ -38,6 +38,7 @@ describe('DshCliExecutor', () => {
         PEGAS_MODEL_API_KEY: 'model',
         PEGAS_SPEECH_API_KEY: 'speech',
         PEGAS_RUN_CLAIM_TOKEN: 'stale-run-claim',
+        PEGAS_RUN_CAPABILITY_FILE: '/tmp/stale-capability.json',
         PEGAS_RUN_ID: 'stale-run',
         PEGAS_TASK_ID: 'stale-task',
         PEGAS_INPUT_EVENT_ID: 'stale-input-event',
@@ -151,6 +152,10 @@ console.log(JSON.stringify({
     taskId: process.env.PEGAS_TASK_ID,
     inputEventId: process.env.PEGAS_INPUT_EVENT_ID,
     claimToken: process.env.PEGAS_RUN_CLAIM_TOKEN,
+    capabilityFile: process.env.PEGAS_RUN_CAPABILITY_FILE,
+    capability: process.env.PEGAS_RUN_CAPABILITY_FILE
+      ? JSON.parse(require('node:fs').readFileSync(process.env.PEGAS_RUN_CAPABILITY_FILE, 'utf8'))
+      : undefined,
     apiToken: process.env.PEGAS_API_TOKEN
   }),
   reason: { kind: 'completed' }
@@ -170,12 +175,95 @@ console.log(JSON.stringify({
       },
     })
 
-    expect(JSON.parse(result.output)).toEqual({
+    const capabilityOutput = JSON.parse(result.output) as {
+      baseUrl: string
+      runId: string
+      taskId: string
+      inputEventId: string
+      claimToken: string
+      capabilityFile: string
+      capability: { baseUrl: string; runId: string; claimToken: string }
+      apiToken?: string
+    }
+    expect(capabilityOutput.baseUrl).toBe('http://127.0.0.1:4317')
+    expect(capabilityOutput.runId).toBe('run-current')
+    expect(capabilityOutput.taskId).toBe('task-current')
+    expect(capabilityOutput.inputEventId).toBe('event-current')
+    expect(capabilityOutput.claimToken).toBe('current-run-claim')
+    expect(capabilityOutput.apiToken).toBeUndefined()
+    expect(capabilityOutput.capabilityFile).toContain('pegas-dsh-capability-')
+    expect(capabilityOutput.capability).toEqual({
       baseUrl: 'http://127.0.0.1:4317',
       runId: 'run-current',
-      taskId: 'task-current',
-      inputEventId: 'event-current',
       claimToken: 'current-run-claim',
+    })
+  })
+
+  it('removes the capability file after the child exits', async () => {
+    const command = fakeDsh(`
+console.log(JSON.stringify({
+  type: 'final',
+  sessionId: 'session-capability-cleanup',
+  text: process.env.PEGAS_RUN_CAPABILITY_FILE,
+  reason: { kind: 'completed' }
+}))
+`)
+    const executor = new DshCliExecutor({ command })
+    const result = await executor.execute({
+      runId: 'run-cleanup',
+      taskId: 'task-cleanup',
+      prompt: 'check cleanup',
+      workingDirectory: process.cwd(),
+      actionCapability: {
+        baseUrl: 'http://127.0.0.1:4317',
+        claimToken: 'cleanup-claim',
+      },
+    })
+    expect(result.output).toContain('pegas-dsh-capability-')
+    expect(existsSync(result.output)).toBe(false)
+  })
+
+  it('keeps the claim credential readable from a scrubbed model shell', async () => {
+    const command = fakeDsh(`
+const { spawnSync } = require('node:child_process')
+const pattern = /KEY|PASSWORD|SECRET|TOKEN/i
+const scrubbed = Object.fromEntries(
+  Object.entries(process.env).filter(
+    ([key]) => !pattern.test(key) && !key.toUpperCase().startsWith('DSH_'),
+  ),
+)
+const child = spawnSync(
+  process.execPath,
+  [
+    '-e',
+    'const fs = require("node:fs");' +
+      'const capability = JSON.parse(fs.readFileSync(process.env.PEGAS_RUN_CAPABILITY_FILE, "utf8"));' +
+      'process.stdout.write(JSON.stringify({ envToken: process.env.PEGAS_RUN_CLAIM_TOKEN ?? null, fileToken: capability.claimToken, runId: capability.runId }))',
+  ],
+  { env: scrubbed, encoding: 'utf8' },
+)
+console.log(JSON.stringify({
+  type: 'final',
+  sessionId: 'session-scrubbed-shell',
+  text: child.stdout,
+  reason: { kind: 'completed' }
+}))
+`)
+    const executor = new DshCliExecutor({ command })
+    const result = await executor.execute({
+      runId: 'run-scrubbed',
+      taskId: 'task-scrubbed',
+      prompt: 'call the control plane from a model shell',
+      workingDirectory: process.cwd(),
+      actionCapability: {
+        baseUrl: 'http://127.0.0.1:4317',
+        claimToken: 'scrubbed-shell-claim',
+      },
+    })
+    expect(JSON.parse(result.output)).toEqual({
+      envToken: null,
+      fileToken: 'scrubbed-shell-claim',
+      runId: 'run-scrubbed',
     })
   })
 
@@ -233,6 +321,8 @@ console.log(JSON.stringify({
     )
     expect(prompt).toContain('expectedRevision')
     expect(prompt).toContain('周期责任也不会复活已关闭的事情')
+    expect(prompt).toContain('PEGAS_RUN_CAPABILITY_FILE')
+    expect(prompt).toContain('Run 结束时它会被自动删除')
   })
 
   it('accepts only a completed final event and captures the session id', async () => {

@@ -264,6 +264,18 @@
 - Enforcement：尚未晋升；已有 config/desktop 回归与 smoke 快照断言守住 workspaceRoot 一处（断言 workspace 在 checkout 树外，而非仅"等于某派生路径"）。第三个独立日期出现时晋升，并评估把「默认目录物理隔离于 checkout」扩展为对 `selfChangeRepositoryRoot` 等其余 `resolve('.')` 默认值的统一检查（self-change 显式指仓库属预期，需区分）。
 - Owner / next action：再次出现同类默认目录泄漏时晋升本 Lesson；显式覆盖指向仓库子目录的场景已在 `.env.example` 警示，属用户主动授权。
 
+### LESSON-20261123-02：跨进程送达的凭证必须有真实执行链路端到端验证
+
+- Rule：凡执行合同要求 Executor 使用的凭证/能力，不能只验证「注入了子进程环境」，必须验证它在 Executor 实际使用的工具（模型 bash shell）里可获取——中间层（如 DSH `dsh-subprocess` 的 `SENSITIVE_ENV_PATTERN = /KEY|PASSWORD|SECRET|TOKEN/i`）会按名字剥掉凭证形环境变量。含敏感词命名的凭证必须同时提供不触发过滤的第二通道（如 0600 capability 文件 + 非敏感词路径环境变量），并有模拟中间层过滤行为的端到端回归。
+- Why：SCHEDULE-001 周期入口上线后真机验证失败：Worker 正确注入 `PEGAS_RUN_CLAIM_TOKEN`，既有测试用 fakeDsh 直读 `process.env` 全绿，但 DSH bash 工具经 `scrubbedParentEnv()` 剥掉 TOKEN 形变量，真实 Executor 在 shell 里拿不到 claim，创建 Automation 403，模型转而空转 60+ 步找凭证。同一断点也影响既有 approvals/collaborations/follow-ups/goal-proposals 合同（此前 smoke 全部用 echo-test executor，从未走真实 DSH shell 调用 run-capability API）。
+- Feature：SCHEDULE-001（同样约束 EXEC-003/APPROVAL-001/CONV-006 的 run-capability 通道）
+- Evidence：线上 Run e2f6df78（activity 记录 bash env 无 claim、POST 403）；DSH `dsh-subprocess/src/index.ts` `SENSITIVE_ENV_PATTERN` 与 `scrubbedParentEnv()`；修复 `createRunCapabilityFile` + `PEGAS_RUN_CAPABILITY_FILE`（src/executor/dsh-cli-executor.ts）；`test/dsh-cli-executor.test.ts` 3 项新回归（capability 文件内容/退出清理/模拟 scrub 的子进程可读）+ `test/run-automations.test.ts` 端到端（scrubbed shell 读文件→真实 HTTP 201→落盘）。
+- Seen：1（2026-11-23）
+- Severity：normal
+- Status：Observed
+- Enforcement：尚未晋升；已有模拟 DSH scrub 行为的端到端回归守住 claim 通道。若其他凭证（approval grant、privacy key 等）再因中间层过滤不可达，按同类计数。
+- Owner / next action：CONV-006 接线时复核 chat lane 只读通道同样经 capability 文件可达；评估把「真实 DSH probe 验证 run-capability API」纳入发布 checklist。
+
 <!--
 ### LESSON-YYYYMMDD-NN：简短标题
 

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { createControlPlane } from '../src/control-plane/server.js'
 import type { Clock } from '../src/core/clock.js'
+import { DshCliExecutor } from '../src/executor/dsh-cli-executor.js'
 import { RuleBasedTaskRouter } from '../src/router/router.js'
 import {
   parseFollowUpCommand,
@@ -469,6 +470,83 @@ describe('SCHEDULE-001 executor recurring automations', () => {
     expect(cancelled.status).toBe(200)
     expect(await cancelled.json()).toMatchObject({
       automation: { status: 'cancelled', revision: 2 },
+    })
+  })
+
+  it('creates an automation through a credential-scrubbed model shell', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'pegas-run-automation-e2e-'))
+    cleanups.push(() => rmSync(directory, { recursive: true, force: true }))
+    const store = new PegasStore(join(directory, 'pegas.sqlite'))
+    cleanups.push(() => store.close())
+    const { claimed } = await seedClaimedRun(
+      store,
+      '每分钟数一个数，从 1 数到 10',
+    )
+    const server = createControlPlane({
+      store,
+      apiToken: '{{SECRET_9jk5hg67}}',
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    cleanups.push(
+      () => new Promise<void>(resolve => server.close(() => resolve())),
+    )
+    const base = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+    const command = join(directory, 'fake-dsh')
+    writeFileSync(
+      command,
+      `#!/usr/bin/env node
+const { spawnSync } = require('node:child_process')
+const pattern = /KEY|PASSWORD|SECRET|TOKEN/i
+const scrubbed = Object.fromEntries(
+  Object.entries(process.env).filter(
+    ([key]) => !pattern.test(key) && !key.toUpperCase().startsWith('DSH_'),
+  ),
+)
+const script = [
+  'const fs = require("node:fs");',
+  'const capability = JSON.parse(fs.readFileSync(process.env.PEGAS_RUN_CAPABILITY_FILE, "utf8"));',
+  'fetch(capability.baseUrl + "/v1/runs/" + capability.runId + "/automations", {',
+  '  method: "POST",',
+  '  headers: { "content-type": "application/json", "x-pegas-run-claim-token": capability.claimToken },',
+  '  body: JSON.stringify({ commandId: "count-1-10", prompt: "输出下一个数字", everySeconds: 60, title: "数数 1 到 10" }),',
+  '}).then(async response => {',
+  '  process.stdout.write(JSON.stringify({ status: response.status, body: await response.json() }));',
+  '});',
+].join('\\n')
+const child = spawnSync(process.execPath, ['-e', script], {
+  env: scrubbed,
+  encoding: 'utf8',
+})
+console.log(JSON.stringify({
+  type: 'final',
+  sessionId: 'session-scrubbed-e2e',
+  text: child.stdout,
+  reason: { kind: 'completed' },
+}))
+`,
+      { mode: 0o700 },
+    )
+    chmodSync(command, 0o700)
+    const executor = new DshCliExecutor({ command })
+    const result = await executor.execute({
+      runId: claimed.run.id,
+      taskId: claimed.task.id,
+      prompt: '把它保存为周期自动化',
+      workingDirectory: directory,
+      actionCapability: { baseUrl: base, claimToken: claimed.claimToken },
+    })
+    const response = JSON.parse(result.output) as {
+      status: number
+      body: { automation: { id: string; target: { taskId: string } } }
+    }
+    expect(response.status).toBe(201)
+    expect(response.body.automation.target.taskId).toBe(claimed.task.id)
+    const automations = store.listAutomations('owner')
+    expect(automations).toHaveLength(1)
+    expect(automations[0]).toMatchObject({
+      status: 'active',
+      schedule: { kind: 'interval', everySeconds: 60 },
+      target: { kind: 'existing_task', taskId: claimed.task.id },
     })
   })
 })
