@@ -139,18 +139,38 @@ X-Pegas-Run-Claim-Token: <successor-capability>
 
 ## DSH 工具审批桥接
 
-除执行合同中由 Executor 主动发起的 Approval 外，Worker 现在以 `--approval-policy ask` 运行 DSH，并通过 `--patch` 注入进程内桥接插件 `src/executor/dsh-approval-bridge.mjs`。插件挂接 DSH 的 `approval/request` seam：工具在沙箱内被直接允许的调用不经审批；一旦工具请求越权（例如 bash/fs 的 `sandbox_permissions` 升级），DSH 会发起审批请求，由桥接插件接管：
+除执行合同中由 Executor 主动发起的 Approval 外，Worker 现在以 `--approval-policy ask` 运行 DSH，并通过 `--patch` 注入进程内桥接插件 `src/executor/dsh-approval-bridge.mjs`。桥接分两层：**Policy Gate**（`tools/pre-execute` waterfall，对每个工具调用先做确定性分级）与 **越权 seam**（`approval/request`，承接 DSH 沙箱升级请求，例如 bash/fs 的 `sandbox_permissions`）。
 
-1. **停放**：插件用当前 Run 的 claim capability 调 `POST /v1/runs/:runId/approvals` 创建持久 Approval。Action `kind` 为 `dsh.tool.<tool>`、risk 固定 `high`，`request` 保存 `tool`、`callId`、`reason` 与 `argumentsHash`（工具参数的稳定序列化 SHA-256），幂等键为 `dsh-tool:<runId>:<callId>`。创建成功后向 headless JSON 流写入 `approval_pending` 事件并对本次调用返回 `rejected`；Executor 识别该事件后按持久等待结算 Run（服务端已把 Run 置为 `waiting` 并清除 lease），不再提交 Report。创建失败时写入 `approval_bridge_error` 事件，Executor 将其作为执行失败处理，不放行工具。
+### Policy Gate（APPROVAL-001 P1）
+
+分类器 `src/executor/policy-gate.mjs` 对每个调用按实际效果做确定性静态分类（不看工具名自述）：
+
+| 类别                   | 判定                                                                               | 处置                                                                                                           |
+| ---------------------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| read                   | fs 读/搜索、web fetch/search 只读                                                  | allow，发 `policy_decision` 记录                                                                               |
+| workspace-write        | 写路径 canonical（symlink/父目录解析后）在工作区内                                 | allow，发 `policy_decision` 记录                                                                               |
+| out-of-workspace-write | 写路径越界（write/edit/apply_patch 全部目标路径）                                  | ask，risk `high`                                                                                               |
+| network-egress         | bash 命中外部发送模式（POST/上传/scp/rsync 等）                                    | ask，risk `high`                                                                                               |
+| destructive-command    | bash 命中不可逆模式（区外递归删除、force push、DROP/TRUNCATE、mkfs/dd of=/dev 等） | ask，risk `critical`                                                                                           |
+| control-plane-mutation | 写 Pegas 数据目录 / DSH home（含 bash 间接写与重定向）                             | **deny + 强制审批**，risk `critical`；同时经 `tools.guard()` 注册审批后仍生效的单调拒绝，任何 grant 都不能放行 |
+| unknown                | 未知工具、缺路径、补丁不可解析、bash 间接执行（eval/管道 sh/解释器 -c 等）         | ask（fail closed to human）                                                                                    |
+
+Gate 的边界事实来自 Executor 注入的 patch config `policy { workspaceRoot, protectedRoots }`：`workspaceRoot` 取 Run 的实际工作目录；`protectedRoots` 由 Worker 传 `dataDir`，Executor 追加受管 DSH home。缺少边界信息时写入类调用一律 ask。ask 经 DSH `approval/request` seam 进入下述同一停放/恢复/一次性放行链路；`policy_decision` 事件由 Executor 转为 Activity 进度（「安全检查通过 / 已拦截」）。静态分类只是审批路由，不是安全边界：真正的硬边界仍是 DSH sandbox 与 guard 底线。
+
+### 停放与恢复（seam 共用链路）
+
+1. **停放**：插件用当前 Run 的 claim capability 调 `POST /v1/runs/:runId/approvals` 创建持久 Approval。Action `kind` 为 `dsh.tool.<tool>`，risk 由 Gate 分级写入（`high`/`critical`；seam 越权无 Gate 判定时按 `high`），`request` 保存 `tool`、`callId`、`reason`、`category`、`targets` 与 `argumentsHash`（工具参数的稳定序列化 SHA-256），幂等键为 `dsh-tool:<runId>:<callId>`。创建成功后向 headless JSON 流写入 `approval_pending` 事件并对本次调用返回 `rejected`；Executor 识别该事件后按持久等待结算 Run（服务端已把 Run 置为 `waiting` 并清除 lease），不再提交 Report。创建失败时写入 `approval_bridge_error` 事件，Executor 将其作为执行失败处理，不放行工具。
 2. **恢复**：用户批准后，successor Run 的输入是结构化 `approval.decision` 上下文。Worker 解析出 `actionId`，回查服务端 Action 确认 `status='authorized'` 且 `resumeRunId` 等于当前 Run，才构造一次性 `toolApprovalGrant {actionId, tool, argumentsHash}` 传给 Executor，并随桥接 patch 注入 DSH。
-3. **一次性放行**：插件在 `tools/pre-execute` 记录每个 `callId` 的工具名与参数哈希；`approval/request` 到达时只有 `tool` 与 `argumentsHash` 都与 grant 完全一致才返回 `allowed-once`，且每个 DSH 进程只消费一次。模型改写参数后重试不会命中 grant，会重新走停放流程。
+3. **一次性放行**：插件在 `tools/pre-execute` 记录每个 `callId` 的工具名与参数哈希；grant 命中（`tool` 与 `argumentsHash` 完全一致）时在 Gate 层直接放行并登记 outcome 追踪，seam 到达时返回 `allowed-once`；每个 DSH 进程只消费一次。模型改写参数后重试不会命中 grant，会重新走停放流程。control-plane-mutation 类别永不接受 grant 豁免。
 4. **记录结果**：被放行调用结束后，插件在 `tools/post-execute` 用 successor 的 claim 调 `POST /v1/actions/:actionId/outcomes`（`commandId` 为 `dsh-tool-outcome:<actionId>`）：工具报错或 post-execute 被 block 记 `failed`，否则记 `succeeded`。outcome 上报失败会发出 `approval_bridge_error` 事件并使该 Run 失败，Action 由既有 lease/完成 fence 转为 `unknown` 进入人工核对，不会静默丢失。
 
 claim token 只经进程环境传给 DSH 主进程，DSH 自身的 subprocess 环境清洗会剥离 `*TOKEN*` 与 `DSH_*` 变量，因此不会进入 bash 等工具子进程。`PEGAS_TOOL_APPROVAL_GRANT` 与 `PEGAS_APPROVAL_BRIDGE` 也在 Worker 的父进程环境剥离清单内，防止残留串扰。
 
 桥接的已知边界：
 
-- 只覆盖走 DSH `approval/request` seam 的调用（沙箱越权类）；沙箱内直接允许的工具与未接入该 seam 的工具不产生 Approval。
+- Policy Gate 覆盖全部工具调用，但 bash 只做确定性静态分类：未命中模式的复杂命令按低风险交由沙箱边界执行，间接执行按 unknown 强制人工确认；execpolicy 级完整命令语义解析属后续阶段。
+- Gate 的 allow 记录目前经 `policy_decision` 事件进入 Run Activity 进度流，尚未落独立审计表（P2 档位对象引入代次与审计持久化）。
+- 档位仍是 Run 快照的 `read-only | workspace-write | danger-full-access × ask | never`；运行中热切换、持久规则批准（approve_rule）与自动审阅分别属 P2/P3/P5。
 - 同一 DSH 进程只停放第一个越权调用；并行的其余审批请求 fall through 到 DSH 默认 `unavailable`，fail closed。
 - 批准后恢复的是同一 DSH session，但模型需要重新发起同参数调用才能命中一次性 grant；grant 不预执行任何工具。
 - 拒绝或要求修改时不注入 grant，Action 走既有 `rejected`/修订路径。

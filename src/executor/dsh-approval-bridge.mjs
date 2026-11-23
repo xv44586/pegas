@@ -1,18 +1,21 @@
 import { createHash } from 'node:crypto'
 
+import { classifyToolCall } from './policy-gate.mjs'
+
 /** @typedef {{ baseUrl: string, runId: string, claimToken: string }} BridgeCapability */
 /** @typedef {{ actionId: string, tool: string, argumentsHash: string }} ToolGrant */
-/** @typedef {{ tool: string, argumentsHash: string }} CapturedCall */
-/** @typedef {{ callId?: string | number, name: string, arguments?: unknown }} ToolExecution */
+/** @typedef {{ tool: string, argumentsHash: string, classification?: import('./policy-gate.d.ts').ToolCallClassification }} CapturedCall */
+/** @typedef {{ callId?: string | number, name: string, arguments?: unknown, agent?: unknown }} ToolExecution */
 /** @typedef {{ callId?: string | number, toolName: string, reason?: string, signal?: { aborted?: boolean } }} ApprovalRequest */
 /** @typedef {{ kind: 'accept' | 'block' }} PostToolDecision */
+/** @typedef {{ kind: 'allow' } | { kind: 'ask', reason: string } | { kind: 'deny', reason: string }} PreToolGate */
 
 export const name = 'pegas-approval-bridge'
 export const inject = ['tools']
 
 /**
- * @param {{ on: (event: string, listener: (...args: never[]) => unknown) => void }} ctx
- * @param {{ emit?: (event: Record<string, unknown>) => void, grant?: unknown }} [config]
+ * @param {{ on: (event: string, listener: (...args: never[]) => unknown) => void, tools?: { guard: (guard: (exec: ToolExecution) => { reason: string } | undefined) => unknown } }} ctx
+ * @param {{ emit?: (event: Record<string, unknown>) => void, grant?: unknown, policy?: unknown }} [config]
  */
 export function apply(ctx, config = {}) {
   const emit = typeof config.emit === 'function' ? config.emit : writeEvent
@@ -21,25 +24,107 @@ export function apply(ctx, config = {}) {
       ? readCapability(process.env)
       : undefined
   const grant = normalizeGrant(config.grant ?? readGrant(process.env))
+  const policy = normalizePolicy(config.policy)
   /** @type {Map<string, CapturedCall>} */
   const toolCalls = new Map()
   /** @type {Map<string, string>} */
   const grantedCalls = new Map()
+  /** @type {Map<string, import('./policy-gate.d.ts').ToolCallClassification>} */
+  const gateDecisions = new Map()
   let grantConsumed = false
   let parked = false
+
+  const controlPlaneGuard =
+    /** @param {ToolExecution} exec */
+    exec => {
+      const classification = classifyToolCall(exec, policy)
+      if (classification.category === 'control-plane-mutation') {
+        return {
+          reason: classification.reason,
+        }
+      }
+      return undefined
+    }
+  if (ctx.tools && typeof ctx.tools.guard === 'function') {
+    ctx.tools.guard(controlPlaneGuard)
+  }
 
   ctx.on(
     'tools/pre-execute',
     /**
      * @param {ToolExecution} exec
-     * @param {() => Promise<unknown>} next
+     * @param {() => Promise<PreToolGate>} next
      */
-    (exec, next) => {
-      if (exec.callId !== undefined) {
-        toolCalls.set(String(exec.callId), {
+    async (exec, next) => {
+      const callKey =
+        exec.callId === undefined ? undefined : String(exec.callId)
+      const classification = classifyToolCall(exec, policy)
+      if (callKey !== undefined) {
+        toolCalls.set(callKey, {
           tool: exec.name,
           argumentsHash: stableHash(exec.arguments),
+          classification,
         })
+        gateDecisions.set(callKey, classification)
+      }
+      if (capability && callKey !== undefined) {
+        const granted =
+          grant !== undefined &&
+          !grantConsumed &&
+          classification.category !== 'control-plane-mutation' &&
+          exec.name === grant.tool &&
+          stableHash(exec.arguments) === grant.argumentsHash
+        if (granted) {
+          grantConsumed = true
+          grantedCalls.set(callKey, grant.actionId)
+          return next()
+        }
+        if (classification.action === 'allow') {
+          emit({
+            type: 'policy_decision',
+            callId: callKey,
+            tool: exec.name,
+            category: classification.category,
+            risk: classification.risk,
+            decision: 'allow',
+            reason: classification.reason,
+          })
+          return next()
+        }
+        if (classification.action === 'deny') {
+          emit({
+            type: 'policy_decision',
+            callId: callKey,
+            tool: exec.name,
+            category: classification.category,
+            risk: classification.risk,
+            decision: 'deny',
+            reason: classification.reason,
+          })
+          return { kind: 'deny', reason: classification.reason }
+        }
+        if (exec.agent !== undefined) {
+          return { kind: 'ask', reason: classification.reason }
+        }
+        try {
+          const pending = await parkCall(
+            capability,
+            callKey,
+            exec.name,
+            classification,
+            toolCalls.get(callKey),
+            emit,
+          )
+          if (pending) parked = true
+        } catch (error) {
+          emit({
+            type: 'approval_bridge_error',
+            stage: 'request',
+            callId: callKey,
+            message: errorMessage(error),
+          })
+        }
+        return { kind: 'deny', reason: classification.reason }
       }
       return next()
     },
@@ -57,6 +142,31 @@ export function apply(ctx, config = {}) {
         request.callId === undefined ? undefined : String(request.callId)
       const captured =
         callKey === undefined ? undefined : toolCalls.get(callKey)
+      const classification =
+        callKey === undefined ? undefined : gateDecisions.get(callKey)
+      if (classification?.category === 'control-plane-mutation') {
+        if (!capability || callKey === undefined || parked) return 'rejected'
+        parked = true
+        try {
+          const pending = await parkCall(
+            capability,
+            callKey,
+            request.toolName,
+            classification,
+            captured,
+            emit,
+          )
+          if (!pending) parked = false
+        } catch (error) {
+          emit({
+            type: 'approval_bridge_error',
+            stage: 'request',
+            callId: callKey,
+            message: errorMessage(error),
+          })
+        }
+        return 'rejected'
+      }
       if (
         grant &&
         !grantConsumed &&
@@ -68,23 +178,24 @@ export function apply(ctx, config = {}) {
         grantedCalls.set(callKey, grant.actionId)
         return 'allowed-once'
       }
+      if (callKey !== undefined && grantedCalls.has(callKey)) {
+        return 'allowed-once'
+      }
       if (!capability || callKey === undefined || parked) return next()
       parked = true
       const reason = request.reason ?? `工具 ${request.toolName} 请求越权执行`
       try {
-        const pending = await createApproval(capability, {
+        const pending = await parkCall(
+          capability,
           callKey,
-          tool: request.toolName,
-          reason,
+          request.toolName,
+          classification?.action === 'ask'
+            ? classification
+            : escalateClassification(reason),
           captured,
-        })
-        emit({
-          type: 'approval_pending',
-          callId: callKey,
-          tool: request.toolName,
-          actionId: pending.actionId,
-          approvalId: pending.approvalId,
-        })
+          emit,
+        )
+        if (!pending) parked = false
       } catch (error) {
         emit({
           type: 'approval_bridge_error',
@@ -128,6 +239,53 @@ export function apply(ctx, config = {}) {
       return decision
     },
   )
+}
+
+/**
+ * @param {string} reason
+ * @returns {import('./policy-gate.d.ts').ToolCallClassification}
+ */
+function escalateClassification(reason) {
+  return {
+    category: 'out-of-workspace-write',
+    risk: 'high',
+    action: 'ask',
+    reason,
+    targets: [],
+  }
+}
+
+/**
+ * @param {BridgeCapability} capability
+ * @param {string} callKey
+ * @param {string} tool
+ * @param {import('./policy-gate.d.ts').ToolCallClassification} classification
+ * @param {CapturedCall | undefined} captured
+ * @param {(event: Record<string, unknown>) => void} emit
+ * @returns {Promise<boolean>}
+ */
+async function parkCall(
+  capability,
+  callKey,
+  tool,
+  classification,
+  captured,
+  emit,
+) {
+  const pending = await createApproval(capability, {
+    callKey,
+    tool,
+    classification,
+    captured,
+  })
+  emit({
+    type: 'approval_pending',
+    callId: callKey,
+    tool,
+    actionId: pending.actionId,
+    approvalId: pending.approvalId,
+  })
+  return true
 }
 
 /** @param {Record<string, unknown>} event */
@@ -188,25 +346,49 @@ function normalizeGrant(value) {
 }
 
 /**
+ * @param {unknown} value
+ * @returns {import('./policy-gate.d.ts').PolicyRoots}
+ */
+function normalizePolicy(value) {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return {}
+  }
+  const record = /** @type {Record<string, unknown>} */ (value)
+  const workspaceRoot =
+    typeof record.workspaceRoot === 'string' ? record.workspaceRoot : undefined
+  const protectedRoots = Array.isArray(record.protectedRoots)
+    ? record.protectedRoots.filter(
+        root => typeof root === 'string' && root.length > 0,
+      )
+    : []
+  return {
+    ...(workspaceRoot === undefined ? {} : { workspaceRoot }),
+    protectedRoots,
+  }
+}
+
+/**
  * @param {BridgeCapability} capability
- * @param {{ callKey: string, tool: string, reason: string, captured?: CapturedCall }} input
+ * @param {{ callKey: string, tool: string, classification: import('./policy-gate.d.ts').ToolCallClassification, captured?: CapturedCall }} input
  * @returns {Promise<{ actionId: string, approvalId: string }>}
  */
 async function createApproval(capability, input) {
   const action = {
     kind: `dsh.tool.${input.tool}`,
-    risk: 'high',
+    risk: input.classification.risk === 'critical' ? 'critical' : 'high',
     idempotencyKey: `dsh-tool:${capability.runId}:${input.callKey}`,
     request: {
       tool: input.tool,
       callId: input.callKey,
-      reason: input.reason,
+      reason: input.classification.reason,
+      category: input.classification.category,
+      targets: input.classification.targets,
       argumentsHash: input.captured?.argumentsHash ?? null,
     },
     recoveryPoint: { step: 'before_tool_call', callId: input.callKey },
     approval: {
-      summary: `批准工具 ${input.tool} 越权执行一次`,
-      impact: input.reason,
+      summary: approvalSummary(input.tool, input.classification),
+      impact: input.classification.reason,
       recommendedOptionId: 'approve',
       options: [
         { id: 'approve', label: '批准执行一次', kind: 'approve' },
@@ -235,6 +417,26 @@ async function createApproval(capability, input) {
     throw new Error('approval API response is missing identifiers')
   }
   return { actionId, approvalId }
+}
+
+/**
+ * @param {string} tool
+ * @param {import('./policy-gate.d.ts').ToolCallClassification} classification
+ * @returns {string}
+ */
+function approvalSummary(tool, classification) {
+  switch (classification.category) {
+    case 'control-plane-mutation':
+      return `确认工具 ${tool} 对 Pegas 控制面数据的修改`
+    case 'destructive-command':
+      return `确认不可逆命令（${tool}）执行一次`
+    case 'network-egress':
+      return `批准工具 ${tool} 向外部发送数据一次`
+    case 'out-of-workspace-write':
+      return `批准工具 ${tool} 写入工作区之外一次`
+    default:
+      return `批准工具 ${tool} 越权执行一次`
+  }
 }
 
 /**

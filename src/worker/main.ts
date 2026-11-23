@@ -450,6 +450,7 @@ function createExecutor(
           timeoutMs: config.dshTimeoutMs,
           home: config.dshHome,
           modelConfiguration,
+          policyProtectedRoots: [config.dataDir],
           ...(privacyMode === 'mask'
             ? { privacyMasker: createPrivacyMasker() }
             : {}),

@@ -27,7 +27,11 @@ export function dshExecutorOptionsFromSnapshot(
   snapshot: DshExecutionSnapshot,
   runtime: Pick<
     DshCliExecutorOptions,
-    'command' | 'timeoutMs' | 'home' | 'modelConfiguration'
+    | 'command'
+    | 'timeoutMs'
+    | 'home'
+    | 'modelConfiguration'
+    | 'policyProtectedRoots'
   >,
 ): DshCliExecutorOptions {
   return {

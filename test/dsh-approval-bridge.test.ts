@@ -124,8 +124,11 @@ describe('DSH approval bridge plugin', () => {
         () => Promise.resolve('unavailable'),
       )
       expect(outcome).toBe('rejected')
-      expect(events).toHaveLength(1)
-      expect(events[0]).toMatchObject({
+      const pendingEvents = events.filter(
+        event => event.type === 'approval_pending',
+      )
+      expect(pendingEvents).toHaveLength(1)
+      expect(pendingEvents[0]).toMatchObject({
         type: 'approval_pending',
         callId: 'call-42',
         tool: 'bash',
@@ -216,6 +219,7 @@ describe('DSH approval bridge plugin', () => {
         throw new Error('bridge did not register its hooks')
       }
       const exec = {
+        agent: {},
         callId: 'call-new',
         name: 'bash',
         arguments: { command: 'echo done' },
@@ -236,6 +240,7 @@ describe('DSH approval bridge plugin', () => {
       expect(events).toEqual([])
 
       const differentExec = {
+        agent: {},
         callId: 'call-other',
         name: 'bash',
         arguments: { command: 'rm -rf /' },
@@ -246,8 +251,11 @@ describe('DSH approval bridge plugin', () => {
         () => Promise.resolve('unavailable'),
       )
       expect(secondOutcome).toBe('rejected')
-      expect(events).toHaveLength(1)
-      expect(events[0]).toMatchObject({ type: 'approval_pending' })
+      const pendingEvents = events.filter(
+        event => event.type === 'approval_pending',
+      )
+      expect(pendingEvents).toHaveLength(1)
+      expect(pendingEvents[0]).toMatchObject({ type: 'approval_pending' })
     } finally {
       restoreEnvironment(previous)
       await new Promise<void>(resolve => server.close(() => resolve()))
