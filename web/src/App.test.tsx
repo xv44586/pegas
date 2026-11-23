@@ -2996,6 +2996,103 @@ describe('sealed Pegas UI', () => {
     expect(localStorage.getItem('pegas-setup-complete')).toBe('true')
   })
 
+  it('lets first-run setup pick the default model from the paginated catalog', async () => {
+    localStorage.removeItem('pegas-setup-complete')
+    const catalogModels = Array.from({ length: 33 }, (_, index) => ({
+      provider: 'Magpie',
+      id: `gateway/setup-${String(index + 1).padStart(2, '0')}`,
+      name: `Setup Model ${String(index + 1).padStart(2, '0')}`,
+    }))
+    const fetchMock = installFetch((path, init) => {
+      if (path === '/v1/settings' && init?.method !== 'PUT')
+        return Response.json({
+          ...settingsResponse,
+          settings: {
+            ...settingsResponse.settings,
+            agentModelProvider: 'Magpie',
+            agentModelName: 'gateway/setup-01',
+          },
+        })
+      if (path === '/v1/settings/agent-models')
+        return Response.json({
+          defaultProvider: 'Magpie',
+          defaultModel: 'gateway/setup-01',
+          models: catalogModels,
+        })
+      if (path === '/v1/settings' && init?.method === 'PUT') {
+        const update = JSON.parse(
+          typeof init.body === 'string' ? init.body : '{}',
+        ) as {
+          agentModelMode?: string
+          agentModelProvider?: string
+          agentModelName?: string
+        }
+        return Response.json({
+          ...settingsResponse,
+          settings: {
+            ...settingsResponse.settings,
+            revision: 2,
+            agentModelMode: 'override',
+            agentModelProvider: update.agentModelProvider ?? 'Magpie',
+            agentModelName: update.agentModelName ?? 'gateway/setup-01',
+          },
+        })
+      }
+      return undefined
+    })
+    render(<App />)
+    await screen.findByText('欢迎使用 Pegas')
+    fireEvent.click(screen.getByRole('button', { name: /^继续$/ }))
+    expect(screen.getByText('连接模型服务')).toBeTruthy()
+    const trigger = await screen.findByRole('button', { name: /，默认模型$/ })
+    await waitFor(() => expect(trigger.textContent).toContain('Setup Model 01'))
+    expect(trigger.textContent).toContain('Magpie · gateway/setup-01')
+    fireEvent.click(trigger)
+    const dialog = await screen.findByRole('dialog', { name: '选择模型' })
+    expect(within(dialog).getByText('33 个可用')).toBeTruthy()
+    expect(
+      within(dialog).getByRole('option', { name: /Setup Model 30/ }),
+    ).toBeTruthy()
+    expect(
+      within(dialog).queryByRole('option', { name: /Setup Model 31/ }),
+    ).toBeNull()
+    fireEvent.click(within(dialog).getByRole('button', { name: '下一页' }))
+    const target = within(dialog).getByRole('option', {
+      name: /Setup Model 31/,
+    })
+    fireEvent.click(target)
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([path, init]) => {
+          if (path !== '/v1/settings' || init?.method !== 'PUT') return false
+          const body = JSON.parse(
+            typeof init.body === 'string' ? init.body : '{}',
+          ) as {
+            agentModelMode?: string
+            agentModelProvider?: string
+            agentModelName?: string
+          }
+          return (
+            body.agentModelMode === 'override' &&
+            body.agentModelProvider === 'Magpie' &&
+            body.agentModelName === 'gateway/setup-31'
+          )
+        }),
+      ).toBe(true),
+    )
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: /，默认模型$/ }).textContent,
+      ).toContain('Setup Model 31'),
+    )
+    expect(screen.queryByRole('dialog', { name: '选择模型' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /^继续$/ }))
+    expect(screen.getByText('准备执行环境')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /^继续$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /进入 Pegas/ }))
+    expect(localStorage.getItem('pegas-setup-complete')).toBe('true')
+  })
+
   it.each([
     ['completed', '工作已完成', 'is-done'],
     ['waiting', '等待下一步条件', 'is-waiting'],
@@ -4276,12 +4373,8 @@ describe('sealed Pegas UI', () => {
         `[data-message-id="${originEvent.id}"].is-anchor-highlight`,
       ),
     ).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: '查看进展' }))
-    expect(
-      document.querySelector(
-        '[data-message-id="result-cue"].is-anchor-highlight',
-      ),
-    ).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '查看工作详情' }))
+    expect(await screen.findByRole('dialog', { name: '工作详情' })).toBeTruthy()
   })
 
   it('shows router and rewrite metering with honest unreported tokens', async () => {

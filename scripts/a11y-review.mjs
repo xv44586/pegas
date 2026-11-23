@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { createServer as createHttpServer } from 'node:http'
 import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -43,11 +44,46 @@ const dshFixture = resolve(dataDirectory, 'a11y-dsh')
 writeFileSync(
   dshFixture,
   `#!/usr/bin/env node
+const fs = require('node:fs')
+if (process.argv.includes('--dump-config')) {
+  const patchIndex = process.argv.indexOf('--patch')
+  const patchPath = patchIndex >= 0 ? process.argv[patchIndex + 1] : undefined
+  const entries = patchPath
+    ? JSON.parse(fs.readFileSync(patchPath, 'utf8'))
+    : []
+  process.stdout.write(JSON.stringify(entries))
+  process.exit(0)
+}
 process.stdout.write('- id: m1\\n  config:\\n    provider: fixture\\n    model: test-model\\n')
 `,
 )
 chmodSync(dshFixture, 0o755)
 const port = await availablePort()
+const modelGateway = createHttpServer((request, response) => {
+  if (request.url?.endsWith('/models')) {
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(
+      JSON.stringify({
+        data: Array.from({ length: 34 }, (_, index) => ({
+          id:
+            index === 0
+              ? 'deepseek-v4.1-flash'
+              : `fixture/model-${String(index + 1).padStart(2, '0')}`,
+          display_name:
+            index === 0
+              ? 'DeepSeek V4.1 Flash'
+              : `Fixture Model ${String(index + 1).padStart(2, '0')}`,
+        })),
+      }),
+    )
+    return
+  }
+  response.writeHead(404).end()
+})
+await new Promise(resolveListen =>
+  modelGateway.listen(0, '127.0.0.1', resolveListen),
+)
+const modelGatewayPort = modelGateway.address().port
 const environment = {
   ...process.env,
   PEGAS_API_HOST: '127.0.0.1',
@@ -56,6 +92,8 @@ const environment = {
   PEGAS_DSH_COMMAND: dshFixture,
   PEGAS_EVENT_POLL_MS: '25',
   PEGAS_EXECUTOR: 'echo',
+  PEGAS_MODEL_BASE_URL: `http://127.0.0.1:${String(modelGatewayPort)}/v1`,
+  PEGAS_MODEL_NAME: 'deepseek-v4.1-flash',
   PEGAS_SPEECH_PROVIDER: 'disabled',
   PEGAS_PUSH_MODE: 'disabled',
 }
@@ -210,6 +248,28 @@ try {
     await context.close()
   }
 
+  const onboarding = await browser.newContext({
+    viewport: { width: 1440, height: 900 },
+    reducedMotion: 'reduce',
+  })
+  const onboardingPage = await onboarding.newPage()
+  onboardingPage.setDefaultTimeout(12_000)
+  await onboardingPage.goto(`http://127.0.0.1:${port}/?setup=1`)
+  await onboardingPage
+    .getByRole('heading', { name: '欢迎使用 Pegas', exact: true })
+    .waitFor()
+  await onboardingPage
+    .getByRole('button', { name: '继续', exact: true })
+    .click()
+  await onboardingPage
+    .getByRole('heading', { name: '连接模型服务', exact: true })
+    .waitFor()
+  await audit(onboardingPage, 'onboarding-models')
+  await onboardingPage.getByRole('button', { name: /，默认模型$/ }).click()
+  await onboardingPage.getByRole('dialog', { name: '选择模型' }).waitFor()
+  await audit(onboardingPage, 'onboarding-model-picker')
+  await onboarding.close()
+
   const forced = await browser.newContext({
     viewport: { width: 1440, height: 900 },
     forcedColors: 'active',
@@ -281,4 +341,5 @@ try {
 } finally {
   await browser?.close()
   for (const child of children) child.kill('SIGTERM')
+  await new Promise(resolveClose => modelGateway.close(resolveClose))
 }

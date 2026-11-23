@@ -796,7 +796,7 @@ a {
 }
 .message-meta {
   align-items: center;
-  color: var(--faint);
+  color: var(--muted);
   display: flex;
   font-size: var(--text-small);
   gap: 8px;
@@ -851,6 +851,22 @@ a {
 }
 .message-derived-trigger:hover {
   background: var(--accent-softer);
+}
+.message-work-entry {
+  align-items: center;
+  background: transparent;
+  border-radius: 7px;
+  color: var(--accent-ink, var(--accent));
+  display: inline-flex;
+  height: 22px;
+  justify-content: center;
+  padding: 0 4px;
+}
+.message-work-entry:hover {
+  background: var(--accent-softer);
+}
+.message-row.has-work-entry .message-meta {
+  opacity: 1;
 }
 .message-derived-count {
   font-size: var(--text-tiny);
@@ -962,6 +978,7 @@ a {
   display: grid;
   font-size: var(--text-caption);
   gap: 10px;
+  line-height: 1.55;
   max-width: 560px;
   min-width: 0;
   padding: 12px 14px;
@@ -1082,6 +1099,10 @@ a {
 }
 .message-markdown {
   min-width: 0;
+}
+.message-markdown strong,
+.message-markdown b {
+  font-weight: 500;
 }
 .message-markdown p,
 .message-markdown li {
@@ -5644,7 +5665,6 @@ kbd {
   border-radius: 19px;
   box-shadow: var(--shadow-pop);
   max-width: 620px;
-  overflow: hidden;
   width: 100%;
 }
 .onboarding-dialog > header {
@@ -5726,19 +5746,26 @@ kbd {
   max-width: 400px;
   text-align: left;
 }
-.setup-form label {
+.setup-form > label,
+.setup-form > .field-label {
   display: grid;
   font-size: var(--text-small);
   font-weight: 500;
   gap: 6px;
+  margin: 0;
 }
-.setup-form input,
-.setup-form select {
+.setup-form > label > input,
+.setup-form > .field-label > input,
+.setup-form > label > select {
   background-color: var(--surface-raised);
   border: 1px solid var(--line);
   border-radius: 8px;
   min-height: 40px;
   padding: 0 11px;
+}
+.setup-form .model-picker-panel {
+  max-inline-size: calc(100vw - 48px);
+  z-index: 90;
 }
 .runtime-choice {
   align-items: center;
