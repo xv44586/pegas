@@ -134,6 +134,23 @@ const maximumPageLimit = 200
 const defaultMaximumAudioBytes = 25 * 1024 * 1024
 const maximumAttachmentBytes = 25 * 1024 * 1024
 const maximumRunImageBytes = 10 * 1024 * 1024
+const maximumRunSpillFileBytes = 1024 * 1024
+
+/**
+ * EXEC-006 round 18: best-effort read of one executor spill file for output
+ * paging. The path always comes from a persisted, owner-checked semantic;
+ * oversized or unreadable files simply yield no fallback.
+ */
+async function readRunSpillText(path: string): Promise<string | undefined> {
+  try {
+    const stats = await statFile(path)
+    if (!stats.isFile() || stats.size > maximumRunSpillFileBytes)
+      return undefined
+    return await readFile(path, 'utf8')
+  } catch {
+    return undefined
+  }
+}
 
 function imageMediaType(path: string): string | undefined {
   switch (extname(path).toLowerCase()) {
@@ -1740,17 +1757,40 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
           const userId = requiredQuery(url, 'userId')
           const offsetParam = url.searchParams.get('offset')
           const limitParam = url.searchParams.get('limit')
-          const page = options.store.readRunActivityOutput(
+          const page = await options.store.readRunActivityOutput(
             decodeURIComponent(outputMatch[1] ?? ''),
             userId,
             decodeURIComponent(outputMatch[2] ?? ''),
             {
               ...(offsetParam ? { offset: Number(offsetParam) } : {}),
               ...(limitParam ? { limit: Number(limitParam) } : {}),
+              spillReader: readRunSpillText,
             },
           )
           if (!page) return sendJson(response, 404, { error: 'not_found' })
           return sendJson(response, 200, page)
+        }
+        const outputFileMatch =
+          /^\/v1\/runs\/([^/]+)\/activity\/([^/]+)\/output-file$/.exec(
+            url.pathname,
+          )
+        if (outputFileMatch) {
+          const userId = requiredQuery(url, 'userId')
+          const path = options.store.resolveRunOutputSpillPath(
+            decodeURIComponent(outputFileMatch[1] ?? ''),
+            userId,
+            decodeURIComponent(outputFileMatch[2] ?? ''),
+          )
+          if (!path) return sendJson(response, 404, { error: 'not_found' })
+          const text = await readRunSpillText(path)
+          if (text === undefined)
+            return sendJson(response, 404, { error: 'not_found' })
+          response.writeHead(200, {
+            'content-type': 'text/plain; charset=utf-8',
+            'cache-control': 'private, max-age=300',
+            'x-content-type-options': 'nosniff',
+          })
+          return response.end(text)
         }
         const imageMatch =
           /^\/v1\/runs\/([^/]+)\/activity\/([^/]+)\/image$/.exec(url.pathname)

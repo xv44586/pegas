@@ -1000,6 +1000,8 @@ function TaskDetail({
           api.runActivityOutputPage(targetRun, callId, offset),
         imageUrl: (targetRun, callId) =>
           api.runActivityImageUrl(targetRun, callId),
+        outputFileUrl: (targetRun, callId) =>
+          api.runActivityOutputFileUrl(targetRun, callId),
       })
     : undefined
 
