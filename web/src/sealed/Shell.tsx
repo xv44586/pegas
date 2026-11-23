@@ -159,17 +159,21 @@ export function PageToolbar({
   onSearch,
   onToggleAppearance,
   isDark,
+  showSearch = true,
 }: {
   onSearch: () => void
   onToggleAppearance: () => void
   isDark: boolean
+  showSearch?: boolean
 }) {
   const appearanceLabel = isDark ? '切换到明亮外观' : '切换到深色外观'
   return (
     <div className="page-toolbar">
-      <button aria-label="全局搜索" onClick={onSearch} type="button">
-        <Search size={20} />
-      </button>
+      {showSearch && (
+        <button aria-label="全局搜索" onClick={onSearch} type="button">
+          <Search size={20} />
+        </button>
+      )}
       <button
         aria-label={appearanceLabel}
         onClick={onToggleAppearance}

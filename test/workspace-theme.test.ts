@@ -264,4 +264,23 @@ describe('sealed UI layout contracts', () => {
     ]
     expect(searchLabels.length).toBeGreaterThanOrEqual(2)
   })
+
+  it('keeps page search on the same container-owned focus treatment', () => {
+    expect(sealedUi).toMatch(
+      /\.page-search:focus-within\s*\{[^}]*border-color:\s*var\(--accent\);/,
+    )
+    expect(sealedUi).toMatch(
+      /\.page-search input:focus-visible\s*\{[^}]*outline:\s*none;/,
+    )
+    expect(sealedUi).toMatch(
+      /\.page-search input::placeholder\s*\{[^}]*color:\s*var\(--muted\);/,
+    )
+  })
+
+  it('anchors the work sort menu to its own control', () => {
+    expect(sealedUi).toMatch(/\.filter-row-wrap\s*\{[^}]*position:\s*relative;/)
+    expect(sealedUi).toMatch(
+      /\.sort-menu\s*\{[^}]*position:\s*absolute;[^}]*z-index:/,
+    )
+  })
 })

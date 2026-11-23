@@ -28,7 +28,9 @@
 
 ### 3.2 所有事情
 
-- 提供标题、状态筛选、搜索和按最近活动排序。
+- 提供标题、状态筛选、搜索和排序（最近更新/最近创建/最近结束，默认最近更新；排序对已加载列表生效，语义与 CHANNEL-003 服务端排序合同一致）。
+- 页内已有搜索框时，页头工具栏不再重复显示全局搜索放大镜（待你处理页同规则）；⌘K/Ctrl+K 全局搜索在所有页面保持可用。
+- 页内搜索框聚焦由容器统一表达（`:focus-within` 边框 accent，内部 input 不再画独立 outline），与模型选择搜索框同一合同。
 - 每个事情行展示名称、简短目标、状态、最近活动和执行上下文；整行可打开详情。
 - 服务端仍是 Task 状态事实来源，客户端不自行迁移状态。
 
@@ -292,3 +294,10 @@
 - 「已完成」不再对挂着 active automation 的事情撒谎：服务端 `run.completed` payload 携带 `automationActive` 事实，完成卡标题渲染「已安排」+ CalendarClock，事情抽屉 hero 显示「已安排，自动化仍会按周期推进」。旧消息无字段时诚实回退为已完成。
 - 卡片排版对齐既有契约：`.fact-card` 行高 1.55（原错误继承聊天正文 1.78）；`.message-markdown strong/b` 字重 500（原浏览器默认 700）。
 - 门禁：`test/sealed-ui-work-entry.test.ts` 6 测试固化 CSS/DOM 合同；`ChatExperience.test.tsx` 已安排/普通完成两场景 + 入口开抽屉回归；`test/run-automations.test.ts` 服务端事实两场景；`web/src/sealed/types.test.ts` 事实 helper 两场景。
+
+## 22. 所有事情页搜索去重、聚焦合同与排序菜单（2026-11-23，DESIGN-002）
+
+- 用户报告三处缺陷：①「所有事情」页头同时出现页内搜索框与工具栏「全局搜索」放大镜，视觉上是两个搜索框；②页内搜索框聚焦时内部 input 画出独立 3px outline，在容器边框内形成「框中框」；③右侧「最近更新」排序按钮是 disabled 占位，无法使用。
+- 修复：①`PageHeader` 新增 `hasPageSearch`，「所有事情」「待你处理」两页工具栏不再重复渲染全局搜索按钮；⌘K/Ctrl+K 与其他页面入口不变。②`.page-search` 接入与 `model-search` 相同的容器聚焦合同（`:focus-within` 边框 accent、内部 `outline: none`、placeholder muted、search 原生外观清除），并把两页搜索 input 统一为 `type="search"`。③排序按钮改为真实菜单（`role="menu"` + `menuitemradio`，最近更新/最近创建/最近结束），语义与 CHANNEL-003 服务端 `sort` 合同一致：updated=`latestActivityAt`、created=`createdAt`、ended=`endedAt ?? updatedAt`，同刻按 id 倒序稳定排序；排序作用于已加载快照列表，是视图投影，不改服务端事实。Esc/外点关闭并还原焦点；≤520px 不再隐藏排序入口，随筛选行横向滚动可达。
+- 边界：排序菜单结构对齐既有 `.message-derived-menu` 弹层模式（局部 `position: relative` 包含块 + `--shadow-pop`）；纯前端交互适配，无服务端契约与存储变更；回滚 revert 即恢复。
+- 门禁：`web/src/App.test.tsx` +2（单页单搜索入口 + ⌘K 保留、三种排序顺序/菜单语义/Esc 焦点还原）；`web/src/sealed/types.test.ts` +2（排序投影不变更输入、ended 回退与 id 决胜）；`test/workspace-theme.test.ts` +2（page-search 容器聚焦合同、排序菜单局部包含块）；`scripts/capture-ui-review.mjs` 新增搜索聚焦几何断言与桌面/移动排序菜单 fixture（`desktop-all-work-search-focus`、`desktop-all-work-sort-menu`、`mobile-all-work-sort-menu`），移动端排序按钮 44px 触控断言。

@@ -71,6 +71,18 @@
 - Enforcement：尚未晋升；本 Feature 回归测试 + 合同验收条件 4（时间线条数 = 胶囊计数）已落地。
 - Owner / next action：后续出现同类问题时补充独立日期证据；候选检查其他聚合/折叠视图（任务托盘、触发记录）是否存在「计数成员不可达」模式。
 
+### LESSON-20261123-03：搜索框聚焦合同必须覆盖所有搜索容器
+
+- Rule：每个内嵌 input 的搜索容器必须实现统一的容器聚焦合同（`:focus-within` 边框 accent + 内部 input `outline: none` + placeholder muted），新增搜索框时同步接入，不得依赖全局 `input:focus-visible` 在容器内画第二层焦点框。
+- Why：「所有事情」「待你处理」页的 `.page-search` 未接入 LESSON-20261118-02 晋升的容器聚焦合同，input 聚焦时全局 3px outline 画在容器边框内部，形成用户报告的「框中框」；同页工具栏还重复渲染全局搜索放大镜，出现两个搜索入口。
+- Feature：DESIGN-002、SETTINGS-001
+- Evidence：2026-11-23 用户「所有事情」页截图；`web/src/App.test.tsx`「keeps one visible search entry per page without losing command search」与 `test/workspace-theme.test.ts`「keeps page search on the same container-owned focus treatment」先红后绿；`scripts/capture-ui-review.mjs` 新增 work 搜索聚焦几何断言。
+- Seen：1（2026-11-23；同模式前例见 LESSON-20261118-02 的 model-search 修复）
+- Severity：normal
+- Status：Observed
+- Enforcement：尚未晋升；本 Feature 已把 `.page-search` 纳入 workspace-theme 合同测试与 UI review 聚焦断言。
+- Owner / next action：候选把「所有 `.page-search`/`*-search` 容器必须具备容器聚焦合同」提炼为 CSS lint 或统一测试遍历；出现第二个独立日期同类报告时晋升。
+
 ### LESSON-20261118-01：看板固定最小宽度导致整页横向位移
 
 - Rule：宽面板需要在实际主内容宽度下验证，不能只按完整视口宽度决定列数。
