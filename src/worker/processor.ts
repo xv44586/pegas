@@ -6,6 +6,7 @@ import type {
   Task,
 } from '../core/domain.js'
 import { buildToolSemantic } from '../activity/tool-semantics.js'
+import { conversationProgressText } from '../executor/conversation-executor.js'
 import {
   needsChineseSummary,
   type ThinkingSummarizer,
@@ -456,6 +457,7 @@ async function executeConversationRun(
   )
   const workRules = store.workRuleContextForUser(claimed.task.userId)
   const resumeSessionId = store.conversationSessionRef(claimed.task.userId)
+  let streamedText = ''
   let result
   try {
     result = await executor.execute({
@@ -477,6 +479,23 @@ async function executeConversationRun(
         ? { workRules }
         : {}),
       ...(resumeSessionId ? { resumeSessionId } : {}),
+      onProgress: event => {
+        if (event.type !== 'message') return
+        const next = conversationProgressText(streamedText + event.text)
+        if (!next || next === streamedText) return
+        streamedText = next
+        try {
+          store.streamSayFromRun(claimed.run.id, workerId, next, {
+            streaming: true,
+          })
+        } catch (error) {
+          telemetry?.logger?.warn('conversation.say_stream_failed', {
+            runId: claimed.run.id,
+            workerId,
+            error: error instanceof Error ? error.message : String(error),
+          })
+        }
+      },
       onExecutorRef: executorRef => {
         store.recordExecutorRef(claimed.run.id, workerId, executorRef)
         store.recordConversationSessionRef(claimed.task.userId, executorRef)
@@ -502,6 +521,12 @@ async function executeConversationRun(
   store.recordConversationSessionRef(claimed.task.userId, result.executorRef)
   const suggestion = conversationSuggestion(result.output)
   if (suggestion) {
+    store.streamSayFromRun(
+      claimed.run.id,
+      workerId,
+      suggestion.reply ?? '这件事需要作为正式任务处理，我已为你创建。',
+      { streaming: false },
+    )
     store.completeRun(claimed.run.id, workerId, {
       ...result,
       output: suggestion.reply ?? '这件事需要作为正式任务处理，我已为你创建。',
@@ -516,6 +541,9 @@ async function executeConversationRun(
     telemetry?.metrics?.increment('pegas_runs_total', { outcome: 'completed' })
     return
   }
+  store.streamSayFromRun(claimed.run.id, workerId, result.output, {
+    streaming: false,
+  })
   store.completeRun(claimed.run.id, workerId, result)
   telemetry?.metrics?.increment('pegas_runs_total', { outcome: 'completed' })
   telemetry?.metrics?.observe(

@@ -3,6 +3,7 @@ import {
   Check,
   ChevronLeft,
   Link2,
+  LockKeyhole,
   Mic,
   Server,
   ShieldCheck,
@@ -10,19 +11,50 @@ import {
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
-import type { SettingsResponse } from '../types'
+import type {
+  DshModelCatalog,
+  DshModelCatalogItem,
+  SettingsResponse,
+} from '../types'
+import { ModelPicker, modelSelectionKey } from './ModelPicker'
 import { PegasMark } from './PegasMark'
 
 export function Onboarding({
   response,
+  catalog,
+  onSelectModel,
+  onSaveConnection,
+  onTestConnection,
   onComplete,
   onContinueSettings,
 }: {
   response?: SettingsResponse
+  catalog?: DshModelCatalog
+  onSelectModel?: (model: DshModelCatalogItem) => Promise<void>
+  onSaveConnection?: (
+    baseUrl: string,
+    apiKey: string,
+    modelName: string,
+  ) => Promise<void>
+  onTestConnection?: (
+    baseUrl: string,
+    apiKey: string,
+    modelName: string,
+  ) => Promise<{ ok: true; latencyMs: number }>
   onComplete: () => void
   onContinueSettings: () => void
 }) {
   const [step, setStep] = useState(0)
+  const [connectionDraft, setConnectionDraft] = useState({
+    baseUrl: '',
+    apiKey: '',
+    modelName: '',
+  })
+  const [connectionBusy, setConnectionBusy] = useState<'test' | 'save'>()
+  const [connectionNotice, setConnectionNotice] = useState<{
+    kind: 'success' | 'error'
+    message: string
+  }>()
   const dialogRef = useRef<HTMLElement>(null)
   const primaryActionRef = useRef<HTMLButtonElement>(null)
   useEffect(() => {
@@ -33,6 +65,29 @@ export function Onboarding({
     primaryActionRef.current?.focus()
     const containFocus = (event: KeyboardEvent) => {
       if (event.key !== 'Tab') return
+      const openPicker = document.querySelector('.model-picker-panel')
+      if (openPicker) {
+        const pickerFocusable = openPicker.querySelectorAll<HTMLElement>(
+          'button:not(:disabled), input:not(:disabled), [tabindex="0"]',
+        )
+        if (!pickerFocusable.length) return
+        const first = pickerFocusable[0]
+        const last = pickerFocusable[pickerFocusable.length - 1]
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault()
+          last?.focus()
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault()
+          first?.focus()
+        } else if (
+          document.activeElement instanceof HTMLElement &&
+          !openPicker.contains(document.activeElement)
+        ) {
+          event.preventDefault()
+          first?.focus()
+        }
+        return
+      }
       const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
         'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
       )
@@ -77,6 +132,100 @@ export function Onboarding({
   ] as const
   const current = steps[step] ?? steps[0]
   const Icon = current.icon
+  const models = catalog?.models ?? []
+  const routerProvider = response?.capabilities.providers.find(
+    provider => provider.id === response.settings.modelProvider,
+  )
+  const connectionConfigured =
+    Boolean(routerProvider?.available) &&
+    (catalog === undefined || models.length > 0)
+  const connectionCustom = routerProvider?.id === 'custom'
+  const effectiveBaseUrl = connectionCustom
+    ? connectionDraft.baseUrl
+    : (routerProvider?.baseUrl ?? '')
+  const effectiveModelName =
+    [
+      connectionDraft.modelName.trim(),
+      response?.settings.modelName ?? '',
+      routerProvider?.defaultModel ?? '',
+    ].find(candidate => candidate !== '') ?? ''
+  const probeModelPlaceholder =
+    [routerProvider?.defaultModel.trim() ?? ''].find(
+      candidate => candidate !== '',
+    ) ?? '用于测试连接的模型 ID'
+  const connectionReady =
+    Boolean(effectiveBaseUrl) &&
+    Boolean(effectiveModelName) &&
+    (Boolean(routerProvider?.hasApiKey) ||
+      Boolean(connectionDraft.apiKey.trim()))
+  useEffect(() => {
+    if (!routerProvider) return
+    setConnectionDraft(current => ({
+      baseUrl: current.baseUrl || routerProvider.baseUrl,
+      apiKey: current.apiKey,
+      modelName: current.modelName,
+    }))
+  }, [routerProvider?.baseUrl])
+  async function probeConnection(kind: 'test' | 'save') {
+    if (
+      connectionBusy ||
+      !connectionReady ||
+      !onSaveConnection ||
+      !onTestConnection
+    )
+      return
+    setConnectionBusy(kind)
+    setConnectionNotice(undefined)
+    try {
+      if (kind === 'test') {
+        const result = await onTestConnection(
+          effectiveBaseUrl,
+          connectionDraft.apiKey.trim(),
+          effectiveModelName,
+        )
+        setConnectionNotice({
+          kind: 'success',
+          message: `连接正常 · ${String(result.latencyMs)} ms`,
+        })
+      } else {
+        await onTestConnection(
+          effectiveBaseUrl,
+          connectionDraft.apiKey.trim(),
+          effectiveModelName,
+        )
+        await onSaveConnection(
+          effectiveBaseUrl,
+          connectionDraft.apiKey.trim(),
+          effectiveModelName,
+        )
+        setConnectionDraft(current => ({ ...current, apiKey: '' }))
+        setConnectionNotice({ kind: 'success', message: '连接已保存' })
+      }
+    } catch (caught) {
+      setConnectionNotice({
+        kind: 'error',
+        message:
+          caught instanceof Error ? caught.message : '连接失败，请重试。',
+      })
+    } finally {
+      setConnectionBusy(undefined)
+    }
+  }
+  const configuredProvider =
+    response?.settings.agentModelMode === 'override'
+      ? response.settings.agentModelProvider
+      : catalog?.defaultProvider
+  const configuredModelId =
+    response?.settings.agentModelMode === 'override'
+      ? response.settings.agentModelName
+      : catalog?.defaultModel
+  const configuredModel = configuredModelId
+    ? (models.find(
+        model =>
+          model.id === configuredModelId &&
+          (!configuredProvider || model.provider === configuredProvider),
+      ) ?? models.find(model => model.id === configuredModelId))
+    : undefined
   return (
     <div className="onboarding-backdrop">
       <section
@@ -118,26 +267,140 @@ export function Onboarding({
           )}
           {step === 1 && (
             <div className="setup-form">
+              {!connectionConfigured &&
+                onSaveConnection &&
+                onTestConnection && (
+                  <div
+                    className="setup-connection"
+                    role="group"
+                    aria-label="模型连接配置"
+                  >
+                    <p className="setup-connection-hint">
+                      <LockKeyhole size={15} />
+                      尚未配置模型连接。填写服务地址与 API Key
+                      并保存后，即可选择默认模型；凭证只保存在服务端。
+                    </p>
+                    <label>
+                      服务地址
+                      <input
+                        autoComplete="off"
+                        onChange={event =>
+                          setConnectionDraft(current => ({
+                            ...current,
+                            baseUrl: event.target.value,
+                          }))
+                        }
+                        placeholder="https://gateway.example/v1"
+                        readOnly={!connectionCustom}
+                        value={effectiveBaseUrl}
+                      />
+                    </label>
+                    <label>
+                      API Key
+                      <input
+                        autoComplete="off"
+                        onChange={event =>
+                          setConnectionDraft(current => ({
+                            ...current,
+                            apiKey: event.target.value,
+                          }))
+                        }
+                        placeholder={
+                          routerProvider?.hasApiKey
+                            ? '已保存；填写新值可替换'
+                            : '输入 API Key'
+                        }
+                        type="password"
+                        value={connectionDraft.apiKey}
+                      />
+                    </label>
+                    <label>
+                      探测模型
+                      <input
+                        autoComplete="off"
+                        onChange={event =>
+                          setConnectionDraft(current => ({
+                            ...current,
+                            modelName: event.target.value,
+                          }))
+                        }
+                        placeholder={probeModelPlaceholder}
+                        value={connectionDraft.modelName}
+                      />
+                    </label>
+                    <div className="setup-connection-actions">
+                      <button
+                        className="secondary-button"
+                        disabled={Boolean(connectionBusy) || !connectionReady}
+                        onClick={() => void probeConnection('test')}
+                        type="button"
+                      >
+                        {connectionBusy === 'test' ? '测试中…' : '测试连接'}
+                      </button>
+                      <button
+                        className="primary-button"
+                        disabled={Boolean(connectionBusy) || !connectionReady}
+                        onClick={() => void probeConnection('save')}
+                        type="button"
+                      >
+                        {connectionBusy === 'save' ? '保存中…' : '保存连接'}
+                      </button>
+                    </div>
+                    {connectionNotice && (
+                      <p
+                        className={
+                          connectionNotice.kind === 'error'
+                            ? 'settings-error'
+                            : 'setup-connection-ok'
+                        }
+                        role={
+                          connectionNotice.kind === 'error' ? 'alert' : 'status'
+                        }
+                      >
+                        {connectionNotice.message}
+                      </p>
+                    )}
+                  </div>
+                )}
               <label>
                 模型服务
                 <input
                   disabled
                   value={
+                    configuredModel?.provider ??
                     response?.capabilities.providers.find(
                       provider =>
                         provider.id === response.settings.modelProvider,
-                    )?.name ?? '尚未连接'
+                    )?.name ??
+                    '尚未连接'
                   }
                 />
               </label>
-              <label>
-                默认模型
-                <input
-                  disabled
-                  value={response?.settings.modelName ?? '服务端未提供'}
-                />
-              </label>
-              <small>模型连接将在设置中完成并保存到服务端。</small>
+              <div className="field-label">
+                <span>默认模型</span>
+                {onSelectModel ? (
+                  <ModelPicker
+                    ariaLabel="默认模型"
+                    footer="选择立即保存到服务端；模型变更只作用于新建执行会话"
+                    models={models}
+                    onSelect={(_, model) => {
+                      if (model) return onSelectModel(model)
+                    }}
+                    placeholder={
+                      configuredModelId ??
+                      (models.length ? '选择模型' : '服务端未提供可选模型')
+                    }
+                    value={
+                      configuredModel ? modelSelectionKey(configuredModel) : ''
+                    }
+                  />
+                ) : (
+                  <input disabled value={configuredModelId ?? '服务端未提供'} />
+                )}
+              </div>
+              <small>
+                默认模型来自模型服务的完整目录；连接与凭证仍在设置中管理。
+              </small>
             </div>
           )}
           {step === 2 && (

@@ -48,6 +48,7 @@ export type DrawerView =
       run?: Run
       selectedRunId?: string
       runs?: Run[]
+      automationActive?: boolean
       timeline?: ChannelTimeline
       timelineError?: string
       delivery?: TaskDelivery
@@ -528,6 +529,55 @@ export type ConversationLane = ConversationProjection['lane']
  */
 export function conversationLane(message: OutboxMessage): ConversationLane {
   return message.projection?.lane ?? 'say'
+}
+
+/**
+ * EXEC-005: server fact only. A streaming say draft carries `streaming:true`
+ * while the Run is still producing body text; the settled fact drops it.
+ * Clients never infer streaming from payload text.
+ */
+export function isStreamingSayMessage(message: OutboxMessage): boolean {
+  const record = payloadRecord(message.payload)
+  return (
+    payloadType(message.payload) === 'agent.message' &&
+    record?.streaming === true
+  )
+}
+
+/**
+ * DESIGN-008: server fact only. A run.completed payload carries
+ * automationActive when an active automation still targets the Task, so the
+ * Run ending must not read as the whole thing being finished.
+ */
+export function hasActiveAutomationFact(
+  payload: OutboxMessage['payload'],
+): boolean {
+  const record = payloadRecord(payload)
+  return (
+    payloadType(payload) === 'run.completed' &&
+    record?.automationActive === true
+  )
+}
+
+/**
+ * DESIGN-008: the drawer hero reads the latest terminal run.completed fact
+ * for the Task. Older completion facts never override a newer one.
+ */
+export function taskAutomationActive(
+  messages: readonly OutboxMessage[],
+  taskId: string,
+): boolean {
+  let latest: OutboxMessage | undefined
+  for (const message of messages) {
+    if (message.taskId !== taskId) continue
+    if (payloadType(message.payload) !== 'run.completed') continue
+    if (
+      !latest ||
+      Date.parse(message.createdAt) >= Date.parse(latest.createdAt)
+    )
+      latest = message
+  }
+  return latest ? hasActiveAutomationFact(latest.payload) : false
 }
 
 export interface ConversationAnchor {

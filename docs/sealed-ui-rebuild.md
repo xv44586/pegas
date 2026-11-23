@@ -284,7 +284,16 @@
 
 - 交互稿（本地研究材料，不入库）：`research/design-006-lifecycle-history/mockups.html`——桌面列表（删除确认态）、触发记录展开（摘要 + 查看事情 + 加载更多）、390px 移动端三帧，使用 §5 视觉 token 与既有 record-list 结构。
 
-## 21. 标准页内容列宽上限（2026-11-23，DESIGN-006 宽屏缺陷修复）
+## 21. work 入口语义统一与已安排事实（2026-11-23，DESIGN-008）
+
+- 对话页 icon 词汇表收敛为三条互不重叠的规则：**🔗 Link2（accent 蓝，meta 行）＝ 去事情**（打开事情详情抽屉；review.ready 进审查抽屉）；**↑ ArrowUpToLine（灰，卡片右上）＝ 回到发起消息**（页内向上回溯锚点）；**CalendarClock / ✓ / ⚠（卡片标题）＝ 状态**（已安排 / 已完成 / 执行失败）。蓝色表示离开当前位置，灰色表示页内辅助动作。
+- say 正文下的 16px 大蓝「查看工作详情」链接与 work 卡内的 36px 描边按钮移除；入口统一为每条消息 meta 行的 `.message-work-entry`（14px Link2、22px 槽、7px 圆角 hover 淡蓝底、title + aria-label），与 DESIGN-005 用户消息状态槽同规格同位置。带入口的 meta 行常显（`.has-work-entry`）。
+- 用户消息派生入口行为归一：单事情 🔗 直接开抽屉；多事情 🔗+角标弹菜单（结构不变），逐项点击也开对应事情的抽屉；「查看进展」文案统一为「查看工作详情」。页内跳转只剩卡片右上 ↑ 一个入口。
+- 「已完成」不再对挂着 active automation 的事情撒谎：服务端 `run.completed` payload 携带 `automationActive` 事实，完成卡标题渲染「已安排」+ CalendarClock，事情抽屉 hero 显示「已安排，自动化仍会按周期推进」。旧消息无字段时诚实回退为已完成。
+- 卡片排版对齐既有契约：`.fact-card` 行高 1.55（原错误继承聊天正文 1.78）；`.message-markdown strong/b` 字重 500（原浏览器默认 700）。
+- 门禁：`test/sealed-ui-work-entry.test.ts` 6 测试固化 CSS/DOM 合同；`ChatExperience.test.tsx` 已安排/普通完成两场景 + 入口开抽屉回归；`test/run-automations.test.ts` 服务端事实两场景；`web/src/sealed/types.test.ts` 事实 helper 两场景。
+
+## 22. 标准页内容列宽上限（2026-11-23，DESIGN-006 宽屏缺陷修复）
 
 - 缺陷：`.standard-page > :not(.page-header)` 只有左右 42px margin、没有 max-width，宽屏（用户实测约 2560px 视口）下自动化列表与触发记录面板被拉到 2000px+，摘要单行超长、「查看事情」被推出可视区，与对话页 980px / composer 1040px 的居中内容列不一致。
 - 修复：标准页（所有事情/待你处理/自动化/记忆）内容统一 `max-width: 1040px` 居中（`margin-inline: auto; width: calc(100% - 84px)`），与 composer/tray 同一列宽口径；`.page-header` 同步 `max-width: 1124px`（1040 + 2×42 padding）居中，保证标题与内容左缘对齐。≤820px 保持 20px gutter（`width: calc(100% - 40px)`，header max-width 1080px）。≤1124px 视口行为与修复前完全一致。

@@ -1,5 +1,6 @@
 import {
   AlertTriangle,
+  CalendarClock,
   CheckCircle2,
   CircleHelp,
   Clock3,
@@ -168,6 +169,7 @@ export function DetailDrawer({
             api={api}
             activityByRun={view.activityByRun}
             activityErrorByRun={view.activityErrorByRun}
+            automationActive={view.automationActive}
             channel={view.channel}
             collaborations={view.collaborations}
             collaborationsError={view.collaborationsError}
@@ -860,6 +862,7 @@ function TaskDetail({
   collaborationsError,
   delivery,
   deliveryError,
+  automationActive,
   run,
   runs,
   subagentsByRun,
@@ -882,6 +885,7 @@ function TaskDetail({
   api?: PegasApi
   activityByRun?: Record<string, RunActivityReport>
   activityErrorByRun?: Record<string, string>
+  automationActive?: boolean
   channel: Extract<DrawerView, { kind: 'task' }>['channel']
   collaborations?: ChannelRelation[]
   collaborationsError?: string
@@ -912,7 +916,9 @@ function TaskDetail({
     channel: Extract<DrawerView, { kind: 'task' }>['channel'],
   ) => Promise<void>
 }) {
-  const state = statusLabel(channel, run)
+  const baseState = statusLabel(channel, run)
+  const state =
+    automationActive && baseState === '已完成' ? '已安排' : baseState
   const runHistory = (runs ?? (run ? [run] : [])).toSorted(
     (left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt),
   )
@@ -2572,6 +2578,7 @@ function workerProfileSourceLabel(source?: 'global' | 'task') {
 }
 function stateIcon(state: string) {
   if (state === '已完成') return <CheckCircle2 size={24} />
+  if (state === '已安排') return <CalendarClock size={24} />
   if (state === '失败') return <AlertTriangle size={24} />
   if (state === '进行中') return <RotateCw size={24} />
   return <Clock3 size={24} />
@@ -2589,6 +2596,7 @@ function runProgressIcon(state: string) {
 }
 function stateHeadline(state: string): string {
   if (state === '已完成') return '工作已完成'
+  if (state === '已安排') return '已安排，自动化仍会按周期推进'
   if (state === '失败') return '执行失败，记录已保留'
   if (state === '进行中') return 'Pegas 正在推进这件事'
   if (state === '已归档') return '这件事已归档'
@@ -2599,6 +2607,8 @@ function stateDescription(state: string, run?: Run): string {
     return run?.output
       ? `${run.output.slice(0, 260)}${run.output.length > 260 ? '…' : ''}`
       : '服务端没有提供结果摘要。'
+  if (state === '已安排')
+    return '这一轮运行已结束，但事情还挂着启用中的自动化；后续触发会继续在这里更新。'
   if (state === '失败') return '查看服务端返回的原因后，可以创建一次重试。'
   if (state === '进行中') return '离开页面不会中断执行；状态由服务端持续保存。'
   if (state === '已归档') return '归档内容仍保留在服务端。'

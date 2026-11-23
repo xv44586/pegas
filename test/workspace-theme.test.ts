@@ -101,6 +101,10 @@ describe('sealed UI layout contracts', () => {
       new URL('../web/src/sealed/ModelPicker.tsx', import.meta.url),
       'utf8',
     )
+    const onboarding = readFileSync(
+      new URL('../web/src/sealed/Onboarding.tsx', import.meta.url),
+      'utf8',
+    )
     const app = readFileSync(
       new URL('../web/src/App.tsx', import.meta.url),
       'utf8',
@@ -115,7 +119,12 @@ describe('sealed UI layout contracts', () => {
     expect(modelPicker).toContain('filteredModels.length > pageSize')
     expect(modelPicker).toContain('上一页')
     expect(modelPicker).toContain('下一页')
-    for (const consumer of [mainPages, settingsPage, detailDrawer]) {
+    for (const consumer of [
+      mainPages,
+      settingsPage,
+      detailDrawer,
+      onboarding,
+    ]) {
       expect(consumer).toContain("from './ModelPicker'")
       expect(consumer).toContain('<ModelPicker')
     }
@@ -131,6 +140,80 @@ describe('sealed UI layout contracts', () => {
     )
     expect(uiReviewScript).toContain('assertPickerPagination')
     expect(uiReviewScript).toContain('PEGAS_MODEL_BASE_URL')
+  })
+
+  it('keeps the onboarding model picker unclipped and single-bordered', () => {
+    expect(sealedUi).toMatch(
+      /\.onboarding-dialog\s*\{(?![^}]*overflow:\s*hidden)[^}]*\}/,
+    )
+    expect(sealedUi).toMatch(
+      /\.setup-form > label > input,\s*\.setup-form > \.field-label > input,\s*\.setup-form > label > select\s*\{/,
+    )
+    expect(sealedUi).not.toMatch(/\.setup-form input,/)
+    const app = readFileSync(
+      new URL('../web/src/App.tsx', import.meta.url),
+      'utf8',
+    )
+    expect(app).toMatch(/<Onboarding[\s\S]*?catalog=\{agentModels\}/)
+    expect(app).toMatch(/<Onboarding[\s\S]*?onSelectModel=\{selectAgentModel\}/)
+    expect(uiReviewScript).toContain('onboarding model picker')
+  })
+
+  it('keeps picker trigger accessible names aligned with the glued visible lines', () => {
+    const modelPicker = readFileSync(
+      new URL('../web/src/sealed/ModelPicker.tsx', import.meta.url),
+      'utf8',
+    )
+    expect(modelPicker).toContain(
+      "aria-label={`${selection?.label ?? placeholder}${selection?.detail ?? ''}，${ariaLabel}`}",
+    )
+    const a11yScript = readFileSync(
+      new URL('../scripts/a11y-review.mjs', import.meta.url),
+      'utf8',
+    )
+    expect(a11yScript).toContain('onboarding-model-picker')
+    expect(a11yScript).toContain('PEGAS_MODEL_BASE_URL')
+  })
+
+  it('keeps the onboarding connection setup on the shared save and probe path', () => {
+    const onboarding = readFileSync(
+      new URL('../web/src/sealed/Onboarding.tsx', import.meta.url),
+      'utf8',
+    )
+    const app = readFileSync(
+      new URL('../web/src/App.tsx', import.meta.url),
+      'utf8',
+    )
+    expect(onboarding).toContain('尚未配置模型连接')
+    expect(onboarding).toContain('测试连接')
+    expect(onboarding).toContain('保存连接')
+    expect(onboarding).toContain('type="password"')
+    expect(onboarding).toContain('connectionConfigured')
+    expect(app).toMatch(
+      /<Onboarding[\s\S]*?onSaveConnection=\{saveOnboardingConnection\}/,
+    )
+    expect(app).toMatch(
+      /<Onboarding[\s\S]*?onTestConnection=\{testOnboardingConnection\}/,
+    )
+    expect(app).toMatch(
+      /async function saveOnboardingConnection[\s\S]*?api\.saveSettings\([\s\S]*?loadConfiguration\(true\)/,
+    )
+    expect(app).toMatch(
+      /async function testOnboardingConnection[\s\S]*?api\.testModel\(/,
+    )
+    expect(sealedUi).toMatch(/\.setup-connection > label > input\s*\{/)
+    expect(sealedUi).not.toMatch(/\.setup-form input,/)
+    expect(sealedUi).toMatch(
+      /\.onboarding-dialog\s*\{[^}]*max-height:\s*calc\(100dvh - 12vh - 20px\);/,
+    )
+    expect(sealedUi).toMatch(/\.setup-body\s*\{[^}]*overflow-y:\s*auto;/)
+    expect(uiReviewScript).toContain('escapes viewport vertically')
+    expect(uiReviewScript).toContain('desktop-onboarding-connection')
+    const a11yScript = readFileSync(
+      new URL('../scripts/a11y-review.mjs', import.meta.url),
+      'utf8',
+    )
+    expect(a11yScript).toContain('onboarding-connection-setup')
   })
 
   it('stacks the composer trigger name and provider detail instead of gluing them inline', () => {

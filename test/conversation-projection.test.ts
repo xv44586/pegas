@@ -99,7 +99,7 @@ describe('CONV-006 deterministic projection derivation', () => {
           },
         },
       ),
-    ).toMatchObject({ lane: 'work', weight: 'card' })
+    ).toMatchObject({ lane: 'work', weight: 'silent' })
   })
 
   it('keeps automation-triggered completion cards silent while failures and decisions stay visible', () => {
@@ -276,7 +276,7 @@ describe('CONV-006 store read path projection', () => {
       .find(item => item.taskId === seeded.taskId)
     expect(message?.projection).toEqual({
       lane: 'work',
-      weight: 'card',
+      weight: 'silent',
       anchor: { taskId: seeded.taskId, eventId: seeded.eventId },
     })
   })

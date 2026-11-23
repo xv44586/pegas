@@ -995,6 +995,58 @@ describe('sealed Pegas UI', () => {
     await screen.findByText('更改已保存')
   })
 
+  it('EXEC-005: toggles the chat lane from settings and persists the switch', async () => {
+    let savedBody: Record<string, unknown> | undefined
+    let currentSettings: SettingsResponse = {
+      ...settingsResponse,
+      settings: { ...settingsResponse.settings, chatLaneEnabled: false },
+    }
+    installFetch((path, init) => {
+      if (path === '/v1/settings' && init?.method === 'PUT') {
+        savedBody = JSON.parse(
+          typeof init.body === 'string' ? init.body : '{}',
+        ) as Record<string, unknown>
+        currentSettings = {
+          ...currentSettings,
+          settings: {
+            ...currentSettings.settings,
+            revision: currentSettings.settings.revision + 1,
+            chatLaneEnabled: savedBody.chatLaneEnabled === true,
+          },
+        }
+        return Response.json(currentSettings)
+      }
+      if (path === '/v1/settings') return Response.json(currentSettings)
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(await screen.findByRole('button', { name: /事情归类/ }))
+    const toggle = screen.getByLabelText('启用即时应答')
+    expect(toggle).toHaveProperty('checked', false)
+    fireEvent.click(toggle)
+    expect(toggle).toHaveProperty('checked', true)
+    fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
+    await screen.findByText('更改已保存')
+    expect(savedBody?.chatLaneEnabled).toBe(true)
+    expect(screen.getByLabelText('启用即时应答')).toHaveProperty(
+      'checked',
+      true,
+    )
+    fireEvent.click(screen.getByLabelText('启用即时应答'))
+    fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
+    await screen.findByText('更改已保存')
+    expect(savedBody?.chatLaneEnabled).toBe(false)
+    expect(screen.getByLabelText('启用即时应答')).toHaveProperty(
+      'checked',
+      false,
+    )
+  })
+
   it('keeps model-service Router shortcuts in sync with the URL', async () => {
     installFetch()
     render(<App />)
@@ -1530,7 +1582,8 @@ describe('sealed Pegas UI', () => {
       .filter(
         button =>
           !button.classList.contains('attention-title') &&
-          !button.classList.contains('attention-toggle'),
+          !button.classList.contains('attention-toggle') &&
+          !button.classList.contains('attention-latest'),
       )
       .map(button => button.getAttribute('aria-label'))
     expect(new Set(actionNames).size).toBe(actionNames.length)
@@ -2995,6 +3048,235 @@ describe('sealed Pegas UI', () => {
     expect(localStorage.getItem('pegas-setup-complete')).toBe('true')
   })
 
+  it('lets first-run setup pick the default model from the paginated catalog', async () => {
+    localStorage.removeItem('pegas-setup-complete')
+    const catalogModels = Array.from({ length: 33 }, (_, index) => ({
+      provider: 'Magpie',
+      id: `gateway/setup-${String(index + 1).padStart(2, '0')}`,
+      name: `Setup Model ${String(index + 1).padStart(2, '0')}`,
+    }))
+    const fetchMock = installFetch((path, init) => {
+      if (path === '/v1/settings' && init?.method !== 'PUT')
+        return Response.json({
+          ...settingsResponse,
+          settings: {
+            ...settingsResponse.settings,
+            agentModelProvider: 'Magpie',
+            agentModelName: 'gateway/setup-01',
+          },
+        })
+      if (path === '/v1/settings/agent-models')
+        return Response.json({
+          defaultProvider: 'Magpie',
+          defaultModel: 'gateway/setup-01',
+          models: catalogModels,
+        })
+      if (path === '/v1/settings' && init?.method === 'PUT') {
+        const update = JSON.parse(
+          typeof init.body === 'string' ? init.body : '{}',
+        ) as {
+          agentModelMode?: string
+          agentModelProvider?: string
+          agentModelName?: string
+        }
+        return Response.json({
+          ...settingsResponse,
+          settings: {
+            ...settingsResponse.settings,
+            revision: 2,
+            agentModelMode: 'override',
+            agentModelProvider: update.agentModelProvider ?? 'Magpie',
+            agentModelName: update.agentModelName ?? 'gateway/setup-01',
+          },
+        })
+      }
+      return undefined
+    })
+    render(<App />)
+    await screen.findByText('欢迎使用 Pegas')
+    fireEvent.click(screen.getByRole('button', { name: /^继续$/ }))
+    expect(screen.getByText('连接模型服务')).toBeTruthy()
+    const trigger = await screen.findByRole('button', { name: /，默认模型$/ })
+    await waitFor(() => expect(trigger.textContent).toContain('Setup Model 01'))
+    expect(trigger.textContent).toContain('Magpie · gateway/setup-01')
+    fireEvent.click(trigger)
+    const dialog = await screen.findByRole('dialog', { name: '选择模型' })
+    expect(within(dialog).getByText('33 个可用')).toBeTruthy()
+    expect(
+      within(dialog).getByRole('option', { name: /Setup Model 30/ }),
+    ).toBeTruthy()
+    expect(
+      within(dialog).queryByRole('option', { name: /Setup Model 31/ }),
+    ).toBeNull()
+    fireEvent.click(within(dialog).getByRole('button', { name: '下一页' }))
+    const target = within(dialog).getByRole('option', {
+      name: /Setup Model 31/,
+    })
+    fireEvent.click(target)
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([path, init]) => {
+          if (path !== '/v1/settings' || init?.method !== 'PUT') return false
+          const body = JSON.parse(
+            typeof init.body === 'string' ? init.body : '{}',
+          ) as {
+            agentModelMode?: string
+            agentModelProvider?: string
+            agentModelName?: string
+          }
+          return (
+            body.agentModelMode === 'override' &&
+            body.agentModelProvider === 'Magpie' &&
+            body.agentModelName === 'gateway/setup-31'
+          )
+        }),
+      ).toBe(true),
+    )
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: /，默认模型$/ }).textContent,
+      ).toContain('Setup Model 31'),
+    )
+    expect(screen.queryByRole('dialog', { name: '选择模型' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /^继续$/ }))
+    expect(screen.getByText('准备执行环境')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /^继续$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /进入 Pegas/ }))
+    expect(localStorage.getItem('pegas-setup-complete')).toBe('true')
+  })
+
+  it('lets first-run setup configure the model connection before picking a model', async () => {
+    localStorage.removeItem('pegas-setup-complete')
+    let keySaved = false
+    const unconfigured: SettingsResponse = {
+      ...settingsResponse,
+      settings: {
+        ...settingsResponse.settings,
+        modelName: '',
+        agentModelMode: 'profile',
+        agentModelProvider: '',
+        agentModelName: '',
+      },
+      capabilities: {
+        ...settingsResponse.capabilities,
+        providers: settingsResponse.capabilities.providers.map(provider =>
+          provider.id === 'magpie'
+            ? {
+                ...provider,
+                hasApiKey: false,
+                available: false,
+                reason: '需要 API key',
+              }
+            : provider,
+        ),
+      },
+    }
+    const configured: SettingsResponse = {
+      ...settingsResponse,
+      settings: { ...settingsResponse.settings, revision: 2 },
+    }
+    let currentSettings = unconfigured
+    const fetchMock = installFetch((path, init) => {
+      if (path === '/v1/settings' && init?.method !== 'PUT')
+        return Response.json(currentSettings)
+      if (path === '/v1/settings/agent-models')
+        return keySaved
+          ? Response.json({
+              defaultProvider: 'Magpie',
+              defaultModel: 'deepseek-v4.1-flash',
+              models: [
+                {
+                  provider: 'Magpie',
+                  id: 'deepseek-v4.1-flash',
+                  name: 'DeepSeek V4.1 Flash',
+                },
+                { provider: 'Magpie', id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol' },
+              ],
+            })
+          : Response.json(
+              { error: 'agent_models_unavailable' },
+              { status: 503 },
+            )
+      if (path === '/v1/settings/models/test' && init?.method === 'POST') {
+        const body = JSON.parse(
+          typeof init.body === 'string' ? init.body : '{}',
+        ) as { provider?: { apiKey?: string } }
+        return body.provider?.apiKey === 'sk-onboarding'
+          ? Response.json({ ok: true, latencyMs: 42 })
+          : Response.json({ message: '需要 API key' }, { status: 400 })
+      }
+      if (path === '/v1/settings' && init?.method === 'PUT') {
+        const body = JSON.parse(
+          typeof init.body === 'string' ? init.body : '{}',
+        ) as {
+          provider?: { apiKey?: string }
+          agentModelMode?: string
+          agentModelProvider?: string
+          agentModelName?: string
+        }
+        if (!keySaved) {
+          if (body.provider?.apiKey !== 'sk-onboarding')
+            return Response.json({ message: '需要 API key' }, { status: 400 })
+          keySaved = true
+          currentSettings = configured
+          return Response.json(configured)
+        }
+        currentSettings = {
+          ...currentSettings,
+          settings: {
+            ...currentSettings.settings,
+            revision: currentSettings.settings.revision + 1,
+            ...(body.agentModelMode
+              ? {
+                  agentModelMode: body.agentModelMode as 'profile' | 'override',
+                }
+              : {}),
+            ...(body.agentModelProvider
+              ? { agentModelProvider: body.agentModelProvider }
+              : {}),
+            ...(body.agentModelName
+              ? { agentModelName: body.agentModelName }
+              : {}),
+          },
+        }
+        return Response.json(currentSettings)
+      }
+      return undefined
+    })
+    render(<App />)
+    await screen.findByText('欢迎使用 Pegas')
+    fireEvent.click(screen.getByRole('button', { name: /^继续$/ }))
+    expect(screen.getByText('连接模型服务')).toBeTruthy()
+    expect(screen.getByText(/尚未配置模型连接/)).toBeTruthy()
+    const keyInput = await screen.findByLabelText('API Key')
+    fireEvent.change(keyInput, { target: { value: 'sk-onboarding' } })
+    fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
+    expect(await screen.findByText(/连接正常 · 42 ms/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '保存连接' }))
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([path, init]) => {
+          if (path !== '/v1/settings' || init?.method !== 'PUT') return false
+          const body = JSON.parse(
+            typeof init.body === 'string' ? init.body : '{}',
+          ) as { provider?: { apiKey?: string } }
+          return body.provider?.apiKey === 'sk-onboarding'
+        }),
+      ).toBe(true),
+    )
+    const trigger = await screen.findByRole('button', { name: /，默认模型$/ })
+    await waitFor(() => expect(trigger).toHaveProperty('disabled', false))
+    fireEvent.click(trigger)
+    const dialog = await screen.findByRole('dialog', { name: '选择模型' })
+    fireEvent.click(within(dialog).getByRole('option', { name: /GPT-6.1 Sol/ }))
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: /，默认模型$/ }).textContent,
+      ).toContain('GPT-6.1 Sol'),
+    )
+    expect(screen.queryByText(/尚未配置模型连接/)).toBeNull()
+  })
+
   it.each([
     ['completed', '工作已完成', 'is-done'],
     ['waiting', '等待下一步条件', 'is-waiting'],
@@ -4275,12 +4557,8 @@ describe('sealed Pegas UI', () => {
         `[data-message-id="${originEvent.id}"].is-anchor-highlight`,
       ),
     ).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: '查看进展' }))
-    expect(
-      document.querySelector(
-        '[data-message-id="result-cue"].is-anchor-highlight',
-      ),
-    ).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '查看工作详情' }))
+    expect(await screen.findByRole('dialog', { name: '工作详情' })).toBeTruthy()
   })
 
   it('shows router and rewrite metering with honest unreported tokens', async () => {
@@ -5534,9 +5812,9 @@ describe('sealed Pegas UI', () => {
       .getAllByRole('button')
       .filter(button => button.classList.contains('attention-group-entry'))
     expect(entries.map(entry => entry.textContent)).toEqual([
+      expect.stringContaining('第 11 个数：11'),
       expect.stringContaining('第 10 个数：10'),
       expect.stringContaining('第 9 个数：9'),
-      expect.stringContaining('第 8 个数：8'),
     ])
     expect(
       within(list).getByRole('button', { name: '查看全部 5 条' }),
@@ -5546,8 +5824,116 @@ describe('sealed Pegas UI', () => {
     expect(
       within(list).getByRole('button', { name: '收起更早通知' }),
     ).toBeTruthy()
+    const allEntries = within(list)
+      .getAllByRole('button')
+      .filter(button => button.classList.contains('attention-group-entry'))
+    expect(allEntries).toHaveLength(5)
+    expect(allEntries[4]?.textContent).toContain('第 7 个数：7')
     expect(within(list).getByText('第 7 个数：7')).toBeTruthy()
     expect(readRequests).toBe(0)
+  })
+
+  it('opens the latest grouped failure from its summary line and marks only that message read', async () => {
+    const source = snapshot.messages[0]
+    if (!source) throw new Error('missing attention fixture')
+    const older = {
+      ...source,
+      id: 'fail-old',
+      createdAt: '2026-11-19T08:01:00.000Z',
+      payload: { type: 'run.failed', error: '首次失败' },
+    }
+    const latest = {
+      ...source,
+      id: 'fail-latest',
+      createdAt: '2026-11-19T08:02:00.000Z',
+      payload: { type: 'run.failed', error: '重试仍失败' },
+    }
+    const readPaths: string[] = []
+    installSnapshotFetch({ ...snapshot, messages: [older, latest] }, path => {
+      if (!path.endsWith('/read')) return undefined
+      readPaths.push(path)
+      return Response.json({
+        message: { ...latest, readAt: '2026-11-19T09:00:00.000Z' },
+      })
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    const list = screen.getByLabelText('待处理列表')
+    expect(within(list).getByText('2 条 · 2 未读')).toBeTruthy()
+    fireEvent.click(
+      within(list).getByRole('button', { name: '最新：重试仍失败' }),
+    )
+    expect(await screen.findByLabelText('工作详情')).toBeTruthy()
+    expect(readPaths).toEqual([`/v1/outbox/${latest.id}/read`])
+    fireEvent.click(screen.getByRole('button', { name: '关闭详情' }))
+    await waitFor(() =>
+      expect(within(list).getByText('2 条 · 1 未读')).toBeTruthy(),
+    )
+    fireEvent.click(
+      within(list).getByRole('button', { name: `展开：${channel.title}` }),
+    )
+    const entries = within(list)
+      .getAllByRole('button')
+      .filter(button => button.classList.contains('attention-group-entry'))
+    expect(entries.map(entry => entry.textContent)).toEqual([
+      expect.stringContaining('重试仍失败'),
+      expect.stringContaining('首次失败'),
+    ])
+    expect(
+      entries[0]?.querySelector('.attention-group-entry-dot.is-unread'),
+    ).toBeNull()
+    expect(
+      entries[1]?.querySelector('.attention-group-entry-dot.is-unread'),
+    ).toBeTruthy()
+    expect(readPaths).toHaveLength(1)
+  })
+
+  it('opens the newest routine result of a group from its summary line and reduces the unread count', async () => {
+    const source = snapshot.messages[0]
+    if (!source) throw new Error('missing attention fixture')
+    const older = {
+      ...source,
+      id: 'result-old',
+      createdAt: '2026-11-19T08:01:00.000Z',
+      payload: { type: 'run.completed', text: '第 1 个数：1' },
+    }
+    const latest = {
+      ...source,
+      id: 'result-latest',
+      createdAt: '2026-11-19T08:02:00.000Z',
+      payload: { type: 'run.completed', text: '第 2 个数：2' },
+    }
+    const readPaths: string[] = []
+    installSnapshotFetch({ ...snapshot, messages: [older, latest] }, path => {
+      if (!path.endsWith('/read')) return undefined
+      readPaths.push(path)
+      return Response.json({
+        message: { ...latest, readAt: '2026-11-19T09:00:00.000Z' },
+      })
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    const list = screen.getByLabelText('待处理列表')
+    expect(within(list).getByText('2 条 · 2 未读')).toBeTruthy()
+    expect(screen.getByText(/2 条未读/)).toBeTruthy()
+    fireEvent.click(
+      within(list).getByRole('button', { name: '最新：第 2 个数：2' }),
+    )
+    expect(await screen.findByLabelText('工作详情')).toBeTruthy()
+    expect(readPaths).toEqual([`/v1/outbox/${latest.id}/read`])
+    fireEvent.click(screen.getByRole('button', { name: '关闭详情' }))
+    await waitFor(() =>
+      expect(within(list).getByText('2 条 · 1 未读')).toBeTruthy(),
+    )
+    expect(screen.getByText(/1 条未读/)).toBeTruthy()
   })
 
   it('merges repeated failures of one task into a single pinned failure row', async () => {

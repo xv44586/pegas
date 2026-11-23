@@ -10,9 +10,12 @@ import {
   attentionSummary,
   conversationAnchor,
   conversationLane,
+  hasActiveAutomationFact,
   isAttentionMessage,
   isResolvedDecisionMessage,
   isSilentConversationMessage,
+  isStreamingSayMessage,
+  taskAutomationActive,
 } from './types'
 
 describe('CONV-006 lane and anchor projection helpers', () => {
@@ -101,6 +104,30 @@ describe('CONV-006 lane and anchor projection helpers', () => {
 })
 
 describe('CONV-006 silent conversation projection', () => {
+  it('EXEC-005: streaming state is a server fact on agent.message only', () => {
+    const draft: OutboxMessage = {
+      id: 'message-stream',
+      userId: 'owner',
+      taskId: 'task-1',
+      payload: { type: 'agent.message', text: '今天是', streaming: true },
+      status: 'sent',
+      createdAt: '2026-11-23T00:00:00.000Z',
+    }
+    expect(isStreamingSayMessage(draft)).toBe(true)
+    expect(
+      isStreamingSayMessage({
+        ...draft,
+        payload: { type: 'agent.message', text: '今天是星期六。' },
+      }),
+    ).toBe(false)
+    expect(
+      isStreamingSayMessage({
+        ...draft,
+        payload: { type: 'run.progress', text: 'x', streaming: true },
+      }),
+    ).toBe(false)
+  })
+
   const base: OutboxMessage = {
     id: 'message-silent',
     userId: 'owner',
@@ -469,5 +496,53 @@ describe('DESIGN-007 attention sections and grouping', () => {
     expect(empty.groups).toHaveLength(0)
     expect(empty.rangeStart).toBe(0)
     expect(empty.rangeEnd).toBe(0)
+  })
+})
+
+describe('DESIGN-008 automationActive fact helpers', () => {
+  const scheduled: OutboxMessage = {
+    id: 'fact-scheduled',
+    userId: 'owner',
+    taskId: 'task-1',
+    payload: {
+      type: 'run.completed',
+      automationActive: true,
+      text: '周期自动化已创建并生效',
+    },
+    status: 'sent',
+    createdAt: '2026-11-23T02:00:00.000Z',
+  }
+  const finished: OutboxMessage = {
+    ...scheduled,
+    id: 'fact-finished',
+    payload: { type: 'run.completed', text: '已数到 10，自动化已取消。' },
+    createdAt: '2026-11-23T02:10:00.000Z',
+  }
+
+  it('reads automationActive only from run.completed payloads', () => {
+    expect(hasActiveAutomationFact(scheduled.payload)).toBe(true)
+    expect(hasActiveAutomationFact(finished.payload)).toBe(false)
+    expect(
+      hasActiveAutomationFact({
+        type: 'agent.message',
+        automationActive: true,
+        text: '1',
+      }),
+    ).toBe(false)
+    expect(hasActiveAutomationFact('纯文本')).toBe(false)
+    expect(hasActiveAutomationFact(undefined)).toBe(false)
+  })
+
+  it('lets the newest completion fact win regardless of input order', () => {
+    expect(taskAutomationActive([scheduled], 'task-1')).toBe(true)
+    expect(taskAutomationActive([scheduled, finished], 'task-1')).toBe(false)
+    expect(taskAutomationActive([finished, scheduled], 'task-1')).toBe(false)
+    expect(
+      taskAutomationActive(
+        [{ ...finished, taskId: 'task-2' }, scheduled],
+        'task-1',
+      ),
+    ).toBe(true)
+    expect(taskAutomationActive([], 'task-1')).toBe(false)
   })
 })
