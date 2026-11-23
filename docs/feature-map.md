@@ -246,6 +246,22 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - **真实 DSH 只读工具面（2026-11-22，缺口关闭）**：conversation lane 的只读不再仅靠 prompt 合同。`DshCliExecutor` 在 `permissionMode=read-only` 时注入 `pegas-readonly-surface` 补丁（0600 临时 patch-list，执行后清理；workspace-write 不注入），三层强制：①DSH Seatbelt/bwrap read-only 沙箱 + approval-policy never（越权升级请求确定性 rejected）；②目录裁剪——插件在 `ctx.inject([tools])` 就绪后原地包装已注册 native executor 的 `describe`（对象身份不变，避免 setExecutor 单槽冲突与 prompt section 身份比较失效），模型可见工具仅剩 read/read_image/glob/grep/web_fetch/web_search/working_directory，写/执行/委派/作业类工具从模型目录消失，`execute` 原样保留（native pipeline、scoped 子工具与 session 日志语义不变），插件卸载时恢复原 describe；③单调 guard——allowlist 外的任何派发在工具体执行前拒绝（PEGAS_READONLY_SURFACE_DENIED，拒绝文案引导 suggest_task 升级），`working_directory` 只许读不许 cd。真实验证（magpie/qwen4-max + DSH 0.2.2-rc.5，隔离 home）四场景：grep 检索正常作答；诱导写文件→零工具调用+升级标记+文件未落地；诱导 bash→模型确认目录无 bash 拒绝伪造输出+升级标记；诱导 cd→guard 拒绝+升级标记。另以直接 DSH 探针证实幻觉调用 bash 时 guard 拒绝并如实上报。回归：`test/dsh-readonly-surface.test.ts` 7 测试、`test/dsh-cli-executor.test.ts` +1（patch 注入/清理/负例）、`test/dsh-readonly-surface-integration.test.ts` 条件真实集成（dsh+本地网关可达才运行：诱导写文件不落地）。
 - **查任务状态/记忆只读工具（2026-11-22，缺口关闭）**：conversation lane 注册 pegas_tasks/pegas_memories 服务端权威只读查询。store `conversationStateForRun` 校验活跃 claim 且 kind=conversation（work Run 拒绝）；`GET /v1/runs/:id/conversation-state/(tasks|memories)` 以 x-pegas-run-claim-token 头认证（伪造/过期 403）；capability 经 read-only patch 的 in-process config 传入插件（token 不落盘，DSH 洗掉子进程 TOKEN 环境变量），仅 capability 合法才注册并放行 guard；privacyMode=mask 时投影字符串叶子经 DeterministicPrivacyMasker 掩码后才进转录；10s 超时 + 64KB 上限。真实验证：pegas_tasks/pegas_memories tool_call 命中、投影含种子任务与记忆、回答与权威数据一致，bash 仍拒。回归：`test/conversation-state.test.ts` 3 测试、`test/dsh-readonly-surface.test.ts` +7、`test/dsh-cli-executor.test.ts` +1、`test/dsh-readonly-surface-integration.test.ts` +1（真实 DSH 条件集成断言 pegas_tasks 调用与投影内容）。实现细节见 docs/router-worker-design.md P1 第 7 条。
 - **剩余风险**：真实 DSH conversation 全链路（Router reply→滚动 session→Outbox）尚未在真实供应商上端到端实测（执行器层只读面与状态工具已实测）；真实模型对 reply 判据与零确认遵守度未系统评测；只读目录裁剪依赖 DSH 工具注册名（read/glob/grep 等），DSH 升级新增只读工具需同步 allowlist；describe 原地包装依赖 DSH ToolsService 对象结构（升级需回归验证）；Web 端设置页尚无开关，需经 API 或环境变量启用。
+
+#### 收尾迭代（2026-11-23 Intake，关闭 Partial 缺口）
+
+- **用户结果**：即时问答车道达到 Usable——回答逐段流式出现在正文；设置页可直接开关车道；空闲时不残留执行进程，session 保留、下条消息无缝 resume。
+- **范围与归属**：①say 流式输出（同时关闭 CONV-006 验收 3 的 say 流式子项）；②Web 设置页「即时应答」开关（ROUTE-004/EXEC-005 共同缺口）；③空闲回收合同（runtime 随 Run 结束关闭、session 持久、下条消息 resume）的确定性回归与文档化；④真实 DSH conversation 全链路（Router reply→滚动 session→Outbox）实机验证并更新证据。基线 `6c0f013`（main），隔离 worktree `exec-005-chat-lane-closeout`。
+- **验收条件**：
+  1. conversation Run 执行期间，助手正文增量以服务端权威投影进入对话流：复用既有 coalesce 机制，同一 Run 至多一条 `agent.message`（dedupe `run-say:<runId>`，coalesceKey 同键），payload 携带 `streaming:true`；文本单调增长（只追加），最终结算与最后增量一致。`completeRun` 对 conversation Task 不再产生第二条重复正文（`run.completed` 事实保留为权威、payload 去文本、投影 `work/silent`；decide 类结算事实不受影响）。
+  2. 增量读取走 owner 鉴权的只读投影（snapshot/outbox），客户端不复制派生逻辑；无增量的旧 Run/旧服务端渲染行为不变（兼容回归）。流式中断（Worker 崩溃/Run 失败）时已到达文本保留可见，失败事实照常投影，无半条消息假完成。
+  3. 升级标记（PEGAS_SUGGEST_TASK）与零确认合同不被流式破坏：标记段不得作为正文增量流出；suggest_task 升级路径与幂等不变。
+  4. 设置页提供「即时应答」开关：读写 `chatLaneEnabled`，保存省略其他字段不丢值（COALESCE 语义不变）；关闭后新输入回到完整 Task 路径（既有 lane-off 兜底），开关状态跨刷新保留；390px 布局可达、可键盘操作。
+  5. 空闲回收：conversation Run 结算后执行进程退出（runtime 关闭）、`conversation_sessions.executor_ref` 持久；下条消息 resume 同一 session。以既有崩溃/resume 回归 + 新增进程退出断言固化，文档明确「常驻=会话长驻，进程按事件唤醒」。
+  6. 新增/修改路径均有自动化回归；`pnpm check` + `pnpm smoke`（含 crash）通过；真实 DSH conversation 链路实机验证后更新本行与 ROUTE-004/EXEC-005/CONV-006 状态与证据。
+- **非目标**：不做 token 级 SSE/WebSocket 推送（沿用既有 poll+coalesce 投影，粒度为 DSH text 事件）；不改哪些事件进 Outbox；不新增控制意图；不做常驻 DSH 进程池（现状进程本就按 Run 起停）；真实模型遵守度系统评测另立评测任务，不在本迭代冒充完成。
+- **数据与权限边界**：无 schema 变更（复用 outbox coalesce 列与 runtime_settings 既有字段）；流式增量仅 owner 可读，durable payload/dispatcher/external 投递语义不变；开关沿用 settings API 鉴权。
+- **失败与恢复**：增量写失败不阻断 Run 结算（最终文本以 completeRun 为准）；coalesce 目标已被领取时新起一行仍保持同 dedupe 语义需回归覆盖；回滚只需回退代码，无数据迁移（旧版本读到的 `agent.message` 仍按 say 正文渲染，`streaming` 字段被忽略）。
+- **当前状态**：Intake 登记，实现进行中。
 - **状态说明**：标 Partial 而非 Usable——主要路径可运行且有自动化验证，但默认关闭且真实执行器链路未实测，不满足"目标场景可使用"的完整判据。
 
 ### ROUTE-003：路由候选语义与权威摘要（2026-11-21）
