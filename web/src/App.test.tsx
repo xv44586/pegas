@@ -759,7 +759,7 @@ describe('sealed Pegas UI', () => {
   })
 
   it('loads, searches and paginates the real model catalog', async () => {
-    const models = Array.from({ length: 30 }, (_, index) => ({
+    const models = Array.from({ length: 35 }, (_, index) => ({
       id: `model-${String(index + 1).padStart(2, '0')}`,
       name: `Model ${String(index + 1).padStart(2, '0')}`,
     }))
@@ -780,15 +780,15 @@ describe('sealed Pegas UI', () => {
     fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
     expect(await screen.findByText('连接正常 · 42 ms')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '获取模型目录' }))
-    expect(await screen.findByText('Model 25')).toBeTruthy()
-    expect(screen.queryByText('Model 26')).toBeNull()
+    expect(await screen.findByText('Model 30')).toBeTruthy()
+    expect(screen.queryByText('Model 31')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '下一页' }))
-    expect(screen.getByText('Model 30')).toBeTruthy()
+    expect(screen.getByText('Model 35')).toBeTruthy()
     fireEvent.change(screen.getByPlaceholderText('按名称或模型 ID 搜索'), {
       target: { value: 'Model 03' },
     })
     expect(screen.getByText('Model 03')).toBeTruthy()
-    expect(screen.queryByText('Model 30')).toBeNull()
+    expect(screen.queryByText('Model 35')).toBeNull()
     expect(fetchMock).toHaveBeenCalledWith(
       '/v1/settings/models/discover',
       expect.objectContaining({ method: 'POST' }),
@@ -2361,7 +2361,7 @@ describe('sealed Pegas UI', () => {
     fireEvent.click(modelButton)
     expect(await screen.findByRole('dialog', { name: '选择模型' })).toBeTruthy()
     expect(screen.getByRole('option', { name: /GPT-6.1 Sol/ })).toBeTruthy()
-    expect(screen.queryByRole('option', { name: /Other model/ })).toBeNull()
+    expect(screen.getByRole('option', { name: /Other model/ })).toBeTruthy()
     fireEvent.click(screen.getByRole('option', { name: /GPT-6.1 Sol/ }))
     await waitFor(() =>
       expect(
@@ -2408,6 +2408,133 @@ describe('sealed Pegas UI', () => {
         ),
       ).toBe(true),
     )
+  })
+
+  it('lists the full multi-provider agent catalog in the composer with 30-item pages', async () => {
+    const magpieModels = Array.from({ length: 32 }, (_, index) => ({
+      provider: 'Magpie',
+      id: `gateway/model-${String(index + 1).padStart(2, '0')}`,
+      name: `Gateway Model ${String(index + 1).padStart(2, '0')}`,
+    }))
+    const fetchMock = installFetch((path, init) => {
+      if (path === '/v1/settings' && init?.method !== 'PUT')
+        return Response.json({
+          ...settingsResponse,
+          settings: {
+            ...settingsResponse.settings,
+            agentModelProvider: 'Magpie',
+            agentModelName: 'gateway/model-01',
+          },
+        })
+      if (path === '/v1/settings/agent-models')
+        return Response.json({
+          defaultProvider: 'Magpie',
+          defaultModel: 'gateway/model-01',
+          models: [
+            ...magpieModels,
+            {
+              provider: 'Anthropic',
+              id: 'claude-sonnet-4-5',
+              name: 'Claude Sonnet 4.5',
+            },
+          ],
+        })
+      if (path === '/v1/settings' && init?.method === 'PUT') {
+        const update = JSON.parse(
+          typeof init.body === 'string' ? init.body : '{}',
+        ) as { agentModelProvider?: string; agentModelName?: string }
+        return Response.json({
+          ...settingsResponse,
+          settings: {
+            ...settingsResponse.settings,
+            revision: 2,
+            agentModelMode: 'override',
+            agentModelProvider: update.agentModelProvider ?? 'Magpie',
+            agentModelName: update.agentModelName ?? 'gateway/model-01',
+          },
+        })
+      }
+      return undefined
+    })
+    render(<App />)
+    const modelButton = await screen.findByRole('button', {
+      name: /选择执行模型/,
+    })
+    await waitFor(() =>
+      expect(modelButton.textContent).toContain('Gateway Model 01'),
+    )
+    fireEvent.click(modelButton)
+    const dialog = await screen.findByRole('dialog', { name: '选择模型' })
+    expect(within(dialog).getByText('33 个可用')).toBeTruthy()
+    expect(
+      within(dialog).getByRole('option', { name: /Gateway Model 01/ }),
+    ).toBeTruthy()
+    expect(
+      within(dialog).getByRole('option', { name: /Gateway Model 30/ }),
+    ).toBeTruthy()
+    expect(
+      within(dialog).queryByRole('option', { name: /Gateway Model 31/ }),
+    ).toBeNull()
+    expect(
+      within(dialog).queryByRole('option', { name: /Claude Sonnet 4.5/ }),
+    ).toBeNull()
+    fireEvent.click(within(dialog).getByRole('button', { name: '下一页' }))
+    expect(
+      within(dialog).getByRole('option', { name: /Gateway Model 31/ }),
+    ).toBeTruthy()
+    const claudeOption = within(dialog).getByRole('option', {
+      name: /Claude Sonnet 4.5/,
+    })
+    expect(within(claudeOption).getByText(/Anthropic/)).toBeTruthy()
+    fireEvent.click(claudeOption)
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([path, init]) => {
+          if (path !== '/v1/settings' || init?.method !== 'PUT') return false
+          const body = JSON.parse(
+            typeof init.body === 'string' ? init.body : '{}',
+          ) as { agentModelProvider?: string; agentModelName?: string }
+          return (
+            body.agentModelProvider === 'Anthropic' &&
+            body.agentModelName === 'claude-sonnet-4-5'
+          )
+        }),
+      ).toBe(true),
+    )
+    await waitFor(() =>
+      expect(modelButton.textContent).toContain('Claude Sonnet 4.5'),
+    )
+    fireEvent.click(modelButton)
+    const reopened = await screen.findByRole('dialog', { name: '选择模型' })
+    expect(
+      within(reopened)
+        .getByRole('option', { name: /Claude Sonnet 4.5/ })
+        .getAttribute('aria-selected'),
+    ).toBe('true')
+    expect(
+      within(reopened).getByRole('button', { name: '上一页' }),
+    ).toHaveProperty('disabled', true)
+    fireEvent.change(within(reopened).getByPlaceholderText('搜索模型'), {
+      target: { value: 'model-3' },
+    })
+    expect(
+      within(reopened).getByRole('option', { name: /Gateway Model 30/ }),
+    ).toBeTruthy()
+    expect(
+      within(reopened).getByRole('option', { name: /Gateway Model 32/ }),
+    ).toBeTruthy()
+    expect(
+      within(reopened).queryByRole('option', { name: /Gateway Model 03/ }),
+    ).toBeNull()
+    expect(
+      within(reopened).queryByRole('button', { name: '下一页' }),
+    ).toBeNull()
+    fireEvent.change(within(reopened).getByPlaceholderText('搜索模型'), {
+      target: { value: 'anthropic' },
+    })
+    expect(
+      within(reopened).getByRole('option', { name: /Claude Sonnet 4.5/ }),
+    ).toBeTruthy()
   })
 
   it('opens voice settings without requesting microphone access when speech is disabled', async () => {

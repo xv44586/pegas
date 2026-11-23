@@ -1187,7 +1187,7 @@ function ModelServices({
       .toLowerCase()
       .includes(modelQuery.toLowerCase()),
   )
-  const pageSize = 25
+  const pageSize = 30
   const pageCount = Math.max(1, Math.ceil(visibleModels.length / pageSize))
   const pageModels = visibleModels.slice(
     modelPage * pageSize,
