@@ -1724,7 +1724,9 @@ export function App() {
       )}
       {setupOpen && (
         <Onboarding
+          catalog={agentModels}
           response={data.settings}
+          onSelectModel={selectAgentModel}
           onContinueSettings={() => {
             setSetupOpen(false)
             localStorage.setItem('pegas-setup-complete', 'true')

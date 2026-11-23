@@ -10,15 +10,24 @@ import {
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
-import type { SettingsResponse } from '../types'
+import type {
+  DshModelCatalog,
+  DshModelCatalogItem,
+  SettingsResponse,
+} from '../types'
+import { ModelPicker, modelSelectionKey } from './ModelPicker'
 import { PegasMark } from './PegasMark'
 
 export function Onboarding({
   response,
+  catalog,
+  onSelectModel,
   onComplete,
   onContinueSettings,
 }: {
   response?: SettingsResponse
+  catalog?: DshModelCatalog
+  onSelectModel?: (model: DshModelCatalogItem) => Promise<void>
   onComplete: () => void
   onContinueSettings: () => void
 }) {
@@ -33,6 +42,29 @@ export function Onboarding({
     primaryActionRef.current?.focus()
     const containFocus = (event: KeyboardEvent) => {
       if (event.key !== 'Tab') return
+      const openPicker = document.querySelector('.model-picker-panel')
+      if (openPicker) {
+        const pickerFocusable = openPicker.querySelectorAll<HTMLElement>(
+          'button:not(:disabled), input:not(:disabled), [tabindex="0"]',
+        )
+        if (!pickerFocusable.length) return
+        const first = pickerFocusable[0]
+        const last = pickerFocusable[pickerFocusable.length - 1]
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault()
+          last?.focus()
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault()
+          first?.focus()
+        } else if (
+          document.activeElement instanceof HTMLElement &&
+          !openPicker.contains(document.activeElement)
+        ) {
+          event.preventDefault()
+          first?.focus()
+        }
+        return
+      }
       const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
         'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
       )
@@ -77,6 +109,22 @@ export function Onboarding({
   ] as const
   const current = steps[step] ?? steps[0]
   const Icon = current.icon
+  const models = catalog?.models ?? []
+  const configuredProvider =
+    response?.settings.agentModelMode === 'override'
+      ? response.settings.agentModelProvider
+      : catalog?.defaultProvider
+  const configuredModelId =
+    response?.settings.agentModelMode === 'override'
+      ? response.settings.agentModelName
+      : catalog?.defaultModel
+  const configuredModel = configuredModelId
+    ? (models.find(
+        model =>
+          model.id === configuredModelId &&
+          (!configuredProvider || model.provider === configuredProvider),
+      ) ?? models.find(model => model.id === configuredModelId))
+    : undefined
   return (
     <div className="onboarding-backdrop">
       <section
@@ -123,21 +171,40 @@ export function Onboarding({
                 <input
                   disabled
                   value={
+                    configuredModel?.provider ??
                     response?.capabilities.providers.find(
                       provider =>
                         provider.id === response.settings.modelProvider,
-                    )?.name ?? '尚未连接'
+                    )?.name ??
+                    '尚未连接'
                   }
                 />
               </label>
-              <label>
-                默认模型
-                <input
-                  disabled
-                  value={response?.settings.modelName ?? '服务端未提供'}
-                />
-              </label>
-              <small>模型连接将在设置中完成并保存到服务端。</small>
+              <div className="field-label">
+                <span>默认模型</span>
+                {onSelectModel ? (
+                  <ModelPicker
+                    ariaLabel="默认模型"
+                    footer="选择立即保存到服务端；模型变更只作用于新建执行会话"
+                    models={models}
+                    onSelect={(_, model) => {
+                      if (model) return onSelectModel(model)
+                    }}
+                    placeholder={
+                      configuredModelId ??
+                      (models.length ? '选择模型' : '服务端未提供可选模型')
+                    }
+                    value={
+                      configuredModel ? modelSelectionKey(configuredModel) : ''
+                    }
+                  />
+                ) : (
+                  <input disabled value={configuredModelId ?? '服务端未提供'} />
+                )}
+              </div>
+              <small>
+                默认模型来自模型服务的完整目录；连接与凭证仍在设置中管理。
+              </small>
             </div>
           )}
           {step === 2 && (

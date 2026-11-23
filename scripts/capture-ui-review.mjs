@@ -534,6 +534,39 @@ try {
   ]) {
     await page.getByRole('button', { name: '继续', exact: true }).click()
     await page.getByRole('heading', { name: heading, exact: true }).waitFor()
+    if (slug === 'models') {
+      await page.getByRole('button', { name: /，默认模型$/ }).click()
+      await assertPickerPagination(page, 'onboarding model picker')
+      const panelGeometry = await page.evaluate(() => {
+        const panel = globalThis.document.querySelector(
+          '.setup-form .model-picker-panel',
+        )
+        if (!panel) return 'onboarding picker panel missing'
+        const rect = panel.getBoundingClientRect()
+        if (
+          rect.left < -1 ||
+          rect.right > globalThis.innerWidth + 1 ||
+          rect.top < -1 ||
+          rect.bottom > globalThis.innerHeight + 1
+        )
+          return `onboarding picker panel escapes viewport ${JSON.stringify(rect)}`
+        const probe = globalThis.document.elementFromPoint(
+          rect.left + rect.width / 2,
+          Math.min(rect.bottom - 8, globalThis.innerHeight - 8),
+        )
+        if (!probe || !panel.contains(probe))
+          return 'onboarding picker panel bottom is clipped or covered'
+        return ''
+      })
+      if (panelGeometry) throw new Error(panelGeometry)
+      await capture(
+        page,
+        'desktop-onboarding-models-picker.png',
+        'desktop-onboarding-models-picker',
+      )
+      await page.keyboard.press('Escape')
+      await page.getByRole('button', { name: /，默认模型$/ }).waitFor()
+    }
     await capture(
       page,
       `desktop-onboarding-${slug}.png`,

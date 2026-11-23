@@ -101,6 +101,10 @@ describe('sealed UI layout contracts', () => {
       new URL('../web/src/sealed/ModelPicker.tsx', import.meta.url),
       'utf8',
     )
+    const onboarding = readFileSync(
+      new URL('../web/src/sealed/Onboarding.tsx', import.meta.url),
+      'utf8',
+    )
     const app = readFileSync(
       new URL('../web/src/App.tsx', import.meta.url),
       'utf8',
@@ -115,7 +119,12 @@ describe('sealed UI layout contracts', () => {
     expect(modelPicker).toContain('filteredModels.length > pageSize')
     expect(modelPicker).toContain('上一页')
     expect(modelPicker).toContain('下一页')
-    for (const consumer of [mainPages, settingsPage, detailDrawer]) {
+    for (const consumer of [
+      mainPages,
+      settingsPage,
+      detailDrawer,
+      onboarding,
+    ]) {
       expect(consumer).toContain("from './ModelPicker'")
       expect(consumer).toContain('<ModelPicker')
     }
@@ -131,6 +140,39 @@ describe('sealed UI layout contracts', () => {
     )
     expect(uiReviewScript).toContain('assertPickerPagination')
     expect(uiReviewScript).toContain('PEGAS_MODEL_BASE_URL')
+  })
+
+  it('keeps the onboarding model picker unclipped and single-bordered', () => {
+    expect(sealedUi).toMatch(
+      /\.onboarding-dialog\s*\{(?![^}]*overflow:\s*hidden)[^}]*\}/,
+    )
+    expect(sealedUi).toMatch(
+      /\.setup-form > label > input,\s*\.setup-form > \.field-label > input,\s*\.setup-form > label > select\s*\{/,
+    )
+    expect(sealedUi).not.toMatch(/\.setup-form input,/)
+    const app = readFileSync(
+      new URL('../web/src/App.tsx', import.meta.url),
+      'utf8',
+    )
+    expect(app).toMatch(/<Onboarding[\s\S]*?catalog=\{agentModels\}/)
+    expect(app).toMatch(/<Onboarding[\s\S]*?onSelectModel=\{selectAgentModel\}/)
+    expect(uiReviewScript).toContain('onboarding model picker')
+  })
+
+  it('keeps picker trigger accessible names aligned with the glued visible lines', () => {
+    const modelPicker = readFileSync(
+      new URL('../web/src/sealed/ModelPicker.tsx', import.meta.url),
+      'utf8',
+    )
+    expect(modelPicker).toContain(
+      "aria-label={`${selection?.label ?? placeholder}${selection?.detail ?? ''}，${ariaLabel}`}",
+    )
+    const a11yScript = readFileSync(
+      new URL('../scripts/a11y-review.mjs', import.meta.url),
+      'utf8',
+    )
+    expect(a11yScript).toContain('onboarding-model-picker')
+    expect(a11yScript).toContain('PEGAS_MODEL_BASE_URL')
   })
 
   it('stacks the composer trigger name and provider detail instead of gluing them inline', () => {
