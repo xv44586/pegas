@@ -2231,7 +2231,9 @@ export function AutomationPage({
   channels,
   error,
   onCreate,
+  onDelete,
   onLoadInvocations,
+  onOpenChannel,
   onReload,
   onSetStatus,
   onUpdate,
@@ -2241,9 +2243,12 @@ export function AutomationPage({
   channels: WorkChannel[]
   error: string
   onCreate: (draft: AutomationDraft) => Promise<void>
+  onDelete?: (automation: Automation) => Promise<void>
   onLoadInvocations?: (
     automation: Automation,
-  ) => Promise<AutomationInvocation[]>
+    cursor?: string,
+  ) => Promise<{ invocations: AutomationInvocation[]; nextCursor?: string }>
+  onOpenChannel?: (channel: WorkChannel) => void
   onReload: () => void
   onSetStatus: (
     automation: Automation,
@@ -2256,11 +2261,15 @@ export function AutomationPage({
   >()
   const [busyId, setBusyId] = useState('')
   const [confirmCancelId, setConfirmCancelId] = useState<string>()
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string>()
   const [actionError, setActionError] = useState('')
   const [historyId, setHistoryId] = useState<string>()
   const [invocations, setInvocations] = useState<AutomationInvocation[]>()
+  const [historyCursor, setHistoryCursor] = useState<string>()
   const [historyError, setHistoryError] = useState('')
   const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyLoadingMore, setHistoryLoadingMore] = useState(false)
+  const [historyMoreError, setHistoryMoreError] = useState('')
   const [promptId, setPromptId] = useState<string>()
   const [showEnded, setShowEnded] = useState(false)
   const historyRequestRef = useRef(0)
@@ -2270,20 +2279,27 @@ export function AutomationPage({
       historyRequestRef.current += 1
       setHistoryId(undefined)
       setInvocations(undefined)
+      setHistoryCursor(undefined)
       setHistoryError('')
       setHistoryLoading(false)
+      setHistoryLoadingMore(false)
+      setHistoryMoreError('')
       return
     }
     const requestId = historyRequestRef.current + 1
     historyRequestRef.current = requestId
     setHistoryId(automation.id)
     setInvocations(undefined)
+    setHistoryCursor(undefined)
     setHistoryError('')
     setHistoryLoading(true)
+    setHistoryLoadingMore(false)
+    setHistoryMoreError('')
     try {
       const next = await onLoadInvocations(automation)
       if (requestId !== historyRequestRef.current) return
-      setInvocations(next)
+      setInvocations(next.invocations)
+      setHistoryCursor(next.nextCursor)
     } catch (caught) {
       if (requestId !== historyRequestRef.current) return
       setHistoryError(
@@ -2291,6 +2307,46 @@ export function AutomationPage({
       )
     } finally {
       if (requestId === historyRequestRef.current) setHistoryLoading(false)
+    }
+  }
+  async function loadMoreHistory(automation: Automation) {
+    if (!onLoadInvocations || !historyCursor || historyLoadingMore) return
+    const requestId = historyRequestRef.current
+    setHistoryLoadingMore(true)
+    setHistoryMoreError('')
+    try {
+      const next = await onLoadInvocations(automation, historyCursor)
+      if (requestId !== historyRequestRef.current) return
+      setInvocations(current => [...(current ?? []), ...next.invocations])
+      setHistoryCursor(next.nextCursor)
+    } catch (caught) {
+      if (requestId !== historyRequestRef.current) return
+      setHistoryMoreError(
+        caught instanceof Error ? caught.message : '加载更多失败，请重试。',
+      )
+    } finally {
+      if (requestId === historyRequestRef.current) setHistoryLoadingMore(false)
+    }
+  }
+  async function runDelete(automation: Automation) {
+    if (!onDelete) return
+    setBusyId(automation.id)
+    setActionError('')
+    try {
+      await onDelete(automation)
+      setConfirmDeleteId(undefined)
+      if (historyId === automation.id) {
+        historyRequestRef.current += 1
+        setHistoryId(undefined)
+        setInvocations(undefined)
+        setHistoryCursor(undefined)
+      }
+    } catch (caught) {
+      setActionError(
+        caught instanceof Error ? caught.message : '删除失败，请重试。',
+      )
+    } finally {
+      setBusyId('')
     }
   }
   const activeCount =
@@ -2374,22 +2430,32 @@ export function AutomationPage({
       {automations && automations.length > 0 && (
         <div className="automation-lists">
           <section className="record-list" aria-label="自动化列表">
-            {(hasLiveAutomations(automations)
-              ? automations.filter(item => !isEndedAutomation(item))
-              : automations
+            {sortLiveAutomations(
+              hasLiveAutomations(automations)
+                ? automations.filter(item => !isEndedAutomation(item))
+                : automations,
             ).map(automation => (
               <AutomationRow
                 automation={automation}
                 busyId={busyId}
                 channels={channels}
                 confirmCancelId={confirmCancelId}
+                confirmDeleteId={confirmDeleteId}
                 historyError={historyError}
                 historyId={historyId}
                 historyLoading={historyLoading}
+                historyLoadingMore={historyLoadingMore}
+                historyMoreError={historyMoreError}
+                historyCursor={historyCursor}
                 invocations={invocations}
                 onCancelConfirm={() => setConfirmCancelId(undefined)}
+                onCancelDelete={() => setConfirmDeleteId(undefined)}
                 onConfirmCancel={() => setConfirmCancelId(automation.id)}
+                onConfirmDelete={() => setConfirmDeleteId(automation.id)}
+                onDelete={onDelete ? () => runDelete(automation) : undefined}
                 onEdit={() => setForm({ mode: 'edit', automation })}
+                onLoadMoreHistory={loadMoreHistory}
+                onOpenChannel={onOpenChannel}
                 onRunStatus={runStatus}
                 onToggleHistory={toggleHistory}
                 onTogglePrompt={() =>
@@ -2417,19 +2483,32 @@ export function AutomationPage({
               </button>
               {showEnded && (
                 <div className="record-list">
-                  {automations.filter(isEndedAutomation).map(automation => (
+                  {sortEndedAutomations(
+                    automations.filter(isEndedAutomation),
+                  ).map(automation => (
                     <AutomationRow
                       automation={automation}
                       busyId={busyId}
                       channels={channels}
                       confirmCancelId={confirmCancelId}
+                      confirmDeleteId={confirmDeleteId}
                       historyError={historyError}
                       historyId={historyId}
                       historyLoading={historyLoading}
+                      historyLoadingMore={historyLoadingMore}
+                      historyMoreError={historyMoreError}
+                      historyCursor={historyCursor}
                       invocations={invocations}
                       onCancelConfirm={() => setConfirmCancelId(undefined)}
+                      onCancelDelete={() => setConfirmDeleteId(undefined)}
                       onConfirmCancel={() => setConfirmCancelId(automation.id)}
+                      onConfirmDelete={() => setConfirmDeleteId(automation.id)}
+                      onDelete={
+                        onDelete ? () => runDelete(automation) : undefined
+                      }
                       onEdit={() => setForm({ mode: 'edit', automation })}
+                      onLoadMoreHistory={loadMoreHistory}
+                      onOpenChannel={onOpenChannel}
                       onRunStatus={runStatus}
                       onToggleHistory={toggleHistory}
                       onTogglePrompt={() =>
@@ -2470,6 +2549,24 @@ function hasLiveAutomations(automations: Automation[]): boolean {
   return automations.some(item => !isEndedAutomation(item))
 }
 
+function sortLiveAutomations(automations: Automation[]): Automation[] {
+  return [...automations].sort((left, right) => {
+    const statusOrder =
+      Number(left.status !== 'active') - Number(right.status !== 'active')
+    if (statusOrder !== 0) return statusOrder
+    const leftFire = left.nextFireAt ? Date.parse(left.nextFireAt) : Infinity
+    const rightFire = right.nextFireAt ? Date.parse(right.nextFireAt) : Infinity
+    if (leftFire !== rightFire) return leftFire - rightFire
+    return left.title.localeCompare(right.title)
+  })
+}
+
+function sortEndedAutomations(automations: Automation[]): Automation[] {
+  return [...automations].sort(
+    (left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt),
+  )
+}
+
 function automationPromptSummary(prompt: string): string {
   const collapsed = prompt.replaceAll(/\s+/g, ' ').trim()
   return collapsed.length > 120 ? `${collapsed.slice(0, 120)}…` : collapsed
@@ -2480,13 +2577,22 @@ function AutomationRow({
   busyId,
   channels,
   confirmCancelId,
+  confirmDeleteId,
   historyError,
   historyId,
   historyLoading,
+  historyLoadingMore,
+  historyMoreError,
+  historyCursor,
   invocations,
   onCancelConfirm,
+  onCancelDelete,
   onConfirmCancel,
+  onConfirmDelete,
+  onDelete,
   onEdit,
+  onLoadMoreHistory,
+  onOpenChannel,
   onRunStatus,
   onToggleHistory,
   onTogglePrompt,
@@ -2496,13 +2602,22 @@ function AutomationRow({
   busyId: string
   channels: WorkChannel[]
   confirmCancelId?: string
+  confirmDeleteId?: string
   historyError: string
   historyId?: string
   historyLoading: boolean
+  historyLoadingMore: boolean
+  historyMoreError: string
+  historyCursor?: string
   invocations?: AutomationInvocation[]
   onCancelConfirm: () => void
+  onCancelDelete: () => void
   onConfirmCancel: () => void
+  onConfirmDelete: () => void
+  onDelete?: () => Promise<void>
   onEdit: () => void
+  onLoadMoreHistory: (automation: Automation) => Promise<void>
+  onOpenChannel?: (channel: WorkChannel) => void
   onRunStatus: (
     automation: Automation,
     action: 'pause' | 'resume' | 'cancel',
@@ -2633,6 +2748,36 @@ function AutomationRow({
               结束
             </button>
           ))}
+        {isEndedAutomation(automation) &&
+          onDelete &&
+          (confirmDeleteId === automation.id ? (
+            <>
+              <button
+                className="danger-button"
+                disabled={busyId === automation.id}
+                onClick={() => void onDelete()}
+                type="button"
+              >
+                确认删除
+              </button>
+              <button
+                className="quiet-button"
+                onClick={onCancelDelete}
+                type="button"
+              >
+                保留
+              </button>
+            </>
+          ) : (
+            <button
+              className="quiet-button"
+              disabled={busyId === automation.id}
+              onClick={onConfirmDelete}
+              type="button"
+            >
+              删除
+            </button>
+          ))}
       </div>
       {historyId === automation.id && (
         <div className="record-history">
@@ -2653,26 +2798,73 @@ function AutomationRow({
             !historyError &&
             invocations &&
             (invocations.length ? (
-              <ul aria-label="触发记录">
-                {invocations.map(invocation => (
-                  <li key={invocation.id}>
-                    <span
-                      className={`invocation-status is-${invocation.status}`}
+              <>
+                <ul aria-label="触发记录">
+                  {invocations.map(invocation => {
+                    const invocationChannel = invocation.taskId
+                      ? channels.find(item => item.id === invocation.taskId)
+                      : undefined
+                    return (
+                      <li key={invocation.id}>
+                        <span
+                          className={`invocation-status is-${invocation.status}`}
+                        >
+                          {invocationStatusLabel(invocation.status)}
+                        </span>
+                        <span>
+                          计划 {formatDateTime(invocation.scheduledFor)}
+                        </span>
+                        {invocation.attempts > 1 && (
+                          <span>尝试 {invocation.attempts} 次</span>
+                        )}
+                        {invocation.summary && (
+                          <span className="invocation-summary">
+                            {invocation.summary}
+                          </span>
+                        )}
+                        {invocation.lastError && (
+                          <span className="invocation-error">
+                            {invocation.lastError}
+                          </span>
+                        )}
+                        {invocationChannel && onOpenChannel && (
+                          <button
+                            className="inline-link"
+                            onClick={() => onOpenChannel(invocationChannel)}
+                            type="button"
+                          >
+                            查看事情
+                          </button>
+                        )}
+                      </li>
+                    )
+                  })}
+                </ul>
+                {historyMoreError && (
+                  <small className="record-history-error" role="alert">
+                    {historyMoreError}
+                    <button
+                      className="inline-link"
+                      onClick={() => void onLoadMoreHistory(automation)}
+                      type="button"
                     >
-                      {invocationStatusLabel(invocation.status)}
-                    </span>
-                    <span>计划 {formatDateTime(invocation.scheduledFor)}</span>
-                    {invocation.attempts > 1 && (
-                      <span>尝试 {invocation.attempts} 次</span>
-                    )}
-                    {invocation.lastError && (
-                      <span className="invocation-error">
-                        {invocation.lastError}
-                      </span>
-                    )}
-                  </li>
-                ))}
-              </ul>
+                      重试
+                    </button>
+                  </small>
+                )}
+                {historyCursor && (
+                  <div className="history-more">
+                    <button
+                      className="quiet-button"
+                      disabled={historyLoadingMore}
+                      onClick={() => void onLoadMoreHistory(automation)}
+                      type="button"
+                    >
+                      {historyLoadingMore ? '正在加载…' : '加载更多'}
+                    </button>
+                  </div>
+                )}
+              </>
             ) : (
               <small>还没有触发记录</small>
             ))}

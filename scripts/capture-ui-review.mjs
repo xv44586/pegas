@@ -210,6 +210,11 @@ const children = [
     env: environment,
     stdio: 'inherit',
   }),
+  spawn(process.execPath, [resolve(repositoryRoot, 'dist/scheduler/main.js')], {
+    cwd: repositoryRoot,
+    env: { ...environment, PEGAS_SCHEDULER_POLL_MS: '50' },
+    stdio: 'inherit',
+  }),
 ]
 
 let browser
@@ -320,10 +325,30 @@ try {
   await page.locator('.automation-prompt').first().waitFor()
   await capture(page, 'desktop-automation-prompt.png', 'desktop-automation')
   await page.getByRole('button', { name: '收起指令' }).first().click()
-  await page.getByRole('button', { name: /已结束 1/ }).click()
+  await page.getByRole('button', { name: /已结束 2/ }).click()
   await page.getByText('每分钟报数 1→10').waitFor()
   await capture(page, 'desktop-automation-ended.png', 'desktop-automation')
-  await page.getByRole('button', { name: /已结束 1/ }).click()
+  const endedHistoryRow = page
+    .getByLabel('已结束的自动化')
+    .getByRole('article')
+    .filter({ hasText: '触发记录示例' })
+  await endedHistoryRow.getByRole('button', { name: '删除' }).click()
+  await endedHistoryRow.getByRole('button', { name: '确认删除' }).waitFor()
+  await capture(
+    page,
+    'desktop-automation-delete-confirm.png',
+    'desktop-automation-delete-confirm',
+  )
+  await endedHistoryRow.getByRole('button', { name: '保留' }).click()
+  await endedHistoryRow.getByRole('button', { name: '触发记录' }).click()
+  await page.locator('.record-history .invocation-summary').first().waitFor()
+  await capture(
+    page,
+    'desktop-automation-history.png',
+    'desktop-automation-history',
+  )
+  await endedHistoryRow.getByRole('button', { name: '触发记录' }).click()
+  await page.getByRole('button', { name: /已结束 2/ }).click()
 
   await page.getByLabel('主导航').getByRole('button', { name: '记忆' }).click()
   await page.getByRole('heading', { name: '记忆', exact: true }).waitFor()
@@ -711,9 +736,24 @@ try {
     .getByRole('heading', { name: '自动化', exact: true })
     .waitFor()
   await mobilePage.getByText('晨间简报').waitFor()
-  await mobilePage.getByRole('button', { name: /已结束 1/ }).click()
+  await mobilePage.getByRole('button', { name: /已结束 2/ }).click()
   await mobilePage.getByText('每分钟报数 1→10').waitFor()
   await capture(mobilePage, 'mobile-automation.png', 'mobile-automation')
+  const mobileEndedHistoryRow = mobilePage
+    .getByLabel('已结束的自动化')
+    .getByRole('article')
+    .filter({ hasText: '触发记录示例' })
+  await mobileEndedHistoryRow.getByRole('button', { name: '触发记录' }).click()
+  await mobilePage
+    .locator('.record-history .invocation-summary')
+    .first()
+    .waitFor()
+  await capture(
+    mobilePage,
+    'mobile-automation-history.png',
+    'mobile-automation-history',
+  )
+  await mobileEndedHistoryRow.getByRole('button', { name: '触发记录' }).click()
   await mobilePage
     .getByLabel('移动端主导航')
     .getByRole('button', { name: '设置' })
@@ -1200,6 +1240,33 @@ async function seedConversation(apiPort) {
   if (longPromptResponse.status !== 201)
     throw new Error('Unable to seed UI review counting automation')
   const countingAutomation = (await longPromptResponse.json()).automation
+  // Park the counting automation far in the future so the seeded scheduler
+  // cannot fire it during the capture, then end it for the delete fixture.
+  const countingParkResponse = await fetch(
+    `http://127.0.0.1:${String(apiPort)}/v1/automations/${countingAutomation.id}`,
+    {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        userId: 'owner',
+        commandId: 'feature-review-automation-counting-park',
+        expectedRevision: countingAutomation.revision,
+        automation: {
+          title: '每分钟报数 1→10',
+          prompt: countingAutomation.prompt,
+          schedule: {
+            kind: 'interval',
+            everySeconds: 60,
+            startsAt: new Date(Date.now() + 3_600_000).toISOString(),
+          },
+          target: { kind: 'new_task' },
+        },
+      }),
+    },
+  )
+  if (countingParkResponse.status !== 200)
+    throw new Error('Unable to park UI review counting automation')
+  const parkedCounting = (await countingParkResponse.json()).automation
   const countingCancelResponse = await fetch(
     `http://127.0.0.1:${String(apiPort)}/v1/automations/${countingAutomation.id}/cancel`,
     {
@@ -1208,12 +1275,122 @@ async function seedConversation(apiPort) {
       body: JSON.stringify({
         userId: 'owner',
         commandId: 'feature-review-automation-counting-cancel',
-        expectedRevision: countingAutomation.revision,
+        expectedRevision: parkedCounting.revision,
       }),
     },
   )
   if (countingCancelResponse.status !== 200)
     throw new Error('Unable to end UI review counting automation')
+  // A dedicated history fixture fires once right away; its real run output
+  // feeds the invocation summary shown in the history panel.
+  const historyFixtureResponse = await fetch(
+    `http://127.0.0.1:${String(apiPort)}/v1/automations`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        userId: 'owner',
+        commandId: 'feature-review-automation-history',
+        automation: {
+          title: '触发记录示例',
+          prompt: '报出下一个数字。',
+          schedule: {
+            kind: 'interval',
+            everySeconds: 3600,
+            startsAt: new Date(Date.now() + 500).toISOString(),
+          },
+          target: { kind: 'new_task' },
+        },
+      }),
+    },
+  )
+  if (historyFixtureResponse.status !== 201)
+    throw new Error('Unable to seed UI review history automation')
+  const historyAutomation = (await historyFixtureResponse.json()).automation
+  // Let the counting automation fire one real trigger through the seeded
+  // scheduler + worker (its run summary feeds the history panel), then end
+  // it before the second fire so no extra channel lingers in the sidebar.
+  const historyDeadline = Date.now() + 90_000
+  let countingHistory = { invocations: [] }
+  while (Date.now() < historyDeadline) {
+    const historyResponse = await fetch(
+      `http://127.0.0.1:${String(apiPort)}/v1/automations/${historyAutomation.id}/invocations?userId=owner&limit=25`,
+    )
+    countingHistory = await historyResponse.json()
+    if (countingHistory.invocations.some(item => item.summary)) break
+    await wait(250)
+  }
+  if (!countingHistory.invocations.some(item => item.summary))
+    throw new Error(
+      'UI review counting automation never produced a run summary',
+    )
+  const historyCancelResponse = await fetch(
+    `http://127.0.0.1:${String(apiPort)}/v1/automations/${historyAutomation.id}/cancel`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        userId: 'owner',
+        commandId: 'feature-review-automation-history-cancel',
+        expectedRevision: historyAutomation.revision,
+      }),
+    },
+  )
+  if (historyCancelResponse.status !== 200)
+    throw new Error('Unable to end UI review history automation')
+  // Bump the two fixture channels back to the top of the recent-work
+  // window (the trigger's channel is newer) so later captures stay
+  // deterministic. Explicit taskId continuations resume the same Tasks
+  // instead of creating duplicate channels.
+  const bumpChannelsResponse = await fetch(
+    `http://127.0.0.1:${String(apiPort)}/v1/channels?userId=owner`,
+  )
+  const bumpChannelsBody = await bumpChannelsResponse.json()
+  for (const [index, title] of [
+    '检查设置与工作详情是否一致',
+    '为 Pegas 封板新的白底界面',
+  ].entries()) {
+    const bumpChannel = bumpChannelsBody.channels?.find(
+      item => item.title === title,
+    )
+    if (!bumpChannel)
+      throw new Error('Unable to find UI review channel to bump')
+    const bumpResponse = await fetch(
+      `http://127.0.0.1:${String(apiPort)}/v1/events`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          userId: 'owner',
+          type: 'user.message',
+          source: 'web',
+          dedupeKey: `feature-review-recent-bump-${String(index)}`,
+          payload: { taskId: bumpChannel.taskId, text: '请确认当前进展。' },
+        }),
+      },
+    )
+    if (bumpResponse.status !== 202)
+      throw new Error('Unable to bump UI review recent channels')
+    const bumpDeadline = Date.now() + 25_000
+    let bumpSettled = false
+    while (Date.now() < bumpDeadline) {
+      const timelineResponse = await fetch(
+        `http://127.0.0.1:${String(apiPort)}/v1/channels/${bumpChannel.taskId}/timeline?userId=owner`,
+      )
+      const timelineBody = await timelineResponse.json()
+      if (
+        timelineBody.runs?.length > 1 &&
+        timelineBody.runs.every(
+          run => !['queued', 'running', 'waiting'].includes(run.status),
+        )
+      ) {
+        bumpSettled = true
+        break
+      }
+      await wait(100)
+    }
+    if (!bumpSettled) throw new Error('UI review channel bump never settled')
+  }
   const memoryResponse = await fetch(
     `http://127.0.0.1:${String(apiPort)}/v1/memories`,
     {

@@ -4,7 +4,7 @@
 >
 > 状态：Partial
 >
-> 更新日期：2026-11-23
+> 更新日期：2026-11-23（手动删除与触发记录分页落地：schema v39、`POST .../delete`、invocations cursor 分页与 `taskId`/`summary` 只读投影；实现与验收归属 DESIGN-006 第二阶段，见 `docs/sealed-ui-rebuild.md` §20）
 
 ## 用户结果
 
@@ -95,6 +95,13 @@ Invocation 保存：
 - `pending`、`processing`、`dispatched` 或 `failed` 状态；
 - Inbox 尝试次数与最近失败原因。
 
+展示层投影（DESIGN-006 第二阶段）：Invocation 读取响应附加两个只读派生字段，均不落盘：
+
+- `taskId`：该次触发对应 Run 的 Task（经 `event_id → runs.origin_event_id` 关联；Run 尚未创建时缺省）；
+- `summary`：该 Run 已落盘输出（`output_json`）的首行摘要（≤120 字，与对话投影同一截断口径；Run 未完成或无输出时缺省）。
+
+它们只回答「这次触发做了什么」，不是执行确认的权威来源；权威事实仍是对话流中的 `agent.message` 与 Run 终态。
+
 `existing_task` 只能指向同一 owner 下未完成、未停止的 Task。Automation Event 是机器输入，不能恢复 cancelled Task、恢复 completed Task，也不能被普通 `/v1/events` 调用伪造。
 
 ## API
@@ -137,6 +144,17 @@ PUT /v1/automations/:automationId
 
 编辑必须携带 `userId`、`commandId`、`expectedRevision` 和完整 `automation`。旧 revision 返回 `409 automation_conflict`；不增加数量化的“last write wins”。
 
+### 触发记录分页（DESIGN-006 第二阶段）
+
+```http
+GET /v1/automations/:automationId/invocations?userId=owner&limit=25&cursor=<invocationId>
+```
+
+- 排序固定为 `scheduled_for DESC, rowid DESC`（最新计划触发在前），与既有查询一致。
+- `limit` 缺省 50（兼容既有调用方），上限 200；`cursor` 是上一页最后一条 Invocation 的 id，按排序键 seek，不依赖 OFFSET。非法 cursor（不存在或不属于该 Automation/owner）返回 400。
+- 还有下一页时响应携带 `nextCursor`（本页最后一条 id）；没有则省略。响应形状：`{ invocations: [...], nextCursor?: string }`。
+- 分页读取是只读操作，无幂等/revision 语义；owner 隔离与 404 语义沿用既有查询。
+
 ### 状态命令
 
 ```http
@@ -155,15 +173,32 @@ POST /v1/automations/:automationId/cancel
 }
 ```
 
-暂停清空下一次触发时间；恢复从当前时间重新计算下一次触发；取消永久结束 Automation。暂停、恢复和停止失败都返回稳定错误：
+暂停清空下一次触发时间；恢复从当前时间重新计算下一次触发；取消永久结束 Automation。删除仅适用于已结束状态（见下节）。这些命令失败都返回稳定错误（见「状态命令错误表」）。
 
-| 状态 | `error`                         | 含义                                   |
-| ---- | ------------------------------- | -------------------------------------- |
-| 404  | `not_found`                     | Automation 不存在或不属于该 owner      |
-| 409  | `automation_command_conflict`   | 同一 command ID 用于不同 payload       |
-| 409  | `automation_conflict`           | `expectedRevision` 已过期              |
-| 409  | `automation_read_only`          | completed/cancelled 状态不允许该命令   |
-| 409  | `automation_target_unavailable` | 已有事情不存在、已停止或不属于该 owner |
+### 删除（DESIGN-006 第二阶段）
+
+```http
+POST /v1/automations/:automationId/delete
+```
+
+携带与状态命令相同的 `{ userId, commandId, expectedRevision }`。删除是用户显式清理入口，语义与「结束」不同：
+
+- **前置条件**：仅 `completed` / `cancelled` 可删；`active` / `paused` 返回 `409 automation_read_only`（先结束再删除，防止误删仍在履行责任的自动化）。
+- **删除范围**：同一事务内删除 Automation 定义、其全部 Invocation 行、以及这些 Invocation 对应且仍处于 `pending` 的 `automation.due` Inbox Event（防止已排队未处理的触发在定义消失后结算失败）。`processing` / 已结算 Event 不动：Worker 对缺失 Invocation 的更新是 no-op，Run 一旦创建即独立存在。
+- **保留边界**：已产生的 Task、Run、对话消息与 `agent.message` 历史全部保留——删除清理的是「未来的责任与调度记录」，不是「已经发生的事实」。对话里的数数气泡不因删除消失。
+- **幂等**：按 `(userId, commandId)` 冻结首次响应重放；同 command 不同 payload 返回 `409 automation_command_conflict`；旧 `expectedRevision` 返回 `409 automation_conflict`。删除后同 command 重放仍返回冻结的删除回执（命令账本保留，不随定义删除）。
+- **回执**：`{ deletion: { id, deleted: true, deletedAt } }`。删除后 `GET` 该 Automation 返回 404。
+- **schema**：迁移 v39 重建 `automation_commands`，`automation_id` 放宽为可空并把外键改为 `ON DELETE SET NULL`，命令账本在定义删除后仍可重放；additive 迁移，旧版本代码不读该列的空值场景，回滚无兼容负担。删除事务内按 Event 逐条先删 Invocation 再删 pending Event（满足 `automation_invocations.event_id` 外键顺序），批量删除会因外键约束失败。
+
+### 状态命令错误表
+
+| 状态 | `error`                         | 含义                                                                                      |
+| ---- | ------------------------------- | ----------------------------------------------------------------------------------------- |
+| 404  | `not_found`                     | Automation 不存在或不属于该 owner                                                         |
+| 409  | `automation_command_conflict`   | 同一 command ID 用于不同 payload                                                          |
+| 409  | `automation_conflict`           | `expectedRevision` 已过期                                                                 |
+| 409  | `automation_read_only`          | 状态不允许该命令：pause/resume/cancel 拒绝 completed/cancelled；delete 拒绝 active/paused |
+| 409  | `automation_target_unavailable` | 已有事情不存在、已停止或不属于该 owner                                                    |
 
 ## Scheduler 事务
 

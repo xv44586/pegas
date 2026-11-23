@@ -167,7 +167,7 @@ describe('automation scheduling', () => {
       },
     ])
     expect(
-      store.listAutomationInvocations(automation.id, 'owner')[0],
+      store.listAutomationInvocations(automation.id, 'owner').items[0],
     ).toMatchObject({
       status: 'dispatched',
       attempts: 1,
@@ -298,7 +298,7 @@ describe('automation scheduling', () => {
     if (!event) throw new Error('Expected Automation Event')
     store.failEvent(event.id, 'failing-router', 'synthetic failure', 1)
     expect(
-      store.listAutomationInvocations(automation.id, 'owner')[0],
+      store.listAutomationInvocations(automation.id, 'owner').items[0],
     ).toMatchObject({
       status: 'failed',
       attempts: 1,

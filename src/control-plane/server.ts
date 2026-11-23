@@ -880,7 +880,7 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         }
       }
       const automationResourceMatch =
-        /^\/v1\/automations\/([^/]+)(?:\/(pause|resume|cancel|invocations))?$/.exec(
+        /^\/v1\/automations\/([^/]+)(?:\/(pause|resume|cancel|delete|invocations))?$/.exec(
           taskResourceUrl.pathname,
         )
       if (automationResourceMatch) {
@@ -910,6 +910,13 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         if (action && action !== 'invocations' && request.method === 'POST') {
           const command = parseAutomationStatusCommand(await readJson(request))
           try {
+            if (action === 'delete') {
+              const deletion = options.store.deleteAutomation(
+                automationId,
+                command,
+              )
+              return sendJson(response, 200, { deletion })
+            }
             const automation =
               action === 'pause'
                 ? options.store.pauseAutomation(automationId, command)
@@ -923,18 +930,16 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         }
         if (action === 'invocations' && request.method === 'GET') {
           const userId = requiredQuery(taskResourceUrl, 'userId')
-          const requestedLimit = optionalQuery(taskResourceUrl, 'limit')
-          const limit =
-            requestedLimit === undefined
-              ? 100
-              : Number.parseInt(requestedLimit, 10)
+          const page = pageRequest(taskResourceUrl)
           try {
+            const result = options.store.listAutomationInvocations(
+              automationId,
+              userId,
+              page,
+            )
             return sendJson(response, 200, {
-              invocations: options.store.listAutomationInvocations(
-                automationId,
-                userId,
-                limit,
-              ),
+              invocations: result.items,
+              ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
             })
           } catch (error) {
             return sendAutomationError(response, error)

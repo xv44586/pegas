@@ -1377,8 +1377,19 @@ export function App() {
               await api.createAutomation(draft)
               await loadAutomations()
             }}
-            onLoadInvocations={automation =>
-              api.automationInvocations(automation.id)
+            onDelete={async automation => {
+              await api.deleteAutomation(automation.id, automation.revision)
+              await loadAutomations()
+            }}
+            onLoadInvocations={(automation, cursor) =>
+              api.automationInvocations(automation.id, cursor)
+            }
+            onOpenChannel={channel =>
+              openDrawer({
+                kind: 'task',
+                channel,
+                run: latestRunForTask(data.snapshot.runs, channel.id),
+              })
             }
             onReload={() => void loadAutomations()}
             onSetStatus={async (automation, action) => {

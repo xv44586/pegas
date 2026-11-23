@@ -573,6 +573,8 @@ export interface AutomationInvocation {
   lastError?: string
   createdAt: string
   updatedAt: string
+  taskId?: string
+  summary?: string
 }
 
 interface ChannelSearchMatch {

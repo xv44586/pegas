@@ -215,3 +215,71 @@
 - 已结束的 Automation 默认收进「已结束 N」disclosure（ChevronDown 旋转指示），进行中/暂停的保持平铺；全部已结束时不折叠、直接平铺历史。行结构仍是 icon + 正文 + 操作按钮的平铺行，无嵌套卡片。
 - 移动端（≤820px）修复既有网格缺陷：两列布局下 `.record-icon`/`.record-copy` 显式指定列，正文不再被自动放置进 34px 图标列挤成竖排单字（记忆页同受益）。
 - 门禁：`web/src/sealed/AutomationPage.test.tsx` 6 测试（摘要折叠/指令 disclosure/单行 meta/已结束分组/全结束平铺/暂停与结束命令）；`scripts/capture-ui-review.mjs` 新增长 prompt + 已结束种子与 `desktop-automation-prompt/ended`、`mobile-automation` 实拍。
+
+## 20. 自动化生命周期与触发记录（2026-11-23，DESIGN-006 第二阶段）
+
+> 状态：已实现（worktree `design-006-lifecycle-history`，分支 `feat/DESIGN-006-automation-lifecycle-history`，基线 `76d4d3c`）。用户裁决（2026-11-23）：加删除入口让用户手动清理已结束自动化；触发记录做 limit + 加载更多。调研依据见本地研究笔记 `research/automation-list-scaling/NOTES.md`（Codex/Cindy 均不做定义列表页码分页：Codex 固定排序 + run 级 cursor 分页 + run 归档；Cindy 分组折叠 + quiet-run 自动归档）。
+
+### 用户结果
+
+- 已结束的自动化可以显式删除，列表不再只增不减；删除不影响对话里已经发生的事实（数数气泡、完成卡都保留）。
+- 「触发记录」不再只是调度器状态流水：每次触发显示「状态 + 计划时间 + 这次做了什么（Run 输出首行摘要）+ 进入对应事情的入口」；记录多于 25 条时尾部出现「加载更多」，逐页追加。
+- 进行中的自动化排序稳定：启用中在前、按下次触发时间升序；已结束沉底折叠（既有行为不变）。
+
+### 设计要点
+
+1. **删除入口（仅已结束行）**
+   - `completed`/`cancelled` 行的操作区追加「删除」quiet-button；点击后原位切换为「确认删除」（danger-button）+「保留」（quiet-button），与既有「结束 → 确认结束/保留」同一交互模式，无模态弹窗。
+   - `active`/`paused` 行不出现删除按钮；服务端同样拒绝（`409 automation_read_only`），UI 不是唯一防线。
+   - 确认删除后就地移除该行并刷新计数；失败在页级 `actionError` 提示，行保留。
+   - 文案口径：按钮「删除」，确认「确认删除」；不需要额外解释文案——保留边界（对话历史不删）由合同文档承载，行内不堆说明。
+2. **触发记录行升级**
+   - 每条 Invocation 渲染为：状态徽章（既有 `invocation-status`）+「计划 <时间>」+ 摘要（`summary`，Run 输出首行 ≤120 字，muted 单行截断）+「查看事情」inline-link（有 `taskId` 时渲染，跳转对应 Channel）。
+   - 无 Run/无输出（pending、失败未派发）只显示状态与时间，失败原因沿用 `invocation-error`；不编造摘要。
+   - 摘要与入口是服务端派生的只读投影（`taskId`/`summary`），客户端不从正文推断；权威执行确认仍在对话流（长期架构约束）。
+3. **加载更多**
+   - 首屏 `limit=25`；响应含 `nextCursor` 时列表尾部渲染「加载更多」quiet-button，点击追加下一页（cursor=上页末条 id），加载中按钮禁用并显示「正在加载…」。
+   - 追加失败显示行内错误 +「重试」，已加载页保留；切换 Automation 或收起记录时重置分页状态。
+   - 无 `nextCursor` 不渲染按钮；空列表仍显示「还没有触发记录」。
+4. **排序（固定规则，不加排序菜单）**
+   - 进行中/暂停区：`active` 在前、`paused` 次之，组内按 `nextFireAt` 升序（无下次触发排后），同刻按标题稳定排序。
+   - 已结束区：按 `updatedAt` 倒序（最近结束在前）。折叠分组行为不变。
+   - 依据：Codex 定义列表同为固定排序（未读→未暂停→nextRun 升序→名称），不提供排序控件；机器运行不改变定义列表顺序。
+
+### 数据与权限边界
+
+- 删除：`POST /v1/automations/:id/delete`（owner 命令幂等 + expectedRevision fence），事务内清定义 + Invocation + pending automation.due Event；Task/Run/消息保留。`automation_commands` 外键改 `ON DELETE SET NULL`（additive 迁移 v39），命令账本保留可重放。合同细节见 `docs/automation-scheduling.md`「删除」「触发记录分页」。
+- 分页：`GET .../invocations?limit&cursor` seek 分页（`scheduled_for DESC, rowid DESC`），limit 缺省 50、上限 200；响应 `{ invocations, nextCursor? }`。
+- 投影：Invocation 响应附加 `taskId?`/`summary?`（`runs.origin_event_id` JOIN + `output_json` 首行），只读派生不落盘，不新增表。
+
+### 验收条件（已按下述证据先红后绿）
+
+1. store：删除仅限已结束；active/paused 拒绝；revision 冲突 409；同 command 幂等重放冻结回执、异 payload 409；删除后 GET 404；Invocation 与 pending Event 同事务清除；Task/Run/消息保留；processing Event 不受影响；owner 隔离。
+2. store：invocations 分页按 scheduled_for DESC seek；limit 边界（1/200/缺省 50/非法拒绝）；非法 cursor 400；nextCursor 有无正确；投影 taskId/summary 正确且 Run 缺失时缺省。
+3. HTTP：delete 路由合同（201/200/404/409 各错误码）；invocations cursor 透传。
+4. web：已结束行删除两步确认与就地移除；active 行无删除按钮；触发记录含摘要与「查看事情」入口、失败行无摘要；加载更多追加/禁用/重试/重置；排序规则（active→paused→nextFireAt 升序，已结束 updatedAt 倒序）。
+5. 门禁：`pnpm check` + `pnpm smoke`（持久化链路）+ `pnpm smoke:crash`（Event 删除与 lease 并发）+ `pnpm review:ui --force`（新增删除确认与加载更多种子实拍）+ `pnpm a11y:review`。
+
+### 实现证据（2026-11-23）
+
+- 服务端：`src/storage/sqlite-store.ts` 迁移 v39（`automation_commands.automation_id` 可空 + `ON DELETE SET NULL`）、`deleteAutomation`（幂等命令重放 + revision fence + 仅已结束；事务内逐 Event 先删 Invocation 再删 pending Event，随后清剩余 Invocation 与定义；Task/Run/消息保留）、`listAutomationInvocations` 改 seek 分页（`scheduled_for DESC, rowid DESC`，缺省 50/上限 200，非法 cursor 拒绝）并投影 `taskId`/`summary`（`runs.origin_event_id` JOIN + `output_json` 首行 ≤120 字）。`src/control-plane/server.ts` 新增 `POST .../delete` 与 invocations `limit/cursor` 透传；`src/worker/main.ts` compatibility maximumSchema 38→39。
+- Web：`AutomationPage`/`AutomationRow`（`web/src/sealed/MainPages.tsx`）删除两步确认（仅已结束行）、触发记录摘要 + 「查看事情」inline-link（经 `taskId` 命中 Channel 才渲染）、加载更多（limit 25、cursor 追加、加载禁用、失败重试保留已加载页、切换/收起重置）、固定排序（active→paused→nextFireAt 升序→标题；已结束 updatedAt 倒序）。
+- 回归测试：`test/automation-lifecycle.test.ts` 6 测试先红后绿（删除语义/幂等/fence/owner 隔离/HTTP 错误表；分页 seek/limit 边界/非法 cursor/投影与 HTTP 透传）；`web/src/sealed/AutomationPage.test.tsx` 6→11 测试（删除两步确认仅已结束、摘要与事情入口、失败行不编造摘要、加载更多 cursor 追加与耗尽、追加失败重试保留已加载页、固定排序）。既有 store 调用方（schedule/follow-up/run-automations 测试）随分页签名更新为 `.items`。
+- 门禁：`pnpm check` 全绿（108 文件 / 1115 测试；statement 85.25%、line 88.47%，阈值 60/55/60/65）；`pnpm smoke`、`pnpm smoke:crash`（3 Task exactly-once）通过；`pnpm review:ui --force` 新增删除确认/触发记录实拍（desktop-automation-delete-confirm/history、mobile-automation-history；种子改为 park+cancel 的计数自动化 + 单次真实触发的「触发记录示例」历史 fixture，经真实 scheduler+worker 产出 Run 摘要；fixture Channel 以显式 taskId 续接回顶保持侧栏确定性）；`pnpm a11y:review` 0 违例。
+
+### 非目标
+
+- 不做定义列表页码分页/搜索框/排序菜单（调研结论：当前规模不需要；>20 条再议搜索）。
+- 不做自动清理/N 天归档（用户选择手动删除）。
+- 不做 run 级归档/未读圆点（Codex 语义，Pegas 对话流已有 say 声道承载）。
+- 不改「查看指令」摘要截断为语义化首句（仍是 DESIGN-006 登记缺口）。
+
+### 失败与恢复
+
+- 删除是破坏性操作但范围受限（仅调度对象）；无「撤销」——确认步骤即防线；误删的补救是重建自动化，历史事实不受损。
+- 迁移 v39 additive（外键重建 + 列放宽），旧数据不动；回滚 revert 代码即可，schema 向前兼容（旧代码不写 null automation_id）。
+- Candidate 发布走 SELF-001 既有流程；compatibility maximumSchema 提升至 39。
+
+### 设计图
+
+- 交互稿（本地研究材料，不入库）：`research/design-006-lifecycle-history/mockups.html`——桌面列表（删除确认态）、触发记录展开（摘要 + 查看事情 + 加载更多）、390px 移动端三帧，使用 §5 视觉 token 与既有 record-list 结构。
