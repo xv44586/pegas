@@ -165,18 +165,20 @@ interface SpillNotice {
   body: string
 }
 
-/** The absolute spill-file path recorded in one persisted semantic. */
-export function semanticSpillPath(
+/** Absolute spill-file locators recorded in one persisted semantic. */
+export function semanticSpillPaths(
   semantic: ToolSemantic | undefined,
-): string | undefined {
-  if (!semantic) return undefined
-  const path =
+): string[] {
+  if (!semantic) return []
+  const paths =
     semantic.kind === 'shell'
-      ? semantic.outputSpillPath
+      ? [semantic.outputSpillPath, semantic.outputRawSpillPath]
       : 'previewSpillPath' in semantic
-        ? semantic.previewSpillPath
-        : undefined
-  return path?.startsWith('/') ? path : undefined
+        ? [semantic.previewSpillPath, semantic.previewRawSpillPath]
+        : []
+  return paths.filter(
+    (path): path is string => typeof path === 'string' && path.startsWith('/'),
+  )
 }
 
 const BASH_SPILL_NOTICE = /\n\[output truncated; full output: ([^\]\n]+)\]\s*$/u
@@ -186,27 +188,25 @@ const POLICY_SPILL_NOTICE =
 /**
  * EXEC-006 round 18: recognizes the executor's persisted spill notices at
  * the very end of a result — the bash tail notice and the generic retention
- * notice. The notice is stripped from the displayed body; only absolute
- * file paths become links, `(unavailable)` stays an honest truncation.
+ * notice. Real results chain both (retention wraps the bash render), so
+ * notices are peeled outermost-first and every absolute locator is kept;
+ * callers prefer the first path (the formatted full copy) and fall back to
+ * the raw stream path. `(unavailable)` stays an honest truncation.
  */
-function extractSpillNotice(result: string): SpillNotice {
-  const bash = BASH_SPILL_NOTICE.exec(result)
-  if (bash?.[1]) {
-    const locator = bash[1].trim()
-    return {
-      body: result.slice(0, bash.index).trimEnd(),
+function extractSpillNotices(result: string): SpillNotice[] {
+  const notices: SpillNotice[] = []
+  let body = result
+  for (;;) {
+    const match = POLICY_SPILL_NOTICE.exec(body) ?? BASH_SPILL_NOTICE.exec(body)
+    if (!match?.[1]) break
+    const locator = match[1].trim()
+    body = body.slice(0, match.index).trimEnd()
+    notices.push({
+      body,
       ...(locator.startsWith('/') ? { path: locator } : {}),
-    }
+    })
   }
-  const policy = POLICY_SPILL_NOTICE.exec(result)
-  if (policy?.[1]) {
-    const locator = policy[1].trim()
-    return {
-      body: result.slice(0, policy.index).trimEnd(),
-      ...(locator.startsWith('/') ? { path: locator } : {}),
-    }
-  }
-  return { body: result }
+  return notices
 }
 
 function previewFields(result: string | undefined): Partial<{
@@ -214,18 +214,35 @@ function previewFields(result: string | undefined): Partial<{
   previewTruncated: boolean
   previewOmittedCharacters: number
   previewSpillPath: string
+  previewRawSpillPath: string
 }> {
   if (result === undefined) return {}
-  const spill = extractSpillNotice(result)
-  const preview = clip(spill.body, MAX_PREVIEW_CHARACTERS)
+  const notices = extractSpillNotices(result)
+  const [spillPath, rawSpillPath] = spillLocatorPaths(notices)
+  const preview = clip(notices.at(-1)?.body ?? result, MAX_PREVIEW_CHARACTERS)
   return {
     ...(preview.text ? { preview: preview.text } : {}),
     ...(preview.truncated ? { previewTruncated: true } : {}),
     ...(preview.omittedCharacters !== undefined
       ? { previewOmittedCharacters: preview.omittedCharacters }
       : {}),
-    ...(spill.path ? { previewSpillPath: spill.path } : {}),
+    ...(spillPath ? { previewSpillPath: spillPath } : {}),
+    ...(rawSpillPath ? { previewRawSpillPath: rawSpillPath } : {}),
   }
+}
+
+/** First two distinct absolute locators: formatted copy, then raw stream. */
+function spillLocatorPaths(
+  notices: SpillNotice[],
+): [string | undefined, string | undefined] {
+  const paths = [
+    ...new Set(
+      notices
+        .map(notice => notice.path)
+        .filter((path): path is string => path !== undefined),
+    ),
+  ]
+  return [paths[0], paths[1]]
 }
 
 function shellSemantic(
@@ -237,7 +254,10 @@ function shellSemantic(
     stringField(args, 'command', 'cmd') ?? commandFromClippedInput(rawInput)
   if (command === undefined) return { kind: 'unknown' }
   const description = stringField(args, 'description')
-  const spill = result === undefined ? undefined : extractSpillNotice(result)
+  const notices = result === undefined ? [] : extractSpillNotices(result)
+  const spill =
+    result === undefined ? undefined : { body: notices.at(-1)?.body ?? result }
+  const [spillPath, rawSpillPath] = spillLocatorPaths(notices)
   const output =
     spill === undefined ? undefined : clip(spill.body, MAX_OUTPUT_CHARACTERS)
   return {
@@ -253,7 +273,8 @@ function shellSemantic(
             : {}),
         }
       : {}),
-    ...(spill?.path ? { outputSpillPath: spill.path } : {}),
+    ...(spillPath ? { outputSpillPath: spillPath } : {}),
+    ...(rawSpillPath ? { outputRawSpillPath: rawSpillPath } : {}),
   }
 }
 
@@ -263,8 +284,9 @@ function fileReadSemantic(
 ): ToolSemantic {
   const path = stringField(args, 'file_path', 'path')
   if (path === undefined) return { kind: 'unknown' }
-  const spill = result === undefined ? undefined : extractSpillNotice(result)
-  const content = extractTaggedContent(spill?.body ?? result)
+  const notices = result === undefined ? [] : extractSpillNotices(result)
+  const [spillPath, rawSpillPath] = spillLocatorPaths(notices)
+  const content = extractTaggedContent(notices.at(-1)?.body ?? result)
   const lineCount = content ? countNumberedLines(content) : undefined
   const preview =
     content === undefined ? undefined : clip(content, MAX_PREVIEW_CHARACTERS)
@@ -281,7 +303,8 @@ function fileReadSemantic(
             : {}),
         }
       : {}),
-    ...(spill?.path ? { previewSpillPath: spill.path } : {}),
+    ...(spillPath ? { previewSpillPath: spillPath } : {}),
+    ...(rawSpillPath ? { previewRawSpillPath: rawSpillPath } : {}),
   }
 }
 

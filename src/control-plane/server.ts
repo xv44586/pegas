@@ -134,7 +134,7 @@ const maximumPageLimit = 200
 const defaultMaximumAudioBytes = 25 * 1024 * 1024
 const maximumAttachmentBytes = 25 * 1024 * 1024
 const maximumRunImageBytes = 10 * 1024 * 1024
-const maximumRunSpillFileBytes = 1024 * 1024
+const maximumRunSpillFileBytes = 4 * 1024 * 1024
 
 /**
  * EXEC-006 round 18: best-effort read of one executor spill file for output
@@ -1776,21 +1776,22 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
           )
         if (outputFileMatch) {
           const userId = requiredQuery(url, 'userId')
-          const path = options.store.resolveRunOutputSpillPath(
+          const paths = options.store.resolveRunOutputSpillPath(
             decodeURIComponent(outputFileMatch[1] ?? ''),
             userId,
             decodeURIComponent(outputFileMatch[2] ?? ''),
           )
-          if (!path) return sendJson(response, 404, { error: 'not_found' })
-          const text = await readRunSpillText(path)
-          if (text === undefined)
-            return sendJson(response, 404, { error: 'not_found' })
-          response.writeHead(200, {
-            'content-type': 'text/plain; charset=utf-8',
-            'cache-control': 'private, max-age=300',
-            'x-content-type-options': 'nosniff',
-          })
-          return response.end(text)
+          for (const path of paths) {
+            const text = await readRunSpillText(path)
+            if (text === undefined) continue
+            response.writeHead(200, {
+              'content-type': 'text/plain; charset=utf-8',
+              'cache-control': 'private, max-age=300',
+              'x-content-type-options': 'nosniff',
+            })
+            return response.end(text)
+          }
+          return sendJson(response, 404, { error: 'not_found' })
         }
         const imageMatch =
           /^\/v1\/runs\/([^/]+)\/activity\/([^/]+)\/image$/.exec(url.pathname)

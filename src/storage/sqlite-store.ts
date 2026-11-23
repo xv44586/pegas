@@ -63,7 +63,7 @@ import type {
 } from '../core/domain.js'
 import {
   buildToolSemantic,
-  semanticSpillPath,
+  semanticSpillPaths,
   splitToolDetail,
 } from '../activity/tool-semantics.js'
 import { needsChineseSummary } from '../activity/thinking-summary.js'
@@ -10341,15 +10341,19 @@ export class PegasStore {
     let archivedContent = row.content
     let totalCharacters = row.total_characters
     if (options.spillReader) {
-      const spillPath = semanticSpillPath(
+      const spillPaths = semanticSpillPaths(
         decodeActivityDetail(row.detail_json ?? '').semantic,
       )
-      const spillText = spillPath
-        ? await options.spillReader(spillPath)
-        : undefined
-      if (spillText !== undefined && spillText.length >= row.total_characters) {
-        archivedContent = spillText.slice(0, 262_144)
-        totalCharacters = spillText.length
+      for (const spillPath of spillPaths) {
+        const spillText = await options.spillReader(spillPath)
+        if (
+          spillText !== undefined &&
+          spillText.length >= row.total_characters
+        ) {
+          archivedContent = spillText.slice(0, 262_144)
+          totalCharacters = spillText.length
+          break
+        }
       }
     }
     const offset = Math.max(
@@ -10803,7 +10807,7 @@ export class PegasStore {
     runId: string,
     userId: string,
     callId: string,
-  ): string | undefined {
+  ): string[] {
     const row = this.#database
       .prepare(
         `SELECT entries.detail_json FROM run_activity_entries AS entries
@@ -10814,8 +10818,8 @@ export class PegasStore {
          ORDER BY entries.seq DESC LIMIT 1`,
       )
       .get(runId, callId, userId) as { detail_json: string | null } | undefined
-    if (!row?.detail_json) return undefined
-    return semanticSpillPath(decodeActivityDetail(row.detail_json).semantic)
+    if (!row?.detail_json) return []
+    return semanticSpillPaths(decodeActivityDetail(row.detail_json).semantic)
   }
 
   recordRunSubagents(
