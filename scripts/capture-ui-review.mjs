@@ -6,6 +6,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs'
+import { createServer as createHttpServer } from 'node:http'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { relative, resolve, sep } from 'node:path'
@@ -50,19 +51,14 @@ const dshFixture = resolve(dataDirectory, 'ui-review-dsh')
 writeFileSync(
   dshFixture,
   `#!/usr/bin/env node
+const fs = require('node:fs')
 if (process.argv.includes('--dump-config')) {
-  process.stdout.write(\`- id: agent-default-model
-  config:
-    provider: fixture
-    model: deepseek-v4.1-flash
-- id: llm-pi-ai
-  config:
-    providers:
-      fixture:
-        models:
-          - id: deepseek-v4.1-flash
-            name: DeepSeek V4.1 Flash
-\`)
+  const patchIndex = process.argv.indexOf('--patch')
+  const patchPath = patchIndex >= 0 ? process.argv[patchIndex + 1] : undefined
+  const entries = patchPath
+    ? JSON.parse(fs.readFileSync(patchPath, 'utf8'))
+    : []
+  process.stdout.write(JSON.stringify(entries))
   process.exit(0)
 }
 let input = ''
@@ -158,6 +154,31 @@ process.stdin.on('end', async () => {
 chmodSync(dshFixture, 0o755)
 const port = await availablePort()
 const recoveryPort = await availablePort()
+const modelGateway = createHttpServer((request, response) => {
+  if (request.url?.endsWith('/models')) {
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(
+      JSON.stringify({
+        data: Array.from({ length: 34 }, (_, index) => ({
+          id:
+            index === 0
+              ? 'deepseek-v4.1-flash'
+              : `fixture/model-${String(index + 1).padStart(2, '0')}`,
+          display_name:
+            index === 0
+              ? 'DeepSeek V4.1 Flash'
+              : `Fixture Model ${String(index + 1).padStart(2, '0')}`,
+        })),
+      }),
+    )
+    return
+  }
+  response.writeHead(404).end()
+})
+await new Promise(resolveListen =>
+  modelGateway.listen(0, '127.0.0.1', resolveListen),
+)
+const modelGatewayPort = modelGateway.address().port
 const environment = {
   ...process.env,
   PEGAS_API_HOST: '127.0.0.1',
@@ -166,6 +187,8 @@ const environment = {
   PEGAS_DSH_COMMAND: dshFixture,
   PEGAS_EVENT_POLL_MS: '25',
   PEGAS_EXECUTOR: 'dsh',
+  PEGAS_MODEL_BASE_URL: `http://127.0.0.1:${String(modelGatewayPort)}/v1`,
+  PEGAS_MODEL_NAME: 'deepseek-v4.1-flash',
   PEGAS_RECOVERY_BASE_URL: `http://127.0.0.1:${String(recoveryPort)}`,
   PEGAS_SPEECH_PROVIDER: 'disabled',
   PEGAS_PUSH_MODE: 'disabled',
@@ -214,6 +237,7 @@ try {
   await capture(page, 'desktop-composer-focus.png', 'desktop-composer-focus')
   await page.getByRole('button', { name: /选择执行模型/ }).click()
   await page.getByRole('dialog', { name: '选择模型' }).waitFor()
+  await assertPickerPagination(page, 'desktop model picker')
   await capture(
     page,
     'desktop-composer-model-picker.png',
@@ -520,6 +544,7 @@ try {
   )
   await mobilePage.getByRole('button', { name: /选择执行模型/ }).click()
   await mobilePage.getByRole('dialog', { name: '选择模型' }).waitFor()
+  await assertPickerPagination(mobilePage, 'mobile model picker')
   await capture(
     mobilePage,
     'mobile-composer-model-picker.png',
@@ -679,6 +704,54 @@ try {
             const offset = Number(
               new URL(url).searchParams.get('offset') ?? '0',
             )
+            if (url.includes('/call-6/')) {
+              const middle =
+                offset === 2_000
+                  ? Array.from(
+                      { length: 40 },
+                      (_, index) =>
+                        `line ${String(index + 41).padStart(3, '0')}: omitted middle output — coverage detail`,
+                    ).join('\n')
+                  : ''
+              await route.fulfill({
+                contentType: 'application/json',
+                body: JSON.stringify({
+                  runId: 'review-completed',
+                  callId: 'call-6',
+                  content: middle,
+                  offset,
+                  totalCharacters: 12_000,
+                  archivedCharacters: 12_000,
+                  truncatedArchive: false,
+                }),
+              })
+              return
+            }
+            if (url.includes('/call-7/')) {
+              const full =
+                offset === 0
+                  ? `${Array.from(
+                      { length: 40 },
+                      (_, index) =>
+                        `line ${String(index + 1).padStart(3, '0')}: spilled full build log`,
+                    ).join(
+                      '\n',
+                    )}\nERROR: build failed at step 42 — full log kept by the executor`
+                  : ''
+              await route.fulfill({
+                contentType: 'application/json',
+                body: JSON.stringify({
+                  runId: 'review-completed',
+                  callId: 'call-7',
+                  content: full,
+                  offset,
+                  totalCharacters: 2_400,
+                  archivedCharacters: 2_400,
+                  truncatedArchive: false,
+                }),
+              })
+              return
+            }
             const isWebPreview = url.includes('/call-4/')
             const tail =
               offset === (isWebPreview ? 4_001 : 4_000)
@@ -699,6 +772,13 @@ try {
                 archivedCharacters: 14_800,
                 truncatedArchive: false,
               }),
+            })
+            return
+          }
+          if (url.includes('/output-file?')) {
+            await route.fulfill({
+              contentType: 'text/plain; charset=utf-8',
+              body: 'spilled full build log\nERROR: build failed at step 42',
             })
             return
           }
@@ -827,6 +907,7 @@ try {
       }
       if (fixture === 'task-output-archive') {
         await fixturePage.getByText('工作流程记录', { exact: false }).click()
+        await fixturePage.locator('.activity-batch > details > summary').click()
         await fixturePage
           .locator('.activity-tool')
           .filter({ hasText: 'pnpm check' })
@@ -840,6 +921,33 @@ try {
           .getByText('archived tail output', { exact: false })
           .first()
           .waitFor()
+        await fixturePage
+          .locator('.activity-tool')
+          .filter({ hasText: 'pnpm test:coverage' })
+          .locator('summary')
+          .click()
+        await fixturePage.getByRole('button', { name: '加载省略内容' }).click()
+        await fixturePage
+          .getByText('omitted middle output', { exact: false })
+          .first()
+          .waitFor()
+        await fixturePage
+          .locator('.activity-tool')
+          .filter({ hasText: 'cat /tmp/huge-build.log' })
+          .locator('summary')
+          .click()
+        await fixturePage.getByRole('link', { name: '完整输出文件' }).waitFor()
+        if (size === 'desktop') {
+          await fixturePage
+            .locator('.activity-tool')
+            .filter({ hasText: 'pnpm test:coverage' })
+            .evaluate(element => element.scrollIntoView({ block: 'start' }))
+          await capture(
+            fixturePage,
+            `${size}-${fixture}-headtail.png`,
+            `${size}-${fixture}-headtail`,
+          )
+        }
         await fixturePage
           .locator('.activity-tool')
           .filter({ hasText: 'example.com/long-readme' })
@@ -861,7 +969,10 @@ try {
           .filter({ hasText: '查看了图片' })
           .locator('summary')
           .click()
-        await fixturePage.locator('.shell-card').scrollIntoViewIfNeeded()
+        await fixturePage
+          .locator('.activity-tool')
+          .filter({ hasText: 'cat /tmp/huge-build.log' })
+          .evaluate(element => element.scrollIntoView({ block: 'start' }))
       }
       await capture(fixturePage, `${size}-${fixture}.png`, `${size}-${fixture}`)
       await fixturePage.close()
@@ -877,6 +988,7 @@ try {
     Promise.all(children.map(child => waitForExit(child))),
     new Promise(resolveTimeout => setTimeout(resolveTimeout, 3000)),
   ])
+  await new Promise(resolveClose => modelGateway.close(resolveClose))
   rmSync(dataDirectory, { recursive: true, force: true })
 }
 
@@ -1098,16 +1210,39 @@ async function seedConversation(apiPort) {
   }
 }
 
+async function assertPickerPagination(page, label) {
+  const picker = page.getByRole('dialog', { name: '选择模型' })
+  await picker.getByText('34 个可用').waitFor()
+  const optionCount = await picker.getByRole('option').count()
+  if (optionCount !== 30)
+    throw new Error(
+      `${label}: expected 30 options on page one, saw ${String(optionCount)}`,
+    )
+  await picker.getByRole('button', { name: '下一页' }).click()
+  const tailCount = await picker.getByRole('option').count()
+  if (tailCount !== 4)
+    throw new Error(
+      `${label}: expected 4 options on page two, saw ${String(tailCount)}`,
+    )
+  await picker.getByRole('option', { name: /Fixture Model 34/ }).waitFor()
+  await picker.getByRole('button', { name: '上一页' }).click()
+  await picker.getByRole('option', { name: /DeepSeek V4.1 Flash/ }).waitFor()
+}
+
 async function capture(page, name, label) {
   await assertGeometry(page, label)
   await page.evaluate(async () => {
     const images = [...globalThis.document.images]
     await Promise.all(
-      images.map(image =>
-        image.complete
-          ? Promise.resolve()
-          : image.decode().catch(() => undefined),
-      ),
+      images.map(image => {
+        if (image.complete) return Promise.resolve()
+        if (!image.isConnected || !image.getAttribute('src'))
+          return Promise.resolve()
+        return Promise.race([
+          image.decode().catch(() => undefined),
+          new Promise(resolve => setTimeout(resolve, 3000)),
+        ])
+      }),
     )
   })
   await page.screenshot({

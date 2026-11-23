@@ -835,6 +835,30 @@ function outputArchiveView(): DrawerView {
         outputTruncated: true,
       },
     }),
+    activityEntry(6, {
+      tool: 'bash',
+      label: 'bash',
+      detail: JSON.stringify({ command: 'pnpm test:coverage' }),
+      semantic: {
+        kind: 'shell',
+        command: 'pnpm test:coverage',
+        output: `${longOutput.slice(0, 2_000)}\n… 已省略 8000 字符 …\nERROR: 2 suites failed — see tail summary`,
+        outputTruncated: true,
+        outputOmittedCharacters: 8_000,
+      },
+    }),
+    activityEntry(7, {
+      tool: 'bash',
+      label: 'bash',
+      detail: JSON.stringify({ command: 'cat /tmp/huge-build.log' }),
+      semantic: {
+        kind: 'shell',
+        command: 'cat /tmp/huge-build.log',
+        output:
+          'ERROR: build failed at step 42 — full log kept by the executor',
+        outputSpillPath: '/tmp/dsh-spill/huge-build.log',
+      },
+    }),
     activityEntry(3, {
       tool: 'read_image',
       label: 'read_image',

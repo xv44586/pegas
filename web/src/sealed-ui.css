@@ -1646,7 +1646,8 @@ a {
   box-shadow: var(--shadow-pop);
   display: grid;
   gap: 10px;
-  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+  grid-auto-rows: auto;
+  grid-template-rows: auto auto minmax(0, 1fr);
   inset-block-end: 48px;
   inset-inline-end: 0;
   max-block-size: min(520px, calc(100dvh - 280px));
@@ -1779,6 +1780,13 @@ a {
   color: var(--critical);
   padding: 9px 10px;
   text-align: left;
+}
+.composer-model-pagination {
+  margin: 0 2px;
+}
+.composer-model-pagination button {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 .composer-model-picker > footer {
   border-top: 1px solid var(--line);
@@ -3992,6 +4000,30 @@ kbd {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+.output-gap {
+  color: var(--muted);
+  font-size: var(--text-small);
+  margin: 6px 10px 8px;
+  text-align: center;
+}
+.output-spill {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: var(--text-small);
+  gap: 6px;
+  margin: 6px 10px 8px;
+  min-width: 0;
+}
+.output-spill-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--text-tiny);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .image-thumb-link {
   border-bottom: 1px dashed var(--line);

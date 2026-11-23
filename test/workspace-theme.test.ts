@@ -83,4 +83,33 @@ describe('sealed UI layout contracts', () => {
     expect(sealedUi).toContain('.router-settings')
     expect(sealedUi).toContain('.pegas-settings')
   })
+
+  it('keeps every model-selection entry on the paginated shared catalog', () => {
+    const mainPages = readFileSync(
+      new URL('../web/src/sealed/MainPages.tsx', import.meta.url),
+      'utf8',
+    )
+    const settingsPage = readFileSync(
+      new URL('../web/src/sealed/SettingsPage.tsx', import.meta.url),
+      'utf8',
+    )
+    const app = readFileSync(
+      new URL('../web/src/App.tsx', import.meta.url),
+      'utf8',
+    )
+    const pageSizeMatches = [
+      ...mainPages.matchAll(/const pageSize = (\d+)/g),
+      ...settingsPage.matchAll(/const pageSize = (\d+)/g),
+    ].map(match => match[1])
+    expect(pageSizeMatches.length).toBeGreaterThanOrEqual(2)
+    for (const size of pageSizeMatches) expect(size).toBe('30')
+    expect(mainPages).toContain('filteredModels.length > pageSize')
+    expect(mainPages).toContain('上一页')
+    expect(mainPages).toContain('下一页')
+    expect(app).toContain(
+      'const availableAgentModels = agentModels?.models ?? []',
+    )
+    expect(uiReviewScript).toContain('assertPickerPagination')
+    expect(uiReviewScript).toContain('PEGAS_MODEL_BASE_URL')
+  })
 })

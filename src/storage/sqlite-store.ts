@@ -63,6 +63,7 @@ import type {
 } from '../core/domain.js'
 import {
   buildToolSemantic,
+  semanticSpillPath,
   splitToolDetail,
 } from '../activity/tool-semantics.js'
 import { needsChineseSummary } from '../activity/thinking-summary.js'
@@ -152,6 +153,8 @@ import {
   type AutomationTarget,
   type AutomationUpdateCommand,
   type FollowUpCommand,
+  type RunAutomationCommand,
+  type RunAutomationStatusCommand,
 } from '../schedule/schedule.js'
 import {
   effectiveWorkerProfile,
@@ -7685,6 +7688,70 @@ export class PegasStore {
     return { automation }
   }
 
+  createRunAutomation(
+    runId: string,
+    claimToken: string,
+    command: RunAutomationCommand,
+  ): { automation: Automation } {
+    this.#claimForCapability(runId, claimToken)
+    const run = this.#runById(runId)
+    const task = this.#taskById(run.taskId)
+    if (task.status === 'completed' || task.status === 'cancelled')
+      throw new AutomationTargetUnavailableError()
+    if (
+      command.startsAt !== undefined &&
+      Date.parse(command.startsAt) <= this.#clock.now().getTime()
+    )
+      throw new Error('Automation startsAt must be in the future')
+    const automation = this.createAutomation({
+      userId: task.userId,
+      commandId: `run-automation:${runId}:${command.commandId}`,
+      automation: {
+        title: (command.title ?? `周期跟进: ${task.title}`).slice(0, 120),
+        prompt: command.prompt,
+        schedule: {
+          kind: 'interval',
+          everySeconds: command.everySeconds,
+          ...(command.startsAt === undefined
+            ? {}
+            : { startsAt: command.startsAt }),
+        },
+        target: { kind: 'existing_task', taskId: task.id },
+      },
+    })
+    return { automation }
+  }
+
+  transitionRunAutomation(
+    runId: string,
+    claimToken: string,
+    automationId: string,
+    operation: 'pause' | 'resume' | 'cancel',
+    command: RunAutomationStatusCommand,
+  ): { automation: Automation } {
+    this.#claimForCapability(runId, claimToken)
+    const run = this.#runById(runId)
+    const task = this.#taskById(run.taskId)
+    const automation = this.#automationByIdForUser(automationId, task.userId)
+    if (
+      automation.target.kind !== 'existing_task' ||
+      automation.target.taskId !== task.id
+    )
+      throw new AutomationNotFoundError()
+    const statusCommand: AutomationStatusCommand = {
+      userId: task.userId,
+      commandId: `run-automation:${runId}:${command.commandId}`,
+      expectedRevision: command.expectedRevision,
+    }
+    const updated =
+      operation === 'pause'
+        ? this.pauseAutomation(automationId, statusCommand)
+        : operation === 'resume'
+          ? this.resumeAutomation(automationId, statusCommand)
+          : this.cancelAutomation(automationId, statusCommand)
+    return { automation: updated }
+  }
+
   submitWorkerReport(
     runId: string,
     userId: string | undefined,
@@ -9429,6 +9496,17 @@ export class PegasStore {
           )
           .get(task.id, runId),
       )
+      const hasActiveAutomation = Boolean(
+        this.#database
+          .prepare(
+            `SELECT 1 FROM automations
+             WHERE user_id = ? AND status = 'active'
+               AND json_extract(target_json, '$.kind') = 'existing_task'
+               AND json_extract(target_json, '$.taskId') = ?
+             LIMIT 1`,
+          )
+          .get(task.userId, task.id),
+      )
       const requiresEvidence = Boolean(
         this.currentGoalContract(task.id, task.userId),
       )
@@ -9509,7 +9587,10 @@ export class PegasStore {
            WHERE id = ?`,
         )
         .run(
-          actionBlocksCompletion || requiresEvidence || hasPendingWork
+          actionBlocksCompletion ||
+            requiresEvidence ||
+            hasPendingWork ||
+            hasActiveAutomation
             ? 'started'
             : 'completed',
           awaitingClarification
@@ -9525,7 +9606,10 @@ export class PegasStore {
                     : requiresEvidence
                       ? 'awaiting_evidence'
                       : null,
-          actionBlocksCompletion || requiresEvidence || hasPendingWork
+          actionBlocksCompletion ||
+            requiresEvidence ||
+            hasPendingWork ||
+            hasActiveAutomation
             ? null
             : JSON.stringify({
                 at: now,
@@ -9572,7 +9656,12 @@ export class PegasStore {
           text: result.output,
         },
       })
-      if (!actionBlocksCompletion && !requiresEvidence && !hasPendingWork) {
+      if (
+        !actionBlocksCompletion &&
+        !requiresEvidence &&
+        !hasPendingWork &&
+        !hasActiveAutomation
+      ) {
         this.#settleInboundCollaborations(
           task.id,
           'completed',
@@ -10286,14 +10375,24 @@ export class PegasStore {
   /**
    * Owner-checked page of one archived tool output. `offset`/`limit` are
    * character windows; `totalCharacters` is the faithful pre-cap length and
-   * `archivedCharacters` is what actually survived the 256KB archive cap.
+   * `archivedCharacters` is what actually survived the 256KB archive cap
+   * (without a reader: what this page's offset can still reach).
+   * Round 18: when the call recorded an executor spill file, the injected
+   * reader serves any window from that faithful full text — but only when
+   * the file is at least as long as the archived original (a shorter file
+   * means the executor rewrote/cleaned the path). Missing files degrade
+   * honestly to the archive.
    */
-  readRunActivityOutput(
+  async readRunActivityOutput(
     runId: string,
     userId: string,
     callId: string,
-    options: { offset?: number; limit?: number } = {},
-  ):
+    options: {
+      offset?: number
+      limit?: number
+      spillReader?: (path: string) => Promise<string | undefined>
+    } = {},
+  ): Promise<
     | {
         runId: string
         callId: string
@@ -10303,31 +10402,56 @@ export class PegasStore {
         archivedCharacters: number
         truncatedArchive: boolean
       }
-    | undefined {
+    | undefined
+  > {
     const row = this.#database
       .prepare(
-        `SELECT pages.content, pages.total_characters
+        `SELECT pages.content, pages.total_characters, entries.detail_json
          FROM run_activity_output_pages AS pages
          JOIN runs ON runs.id = pages.run_id
          JOIN tasks ON tasks.id = runs.task_id
-         WHERE pages.run_id = ? AND pages.call_id = ? AND tasks.user_id = ?`,
+         JOIN run_activity_entries AS entries
+           ON entries.run_id = pages.run_id
+          AND entries.call_id = pages.call_id
+          AND entries.kind = 'tool_call'
+         WHERE pages.run_id = ? AND pages.call_id = ? AND tasks.user_id = ?
+         ORDER BY entries.seq DESC LIMIT 1`,
       )
       .get(runId, callId, userId) as
-      { content: string; total_characters: number } | undefined
+      | {
+          content: string
+          total_characters: number
+          detail_json: string | null
+        }
+      | undefined
     if (!row) return undefined
+    const limit = Math.max(1, Math.min(options.limit ?? 12_000, 32_768))
+    let archivedContent = row.content
+    let totalCharacters = row.total_characters
+    if (options.spillReader) {
+      const spillPath = semanticSpillPath(
+        decodeActivityDetail(row.detail_json ?? '').semantic,
+      )
+      const spillText = spillPath
+        ? await options.spillReader(spillPath)
+        : undefined
+      if (spillText !== undefined && spillText.length >= row.total_characters) {
+        archivedContent = spillText.slice(0, 262_144)
+        totalCharacters = spillText.length
+      }
+    }
     const offset = Math.max(
       0,
-      Math.min(options.offset ?? 0, row.content.length),
+      Math.min(options.offset ?? 0, archivedContent.length),
     )
-    const limit = Math.max(1, Math.min(options.limit ?? 12_000, 32_768))
     return {
       runId,
       callId,
-      content: row.content.slice(offset, offset + limit),
+      content: archivedContent.slice(offset, offset + limit),
       offset,
-      totalCharacters: row.total_characters,
-      archivedCharacters: row.content.length,
-      truncatedArchive: row.total_characters > row.content.length,
+      totalCharacters,
+      archivedCharacters: archivedContent.length,
+      truncatedArchive: totalCharacters > archivedContent.length,
     }
   }
 
@@ -10755,6 +10879,31 @@ export class PegasStore {
     if (stored.semantic?.kind !== 'image') return undefined
     const path = stored.semantic.path
     return path.startsWith('/') ? path : undefined
+  }
+
+  /**
+   * EXEC-006 round 18: resolves one tool call to the executor spill-file
+   * path recorded in its persisted semantic, after owner + Run + call
+   * checks. Never accepts client-supplied paths; the control plane reads
+   * the file under its own byte caps.
+   */
+  resolveRunOutputSpillPath(
+    runId: string,
+    userId: string,
+    callId: string,
+  ): string | undefined {
+    const row = this.#database
+      .prepare(
+        `SELECT entries.detail_json FROM run_activity_entries AS entries
+         JOIN runs ON runs.id = entries.run_id
+         JOIN tasks ON tasks.id = runs.task_id
+         WHERE entries.run_id = ? AND entries.call_id = ?
+           AND entries.kind = 'tool_call' AND tasks.user_id = ?
+         ORDER BY entries.seq DESC LIMIT 1`,
+      )
+      .get(runId, callId, userId) as { detail_json: string | null } | undefined
+    if (!row?.detail_json) return undefined
+    return semanticSpillPath(decodeActivityDetail(row.detail_json).semantic)
   }
 
   recordRunSubagents(

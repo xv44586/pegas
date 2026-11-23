@@ -123,31 +123,59 @@ function ComposerModelPicker({
   const pickerTitleId = useId()
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
+  const [page, setPage] = useState(0)
   const [savingId, setSavingId] = useState('')
   const [error, setError] = useState('')
   const [displayModelId, setDisplayModelId] = useState(selectedModelId)
+  const [displayProvider, setDisplayProvider] = useState(provider)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const pickerRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
-  const selected = models.find(model => model.id === displayModelId)
+  const selected =
+    models.find(
+      model =>
+        model.id === displayModelId &&
+        (!displayProvider || model.provider === displayProvider),
+    ) ?? models.find(model => model.id === displayModelId)
   const filteredModels = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase()
     if (!normalized) {
-      const current = models.find(model => model.id === displayModelId)
+      const current =
+        models.find(
+          model =>
+            model.id === displayModelId &&
+            (!displayProvider || model.provider === displayProvider),
+        ) ?? models.find(model => model.id === displayModelId)
       return current
-        ? [current, ...models.filter(model => model.id !== displayModelId)]
+        ? [current, ...models.filter(model => model !== current)]
         : models
     }
     return models.filter(model =>
-      `${model.name} ${model.id}`.toLocaleLowerCase().includes(normalized),
+      `${model.name} ${model.id} ${model.provider}`
+        .toLocaleLowerCase()
+        .includes(normalized),
     )
-  }, [displayModelId, models, query])
+  }, [displayModelId, displayProvider, models, query])
+  const pageSize = 30
+  const pageCount = Math.max(1, Math.ceil(filteredModels.length / pageSize))
+  const currentPage = Math.min(page, pageCount - 1)
+  const pageModels = filteredModels.slice(
+    currentPage * pageSize,
+    (currentPage + 1) * pageSize,
+  )
+  const selectedInList = filteredModels.some(
+    model =>
+      model.id === displayModelId &&
+      (!displayProvider || model.provider === displayProvider),
+  )
 
   useEffect(() => setDisplayModelId(selectedModelId), [selectedModelId])
+  useEffect(() => setDisplayProvider(provider), [provider])
 
   function closePicker(restoreFocus = true) {
     setOpen(false)
     setQuery('')
+    setPage(0)
     setError('')
     if (restoreFocus) window.setTimeout(() => triggerRef.current?.focus(), 0)
   }
@@ -187,6 +215,7 @@ function ComposerModelPicker({
     try {
       await onSelect(model)
       setDisplayModelId(model.id)
+      setDisplayProvider(model.provider)
       closePicker()
     } catch (caught) {
       setError(
@@ -269,7 +298,7 @@ function ComposerModelPicker({
           <header>
             <div>
               <h2 id={pickerTitleId}>选择模型</h2>
-              <p>{provider ? `${provider} 接入点` : '当前接入点'}</p>
+              <p>已配置模型服务的完整目录</p>
             </div>
             <span>{models.length} 个可用</span>
           </header>
@@ -278,7 +307,10 @@ function ComposerModelPicker({
             <span className="visually-hidden">搜索模型</span>
             <input
               autoComplete="off"
-              onChange={event => setQuery(event.target.value)}
+              onChange={event => {
+                setQuery(event.target.value)
+                setPage(0)
+              }}
               placeholder="搜索模型"
               ref={searchRef}
               spellCheck={false}
@@ -291,9 +323,11 @@ function ComposerModelPicker({
             className="composer-model-list"
             role="listbox"
           >
-            {filteredModels.length ? (
-              filteredModels.map((model, index) => {
-                const isSelected = model.id === displayModelId
+            {pageModels.length ? (
+              pageModels.map((model, index) => {
+                const isSelected =
+                  model.id === displayModelId &&
+                  (!displayProvider || model.provider === displayProvider)
                 const isSaving = savingId === model.id
                 return (
                   <div
@@ -307,12 +341,18 @@ function ComposerModelPicker({
                     }}
                     role="option"
                     tabIndex={
-                      isSelected || (!displayModelId && index === 0) ? 0 : -1
+                      isSelected ||
+                      (!selectedInList && currentPage === 0 && index === 0)
+                        ? 0
+                        : -1
                     }
                   >
                     <span>
                       <strong>{model.name}</strong>
-                      {model.id !== model.name && <small>{model.id}</small>}
+                      <small>
+                        {model.provider}
+                        {model.id !== model.name ? ` · ${model.id}` : ''}
+                      </small>
                     </span>
                     {isSaving ? (
                       <RotateCw className="is-spinning" size={17} />
@@ -326,6 +366,31 @@ function ComposerModelPicker({
               <p className="composer-model-empty">没有匹配的模型</p>
             )}
           </div>
+          {filteredModels.length > pageSize && (
+            <div className="composer-model-pagination pagination">
+              <span>
+                {currentPage * pageSize + 1}–
+                {Math.min((currentPage + 1) * pageSize, filteredModels.length)}{' '}
+                / {filteredModels.length}
+              </span>
+              <button
+                disabled={currentPage === 0}
+                onClick={() => setPage(Math.max(0, currentPage - 1))}
+                type="button"
+              >
+                上一页
+              </button>
+              <button
+                disabled={currentPage >= pageCount - 1}
+                onClick={() =>
+                  setPage(Math.min(pageCount - 1, currentPage + 1))
+                }
+                type="button"
+              >
+                下一页
+              </button>
+            </div>
+          )}
           {error && (
             <p className="composer-model-error" role="alert">
               {error}

@@ -759,7 +759,7 @@ describe('sealed Pegas UI', () => {
   })
 
   it('loads, searches and paginates the real model catalog', async () => {
-    const models = Array.from({ length: 30 }, (_, index) => ({
+    const models = Array.from({ length: 35 }, (_, index) => ({
       id: `model-${String(index + 1).padStart(2, '0')}`,
       name: `Model ${String(index + 1).padStart(2, '0')}`,
     }))
@@ -780,15 +780,15 @@ describe('sealed Pegas UI', () => {
     fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
     expect(await screen.findByText('连接正常 · 42 ms')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '获取模型目录' }))
-    expect(await screen.findByText('Model 25')).toBeTruthy()
-    expect(screen.queryByText('Model 26')).toBeNull()
+    expect(await screen.findByText('Model 30')).toBeTruthy()
+    expect(screen.queryByText('Model 31')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '下一页' }))
-    expect(screen.getByText('Model 30')).toBeTruthy()
+    expect(screen.getByText('Model 35')).toBeTruthy()
     fireEvent.change(screen.getByPlaceholderText('按名称或模型 ID 搜索'), {
       target: { value: 'Model 03' },
     })
     expect(screen.getByText('Model 03')).toBeTruthy()
-    expect(screen.queryByText('Model 30')).toBeNull()
+    expect(screen.queryByText('Model 35')).toBeNull()
     expect(fetchMock).toHaveBeenCalledWith(
       '/v1/settings/models/discover',
       expect.objectContaining({ method: 'POST' }),
@@ -2361,7 +2361,7 @@ describe('sealed Pegas UI', () => {
     fireEvent.click(modelButton)
     expect(await screen.findByRole('dialog', { name: '选择模型' })).toBeTruthy()
     expect(screen.getByRole('option', { name: /GPT-6.1 Sol/ })).toBeTruthy()
-    expect(screen.queryByRole('option', { name: /Other model/ })).toBeNull()
+    expect(screen.getByRole('option', { name: /Other model/ })).toBeTruthy()
     fireEvent.click(screen.getByRole('option', { name: /GPT-6.1 Sol/ }))
     await waitFor(() =>
       expect(
@@ -2408,6 +2408,133 @@ describe('sealed Pegas UI', () => {
         ),
       ).toBe(true),
     )
+  })
+
+  it('lists the full multi-provider agent catalog in the composer with 30-item pages', async () => {
+    const magpieModels = Array.from({ length: 32 }, (_, index) => ({
+      provider: 'Magpie',
+      id: `gateway/model-${String(index + 1).padStart(2, '0')}`,
+      name: `Gateway Model ${String(index + 1).padStart(2, '0')}`,
+    }))
+    const fetchMock = installFetch((path, init) => {
+      if (path === '/v1/settings' && init?.method !== 'PUT')
+        return Response.json({
+          ...settingsResponse,
+          settings: {
+            ...settingsResponse.settings,
+            agentModelProvider: 'Magpie',
+            agentModelName: 'gateway/model-01',
+          },
+        })
+      if (path === '/v1/settings/agent-models')
+        return Response.json({
+          defaultProvider: 'Magpie',
+          defaultModel: 'gateway/model-01',
+          models: [
+            ...magpieModels,
+            {
+              provider: 'Anthropic',
+              id: 'claude-sonnet-4-5',
+              name: 'Claude Sonnet 4.5',
+            },
+          ],
+        })
+      if (path === '/v1/settings' && init?.method === 'PUT') {
+        const update = JSON.parse(
+          typeof init.body === 'string' ? init.body : '{}',
+        ) as { agentModelProvider?: string; agentModelName?: string }
+        return Response.json({
+          ...settingsResponse,
+          settings: {
+            ...settingsResponse.settings,
+            revision: 2,
+            agentModelMode: 'override',
+            agentModelProvider: update.agentModelProvider ?? 'Magpie',
+            agentModelName: update.agentModelName ?? 'gateway/model-01',
+          },
+        })
+      }
+      return undefined
+    })
+    render(<App />)
+    const modelButton = await screen.findByRole('button', {
+      name: /选择执行模型/,
+    })
+    await waitFor(() =>
+      expect(modelButton.textContent).toContain('Gateway Model 01'),
+    )
+    fireEvent.click(modelButton)
+    const dialog = await screen.findByRole('dialog', { name: '选择模型' })
+    expect(within(dialog).getByText('33 个可用')).toBeTruthy()
+    expect(
+      within(dialog).getByRole('option', { name: /Gateway Model 01/ }),
+    ).toBeTruthy()
+    expect(
+      within(dialog).getByRole('option', { name: /Gateway Model 30/ }),
+    ).toBeTruthy()
+    expect(
+      within(dialog).queryByRole('option', { name: /Gateway Model 31/ }),
+    ).toBeNull()
+    expect(
+      within(dialog).queryByRole('option', { name: /Claude Sonnet 4.5/ }),
+    ).toBeNull()
+    fireEvent.click(within(dialog).getByRole('button', { name: '下一页' }))
+    expect(
+      within(dialog).getByRole('option', { name: /Gateway Model 31/ }),
+    ).toBeTruthy()
+    const claudeOption = within(dialog).getByRole('option', {
+      name: /Claude Sonnet 4.5/,
+    })
+    expect(within(claudeOption).getByText(/Anthropic/)).toBeTruthy()
+    fireEvent.click(claudeOption)
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([path, init]) => {
+          if (path !== '/v1/settings' || init?.method !== 'PUT') return false
+          const body = JSON.parse(
+            typeof init.body === 'string' ? init.body : '{}',
+          ) as { agentModelProvider?: string; agentModelName?: string }
+          return (
+            body.agentModelProvider === 'Anthropic' &&
+            body.agentModelName === 'claude-sonnet-4-5'
+          )
+        }),
+      ).toBe(true),
+    )
+    await waitFor(() =>
+      expect(modelButton.textContent).toContain('Claude Sonnet 4.5'),
+    )
+    fireEvent.click(modelButton)
+    const reopened = await screen.findByRole('dialog', { name: '选择模型' })
+    expect(
+      within(reopened)
+        .getByRole('option', { name: /Claude Sonnet 4.5/ })
+        .getAttribute('aria-selected'),
+    ).toBe('true')
+    expect(
+      within(reopened).getByRole('button', { name: '上一页' }),
+    ).toHaveProperty('disabled', true)
+    fireEvent.change(within(reopened).getByPlaceholderText('搜索模型'), {
+      target: { value: 'model-3' },
+    })
+    expect(
+      within(reopened).getByRole('option', { name: /Gateway Model 30/ }),
+    ).toBeTruthy()
+    expect(
+      within(reopened).getByRole('option', { name: /Gateway Model 32/ }),
+    ).toBeTruthy()
+    expect(
+      within(reopened).queryByRole('option', { name: /Gateway Model 03/ }),
+    ).toBeNull()
+    expect(
+      within(reopened).queryByRole('button', { name: '下一页' }),
+    ).toBeNull()
+    fireEvent.change(within(reopened).getByPlaceholderText('搜索模型'), {
+      target: { value: 'anthropic' },
+    })
+    expect(
+      within(reopened).getByRole('option', { name: /Claude Sonnet 4.5/ }),
+    ).toBeTruthy()
   })
 
   it('opens voice settings without requesting microphone access when speech is disabled', async () => {
@@ -7318,6 +7445,184 @@ describe('sealed Pegas UI', () => {
     deliveryAnchor.scrollIntoView = scrollSpy
     fireEvent.click(jump)
     expect(scrollSpy).toHaveBeenCalled()
+  })
+
+  it('renders head+tail shell output and pages the omission gap', async () => {
+    const outputCalls: string[] = []
+    installSnapshotFetch(
+      {
+        ...snapshot,
+        channels: [{ ...channel, status: 'completed', canStop: false }],
+        runs: [{ ...run, status: 'completed', output: '完成。' }],
+      },
+      path => {
+        if (path.startsWith('/v1/tasks/task-1/delivery?'))
+          return Response.json(deliveryFixture)
+        if (path.startsWith('/v1/runs/run-1/activity?'))
+          return Response.json({
+            runId: 'run-1',
+            taskId: channel.id,
+            totalEntries: 1,
+            truncated: false,
+            entries: [
+              {
+                seq: 1,
+                kind: 'tool_call',
+                status: 'completed',
+                callId: 'call-gap',
+                tool: 'bash',
+                label: 'bash',
+                semantic: {
+                  kind: 'shell',
+                  command: 'pnpm check',
+                  output: 'HEAD-LINE\n… 已省略 8000 字符 …\nERROR-TAIL',
+                  outputTruncated: true,
+                  outputOmittedCharacters: 8_000,
+                },
+                createdAt: '2026-11-19T08:00:10.000Z',
+                updatedAt: '2026-11-19T08:00:20.000Z',
+              },
+            ],
+          })
+        if (path.startsWith('/v1/runs/run-1/activity/call-gap/output?')) {
+          outputCalls.push(path)
+          const offset = Number(
+            new URL(path, 'http://localhost').searchParams.get('offset'),
+          )
+          if (offset === 9)
+            return Response.json({
+              runId: 'run-1',
+              callId: 'call-gap',
+              content: 'MIDDLE-OUTPUT',
+              offset: 9,
+              totalCharacters: 22,
+              archivedCharacters: 22,
+              truncatedArchive: false,
+            })
+          return Response.json({ error: 'not_found' }, { status: 404 })
+        }
+        return undefined
+      },
+    )
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: new RegExp(channel.title) }),
+    )
+    const drawer = await screen.findByRole('dialog', { name: '工作详情' })
+    fireEvent.click(await within(drawer).findByText(/工作流程记录/))
+    const gapHeadline = (await within(drawer).findAllByText('pnpm check'))[0]
+    if (!gapHeadline) throw new Error('expected gap headline')
+    fireEvent.click(gapHeadline)
+    const shellCard = drawer.querySelector('.shell-card')
+    if (!shellCard) throw new Error('expected shell card')
+    expect(shellCard.textContent).toContain('HEAD-LINE')
+    expect(shellCard.textContent).toContain('ERROR-TAIL')
+    expect(shellCard.querySelector('.output-gap')?.textContent).toContain(
+      '已省略 8,000 字符',
+    )
+    const loadGap = within(shellCard as HTMLElement).getByRole('button', {
+      name: '加载省略内容',
+    })
+    fireEvent.click(loadGap)
+    expect(await within(drawer).findByText('MIDDLE-OUTPUT')).toBeTruthy()
+    expect(outputCalls[0]).toContain('offset=9')
+    expect(shellCard.querySelector('.output-gap')).toBeNull()
+    expect(
+      within(shellCard as HTMLElement).queryByRole('button', {
+        name: '加载省略内容',
+      }),
+    ).toBeNull()
+  })
+
+  it('links the executor spill file and pages the full output from zero', async () => {
+    const outputCalls: string[] = []
+    installSnapshotFetch(
+      {
+        ...snapshot,
+        channels: [{ ...channel, status: 'completed', canStop: false }],
+        runs: [{ ...run, status: 'completed', output: '完成。' }],
+      },
+      path => {
+        if (path.startsWith('/v1/tasks/task-1/delivery?'))
+          return Response.json(deliveryFixture)
+        if (path.startsWith('/v1/runs/run-1/activity?'))
+          return Response.json({
+            runId: 'run-1',
+            taskId: channel.id,
+            totalEntries: 1,
+            truncated: false,
+            entries: [
+              {
+                seq: 1,
+                kind: 'tool_call',
+                status: 'completed',
+                callId: 'call-spill',
+                tool: 'bash',
+                label: 'bash',
+                semantic: {
+                  kind: 'shell',
+                  command: 'cat huge.log',
+                  output: 'SPILL-TAIL',
+                  outputSpillPath: '/tmp/dsh-spill/huge.txt',
+                },
+                createdAt: '2026-11-19T08:00:10.000Z',
+                updatedAt: '2026-11-19T08:00:20.000Z',
+              },
+            ],
+          })
+        if (path.startsWith('/v1/runs/run-1/activity/call-spill/output?')) {
+          outputCalls.push(path)
+          const offset = Number(
+            new URL(path, 'http://localhost').searchParams.get('offset'),
+          )
+          if (offset === 0)
+            return Response.json({
+              runId: 'run-1',
+              callId: 'call-spill',
+              content: 'SPILL-FULL-HEAD',
+              offset: 0,
+              totalCharacters: 15,
+              archivedCharacters: 15,
+              truncatedArchive: false,
+            })
+          return Response.json({ error: 'not_found' }, { status: 404 })
+        }
+        return undefined
+      },
+    )
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: new RegExp(channel.title) }),
+    )
+    const drawer = await screen.findByRole('dialog', { name: '工作详情' })
+    fireEvent.click(await within(drawer).findByText(/工作流程记录/))
+    const spillHeadline = (
+      await within(drawer).findAllByText('cat huge.log')
+    )[0]
+    if (!spillHeadline) throw new Error('expected spill headline')
+    fireEvent.click(spillHeadline)
+    const shellCard = drawer.querySelector('.shell-card')
+    if (!shellCard) throw new Error('expected shell card')
+    const link = within(shellCard as HTMLElement).getByRole('link', {
+      name: '完整输出文件',
+    })
+    expect(link.getAttribute('href')).toBe(
+      '/v1/runs/run-1/activity/call-spill/output-file?userId=owner',
+    )
+    expect(link.getAttribute('target')).toBe('_blank')
+    expect(shellCard.textContent).toContain('/tmp/dsh-spill/huge.txt')
+    const loadMore = within(shellCard as HTMLElement).getByRole('button', {
+      name: '加载后续输出',
+    })
+    fireEvent.click(loadMore)
+    await waitFor(() => {
+      expect(drawer.textContent).toContain('SPILL-FULL-HEAD')
+    })
+    expect(outputCalls[0]).toContain('offset=0')
   })
 
   it('keeps honest fallbacks for legacy and unknown tool records', async () => {

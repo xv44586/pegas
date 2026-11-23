@@ -297,6 +297,8 @@ export type ToolSemantic =
       description?: string
       output?: string
       outputTruncated?: boolean
+      outputOmittedCharacters?: number
+      outputSpillPath?: string
       exitCode?: number
       interrupted?: boolean
     }
@@ -306,6 +308,8 @@ export type ToolSemantic =
       lineCount?: number
       preview?: string
       previewTruncated?: boolean
+      previewOmittedCharacters?: number
+      previewSpillPath?: string
     }
   | {
       kind: 'image'
@@ -322,6 +326,8 @@ export type ToolSemantic =
       files: { path: string; description?: string }[]
       preview?: string
       previewTruncated?: boolean
+      previewOmittedCharacters?: number
+      previewSpillPath?: string
     }
   | {
       kind: 'file_edit'
@@ -344,6 +350,8 @@ export type ToolSemantic =
       paths?: string[]
       preview?: string
       previewTruncated?: boolean
+      previewOmittedCharacters?: number
+      previewSpillPath?: string
     }
   | {
       kind: 'todo'
@@ -357,6 +365,8 @@ export type ToolSemantic =
       pending?: boolean
       preview?: string
       previewTruncated?: boolean
+      previewOmittedCharacters?: number
+      previewSpillPath?: string
     }
   | {
       kind: 'web'
@@ -368,6 +378,8 @@ export type ToolSemantic =
       sourcesTruncated?: boolean
       preview?: string
       previewTruncated?: boolean
+      previewOmittedCharacters?: number
+      previewSpillPath?: string
     }
   | {
       kind: 'agent_control'
@@ -379,6 +391,8 @@ export type ToolSemantic =
       agents?: { name: string; status: string; description?: string }[]
       preview?: string
       previewTruncated?: boolean
+      previewOmittedCharacters?: number
+      previewSpillPath?: string
     }
   | { kind: 'unknown' }
 

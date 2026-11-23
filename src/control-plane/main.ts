@@ -14,6 +14,7 @@ import {
   settingsCapabilities,
 } from '../settings/runtime-settings.js'
 import { resolveInitialModelName } from '../settings/initial-model.js'
+import { discoverConnectionCatalogs } from '../settings/connection-catalog.js'
 import { PegasStore } from '../storage/sqlite-store.js'
 import { createLogger } from '../observability/logger.js'
 import { MetricsRegistry } from '../observability/metrics.js'
@@ -75,13 +76,20 @@ const server = createControlPlane({
 
 async function loadAgentModelCatalog() {
   const settings = store.getRuntimeSettings()
+  const connections = store.listModelProviderConnections()
+  const modelCatalog = await discoverConnectionCatalogs(
+    connections,
+    modelCredentialVault,
+    { timeoutMs: Math.min(config.modelTimeoutMs, 15_000) },
+  )
   const modelConfiguration = createDshModelConfiguration({
-    connections: store.listModelProviderConnections(),
+    connections,
     vault: modelCredentialVault,
     agentModel: {
       provider: settings.modelProvider,
       model: settings.modelName,
     },
+    modelCatalog,
   })
   try {
     return await loadDshModelCatalog({
