@@ -133,6 +133,28 @@ describe('sealed UI layout contracts', () => {
     expect(uiReviewScript).toContain('PEGAS_MODEL_BASE_URL')
   })
 
+  it('stacks the composer trigger name and provider detail instead of gluing them inline', () => {
+    expect(sealedUi).toMatch(
+      /\.composer-model-button > span\s*\{[^}]*display:\s*grid;/,
+    )
+    expect(sealedUi).toMatch(
+      /\.composer-model-button strong,\s*\.composer-model-button small\s*\{[^}]*text-overflow:\s*ellipsis;/,
+    )
+    expect(sealedUi).toMatch(
+      /\.composer-model-button small\s*\{[^}]*color:\s*var\(--muted\);/,
+    )
+    const modelPicker = readFileSync(
+      new URL('../web/src/sealed/ModelPicker.tsx', import.meta.url),
+      'utf8',
+    )
+    expect(modelPicker).toContain(
+      '<strong>{selection?.label ?? placeholder}</strong>',
+    )
+    expect(modelPicker).toContain(
+      '<small>{selection?.detail ?? placeholderDetail}</small>',
+    )
+  })
+
   it('keeps search inputs on the single container-owned focus treatment', () => {
     expect(sealedUi).toMatch(
       /\.model-search\s*\{[^}]*border:\s*1px solid transparent;/,

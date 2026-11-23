@@ -1567,6 +1567,22 @@ async function assertGeometry(page, label) {
         if (composerStyle.boxShadow === 'none')
           out.push('focused composer has no visible outer focus treatment')
       }
+      const modelTrigger = composer.querySelector('.composer-model-button')
+      const triggerName = modelTrigger?.querySelector('strong')
+      const triggerDetail = modelTrigger?.querySelector('small')
+      if (modelTrigger && triggerName && triggerDetail) {
+        const triggerRect = modelTrigger.getBoundingClientRect()
+        const nameRect = triggerName.getBoundingClientRect()
+        const detailRect = triggerDetail.getBoundingClientRect()
+        if (detailRect.top < nameRect.bottom - 1)
+          out.push('composer model trigger glues name and provider inline')
+        if (
+          nameRect.right > triggerRect.right + 1 ||
+          detailRect.right > triggerRect.right + 1 ||
+          detailRect.bottom > triggerRect.bottom + 1
+        )
+          out.push('composer model trigger text overflows its button')
+      }
     }
     const modelPicker = globalThis.document.querySelector(
       '.composer-model-picker',

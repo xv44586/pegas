@@ -1685,10 +1685,25 @@ a {
   padding: 0 8px 0 10px;
   width: auto;
 }
-.composer-model-button span {
+.composer-model-button > span {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+.composer-model-button strong,
+.composer-model-button small {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.composer-model-button strong {
+  font-size: var(--text-caption);
+  font-weight: 500;
+}
+.composer-model-button small {
+  color: var(--muted);
+  font-size: var(--text-tiny);
+  font-weight: 400;
 }
 .composer-model-control {
   position: relative;
