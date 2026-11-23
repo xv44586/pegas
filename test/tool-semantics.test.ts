@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   buildToolSemantic,
+  semanticSpillPath,
   splitToolDetail,
 } from '../src/activity/tool-semantics.js'
 import { PegasStore } from '../src/storage/sqlite-store.js'
@@ -48,8 +49,10 @@ describe('EXEC-006 tool semantics projection', () => {
       { status: 'completed', result: 'y'.repeat(20_000) },
     )
     if (semantic.kind !== 'shell') throw new Error('expected shell')
-    expect(semantic.output?.length).toBe(12_000)
+    expect(semantic.output).toContain('已省略 8000 字符')
+    expect(semantic.output?.length).toBeLessThan(12_100)
     expect(semantic.outputTruncated).toBe(true)
+    expect(semantic.outputOmittedCharacters).toBe(8_000)
   })
 
   it('projects edit calls into a context diff with add/del counts', () => {
@@ -825,5 +828,89 @@ describe('EXEC-006 store semantic persistence and legacy derivation', () => {
     } finally {
       rmSync(directory, { recursive: true, force: true })
     }
+  })
+})
+
+describe('EXEC-006 round-18 head+tail clipping and spill notices', () => {
+  it('keeps both ends of long shell output with an honest omission marker', () => {
+    const result = `HEAD-START\n${'m'.repeat(20_000)}\nERROR: tail summary`
+    const semantic = buildToolSemantic(
+      { tool: 'bash', input: '{"command":"pnpm check"}' },
+      { status: 'completed', result },
+    )
+    if (semantic.kind !== 'shell') throw new Error('expected shell')
+    expect(semantic.output?.startsWith('HEAD-START')).toBe(true)
+    expect(semantic.output?.endsWith('ERROR: tail summary')).toBe(true)
+    expect(semantic.output).toContain(
+      `已省略 ${String(result.length - 12_000)} 字符`,
+    )
+    expect(semantic.outputTruncated).toBe(true)
+    expect(semantic.outputOmittedCharacters).toBe(result.length - 12_000)
+    expect(semantic.outputSpillPath).toBeUndefined()
+  })
+
+  it('strips the bash spill notice and records the absolute file path', () => {
+    const semantic = buildToolSemantic(
+      { tool: 'bash', input: '{"command":"cat huge.log"}' },
+      {
+        status: 'completed',
+        result:
+          'tail line one\ntail line two\n[output truncated; full output: /tmp/dsh-spill/out-1.txt]',
+      },
+    )
+    if (semantic.kind !== 'shell') throw new Error('expected shell')
+    expect(semantic.output).toBe('tail line one\ntail line two')
+    expect(semantic.outputTruncated).toBeUndefined()
+    expect(semantic.outputSpillPath).toBe('/tmp/dsh-spill/out-1.txt')
+    expect(semanticSpillPath(semantic)).toBe('/tmp/dsh-spill/out-1.txt')
+  })
+
+  it('recognizes the retention notice on previews and drops unavailable locators', () => {
+    const notice =
+      '(Omitted 52310 bytes. Full formatted result stored at: /tmp/spill/page.txt. Use read with offset/limit, or grep this path to search within it.)'
+    const web = buildToolSemantic(
+      { tool: 'web_fetch', input: '{"url":"https://example.com/long"}' },
+      {
+        status: 'completed',
+        result: `Fetched https://example.com/long (HTTP 200)\nbody head\n\n[...]\n\nbody tail\n\n${notice}`,
+      },
+    )
+    if (web.kind !== 'web') throw new Error('expected web')
+    expect(web.previewSpillPath).toBe('/tmp/spill/page.txt')
+    expect(web.preview).not.toContain('Full formatted result stored at')
+    expect(web.preview).toContain('body tail')
+    const unavailable = buildToolSemantic(
+      { tool: 'bash', input: '{"command":"ls"}' },
+      {
+        status: 'completed',
+        result: 'tail only\n[output truncated; full output: (unavailable)]',
+      },
+    )
+    if (unavailable.kind !== 'shell') throw new Error('expected shell')
+    expect(unavailable.output).toBe('tail only')
+    expect(unavailable.outputSpillPath).toBeUndefined()
+    expect(semanticSpillPath(unavailable)).toBeUndefined()
+    const relative = buildToolSemantic(
+      { tool: 'bash', input: '{"command":"ls"}' },
+      {
+        status: 'completed',
+        result: 'tail\n[output truncated; full output: spill/relative.txt]',
+      },
+    )
+    if (relative.kind !== 'shell') throw new Error('expected shell')
+    expect(relative.outputSpillPath).toBeUndefined()
+  })
+
+  it('keeps head and tail of long file previews with the omission count', () => {
+    const content = `<content>\n1: first line\n${'x'.repeat(9_000)}\n99: last line\n</content>`
+    const semantic = buildToolSemantic(
+      { tool: 'read', input: '{"file_path":"/repo/big.ts"}' },
+      { status: 'completed', result: content },
+    )
+    if (semantic.kind !== 'file_read') throw new Error('expected file_read')
+    expect(semantic.preview?.startsWith('1: first line')).toBe(true)
+    expect(semantic.preview?.endsWith('99: last line')).toBe(true)
+    expect(semantic.previewTruncated).toBe(true)
+    expect(semantic.previewOmittedCharacters).toBeGreaterThan(5_000)
   })
 })

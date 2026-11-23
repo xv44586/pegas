@@ -217,7 +217,7 @@ describe('EXEC-006 P1a store semantic upgrade', () => {
 })
 
 describe('EXEC-006 P1b full-output archive and paging', () => {
-  it('archives the faithful output, pages it, and stays owner-scoped', () => {
+  it('archives the faithful output, pages it, and stays owner-scoped', async () => {
     const store = new PegasStore(':memory:')
     const claimed = seedClaimedRun(store)
     const longOutput = 'x'.repeat(40_000)
@@ -235,7 +235,7 @@ describe('EXEC-006 P1b full-output archive and paging', () => {
       'call-long',
       { status: 'completed', result: longOutput },
     )
-    const first = store.readRunActivityOutput(
+    const first = await store.readRunActivityOutput(
       claimed.run.id,
       'owner',
       'call-long',
@@ -247,7 +247,7 @@ describe('EXEC-006 P1b full-output archive and paging', () => {
       truncatedArchive: false,
     })
     expect(first?.content).toHaveLength(12_000)
-    const second = store.readRunActivityOutput(
+    const second = await store.readRunActivityOutput(
       claimed.run.id,
       'owner',
       'call-long',
@@ -255,7 +255,7 @@ describe('EXEC-006 P1b full-output archive and paging', () => {
     )
     expect(second?.content).toHaveLength(28_000)
     expect(second?.offset).toBe(12_000)
-    const beyond = store.readRunActivityOutput(
+    const beyond = await store.readRunActivityOutput(
       claimed.run.id,
       'owner',
       'call-long',
@@ -263,15 +263,19 @@ describe('EXEC-006 P1b full-output archive and paging', () => {
     )
     expect(beyond?.content).toBe('')
     expect(
-      store.readRunActivityOutput(claimed.run.id, 'intruder', 'call-long'),
+      await store.readRunActivityOutput(
+        claimed.run.id,
+        'intruder',
+        'call-long',
+      ),
     ).toBeUndefined()
     expect(
-      store.readRunActivityOutput(claimed.run.id, 'owner', 'call-none'),
+      await store.readRunActivityOutput(claimed.run.id, 'owner', 'call-none'),
     ).toBeUndefined()
     store.close()
   })
 
-  it('heals an 8KB stream-clipped archive from the durable full result without meta', () => {
+  it('heals an 8KB stream-clipped archive from the durable full result without meta', async () => {
     const store = new PegasStore(':memory:')
     const claimed = seedClaimedRun(store)
     const fullOutput = Array.from({ length: 4_000 }, (_, index) =>
@@ -293,13 +297,13 @@ describe('EXEC-006 P1b full-output archive and paging', () => {
       { status: 'completed', result: streamClip },
     )
     expect(
-      store.readRunActivityOutput(claimed.run.id, 'owner', 'call-seq'),
+      await store.readRunActivityOutput(claimed.run.id, 'owner', 'call-seq'),
     ).toMatchObject({ totalCharacters: 8_192 })
     const upgraded = store.upgradeRunToolSemantics(claimed.run.id, [
       { callId: 'call-seq', status: 'completed', result: fullOutput },
     ])
     expect(upgraded).toBe(0)
-    const healed = store.readRunActivityOutput(
+    const healed = await store.readRunActivityOutput(
       claimed.run.id,
       'owner',
       'call-seq',
@@ -311,12 +315,12 @@ describe('EXEC-006 P1b full-output archive and paging', () => {
       { callId: 'call-seq', status: 'completed', result: streamClip },
     ])
     expect(
-      store.readRunActivityOutput(claimed.run.id, 'owner', 'call-seq'),
+      await store.readRunActivityOutput(claimed.run.id, 'owner', 'call-seq'),
     ).toMatchObject({ totalCharacters: fullOutput.length })
     store.close()
   })
 
-  it('caps the archive honestly at 256KB', () => {
+  it('caps the archive honestly at 256KB', async () => {
     const store = new PegasStore(':memory:')
     const claimed = seedClaimedRun(store)
     store.appendRunActivity(claimed.run.id, 'enhance-worker', {
@@ -333,7 +337,7 @@ describe('EXEC-006 P1b full-output archive and paging', () => {
       'call-huge',
       { status: 'completed', result: 'y'.repeat(300_000) },
     )
-    const page = store.readRunActivityOutput(
+    const page = await store.readRunActivityOutput(
       claimed.run.id,
       'owner',
       'call-huge',
@@ -343,6 +347,121 @@ describe('EXEC-006 P1b full-output archive and paging', () => {
       archivedCharacters: 262_144,
       truncatedArchive: true,
     })
+    store.close()
+  })
+})
+
+describe('EXEC-006 round-18 executor spill-file channel', () => {
+  function seedSpilledCall(store: PegasStore, spillPath: string) {
+    const claimed = seedClaimedRun(store)
+    const tailText = 'tail error summary line'
+    const fullText = `head of output\n${'z'.repeat(30_000)}\n${tailText}`
+    const streamResult = `${tailText}\n[output truncated; full output: ${spillPath}]`
+    store.appendRunActivity(claimed.run.id, 'enhance-worker', {
+      kind: 'tool_call',
+      status: 'started',
+      callId: 'call-spill',
+      tool: 'bash',
+      label: 'bash',
+      detail: JSON.stringify({ command: 'cat huge.log' }),
+    })
+    store.completeRunActivityToolCall(
+      claimed.run.id,
+      'enhance-worker',
+      'call-spill',
+      { status: 'completed', result: streamResult },
+    )
+    return { claimed, fullText, streamResult }
+  }
+
+  it('resolves the spill path only from the persisted semantic, owner-scoped', () => {
+    const store = new PegasStore(':memory:')
+    const { claimed } = seedSpilledCall(store, '/tmp/spill/full.txt')
+    expect(
+      store.resolveRunOutputSpillPath(claimed.run.id, 'owner', 'call-spill'),
+    ).toBe('/tmp/spill/full.txt')
+    expect(
+      store.resolveRunOutputSpillPath(claimed.run.id, 'intruder', 'call-spill'),
+    ).toBeUndefined()
+    expect(
+      store.resolveRunOutputSpillPath(claimed.run.id, 'owner', 'call-none'),
+    ).toBeUndefined()
+    store.close()
+  })
+
+  it('pages beyond a short archive from the spill file when it covers the original', async () => {
+    const store = new PegasStore(':memory:')
+    const { claimed, fullText, streamResult } = seedSpilledCall(
+      store,
+      '/tmp/spill/full.txt',
+    )
+    store.upgradeRunToolSemantics(claimed.run.id, [
+      {
+        callId: 'call-spill',
+        status: 'completed',
+        result: streamResult,
+        meta: { truncated: true },
+      },
+    ])
+    const requested: string[] = []
+    const page = await store.readRunActivityOutput(
+      claimed.run.id,
+      'owner',
+      'call-spill',
+      {
+        offset: 0,
+        spillReader: path => {
+          requested.push(path)
+          return Promise.resolve(fullText)
+        },
+      },
+    )
+    expect(requested).toEqual(['/tmp/spill/full.txt'])
+    expect(page?.content).toBe(fullText.slice(0, 12_000))
+    expect(page?.archivedCharacters).toBe(fullText.length)
+    expect(page?.totalCharacters).toBe(fullText.length)
+    const tail = await store.readRunActivityOutput(
+      claimed.run.id,
+      'owner',
+      'call-spill',
+      {
+        offset: fullText.length - 23,
+        spillReader: () => Promise.resolve(fullText),
+      },
+    )
+    expect(tail?.content).toBe('tail error summary line')
+    store.close()
+  })
+
+  it('degrades honestly when the spill file is missing or shorter than the original', async () => {
+    const store = new PegasStore(':memory:')
+    const { claimed, fullText, streamResult } = seedSpilledCall(
+      store,
+      '/tmp/spill/full.txt',
+    )
+    store.upgradeRunToolSemantics(claimed.run.id, [
+      {
+        callId: 'call-spill',
+        status: 'completed',
+        result: streamResult,
+        meta: { truncated: true },
+      },
+    ])
+    const missing = await store.readRunActivityOutput(
+      claimed.run.id,
+      'owner',
+      'call-spill',
+      { offset: 0, spillReader: () => Promise.resolve(undefined) },
+    )
+    expect(missing?.content).toContain('[output truncated; full output:')
+    expect(missing?.archivedCharacters).toBeLessThan(200)
+    const mismatched = await store.readRunActivityOutput(
+      claimed.run.id,
+      'owner',
+      'call-spill',
+      { offset: 0, spillReader: () => Promise.resolve(fullText.slice(0, 10)) },
+    )
+    expect(mismatched?.content).toContain('[output truncated; full output:')
     store.close()
   })
 })
@@ -570,6 +689,70 @@ describe('EXEC-006 activity output/image HTTP surface', () => {
     rmSync(imagePath)
     const gone = await fetch(
       `${base}/v1/runs/${claimed.run.id}/activity/call-img/image?userId=owner`,
+    )
+    expect(gone.status).toBe(404)
+  })
+
+  it('serves the recorded spill file as text and pages beyond the archive', async () => {
+    const root = tempDirectory('pegas-spill-api-')
+    const spillPath = join(root, 'full-output.txt')
+    const fullText = `first line\n${'w'.repeat(30_000)}\nfinal error summary`
+    writeFileSync(spillPath, fullText)
+    const store = new PegasStore(':memory:')
+    cleanups.push(() => store.close())
+    const claimed = seedClaimedRun(store)
+    store.appendRunActivity(claimed.run.id, 'enhance-worker', {
+      kind: 'tool_call',
+      status: 'started',
+      callId: 'call-spill-http',
+      tool: 'bash',
+      label: 'bash',
+      detail: JSON.stringify({ command: 'cat huge.log' }),
+    })
+    const streamResult = `final error summary\n[output truncated; full output: ${spillPath}]`
+    store.completeRunActivityToolCall(
+      claimed.run.id,
+      'enhance-worker',
+      'call-spill-http',
+      { status: 'completed', result: streamResult },
+    )
+    store.upgradeRunToolSemantics(claimed.run.id, [
+      {
+        callId: 'call-spill-http',
+        status: 'completed',
+        result: streamResult,
+        meta: { truncated: true },
+      },
+    ])
+    const base = await openServer(store)
+    const file = await fetch(
+      `${base}/v1/runs/${claimed.run.id}/activity/call-spill-http/output-file?userId=owner`,
+    )
+    expect(file.status).toBe(200)
+    expect(file.headers.get('content-type')).toBe('text/plain; charset=utf-8')
+    expect(file.headers.get('x-content-type-options')).toBe('nosniff')
+    expect(await file.text()).toBe(fullText)
+    const denied = await fetch(
+      `${base}/v1/runs/${claimed.run.id}/activity/call-spill-http/output-file?userId=intruder`,
+    )
+    expect(denied.status).toBe(404)
+    const missing = await fetch(
+      `${base}/v1/runs/${claimed.run.id}/activity/call-none/output-file?userId=owner`,
+    )
+    expect(missing.status).toBe(404)
+    const page = await fetch(
+      `${base}/v1/runs/${claimed.run.id}/activity/call-spill-http/output?userId=owner&offset=${String(fullText.length - 19)}`,
+    )
+    expect(page.status).toBe(200)
+    const body = (await page.json()) as {
+      content: string
+      archivedCharacters: number
+    }
+    expect(body.content).toBe('final error summary')
+    expect(body.archivedCharacters).toBe(fullText.length)
+    rmSync(spillPath)
+    const gone = await fetch(
+      `${base}/v1/runs/${claimed.run.id}/activity/call-spill-http/output-file?userId=owner`,
     )
     expect(gone.status).toBe(404)
   })

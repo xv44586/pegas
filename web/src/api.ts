@@ -109,6 +109,11 @@ export class PegasApi {
     return `/v1/runs/${encodeURIComponent(runId)}/activity/${encodeURIComponent(callId)}/image?userId=${user}`
   }
 
+  runActivityOutputFileUrl(runId: string, callId: string): string {
+    const user = encodeURIComponent(this.#userId)
+    return `/v1/runs/${encodeURIComponent(runId)}/activity/${encodeURIComponent(callId)}/output-file?userId=${user}`
+  }
+
   async channelTimeline(channelId: string): Promise<ChannelTimeline> {
     const user = encodeURIComponent(this.#userId)
     const raw = await this.#get<unknown>(

@@ -147,10 +147,85 @@ function clip(
 ): {
   text: string
   truncated: boolean
+  omittedCharacters?: number
 } {
-  return value.length > maximum
-    ? { text: value.slice(0, maximum), truncated: true }
-    : { text: value, truncated: false }
+  if (value.length <= maximum) return { text: value, truncated: false }
+  const headLength = Math.ceil(maximum / 2)
+  const tailLength = maximum - headLength
+  const omittedCharacters = value.length - maximum
+  return {
+    text: `${value.slice(0, headLength)}\n… 已省略 ${String(omittedCharacters)} 字符 …\n${value.slice(value.length - tailLength)}`,
+    truncated: true,
+    omittedCharacters,
+  }
+}
+
+interface SpillNotice {
+  path?: string
+  body: string
+}
+
+/** The absolute spill-file path recorded in one persisted semantic. */
+export function semanticSpillPath(
+  semantic: ToolSemantic | undefined,
+): string | undefined {
+  if (!semantic) return undefined
+  const path =
+    semantic.kind === 'shell'
+      ? semantic.outputSpillPath
+      : 'previewSpillPath' in semantic
+        ? semantic.previewSpillPath
+        : undefined
+  return path?.startsWith('/') ? path : undefined
+}
+
+const BASH_SPILL_NOTICE = /\n\[output truncated; full output: ([^\]\n]+)\]\s*$/u
+const POLICY_SPILL_NOTICE =
+  /\n?\(Omitted [^()\n]*?Full formatted result stored at: ([^()\n]+?)\. (?:Use [^()\n]*)\)\s*$/u
+
+/**
+ * EXEC-006 round 18: recognizes the executor's persisted spill notices at
+ * the very end of a result — the bash tail notice and the generic retention
+ * notice. The notice is stripped from the displayed body; only absolute
+ * file paths become links, `(unavailable)` stays an honest truncation.
+ */
+function extractSpillNotice(result: string): SpillNotice {
+  const bash = BASH_SPILL_NOTICE.exec(result)
+  if (bash?.[1]) {
+    const locator = bash[1].trim()
+    return {
+      body: result.slice(0, bash.index).trimEnd(),
+      ...(locator.startsWith('/') ? { path: locator } : {}),
+    }
+  }
+  const policy = POLICY_SPILL_NOTICE.exec(result)
+  if (policy?.[1]) {
+    const locator = policy[1].trim()
+    return {
+      body: result.slice(0, policy.index).trimEnd(),
+      ...(locator.startsWith('/') ? { path: locator } : {}),
+    }
+  }
+  return { body: result }
+}
+
+function previewFields(result: string | undefined): Partial<{
+  preview: string
+  previewTruncated: boolean
+  previewOmittedCharacters: number
+  previewSpillPath: string
+}> {
+  if (result === undefined) return {}
+  const spill = extractSpillNotice(result)
+  const preview = clip(spill.body, MAX_PREVIEW_CHARACTERS)
+  return {
+    ...(preview.text ? { preview: preview.text } : {}),
+    ...(preview.truncated ? { previewTruncated: true } : {}),
+    ...(preview.omittedCharacters !== undefined
+      ? { previewOmittedCharacters: preview.omittedCharacters }
+      : {}),
+    ...(spill.path ? { previewSpillPath: spill.path } : {}),
+  }
 }
 
 function shellSemantic(
@@ -162,8 +237,9 @@ function shellSemantic(
     stringField(args, 'command', 'cmd') ?? commandFromClippedInput(rawInput)
   if (command === undefined) return { kind: 'unknown' }
   const description = stringField(args, 'description')
+  const spill = result === undefined ? undefined : extractSpillNotice(result)
   const output =
-    result === undefined ? undefined : clip(result, MAX_OUTPUT_CHARACTERS)
+    spill === undefined ? undefined : clip(spill.body, MAX_OUTPUT_CHARACTERS)
   return {
     kind: 'shell',
     command: command.slice(0, MAX_COMMAND_CHARACTERS),
@@ -172,8 +248,12 @@ function shellSemantic(
       ? {
           output: output.text,
           ...(output.truncated ? { outputTruncated: true } : {}),
+          ...(output.omittedCharacters !== undefined
+            ? { outputOmittedCharacters: output.omittedCharacters }
+            : {}),
         }
       : {}),
+    ...(spill?.path ? { outputSpillPath: spill.path } : {}),
   }
 }
 
@@ -183,7 +263,8 @@ function fileReadSemantic(
 ): ToolSemantic {
   const path = stringField(args, 'file_path', 'path')
   if (path === undefined) return { kind: 'unknown' }
-  const content = extractTaggedContent(result)
+  const spill = result === undefined ? undefined : extractSpillNotice(result)
+  const content = extractTaggedContent(spill?.body ?? result)
   const lineCount = content ? countNumberedLines(content) : undefined
   const preview =
     content === undefined ? undefined : clip(content, MAX_PREVIEW_CHARACTERS)
@@ -195,8 +276,12 @@ function fileReadSemantic(
       ? {
           preview: preview.text,
           ...(preview.truncated ? { previewTruncated: true } : {}),
+          ...(preview.omittedCharacters !== undefined
+            ? { previewOmittedCharacters: preview.omittedCharacters }
+            : {}),
         }
       : {}),
+    ...(spill?.path ? { previewSpillPath: spill.path } : {}),
   }
 }
 
@@ -426,20 +511,13 @@ function searchSemantic(
       : tool === 'glob'
         ? globResultSemantic(result)
         : undefined)
-  const preview =
-    result === undefined ? undefined : clip(result, MAX_PREVIEW_CHARACTERS)
   return {
     kind: 'search',
     query,
     ...(path ? { path } : {}),
     ...(include ? { include } : {}),
     ...structured,
-    ...(preview && !structured
-      ? {
-          preview: preview.text,
-          ...(preview.truncated ? { previewTruncated: true } : {}),
-        }
-      : {}),
+    ...(structured ? {} : previewFields(result)),
   }
 }
 
@@ -464,8 +542,6 @@ function webSemantic(
     url === undefined
       ? (webMetaSources(metaRecord) ?? parseSearchSources(result))
       : undefined
-  const preview =
-    result === undefined ? undefined : clip(result, MAX_PREVIEW_CHARACTERS)
   return {
     kind: 'web',
     ...(url ? { url } : {}),
@@ -478,12 +554,7 @@ function webSemantic(
           ...(parsedSources.truncated ? { sourcesTruncated: true } : {}),
         }
       : {}),
-    ...(preview
-      ? {
-          preview: preview.text,
-          ...(preview.truncated ? { previewTruncated: true } : {}),
-        }
-      : {}),
+    ...previewFields(result),
   }
 }
 
@@ -550,14 +621,7 @@ function agentControlSemantic(
   result: string | undefined,
 ): ToolSemantic {
   const agent = stringField(args, 'agent', 'target', 'name')
-  const preview =
-    result === undefined ? undefined : clip(result, MAX_PREVIEW_CHARACTERS)
-  const previewFields = preview
-    ? {
-        preview: preview.text,
-        ...(preview.truncated ? { previewTruncated: true } : {}),
-      }
-    : {}
+  const preview = previewFields(result)
   switch (tool) {
     case 'wait_agent': {
       const timeout = args.timeout_ms
@@ -569,7 +633,7 @@ function agentControlSemantic(
           ? { timeoutMs: timeout }
           : {}),
         ...(timedOut !== undefined ? { timedOut } : {}),
-        ...previewFields,
+        ...preview,
       }
     }
     case 'send_message': {
@@ -583,7 +647,7 @@ function agentControlSemantic(
         ...(message
           ? { message: message.slice(0, MAX_AGENT_MESSAGE_CHARACTERS) }
           : {}),
-        ...previewFields,
+        ...preview,
       }
     }
     case 'interrupt_agent':
@@ -592,7 +656,7 @@ function agentControlSemantic(
         kind: 'agent_control',
         action: 'interrupt',
         agent,
-        ...previewFields,
+        ...preview,
       }
     default: {
       const agents = parseAgentList(result)
@@ -600,7 +664,7 @@ function agentControlSemantic(
         kind: 'agent_control',
         action: 'list',
         ...(agents && agents.length > 0 ? { agents } : {}),
-        ...previewFields,
+        ...preview,
       }
     }
   }
@@ -803,21 +867,12 @@ function askUserSemantic(
   const questions = parseAskQuestions(args.questions)
   if (!questions) return { kind: 'unknown' }
   const outcome = parseAskOutcome(result)
-  const preview =
-    result === undefined || outcome
-      ? undefined
-      : clip(result, MAX_PREVIEW_CHARACTERS)
   return {
     kind: 'ask_user',
     questions,
     ...(outcome && 'answers' in outcome ? { answers: outcome.answers } : {}),
     ...(outcome && 'pending' in outcome ? { pending: true } : {}),
-    ...(preview
-      ? {
-          preview: preview.text,
-          ...(preview.truncated ? { previewTruncated: true } : {}),
-        }
-      : {}),
+    ...(outcome ? {} : previewFields(result)),
   }
 }
 
@@ -1089,16 +1144,9 @@ function deliverySemantic(
     }
   }
   if (files.length === 0) return { kind: 'unknown' }
-  const preview =
-    result === undefined ? undefined : clip(result, MAX_PREVIEW_CHARACTERS)
   return {
     kind: 'delivery',
     files,
-    ...(preview
-      ? {
-          preview: preview.text,
-          ...(preview.truncated ? { previewTruncated: true } : {}),
-        }
-      : {}),
+    ...previewFields(result),
   }
 }

@@ -679,6 +679,54 @@ try {
             const offset = Number(
               new URL(url).searchParams.get('offset') ?? '0',
             )
+            if (url.includes('/call-6/')) {
+              const middle =
+                offset === 2_000
+                  ? Array.from(
+                      { length: 40 },
+                      (_, index) =>
+                        `line ${String(index + 41).padStart(3, '0')}: omitted middle output — coverage detail`,
+                    ).join('\n')
+                  : ''
+              await route.fulfill({
+                contentType: 'application/json',
+                body: JSON.stringify({
+                  runId: 'review-completed',
+                  callId: 'call-6',
+                  content: middle,
+                  offset,
+                  totalCharacters: 12_000,
+                  archivedCharacters: 12_000,
+                  truncatedArchive: false,
+                }),
+              })
+              return
+            }
+            if (url.includes('/call-7/')) {
+              const full =
+                offset === 0
+                  ? `${Array.from(
+                      { length: 40 },
+                      (_, index) =>
+                        `line ${String(index + 1).padStart(3, '0')}: spilled full build log`,
+                    ).join(
+                      '\n',
+                    )}\nERROR: build failed at step 42 — full log kept by the executor`
+                  : ''
+              await route.fulfill({
+                contentType: 'application/json',
+                body: JSON.stringify({
+                  runId: 'review-completed',
+                  callId: 'call-7',
+                  content: full,
+                  offset,
+                  totalCharacters: 2_400,
+                  archivedCharacters: 2_400,
+                  truncatedArchive: false,
+                }),
+              })
+              return
+            }
             const isWebPreview = url.includes('/call-4/')
             const tail =
               offset === (isWebPreview ? 4_001 : 4_000)
@@ -699,6 +747,13 @@ try {
                 archivedCharacters: 14_800,
                 truncatedArchive: false,
               }),
+            })
+            return
+          }
+          if (url.includes('/output-file?')) {
+            await route.fulfill({
+              contentType: 'text/plain; charset=utf-8',
+              body: 'spilled full build log\nERROR: build failed at step 42',
             })
             return
           }
@@ -827,6 +882,7 @@ try {
       }
       if (fixture === 'task-output-archive') {
         await fixturePage.getByText('工作流程记录', { exact: false }).click()
+        await fixturePage.locator('.activity-batch > details > summary').click()
         await fixturePage
           .locator('.activity-tool')
           .filter({ hasText: 'pnpm check' })
@@ -840,6 +896,33 @@ try {
           .getByText('archived tail output', { exact: false })
           .first()
           .waitFor()
+        await fixturePage
+          .locator('.activity-tool')
+          .filter({ hasText: 'pnpm test:coverage' })
+          .locator('summary')
+          .click()
+        await fixturePage.getByRole('button', { name: '加载省略内容' }).click()
+        await fixturePage
+          .getByText('omitted middle output', { exact: false })
+          .first()
+          .waitFor()
+        await fixturePage
+          .locator('.activity-tool')
+          .filter({ hasText: 'cat /tmp/huge-build.log' })
+          .locator('summary')
+          .click()
+        await fixturePage.getByRole('link', { name: '完整输出文件' }).waitFor()
+        if (size === 'desktop') {
+          await fixturePage
+            .locator('.activity-tool')
+            .filter({ hasText: 'pnpm test:coverage' })
+            .evaluate(element => element.scrollIntoView({ block: 'start' }))
+          await capture(
+            fixturePage,
+            `${size}-${fixture}-headtail.png`,
+            `${size}-${fixture}-headtail`,
+          )
+        }
         await fixturePage
           .locator('.activity-tool')
           .filter({ hasText: 'example.com/long-readme' })
@@ -861,7 +944,10 @@ try {
           .filter({ hasText: '查看了图片' })
           .locator('summary')
           .click()
-        await fixturePage.locator('.shell-card').scrollIntoViewIfNeeded()
+        await fixturePage
+          .locator('.activity-tool')
+          .filter({ hasText: 'cat /tmp/huge-build.log' })
+          .evaluate(element => element.scrollIntoView({ block: 'start' }))
       }
       await capture(fixturePage, `${size}-${fixture}.png`, `${size}-${fixture}`)
       await fixturePage.close()
@@ -1103,11 +1189,15 @@ async function capture(page, name, label) {
   await page.evaluate(async () => {
     const images = [...globalThis.document.images]
     await Promise.all(
-      images.map(image =>
-        image.complete
-          ? Promise.resolve()
-          : image.decode().catch(() => undefined),
-      ),
+      images.map(image => {
+        if (image.complete) return Promise.resolve()
+        if (!image.isConnected || !image.getAttribute('src'))
+          return Promise.resolve()
+        return Promise.race([
+          image.decode().catch(() => undefined),
+          new Promise(resolve => setTimeout(resolve, 3000)),
+        ])
+      }),
     )
   })
   await page.screenshot({

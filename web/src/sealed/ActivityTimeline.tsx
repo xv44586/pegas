@@ -61,6 +61,7 @@ export interface ActivityDataAccess {
     truncatedArchive: boolean
   }>
   imageUrl: (runId: string, callId: string) => string
+  outputFileUrl: (runId: string, callId: string) => string
 }
 
 const ActivityDataContext = createContext<ActivityDataAccess | undefined>(
@@ -394,6 +395,13 @@ function ShellCard({
 }) {
   const footer = shellFooter(entry)
   const output = semantic.output ?? ''
+  const gapStart =
+    semantic.outputOmittedCharacters !== undefined
+      ? output.indexOf('\n… 已省略 ')
+      : -1
+  const head = gapStart >= 0 ? output.slice(0, gapStart) : output
+  const tail =
+    gapStart >= 0 ? output.slice(output.indexOf('\n', gapStart + 1) + 1) : ''
   return (
     <div className="activity-card shell-card">
       <header className="activity-card-header">
@@ -409,13 +417,25 @@ function ShellCard({
         </span>
         <HighlightedText tokens={tokenizeShell(semantic.command)} />
       </pre>
-      {output && (
+      {head && (
         <pre className="shell-output" tabIndex={0}>
-          {output}
+          {head}
         </pre>
       )}
-      {semantic.outputTruncated && (
-        <OutputPager entry={entry} initialLength={output.length} />
+      {(semantic.outputTruncated === true ||
+        semantic.outputSpillPath !== undefined) && (
+        <OutputPager
+          entry={entry}
+          initialLength={head.length}
+          omittedCharacters={semantic.outputOmittedCharacters}
+          spillPath={semantic.outputSpillPath}
+          headText={head}
+        />
+      )}
+      {tail && (
+        <pre className="shell-output" tabIndex={0}>
+          {tail}
+        </pre>
       )}
       <footer className={`shell-footer is-${footer.tone}`}>
         {footer.tone === 'ok' && <Check aria-hidden="true" size={13} />}
@@ -454,15 +474,23 @@ function HighlightedText({ tokens }: { tokens: HighlightToken[] }) {
  * one separator newline before the inline preview text.
  * The button only appears when the Run has an output archive endpoint; the
  * archive itself is capped and says so honestly.
+ * Round 18: head+tail clips page from the omission gap (spill-backed
+ * results from 0), and a recorded executor spill file gets a direct link.
  */
 function OutputPager({
   entry,
   initialLength,
   archiveOffset = 0,
+  omittedCharacters,
+  spillPath,
+  headText = '',
 }: {
   entry: RunActivityEntry
   initialLength: number
   archiveOffset?: number
+  omittedCharacters?: number
+  spillPath?: string
+  headText?: string
 }) {
   const access = useContext(ActivityDataContext)
   const [pages, setPages] = useState<string[]>([])
@@ -470,9 +498,49 @@ function OutputPager({
     'idle',
   )
   const [archiveNote, setArchiveNote] = useState('')
-  const offsetRef = useRef(initialLength + archiveOffset)
+  const offsetRef = useRef(
+    spillPath
+      ? 0
+      : omittedCharacters !== undefined
+        ? initialLength
+        : initialLength + archiveOffset,
+  )
+  const fileLink =
+    access && entry.callId && spillPath ? (
+      <p className="output-spill">
+        <FileText aria-hidden="true" size={12} />
+        <a
+          href={access.outputFileUrl(access.runId, entry.callId)}
+          rel="noreferrer noopener"
+          target="_blank"
+          title={spillPath}
+        >
+          完整输出文件
+        </a>
+        <code className="output-spill-path">{spillPath}</code>
+      </p>
+    ) : null
   if (!access || !entry.callId) {
-    return <p className="activity-empty">内容过长，仅保留前段记录。</p>
+    return (
+      <>
+        {omittedCharacters !== undefined && (
+          <p className="output-gap">
+            … 已省略 {omittedCharacters.toLocaleString('zh-CN')} 字符 …
+          </p>
+        )}
+        {spillPath ? (
+          <p className="output-spill">
+            <FileText aria-hidden="true" size={12} />
+            <span>完整输出文件</span>
+            <code className="output-spill-path">{spillPath}</code>
+          </p>
+        ) : (
+          omittedCharacters === undefined && (
+            <p className="activity-empty">内容过长，仅保留前段记录。</p>
+          )
+        )}
+      </>
+    )
   }
   const callId = entry.callId
   const loadMore = async () => {
@@ -492,7 +560,19 @@ function OutputPager({
         return
       }
       offsetRef.current = page.offset + page.content.length
-      setPages(previous => [...previous, page.content])
+      let content = page.content
+      if (
+        spillPath &&
+        pages.length === 0 &&
+        omittedCharacters === undefined &&
+        headText
+      ) {
+        if (page.content.endsWith(headText))
+          content = page.content.slice(0, page.content.length - headText.length)
+        else if (page.content.startsWith(headText))
+          content = page.content.slice(headText.length)
+      }
+      if (content.length > 0) setPages(previous => [...previous, content])
       const exhausted = offsetRef.current >= page.archivedCharacters
       setState(exhausted ? 'done' : 'idle')
       if (exhausted && page.truncatedArchive)
@@ -505,24 +585,33 @@ function OutputPager({
   }
   return (
     <div className="output-pager">
+      {omittedCharacters !== undefined && pages.length === 0 && (
+        <p className="output-gap">
+          … 已省略 {omittedCharacters.toLocaleString('zh-CN')} 字符 …
+        </p>
+      )}
       {pages.map((page, index) => (
         <pre className="shell-output" key={index} tabIndex={0}>
           {page}
         </pre>
       ))}
-      <p className="activity-empty">
-        输出过长，仅保留前段记录。
-        {state !== 'done' && (
+      {state !== 'done' && (
+        <p className="activity-empty">
+          {spillPath ? '中间内容未内联留存。' : '输出过长，仅保留前段记录。'}
           <button
             className="inline-link"
             disabled={state === 'loading'}
             onClick={() => void loadMore()}
             type="button"
           >
-            {state === 'loading' ? '读取中…' : '加载后续输出'}
+            {state === 'loading'
+              ? '读取中…'
+              : omittedCharacters !== undefined
+                ? '加载省略内容'
+                : '加载后续输出'}
           </button>
-        )}
-      </p>
+        </p>
+      )}
       {state === 'error' && (
         <p className="activity-empty is-error" role="alert">
           后续输出读取失败，可重试。
@@ -536,6 +625,7 @@ function OutputPager({
         </p>
       )}
       {archiveNote && <p className="activity-empty">{archiveNote}</p>}
+      {fileLink}
     </div>
   )
 }
@@ -634,6 +724,20 @@ function PreviewCard({
   const preview = semantic.preview
   const web = semantic.kind === 'web' ? semantic : undefined
   const sources = web?.sources
+  const gapStart =
+    preview !== undefined && semantic.previewOmittedCharacters !== undefined
+      ? preview.indexOf('\n… 已省略 ')
+      : -1
+  const head =
+    gapStart >= 0 ? (preview?.slice(0, gapStart) ?? '') : (preview ?? '')
+  const pagerLength =
+    semantic.kind === 'file_read' && gapStart >= 0
+      ? head.length + '<content>\n'.length
+      : head.length
+  const tail =
+    gapStart >= 0 && preview !== undefined
+      ? preview.slice(preview.indexOf('\n', gapStart + 1) + 1)
+      : ''
   const meta =
     semantic.kind === 'file_read'
       ? semantic.path
@@ -681,21 +785,30 @@ function PreviewCard({
       {web?.sourcesTruncated && (
         <p className="activity-empty">来源过多，仅保留前段引用。</p>
       )}
-      {preview ? (
+      {head ? (
         <pre className="preview-body" tabIndex={0}>
-          {preview}
+          {head}
         </pre>
       ) : (
         <p className="activity-empty">
           {entry.status === 'started' ? '读取中…' : '没有留存内容预览。'}
         </p>
       )}
-      {semantic.previewTruncated && (
+      {(semantic.previewTruncated === true ||
+        semantic.previewSpillPath !== undefined) && (
         <OutputPager
           entry={entry}
-          initialLength={preview?.length ?? 0}
+          initialLength={pagerLength}
           archiveOffset={1}
+          omittedCharacters={semantic.previewOmittedCharacters}
+          spillPath={semantic.previewSpillPath}
+          headText={head}
         />
+      )}
+      {tail && (
+        <pre className="preview-body" tabIndex={0}>
+          {tail}
+        </pre>
       )}
     </div>
   )
