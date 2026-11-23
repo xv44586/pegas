@@ -2,7 +2,7 @@
 
 > 状态：Living Document
 >
-> 更新日期：2026-11-23（SCHEDULE-001 Executor 周期跟进入口与时间防错；同日早前：移除 CONV-004 误登记的链接整理笔记测试需求；CONV-007 thread 分组渲染补齐后升级 Usable；同日早前：CONV-007 任务托盘与选中指向落地 Partial；EXEC-008 默认 Agent 工作区与开发 checkout 隔离；此前 2026-11-22：SELF-001 main-b22fa90-r1 生产发布与依赖重锚定；QUALITY-001 CI actions 升级 node24 登记；DESIGN-004 字号/字重/层级收敛；PLAN-001 P2–P6 路由/执行/可观测性落地；DESIGN-003 聊天体验；CONV-005 链接悬停预览卡片；CONV-006/CONV-007/VOICE-002 对话投影合同与语音渲染器需求登记）
+> 更新日期：2026-11-23（SCHEDULE-001 claim 凭证 capability 文件通道修复；同日早前：SCHEDULE-001 Executor 周期跟进入口与时间防错；同日早前：移除 CONV-004 误登记的链接整理笔记测试需求；CONV-007 thread 分组渲染补齐后升级 Usable；同日早前：CONV-007 任务托盘与选中指向落地 Partial；EXEC-008 默认 Agent 工作区与开发 checkout 隔离；此前 2026-11-22：SELF-001 main-b22fa90-r1 生产发布与依赖重锚定；QUALITY-001 CI actions 升级 node24 登记；DESIGN-004 字号/字重/层级收敛；PLAN-001 P2–P6 路由/执行/可观测性落地；DESIGN-003 聊天体验；CONV-005 链接悬停预览卡片；CONV-006/CONV-007/VOICE-002 对话投影合同与语音渲染器需求登记）
 
 Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查这里和代码，确认能力是否已经存在、权威实现在哪里、还缺什么；功能合入时必须同步更新对应条目。它不代替 Issue 或路线图，而是防止同一能力被不同入口重复实现。
 
@@ -392,6 +392,16 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - **失败与恢复**：创建失败整体回滚；到点投递失败沿用 Invocation 重试与失败结算；进程重启后 Automation/Invocation 在 SQLite 中恢复；目标 Task 关闭后周期触发按既有边界失败结算，不复活。
 - **当前证据（2026-11-23）**：worktree `schedule-001-executor-automations`（分支 `feat/SCHEDULE-001-executor-recurring-automations`，基线 `e2a5e36`）。`test/run-automations.test.ts` 7 测试（严格 payload/裸时间拒绝、Follow-up 时区校验、冻结 target 幂等创建、伪造 claim/过去 startsAt/关闭 Task 拒绝、周期触发续接同 Task 且保持 active、状态命令边界与幂等、HTTP create/status 合同）+ `test/dsh-cli-executor.test.ts` 合同回归更新。完整门禁：格式、品牌资产、Lint（含 css-cascade）、类型、Knip、三端构建通过；`vitest run --coverage --no-file-parallelism` 103 文件 / 1058 测试全绿（statement 84.95%、branch 77.58%、function 89.55%、line 88.2%，阈值 60/55/60/65）；`pnpm smoke` 真实 Task→Run→automation 调度链路通过；`pnpm smoke:crash` event-claim/tool-call/write-back 三 Task 恰好一次完成通过。计时抖动记录：宿主负载 30–40 时默认并行度下 `pnpm check` 测试阶段先后出现 10 例/1 例（dsh SIGKILL 升级、App.test 轮询等既有计时敏感用例）失败，全部与本 Feature 改动文件无关且隔离复跑通过；降低并行（--maxWorkers=2 剩 1 例，--no-file-parallelism 0 例）后全绿，未改动任何测试或阈值。
 - **下一缺口**：CONV-006 say 声道接线（周期触发的用户可见回告仍走 run.completed 折叠卡）；Executor 侧 Automation 读取入口（当前只能经创建响应记住 id/revision）。
+
+### SCHEDULE-001：claim 凭证 capability 文件通道（2026-11-23）
+
+- **用户结果**：Executor 在真实模型 shell 里能拿到当前 Run 的 claim 凭证，周期自动化/审批/协作等 run-capability API 真正可用；不再出现「合同教了 API 但 shell 里没有凭证」导致的 403 与模型空转找凭证。
+- **验收条件**：`DshCliExecutor` 在提供 actionCapability 或 conversationStateCapability 时，额外写入私有临时目录（0700）下的 0600 `capability.json`（`{baseUrl, runId, claimToken}`），以非敏感词环境变量 `PEGAS_RUN_CAPABILITY_FILE` 指向它；子进程退出（含超时/中止）后目录删除；父进程残留的 `PEGAS_RUN_CAPABILITY_FILE` 与其他 Pegas 凭证一样被剥离；即使模型 shell 按 `/KEY|PASSWORD|SECRET|TOKEN/i` 过滤环境变量（DSH `scrubbedParentEnv` 行为），shell 内仍能经该文件取回同一 claim 并成功调用 run-capability HTTP API；执行合同指导环境变量缺失时改读该文件，凭证不得外泄。
+- **非目标**：不改 claim 鉴权/租约/过期语义；不动 approvals 桥的进程内凭证读取（其不经模型 shell）；不做凭证轮换或长期化。
+- **数据与权限边界**：文件与 Run 同生命周期，仅当前 Executor 进程树可读；两条通道给出同一短期 claim，服务端仍按 hash+lease 校验。
+- **失败与恢复**：文件写入失败则 Run 执行失败走既有 failRun；清理在 finally 中执行，异常退出不留凭证文件。
+- **当前证据（2026-11-23）**：worktree `schedule-001-claim-capability-file`（分支 `fix/SCHEDULE-001-claim-capability-file`，基线 `8b4e7ca`）。根因与影响见 LESSON-20261123-02（线上 Run e2f6df78 空转 60+ 步、DSH `SENSITIVE_ENV_PATTERN` 剥 TOKEN 形变量；既有 fakeDsh 直读 env 测试与 echo-test smoke 均未覆盖真实 shell 链路）。`test/dsh-cli-executor.test.ts` 新增 3 回归（capability 文件内容与 env 一致、退出后清理、模拟 scrub 的子进程 env 无 TOKEN 但文件可读）+ 既有 capability/合同测试扩展；`test/run-automations.test.ts` 新增端到端（scrubbed shell 读文件 → 真实 Control Plane HTTP 201 → Automation 落盘），4 项均先红后绿。完整门禁：格式、品牌资产、Lint（含 css-cascade）、类型、Knip、三端构建通过；`vitest run --coverage --no-file-parallelism` 104 文件 / 1067 测试全绿（statement 85.04%、branch 77.68%、function 89.64%、line 88.27%，阈值 60/55/60/65）；`pnpm smoke`、`pnpm smoke:crash`（三 Task 恰好一次完成）通过。真机数数场景验证在发布后执行（见发布记录）。
+- **下一缺口**：真实 DSH probe 的发布 checklist 化；CONV-006 接线时复核 chat lane 只读通道。
 
 ### SCHEDULE-001：持久自动化与时间触发（2026-11-21）
 

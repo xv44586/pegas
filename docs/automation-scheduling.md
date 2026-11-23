@@ -71,6 +71,10 @@ POST /v1/runs/:runId/automations/:automationId/cancel
 
 `userId` 由服务端取自 Run 所属 Task，不接受调用方指定；revision 冲突、只读状态与幂等语义沿用既有 Automation 状态命令。执行合同要求 Executor 把周期性等待交给调度器，禁止在当前 Run 里用 sleep/循环模拟周期任务。
 
+### Claim 凭证送达（capability 文件通道）
+
+Run claim 经两条等价通道送达实际 Executor：进程环境变量 `PEGAS_RUN_CLAIM_TOKEN`，以及 `PEGAS_RUN_CAPABILITY_FILE` 指向的本机只读 JSON 文件（`{baseUrl, runId, claimToken}`，0600，位于私有临时目录，Run 结束即删除）。第二条通道存在的原因：模型 shell 工具链可能按变量名启发式过滤含 `TOKEN/KEY/SECRET` 的环境变量（如 DSH `dsh-subprocess` 的 `SENSITIVE_ENV_PATTERN`），导致 Executor 的 bash 里读不到 claim 环境变量；不含敏感词的 `PEGAS_RUN_CAPABILITY_FILE` 路径能通过过滤，Executor 在 shell 内读文件即可取回同一凭证。两条通道给出同一个短期 claim，鉴权、租约与过期语义不变；执行合同指导 Executor 在环境变量缺失时改读该文件，且不得把凭证复制到别处或输出到对话/日志/第三方。
+
 ## 领域模型
 
 Automation 保存：
