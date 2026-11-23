@@ -271,6 +271,51 @@ describe('EXEC-006 P1b full-output archive and paging', () => {
     store.close()
   })
 
+  it('heals an 8KB stream-clipped archive from the durable full result without meta', () => {
+    const store = new PegasStore(':memory:')
+    const claimed = seedClaimedRun(store)
+    const fullOutput = Array.from({ length: 4_000 }, (_, index) =>
+      String(index + 1),
+    ).join('\n')
+    const streamClip = fullOutput.slice(0, 8_192)
+    store.appendRunActivity(claimed.run.id, 'enhance-worker', {
+      kind: 'tool_call',
+      status: 'started',
+      callId: 'call-seq',
+      tool: 'bash',
+      label: 'bash',
+      detail: JSON.stringify({ command: 'seq 1 4000' }),
+    })
+    store.completeRunActivityToolCall(
+      claimed.run.id,
+      'enhance-worker',
+      'call-seq',
+      { status: 'completed', result: streamClip },
+    )
+    expect(
+      store.readRunActivityOutput(claimed.run.id, 'owner', 'call-seq'),
+    ).toMatchObject({ totalCharacters: 8_192 })
+    const upgraded = store.upgradeRunToolSemantics(claimed.run.id, [
+      { callId: 'call-seq', status: 'completed', result: fullOutput },
+    ])
+    expect(upgraded).toBe(0)
+    const healed = store.readRunActivityOutput(
+      claimed.run.id,
+      'owner',
+      'call-seq',
+      { offset: 8_192 },
+    )
+    expect(healed?.totalCharacters).toBe(fullOutput.length)
+    expect(healed?.content.endsWith('4000')).toBe(true)
+    store.upgradeRunToolSemantics(claimed.run.id, [
+      { callId: 'call-seq', status: 'completed', result: streamClip },
+    ])
+    expect(
+      store.readRunActivityOutput(claimed.run.id, 'owner', 'call-seq'),
+    ).toMatchObject({ totalCharacters: fullOutput.length })
+    store.close()
+  })
+
   it('caps the archive honestly at 256KB', () => {
     const store = new PegasStore(':memory:')
     const claimed = seedClaimedRun(store)

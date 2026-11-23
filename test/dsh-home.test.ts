@@ -125,7 +125,7 @@ describe('createDshModelConfiguration', () => {
         api: 'openai-completions',
         baseURL: 'http://127.0.0.1:3425/v1',
         apiKeyEnv: 'PEGAS_DSH_MODEL_KEY_MAGPIE',
-        models: [{ id: 'gateway/model-a' }],
+        models: [{ id: 'gateway/model-a', input: ['text', 'image'] }],
       })
       expect(providers.anthropic).toMatchObject({
         api: 'anthropic-messages',
