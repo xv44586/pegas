@@ -433,7 +433,7 @@ function installFetch(
           },
         }),
       )
-    if (path === '/v1/settings')
+    if (path === '/v1/settings' && init?.method !== 'PUT')
       return Promise.resolve(Response.json(settingsResponse))
     if (path.startsWith('/v1/usage?'))
       return Promise.resolve(
@@ -755,7 +755,9 @@ describe('sealed Pegas UI', () => {
     expect(
       screen.getByText('决定一条新消息是继续已有事情，还是开始一件新事情。'),
     ).toBeTruthy()
-    expect(screen.getByDisplayValue('deepseek-v4.1-flash')).toBeTruthy()
+    expect(
+      screen.getByRole('button', { name: /，归类模型名称$/ }).textContent,
+    ).toContain('deepseek-v4.1-flash')
   })
 
   it('loads, searches and paginates the real model catalog', async () => {
@@ -982,7 +984,7 @@ describe('sealed Pegas UI', () => {
         name: /设置/,
       }),
     )
-    const model = await screen.findByLabelText('模型')
+    const model = await screen.findByRole('button', { name: /，模型$/ })
     fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
     expect(model.matches(':disabled')).toBe(true)
     expect(screen.getByRole('button', { name: '保存中…' })).toHaveProperty(
@@ -1049,7 +1051,16 @@ describe('sealed Pegas UI', () => {
   })
 
   it('keeps provider identity when two providers expose the same model id', async () => {
-    const fetchMock = installFetch(path => {
+    const fetchMock = installFetch((path, init) => {
+      if (path === '/v1/settings' && init?.method !== 'PUT')
+        return Response.json({
+          ...settingsResponse,
+          settings: {
+            ...settingsResponse.settings,
+            agentModelProvider: 'Magpie',
+            agentModelName: 'shared-model',
+          },
+        })
       if (path === '/v1/settings/agent-models')
         return Response.json({
           defaultProvider: 'Magpie',
@@ -1067,14 +1078,21 @@ describe('sealed Pegas UI', () => {
         name: /设置/,
       }),
     )
-    const modelSelect = await screen.findByLabelText('模型')
-    expect(
-      within(modelSelect).getByRole('option', { name: '共享模型 · Magpie' }),
-    ).toBeTruthy()
-    expect(
-      within(modelSelect).getByRole('option', { name: '共享模型 · Other' }),
-    ).toBeTruthy()
-    fireEvent.change(modelSelect, { target: { value: 'Other::shared-model' } })
+    const modelTrigger = await screen.findByRole('button', {
+      name: /，模型$/,
+    })
+    await waitFor(() => expect(modelTrigger.textContent).toContain('共享模型'))
+    fireEvent.click(modelTrigger)
+    const modelDialog = await screen.findByRole('dialog', { name: '选择模型' })
+    const magpieOption = within(modelDialog).getByRole('option', {
+      name: /共享模型.*Magpie/,
+    })
+    const otherOption = within(modelDialog).getByRole('option', {
+      name: /共享模型.*Other/,
+    })
+    expect(magpieOption.getAttribute('aria-selected')).toBe('true')
+    expect(otherOption.getAttribute('aria-selected')).toBe('false')
+    fireEvent.click(otherOption)
     fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
     await waitFor(() =>
       expect(
@@ -2382,7 +2400,9 @@ describe('sealed Pegas UI', () => {
     )
     expect(screen.queryByRole('dialog', { name: '选择模型' })).toBeNull()
     await waitFor(() =>
-      expect(modelButton.textContent).toContain('GPT-6.1 Sol'),
+      expect(
+        screen.getByRole('button', { name: /选择执行模型/ }).textContent,
+      ).toContain('GPT-6.1 Sol'),
     )
     fireEvent.change(composer, { target: { value: '中文输入尚未完成' } })
     fireEvent.keyDown(composer, {
@@ -2502,9 +2522,11 @@ describe('sealed Pegas UI', () => {
       ).toBe(true),
     )
     await waitFor(() =>
-      expect(modelButton.textContent).toContain('Claude Sonnet 4.5'),
+      expect(
+        screen.getByRole('button', { name: /选择执行模型/ }).textContent,
+      ).toContain('Claude Sonnet 4.5'),
     )
-    fireEvent.click(modelButton)
+    fireEvent.click(screen.getByRole('button', { name: /选择执行模型/ }))
     const reopened = await screen.findByRole('dialog', { name: '选择模型' })
     expect(
       within(reopened)
@@ -2534,6 +2556,288 @@ describe('sealed Pegas UI', () => {
     })
     expect(
       within(reopened).getByRole('option', { name: /Claude Sonnet 4.5/ }),
+    ).toBeTruthy()
+  })
+
+  it('paginates the Pegas execution-model and pool pickers with pinned special values', async () => {
+    const catalogModels = Array.from({ length: 33 }, (_, index) => ({
+      provider: 'Magpie',
+      id: `gateway/model-${String(index + 1).padStart(2, '0')}`,
+      name: `Gateway Model ${String(index + 1).padStart(2, '0')}`,
+    }))
+    const fetchMock = installFetch((path, init) => {
+      if (path === '/v1/settings/agent-models')
+        return Response.json({
+          defaultProvider: 'Magpie',
+          defaultModel: 'gateway/model-01',
+          models: catalogModels,
+        })
+      if (path === '/v1/settings' && init?.method === 'PUT') {
+        const update = JSON.parse(
+          typeof init.body === 'string' ? init.body : '{}',
+        ) as {
+          agentModelProvider?: string
+          agentModelName?: string
+          executionPools?: Record<string, { provider: string; model: string }>
+        }
+        return Response.json({
+          ...settingsResponse,
+          settings: {
+            ...settingsResponse.settings,
+            revision: 2,
+            agentModelProvider: update.agentModelProvider ?? 'Magpie',
+            agentModelName: update.agentModelName ?? 'gateway/model-01',
+            ...(update.executionPools
+              ? { executionPools: update.executionPools }
+              : {}),
+          },
+        })
+      }
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    const summaryChange = await screen.findByRole('button', {
+      name: '更换模型',
+    })
+    fireEvent.click(summaryChange)
+    const execDialog = await screen.findByRole('dialog', {
+      name: '选择模型',
+    })
+    expect(within(execDialog).getByText('33 个可用')).toBeTruthy()
+    const profileOption = within(execDialog).getByRole('option', {
+      name: /隔离环境默认模型（Pegas 专属 profile）/,
+    })
+    expect(within(execDialog).getAllByRole('option').length).toBe(31)
+    expect(
+      within(execDialog).getByRole('option', { name: /Gateway Model 30/ }),
+    ).toBeTruthy()
+    expect(
+      within(execDialog).queryByRole('option', { name: /Gateway Model 31/ }),
+    ).toBeNull()
+    fireEvent.click(within(execDialog).getByRole('button', { name: '下一页' }))
+    const tailOption = within(execDialog).getByRole('option', {
+      name: /Gateway Model 33/,
+    })
+    expect(profileOption.isConnected).toBe(true)
+    fireEvent.click(tailOption)
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: /，模型$/ }).textContent,
+      ).toContain('Gateway Model 33'),
+    )
+
+    const fastTrigger = screen.getByRole('button', {
+      name: /，fast 池模型$/,
+    })
+    fireEvent.click(fastTrigger)
+    const fastDialog = await screen.findByRole('dialog', {
+      name: 'fast 池模型',
+    })
+    const unsetOption = within(fastDialog).getByRole('option', {
+      name: /未配置（按降级链处理）/,
+    })
+    expect(unsetOption.getAttribute('aria-selected')).toBe('true')
+    fireEvent.click(within(fastDialog).getByRole('button', { name: '下一页' }))
+    fireEvent.click(
+      within(fastDialog).getByRole('option', { name: /Gateway Model 32/ }),
+    )
+    await waitFor(() =>
+      expect(fastTrigger.textContent).toContain('Gateway Model 32'),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([path, init]) => {
+          if (path !== '/v1/settings' || init?.method !== 'PUT') return false
+          const body = JSON.parse(
+            typeof init.body === 'string' ? init.body : '{}',
+          ) as {
+            agentModelName?: string
+            executionPools?: Record<string, { provider: string; model: string }>
+          }
+          return (
+            body.agentModelName === 'gateway/model-33' &&
+            body.executionPools?.fast?.model === 'gateway/model-32' &&
+            body.executionPools.fast.provider === 'Magpie'
+          )
+        }),
+      ).toBe(true),
+    )
+    fireEvent.click(fastTrigger)
+    const reopenedFast = await screen.findByRole('dialog', {
+      name: 'fast 池模型',
+    })
+    fireEvent.click(
+      within(reopenedFast).getByRole('option', {
+        name: /未配置（按降级链处理）/,
+      }),
+    )
+    await waitFor(() =>
+      expect(fastTrigger.textContent).toContain('未配置（按降级链处理）'),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([path, init]) => {
+          if (path !== '/v1/settings' || init?.method !== 'PUT') return false
+          const body = JSON.parse(
+            typeof init.body === 'string' ? init.body : '{}',
+          ) as {
+            executionPools?: Record<string, unknown>
+          }
+          return (
+            body.executionPools !== undefined &&
+            body.executionPools.fast === undefined
+          )
+        }),
+      ).toBe(true),
+    )
+  })
+
+  it('selects the router classification model from the provider-filtered catalog with a manual fallback', async () => {
+    const magpieModels = Array.from({ length: 31 }, (_, index) => ({
+      provider: 'Magpie',
+      id: `router/model-${String(index + 1).padStart(2, '0')}`,
+      name: `Router Model ${String(index + 1).padStart(2, '0')}`,
+    }))
+    const fetchMock = installFetch((path, init) => {
+      if (path === '/v1/settings/agent-models')
+        return Response.json({
+          defaultProvider: 'Magpie',
+          defaultModel: 'router/model-01',
+          models: [
+            ...magpieModels,
+            {
+              provider: 'Anthropic',
+              id: 'claude-sonnet-4-5',
+              name: 'Claude Sonnet 4.5',
+            },
+          ],
+        })
+      if (path === '/v1/settings' && init?.method === 'PUT') {
+        const update = JSON.parse(
+          typeof init.body === 'string' ? init.body : '{}',
+        ) as { modelName?: string }
+        return Response.json({
+          ...settingsResponse,
+          settings: {
+            ...settingsResponse.settings,
+            revision: 2,
+            modelName: update.modelName ?? 'deepseek-v4.1-flash',
+          },
+        })
+      }
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /事情归类/ }))
+    const routerTrigger = await screen.findByRole('button', {
+      name: /，归类模型名称$/,
+    })
+    await waitFor(() =>
+      expect(routerTrigger.textContent).toContain('deepseek-v4.1-flash'),
+    )
+    fireEvent.click(routerTrigger)
+    const routerDialog = await screen.findByRole('dialog', {
+      name: '归类模型',
+    })
+    expect(within(routerDialog).getByText('31 个可用')).toBeTruthy()
+    expect(
+      within(routerDialog).queryByRole('option', { name: /Claude Sonnet/ }),
+    ).toBeNull()
+    expect(
+      within(routerDialog).getByRole('option', { name: /Router Model 30/ }),
+    ).toBeTruthy()
+    expect(
+      within(routerDialog).queryByRole('option', { name: /Router Model 31/ }),
+    ).toBeNull()
+    fireEvent.click(
+      within(routerDialog).getByRole('button', { name: '下一页' }),
+    )
+    fireEvent.click(
+      within(routerDialog).getByRole('option', { name: /Router Model 31/ }),
+    )
+    await waitFor(() =>
+      expect(routerTrigger.textContent).toContain('Router Model 31'),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([path, init]) => {
+          if (path !== '/v1/settings' || init?.method !== 'PUT') return false
+          const body = JSON.parse(
+            typeof init.body === 'string' ? init.body : '{}',
+          ) as { modelName?: string; modelProvider?: string }
+          return (
+            body.modelName === 'router/model-31' &&
+            body.modelProvider === 'magpie'
+          )
+        }),
+      ).toBe(true),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '手动输入模型 ID' }))
+    const manualInput = screen.getByLabelText('归类模型名称')
+    expect(manualInput.tagName).toBe('INPUT')
+    fireEvent.change(manualInput, { target: { value: 'custom/manual-id' } })
+    fireEvent.click(screen.getByRole('button', { name: '从目录选择' }))
+    expect(
+      screen.getByRole('button', { name: /，归类模型名称$/ }).textContent,
+    ).toContain('custom/manual-id')
+  })
+
+  it('retries the task-level model catalog after a failed load', async () => {
+    let taskCatalogAttempts = 0
+    installFetch(path => {
+      if (path === '/v1/settings/agent-models') {
+        if (!screen.queryByLabelText('工作详情')) return undefined
+        taskCatalogAttempts += 1
+        if (taskCatalogAttempts === 1)
+          return Response.json({ message: '目录暂时不可用' }, { status: 503 })
+        return Response.json({
+          defaultProvider: 'Magpie',
+          defaultModel: 'deepseek-v4.1-flash',
+          models: [
+            {
+              provider: 'Magpie',
+              id: 'deepseek-v4.1-flash',
+              name: 'deepseek-v4.1-flash',
+            },
+          ],
+        })
+      }
+      return undefined
+    })
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(screen.getByRole('button', { name: /安全自更新流程/ }))
+    expect(await screen.findByText('事情级执行设置')).toBeTruthy()
+    const drawer = await screen.findByLabelText('工作详情')
+    const overrideSelect = await within(drawer).findByLabelText('执行模型')
+    fireEvent.change(overrideSelect, { target: { value: 'override' } })
+    const alert = await within(drawer).findByRole('alert')
+    expect(alert.textContent).toContain('目录暂时不可用')
+    const retry = within(alert).getByRole('button', { name: '重试' })
+    fireEvent.click(retry)
+    const picker = await screen.findByRole('button', {
+      name: /，指定模型$/,
+    })
+    await waitFor(() => expect(picker).toHaveProperty('disabled', false))
+    expect(within(drawer).queryByText('目录暂时不可用')).toBeNull()
+    fireEvent.click(picker)
+    const dialog = await screen.findByRole('dialog', { name: '选择模型' })
+    expect(
+      within(dialog).getByRole('option', { name: /deepseek-v4.1-flash/ }),
     ).toBeTruthy()
   })
 
@@ -4110,9 +4414,15 @@ describe('sealed Pegas UI', () => {
         name: /设置/,
       }),
     )
-    fireEvent.change(screen.getByLabelText('模型'), {
-      target: { value: 'profile' },
+    fireEvent.click(await screen.findByRole('button', { name: /，模型$/ }))
+    const profileDialog = await screen.findByRole('dialog', {
+      name: '选择模型',
     })
+    fireEvent.click(
+      within(profileDialog).getByRole('option', {
+        name: /隔离环境默认模型（Pegas 专属 profile）/,
+      }),
+    )
     fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
     await waitFor(() =>
       expect(
@@ -4795,10 +5105,9 @@ describe('sealed Pegas UI', () => {
     fireEvent.change(screen.getByLabelText('归类模型服务'), {
       target: { value: 'anthropic' },
     })
-    expect(screen.getByLabelText('归类模型名称')).toHaveProperty(
-      'value',
-      'claude-sonnet-4-5',
-    )
+    expect(
+      screen.getByRole('button', { name: /，归类模型名称$/ }).textContent,
+    ).toContain('claude-sonnet-4-5')
   })
 
   it('does not attribute an old provider discovery result to a new selection', async () => {
@@ -6197,13 +6506,17 @@ describe('sealed Pegas UI', () => {
     fireEvent.change(screen.getByLabelText('执行模型'), {
       target: { value: 'override' },
     })
-    const modelPicker = await screen.findByLabelText('指定模型')
-    await waitFor(() =>
-      expect(modelPicker.querySelectorAll('option').length).toBeGreaterThan(1),
-    )
-    fireEvent.change(modelPicker, {
-      target: { value: 'Magpie/gpt-6.1-sol' },
+    const modelPicker = await screen.findByRole('button', {
+      name: /，指定模型$/,
     })
+    await waitFor(() => expect(modelPicker).toHaveProperty('disabled', false))
+    fireEvent.click(modelPicker)
+    const taskModelDialog = await screen.findByRole('dialog', {
+      name: '选择模型',
+    })
+    fireEvent.click(
+      within(taskModelDialog).getByRole('option', { name: /GPT-6.1 Sol/ }),
+    )
     fireEvent.click(screen.getByRole('button', { name: '保存执行设置' }))
     expect(
       await screen.findByText('执行设置已保存，对后续运行生效。'),

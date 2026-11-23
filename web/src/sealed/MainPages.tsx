@@ -22,7 +22,7 @@ import {
   X,
   Zap,
 } from 'lucide-react'
-import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import type { PegasApi } from '../api'
 import { MarkdownMessage } from '../MarkdownMessage'
@@ -41,6 +41,7 @@ import type {
 } from '../types'
 import { useVoiceDictation } from '../useVoiceDictation'
 import { PegasAgentIcon } from '../PegasAgentIcon'
+import { ModelPicker, modelSelectionKey } from './ModelPicker'
 import { PegasMascot } from './PegasMascot'
 import { EmptyCapability, PageToolbar } from './Shell'
 import {
@@ -102,301 +103,6 @@ function PageHeader({
         />
       </div>
     </header>
-  )
-}
-
-function ComposerModelPicker({
-  models,
-  provider,
-  selectedModelId,
-  onSelect,
-}: {
-  models: DshModelCatalogItem[]
-  provider?: string
-  selectedModelId?: string
-  onSelect: (model: DshModelCatalogItem) => Promise<void>
-}) {
-  const pickerId = useId()
-  const pickerTitleId = useId()
-  const [open, setOpen] = useState(false)
-  const [query, setQuery] = useState('')
-  const [page, setPage] = useState(0)
-  const [savingId, setSavingId] = useState('')
-  const [error, setError] = useState('')
-  const [displayModelId, setDisplayModelId] = useState(selectedModelId)
-  const [displayProvider, setDisplayProvider] = useState(provider)
-  const triggerRef = useRef<HTMLButtonElement>(null)
-  const pickerRef = useRef<HTMLDivElement>(null)
-  const searchRef = useRef<HTMLInputElement>(null)
-  const selected =
-    models.find(
-      model =>
-        model.id === displayModelId &&
-        (!displayProvider || model.provider === displayProvider),
-    ) ?? models.find(model => model.id === displayModelId)
-  const filteredModels = useMemo(() => {
-    const normalized = query.trim().toLocaleLowerCase()
-    if (!normalized) {
-      const current =
-        models.find(
-          model =>
-            model.id === displayModelId &&
-            (!displayProvider || model.provider === displayProvider),
-        ) ?? models.find(model => model.id === displayModelId)
-      return current
-        ? [current, ...models.filter(model => model !== current)]
-        : models
-    }
-    return models.filter(model =>
-      `${model.name} ${model.id} ${model.provider}`
-        .toLocaleLowerCase()
-        .includes(normalized),
-    )
-  }, [displayModelId, displayProvider, models, query])
-  const pageSize = 30
-  const pageCount = Math.max(1, Math.ceil(filteredModels.length / pageSize))
-  const currentPage = Math.min(page, pageCount - 1)
-  const pageModels = filteredModels.slice(
-    currentPage * pageSize,
-    (currentPage + 1) * pageSize,
-  )
-  const selectedInList = filteredModels.some(
-    model =>
-      model.id === displayModelId &&
-      (!displayProvider || model.provider === displayProvider),
-  )
-
-  useEffect(() => setDisplayModelId(selectedModelId), [selectedModelId])
-  useEffect(() => setDisplayProvider(provider), [provider])
-
-  function closePicker(restoreFocus = true) {
-    setOpen(false)
-    setQuery('')
-    setPage(0)
-    setError('')
-    if (restoreFocus) window.setTimeout(() => triggerRef.current?.focus(), 0)
-  }
-
-  useEffect(() => {
-    if (!open) return
-    window.setTimeout(() => searchRef.current?.focus(), 0)
-    const dismiss = (event: PointerEvent) => {
-      const target = event.target
-      if (!(target instanceof Node)) return
-      if (
-        pickerRef.current?.contains(target) ||
-        triggerRef.current?.contains(target)
-      )
-        return
-      closePicker(false)
-    }
-    document.addEventListener('pointerdown', dismiss)
-    return () => document.removeEventListener('pointerdown', dismiss)
-  }, [open])
-
-  function focusOption(index: number) {
-    const options = Array.from(
-      pickerRef.current?.querySelectorAll<HTMLElement>('[role="option"]') ?? [],
-    )
-    if (!options.length) return
-    options[Math.max(0, Math.min(index, options.length - 1))]?.focus()
-  }
-
-  async function selectModel(model: DshModelCatalogItem) {
-    if (savingId || model.id === displayModelId) {
-      closePicker()
-      return
-    }
-    setSavingId(model.id)
-    setError('')
-    try {
-      await onSelect(model)
-      setDisplayModelId(model.id)
-      setDisplayProvider(model.provider)
-      closePicker()
-    } catch (caught) {
-      setError(
-        caught instanceof Error ? caught.message : '模型切换失败，请重试。',
-      )
-    } finally {
-      setSavingId('')
-    }
-  }
-
-  return (
-    <div className="composer-model-control">
-      <button
-        aria-controls={pickerId}
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        aria-label={`选择执行模型，当前 ${selected?.name ?? '未选择'}`}
-        className="composer-model-button"
-        disabled={!models.length}
-        onClick={() => {
-          if (open) closePicker(false)
-          else setOpen(true)
-        }}
-        ref={triggerRef}
-        title={selected?.name ?? '服务端未提供可用模型'}
-        type="button"
-      >
-        <span>{selected?.name ?? '执行模型'}</span>
-        <ChevronDown size={16} />
-      </button>
-      {open && (
-        <div
-          aria-labelledby={pickerTitleId}
-          className="composer-model-picker"
-          id={pickerId}
-          onKeyDown={event => {
-            if (event.key === 'Escape') {
-              event.preventDefault()
-              closePicker()
-              return
-            }
-            const target = event.target
-            const options = Array.from(
-              pickerRef.current?.querySelectorAll<HTMLElement>(
-                '[role="option"]',
-              ) ?? [],
-            )
-            if (event.key === 'ArrowDown' && target === searchRef.current) {
-              event.preventDefault()
-              focusOption(
-                Math.max(
-                  0,
-                  filteredModels.findIndex(
-                    model => model.id === displayModelId,
-                  ),
-                ),
-              )
-              return
-            }
-            if (!(target instanceof HTMLElement)) return
-            const currentIndex = options.indexOf(target)
-            if (currentIndex < 0) return
-            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-              event.preventDefault()
-              const step = event.key === 'ArrowDown' ? 1 : -1
-              focusOption(
-                (currentIndex + step + options.length) % options.length,
-              )
-            } else if (event.key === 'Home' || event.key === 'End') {
-              event.preventDefault()
-              focusOption(event.key === 'Home' ? 0 : options.length - 1)
-            } else if (event.key === 'Enter' || event.key === ' ') {
-              event.preventDefault()
-              target.click()
-            }
-          }}
-          ref={pickerRef}
-          role="dialog"
-        >
-          <header>
-            <div>
-              <h2 id={pickerTitleId}>选择模型</h2>
-              <p>已配置模型服务的完整目录</p>
-            </div>
-            <span>{models.length} 个可用</span>
-          </header>
-          <label className="composer-model-search">
-            <Search size={16} />
-            <span className="visually-hidden">搜索模型</span>
-            <input
-              autoComplete="off"
-              onChange={event => {
-                setQuery(event.target.value)
-                setPage(0)
-              }}
-              placeholder="搜索模型"
-              ref={searchRef}
-              spellCheck={false}
-              type="search"
-              value={query}
-            />
-          </label>
-          <div
-            aria-label="可用模型"
-            className="composer-model-list"
-            role="listbox"
-          >
-            {pageModels.length ? (
-              pageModels.map((model, index) => {
-                const isSelected =
-                  model.id === displayModelId &&
-                  (!displayProvider || model.provider === displayProvider)
-                const isSaving = savingId === model.id
-                return (
-                  <div
-                    aria-disabled={Boolean(savingId)}
-                    aria-selected={isSelected}
-                    className="composer-model-option"
-                    data-model-id={model.id}
-                    key={`${model.provider}/${model.id}`}
-                    onClick={() => {
-                      if (!savingId) void selectModel(model)
-                    }}
-                    role="option"
-                    tabIndex={
-                      isSelected ||
-                      (!selectedInList && currentPage === 0 && index === 0)
-                        ? 0
-                        : -1
-                    }
-                  >
-                    <span>
-                      <strong>{model.name}</strong>
-                      <small>
-                        {model.provider}
-                        {model.id !== model.name ? ` · ${model.id}` : ''}
-                      </small>
-                    </span>
-                    {isSaving ? (
-                      <RotateCw className="is-spinning" size={17} />
-                    ) : (
-                      isSelected && <Check size={18} />
-                    )}
-                  </div>
-                )
-              })
-            ) : (
-              <p className="composer-model-empty">没有匹配的模型</p>
-            )}
-          </div>
-          {filteredModels.length > pageSize && (
-            <div className="composer-model-pagination pagination">
-              <span>
-                {currentPage * pageSize + 1}–
-                {Math.min((currentPage + 1) * pageSize, filteredModels.length)}{' '}
-                / {filteredModels.length}
-              </span>
-              <button
-                disabled={currentPage === 0}
-                onClick={() => setPage(Math.max(0, currentPage - 1))}
-                type="button"
-              >
-                上一页
-              </button>
-              <button
-                disabled={currentPage >= pageCount - 1}
-                onClick={() =>
-                  setPage(Math.min(pageCount - 1, currentPage + 1))
-                }
-                type="button"
-              >
-                下一页
-              </button>
-            </div>
-          )}
-          {error && (
-            <p className="composer-model-error" role="alert">
-              {error}
-            </p>
-          )}
-          <footer>模型变更只作用于新建执行会话</footer>
-        </div>
-      )}
-    </div>
   )
 }
 
@@ -1319,11 +1025,34 @@ export function ConversationPage({
                   排队
                 </button>
               )}
-              <ComposerModelPicker
+              <ModelPicker
+                ariaLabel="选择执行模型"
+                footer="模型变更只作用于新建执行会话"
                 models={models}
-                onSelect={onSelectModel}
-                provider={modelProvider}
-                selectedModelId={selectedModelId}
+                onSelect={(_, model) => {
+                  if (model) return onSelectModel(model)
+                }}
+                placeholder="执行模型"
+                value={
+                  selectedModelId
+                    ? modelSelectionKey(
+                        models.find(
+                          model =>
+                            model.id === selectedModelId &&
+                            (!modelProvider ||
+                              model.provider === modelProvider),
+                        ) ??
+                          models.find(
+                            model => model.id === selectedModelId,
+                          ) ?? {
+                            provider: modelProvider ?? '',
+                            id: selectedModelId,
+                            name: selectedModelId,
+                          },
+                      )
+                    : ''
+                }
+                variant="composer"
               />
               <button
                 aria-label={

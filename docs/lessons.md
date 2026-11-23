@@ -81,7 +81,19 @@
 - Severity：normal
 - Status：Promoted（2026-11-23）
 - Enforcement：已晋升为自动化门禁——`test/workspace-theme.test.ts`「keeps every model-selection entry on the paginated shared catalog」断言所有模型选择入口共享 30/页分页、composer 不按 Provider 过滤目录、UI review 携带分页断言与隔离模型网关；`scripts/capture-ui-review.mjs` `assertPickerPagination` 在桌面与 390px 真实布局断言 34 模型目录 30+4 分页完整可达；`test/dsh-home.test.ts` 与 `test/connection-catalog.test.ts` 钉死服务端目录装配（全目录注入、选中模型首位、单连接失败回退）。既有目录完整可达、搜索复位、默认三元组、单一配置归属、紧凑反馈回归继续生效。
-- Owner / next action：2026-11-23 用户报告对话框选择器固定 1 个模型（第三个独立日期）：根因是服务端受管 DSH patch 每 Provider 只声明 1 个模型 + composer 按接入点过滤且无分页；已修复并晋升门禁。后续候选：抽取通用异步选项目录组件（engineering-todo）。
+- Owner / next action：2026-11-23 用户报告对话框选择器固定 1 个模型（第三个独立日期）：根因是服务端受管 DSH patch 每 Provider 只声明 1 个模型 + composer 按接入点过滤且无分页；已修复并晋升门禁。同日后续：用户指出设置页 6 处仍是原生 select/手填框，已抽取共享 `web/src/sealed/ModelPicker.tsx` 统一全部入口（分页/搜索/置顶特殊值/手填保底），门禁扩展为断言三个消费方引用共享组件与搜索框容器聚焦合同；「抽取通用异步选项目录组件」候选项完成。
+
+### LESSON-20261123-01：保存路径不得静默重置已配置的连接地址
+
+- Rule：非 custom Provider 的设置保存/探测路径必须保留 capabilities 中已存连接或环境配置的 baseUrl，不得无条件回写 preset 默认地址；隔离 UI/集成夹具必须断言请求真的落在夹具网关上。
+- Why：`parseRuntimeSettingsUpdate` 对非 custom Provider 一律 `baseUrl: preset.baseUrl`，把 `PEGAS_MODEL_BASE_URL` 初始化的连接在目录探测/测试/保存时静默改写到 preset 地址；UI review 的 34 模型隔离网关因此被绕过，目录探测打到真实 Magpie 网关返回 83 个真实模型，隔离性失效且可能误导用户覆盖连接配置。
+- Feature：SETTINGS-001
+- Evidence：2026-11-23 UI review 隔离夹具断言失败（已读取 83 个模型 ≠ 34）；`test/runtime-settings.test.ts`「keeps the configured preset connection address instead of resetting it」回归；`scripts/capture-ui-review.mjs` 目录 34 模型计数断言。
+- Seen：1（2026-11-23）
+- Severity：normal
+- Status：Observed
+- Enforcement：尚未晋升；回归测试 + UI review 夹具计数断言已落地。
+- Owner / next action：后续出现同类问题时补充独立日期证据；候选检查其他写路径是否存在 preset 覆盖已存配置的同类模式。
 
 ### LESSON-20261118-03：密文末字符变更不能稳定代表字节篡改
 
