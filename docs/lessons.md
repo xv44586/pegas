@@ -77,11 +77,11 @@
 - Why：第一次修复让用户可以从 165 个模型中选择，却仍只呈现前 50 个结果，其余结果不能按浏览路径到达；获取成功反馈又以大字号独立卡片占据设置页，且 Router 模型与 Agent 执行模型在同一分类重复出现，造成配置归属不清。分页重构后，搜索框沿用了已经失效的父级选择器而退回浏览器默认宽度；“Magpie 排第一”也没有阻止默认 Router 继续使用规则模式和小模型池。
 - Feature：SETTINGS-001
 - Evidence：用户在 2026-11-18 和 2026-11-19 提供的模型设置截图；`web/src/App.test.tsx` 的大列表分页、搜索复位、模型选择、信息架构和 404 反馈回归；`test/config.test.ts`、`test/initial-model.test.ts` 与 `test/runtime-settings.test.ts` 的默认 Router/Magpie/指定模型回归；`test/workspace-theme.test.ts` 的搜索宽度、分页与紧凑反馈布局合同；`scripts/capture-ui-review.mjs` 的默认三元组断言、搜索几何断言及桌面/390px 截图。
-- Seen：2（2026-11-18、2026-11-19）
+- Seen：3（2026-11-18、2026-11-19、2026-11-23）
 - Severity：normal
-- Status：Candidate
-- Enforcement：尚未晋升；当前以目录完整可达、搜索复位、默认 Router/Magpie/指定模型三元组、单一配置归属、紧凑反馈的配置/DOM/CSS 回归和桌面/390px 可视化证据覆盖。
-- Owner / next action：第三个独立日期再次出现同类问题时，晋升为自动化门禁并抽取通用异步选项目录组件。
+- Status：Promoted（2026-11-23）
+- Enforcement：已晋升为自动化门禁——`test/workspace-theme.test.ts`「keeps every model-selection entry on the paginated shared catalog」断言所有模型选择入口共享 30/页分页、composer 不按 Provider 过滤目录、UI review 携带分页断言与隔离模型网关；`scripts/capture-ui-review.mjs` `assertPickerPagination` 在桌面与 390px 真实布局断言 34 模型目录 30+4 分页完整可达；`test/dsh-home.test.ts` 与 `test/connection-catalog.test.ts` 钉死服务端目录装配（全目录注入、选中模型首位、单连接失败回退）。既有目录完整可达、搜索复位、默认三元组、单一配置归属、紧凑反馈回归继续生效。
+- Owner / next action：2026-11-23 用户报告对话框选择器固定 1 个模型（第三个独立日期）：根因是服务端受管 DSH patch 每 Provider 只声明 1 个模型 + composer 按接入点过滤且无分页；已修复并晋升门禁。后续候选：抽取通用异步选项目录组件（engineering-todo）。
 
 ### LESSON-20261118-03：密文末字符变更不能稳定代表字节篡改
 
