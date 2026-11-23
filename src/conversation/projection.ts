@@ -24,6 +24,8 @@ export interface ConversationProjectionContext {
   task?: ConversationTaskFacts
   /** Origin event of the Run that produced this fact, when known. */
   runOriginEventId?: string
+  /** Source of the Run's origin event (for example `automation`). */
+  runOriginSource?: string
 }
 
 const DECIDE_TYPES = new Set([
@@ -110,7 +112,10 @@ export function deriveConversationProjection(
     weight = 'card'
   } else if (type && WORK_TYPES.has(type)) {
     lane = 'work'
-    weight = 'card'
+    weight =
+      type === 'run.completed' && context.runOriginSource === 'automation'
+        ? 'silent'
+        : 'card'
   } else if (type && SAY_TYPES.has(type)) {
     lane = 'say'
     weight = 'inline'

@@ -83,6 +83,7 @@ import {
   parseFollowUpCommand,
   parseRunAutomationCommand,
   parseRunAutomationStatusCommand,
+  parseRunMessageCommand,
 } from '../schedule/schedule.js'
 import type {
   SpeechRecognitionProvider,
@@ -116,6 +117,7 @@ import {
   OutboxNotFoundError,
   OutboxResolutionConflictError,
   RunClaimError,
+  RunMessageCommandConflictError,
   SettingsRevisionConflictError,
   WorkerProfileReadOnlyError,
   WorkerProfileRevisionConflictError,
@@ -997,6 +999,28 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
       const runAutomationMatch = /^\/v1\/runs\/([^/]+)\/automations$/.exec(
         taskResourceUrl.pathname,
       )
+      const runMessageMatch = /^\/v1\/runs\/([^/]+)\/messages$/.exec(
+        taskResourceUrl.pathname,
+      )
+      if (runMessageMatch && request.method === 'POST') {
+        const claimToken = runClaimToken(request)
+        if (!claimToken)
+          return sendJson(response, 403, { error: 'run_claim_required' })
+        const runId = decodeURIComponent(runMessageMatch[1] ?? '')
+        const command = parseRunMessageCommand(await readJson(request))
+        try {
+          const result = options.store.sayFromRun(runId, claimToken, command)
+          return sendJson(response, 201, result)
+        } catch (error) {
+          if (error instanceof RunClaimError)
+            return sendJson(response, 403, { error: 'run_claim_invalid' })
+          if (error instanceof RunMessageCommandConflictError)
+            return sendJson(response, 409, {
+              error: 'run_message_command_conflict',
+            })
+          throw error
+        }
+      }
       if (runAutomationMatch && request.method === 'POST') {
         const claimToken = runClaimToken(request)
         if (!claimToken)
@@ -2695,6 +2719,7 @@ function isRunCapabilityWrite(request: IncomingMessage): boolean {
     /^\/v1\/runs\/[^/]+\/(reports|approvals|collaborations)$/.test(pathname) ||
     /^\/v1\/runs\/[^/]+\/goal-proposals$/.test(pathname) ||
     /^\/v1\/runs\/[^/]+\/follow-ups$/.test(pathname) ||
+    /^\/v1\/runs\/[^/]+\/messages$/.test(pathname) ||
     /^\/v1\/runs\/[^/]+\/automations$/.test(pathname) ||
     /^\/v1\/runs\/[^/]+\/automations\/[^/]+\/(pause|resume|cancel)$/.test(
       pathname,

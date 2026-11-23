@@ -106,6 +106,14 @@
 - **门禁（第二阶段）**：`pnpm check` 99 文件 / 1008 测试全绿；`pnpm smoke`、`pnpm smoke:crash`、`pnpm review:ui -- --force`（桌面/移动/三主题几何断言）、`pnpm a11y:review`（0 违例）通过。
 - **仍未实现（CONV-006 剩余缺口）**：`say` 正文流式输出（现状仍是一次性完整文本）；work 卡内嵌 criteria 摘要（现经「审查交付/查看工作详情」抽屉下钻）；「待你处理」计数与聊天内就地解决的联动扣减仍以整页快照刷新为准。
 
+## 已落地实现（2026-11-23，第三阶段：Executor say 声道接线与周期回告）
+
+- **say 入口**：`POST /v1/runs/:runId/messages`（pre-auth run-capability 路由，claim header 鉴权，无 claim/伪造 403）。请求体严格限定 `{commandId, text}`（text ≤ 8000）；Task/Run/lane 服务端冻结，payload 不接受 taskId/lane。落盘为 conversation Outbox 的 `agent.message` 事实（dedupe `run-message:<runId>:<commandId>`），同键同 payload 幂等重放冻结响应，异 payload 409 `run_message_command_conflict`；Run 停止/claim 过期后拒绝。该事实只是投影输入：不结算 Run/Task，不铸造控制意图。权威实现 `parseRunMessageCommand`（src/schedule/schedule.ts）、`PegasStore.sayFromRun`（src/storage/sqlite-store.ts）、路由（src/control-plane/server.ts）。
+- **即时可见**：conversation Outbox 是 Web 聊天流的读取源，`agent.message` 派生 `say/inline`（既有 SAY_TYPES 规则），消息入队即出现在对话正文，不等 Run 结束；anchor 指向所属 Task 与发起事件。无 schema 变更，Web 零改动（三声道渲染既有能力直接消费）。
+- **周期回告决定（服务端确定性 Policy）**：机器输入（`source=automation` 的 origin event，含周期 Automation 与 Follow-up 到点）唤醒的 Run，其 `run.completed` 投影为 `work/silent`——完成卡不再重复刷屏，用户可见回告由 Executor 经 say 入口发出（执行合同要求周期触发的 Run 必须如此）。`run.failed`、审批/澄清等 decide 事实不受影响仍可见；人类输入驱动的 Run 完成卡行为不变。派生层新增 `runOriginSource` context（读取路径 JOIN inbox_events.source），纯函数与幂等语义不变。
+- **执行合同**：DSH 合同新增 say 接口段落（正文即时可见、不代替最终答案、不结算状态、周期触发必须经此回告、commandId 网络重试键）。
+- **自动化证据（第三阶段）**：`test/run-messages.test.ts` 5 测试（严格 payload、claim 鉴权 + 幂等/冲突/停止后拒绝 + say/inline anchor、HTTP 合同 403/201/409/400、周期触发端到端：创建 Run 完成卡可见 → 触发 Run say 正文 + 完成卡 silent）；`test/conversation-projection.test.ts` +1（automation 完成卡 silent、失败/decide/say 不受影响、web 来源不变）；`test/dsh-cli-executor.test.ts` +1 合同回归。
+
 ## 已落地实现（2026-11-23，CONV-007：任务托盘与选中指向）
 
 - **托盘只读投影**：`web/src/sealed/MainPages.tsx` 在输入器上方渲染 `.task-tray`（`role=group` 「进行中的事情」），列出当前 owner 非终态任务（completed/cancelled 过滤），按 `latestActivityAt` 降序；每项为 `aria-pressed` 胶囊按钮，状态点区分 active（运行/排队，脉冲）、attention（有 `statusReason`，caution 色）、idle，附 `statusLabel`。空托盘不渲染、不占布局。
