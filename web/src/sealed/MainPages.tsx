@@ -34,6 +34,7 @@ import type {
   Automation,
   AutomationDraft,
   AutomationInvocation,
+  ChannelSearchSort,
   DshModelCatalogItem,
   MemoryCategory,
   MemoryDraft,
@@ -68,6 +69,7 @@ import {
   latestRunProgressText,
   needsOutboxResolution,
   reviewProjection,
+  sortWorkChannels,
   statusLabel,
   taskContextCue,
   textFromPayload,
@@ -87,18 +89,26 @@ interface PageActions {
   onOpenDrawer: (drawer: DrawerView) => void
 }
 
+const WORK_SORT_LABELS: Record<ChannelSearchSort, string> = {
+  updated: '最近更新',
+  created: '最近创建',
+  ended: '最近结束',
+}
+
 function PageHeader({
   title,
   description,
   actions,
   children,
   compact = false,
+  hasPageSearch = false,
 }: {
   title: string
   description: string
   actions: PageActions
   children?: React.ReactNode
   compact?: boolean
+  hasPageSearch?: boolean
 }) {
   return (
     <header className="page-header">
@@ -112,6 +122,7 @@ function PageHeader({
           isDark={actions.isDark}
           onSearch={actions.onSearch}
           onToggleAppearance={actions.onToggleAppearance}
+          showSearch={!hasPageSearch}
         />
       </div>
     </header>
@@ -1468,7 +1479,36 @@ export function WorkPage({
     'all' | 'active' | 'waiting' | 'completed' | 'archived'
   >('all')
   const [query, setQuery] = useState('')
-  const visible = snapshot.channels.filter(channel => {
+  const [sort, setSort] = useState<ChannelSearchSort>('updated')
+  const [sortMenuOpen, setSortMenuOpen] = useState(false)
+  const sortTriggerRef = useRef<HTMLButtonElement>(null)
+  const sortMenuRef = useRef<HTMLDivElement>(null)
+  const sortMenuId = useId()
+  useEffect(() => {
+    if (!sortMenuOpen) return
+    const dismiss = (event: PointerEvent) => {
+      const target = event.target
+      if (!(target instanceof Node)) return
+      if (
+        sortMenuRef.current?.contains(target) ||
+        sortTriggerRef.current?.contains(target)
+      )
+        return
+      setSortMenuOpen(false)
+    }
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      setSortMenuOpen(false)
+      sortTriggerRef.current?.focus()
+    }
+    document.addEventListener('pointerdown', dismiss)
+    document.addEventListener('keydown', escape)
+    return () => {
+      document.removeEventListener('pointerdown', dismiss)
+      document.removeEventListener('keydown', escape)
+    }
+  }, [sortMenuOpen])
+  const visible = sortWorkChannels(snapshot.channels, sort).filter(channel => {
     const run = latestRunForTask(snapshot.runs, channel.id)
     if (
       query &&
@@ -1499,6 +1539,7 @@ export function WorkPage({
       <PageHeader
         actions={actions}
         description="你和 Pegas 一起做过的所有事情"
+        hasPageSearch
         title="所有事情"
       >
         <label className="page-search">
@@ -1507,37 +1548,75 @@ export function WorkPage({
             aria-label="搜索事情"
             onChange={event => setQuery(event.target.value)}
             placeholder="搜索事情或结果"
+            type="search"
             value={query}
           />
         </label>
       </PageHeader>
-      <div className="filter-row" role="group" aria-label="筛选">
-        {(
-          [
-            ['all', '全部'],
-            ['active', '进行中'],
-            ['waiting', '等待中'],
-            ['completed', '已完成'],
-            ['archived', '已归档'],
-          ] as const
-        ).map(([id, label]) => (
+      <div className="filter-row-wrap" ref={sortMenuRef}>
+        <div className="filter-row" role="group" aria-label="筛选">
+          {(
+            [
+              ['all', '全部'],
+              ['active', '进行中'],
+              ['waiting', '等待中'],
+              ['completed', '已完成'],
+              ['archived', '已归档'],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              aria-pressed={filter === id}
+              key={id}
+              onClick={() => setFilter(id)}
+              type="button"
+            >
+              {label}
+            </button>
+          ))}
           <button
-            aria-pressed={filter === id}
-            key={id}
-            onClick={() => setFilter(id)}
+            aria-controls={sortMenuId}
+            aria-expanded={sortMenuOpen}
+            aria-haspopup="menu"
+            aria-label={`排序：${WORK_SORT_LABELS[sort]}`}
+            className="sort-button"
+            onClick={() => setSortMenuOpen(current => !current)}
+            ref={sortTriggerRef}
             type="button"
           >
-            {label}
+            {WORK_SORT_LABELS[sort]} <ChevronDown size={15} />
           </button>
-        ))}
-        <button
-          className="sort-button"
-          disabled
-          title="当前仅支持按最近更新排序"
-          type="button"
-        >
-          最近更新 <ChevronDown size={15} />
-        </button>
+        </div>
+        {sortMenuOpen && (
+          <div
+            aria-label="排序方式"
+            className="sort-menu"
+            id={sortMenuId}
+            role="menu"
+          >
+            {(
+              [
+                'updated',
+                'created',
+                'ended',
+              ] as const satisfies readonly ChannelSearchSort[]
+            ).map(option => (
+              <button
+                aria-checked={sort === option}
+                key={option}
+                onClick={() => {
+                  setSort(option)
+                  setSortMenuOpen(false)
+                  sortTriggerRef.current?.focus()
+                }}
+                role="menuitemradio"
+                type="button"
+              >
+                {WORK_SORT_LABELS[option]}
+                {sort === option && <Check size={15} />}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       <section className="work-list" aria-label="事情列表">
         {visible.length ? (
@@ -2118,6 +2197,7 @@ export function AttentionPage({
             ? `${String(board.totalThings)} 件事情 · ${String(board.totalNotifications)} 条通知 · ${String(board.totalUnread)} 条未读`
             : 'Pegas 现在需要你处理的事情'
         }
+        hasPageSearch
         title="待你处理"
       >
         <label className="page-search">

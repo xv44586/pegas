@@ -1,6 +1,7 @@
 import type {
   Approval,
   BehaviorPreferences,
+  ChannelSearchSort,
   ChannelTimeline,
   ChannelRelation,
   ConversationProjection,
@@ -749,6 +750,32 @@ export function formatRelativeTime(value: string): string {
     hour: '2-digit',
     minute: '2-digit',
   }).format(timestamp)
+}
+
+function channelSortTimestamp(
+  channel: WorkChannel,
+  sort: ChannelSearchSort,
+): number {
+  const value =
+    sort === 'created'
+      ? channel.createdAt
+      : sort === 'ended'
+        ? (channel.endedAt ?? channel.updatedAt)
+        : channel.latestActivityAt
+  const timestamp = Date.parse(value)
+  return Number.isNaN(timestamp) ? 0 : timestamp
+}
+
+export function sortWorkChannels(
+  channels: readonly WorkChannel[],
+  sort: ChannelSearchSort,
+): WorkChannel[] {
+  return [...channels].sort((left, right) => {
+    const delta =
+      channelSortTimestamp(right, sort) - channelSortTimestamp(left, sort)
+    if (delta !== 0) return delta
+    return left.id < right.id ? 1 : left.id > right.id ? -1 : 0
+  })
 }
 
 export function statusLabel(channel: WorkChannel, run?: Run): string {

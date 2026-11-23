@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import type { OutboxMessage } from '../types'
+import type { OutboxMessage, WorkChannel } from '../types'
 import {
   attentionActionKind,
   attentionActivityPage,
@@ -15,6 +15,7 @@ import {
   isResolvedDecisionMessage,
   isSilentConversationMessage,
   isStreamingSayMessage,
+  sortWorkChannels,
   taskAutomationActive,
 } from './types'
 
@@ -544,5 +545,84 @@ describe('DESIGN-008 automationActive fact helpers', () => {
       ),
     ).toBe(true)
     expect(taskAutomationActive([], 'task-1')).toBe(false)
+  })
+})
+
+describe('DESIGN-002 work list sort projection', () => {
+  const base: WorkChannel = {
+    id: 'task-base',
+    taskId: 'task-base',
+    userId: 'owner',
+    originEventId: 'event-base',
+    title: '基础事情',
+    goal: '目标',
+    status: 'started',
+    workerIconId: 'computer',
+    canResume: false,
+    canStop: true,
+    createdAt: '2026-11-19T07:00:00.000Z',
+    updatedAt: '2026-11-19T08:00:00.000Z',
+    latestActivityAt: '2026-11-19T08:00:00.000Z',
+  }
+  const earlyCreated: WorkChannel = {
+    ...base,
+    id: 'task-early',
+    taskId: 'task-early',
+    createdAt: '2026-11-19T06:00:00.000Z',
+    updatedAt: '2026-11-19T09:00:00.000Z',
+    latestActivityAt: '2026-11-19T09:00:00.000Z',
+  }
+  const endedLater: WorkChannel = {
+    ...base,
+    id: 'task-ended',
+    taskId: 'task-ended',
+    status: 'completed',
+    canResume: true,
+    canStop: false,
+    createdAt: '2026-11-19T06:30:00.000Z',
+    updatedAt: '2026-11-19T08:30:00.000Z',
+    latestActivityAt: '2026-11-19T08:30:00.000Z',
+    endedAt: '2026-11-19T09:30:00.000Z',
+    endedKind: 'completed',
+  }
+
+  it('orders by activity, creation and end time without mutating input', () => {
+    const channels = [endedLater, base, earlyCreated]
+    expect(sortWorkChannels(channels, 'updated').map(item => item.id)).toEqual([
+      'task-early',
+      'task-ended',
+      'task-base',
+    ])
+    expect(sortWorkChannels(channels, 'created').map(item => item.id)).toEqual([
+      'task-base',
+      'task-ended',
+      'task-early',
+    ])
+    expect(sortWorkChannels(channels, 'ended').map(item => item.id)).toEqual([
+      'task-ended',
+      'task-early',
+      'task-base',
+    ])
+    expect(channels.map(item => item.id)).toEqual([
+      'task-ended',
+      'task-base',
+      'task-early',
+    ])
+  })
+
+  it('falls back to updatedAt for unfinished work and breaks ties by id', () => {
+    const tie: WorkChannel = { ...base, id: 'task-aaa', taskId: 'task-aaa' }
+    expect(sortWorkChannels([base, tie], 'ended').map(item => item.id)).toEqual(
+      ['task-base', 'task-aaa'],
+    )
+    const broken: WorkChannel = {
+      ...base,
+      id: 'task-broken',
+      taskId: 'task-broken',
+      latestActivityAt: 'not-a-date',
+    }
+    expect(
+      sortWorkChannels([broken, base], 'updated').map(item => item.id),
+    ).toEqual(['task-base', 'task-broken'])
   })
 })

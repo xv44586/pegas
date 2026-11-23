@@ -5651,6 +5651,97 @@ describe('sealed Pegas UI', () => {
     expect(screen.getByText(channel.title)).toBeTruthy()
   })
 
+  it('keeps one visible search entry per page without losing command search', async () => {
+    installFetch()
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    expect(screen.getAllByRole('button', { name: '全局搜索' })).toHaveLength(1)
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    expect(screen.getByPlaceholderText('搜索事情或结果')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '全局搜索' })).toBeNull()
+    fireEvent.click(within(mainNav).getByRole('button', { name: /待你处理/ }))
+    expect(screen.getByPlaceholderText('搜索内容或来源')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '全局搜索' })).toBeNull()
+    fireEvent.click(within(mainNav).getByRole('button', { name: /自动化/ }))
+    expect(screen.getAllByRole('button', { name: '全局搜索' })).toHaveLength(1)
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.keyDown(window, { key: 'k', metaKey: true })
+    expect(screen.getByRole('dialog', { name: '全局搜索' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '关闭搜索' }))
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: '全局搜索' })).toBeNull(),
+    )
+  })
+
+  it('sorts all work by updated, created and ended time', async () => {
+    const createdFirst: WorkChannel = {
+      ...channel,
+      id: 'task-created',
+      taskId: 'task-created',
+      title: '创建最早的长跑事情',
+      createdAt: '2026-11-19T06:00:00.000Z',
+      updatedAt: '2026-11-19T09:00:00.000Z',
+      latestActivityAt: '2026-11-19T09:00:00.000Z',
+    }
+    const endedLast: WorkChannel = {
+      ...channel,
+      id: 'task-ended',
+      taskId: 'task-ended',
+      title: '刚刚结束的事情',
+      status: 'completed',
+      canResume: true,
+      canStop: false,
+      createdAt: '2026-11-19T06:30:00.000Z',
+      updatedAt: '2026-11-19T08:30:00.000Z',
+      latestActivityAt: '2026-11-19T08:30:00.000Z',
+      endedAt: '2026-11-19T09:30:00.000Z',
+      endedKind: 'completed',
+    }
+    installSnapshotFetch({
+      ...snapshot,
+      channels: [endedLast, channel, createdFirst],
+      runs: [],
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /所有事情/,
+      }),
+    )
+    const list = screen.getByLabelText('事情列表')
+    const titlesInOrder = () =>
+      Array.from(list.querySelectorAll('.work-copy > strong')).map(
+        element => element.textContent,
+      )
+    expect(titlesInOrder()).toEqual([
+      createdFirst.title,
+      endedLast.title,
+      channel.title,
+    ])
+    const sortTrigger = screen.getByRole('button', { name: /排序：最近更新/ })
+    fireEvent.click(sortTrigger)
+    fireEvent.click(screen.getByRole('menuitemradio', { name: '最近创建' }))
+    expect(titlesInOrder()).toEqual([
+      channel.title,
+      endedLast.title,
+      createdFirst.title,
+    ])
+    expect(screen.getByRole('button', { name: /排序：最近创建/ })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /排序：最近创建/ }))
+    fireEvent.click(screen.getByRole('menuitemradio', { name: '最近结束' }))
+    expect(titlesInOrder()).toEqual([
+      endedLast.title,
+      createdFirst.title,
+      channel.title,
+    ])
+    fireEvent.click(screen.getByRole('button', { name: /排序：最近结束/ }))
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('menu', { name: '排序方式' })).toBeNull()
+    expect(document.activeElement).toBe(
+      screen.getByRole('button', { name: /排序：最近结束/ }),
+    )
+  })
+
   it('shows ordinary empty work without claiming the service is disabled', async () => {
     installSnapshotFetch({ ...snapshot, channels: [], runs: [] })
     render(<App />)
