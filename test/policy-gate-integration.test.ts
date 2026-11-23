@@ -63,6 +63,7 @@ describe.skipIf(!dshAvailable || !gatewayReachable)(
       })
       await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
       const baseUrl = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+      let leaseHeartbeat: ReturnType<typeof setInterval> | undefined
       try {
         const event = store.enqueueEvent({
           userId: 'owner',
@@ -98,6 +99,14 @@ describe.skipIf(!dshAvailable || !gatewayReachable)(
         store.completeEvent(event.id, 'setup-p1')
         const claimed = store.claimNextRun('worker-p1')
         if (!claimed) throw new Error('Expected claimed Run')
+        leaseHeartbeat = setInterval(() => {
+          try {
+            store.renewRunLease(claimed.run.id, 'worker-p1', 60_000)
+          } catch {
+            if (leaseHeartbeat) clearInterval(leaseHeartbeat)
+          }
+        }, 10_000)
+        leaseHeartbeat.unref()
 
         const executor = new DshCliExecutor({
           command: 'dsh',
@@ -141,6 +150,7 @@ describe.skipIf(!dshAvailable || !gatewayReachable)(
           request: { category: 'out-of-workspace-write' },
         })
       } finally {
+        if (leaseHeartbeat) clearInterval(leaseHeartbeat)
         configuration.remove()
         await new Promise<void>(resolve => server.close(() => resolve()))
         store.close()
