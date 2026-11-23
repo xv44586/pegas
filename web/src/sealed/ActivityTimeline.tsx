@@ -53,12 +53,15 @@ export interface ActivityDataAccess {
     runId: string,
     callId: string,
     offset: number,
+    until?: number,
   ) => Promise<{
     content: string
     offset: number
     totalCharacters: number
     archivedCharacters: number
     truncatedArchive: boolean
+    gapStart?: number
+    gapEnd?: number
   }>
   imageUrl: (runId: string, callId: string) => string
   outputFileUrl: (runId: string, callId: string) => string
@@ -429,7 +432,7 @@ function ShellCard({
           initialLength={head.length}
           omittedCharacters={semantic.outputOmittedCharacters}
           spillPath={semantic.outputSpillPath}
-          headText={head}
+          tailText={tail}
         />
       )}
       {tail && (
@@ -474,8 +477,9 @@ function HighlightedText({ tokens }: { tokens: HighlightToken[] }) {
  * one separator newline before the inline preview text.
  * The button only appears when the Run has an output archive endpoint; the
  * archive itself is capped and says so honestly.
- * Round 18: head+tail clips page from the omission gap (spill-backed
- * results from 0), and a recorded executor spill file gets a direct link.
+ * Round 18: head+tail clips page from 0 and the server bounds each page
+ * at the omission gap (gapStart/gapEnd), so the inline tail never repeats;
+ * a recorded executor spill file gets a direct link.
  */
 function OutputPager({
   entry,
@@ -483,14 +487,14 @@ function OutputPager({
   archiveOffset = 0,
   omittedCharacters,
   spillPath,
-  headText = '',
+  tailText = '',
 }: {
   entry: RunActivityEntry
   initialLength: number
   archiveOffset?: number
   omittedCharacters?: number
   spillPath?: string
-  headText?: string
+  tailText?: string
 }) {
   const access = useContext(ActivityDataContext)
   const [pages, setPages] = useState<string[]>([])
@@ -498,13 +502,12 @@ function OutputPager({
     'idle',
   )
   const [archiveNote, setArchiveNote] = useState('')
+  const gapMode = omittedCharacters !== undefined
   const offsetRef = useRef(
-    spillPath
-      ? 0
-      : omittedCharacters !== undefined
-        ? initialLength
-        : initialLength + archiveOffset,
+    gapMode || spillPath ? 0 : initialLength + archiveOffset,
   )
+  const gapRef = useRef<{ start: number; end: number } | undefined>(undefined)
+  const tailTrimmedRef = useRef(false)
   const fileLink =
     access && entry.callId && spillPath ? (
       <p className="output-spill">
@@ -546,12 +549,27 @@ function OutputPager({
   const loadMore = async () => {
     setState('loading')
     try {
+      const gap = gapRef.current
       const page = await access.loadOutputPage(
         access.runId,
         callId,
         offsetRef.current,
+        gapMode && gap ? gap.end : undefined,
       )
+      if (
+        page.gapStart !== undefined &&
+        page.gapEnd !== undefined &&
+        page.gapEnd > page.gapStart
+      ) {
+        gapRef.current = { start: page.gapStart, end: page.gapEnd }
+      }
+      const activeGap = gapRef.current
       if (page.content.length === 0) {
+        if (gapMode && activeGap && offsetRef.current < activeGap.end) {
+          offsetRef.current = activeGap.end
+          setState('idle')
+          return
+        }
         setState('done')
         if (page.truncatedArchive)
           setArchiveNote(
@@ -559,21 +577,28 @@ function OutputPager({
           )
         return
       }
-      offsetRef.current = page.offset + page.content.length
+      offsetRef.current =
+        gapMode &&
+        activeGap &&
+        page.offset < activeGap.end &&
+        page.offset + page.content.length >= activeGap.end
+          ? activeGap.end
+          : page.offset + page.content.length
       let content = page.content
-      if (
-        spillPath &&
-        pages.length === 0 &&
-        omittedCharacters === undefined &&
-        headText
-      ) {
-        if (page.content.endsWith(headText))
-          content = page.content.slice(0, page.content.length - headText.length)
-        else if (page.content.startsWith(headText))
-          content = page.content.slice(headText.length)
+      if (gapMode && activeGap) {
+        if (page.offset < activeGap.start && !content.endsWith('\n'))
+          content += '\n'
+        if (page.offset === activeGap.start && content.startsWith('\n'))
+          content = content.slice(1)
+        if (!tailTrimmedRef.current && tailText && content.endsWith(tailText)) {
+          content = content.slice(0, content.length - tailText.length)
+          tailTrimmedRef.current = true
+        }
       }
       if (content.length > 0) setPages(previous => [...previous, content])
-      const exhausted = offsetRef.current >= page.archivedCharacters
+      const exhausted = gapMode
+        ? activeGap !== undefined && offsetRef.current >= activeGap.end
+        : offsetRef.current >= page.archivedCharacters
       setState(exhausted ? 'done' : 'idle')
       if (exhausted && page.truncatedArchive)
         setArchiveNote(
@@ -597,7 +622,11 @@ function OutputPager({
       ))}
       {state !== 'done' && (
         <p className="activity-empty">
-          {spillPath ? '中间内容未内联留存。' : '输出过长，仅保留前段记录。'}
+          {gapMode
+            ? '中间内容未内联留存。'
+            : spillPath
+              ? '完整输出未内联留存。'
+              : '输出过长，仅保留前段记录。'}
           <button
             className="inline-link"
             disabled={state === 'loading'}
@@ -802,7 +831,7 @@ function PreviewCard({
           archiveOffset={1}
           omittedCharacters={semantic.previewOmittedCharacters}
           spillPath={semantic.previewSpillPath}
-          headText={head}
+          tailText={tail}
         />
       )}
       {tail && (

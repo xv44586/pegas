@@ -359,6 +359,8 @@ export interface RunActivityOutputPage {
   totalCharacters: number
   archivedCharacters: number
   truncatedArchive: boolean
+  gapStart?: number
+  gapEnd?: number
 }
 
 export interface SubagentTranscript {

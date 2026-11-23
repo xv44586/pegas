@@ -7356,18 +7356,31 @@ describe('sealed Pegas UI', () => {
           })
         if (path.startsWith('/v1/runs/run-1/activity/call-gap/output?')) {
           outputCalls.push(path)
-          const offset = Number(
-            new URL(path, 'http://localhost').searchParams.get('offset'),
-          )
-          if (offset === 9)
+          const query = new URL(path, 'http://localhost').searchParams
+          const offset = Number(query.get('offset'))
+          if (offset === 0 && query.get('until') === null)
+            return Response.json({
+              runId: 'run-1',
+              callId: 'call-gap',
+              content: 'HEAD-LINE',
+              offset: 0,
+              totalCharacters: 31,
+              archivedCharacters: 31,
+              truncatedArchive: false,
+              gapStart: 9,
+              gapEnd: 21,
+            })
+          if (offset === 9 && query.get('until') === '21')
             return Response.json({
               runId: 'run-1',
               callId: 'call-gap',
               content: 'MIDDLE-OUTPUT',
               offset: 9,
-              totalCharacters: 22,
-              archivedCharacters: 22,
+              totalCharacters: 31,
+              archivedCharacters: 31,
               truncatedArchive: false,
+              gapStart: 9,
+              gapEnd: 21,
             })
           return Response.json({ error: 'not_found' }, { status: 404 })
         }
@@ -7396,8 +7409,23 @@ describe('sealed Pegas UI', () => {
       name: '加载省略内容',
     })
     fireEvent.click(loadGap)
-    expect(await within(drawer).findByText('MIDDLE-OUTPUT')).toBeTruthy()
-    expect(outputCalls[0]).toContain('offset=9')
+    await waitFor(() => {
+      expect(outputCalls).toHaveLength(1)
+    })
+    fireEvent.click(loadGap)
+    await waitFor(() => {
+      expect(drawer.textContent).toContain('MIDDLE-OUTPUT')
+    })
+    expect(outputCalls[0]).toContain('offset=0')
+    expect(outputCalls[0]).not.toContain('until=')
+    expect(outputCalls[1]).toContain('offset=9')
+    expect(outputCalls[1]).toContain('until=21')
+    const gapPres = [...shellCard.querySelectorAll('.shell-output')].map(
+      element => element.textContent,
+    )
+    expect(gapPres[0]).toBe('HEAD-LINE')
+    expect(gapPres.at(-1)).toBe('ERROR-TAIL')
+    expect(gapPres.slice(1, -1).join('')).toBe('HEAD-LINE\nMIDDLE-OUTPUT')
     expect(shellCard.querySelector('.output-gap')).toBeNull()
     expect(
       within(shellCard as HTMLElement).queryByRole('button', {
@@ -7493,6 +7521,145 @@ describe('sealed Pegas UI', () => {
       expect(drawer.textContent).toContain('SPILL-FULL-HEAD')
     })
     expect(outputCalls[0]).toContain('offset=0')
+  })
+
+  it('loads the omission gap from a spill-backed head+tail clip without repeating the tail', async () => {
+    const outputCalls: string[] = []
+    installSnapshotFetch(
+      {
+        ...snapshot,
+        channels: [{ ...channel, status: 'completed', canStop: false }],
+        runs: [{ ...run, status: 'completed', output: '完成。' }],
+      },
+      path => {
+        if (path.startsWith('/v1/tasks/task-1/delivery?'))
+          return Response.json(deliveryFixture)
+        if (path.startsWith('/v1/runs/run-1/activity?'))
+          return Response.json({
+            runId: 'run-1',
+            taskId: channel.id,
+            totalEntries: 1,
+            truncated: false,
+            entries: [
+              {
+                seq: 1,
+                kind: 'tool_call',
+                status: 'completed',
+                callId: 'call-seq',
+                tool: 'bash',
+                label: 'bash',
+                semantic: {
+                  kind: 'shell',
+                  command: 'seq 1 80000',
+                  output: '334\n… 已省略 19 字符 …\n79001\n80000',
+                  outputTruncated: true,
+                  outputOmittedCharacters: 19,
+                  outputSpillPath: '/tmp/dsh-spill/seq.txt',
+                },
+                createdAt: '2026-11-19T08:00:10.000Z',
+                updatedAt: '2026-11-19T08:00:20.000Z',
+              },
+            ],
+          })
+        if (path.startsWith('/v1/runs/run-1/activity/call-seq/output?')) {
+          outputCalls.push(path)
+          const query = new URL(path, 'http://localhost').searchParams
+          const offset = Number(query.get('offset'))
+          if (offset === 0 && query.get('until') === null)
+            return Response.json({
+              runId: 'run-1',
+              callId: 'call-seq',
+              content: '334',
+              offset: 0,
+              totalCharacters: 34,
+              archivedCharacters: 34,
+              truncatedArchive: false,
+              gapStart: 3,
+              gapEnd: 23,
+            })
+          if (offset === 3 && query.get('until') === '23')
+            return Response.json({
+              runId: 'run-1',
+              callId: 'call-seq',
+              content: '\nMIDDLE\n\n79001\n80000',
+              offset: 3,
+              totalCharacters: 34,
+              archivedCharacters: 34,
+              truncatedArchive: false,
+              gapStart: 3,
+              gapEnd: 23,
+            })
+          if (offset === 23 && query.get('until') === '23')
+            return Response.json({
+              runId: 'run-1',
+              callId: 'call-seq',
+              content: '',
+              offset: 23,
+              totalCharacters: 34,
+              archivedCharacters: 34,
+              truncatedArchive: false,
+              gapStart: 3,
+              gapEnd: 23,
+            })
+          return Response.json({ error: 'not_found' }, { status: 404 })
+        }
+        return undefined
+      },
+    )
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: new RegExp(channel.title) }),
+    )
+    const drawer = await screen.findByRole('dialog', { name: '工作详情' })
+    fireEvent.click(await within(drawer).findByText(/工作流程记录/))
+    const seqHeadline = (await within(drawer).findAllByText('seq 1 80000'))[0]
+    if (!seqHeadline) throw new Error('expected seq headline')
+    fireEvent.click(seqHeadline)
+    const shellCard = drawer.querySelector('.shell-card')
+    if (!shellCard) throw new Error('expected shell card')
+    expect(shellCard.querySelector('.output-gap')?.textContent).toContain(
+      '已省略 19 字符',
+    )
+    expect(
+      within(shellCard as HTMLElement).getByRole('link', {
+        name: '完整输出文件',
+      }),
+    ).toBeTruthy()
+    const loadSeqGap = within(shellCard as HTMLElement).getByRole('button', {
+      name: '加载省略内容',
+    })
+    fireEvent.click(loadSeqGap)
+    await waitFor(() => {
+      expect(outputCalls).toHaveLength(1)
+    })
+    fireEvent.click(loadSeqGap)
+    await waitFor(() => {
+      expect(shellCard.textContent).toContain('MIDDLE')
+    })
+    expect(outputCalls[0]).toContain('offset=0')
+    expect(outputCalls[1]).toContain('offset=3')
+    expect(outputCalls[1]).toContain('until=23')
+    const seqPres = [...shellCard.querySelectorAll('.shell-output')].map(
+      element => element.textContent,
+    )
+    expect(seqPres[0]).toBe('334')
+    expect(seqPres.at(-1)).toBe('79001\n80000')
+    expect(seqPres.slice(1, -1).join('')).toBe('334\nMIDDLE\n\n')
+    expect(shellCard.querySelector('.output-gap')).toBeNull()
+    await waitFor(() => {
+      expect(
+        within(shellCard as HTMLElement).queryByRole('button', {
+          name: '加载省略内容',
+        }),
+      ).toBeNull()
+    })
+    expect(
+      [...shellCard.querySelectorAll('.shell-output')].map(
+        element => element.textContent,
+      ),
+    ).toEqual(['334', '334\n', 'MIDDLE\n\n', '79001\n80000'])
   })
 
   it('keeps honest fallbacks for legacy and unknown tool records', async () => {

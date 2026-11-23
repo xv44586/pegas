@@ -680,24 +680,32 @@ try {
               new URL(url).searchParams.get('offset') ?? '0',
             )
             if (url.includes('/call-6/')) {
-              const middle =
-                offset === 2_000
-                  ? Array.from(
-                      { length: 40 },
-                      (_, index) =>
-                        `line ${String(index + 41).padStart(3, '0')}: omitted middle output — coverage detail`,
-                    ).join('\n')
-                  : ''
+              const head = Array.from(
+                { length: 40 },
+                (_, index) =>
+                  `line ${String(index + 1).padStart(3, '0')}: coverage head output`,
+              ).join('\n')
+              const middle = Array.from(
+                { length: 40 },
+                (_, index) =>
+                  `line ${String(index + 41).padStart(3, '0')}: omitted middle output — coverage detail`,
+              ).join('\n')
+              const gapStart = head.length
+              const gapEnd = gapStart + middle.length
+              const content =
+                offset === 0 ? head : offset === gapStart ? middle : ''
               await route.fulfill({
                 contentType: 'application/json',
                 body: JSON.stringify({
                   runId: 'review-completed',
                   callId: 'call-6',
-                  content: middle,
+                  content,
                   offset,
                   totalCharacters: 12_000,
                   archivedCharacters: 12_000,
                   truncatedArchive: false,
+                  gapStart,
+                  gapEnd,
                 }),
               })
               return
@@ -901,6 +909,11 @@ try {
           .filter({ hasText: 'pnpm test:coverage' })
           .locator('summary')
           .click()
+        await fixturePage.getByRole('button', { name: '加载省略内容' }).click()
+        await fixturePage
+          .getByText('coverage head output', { exact: false })
+          .first()
+          .waitFor()
         await fixturePage.getByRole('button', { name: '加载省略内容' }).click()
         await fixturePage
           .getByText('omitted middle output', { exact: false })

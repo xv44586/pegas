@@ -996,8 +996,8 @@ function TaskDetail({
   const activityAccess = api
     ? (runId: string): ActivityDataAccess => ({
         runId,
-        loadOutputPage: (targetRun, callId, offset) =>
-          api.runActivityOutputPage(targetRun, callId, offset),
+        loadOutputPage: (targetRun, callId, offset, until) =>
+          api.runActivityOutputPage(targetRun, callId, offset, until),
         imageUrl: (targetRun, callId) =>
           api.runActivityImageUrl(targetRun, callId),
         outputFileUrl: (targetRun, callId) =>

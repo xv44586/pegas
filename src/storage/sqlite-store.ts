@@ -10302,6 +10302,7 @@ export class PegasStore {
     options: {
       offset?: number
       limit?: number
+      until?: number
       spillReader?: (path: string) => Promise<string | undefined>
     } = {},
   ): Promise<
@@ -10313,6 +10314,8 @@ export class PegasStore {
         totalCharacters: number
         archivedCharacters: number
         truncatedArchive: boolean
+        gapStart?: number
+        gapEnd?: number
       }
     | undefined
   > {
@@ -10360,14 +10363,53 @@ export class PegasStore {
       0,
       Math.min(options.offset ?? 0, archivedContent.length),
     )
+    const semantic = decodeActivityDetail(row.detail_json ?? '').semantic
+    let gapStart: number | undefined
+    let gapEnd: number | undefined
+    if (
+      semantic &&
+      (semantic.kind === 'shell' ||
+        semantic.kind === 'file_read' ||
+        semantic.kind === 'search' ||
+        semantic.kind === 'web')
+    ) {
+      const inlineText =
+        semantic.kind === 'shell'
+          ? (semantic.output ?? '')
+          : (semantic.preview ?? '')
+      const markerStart = inlineText.indexOf('\n… 已省略 ')
+      const omitted =
+        semantic.kind === 'shell'
+          ? semantic.outputOmittedCharacters
+          : semantic.previewOmittedCharacters
+      if (markerStart >= 0 && omitted !== undefined) {
+        const tailStart = inlineText.indexOf('\n', markerStart + 1) + 1
+        const tail = inlineText.slice(tailStart)
+        if (tail && archivedContent.endsWith(tail)) {
+          gapEnd = archivedContent.length - tail.length
+          gapStart = gapEnd - inlineText.length + markerStart
+        }
+      }
+    }
+    let end = offset + limit
+    if (options.until !== undefined && Number.isFinite(options.until))
+      end = Math.min(end, Math.max(offset, options.until))
+    if (gapStart !== undefined && gapEnd !== undefined) {
+      if (offset < gapStart && end > gapStart) end = gapStart
+      else if (offset >= gapStart && offset < gapEnd)
+        end = Math.min(end, gapEnd)
+    }
     return {
       runId,
       callId,
-      content: archivedContent.slice(offset, offset + limit),
+      content: archivedContent.slice(offset, end),
       offset,
       totalCharacters,
       archivedCharacters: archivedContent.length,
       truncatedArchive: totalCharacters > archivedContent.length,
+      ...(gapStart !== undefined && gapEnd !== undefined
+        ? { gapStart, gapEnd }
+        : {}),
     }
   }
 
