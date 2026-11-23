@@ -67,6 +67,39 @@ describe('runtime settings validation', () => {
     ).toThrow('隐私 HMAC key')
   })
 
+  it('keeps the configured preset connection address instead of resetting it', () => {
+    const capabilities = settingsCapabilities(
+      loadConfig({
+        PEGAS_MODEL_BASE_URL: 'http://127.0.0.1:45998/v1',
+      }),
+      [
+        {
+          id: 'magpie',
+          name: 'Magpie',
+          protocol: 'openai-chat',
+          baseUrl: 'http://127.0.0.1:45998/v1',
+          hasApiKey: false,
+        },
+      ],
+    )
+    const update = parseRuntimeSettingsUpdate(
+      {
+        ...defaults,
+        expectedRevision: 1,
+        modelProvider: 'magpie',
+        modelName: 'deepseek-v4.1-flash',
+        provider: {
+          name: 'Magpie',
+          protocol: 'openai-chat',
+          baseUrl: 'http://127.0.0.1:45998/v1',
+          clearApiKey: false,
+        },
+      },
+      capabilities,
+    )
+    expect(update.provider.baseUrl).toBe('http://127.0.0.1:45998/v1')
+  })
+
   it('accepts a complete selection when server capabilities are present', () => {
     const capabilities = {
       providers: [

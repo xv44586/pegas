@@ -97,10 +97,11 @@ export class PegasApi {
     runId: string,
     callId: string,
     offset: number,
+    until?: number,
   ): Promise<RunActivityOutputPage> {
     const user = encodeURIComponent(this.#userId)
     return this.#get<RunActivityOutputPage>(
-      `/v1/runs/${encodeURIComponent(runId)}/activity/${encodeURIComponent(callId)}/output?userId=${user}&offset=${String(offset)}&limit=12000`,
+      `/v1/runs/${encodeURIComponent(runId)}/activity/${encodeURIComponent(callId)}/output?userId=${user}&offset=${String(offset)}&limit=12000${until !== undefined ? `&until=${String(until)}` : ''}`,
     )
   }
 

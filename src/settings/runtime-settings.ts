@@ -187,7 +187,7 @@ export function parseRuntimeSettingsUpdate(
       : preset.protocol,
     baseUrl: custom
       ? normalizedUrl(providerValue.baseUrl, 'provider.baseUrl')
-      : preset.baseUrl,
+      : selected.baseUrl,
     ...(apiKey ? { apiKey } : {}),
     clearApiKey: providerValue.clearApiKey === true,
   }

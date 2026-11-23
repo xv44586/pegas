@@ -273,14 +273,20 @@ try {
   await page.getByRole('heading', { name: '待你处理', exact: true }).waitFor()
   await page.getByLabel('待处理列表').getByRole('article').first().waitFor()
   await capture(page, 'desktop-attention.png', 'desktop-attention')
-  await page.getByRole('button', { name: /^需要确认 / }).click()
+  await page
+    .getByRole('group', { name: '筛选' })
+    .getByRole('button', { name: /^待你处理 / })
+    .click()
   await page.getByLabel('待处理列表').getByRole('article').first().waitFor()
   await capture(
     page,
     'desktop-attention-approval-filter.png',
     'desktop-attention-approval-filter',
   )
-  await page.getByRole('button', { name: /^全部 / }).click()
+  await page
+    .getByRole('group', { name: '筛选' })
+    .getByRole('button', { name: /^全部 / })
+    .click()
   await page.getByLabel('搜索待处理内容').fill('不存在的关键词')
   await page.getByText('当前筛选下没有待处理项').waitFor()
   await capture(
@@ -293,14 +299,20 @@ try {
   await filterRow.evaluate(element => {
     element.scrollLeft = element.scrollWidth
   })
-  await page.getByRole('button', { name: /^重要结果 / }).click()
+  await page
+    .getByRole('group', { name: '筛选' })
+    .getByRole('button', { name: /^事情动态 / })
+    .click()
   await page.getByLabel('待处理列表').getByRole('article').first().waitFor()
   await capture(
     page,
     'desktop-attention-result-filter.png',
     'desktop-attention-result-filter',
   )
-  await page.getByRole('button', { name: /^全部 / }).click()
+  await page
+    .getByRole('group', { name: '筛选' })
+    .getByRole('button', { name: /^全部 / })
+    .click()
 
   await page
     .getByLabel('主导航')
@@ -366,6 +378,37 @@ try {
     .click()
   await page.getByRole('heading', { name: 'Pegas', exact: true }).waitFor()
   await capture(page, 'desktop-settings-pegas.png', 'desktop-settings-pegas')
+  await page.getByRole('button', { name: '更换模型' }).click()
+  await assertPickerPagination(page, 'desktop settings execution picker', {
+    pinnedOptions: 1,
+  })
+  await capture(
+    page,
+    'desktop-settings-pegas-picker.png',
+    'desktop-settings-pegas-picker',
+  )
+  await page.keyboard.press('Escape')
+  await page
+    .getByRole('dialog', { name: '选择模型' })
+    .waitFor({ state: 'detached' })
+  const fastPoolTrigger = page.getByRole('button', {
+    name: /，fast 池模型$/,
+  })
+  await fastPoolTrigger.scrollIntoViewIfNeeded()
+  await fastPoolTrigger.click()
+  await assertPickerPagination(page, 'desktop settings fast pool picker', {
+    title: 'fast 池模型',
+    pinnedOptions: 1,
+  })
+  await capture(
+    page,
+    'desktop-settings-pool-picker.png',
+    'desktop-settings-pool-picker',
+  )
+  await page.keyboard.press('Escape')
+  await page
+    .getByRole('dialog', { name: 'fast 池模型' })
+    .waitFor({ state: 'detached' })
   await page.getByRole('tab', { name: '行为与规则' }).click()
   await page
     .getByText('产品设计优先给出具体界面方案', { exact: true })
@@ -397,12 +440,41 @@ try {
     .click()
   await page.getByRole('heading', { name: '模型服务', exact: true }).waitFor()
   await capture(page, 'desktop-settings-models.png', 'desktop-settings-models')
+  await page.getByRole('button', { name: '获取模型目录' }).click()
+  await page.getByText('已读取 34 个模型').waitFor()
+  const catalogRows = page.locator('.model-table > div')
+  if ((await catalogRows.count()) !== 31)
+    throw new Error('model catalog page one must show 30 rows plus header')
+  await page.getByRole('button', { name: '下一页' }).click()
+  await page.getByText('Fixture Model 34', { exact: true }).waitFor()
+  await page.getByRole('button', { name: '上一页' }).click()
+  const catalogSearch = page.getByPlaceholder('按名称或模型 ID 搜索')
+  await catalogSearch.click()
+  await capture(
+    page,
+    'desktop-settings-models-search-focus.png',
+    'desktop-settings-models-search-focus',
+  )
+  await catalogSearch.fill('')
   await page
     .getByLabel('设置分类')
     .getByRole('button', { name: '事情归类' })
     .click()
   await page.getByRole('heading', { name: '事情归类', exact: true }).waitFor()
   await capture(page, 'desktop-settings-router.png', 'desktop-settings-router')
+  await page.getByRole('button', { name: /，归类模型名称$/ }).click()
+  await assertPickerPagination(page, 'desktop settings router picker', {
+    title: '归类模型',
+  })
+  await capture(
+    page,
+    'desktop-settings-router-picker.png',
+    'desktop-settings-router-picker',
+  )
+  await page.keyboard.press('Escape')
+  await page
+    .getByRole('dialog', { name: '归类模型' })
+    .waitFor({ state: 'detached' })
   await page
     .getByLabel('设置分类')
     .getByRole('button', { name: '语音与输入' })
@@ -609,7 +681,7 @@ try {
   await mobileFilters.evaluate(element => {
     element.scrollLeft = element.scrollWidth
   })
-  await mobilePage.getByRole('button', { name: /^重要结果 / }).click()
+  await mobileFilters.getByRole('button', { name: /^事情动态 / }).click()
   await mobilePage
     .getByLabel('待处理列表')
     .getByRole('article')
@@ -623,7 +695,7 @@ try {
     'mobile-attention-result-filter.png',
     'mobile-attention-result-filter',
   )
-  await mobilePage.getByRole('button', { name: /^全部 / }).click()
+  await mobileFilters.getByRole('button', { name: /^全部 / }).click()
   await mobileFilters.evaluate(element => {
     element.scrollLeft = 0
   })
@@ -764,24 +836,32 @@ try {
               new URL(url).searchParams.get('offset') ?? '0',
             )
             if (url.includes('/call-6/')) {
-              const middle =
-                offset === 2_000
-                  ? Array.from(
-                      { length: 40 },
-                      (_, index) =>
-                        `line ${String(index + 41).padStart(3, '0')}: omitted middle output — coverage detail`,
-                    ).join('\n')
-                  : ''
+              const head = Array.from(
+                { length: 40 },
+                (_, index) =>
+                  `line ${String(index + 1).padStart(3, '0')}: coverage head output`,
+              ).join('\n')
+              const middle = Array.from(
+                { length: 40 },
+                (_, index) =>
+                  `line ${String(index + 41).padStart(3, '0')}: omitted middle output — coverage detail`,
+              ).join('\n')
+              const gapStart = head.length
+              const gapEnd = gapStart + middle.length
+              const content =
+                offset === 0 ? head : offset === gapStart ? middle : ''
               await route.fulfill({
                 contentType: 'application/json',
                 body: JSON.stringify({
                   runId: 'review-completed',
                   callId: 'call-6',
-                  content: middle,
+                  content,
                   offset,
                   totalCharacters: 12_000,
                   archivedCharacters: 12_000,
                   truncatedArchive: false,
+                  gapStart,
+                  gapEnd,
                 }),
               })
               return
@@ -985,6 +1065,11 @@ try {
           .filter({ hasText: 'pnpm test:coverage' })
           .locator('summary')
           .click()
+        await fixturePage.getByRole('button', { name: '加载省略内容' }).click()
+        await fixturePage
+          .getByText('coverage head output', { exact: false })
+          .first()
+          .waitFor()
         await fixturePage.getByRole('button', { name: '加载省略内容' }).click()
         await fixturePage
           .getByText('omitted middle output', { exact: false })
@@ -1441,19 +1526,23 @@ async function seedConversation(apiPort) {
   }
 }
 
-async function assertPickerPagination(page, label) {
-  const picker = page.getByRole('dialog', { name: '选择模型' })
+async function assertPickerPagination(
+  page,
+  label,
+  { title = '选择模型', pinnedOptions = 0 } = {},
+) {
+  const picker = page.getByRole('dialog', { name: title })
   await picker.getByText('34 个可用').waitFor()
   const optionCount = await picker.getByRole('option').count()
-  if (optionCount !== 30)
+  if (optionCount !== 30 + pinnedOptions)
     throw new Error(
-      `${label}: expected 30 options on page one, saw ${String(optionCount)}`,
+      `${label}: expected ${String(30 + pinnedOptions)} options on page one, saw ${String(optionCount)}`,
     )
   await picker.getByRole('button', { name: '下一页' }).click()
   const tailCount = await picker.getByRole('option').count()
-  if (tailCount !== 4)
+  if (tailCount !== 4 + pinnedOptions)
     throw new Error(
-      `${label}: expected 4 options on page two, saw ${String(tailCount)}`,
+      `${label}: expected ${String(4 + pinnedOptions)} options on page two, saw ${String(tailCount)}`,
     )
   await picker.getByRole('option', { name: /Fixture Model 34/ }).waitFor()
   await picker.getByRole('button', { name: '上一页' }).click()
@@ -1655,6 +1744,22 @@ async function assertGeometry(page, label) {
         if (composerStyle.boxShadow === 'none')
           out.push('focused composer has no visible outer focus treatment')
       }
+      const modelTrigger = composer.querySelector('.composer-model-button')
+      const triggerName = modelTrigger?.querySelector('strong')
+      const triggerDetail = modelTrigger?.querySelector('small')
+      if (modelTrigger && triggerName && triggerDetail) {
+        const triggerRect = modelTrigger.getBoundingClientRect()
+        const nameRect = triggerName.getBoundingClientRect()
+        const detailRect = triggerDetail.getBoundingClientRect()
+        if (detailRect.top < nameRect.bottom - 1)
+          out.push('composer model trigger glues name and provider inline')
+        if (
+          nameRect.right > triggerRect.right + 1 ||
+          detailRect.right > triggerRect.right + 1 ||
+          detailRect.bottom > triggerRect.bottom + 1
+        )
+          out.push('composer model trigger text overflows its button')
+      }
     }
     const modelPicker = globalThis.document.querySelector(
       '.composer-model-picker',
@@ -1672,6 +1777,31 @@ async function assertGeometry(page, label) {
         )
       if (!modelPicker.querySelector('[role="option"]'))
         out.push('model picker has no selectable options')
+    }
+    for (const search of globalThis.document.querySelectorAll(
+      '.model-search, .composer-model-search',
+    )) {
+      const input = search.querySelector('input')
+      if (!input) continue
+      const inputStyle = globalThis.getComputedStyle(input)
+      if (
+        inputStyle.outlineStyle !== 'none' &&
+        Number.parseFloat(inputStyle.outlineWidth) > 0
+      )
+        out.push('search input draws its own focus outline')
+      if (Number.parseFloat(inputStyle.borderTopWidth) > 0)
+        out.push('search input keeps an inner border')
+      if (search.matches(':focus-within')) {
+        await new Promise(resolveSettled =>
+          globalThis.setTimeout(resolveSettled, 80),
+        )
+        const containerStyle = globalThis.getComputedStyle(search)
+        if (
+          containerStyle.borderTopColor === 'rgba(0, 0, 0, 0)' ||
+          Number.parseFloat(containerStyle.borderTopWidth) === 0
+        )
+          out.push('focused search container has no visible border')
+      }
     }
     return out
   })

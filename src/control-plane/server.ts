@@ -10,6 +10,7 @@ import {
 import { extname, resolve, sep } from 'node:path'
 
 import { projectWorkChannel } from '../channel/work-channel.js'
+import { spillBodyForGap } from '../activity/tool-semantics.js'
 import { isWorkerIconId, type WorkerIconId } from '../brand/agent-icon.js'
 import { parseWorkerCollaborationRequest } from '../collaboration/collaboration.js'
 import {
@@ -1840,6 +1841,13 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
           const userId = requiredQuery(url, 'userId')
           const offsetParam = url.searchParams.get('offset')
           const limitParam = url.searchParams.get('limit')
+          const untilParam = url.searchParams.get('until')
+          if (
+            untilParam !== null &&
+            (!/^\d+$/.test(untilParam) ||
+              !Number.isSafeInteger(Number(untilParam)))
+          )
+            throw new Error('until must be a non-negative integer')
           const page = await options.store.readRunActivityOutput(
             decodeURIComponent(outputMatch[1] ?? ''),
             userId,
@@ -1847,6 +1855,7 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
             {
               ...(offsetParam ? { offset: Number(offsetParam) } : {}),
               ...(limitParam ? { limit: Number(limitParam) } : {}),
+              ...(untilParam !== null ? { until: Number(untilParam) } : {}),
               spillReader: readRunSpillText,
             },
           )
@@ -1872,7 +1881,7 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
               'cache-control': 'private, max-age=300',
               'x-content-type-options': 'nosniff',
             })
-            return response.end(text)
+            return response.end(spillBodyForGap(text)?.body ?? text)
           }
           return sendJson(response, 404, { error: 'not_found' })
         }

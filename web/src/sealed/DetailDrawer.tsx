@@ -43,6 +43,7 @@ import type {
 import { PegasMascot } from './PegasMascot'
 import { ActivityTimeline, type ActivityDataAccess } from './ActivityTimeline'
 import { isDelegationEntry } from './activityModel'
+import { ModelPicker } from './ModelPicker'
 import {
   formatRelativeTime,
   needsOutboxResolution,
@@ -996,8 +997,8 @@ function TaskDetail({
   const activityAccess = api
     ? (runId: string): ActivityDataAccess => ({
         runId,
-        loadOutputPage: (targetRun, callId, offset) =>
-          api.runActivityOutputPage(targetRun, callId, offset),
+        loadOutputPage: (targetRun, callId, offset, until) =>
+          api.runActivityOutputPage(targetRun, callId, offset, until),
         imageUrl: (targetRun, callId) =>
           api.runActivityImageUrl(targetRun, callId),
         outputFileUrl: (targetRun, callId) =>
@@ -2274,6 +2275,7 @@ function WorkerProfileSection({
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
   const [saveNotice, setSaveNotice] = useState('')
+  const [catalogLoading, setCatalogLoading] = useState(false)
   const current = response ?? profile
   const profileKey = current
     ? `${current.profile.id}:${String(current.profile.revision)}:${current.profile.modelMode}:${current.profile.modelProvider ?? ''}:${current.profile.modelName ?? ''}:${current.profile.pool ?? ''}:${current.profile.effort ?? ''}`
@@ -2310,11 +2312,9 @@ function WorkerProfileSection({
   const selectedModel = catalog?.models.find(
     model => `${model.provider}/${model.id}` === modelKey,
   )
-  async function openEditor(nextMode: 'inherit' | 'override') {
-    setModelMode(nextMode)
-    setSaveError('')
-    setSaveNotice('')
-    if (!api || nextMode !== 'override' || catalog) return
+  async function loadCatalog() {
+    if (!api) return
+    setCatalogLoading(true)
     try {
       const loaded = await api.agentModels()
       setCatalog(loaded)
@@ -2327,7 +2327,16 @@ function WorkerProfileSection({
       setCatalogError(
         caught instanceof Error ? caught.message : '读取执行模型目录失败。',
       )
+    } finally {
+      setCatalogLoading(false)
     }
+  }
+  async function openEditor(nextMode: 'inherit' | 'override') {
+    setModelMode(nextMode)
+    setSaveError('')
+    setSaveNotice('')
+    if (!api || nextMode !== 'override' || catalog) return
+    await loadCatalog()
   }
   async function save() {
     if (!api || !current || saving) return
@@ -2472,29 +2481,36 @@ function WorkerProfileSection({
                 </select>
               </label>
               {modelMode === 'override' && (
-                <label className="field-label">
-                  指定模型
-                  <select
+                <div className="field-label">
+                  <span>指定模型</span>
+                  <ModelPicker
+                    ariaLabel="指定模型"
                     disabled={saving || !catalog}
-                    onChange={event => setModelKey(event.target.value)}
-                    value={modelKey}
-                  >
-                    {!catalog && <option value="">正在读取模型目录…</option>}
-                    {catalog?.models.map(model => (
-                      <option
-                        key={`${model.provider}/${model.id}`}
-                        value={`${model.provider}/${model.id}`}
-                      >
-                        {model.name} · {model.provider}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                    footer="选择后仍需点击「保存执行设置」生效"
+                    models={catalog?.models ?? []}
+                    onSelect={(_, model) => {
+                      if (model) setModelKey(`${model.provider}/${model.id}`)
+                    }}
+                    placeholder={catalog ? '选择模型' : '正在读取模型目录…'}
+                    value={
+                      selectedModel
+                        ? `${selectedModel.provider}::${selectedModel.id}`
+                        : ''
+                    }
+                  />
+                </div>
               )}
               {catalogError && (
-                <p className="settings-error" role="alert">
+                <div className="settings-error" role="alert">
                   {catalogError}
-                </p>
+                  <button
+                    disabled={catalogLoading}
+                    onClick={() => void loadCatalog()}
+                    type="button"
+                  >
+                    {catalogLoading ? '重试中…' : '重试'}
+                  </button>
+                </div>
               )}
               {saveError && (
                 <p className="settings-error" role="alert">

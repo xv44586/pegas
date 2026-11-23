@@ -64,6 +64,7 @@ import type {
 import {
   buildToolSemantic,
   semanticSpillPaths,
+  spillBodyForGap,
   splitToolDetail,
 } from '../activity/tool-semantics.js'
 import { needsChineseSummary } from '../activity/thinking-summary.js'
@@ -10593,6 +10594,7 @@ export class PegasStore {
     options: {
       offset?: number
       limit?: number
+      until?: number
       spillReader?: (path: string) => Promise<string | undefined>
     } = {},
   ): Promise<
@@ -10604,6 +10606,8 @@ export class PegasStore {
         totalCharacters: number
         archivedCharacters: number
         truncatedArchive: boolean
+        gapStart?: number
+        gapEnd?: number
       }
     | undefined
   > {
@@ -10631,18 +10635,25 @@ export class PegasStore {
     const limit = Math.max(1, Math.min(options.limit ?? 12_000, 32_768))
     let archivedContent = row.content
     let totalCharacters = row.total_characters
+    let spillGapBody: string | undefined
     if (options.spillReader) {
       const spillPaths = semanticSpillPaths(
         decodeActivityDetail(row.detail_json ?? '').semantic,
       )
-      for (const spillPath of spillPaths) {
+      for (const [spillIndex, spillPath] of spillPaths.entries()) {
         const spillText = await options.spillReader(spillPath)
-        if (
-          spillText !== undefined &&
-          spillText.length >= row.total_characters
-        ) {
-          archivedContent = spillText.slice(0, 262_144)
-          totalCharacters = spillText.length
+        if (spillText === undefined) continue
+        const peeled = spillBodyForGap(spillText)
+        const body = peeled?.body ?? spillText
+        const coversArchive =
+          body.length >= row.total_characters ||
+          (row.content.length <= row.total_characters &&
+            row.content.startsWith(body)) ||
+          (peeled !== undefined && spillIndex === 0)
+        if (coversArchive) {
+          if (peeled) spillGapBody = body
+          archivedContent = body.slice(0, 262_144)
+          totalCharacters = body.length
           break
         }
       }
@@ -10651,14 +10662,61 @@ export class PegasStore {
       0,
       Math.min(options.offset ?? 0, archivedContent.length),
     )
+    const semantic = decodeActivityDetail(row.detail_json ?? '').semantic
+    let gapStart: number | undefined
+    let gapEnd: number | undefined
+    if (
+      semantic &&
+      (semantic.kind === 'shell' ||
+        semantic.kind === 'file_read' ||
+        semantic.kind === 'search' ||
+        semantic.kind === 'web')
+    ) {
+      const inlineText =
+        semantic.kind === 'shell'
+          ? (semantic.output ?? '')
+          : (semantic.preview ?? '')
+      const markerStart = inlineText.indexOf('\n… 已省略 ')
+      const omitted =
+        semantic.kind === 'shell'
+          ? semantic.outputOmittedCharacters
+          : semantic.previewOmittedCharacters
+      if (markerStart >= 0 && omitted !== undefined) {
+        const tailStart = inlineText.indexOf('\n', markerStart + 1) + 1
+        const tail = inlineText.slice(tailStart)
+        const gapBase = spillGapBody?.endsWith(tail)
+          ? spillGapBody
+          : archivedContent.endsWith(tail)
+            ? archivedContent
+            : undefined
+        if (tail && gapBase !== undefined) {
+          gapEnd = gapBase.length - tail.length
+          gapStart =
+            gapBase === spillGapBody
+              ? markerStart
+              : gapEnd - inlineText.length + markerStart
+        }
+      }
+    }
+    let end = offset + limit
+    if (options.until !== undefined && Number.isFinite(options.until))
+      end = Math.min(end, Math.max(offset, options.until))
+    if (gapStart !== undefined && gapEnd !== undefined) {
+      if (offset < gapStart && end > gapStart) end = gapStart
+      else if (offset >= gapStart && offset < gapEnd)
+        end = Math.min(end, gapEnd)
+    }
     return {
       runId,
       callId,
-      content: archivedContent.slice(offset, offset + limit),
+      content: archivedContent.slice(offset, end),
       offset,
       totalCharacters,
       archivedCharacters: archivedContent.length,
       truncatedArchive: totalCharacters > archivedContent.length,
+      ...(gapStart !== undefined && gapEnd !== undefined
+        ? { gapStart, gapEnd }
+        : {}),
     }
   }
 

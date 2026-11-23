@@ -433,7 +433,7 @@ function installFetch(
           },
         }),
       )
-    if (path === '/v1/settings')
+    if (path === '/v1/settings' && init?.method !== 'PUT')
       return Promise.resolve(Response.json(settingsResponse))
     if (path.startsWith('/v1/usage?'))
       return Promise.resolve(
@@ -755,7 +755,9 @@ describe('sealed Pegas UI', () => {
     expect(
       screen.getByText('决定一条新消息是继续已有事情，还是开始一件新事情。'),
     ).toBeTruthy()
-    expect(screen.getByDisplayValue('deepseek-v4.1-flash')).toBeTruthy()
+    expect(
+      screen.getByRole('button', { name: /，归类模型名称$/ }).textContent,
+    ).toContain('deepseek-v4.1-flash')
   })
 
   it('loads, searches and paginates the real model catalog', async () => {
@@ -982,7 +984,7 @@ describe('sealed Pegas UI', () => {
         name: /设置/,
       }),
     )
-    const model = await screen.findByLabelText('模型')
+    const model = await screen.findByRole('button', { name: /，模型$/ })
     fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
     expect(model.matches(':disabled')).toBe(true)
     expect(screen.getByRole('button', { name: '保存中…' })).toHaveProperty(
@@ -1049,7 +1051,16 @@ describe('sealed Pegas UI', () => {
   })
 
   it('keeps provider identity when two providers expose the same model id', async () => {
-    const fetchMock = installFetch(path => {
+    const fetchMock = installFetch((path, init) => {
+      if (path === '/v1/settings' && init?.method !== 'PUT')
+        return Response.json({
+          ...settingsResponse,
+          settings: {
+            ...settingsResponse.settings,
+            agentModelProvider: 'Magpie',
+            agentModelName: 'shared-model',
+          },
+        })
       if (path === '/v1/settings/agent-models')
         return Response.json({
           defaultProvider: 'Magpie',
@@ -1067,14 +1078,21 @@ describe('sealed Pegas UI', () => {
         name: /设置/,
       }),
     )
-    const modelSelect = await screen.findByLabelText('模型')
-    expect(
-      within(modelSelect).getByRole('option', { name: '共享模型 · Magpie' }),
-    ).toBeTruthy()
-    expect(
-      within(modelSelect).getByRole('option', { name: '共享模型 · Other' }),
-    ).toBeTruthy()
-    fireEvent.change(modelSelect, { target: { value: 'Other::shared-model' } })
+    const modelTrigger = await screen.findByRole('button', {
+      name: /，模型$/,
+    })
+    await waitFor(() => expect(modelTrigger.textContent).toContain('共享模型'))
+    fireEvent.click(modelTrigger)
+    const modelDialog = await screen.findByRole('dialog', { name: '选择模型' })
+    const magpieOption = within(modelDialog).getByRole('option', {
+      name: /共享模型.*Magpie/,
+    })
+    const otherOption = within(modelDialog).getByRole('option', {
+      name: /共享模型.*Other/,
+    })
+    expect(magpieOption.getAttribute('aria-selected')).toBe('true')
+    expect(otherOption.getAttribute('aria-selected')).toBe('false')
+    fireEvent.click(otherOption)
     fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
     await waitFor(() =>
       expect(
@@ -1421,7 +1439,7 @@ describe('sealed Pegas UI', () => {
     expect(screen.queryByText('传输失败但不是执行失败')).toBeNull()
     expect(screen.queryByRole('button', { name: '稍后处理' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '失败 1' }))
-    expect(screen.getByRole('button', { name: '执行确实失败' })).toBeTruthy()
+    expect(screen.getByText('最新：执行确实失败')).toBeTruthy()
   })
 
   it('renders attention rows as compact summaries with semantic status and quiet actions', async () => {
@@ -1469,27 +1487,28 @@ describe('sealed Pegas UI', () => {
       }),
     )
     const list = screen.getByLabelText('待处理列表')
-    expect(within(list).getByRole('list')).toBeTruthy()
+    expect(within(list).getAllByRole('list')).toHaveLength(3)
     expect(within(list).getAllByRole('listitem')).toHaveLength(4)
     const rows = within(list).getAllByRole('article')
     expect(rows).toHaveLength(4)
     expect(
-      within(list).getByRole('heading', {
-        level: 2,
-        name: '这是测试相关事情的入口。',
-      }),
+      within(list).getByText('最新：这是测试相关事情的入口。'),
     ).toBeTruthy()
     expect(within(list).queryByText(longReply)).toBeNull()
-    for (const status of ['重要结果', '需要确认', '需要补充', '执行失败'])
+    for (const status of ['确认', '回答'])
       expect(within(list).getByText(status)).toBeTruthy()
-    for (const title of [
-      '发布前需要确认影响范围',
-      '发布窗口是哪个时间段？',
-      '上游模型超时',
-    ])
+    for (const section of ['待你处理', '失败', '事情动态'])
+      expect(
+        within(list).getByRole('heading', {
+          level: 3,
+          name: new RegExp(section),
+        }),
+      ).toBeTruthy()
+    for (const title of ['发布前需要确认影响范围', '发布窗口是哪个时间段？'])
       expect(
         within(list).getByRole('heading', { level: 2, name: title }),
       ).toBeTruthy()
+    expect(within(list).getByText('最新：上游模型超时')).toBeTruthy()
     expect(
       within(list).getAllByRole('button', { name: /^打开事情：/ }),
     ).toHaveLength(1)
@@ -1504,17 +1523,18 @@ describe('sealed Pegas UI', () => {
       }),
     ).toBeTruthy()
     expect(
-      within(list).getByRole('button', { name: '查看原因：上游模型超时' }),
+      within(list).getByRole('button', { name: `查看原因：${channel.title}` }),
     ).toBeTruthy()
     const actionNames = within(list)
       .getAllByRole('button')
-      .filter(button => !button.classList.contains('attention-title'))
+      .filter(
+        button =>
+          !button.classList.contains('attention-title') &&
+          !button.classList.contains('attention-toggle'),
+      )
       .map(button => button.getAttribute('aria-label'))
     expect(new Set(actionNames).size).toBe(actionNames.length)
     expect(list.querySelector('.attention-action.is-primary')).toBeNull()
-    expect(list.querySelector('.attention-title')?.textContent).toBe(
-      '这是测试相关事情的入口。',
-    )
   })
 
   it('summarizes unread attention separately from the full pending count', async () => {
@@ -1543,11 +1563,11 @@ describe('sealed Pegas UI', () => {
         name: /待你处理/,
       }),
     )
-    expect(screen.getByText('2 项待处理 · 1 项未读')).toBeTruthy()
+    expect(screen.getByText('2 件事情 · 2 条通知 · 1 条未读')).toBeTruthy()
     const list = screen.getByLabelText('待处理列表')
     expect(within(list).getAllByRole('listitem')).toHaveLength(2)
     expect(within(list).getByText('已读')).toBeTruthy()
-    expect(within(list).getByText('未读')).toBeTruthy()
+    expect(within(list).getByText('1 条 · 1 未读')).toBeTruthy()
   })
 
   it('shows live attention filter counts and distinguishes filtered empty from true empty', async () => {
@@ -1575,17 +1595,14 @@ describe('sealed Pegas UI', () => {
       }),
     )
     expect(screen.getByRole('button', { name: '全部 2' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: '需要确认 0' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: '需要补充 0' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '待你处理 0' })).toBeTruthy()
     expect(screen.getByRole('button', { name: '失败 1' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: '重要结果 1' })).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: '需要确认 0' }))
+    expect(screen.getByRole('button', { name: '事情动态 1' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '待你处理 0' }))
     expect(screen.getByText('当前筛选下没有待处理项')).toBeTruthy()
     expect(screen.queryByText('现在没有待处理项')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '全部 2' }))
-    expect(
-      screen.getByRole('heading', { level: 2, name: '验收结果已生成' }),
-    ).toBeTruthy()
+    expect(screen.getByText('最新：验收结果已生成')).toBeTruthy()
   })
 
   it('searches loaded attention content and source without claiming server search', async () => {
@@ -1615,14 +1632,10 @@ describe('sealed Pegas UI', () => {
     )
     const search = screen.getByLabelText('搜索待处理内容')
     fireEvent.change(search, { target: { value: '候选版本' } })
-    expect(
-      screen.getByRole('heading', { level: 2, name: '候选版本已交付' }),
-    ).toBeTruthy()
+    expect(screen.getByText('最新：候选版本已交付')).toBeTruthy()
     expect(screen.queryByText('上游模型超时')).toBeNull()
     fireEvent.change(search, { target: { value: 'Pegas' } })
-    expect(
-      screen.getByRole('heading', { level: 2, name: '上游模型超时' }),
-    ).toBeTruthy()
+    expect(screen.getByText('最新：上游模型超时')).toBeTruthy()
     fireEvent.change(search, { target: { value: '不存在的关键词' } })
     expect(screen.getByText('当前筛选下没有待处理项')).toBeTruthy()
     expect(screen.queryByText('现在没有待处理项')).toBeNull()
@@ -1651,15 +1664,15 @@ describe('sealed Pegas UI', () => {
         name: /待你处理/,
       }),
     )
-    const title = screen.getByRole('button', { name: '需要人工处理' })
+    const title = screen.getByRole('button', {
+      name: `查看原因：${channel.title}`,
+    })
     title.focus()
     fireEvent.click(title)
     expect(await screen.findByLabelText('工作详情')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '关闭详情' }))
     await waitFor(() => expect(document.activeElement).toBe(title))
-    expect(
-      screen.getByRole('heading', { level: 2, name: '需要人工处理' }),
-    ).toBeTruthy()
+    expect(screen.getByText('最新：需要人工处理')).toBeTruthy()
   })
 
   it('opens a structured Approval from the attention inbox', async () => {
@@ -2382,7 +2395,9 @@ describe('sealed Pegas UI', () => {
     )
     expect(screen.queryByRole('dialog', { name: '选择模型' })).toBeNull()
     await waitFor(() =>
-      expect(modelButton.textContent).toContain('GPT-6.1 Sol'),
+      expect(
+        screen.getByRole('button', { name: /选择执行模型/ }).textContent,
+      ).toContain('GPT-6.1 Sol'),
     )
     fireEvent.change(composer, { target: { value: '中文输入尚未完成' } })
     fireEvent.keyDown(composer, {
@@ -2502,9 +2517,11 @@ describe('sealed Pegas UI', () => {
       ).toBe(true),
     )
     await waitFor(() =>
-      expect(modelButton.textContent).toContain('Claude Sonnet 4.5'),
+      expect(
+        screen.getByRole('button', { name: /选择执行模型/ }).textContent,
+      ).toContain('Claude Sonnet 4.5'),
     )
-    fireEvent.click(modelButton)
+    fireEvent.click(screen.getByRole('button', { name: /选择执行模型/ }))
     const reopened = await screen.findByRole('dialog', { name: '选择模型' })
     expect(
       within(reopened)
@@ -2534,6 +2551,288 @@ describe('sealed Pegas UI', () => {
     })
     expect(
       within(reopened).getByRole('option', { name: /Claude Sonnet 4.5/ }),
+    ).toBeTruthy()
+  })
+
+  it('paginates the Pegas execution-model and pool pickers with pinned special values', async () => {
+    const catalogModels = Array.from({ length: 33 }, (_, index) => ({
+      provider: 'Magpie',
+      id: `gateway/model-${String(index + 1).padStart(2, '0')}`,
+      name: `Gateway Model ${String(index + 1).padStart(2, '0')}`,
+    }))
+    const fetchMock = installFetch((path, init) => {
+      if (path === '/v1/settings/agent-models')
+        return Response.json({
+          defaultProvider: 'Magpie',
+          defaultModel: 'gateway/model-01',
+          models: catalogModels,
+        })
+      if (path === '/v1/settings' && init?.method === 'PUT') {
+        const update = JSON.parse(
+          typeof init.body === 'string' ? init.body : '{}',
+        ) as {
+          agentModelProvider?: string
+          agentModelName?: string
+          executionPools?: Record<string, { provider: string; model: string }>
+        }
+        return Response.json({
+          ...settingsResponse,
+          settings: {
+            ...settingsResponse.settings,
+            revision: 2,
+            agentModelProvider: update.agentModelProvider ?? 'Magpie',
+            agentModelName: update.agentModelName ?? 'gateway/model-01',
+            ...(update.executionPools
+              ? { executionPools: update.executionPools }
+              : {}),
+          },
+        })
+      }
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    const summaryChange = await screen.findByRole('button', {
+      name: '更换模型',
+    })
+    fireEvent.click(summaryChange)
+    const execDialog = await screen.findByRole('dialog', {
+      name: '选择模型',
+    })
+    expect(within(execDialog).getByText('33 个可用')).toBeTruthy()
+    const profileOption = within(execDialog).getByRole('option', {
+      name: /隔离环境默认模型（Pegas 专属 profile）/,
+    })
+    expect(within(execDialog).getAllByRole('option').length).toBe(31)
+    expect(
+      within(execDialog).getByRole('option', { name: /Gateway Model 30/ }),
+    ).toBeTruthy()
+    expect(
+      within(execDialog).queryByRole('option', { name: /Gateway Model 31/ }),
+    ).toBeNull()
+    fireEvent.click(within(execDialog).getByRole('button', { name: '下一页' }))
+    const tailOption = within(execDialog).getByRole('option', {
+      name: /Gateway Model 33/,
+    })
+    expect(profileOption.isConnected).toBe(true)
+    fireEvent.click(tailOption)
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: /，模型$/ }).textContent,
+      ).toContain('Gateway Model 33'),
+    )
+
+    const fastTrigger = screen.getByRole('button', {
+      name: /，fast 池模型$/,
+    })
+    fireEvent.click(fastTrigger)
+    const fastDialog = await screen.findByRole('dialog', {
+      name: 'fast 池模型',
+    })
+    const unsetOption = within(fastDialog).getByRole('option', {
+      name: /未配置（按降级链处理）/,
+    })
+    expect(unsetOption.getAttribute('aria-selected')).toBe('true')
+    fireEvent.click(within(fastDialog).getByRole('button', { name: '下一页' }))
+    fireEvent.click(
+      within(fastDialog).getByRole('option', { name: /Gateway Model 32/ }),
+    )
+    await waitFor(() =>
+      expect(fastTrigger.textContent).toContain('Gateway Model 32'),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([path, init]) => {
+          if (path !== '/v1/settings' || init?.method !== 'PUT') return false
+          const body = JSON.parse(
+            typeof init.body === 'string' ? init.body : '{}',
+          ) as {
+            agentModelName?: string
+            executionPools?: Record<string, { provider: string; model: string }>
+          }
+          return (
+            body.agentModelName === 'gateway/model-33' &&
+            body.executionPools?.fast?.model === 'gateway/model-32' &&
+            body.executionPools.fast.provider === 'Magpie'
+          )
+        }),
+      ).toBe(true),
+    )
+    fireEvent.click(fastTrigger)
+    const reopenedFast = await screen.findByRole('dialog', {
+      name: 'fast 池模型',
+    })
+    fireEvent.click(
+      within(reopenedFast).getByRole('option', {
+        name: /未配置（按降级链处理）/,
+      }),
+    )
+    await waitFor(() =>
+      expect(fastTrigger.textContent).toContain('未配置（按降级链处理）'),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([path, init]) => {
+          if (path !== '/v1/settings' || init?.method !== 'PUT') return false
+          const body = JSON.parse(
+            typeof init.body === 'string' ? init.body : '{}',
+          ) as {
+            executionPools?: Record<string, unknown>
+          }
+          return (
+            body.executionPools !== undefined &&
+            body.executionPools.fast === undefined
+          )
+        }),
+      ).toBe(true),
+    )
+  })
+
+  it('selects the router classification model from the provider-filtered catalog with a manual fallback', async () => {
+    const magpieModels = Array.from({ length: 31 }, (_, index) => ({
+      provider: 'Magpie',
+      id: `router/model-${String(index + 1).padStart(2, '0')}`,
+      name: `Router Model ${String(index + 1).padStart(2, '0')}`,
+    }))
+    const fetchMock = installFetch((path, init) => {
+      if (path === '/v1/settings/agent-models')
+        return Response.json({
+          defaultProvider: 'Magpie',
+          defaultModel: 'router/model-01',
+          models: [
+            ...magpieModels,
+            {
+              provider: 'Anthropic',
+              id: 'claude-sonnet-4-5',
+              name: 'Claude Sonnet 4.5',
+            },
+          ],
+        })
+      if (path === '/v1/settings' && init?.method === 'PUT') {
+        const update = JSON.parse(
+          typeof init.body === 'string' ? init.body : '{}',
+        ) as { modelName?: string }
+        return Response.json({
+          ...settingsResponse,
+          settings: {
+            ...settingsResponse.settings,
+            revision: 2,
+            modelName: update.modelName ?? 'deepseek-v4.1-flash',
+          },
+        })
+      }
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /事情归类/ }))
+    const routerTrigger = await screen.findByRole('button', {
+      name: /，归类模型名称$/,
+    })
+    await waitFor(() =>
+      expect(routerTrigger.textContent).toContain('deepseek-v4.1-flash'),
+    )
+    fireEvent.click(routerTrigger)
+    const routerDialog = await screen.findByRole('dialog', {
+      name: '归类模型',
+    })
+    expect(within(routerDialog).getByText('31 个可用')).toBeTruthy()
+    expect(
+      within(routerDialog).queryByRole('option', { name: /Claude Sonnet/ }),
+    ).toBeNull()
+    expect(
+      within(routerDialog).getByRole('option', { name: /Router Model 30/ }),
+    ).toBeTruthy()
+    expect(
+      within(routerDialog).queryByRole('option', { name: /Router Model 31/ }),
+    ).toBeNull()
+    fireEvent.click(
+      within(routerDialog).getByRole('button', { name: '下一页' }),
+    )
+    fireEvent.click(
+      within(routerDialog).getByRole('option', { name: /Router Model 31/ }),
+    )
+    await waitFor(() =>
+      expect(routerTrigger.textContent).toContain('Router Model 31'),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([path, init]) => {
+          if (path !== '/v1/settings' || init?.method !== 'PUT') return false
+          const body = JSON.parse(
+            typeof init.body === 'string' ? init.body : '{}',
+          ) as { modelName?: string; modelProvider?: string }
+          return (
+            body.modelName === 'router/model-31' &&
+            body.modelProvider === 'magpie'
+          )
+        }),
+      ).toBe(true),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '手动输入模型 ID' }))
+    const manualInput = screen.getByLabelText('归类模型名称')
+    expect(manualInput.tagName).toBe('INPUT')
+    fireEvent.change(manualInput, { target: { value: 'custom/manual-id' } })
+    fireEvent.click(screen.getByRole('button', { name: '从目录选择' }))
+    expect(
+      screen.getByRole('button', { name: /，归类模型名称$/ }).textContent,
+    ).toContain('custom/manual-id')
+  })
+
+  it('retries the task-level model catalog after a failed load', async () => {
+    let taskCatalogAttempts = 0
+    installFetch(path => {
+      if (path === '/v1/settings/agent-models') {
+        if (!screen.queryByLabelText('工作详情')) return undefined
+        taskCatalogAttempts += 1
+        if (taskCatalogAttempts === 1)
+          return Response.json({ message: '目录暂时不可用' }, { status: 503 })
+        return Response.json({
+          defaultProvider: 'Magpie',
+          defaultModel: 'deepseek-v4.1-flash',
+          models: [
+            {
+              provider: 'Magpie',
+              id: 'deepseek-v4.1-flash',
+              name: 'deepseek-v4.1-flash',
+            },
+          ],
+        })
+      }
+      return undefined
+    })
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(screen.getByRole('button', { name: /安全自更新流程/ }))
+    expect(await screen.findByText('事情级执行设置')).toBeTruthy()
+    const drawer = await screen.findByLabelText('工作详情')
+    const overrideSelect = await within(drawer).findByLabelText('执行模型')
+    fireEvent.change(overrideSelect, { target: { value: 'override' } })
+    const alert = await within(drawer).findByRole('alert')
+    expect(alert.textContent).toContain('目录暂时不可用')
+    const retry = within(alert).getByRole('button', { name: '重试' })
+    fireEvent.click(retry)
+    const picker = await screen.findByRole('button', {
+      name: /，指定模型$/,
+    })
+    await waitFor(() => expect(picker).toHaveProperty('disabled', false))
+    expect(within(drawer).queryByText('目录暂时不可用')).toBeNull()
+    fireEvent.click(picker)
+    const dialog = await screen.findByRole('dialog', { name: '选择模型' })
+    expect(
+      within(dialog).getByRole('option', { name: /deepseek-v4.1-flash/ }),
     ).toBeTruthy()
   })
 
@@ -3124,7 +3423,7 @@ describe('sealed Pegas UI', () => {
         name: /待你处理/,
       }),
     )
-    expect(screen.getByText('上游模型超时')).toBeTruthy()
+    expect(screen.getByText('最新：上游模型超时')).toBeTruthy()
     fireEvent.click(
       within(screen.getByLabelText('主导航')).getByRole('button', {
         name: /所有事情/,
@@ -4113,9 +4412,15 @@ describe('sealed Pegas UI', () => {
         name: /设置/,
       }),
     )
-    fireEvent.change(screen.getByLabelText('模型'), {
-      target: { value: 'profile' },
+    fireEvent.click(await screen.findByRole('button', { name: /，模型$/ }))
+    const profileDialog = await screen.findByRole('dialog', {
+      name: '选择模型',
     })
+    fireEvent.click(
+      within(profileDialog).getByRole('option', {
+        name: /隔离环境默认模型（Pegas 专属 profile）/,
+      }),
+    )
     fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
     await waitFor(() =>
       expect(
@@ -4511,10 +4816,8 @@ describe('sealed Pegas UI', () => {
     fireEvent.click(screen.getByRole('button', { name: /^查看原因：/ }))
     expect(await screen.findByText('无法标记已读')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '关闭详情' }))
-    expect(
-      screen.getByRole('heading', { level: 2, name: '需要处理的失败' }),
-    ).toBeTruthy()
-    expect(screen.getByText('未读')).toBeTruthy()
+    expect(screen.getByText('最新：需要处理的失败')).toBeTruthy()
+    expect(screen.getByText('1 条 · 1 未读')).toBeTruthy()
     expect(screen.getByText(/来自：/)).toBeTruthy()
   })
 
@@ -4546,7 +4849,7 @@ describe('sealed Pegas UI', () => {
       expect(screen.getByRole('button', { name: '关闭详情' })).toBeTruthy(),
     )
     fireEvent.click(screen.getByRole('button', { name: '关闭详情' }))
-    expect(screen.getByText('已读但仍需处理')).toBeTruthy()
+    expect(screen.getByText('最新：已读但仍需处理')).toBeTruthy()
     expect(screen.getByText('已读')).toBeTruthy()
     expect(screen.getByText(/来自：/)).toBeTruthy()
   })
@@ -4798,10 +5101,9 @@ describe('sealed Pegas UI', () => {
     fireEvent.change(screen.getByLabelText('归类模型服务'), {
       target: { value: 'anthropic' },
     })
-    expect(screen.getByLabelText('归类模型名称')).toHaveProperty(
-      'value',
-      'claude-sonnet-4-5',
-    )
+    expect(
+      screen.getByRole('button', { name: /，归类模型名称$/ }).textContent,
+    ).toContain('claude-sonnet-4-5')
   })
 
   it('does not attribute an old provider discovery result to a new selection', async () => {
@@ -5006,12 +5308,14 @@ describe('sealed Pegas UI', () => {
         {
           ...source,
           id: 'older',
+          taskId: 'task-older',
           createdAt: '2026-11-19T08:00:00.000Z',
           payload: { type: 'run.failed', error: '较早失败' },
         },
         {
           ...source,
           id: 'newer',
+          taskId: 'task-newer',
           createdAt: '2026-11-19T09:00:00.000Z',
           payload: { type: 'run.failed', error: '最新失败' },
         },
@@ -5112,7 +5416,7 @@ describe('sealed Pegas UI', () => {
     )
   })
 
-  it('filters important results and marks them as results', async () => {
+  it('filters routine activity and marks results and failures semantically', async () => {
     const source = snapshot.messages[0]
     if (!source) throw new Error('missing attention fixture')
     installSnapshotFetch({
@@ -5138,9 +5442,195 @@ describe('sealed Pegas UI', () => {
     )
     expect(document.querySelector('.attention-icon.is-result')).toBeTruthy()
     expect(document.querySelector('.attention-icon.is-failed')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: '重要结果 1' }))
-    expect(screen.getByText('验收结果已生成')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '事情动态 1' }))
+    expect(screen.getByText('最新：验收结果已生成')).toBeTruthy()
     expect(screen.queryByText('执行失败原因')).toBeNull()
+  })
+
+  it('pins review.ready as an acceptance todo instead of routine activity', async () => {
+    const source = snapshot.messages[0]
+    if (!source) throw new Error('missing attention fixture')
+    installSnapshotFetch({
+      ...snapshot,
+      messages: [
+        {
+          ...source,
+          id: 'review-ready',
+          payload: {
+            type: 'review.ready',
+            title: '官网改版交付待验收',
+            text: 'Review Pack 已生成。',
+          },
+        },
+        {
+          ...source,
+          id: 'routine-result',
+          payload: { type: 'run.completed', text: '例行结果' },
+        },
+      ],
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    const list = screen.getByLabelText('待处理列表')
+    expect(within(list).getByText('验收')).toBeTruthy()
+    expect(
+      within(list).getByRole('heading', {
+        level: 2,
+        name: '官网改版交付待验收',
+      }),
+    ).toBeTruthy()
+    expect(screen.getByRole('button', { name: '待你处理 1' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '事情动态 1' })).toBeTruthy()
+    const sections = within(list).getAllByRole('heading', { level: 3 })
+    expect(sections[0]?.textContent).toContain('待你处理')
+  })
+
+  it('groups routine results per task with a newest-first timeline and per-message reads only', async () => {
+    const source = snapshot.messages[0]
+    if (!source) throw new Error('missing attention fixture')
+    let readRequests = 0
+    const counted = (id: string, minute: number, text: string) => ({
+      ...source,
+      id,
+      createdAt: `2026-11-19T08:${String(minute).padStart(2, '0')}:00.000Z`,
+      payload: { type: 'run.completed', text },
+    })
+    installSnapshotFetch(
+      {
+        ...snapshot,
+        messages: [
+          counted('count-7', 7, '第 7 个数：7'),
+          counted('count-8', 8, '第 8 个数：8'),
+          counted('count-9', 9, '第 9 个数：9'),
+          counted('count-10', 10, '第 10 个数：10'),
+          counted('count-11', 11, '第 11 个数：11'),
+        ],
+      },
+      path => {
+        if (!path.endsWith('/read')) return undefined
+        readRequests += 1
+        return Response.json({ message: { ...source, readAt: 'now' } })
+      },
+    )
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    const list = screen.getByLabelText('待处理列表')
+    expect(within(list).getAllByRole('article')).toHaveLength(1)
+    expect(within(list).getByText('5 条 · 5 未读')).toBeTruthy()
+    expect(within(list).getByText('最新：第 11 个数：11')).toBeTruthy()
+    fireEvent.click(
+      within(list).getByRole('button', { name: `展开：${channel.title}` }),
+    )
+    expect(readRequests).toBe(0)
+    const entries = within(list)
+      .getAllByRole('button')
+      .filter(button => button.classList.contains('attention-group-entry'))
+    expect(entries.map(entry => entry.textContent)).toEqual([
+      expect.stringContaining('第 10 个数：10'),
+      expect.stringContaining('第 9 个数：9'),
+      expect.stringContaining('第 8 个数：8'),
+    ])
+    expect(
+      within(list).getByRole('button', { name: '查看全部 5 条' }),
+    ).toBeTruthy()
+    expect(readRequests).toBe(0)
+    fireEvent.click(within(list).getByRole('button', { name: '查看全部 5 条' }))
+    expect(
+      within(list).getByRole('button', { name: '收起更早通知' }),
+    ).toBeTruthy()
+    expect(within(list).getByText('第 7 个数：7')).toBeTruthy()
+    expect(readRequests).toBe(0)
+  })
+
+  it('merges repeated failures of one task into a single pinned failure row', async () => {
+    const source = snapshot.messages[0]
+    if (!source) throw new Error('missing attention fixture')
+    installSnapshotFetch({
+      ...snapshot,
+      messages: [
+        {
+          ...source,
+          id: 'fail-1',
+          createdAt: '2026-11-19T08:01:00.000Z',
+          payload: { type: 'run.failed', error: '磁盘空间不足' },
+        },
+        {
+          ...source,
+          id: 'fail-2',
+          createdAt: '2026-11-19T08:02:00.000Z',
+          payload: { type: 'run.failed', error: '磁盘空间不足（重试）' },
+        },
+      ],
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    const list = screen.getByLabelText('待处理列表')
+    expect(within(list).getAllByRole('article')).toHaveLength(1)
+    expect(screen.getByRole('button', { name: '失败 2' })).toBeTruthy()
+    expect(within(list).getByText('2 条 · 2 未读')).toBeTruthy()
+    expect(within(list).getByText('最新：磁盘空间不足（重试）')).toBeTruthy()
+  })
+
+  it('pages routine activity by task while keeping todos and failures unpaged', async () => {
+    const source = snapshot.messages[0]
+    if (!source) throw new Error('missing attention fixture')
+    const activityMessages = Array.from({ length: 25 }, (_, index) => ({
+      ...source,
+      id: `activity-${String(index)}`,
+      taskId: `task-page-${String(index)}`,
+      createdAt: new Date(Date.UTC(2026, 10, 19, 8, index)).toISOString(),
+      payload: { type: 'run.completed', text: `结果 ${String(index)}` },
+    }))
+    installSnapshotFetch({
+      ...snapshot,
+      messages: [
+        {
+          ...source,
+          id: 'pinned-approval',
+          payload: {
+            type: 'approval.required',
+            approvalId: 'approval-paging',
+            summary: '发布前需要确认',
+          },
+        },
+        ...activityMessages,
+      ],
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    const list = screen.getByLabelText('待处理列表')
+    expect(screen.getByRole('button', { name: '事情动态 25' })).toBeTruthy()
+    expect(
+      within(list).getByRole('heading', { level: 2, name: '发布前需要确认' }),
+    ).toBeTruthy()
+    const pager = screen.getByLabelText('事情动态分页')
+    expect(within(pager).getByText('第 1–20 件事情，共 25 件')).toBeTruthy()
+    expect(within(list).getByText('最新：结果 24')).toBeTruthy()
+    expect(within(list).queryByText('最新：结果 0')).toBeNull()
+    fireEvent.click(within(pager).getByRole('button', { name: '下一页' }))
+    expect(within(pager).getByText('第 21–25 件事情，共 25 件')).toBeTruthy()
+    expect(within(list).getByText('最新：结果 0')).toBeTruthy()
+    expect(
+      within(list).getByRole('heading', { level: 2, name: '发布前需要确认' }),
+    ).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '事情动态 25' }))
+    expect(within(pager).getByText('第 1–20 件事情，共 25 件')).toBeTruthy()
   })
 
   it('labels long user messages as messages, not replies', async () => {
@@ -6200,13 +6690,17 @@ describe('sealed Pegas UI', () => {
     fireEvent.change(screen.getByLabelText('执行模型'), {
       target: { value: 'override' },
     })
-    const modelPicker = await screen.findByLabelText('指定模型')
-    await waitFor(() =>
-      expect(modelPicker.querySelectorAll('option').length).toBeGreaterThan(1),
-    )
-    fireEvent.change(modelPicker, {
-      target: { value: 'Magpie/gpt-6.1-sol' },
+    const modelPicker = await screen.findByRole('button', {
+      name: /，指定模型$/,
     })
+    await waitFor(() => expect(modelPicker).toHaveProperty('disabled', false))
+    fireEvent.click(modelPicker)
+    const taskModelDialog = await screen.findByRole('dialog', {
+      name: '选择模型',
+    })
+    fireEvent.click(
+      within(taskModelDialog).getByRole('option', { name: /GPT-6.1 Sol/ }),
+    )
     fireEvent.click(screen.getByRole('button', { name: '保存执行设置' }))
     expect(
       await screen.findByText('执行设置已保存，对后续运行生效。'),
@@ -7486,18 +7980,31 @@ describe('sealed Pegas UI', () => {
           })
         if (path.startsWith('/v1/runs/run-1/activity/call-gap/output?')) {
           outputCalls.push(path)
-          const offset = Number(
-            new URL(path, 'http://localhost').searchParams.get('offset'),
-          )
-          if (offset === 9)
+          const query = new URL(path, 'http://localhost').searchParams
+          const offset = Number(query.get('offset'))
+          if (offset === 0 && query.get('until') === null)
+            return Response.json({
+              runId: 'run-1',
+              callId: 'call-gap',
+              content: 'HEAD-LINE',
+              offset: 0,
+              totalCharacters: 31,
+              archivedCharacters: 31,
+              truncatedArchive: false,
+              gapStart: 9,
+              gapEnd: 21,
+            })
+          if (offset === 9 && query.get('until') === '21')
             return Response.json({
               runId: 'run-1',
               callId: 'call-gap',
               content: 'MIDDLE-OUTPUT',
               offset: 9,
-              totalCharacters: 22,
-              archivedCharacters: 22,
+              totalCharacters: 31,
+              archivedCharacters: 31,
               truncatedArchive: false,
+              gapStart: 9,
+              gapEnd: 21,
             })
           return Response.json({ error: 'not_found' }, { status: 404 })
         }
@@ -7526,8 +8033,23 @@ describe('sealed Pegas UI', () => {
       name: '加载省略内容',
     })
     fireEvent.click(loadGap)
-    expect(await within(drawer).findByText('MIDDLE-OUTPUT')).toBeTruthy()
-    expect(outputCalls[0]).toContain('offset=9')
+    await waitFor(() => {
+      expect(outputCalls).toHaveLength(1)
+    })
+    fireEvent.click(loadGap)
+    await waitFor(() => {
+      expect(drawer.textContent).toContain('MIDDLE-OUTPUT')
+    })
+    expect(outputCalls[0]).toContain('offset=0')
+    expect(outputCalls[0]).not.toContain('until=')
+    expect(outputCalls[1]).toContain('offset=9')
+    expect(outputCalls[1]).toContain('until=21')
+    const gapPres = [...shellCard.querySelectorAll('.shell-output')].map(
+      element => element.textContent,
+    )
+    expect(gapPres[0]).toBe('HEAD-LINE')
+    expect(gapPres.at(-1)).toBe('ERROR-TAIL')
+    expect(gapPres.slice(1, -1).join('')).toBe('HEAD-LINE\nMIDDLE-OUTPUT')
     expect(shellCard.querySelector('.output-gap')).toBeNull()
     expect(
       within(shellCard as HTMLElement).queryByRole('button', {
@@ -7623,6 +8145,145 @@ describe('sealed Pegas UI', () => {
       expect(drawer.textContent).toContain('SPILL-FULL-HEAD')
     })
     expect(outputCalls[0]).toContain('offset=0')
+  })
+
+  it('loads the omission gap from a spill-backed head+tail clip without repeating the tail', async () => {
+    const outputCalls: string[] = []
+    installSnapshotFetch(
+      {
+        ...snapshot,
+        channels: [{ ...channel, status: 'completed', canStop: false }],
+        runs: [{ ...run, status: 'completed', output: '完成。' }],
+      },
+      path => {
+        if (path.startsWith('/v1/tasks/task-1/delivery?'))
+          return Response.json(deliveryFixture)
+        if (path.startsWith('/v1/runs/run-1/activity?'))
+          return Response.json({
+            runId: 'run-1',
+            taskId: channel.id,
+            totalEntries: 1,
+            truncated: false,
+            entries: [
+              {
+                seq: 1,
+                kind: 'tool_call',
+                status: 'completed',
+                callId: 'call-seq',
+                tool: 'bash',
+                label: 'bash',
+                semantic: {
+                  kind: 'shell',
+                  command: 'seq 1 80000',
+                  output: '334\n… 已省略 19 字符 …\n79001\n80000',
+                  outputTruncated: true,
+                  outputOmittedCharacters: 19,
+                  outputSpillPath: '/tmp/dsh-spill/seq.txt',
+                },
+                createdAt: '2026-11-19T08:00:10.000Z',
+                updatedAt: '2026-11-19T08:00:20.000Z',
+              },
+            ],
+          })
+        if (path.startsWith('/v1/runs/run-1/activity/call-seq/output?')) {
+          outputCalls.push(path)
+          const query = new URL(path, 'http://localhost').searchParams
+          const offset = Number(query.get('offset'))
+          if (offset === 0 && query.get('until') === null)
+            return Response.json({
+              runId: 'run-1',
+              callId: 'call-seq',
+              content: '334',
+              offset: 0,
+              totalCharacters: 34,
+              archivedCharacters: 34,
+              truncatedArchive: false,
+              gapStart: 3,
+              gapEnd: 23,
+            })
+          if (offset === 3 && query.get('until') === '23')
+            return Response.json({
+              runId: 'run-1',
+              callId: 'call-seq',
+              content: '\nMIDDLE\n\n79001\n80000',
+              offset: 3,
+              totalCharacters: 34,
+              archivedCharacters: 34,
+              truncatedArchive: false,
+              gapStart: 3,
+              gapEnd: 23,
+            })
+          if (offset === 23 && query.get('until') === '23')
+            return Response.json({
+              runId: 'run-1',
+              callId: 'call-seq',
+              content: '',
+              offset: 23,
+              totalCharacters: 34,
+              archivedCharacters: 34,
+              truncatedArchive: false,
+              gapStart: 3,
+              gapEnd: 23,
+            })
+          return Response.json({ error: 'not_found' }, { status: 404 })
+        }
+        return undefined
+      },
+    )
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: new RegExp(channel.title) }),
+    )
+    const drawer = await screen.findByRole('dialog', { name: '工作详情' })
+    fireEvent.click(await within(drawer).findByText(/工作流程记录/))
+    const seqHeadline = (await within(drawer).findAllByText('seq 1 80000'))[0]
+    if (!seqHeadline) throw new Error('expected seq headline')
+    fireEvent.click(seqHeadline)
+    const shellCard = drawer.querySelector('.shell-card')
+    if (!shellCard) throw new Error('expected shell card')
+    expect(shellCard.querySelector('.output-gap')?.textContent).toContain(
+      '已省略 19 字符',
+    )
+    expect(
+      within(shellCard as HTMLElement).getByRole('link', {
+        name: '完整输出文件',
+      }),
+    ).toBeTruthy()
+    const loadSeqGap = within(shellCard as HTMLElement).getByRole('button', {
+      name: '加载省略内容',
+    })
+    fireEvent.click(loadSeqGap)
+    await waitFor(() => {
+      expect(outputCalls).toHaveLength(1)
+    })
+    fireEvent.click(loadSeqGap)
+    await waitFor(() => {
+      expect(shellCard.textContent).toContain('MIDDLE')
+    })
+    expect(outputCalls[0]).toContain('offset=0')
+    expect(outputCalls[1]).toContain('offset=3')
+    expect(outputCalls[1]).toContain('until=23')
+    const seqPres = [...shellCard.querySelectorAll('.shell-output')].map(
+      element => element.textContent,
+    )
+    expect(seqPres[0]).toBe('334')
+    expect(seqPres.at(-1)).toBe('79001\n80000')
+    expect(seqPres.slice(1, -1).join('')).toBe('334\nMIDDLE\n\n')
+    expect(shellCard.querySelector('.output-gap')).toBeNull()
+    await waitFor(() => {
+      expect(
+        within(shellCard as HTMLElement).queryByRole('button', {
+          name: '加载省略内容',
+        }),
+      ).toBeNull()
+    })
+    expect(
+      [...shellCard.querySelectorAll('.shell-output')].map(
+        element => element.textContent,
+      ),
+    ).toEqual(['334', '334\n', 'MIDDLE\n\n', '79001\n80000'])
   })
 
   it('keeps honest fallbacks for legacy and unknown tool records', async () => {
