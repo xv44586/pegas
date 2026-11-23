@@ -617,7 +617,7 @@ describe('sealed Pegas UI', () => {
   it('renders the white-first conversation shell and current work', async () => {
     installFetch()
     render(<App />)
-    expect(await screen.findByText('你的私人智能工作伙伴')).toBeTruthy()
+    expect(await screen.findByLabelText('给 Pegas 发消息')).toBeTruthy()
     expect(screen.getByText('帮我设计一个安全的自更新流程。')).toBeTruthy()
     expect(screen.getAllByText('安全自更新流程').length).toBeGreaterThan(0)
     expect(document.documentElement.dataset.theme).toBe('light')
@@ -654,7 +654,7 @@ describe('sealed Pegas UI', () => {
         : undefined,
     )
     render(<App />)
-    await screen.findByText('你的私人智能工作伙伴')
+    await screen.findByLabelText('给 Pegas 发消息')
     fireEvent.keyDown(window, { key: 'k', metaKey: true })
     const dialog = screen.getByRole('dialog', { name: '全局搜索' })
     expect(within(dialog).getByPlaceholderText('搜索事情')).toBeTruthy()
@@ -2614,7 +2614,7 @@ describe('sealed Pegas UI', () => {
   it('pushes page history and restores the prior page on browser back', async () => {
     installFetch()
     render(<App />)
-    await screen.findByText('你的私人智能工作伙伴')
+    await screen.findByLabelText('给 Pegas 发消息')
     fireEvent.click(
       within(screen.getByLabelText('主导航')).getByRole('button', {
         name: /所有事情/,
@@ -2623,7 +2623,7 @@ describe('sealed Pegas UI', () => {
     expect(screen.getByRole('heading', { name: '所有事情' })).toBeTruthy()
     window.history.back()
     await waitFor(() =>
-      expect(screen.getByText('你的私人智能工作伙伴')).toBeTruthy(),
+      expect(screen.getByLabelText('给 Pegas 发消息')).toBeTruthy(),
     )
   })
 
@@ -3097,7 +3097,10 @@ describe('sealed Pegas UI', () => {
       events: [{ ...sourceEvent, status: 'processing' }],
     })
     render(<App />)
-    expect(await screen.findByText('正在分配')).toBeTruthy()
+    const statusIcon = await screen.findByRole('img', { name: '正在分配' })
+    expect(statusIcon.getAttribute('title')).toBe('正在分配')
+    expect(statusIcon.closest('.message-row.is-user')).toBeTruthy()
+    expect(statusIcon.closest('.message-content')).toBeNull()
     expect(screen.getByText('帮我设计一个安全的自更新流程。')).toBeTruthy()
   })
 
@@ -4096,7 +4099,7 @@ describe('sealed Pegas UI', () => {
       return undefined
     })
     render(<App />)
-    expect(await screen.findByText('你的私人智能工作伙伴')).toBeTruthy()
+    expect(await screen.findByLabelText('给 Pegas 发消息')).toBeTruthy()
     expect(
       (await screen.findAllByText('安全自更新流程')).length,
     ).toBeGreaterThan(0)
@@ -5981,7 +5984,7 @@ describe('sealed Pegas UI', () => {
       messages: [clarificationMessage],
     })
     render(<App />)
-    await screen.findByText('你的私人智能工作伙伴')
+    await screen.findByLabelText('给 Pegas 发消息')
     expect(screen.queryByRole('button', { name: /去回答/ })).toBeNull()
   })
 

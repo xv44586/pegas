@@ -15,6 +15,7 @@
   --canvas: #fff;
   --rail: #fafaf9;
   --surface: #f7f7f5;
+  --message-bubble: var(--surface);
   --surface-raised: #fff;
   --surface-hover: #f2f2ef;
   --ink: #171716;
@@ -255,7 +256,7 @@ a {
 
 .app-shell {
   display: grid;
-  grid-template-columns: 286px minmax(0, 1fr);
+  grid-template-columns: 232px minmax(0, 1fr);
   height: 100dvh;
   min-height: 620px;
   overflow: hidden;
@@ -272,14 +273,14 @@ a {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  padding: 26px 14px 16px;
+  padding: 16px 10px 12px;
 }
 .brand-lockup {
   align-items: center;
   display: flex;
-  gap: 13px;
-  min-height: 58px;
-  padding: 0 20px 18px;
+  gap: 9px;
+  min-height: 44px;
+  padding: 0 8px 12px;
 }
 .pegas-mark {
   display: block;
@@ -287,17 +288,18 @@ a {
 }
 .brand-lockup strong {
   display: block;
-  font-size: var(--text-display);
-  letter-spacing: -0.04em;
-  line-height: 1;
+  font-size: var(--text-read);
+  font-weight: 500;
+  letter-spacing: 0;
+  line-height: 1.2;
 }
 .brand-lockup span {
   align-items: center;
   color: var(--muted);
   display: flex;
-  font-size: var(--text-small);
-  gap: 7px;
-  margin-top: 8px;
+  font-size: var(--text-tiny);
+  gap: 5px;
+  margin-top: 3px;
 }
 .brand-lockup i,
 .state-hero i,
@@ -318,8 +320,8 @@ a {
 }
 .primary-nav {
   display: grid;
-  gap: 5px;
-  margin-top: 26px;
+  gap: 3px;
+  margin-top: 14px;
 }
 .nav-item {
   align-items: center;
@@ -328,10 +330,10 @@ a {
   color: var(--ink-soft);
   display: grid;
   font-weight: 500;
-  gap: 12px;
+  gap: 9px;
   grid-template-columns: 20px 1fr auto;
-  min-height: 46px;
-  padding: 0 18px;
+  min-height: 38px;
+  padding: 0 10px;
   text-align: left;
   width: 100%;
 }
@@ -348,7 +350,7 @@ a {
   border-radius: 0 4px 4px 0;
   content: '';
   height: 28px;
-  left: -14px;
+  left: -10px;
   position: absolute;
   width: 3px;
 }
@@ -369,8 +371,8 @@ a {
 }
 .recent-work {
   border-top: 1px solid var(--line);
-  margin: 30px 8px 0;
-  padding-top: 22px;
+  margin: 14px 8px 0;
+  padding-top: 12px;
 }
 .recent-work > p {
   color: var(--muted);
@@ -384,9 +386,10 @@ a {
   border-radius: 8px;
   color: var(--ink-soft);
   display: flex;
+  font-size: var(--text-caption);
   gap: 10px;
   overflow: hidden;
-  padding: 10px;
+  padding: 8px;
   text-align: left;
   width: 100%;
 }
@@ -628,7 +631,15 @@ a {
   position: relative;
 }
 .conversation-page .page-header {
-  padding-bottom: 10px;
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  padding: 12px 42px;
+}
+.conversation-page .page-header h1 {
+  font-size: var(--text-read);
+  font-weight: 500;
+  letter-spacing: 0;
+  line-height: 1.4;
 }
 .conversation-scroll {
   overflow: auto;
@@ -699,22 +710,12 @@ a {
   text-wrap: pretty;
 }
 .message-row.is-user .message-content {
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  border-radius: 22px;
+  background: var(--message-bubble);
+  border-radius: 18px 18px 6px 18px;
   color: var(--ink);
   max-width: 78%;
   padding: 10px 16px;
 }
-.message-row.is-user .message-delivery {
-  color: var(--text-muted);
-}
-
-.message-delivery {
-  display: inline;
-  color: var(--text-muted);
-  font-size: var(--text-small);
-}
-
 .message-meta {
   align-items: center;
   color: var(--faint);
@@ -732,6 +733,95 @@ a {
 }
 .message-row.is-user .message-meta {
   justify-content: flex-end;
+  opacity: 1;
+}
+.message-status {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+  position: relative;
+}
+.message-status-icon {
+  align-items: center;
+  color: var(--muted);
+  display: inline-flex;
+  height: 22px;
+  justify-content: center;
+  width: 20px;
+}
+.message-status-icon.is-failed {
+  color: var(--critical);
+}
+.message-status-icon.is-processing svg {
+  animation: status-spin 1.2s linear infinite;
+}
+@keyframes status-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.message-derived-trigger {
+  align-items: center;
+  background: transparent;
+  border-radius: 7px;
+  color: var(--accent-ink, var(--accent));
+  display: inline-flex;
+  gap: 3px;
+  height: 22px;
+  justify-content: center;
+  padding: 0 4px;
+}
+.message-derived-trigger:hover {
+  background: var(--accent-softer);
+}
+.message-derived-count {
+  font-size: var(--text-tiny);
+  font-weight: 500;
+  line-height: 1;
+}
+.message-derived-menu {
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow-pop);
+  display: flex;
+  flex-direction: column;
+  min-width: 250px;
+  padding: 6px;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 20;
+}
+.message-derived-menu button {
+  align-items: center;
+  background: transparent;
+  border-radius: 8px;
+  color: var(--ink);
+  display: flex;
+  font-size: var(--text-caption);
+  gap: 8px;
+  justify-content: space-between;
+  padding: 8px 10px;
+  text-align: left;
+}
+.message-derived-menu button:hover {
+  background: var(--surface);
+}
+.message-derived-menu .derived-task-name {
+  align-items: center;
+  display: inline-flex;
+  gap: 7px;
+  min-width: 0;
+}
+.message-derived-menu .derived-task-name span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.message-derived-menu .status-text {
+  flex: 0 0 auto;
+  font-size: var(--text-small);
 }
 .message-row.is-user[data-send-animating] .message-content {
   transform-origin: top left;
@@ -4809,7 +4899,7 @@ kbd {
 }
 .message-attachment {
   align-items: center;
-  color: color-mix(in srgb, var(--canvas) 78%, var(--ink));
+  color: var(--muted);
   display: inline-flex;
   font-size: var(--text-small);
   gap: 6px;
@@ -5372,14 +5462,14 @@ kbd {
 
 @media (max-width: 1120px) {
   .app-shell {
-    grid-template-columns: 230px minmax(0, 1fr);
+    grid-template-columns: 200px minmax(0, 1fr);
   }
   .primary-rail {
     padding-left: 10px;
     padding-right: 10px;
   }
   .brand-lockup {
-    padding-left: 12px;
+    padding-left: 8px;
   }
   .nav-item.is-active::before {
     left: -10px;
@@ -5479,7 +5569,7 @@ kbd {
     padding: 14px 18px 0;
   }
   .conversation-page .page-header {
-    padding-bottom: 6px;
+    padding: 10px 20px;
   }
   .conversation-welcome {
     margin-top: 10vh;
