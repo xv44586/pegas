@@ -218,6 +218,21 @@ console.log(JSON.stringify({
     expect(prompt).toContain('Follow-up 只针对当前事情继续一次')
     expect(prompt).toContain('事情已停止或完成时不会唤醒')
     expect(prompt).toContain('ISO-8601 未来时间')
+    expect(prompt).toContain('必须带时区偏移或 Z')
+    expect(prompt).toContain('禁止把本地墙钟时间直接标成 Z')
+  })
+
+  it('describes the recurring automation API and forbids sleep-loop simulation', () => {
+    const prompt = executorPrompt('每分钟报一个数，从 1 数到 10')
+    expect(prompt).toContain('POST /v1/runs/:runId/automations')
+    expect(prompt).toContain('everySeconds')
+    expect(prompt).toContain('禁止用 sleep/循环在当前 Run 里模拟周期任务')
+    expect(prompt).toContain('固定续接当前事情')
+    expect(prompt).toContain(
+      'POST /v1/runs/:runId/automations/:automationId/pause',
+    )
+    expect(prompt).toContain('expectedRevision')
+    expect(prompt).toContain('周期责任也不会复活已关闭的事情')
   })
 
   it('accepts only a completed final event and captures the session id', async () => {

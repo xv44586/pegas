@@ -4,7 +4,7 @@
 >
 > 状态：Partial
 >
-> 更新日期：2026-11-21
+> 更新日期：2026-11-23
 
 ## 用户结果
 
@@ -31,6 +31,45 @@ x-pegas-run-claim-token: <current run claim>
 ```
 
 服务端把它落盘为 `once + existing_task(当前 Task)` 的 Automation：owner 取自 Run 所属 Task，不接受调用方指定其他 Task 或 new_task；`at` 必须在未来；Task 已停止/完成时拒绝（`automation_target_unavailable`）。命令按 `follow-up:<runId>:<commandId>` 幂等，重放返回冻结的 Automation，payload 冲突 409。到点由既有 Scheduler → Event Inbox → Router 链路把提示词作为机器输入送回同一事情；周期性责任仍走显式 Automation API，Follow-up 不表达周期语义。
+
+`at` 必须携带显式时区（`Z` 或 `±HH:MM` 偏移）。裸本地墙钟时间（如 `2026-11-24T14:00:00`）会被拒绝并提示带时区重写，防止把本地时间误标成 UTC 造成整小时偏移。
+
+### Recurring（对话式周期跟进）
+
+周期责任（“每分钟报一个数”“每小时检查一次构建”）由实际 Executor 用当前 Run 的短期 claim 调用：
+
+```http
+POST /v1/runs/:runId/automations
+x-pegas-run-claim-token: <current run claim>
+```
+
+```json
+{
+  "commandId": "stable-key",
+  "prompt": "每次触发要做的事（自足描述进度判断与停止条件）",
+  "everySeconds": 60,
+  "startsAt": "2026-11-24T14:00:00+08:00",
+  "title": "可选短标题"
+}
+```
+
+服务端把它落盘为 `interval + existing_task(当前 Task)` 的 Automation：owner 与 target 冻结自 Run 所属 Task，payload 不接受 target/userId 字段；`everySeconds` 沿用 Automation 合同（60 秒至 366 天）；`startsAt` 可选、必须在未来且必须带显式时区。Task 已停止/完成时拒绝（`automation_target_unavailable`）。命令按 `run-automation:<runId>:<commandId>` 幂等，重放返回冻结的 Automation，payload 冲突 409。到点由既有 Scheduler → Event Inbox → Worker 链路把提示词作为机器输入送回同一事情，周期 Automation 保持 `active`。
+
+只要 Task 上仍有 `active` 且指向它的 Automation，Run 完成不会把 Task 结算为 `completed`（保持 `started`），周期触发因此总能续接；这是既有「机器输入不复活 closed Task」边界的配套前提，不改变用户显式停止/完成的行为。
+
+Executor 收尾或调整时用同一 claim 调用状态命令（只能操作续接当前事情的 Automation，跨 Task 返回 404）：
+
+```http
+POST /v1/runs/:runId/automations/:automationId/pause
+POST /v1/runs/:runId/automations/:automationId/resume
+POST /v1/runs/:runId/automations/:automationId/cancel
+```
+
+```json
+{ "commandId": "stable-key", "expectedRevision": 1 }
+```
+
+`userId` 由服务端取自 Run 所属 Task，不接受调用方指定；revision 冲突、只读状态与幂等语义沿用既有 Automation 状态命令。执行合同要求 Executor 把周期性等待交给调度器，禁止在当前 Run 里用 sleep/循环模拟周期任务。
 
 ## 领域模型
 
