@@ -931,6 +931,7 @@ setInterval(() => {}, 1000)
   })
 
   it('escalates a timed out child from SIGTERM to SIGKILL without leaving it alive', async () => {
+    const executionTimeoutMs = 2_000
     const command = fakeDsh(`
 process.on('SIGTERM', () => {})
 console.log(JSON.stringify({ type: 'session', sessionId: String(process.pid) }))
@@ -938,7 +939,9 @@ setInterval(() => {}, 1000)
 `)
     const executor = new DshCliExecutor({
       command,
-      timeoutMs: 500,
+      // The timeout exercises termination behavior, not process startup speed.
+      // Leave enough time for a real Node child to boot on loaded CI runners.
+      timeoutMs: executionTimeoutMs,
       terminationGraceMs: 30,
     })
     let childPid: number | undefined
@@ -954,7 +957,7 @@ setInterval(() => {}, 1000)
         },
       }),
     ).rejects.toMatchObject({
-      message: 'DSH execution timed out after 500ms',
+      message: `DSH execution timed out after ${String(executionTimeoutMs)}ms`,
     })
 
     expect(childPid).toBeTypeOf('number')

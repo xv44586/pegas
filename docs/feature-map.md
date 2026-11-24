@@ -244,6 +244,8 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 
 ### EXEC-003：三崩溃点真实进程注入（2026-11-21）
 
+- **测试稳定性修复（2026-11-24）**：`test/dsh-cli-executor.test.ts` 的真实子进程 SIGTERM→SIGKILL 用例把进程启动与执行超时共用 500ms 窗口，慢 runner 会在 session PID 输出前先超时，形成与产品逻辑无关的随机失败。回归预算调整为 2s，继续断言 PID 已捕获、SIGTERM 被忽略、30ms 宽限后 SIGKILL 且进程不存在；`DshCliExecutor` 运行时代码与默认超时不变。该同型抖动在 2026-11-22、23、24 三个独立日期出现，现以测试预算约束晋升门禁。修复后定向用例连续 8 次通过；Node 24 完整 `pnpm check` 140 文件 / 1429 通过 / 1 跳过（statement 77.74%、branch 71.48%、function 74.78%、line 80.92%），`pnpm smoke` 真实 Task→Run 链路通过。
+
 - **用户结果**：Worker 在事件领取后、工具副作用后、结果写回前被硬杀（SIGKILL），重启后任务不丢失、恰好完成一次，外部副作用不重复，完成通知不重复。
 - **验收条件**：`pnpm smoke:crash` 使用真实 Control Plane/Worker 进程与临时数据目录；测试替身 DSH 在三个持久崩溃点杀死 Worker；重启后经真实 30s lease 过期路径结算旧 Run 为 `failed(lease_expired)`，retry Run 携带 `retryOfRunId` 与 `resumeFromRef` 恢复同一 session；每 Task 副作用 marker 计数恒为 1，`run.completed` Outbox 恰好一条，事件终态 `processed`。
 - **非目标**：不推断真实第三方工具副作用是否成功（仍由 Action idempotency/reconciliation 处置）；不缩短生产 lease；不注入网络分区与数据库损坏（由既有确定性回归与备份恢复演练覆盖）。
