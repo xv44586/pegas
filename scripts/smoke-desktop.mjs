@@ -61,6 +61,14 @@ try {
     path: resolve(outputDirectory, 'desktop-electron-macos.png'),
   })
   assert.deepEqual(consoleErrors, [])
+  await waitForUnreadBadge(application)
+  const unreadBefore = await outboxUnreadCount(window)
+  assert.ok(
+    unreadBefore > 0,
+    'completed Run should leave an unread Outbox fact',
+  )
+  await markFirstUnreadRead(window)
+  await waitForBadgeBelow(application, unreadBefore)
   const workerPid = desktopServicePid(
     application.process().pid,
     'worker/main.js',
@@ -136,4 +144,62 @@ async function waitForCompletedRun(window, expectedOutput) {
     await new Promise(resolveWait => setTimeout(resolveWait, 50))
   }
   throw new Error('Desktop Worker did not complete the submitted Run')
+}
+
+async function outboxUnreadCount(window) {
+  return window.evaluate(async () => {
+    const response = await fetch('/v1/outbox?userId=owner')
+    if (!response.ok) return -1
+    const body = await response.json()
+    return (body.messages ?? []).filter(
+      message => !message.readAt && message.status !== 'merged',
+    ).length
+  })
+}
+
+async function markFirstUnreadRead(window) {
+  const marked = await window.evaluate(async () => {
+    const response = await fetch('/v1/outbox?userId=owner')
+    if (!response.ok) return false
+    const body = await response.json()
+    const unread = (body.messages ?? []).find(
+      message => !message.readAt && message.status !== 'merged',
+    )
+    if (!unread) return false
+    const readResponse = await fetch(
+      `/v1/outbox/${encodeURIComponent(unread.id)}/read`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ userId: 'owner' }),
+      },
+    )
+    return readResponse.ok
+  })
+  assert.equal(marked, true, 'marking an Outbox fact read should succeed')
+}
+
+async function waitForUnreadBadge(application) {
+  const deadline = Date.now() + 15_000
+  while (Date.now() < deadline) {
+    const badge = await application.evaluate(({ app }) =>
+      process.platform === 'darwin' ? app.dock?.getBadge() : undefined,
+    )
+    if (badge && Number(badge) > 0) return Number(badge)
+    await new Promise(resolveWait => setTimeout(resolveWait, 100))
+  }
+  throw new Error('Dock badge did not reflect the unread Outbox fact')
+}
+
+async function waitForBadgeBelow(application, previous) {
+  const deadline = Date.now() + 15_000
+  while (Date.now() < deadline) {
+    const badge = await application.evaluate(({ app }) =>
+      process.platform === 'darwin' ? app.dock?.getBadge() : undefined,
+    )
+    const value = badge ? Number(badge) : 0
+    if (value < previous) return
+    await new Promise(resolveWait => setTimeout(resolveWait, 100))
+  }
+  throw new Error('Dock badge did not shrink after the fact was read')
 }

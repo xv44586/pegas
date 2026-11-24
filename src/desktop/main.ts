@@ -3,8 +3,9 @@ import { randomBytes } from 'node:crypto'
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 
-import { app, BrowserWindow, session, shell } from 'electron'
+import { app, BrowserWindow, Notification, session, shell } from 'electron'
 
+import { createDesktopAttentionMonitor } from './attention.js'
 import {
   availableLoopbackPort,
   desktopRequestHeaders,
@@ -24,6 +25,7 @@ let shutdownComplete = false
 let shutdownPromise: Promise<void> | undefined
 let quitAfterShutdownRequested = false
 let serviceFailureHandled = false
+let attentionTimer: NodeJS.Timeout | undefined
 
 app.setName('Pegas')
 
@@ -73,6 +75,62 @@ async function startDesktop(): Promise<void> {
   }
   configureSession(appUrl, apiToken)
   await createWindow(appUrl)
+  startAttentionMonitor(appUrl, apiToken)
+}
+
+function startAttentionMonitor(trustedUrl: string, apiToken?: string): void {
+  const origin = new URL(trustedUrl).origin
+  const monitor = createDesktopAttentionMonitor({
+    fetchSnapshot: async () => {
+      const response = await fetch(`${origin}/v1/outbox?userId=owner`, {
+        headers: apiToken ? { Authorization: `Bearer ${apiToken}` } : {},
+        signal: AbortSignal.timeout(5_000),
+      })
+      if (!response.ok)
+        throw new Error(`outbox poll ${String(response.status)}`)
+      return (await response.json()) as unknown
+    },
+    notificationsSupported: () => Notification.isSupported(),
+    notify: notice => {
+      const notification = new Notification({
+        title: notice.title,
+        ...(notice.body ? { body: notice.body } : {}),
+      })
+      notification.on('click', () => {
+        void focusAttentionDeepLink(trustedUrl, notice.deepLink)
+      })
+      notification.show()
+    },
+    setBadge: value => {
+      if (process.platform === 'darwin') app.dock?.setBadge(value)
+    },
+  })
+  const tick = async (): Promise<void> => {
+    if (quitting) return
+    await monitor.poll()
+    if (serviceFailureHandled) return
+    const delay =
+      monitor.consecutiveFailures > 0
+        ? Math.min(60_000, 3_000 * 2 ** (monitor.consecutiveFailures - 1))
+        : 3_000
+    attentionTimer = setTimeout(() => void tick(), delay)
+  }
+  void tick()
+}
+
+async function focusAttentionDeepLink(
+  trustedUrl: string,
+  deepLink: string,
+): Promise<void> {
+  if (!appUrl) return
+  const target = new URL(deepLink, new URL(trustedUrl).origin).toString()
+  if (!mainWindow) await createWindow(appUrl)
+  const window = mainWindow
+  if (!window) return
+  if (window.isMinimized()) window.restore()
+  window.show()
+  app.focus({ steal: true })
+  await window.loadURL(target)
 }
 
 function startServiceEntries(
@@ -183,6 +241,9 @@ function configureSession(trustedUrl: string, apiToken?: string): void {
 }
 
 function stopChildren(): Promise<void> {
+  if (attentionTimer) clearTimeout(attentionTimer)
+  attentionTimer = undefined
+  if (process.platform === 'darwin') app.dock?.setBadge('')
   return terminateDesktopChildren(children.splice(0))
 }
 
