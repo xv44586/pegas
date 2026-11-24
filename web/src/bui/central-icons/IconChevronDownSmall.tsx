@@ -1,0 +1,1 @@
+export { IconChevronDownSmall } from './index'

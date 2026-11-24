@@ -8,6 +8,9 @@
     "moduleResolution": "Bundler",
     "noEmit": true,
     "noUncheckedIndexedAccess": true,
+    "paths": {
+      "@bui/*": ["./src/bui/*"]
+    },
     "strict": true,
     "target": "ES2022",
     "types": ["vite/client", "vitest/globals"]

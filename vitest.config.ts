@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitest/config'
 
 export const testInclude = [
@@ -6,6 +7,11 @@ export const testInclude = [
 ] as const
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      '@bui': fileURLToPath(new URL('./web/src/bui', import.meta.url)),
+    },
+  },
   test: {
     include: [...testInclude],
     coverage: {

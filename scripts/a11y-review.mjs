@@ -224,7 +224,7 @@ try {
   }
 
   browser = await chromium.launch({ headless: true })
-  for (const theme of ['light', 'warm', 'dark']) {
+  for (const theme of ['light', 'dark']) {
     const context = await browser.newContext({
       viewport: { width: 1440, height: 900 },
       colorScheme: theme === 'dark' ? 'dark' : 'light',
@@ -249,7 +249,10 @@ try {
       ['自动化', '自动化'],
       ['记忆', '记忆'],
     ]) {
-      await page.getByLabel('主导航').getByRole('button', { name: nav }).click()
+      await page
+        .getByLabel('主导航')
+        .getByRole('button', { name: new RegExp(`^${nav}`) })
+        .click()
       await page.getByRole('heading', { name: heading, exact: true }).waitFor()
       if (nav === '待你处理')
         await page
@@ -261,7 +264,7 @@ try {
     }
     await page
       .getByLabel('主导航')
-      .getByRole('button', { name: '设置' })
+      .getByRole('button', { name: /^设置/ })
       .click()
     await page.getByRole('heading', { name: 'Pegas', exact: true }).waitFor()
     await audit(page, `${theme}-settings`)
@@ -354,7 +357,7 @@ try {
   await forcedPage.getByRole('textbox', { name: '给 Pegas 发消息' }).waitFor()
   await forcedPage
     .getByLabel('主导航')
-    .getByRole('button', { name: '所有事情' })
+    .getByRole('button', { name: /^所有事情/ })
     .click()
   await forcedPage
     .getByRole('heading', { name: '所有事情', exact: true })
@@ -363,7 +366,9 @@ try {
     const glyph = globalThis.document.querySelector(
       '.work-icon .pegas-agent-glyph',
     )
-    const status = globalThis.document.querySelector('.status-text')
+    const status = globalThis.document.querySelector(
+      '.work-list > button > span:last-child',
+    )
     return {
       hasGlyph: !!glyph,
       glyphBox: glyph?.getBoundingClientRect().width ?? 0,
@@ -395,7 +400,7 @@ try {
   await mobilePage.getByRole('textbox', { name: '给 Pegas 发消息' }).waitFor()
   await mobilePage
     .getByLabel('移动端主导航')
-    .getByRole('button', { name: '待你处理' })
+    .getByRole('button', { name: /^待你处理/ })
     .click()
   await mobilePage
     .getByRole('heading', { name: '待你处理', exact: true })

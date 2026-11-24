@@ -1,0 +1,1 @@
+export { IconUserAdd } from './index'

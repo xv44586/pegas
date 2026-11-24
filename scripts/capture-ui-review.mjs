@@ -284,7 +284,7 @@ try {
 
   await page
     .getByLabel('主导航')
-    .getByRole('button', { name: '所有事情' })
+    .getByRole('button', { name: /^所有事情/ })
     .click()
   await page.getByRole('heading', { name: '所有事情', exact: true }).waitFor()
   const workSearchInput = page.getByLabel('搜索事情', { exact: true })
@@ -326,7 +326,7 @@ try {
 
   await page
     .getByLabel('主导航')
-    .getByRole('button', { name: '待你处理' })
+    .getByRole('button', { name: /^待你处理/ })
     .click()
   await page.getByRole('heading', { name: '待你处理', exact: true }).waitFor()
   await page.getByLabel('待处理列表').getByRole('article').first().waitFor()
@@ -374,7 +374,7 @@ try {
 
   await page
     .getByLabel('主导航')
-    .getByRole('button', { name: '自动化' })
+    .getByRole('button', { name: /^自动化/ })
     .click()
   await page.getByRole('heading', { name: '自动化', exact: true }).waitFor()
   await page.getByText('晨间简报').waitFor()
@@ -408,12 +408,12 @@ try {
   await endedHistoryRow.getByRole('button', { name: '触发记录' }).click()
   await page.getByRole('button', { name: /已结束 2/ }).click()
 
-  await page.getByLabel('主导航').getByRole('button', { name: '记忆' }).click()
+  await page.getByLabel('主导航').getByRole('button', { name: /^记忆/ }).click()
   await page.getByRole('heading', { name: '记忆', exact: true }).waitFor()
   await page.getByText('我喜欢安静、白底、信息层级清楚的界面。').waitFor()
   await capture(page, 'desktop-memory.png', 'desktop-memory')
 
-  await page.getByLabel('主导航').getByRole('button', { name: '对话' }).click()
+  await page.getByLabel('主导航').getByRole('button', { name: /^对话/ }).click()
   await page
     .getByLabel('主导航')
     .getByRole('button')
@@ -430,10 +430,7 @@ try {
   }
   await page.getByRole('button', { name: '关闭详情' }).click()
 
-  await page
-    .getByLabel('主导航')
-    .getByRole('button', { name: '设置', exact: true })
-    .click()
+  await page.getByLabel('主导航').getByRole('button', { name: /^设置/ }).click()
   await page.getByRole('heading', { name: 'Pegas', exact: true }).waitFor()
   await capture(page, 'desktop-settings-pegas.png', 'desktop-settings-pegas')
   await page.getByRole('button', { name: '更换模型' }).click()
@@ -520,6 +517,10 @@ try {
     .click()
   await page.getByRole('heading', { name: '事情归类', exact: true }).waitFor()
   await capture(page, 'desktop-settings-router.png', 'desktop-settings-router')
+  await page
+    .getByRole('tablist', { name: '归类方式' })
+    .getByRole('tab', { name: '智能判断' })
+    .click()
   await page.getByRole('button', { name: /，归类模型名称$/ }).click()
   await assertPickerPagination(page, 'desktop settings router picker', {
     title: '归类模型',
@@ -534,12 +535,17 @@ try {
     .getByRole('dialog', { name: '归类模型' })
     .waitFor({ state: 'detached' })
   await page
+    .getByRole('tablist', { name: '归类方式' })
+    .getByRole('tab', { name: '确定性规则' })
+    .click()
+  await page
     .getByLabel('设置分类')
     .getByRole('button', { name: '语音与输入' })
     .click()
   await page.getByRole('heading', { name: '语音与输入', exact: true }).waitFor()
-  await page.getByLabel('语音服务').selectOption('openai-compatible')
-  await page.getByLabel('启用轻量改写').check()
+  await page.getByLabel('语音服务').click()
+  await page.getByRole('option', { name: 'OpenAI 兼容' }).click()
+  await page.getByRole('switch', { name: '启用轻量改写' }).click()
   await capture(page, 'desktop-settings-voice.png', 'desktop-settings-voice')
   await page.getByRole('button', { name: '测试改写' }).scrollIntoViewIfNeeded()
   await capture(
@@ -707,7 +713,7 @@ try {
   await capture(darkPage, 'desktop-dark.png', 'desktop-dark')
   await darkPage
     .getByLabel('主导航')
-    .getByRole('button', { name: '待你处理' })
+    .getByRole('button', { name: /^待你处理/ })
     .click()
   await darkPage
     .getByRole('heading', { name: '待你处理', exact: true })
@@ -720,7 +726,7 @@ try {
   )
   await darkPage
     .getByLabel('主导航')
-    .getByRole('button', { name: '设置', exact: true })
+    .getByRole('button', { name: /^设置/ })
     .click()
   await darkPage
     .getByLabel('设置分类')
@@ -733,7 +739,7 @@ try {
   )
   await dark.close()
 
-  for (const theme of ['warm', 'system']) {
+  for (const theme of ['system']) {
     const themed = await browser.newContext({
       viewport: { width: 1440, height: 900 },
       colorScheme: theme === 'system' ? 'dark' : 'light',
@@ -754,7 +760,7 @@ try {
     await capture(themedPage, `desktop-${theme}.png`, `desktop-${theme}`)
     await themedPage
       .getByLabel('主导航')
-      .getByRole('button', { name: '待你处理' })
+      .getByRole('button', { name: /^待你处理/ })
       .click()
     await themedPage
       .getByRole('heading', { name: '待你处理', exact: true })
@@ -807,7 +813,7 @@ try {
   await mobilePage.keyboard.press('Escape')
   await mobilePage
     .getByLabel('移动端主导航')
-    .getByRole('button', { name: '所有事情' })
+    .getByRole('button', { name: /^所有事情/ })
     .click()
   await mobilePage
     .getByRole('heading', { name: '所有事情', exact: true })
@@ -838,7 +844,7 @@ try {
   await capture(mobilePage, 'mobile-all-work.png', 'mobile-all-work')
   await mobilePage
     .getByLabel('移动端主导航')
-    .getByRole('button', { name: '待你处理' })
+    .getByRole('button', { name: /^待你处理/ })
     .click()
   await mobilePage
     .getByRole('heading', { name: '待你处理', exact: true })
@@ -885,7 +891,7 @@ try {
   await mobilePage.getByRole('button', { name: '关闭详情' }).click()
   await mobilePage
     .getByLabel('移动端主导航')
-    .getByRole('button', { name: '所有事情' })
+    .getByRole('button', { name: /^所有事情/ })
     .click()
   await mobilePage
     .getByRole('heading', { name: '所有事情', exact: true })
@@ -902,7 +908,7 @@ try {
   }
   await mobilePage
     .getByLabel('移动端主导航')
-    .getByRole('button', { name: '自动化' })
+    .getByRole('button', { name: /^自动化/ })
     .click()
   await mobilePage
     .getByRole('heading', { name: '自动化', exact: true })
@@ -928,7 +934,7 @@ try {
   await mobileEndedHistoryRow.getByRole('button', { name: '触发记录' }).click()
   await mobilePage
     .getByLabel('移动端主导航')
-    .getByRole('button', { name: '设置' })
+    .getByRole('button', { name: /^设置/ })
     .click()
   await mobilePage
     .getByRole('heading', { name: 'Pegas', exact: true })
@@ -956,8 +962,9 @@ try {
     .getByLabel('设置分类')
     .getByRole('button', { name: '语音与输入', exact: true })
     .click()
-  await mobilePage.getByLabel('语音服务').selectOption('openai-compatible')
-  await mobilePage.getByLabel('启用轻量改写').check()
+  await mobilePage.getByLabel('语音服务').click()
+  await mobilePage.getByRole('option', { name: 'OpenAI 兼容' }).click()
+  await mobilePage.getByRole('switch', { name: '启用轻量改写' }).click()
   await mobilePage
     .getByRole('button', { name: '测试改写' })
     .scrollIntoViewIfNeeded()
@@ -1820,16 +1827,19 @@ async function assertGeometry(page, label) {
           `settings layers do not meet ${String(Math.round(scrollRect.bottom))}..${String(Math.round(footerRect.top))}`,
         )
     }
-    for (const element of globalThis.document.querySelectorAll('select')) {
-      const rect = element.getBoundingClientRect()
+    if (globalThis.document.querySelector('select'))
+      out.push('native select remains after BUI migration')
+    for (const trigger of globalThis.document.querySelectorAll(
+      '.settings-page [role="combobox"], .detail-drawer [role="combobox"]',
+    )) {
+      const rect = trigger.getBoundingClientRect()
       if (!rect.width || !rect.height) continue
-      const style = globalThis.getComputedStyle(element)
-      if (style.appearance !== 'none')
-        out.push(`select keeps native appearance (${style.appearance})`)
-      if (rect.height < 40)
-        out.push(`select is too short (${String(Math.round(rect.height))})`)
-      if (Number.parseFloat(style.paddingRight) < 32)
-        out.push(`select chevron padding is too small (${style.paddingRight})`)
+      if (rect.height < 36)
+        out.push(
+          `select trigger is too short (${String(Math.round(rect.height))})`,
+        )
+      if (trigger.scrollWidth > trigger.clientWidth + 1)
+        out.push('select trigger clips horizontally')
     }
     if (globalThis.matchMedia('(pointer: coarse)').matches) {
       for (const control of globalThis.document.querySelectorAll(
@@ -1901,11 +1911,18 @@ async function assertGeometry(page, label) {
       if (label.scrollWidth > label.clientWidth + 1)
         out.push('radio label wraps or clips')
     }
+    for (const item of globalThis.document.querySelectorAll(
+      '.radio-row [role="radio"], .appearance-options [role="radio"]',
+    )) {
+      const rect = item.getBoundingClientRect()
+      if (rect.width && (rect.width < 16 || rect.height < 16))
+        out.push('radio item is too small')
+    }
     for (const toggle of globalThis.document.querySelectorAll(
-      ".switch-row input[type='checkbox']",
+      '.switch-row [role="switch"]',
     )) {
       const rect = toggle.getBoundingClientRect()
-      if (Math.abs(rect.width - 40) > 1 || Math.abs(rect.height - 22) > 1)
+      if (Math.abs(rect.width - 40) > 1 || Math.abs(rect.height - 24) > 1)
         out.push(
           `switch track changed size (${String(Math.round(rect.width))}x${String(Math.round(rect.height))})`,
         )
@@ -2000,10 +2017,13 @@ async function assertGeometry(page, label) {
           globalThis.setTimeout(resolveSettled, 80),
         )
         const containerStyle = globalThis.getComputedStyle(search)
-        if (
-          containerStyle.borderTopColor === 'rgba(0, 0, 0, 0)' ||
-          Number.parseFloat(containerStyle.borderTopWidth) === 0
-        )
+        const hasBorder =
+          containerStyle.borderTopColor !== 'rgba(0, 0, 0, 0)' &&
+          Number.parseFloat(containerStyle.borderTopWidth) > 0
+        const hasRing =
+          containerStyle.boxShadow !== 'none' &&
+          containerStyle.boxShadow.includes('0px 0px 0px 1px')
+        if (!hasBorder && !hasRing)
           out.push('focused search container has no visible border')
       }
     }
