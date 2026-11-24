@@ -336,6 +336,18 @@
 - Enforcement：尚未晋升；已有真实裸进程 bearer 回归。再次出现「产物一致但用户入口不可用」时按同类计数；晋升时把「真实入口完成一次核心动作」纳入发布 checklist 或自动化。
 - Owner / next action：SELF-001 发布流程复核时评估自动化（Playwright 真实入口审批探针）；与 LESSON-20261123-02（凭证须真实执行链路可达）同族但断点不同（启动配置 vs 中间层过滤），暂不合并计数。
 
+### LESSON-20261124-02：连续保存类 UI 测试不得复用上一次的成功提示判定第二次保存
+
+- Rule：对同一页面连续触发两次保存/提交的测试，第二次断言必须绑定本次请求的证据（如 PUT 调用次数、revision 变化或按钮重新可用），不能只 `findByText('更改已保存')`——第一次的成功提示在第二次 `setNotice(undefined)` 提交到 DOM 之前仍然存在，慢机器上会假通过并读到上一次的服务端状态。
+- Why：DESKTOP-001 PR #91 首次 CI 中既有 EXEC-005 chat lane 开关用例失败（第二次保存后 `savedBody.chatLaneEnabled` 仍为 true）：本地隔离与整文件复跑全绿，CI 慢 runner 上第二次点击与 notice 清除之间存在可观察窗口；隔离复跑 CI 即绿，确认为测试断言竞态而非产品缺陷（保存按钮 `disabled={saving}` 语义正确）。
+- Feature：EXEC-005（用例归属）；DESKTOP-001（观察现场）
+- Evidence：PR #91 CI run 45401147747 首次 attempt 失败日志（App.test.tsx:1047）与同 run 隔离复跑 success；`web/src/sealed/SettingsPage.tsx` save() 的 `setSaving(true)`/`setNotice(undefined)` 同一同步块。
+- Seen：1（2026-11-24）
+- Severity：normal
+- Status：Observed
+- Enforcement：尚未晋升；修复归属 EXEC-005（本 PR 不改无关用例）。再次出现同类「复用旧成功提示」竞态时按同类计数；晋升时给连续保存断言加请求次数绑定的测试规约或 lint。
+- Owner / next action：EXEC-005 下次触碰该用例时改为绑定第二次 PUT 证据；已知 flaky 清单同 dsh SIGTERM 计时用例并列。
+
 <!--
 ### LESSON-YYYYMMDD-NN：简短标题
 

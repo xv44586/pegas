@@ -1,11 +1,17 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { mkdir } from 'node:fs/promises'
+import { createServer } from 'node:http'
 import { join } from 'node:path'
 
 import { app, BrowserWindow, Notification, session, shell } from 'electron'
 
 import { createDesktopAttentionMonitor } from './attention.js'
+import {
+  createResidencyController,
+  readResidencyPreference,
+  type ResidencyController,
+} from './residency.js'
 import {
   availableLoopbackPort,
   desktopRequestHeaders,
@@ -26,6 +32,9 @@ let shutdownPromise: Promise<void> | undefined
 let quitAfterShutdownRequested = false
 let serviceFailureHandled = false
 let attentionTimer: NodeJS.Timeout | undefined
+let residencyController: ResidencyController | undefined
+let residentMode = false
+let residencyServer: ReturnType<typeof createServer> | undefined
 
 app.setName('Pegas')
 
@@ -42,6 +51,7 @@ app.on('before-quit', event => {
 })
 
 app.on('window-all-closed', () => {
+  if (residentMode) return
   if (process.platform !== 'darwin') app.quit()
 })
 
@@ -66,12 +76,21 @@ async function startDesktop(): Promise<void> {
       process.env.PEGAS_DESKTOP_DATA_DIR ??
       join(app.getPath('userData'), 'data')
     await mkdir(dataDir, { recursive: true })
-    startServiceEntries(port, dataDir, apiToken, ['control-plane/main.js'])
+    const preferenceDirectory =
+      process.env.PEGAS_DESKTOP_DATA_DIR ?? app.getPath('userData')
+    residentMode = readResidencyPreference(preferenceDirectory).resident
+    residencyController = createResidencyController({
+      preferenceDirectory,
+      applyLoginItem: settings => {
+        app.setLoginItemSettings(settings)
+      },
+      readLoginItem: () => app.getLoginItemSettings(),
+    })
+    const recoveryPort = await availableLoopbackPort()
+    const residencyPort = await availableLoopbackPort()
+    await startResidencyServer(apiToken, residencyPort)
+    startSupervisorEntry(port, recoveryPort, residencyPort, dataDir, apiToken)
     await waitForControlPlane(appUrl)
-    startServiceEntries(port, dataDir, apiToken, [
-      'worker/main.js',
-      'scheduler/main.js',
-    ])
   }
   configureSession(appUrl, apiToken)
   await createWindow(appUrl)
@@ -133,11 +152,12 @@ async function focusAttentionDeepLink(
   await window.loadURL(target)
 }
 
-function startServiceEntries(
+function startSupervisorEntry(
   port: number,
+  recoveryPort: number,
+  residencyPort: number,
   dataDir: string,
   apiToken: string,
-  entries: string[],
 ): void {
   const applicationRoot = desktopServiceRoot({
     isPackaged: app.isPackaged,
@@ -150,23 +170,111 @@ function startServiceEntries(
     apiToken,
     testMode: process.env.PEGAS_DESKTOP_TEST === '1',
   })
-  for (const entry of entries) {
-    const child = spawn(
-      process.execPath,
-      [join(applicationRoot, 'dist', entry)],
-      {
-        cwd: applicationRoot,
-        detached: process.platform !== 'win32',
-        env: environment,
-        stdio: ['ignore', 'pipe', 'pipe'],
+  const entry = 'supervisor/main.js'
+  const child = spawn(
+    process.execPath,
+    [join(applicationRoot, 'dist', entry)],
+    {
+      cwd: applicationRoot,
+      detached: process.platform !== 'win32',
+      env: {
+        ...environment,
+        PEGAS_SUPERVISOR_STATE: join(dataDir, 'supervisor.json'),
+        PEGAS_RECOVERY_HOST: '127.0.0.1',
+        PEGAS_RECOVERY_PORT: String(recoveryPort),
+        PEGAS_DESKTOP_RESIDENCY_URL: `http://127.0.0.1:${String(residencyPort)}`,
+        PEGAS_RELEASE_ROOT: applicationRoot,
+        // App-lifecycle mode: the shell owns restarts. A business-process
+        // death must fail the window honestly, not silently resurrect.
+        PEGAS_SUPERVISOR_RESTART: 'disabled',
       },
-    )
-    child.stdout.on('data', (chunk: Buffer) => process.stdout.write(chunk))
-    child.stderr.on('data', (chunk: Buffer) => process.stderr.write(chunk))
-    child.once('error', error => handleServiceFailure(entry, error.message))
-    child.once('exit', (code, signal) => handleServiceExit(entry, code, signal))
-    children.push(child)
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  )
+  child.stdout.on('data', (chunk: Buffer) => process.stdout.write(chunk))
+  child.stderr.on('data', (chunk: Buffer) => process.stderr.write(chunk))
+  child.once('error', error => handleServiceFailure(entry, error.message))
+  child.once('exit', (code, signal) => handleServiceExit(entry, code, signal))
+  children.push(child)
+}
+
+/**
+ * Machine-local residency API for the sealed settings page. It lives in the
+ * Electron main process (not the Control Plane) because residency describes
+ * how processes live on this Mac. Same instance bearer; loopback only; the
+ * token never reaches the renderer.
+ */
+async function startResidencyServer(
+  apiToken: string,
+  port: number,
+): Promise<void> {
+  const server = createServer((request, response) => {
+    void handleResidencyRequest(request, response, apiToken)
+  })
+  await new Promise<void>((resolveListen, rejectListen) => {
+    server.once('error', rejectListen)
+    server.listen(port, '127.0.0.1', resolveListen)
+  })
+  residencyServer = server
+}
+
+async function handleResidencyRequest(
+  request: import('node:http').IncomingMessage,
+  response: import('node:http').ServerResponse,
+  apiToken: string,
+): Promise<void> {
+  const sendJson = (status: number, body: unknown): void => {
+    response.writeHead(status, {
+      'content-type': 'application/json',
+      'cache-control': 'no-store',
+      'access-control-allow-origin': new URL(appUrl).origin,
+      'access-control-allow-headers': 'authorization, content-type',
+      'access-control-allow-methods': 'GET, PUT, OPTIONS',
+    })
+    response.end(JSON.stringify(body))
   }
+  if (request.method === 'OPTIONS') {
+    response.writeHead(204, {
+      'access-control-allow-origin': new URL(appUrl).origin,
+      'access-control-allow-headers': 'authorization, content-type',
+      'access-control-allow-methods': 'GET, PUT, OPTIONS',
+    })
+    response.end()
+    return
+  }
+  if (request.headers.authorization !== `Bearer ${apiToken}`)
+    return sendJson(401, { error: 'unauthorized' })
+  if (!residencyController)
+    return sendJson(503, { error: 'residency_unavailable' })
+  if (request.url === '/desktop/residency' && request.method === 'GET')
+    return sendJson(200, residencyController.state())
+  if (request.url === '/desktop/residency' && request.method === 'PUT') {
+    let body = ''
+    for await (const chunk of request) {
+      body += String(chunk)
+      if (body.length > 4096) return sendJson(413, { error: 'body_too_large' })
+    }
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(body)
+    } catch {
+      return sendJson(400, { error: 'bad_request' })
+    }
+    const resident = (parsed as { resident?: unknown }).resident
+    if (typeof resident !== 'boolean')
+      return sendJson(400, { error: 'bad_request' })
+    try {
+      const state = residencyController.setResident(resident)
+      residentMode = state.resident
+      return sendJson(200, state)
+    } catch (error) {
+      return sendJson(500, {
+        error: 'residency_switch_failed',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      })
+    }
+  }
+  return sendJson(404, { error: 'not_found' })
 }
 
 async function createWindow(trustedUrl: string): Promise<void> {
@@ -244,6 +352,8 @@ function stopChildren(): Promise<void> {
   if (attentionTimer) clearTimeout(attentionTimer)
   attentionTimer = undefined
   if (process.platform === 'darwin') app.dock?.setBadge('')
+  residencyServer?.close()
+  residencyServer = undefined
   return terminateDesktopChildren(children.splice(0))
 }
 

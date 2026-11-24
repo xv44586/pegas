@@ -207,6 +207,7 @@ export interface ControlPlaneOptions {
   speechTimeoutMs?: number
   privacyHmacKey?: string
   recoveryStatus?: RecoveryStatusSource
+  desktopResidency?: DesktopResidencySource
   logger?: Logger
   metrics?: MetricsRegistry
   linkPreview?: LinkPreviewOptions
@@ -216,6 +217,19 @@ interface RecoveryStatusSource {
   baseUrl: string
   token?: string
   timeoutMs?: number
+}
+
+interface DesktopResidencySource {
+  baseUrl: string
+  token?: string
+  timeoutMs?: number
+}
+
+interface DesktopResidencyProjection {
+  managed: boolean
+  resident?: boolean
+  loginItemRegistered?: boolean
+  diagnostics?: string[]
 }
 
 interface RecoveryReleaseProjection {
@@ -240,6 +254,90 @@ interface RecoveryStatusProjection {
 const recoveryStatusTimeoutMs = 3_000
 const maximumRecoveryDiagnostics = 20
 const maximumRecoveryDiagnosticLength = 300
+
+async function fetchDesktopResidency(
+  source: DesktopResidencySource,
+): Promise<DesktopResidencyProjection> {
+  try {
+    const upstream = await fetch(
+      new URL('/desktop/residency', source.baseUrl),
+      {
+        headers: source.token
+          ? { authorization: `Bearer ${source.token}` }
+          : {},
+        signal: AbortSignal.timeout(
+          source.timeoutMs ?? recoveryStatusTimeoutMs,
+        ),
+      },
+    )
+    if (upstream.status !== 200) {
+      return {
+        managed: true,
+        diagnostics: ['桌面主进程返回了意外响应；后台运行状态暂不可读。'],
+      }
+    }
+    const body = (await upstream.json()) as {
+      resident?: unknown
+      loginItemRegistered?: unknown
+    }
+    if (typeof body.resident !== 'boolean') {
+      return {
+        managed: true,
+        diagnostics: ['桌面主进程状态形状不符；后台运行状态暂不可读。'],
+      }
+    }
+    return {
+      managed: true,
+      resident: body.resident,
+      ...(typeof body.loginItemRegistered === 'boolean'
+        ? { loginItemRegistered: body.loginItemRegistered }
+        : {}),
+    }
+  } catch {
+    return {
+      managed: true,
+      diagnostics: ['无法连接桌面主进程；后台运行状态暂不可读。'],
+    }
+  }
+}
+
+async function proxyDesktopResidencySwitch(
+  source: DesktopResidencySource,
+  resident: boolean,
+  response: ServerResponse,
+): Promise<void> {
+  let upstream: Response
+  try {
+    upstream = await fetch(new URL('/desktop/residency', source.baseUrl), {
+      method: 'PUT',
+      headers: {
+        'content-type': 'application/json',
+        ...(source.token ? { authorization: `Bearer ${source.token}` } : {}),
+      },
+      body: JSON.stringify({ resident }),
+      signal: AbortSignal.timeout(source.timeoutMs ?? recoveryStatusTimeoutMs),
+    })
+  } catch {
+    return sendJson(response, 503, {
+      error: 'residency_unavailable',
+      message: '无法连接桌面主进程；开关未切换，原状态保持不变。',
+    })
+  }
+  const body: unknown = await upstream.json().catch(() => undefined)
+  if (upstream.status !== 200) {
+    const message =
+      typeof body === 'object' &&
+      body !== null &&
+      typeof (body as { message?: unknown }).message === 'string'
+        ? (body as { message: string }).message
+        : '桌面主进程拒绝了切换；原状态保持不变。'
+    return sendJson(response, 502, {
+      error: 'residency_switch_failed',
+      message,
+    })
+  }
+  return sendJson(response, 200, { managed: true, ...(body as object) })
+}
 
 async function fetchRecoveryStatus(
   source: RecoveryStatusSource,
@@ -1633,6 +1731,41 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
 
       const recoveryStatusPath = new URL(request.url ?? '/', 'http://localhost')
         .pathname
+      if (recoveryStatusPath === '/v1/desktop/residency') {
+        if (request.method !== 'GET' && request.method !== 'PUT') {
+          return sendJson(response, 405, { error: 'method_not_allowed' })
+        }
+        if (!options.desktopResidency) {
+          // Plain server deployment: residency is decided by how the instance
+          // is hosted, not by this UI. Honest read-only, never a fake toggle.
+          return sendJson(response, 200, {
+            managed: false,
+            diagnostics: [
+              '此实例不是由桌面 App 托管；后台运行由该实例的部署方式决定。',
+            ],
+          } satisfies DesktopResidencyProjection)
+        }
+        if (request.method === 'GET') {
+          return sendJson(
+            response,
+            200,
+            await fetchDesktopResidency(options.desktopResidency),
+          )
+        }
+        const parsedBody: unknown = await readJson(request)
+        const resident =
+          typeof parsedBody === 'object' && parsedBody !== null
+            ? (parsedBody as { resident?: unknown }).resident
+            : undefined
+        if (typeof resident !== 'boolean') {
+          return sendJson(response, 400, { error: 'bad_request' })
+        }
+        return await proxyDesktopResidencySwitch(
+          options.desktopResidency,
+          resident,
+          response,
+        )
+      }
       if (recoveryStatusPath === '/v1/recovery/status') {
         if (request.method !== 'GET') {
           return sendJson(response, 405, { error: 'method_not_allowed' })

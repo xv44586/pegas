@@ -32,6 +32,7 @@ import { useEffect, useRef, useState } from 'react'
 
 import type {
   BehaviorPreferences,
+  DesktopResidency,
   DshModelCatalog,
   ExecutionNode,
   MemoryRecord,
@@ -88,6 +89,8 @@ interface SettingsPageProps {
   routingRulesError?: string
   behaviorPreferences?: BehaviorPreferences
   behaviorPreferencesError?: string
+  residency?: DesktopResidency
+  residencyError?: string
   notificationPreferences?: NotificationPreferences
   notificationPreferencesError?: string
   executionNodes?: ExecutionNode[]
@@ -112,6 +115,7 @@ interface SettingsPageProps {
   onToggleRoutingRule?: (rule: RoutingRuleRecord) => Promise<void>
   onTestRouting?: (text: string) => Promise<RoutingPreview>
   onSaveBehavior?: (customInstructions: string) => Promise<void>
+  onToggleResidency?: (resident: boolean) => Promise<void>
   onReloadNotifications?: () => void
   onReloadExecutionNodes?: () => void
   onReloadRecovery?: () => void
@@ -162,6 +166,8 @@ export function SettingsPage({
   routingRulesError,
   behaviorPreferences,
   behaviorPreferencesError,
+  residency,
+  residencyError,
   notificationPreferences,
   notificationPreferencesError,
   executionNodes,
@@ -181,6 +187,7 @@ export function SettingsPage({
   onToggleRoutingRule,
   onTestRouting,
   onSaveBehavior,
+  onToggleResidency,
   onReloadNotifications,
   onReloadExecutionNodes,
   onReloadRecovery,
@@ -338,6 +345,9 @@ export function SettingsPage({
                     onReloadWorkRules={onReloadWorkRules}
                     onSaveBehavior={onSaveBehavior}
                     onToggleWorkRule={onToggleWorkRule}
+                    residency={residency}
+                    residencyError={residencyError}
+                    onToggleResidency={onToggleResidency}
                     workRules={workRules}
                     workRulesError={workRulesError}
                   />
@@ -675,11 +685,14 @@ function PegasSettings({
   workRulesError,
   behaviorPreferences,
   behaviorPreferencesError,
+  residency,
+  residencyError,
   onChange,
   onOpenDrawer,
   onReloadWorkRules,
   onToggleWorkRule,
   onSaveBehavior,
+  onToggleResidency,
 }: {
   draft: RuntimeSettings
   agentModels?: DshModelCatalog
@@ -687,11 +700,14 @@ function PegasSettings({
   workRulesError?: string
   behaviorPreferences?: BehaviorPreferences
   behaviorPreferencesError?: string
+  residency?: DesktopResidency
+  residencyError?: string
   onChange: (settings: RuntimeSettings) => void
   onOpenDrawer: (drawer: DrawerView) => void
   onReloadWorkRules?: () => void
   onToggleWorkRule?: (rule: WorkRuleRecord) => Promise<void>
   onSaveBehavior?: (customInstructions: string) => Promise<void>
+  onToggleResidency?: (resident: boolean) => Promise<void>
 }) {
   const [tab, setTab] = useState<'model' | 'behavior' | 'autonomy'>('model')
   const [modelPickerRequest, setModelPickerRequest] = useState(0)
@@ -941,6 +957,83 @@ function PegasSettings({
           />
         </div>
       )}
+      <ResidencySettings
+        residency={residency}
+        residencyError={residencyError}
+        onToggleResidency={onToggleResidency}
+      />
+    </div>
+  )
+}
+
+function ResidencySettings({
+  residency,
+  residencyError,
+  onToggleResidency,
+}: {
+  residency?: DesktopResidency
+  residencyError?: string
+  onToggleResidency?: (resident: boolean) => Promise<void>
+}) {
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+  const state = residency
+  async function toggle(resident: boolean) {
+    if (!onToggleResidency) return
+    setSaving(true)
+    setError('')
+    try {
+      await onToggleResidency(resident)
+    } catch (caught) {
+      setError(
+        caught instanceof Error && caught.message
+          ? caught.message
+          : '切换失败，原状态保持不变。',
+      )
+    } finally {
+      setSaving(false)
+    }
+  }
+  return (
+    <div className="setting-section">
+      <h3>后台运行</h3>
+      {!state && (residencyError ?? '') === '' ? (
+        <p className="setting-copy">正在读取后台运行状态…</p>
+      ) : state?.managed !== true ? (
+        <p className="setting-copy">
+          {(residencyError ?? '') !== ''
+            ? residencyError
+            : (state?.diagnostics?.[0] ??
+              '此实例不是由桌面 App 托管；后台运行由该实例的部署方式决定。')}
+        </p>
+      ) : state.resident === undefined ? (
+        <p className="setting-copy">
+          {state.diagnostics?.[0] ?? '后台运行状态暂不可读。'}
+        </p>
+      ) : (
+        <>
+          <label className="switch-row">
+            关闭窗口后继续运行
+            <input
+              aria-label="关闭窗口后继续运行"
+              checked={state.resident}
+              disabled={saving}
+              onChange={event => void toggle(event.target.checked)}
+              type="checkbox"
+            />
+          </label>
+          <p className="settings-help">
+            {state.resident
+              ? '关闭窗口只隐藏窗口，服务与定时自动化继续运行，登录本机时自动启动。'
+              : '退出 App 即停止服务；定时自动化仅在 App 打开期间运行。'}
+          </p>
+        </>
+      )}
+      {error ? (
+        <p className="settings-error" role="alert">
+          {error}
+        </p>
+      ) : null}
     </div>
   )
 }

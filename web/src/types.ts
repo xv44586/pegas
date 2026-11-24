@@ -628,6 +628,13 @@ export interface RecoveryStatus {
   previous?: RecoveryRelease
 }
 
+export interface DesktopResidency {
+  managed: boolean
+  resident?: boolean
+  loginItemRegistered?: boolean
+  diagnostics?: string[]
+}
+
 export type MemoryScope = 'global' | 'worker' | 'channel'
 
 export type MemoryCategory =
