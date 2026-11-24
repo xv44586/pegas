@@ -1223,7 +1223,7 @@ describe('sealed Pegas UI', () => {
     fireEvent.click(await screen.findByRole('button', { name: '保存更改' }))
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toContain('设置已在其他设备更新，请刷新后重试')
-    expect(alert.className).toContain('is-error')
+    expect(alert.className).toContain('text-red-text')
   })
 
   it('opens the isolated pegas runtime from Pegas settings', async () => {
@@ -10800,7 +10800,7 @@ describe('sealed Pegas UI', () => {
     expect(await screen.findByText('规则已保存，对后续执行生效。')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '关闭详情' }))
     expect(await screen.findByText('产品设计优先给出具体界面方案')).toBeTruthy()
-    fireEvent.change(screen.getByLabelText('自定义指令'), {
+    fireEvent.change(screen.getByLabelText('指令内容'), {
       target: { value: '发布前先列出回滚路径。' },
     })
     fireEvent.click(screen.getByRole('button', { name: '保存自定义指令' }))

@@ -307,32 +307,50 @@ export function SettingsPage({
   }
 
   return (
-    <div className="settings-page bui">
-      <aside className="settings-nav" aria-label="设置分类">
-        <div className="settings-nav-title">
-          <h1>设置</h1>
-          <button aria-label="返回 Pegas" onClick={onBack} type="button">
+    <div className="settings-page bui grid h-full min-h-0 [grid-template-columns:210px_minmax(0,1fr)] max-[1120px]:[grid-template-columns:190px_minmax(0,1fr)] max-[820px]:block max-[820px]:overflow-auto">
+      <aside
+        className="settings-nav overflow-auto border-r border-line bg-inset px-3 py-[27px] max-[820px]:flex max-[820px]:gap-[5px] max-[820px]:overflow-x-auto max-[820px]:border-r-0 max-[820px]:border-b max-[820px]:px-3.5 max-[820px]:py-3 max-[820px]:whitespace-nowrap max-[820px]:[mask-image:linear-gradient(to_right,#000_calc(100%-28px),transparent)]"
+        aria-label="设置分类"
+      >
+        <div className="settings-nav-title mx-2.5 mb-[22px] flex items-center justify-between max-[820px]:m-0">
+          <h1 className="text-[20px] leading-[1.25] tracking-[-0.02em] max-[820px]:hidden">
+            设置
+          </h1>
+          <Button
+            aria-label="返回 Pegas"
+            className="h-[30px] px-1 text-[12px] font-normal text-ink-2 max-[820px]:min-w-12"
+            onClick={onBack}
+            size="xs"
+            type="button"
+            variant="quiet"
+          >
             返回
-          </button>
+          </Button>
         </div>
         {settingsSections.map(item => {
           const Icon = sectionIcons[item.id]
           return (
-            <button
-              className={section === item.id ? 'is-active' : ''}
+            <Button
+              aria-current={section === item.id ? 'page' : undefined}
+              className="h-[39px] w-full justify-start gap-2.5 rounded-control px-3 text-[14px] font-normal hover:bg-hover aria-[current=page]:bg-accent-tint aria-[current=page]:font-medium aria-[current=page]:text-accent-ink max-[820px]:h-9 max-[820px]:w-auto max-[820px]:flex-none"
               key={item.id}
               onClick={() => selectSection(item.id)}
+              size="sm"
               type="button"
+              variant="quiet"
             >
               <Icon size={17} />
               <span>{item.label}</span>
-            </button>
+            </Button>
           )
         })}
       </aside>
-      <section className="settings-content">
-        <div className="settings-scroll-region">
-          <fieldset className="settings-fields" disabled={saving}>
+      <section className="settings-content relative grid min-h-0 grid-rows-[minmax(0,1fr)_auto] overflow-clip max-[820px]:h-[calc(100dvh-61px)]">
+        <div className="settings-scroll-region min-h-0 overflow-auto overscroll-contain [scrollbar-gutter:stable]">
+          <fieldset
+            className="settings-fields m-0 w-full min-w-0 border-0 p-0"
+            disabled={saving}
+          >
             {section === 'appearance' ? (
               <AppearanceSettings
                 onChange={onThemeChange}
@@ -470,9 +488,9 @@ export function SettingsPage({
           ['pegas', 'models', 'router', 'voice', 'privacy'].includes(section) &&
           (section !== 'models' ||
             modelServiceProvider === draft.modelProvider) && (
-            <footer className="settings-footer">
+            <footer className="settings-footer relative z-[5] flex min-h-16 items-center gap-2.5 border-t border-line bg-surface px-7 py-2.5 max-[520px]:px-3.5">
               <span
-                className={notice?.kind === 'error' ? 'is-error' : ''}
+                className={`flex-1 text-[12px] max-[520px]:min-w-0 max-[520px]:wrap-anywhere ${notice?.kind === 'error' ? 'text-red-text' : 'text-green-text'}`}
                 role={notice?.kind === 'error' ? 'alert' : 'status'}
               >
                 {notice?.message}
@@ -604,9 +622,11 @@ function SettingsHeading({
   description: string
 }) {
   return (
-    <header className="settings-heading">
-      <h2>{title}</h2>
-      <p>{description}</p>
+    <header className="settings-heading mb-[22px] border-b border-line pb-[18px]">
+      <h2 className="mb-[5px] text-[26px] leading-[1.2] tracking-[-0.03em]">
+        {title}
+      </h2>
+      <p className="text-ink-2">{description}</p>
     </header>
   )
 }
@@ -646,7 +666,7 @@ function AppearanceSettings({
     },
   ]
   return (
-    <div className="settings-pane appearance-settings">
+    <div className="settings-pane mx-auto max-w-[900px] px-9 pt-[34px] pb-10 max-[1120px]:px-6 max-[820px]:px-[18px] max-[820px]:pt-6 max-[820px]:pb-[34px] appearance-settings">
       <SettingsHeading
         title="外观"
         description="选择 Pegas 在这台设备上的显示方式。"
@@ -747,28 +767,32 @@ function PegasSettings({
         selectedProvider.toLocaleLowerCase() && model.id === selectedModel,
   )
   const availability = !agentModels
-    ? { className: 'is-unknown', label: '目录未知' }
+    ? { dotClassName: 'bg-orange', label: '目录未知' }
     : selectedModelAvailable
-      ? { className: '', label: '可用' }
-      : { className: 'is-unavailable', label: '未在模型目录中' }
+      ? { dotClassName: 'bg-green', label: '可用' }
+      : { dotClassName: 'bg-red', label: '未在模型目录中' }
   return (
-    <div className="settings-pane pegas-settings">
-      <div className="pegas-settings-title">
+    <div className="settings-pane mx-auto max-w-[900px] px-9 pt-[34px] pb-10 max-[1120px]:px-6 max-[820px]:px-[18px] max-[820px]:pt-6 max-[820px]:pb-[34px] pegas-settings">
+      <div className="pegas-settings-title flex items-center gap-3.5 [&_.settings-heading]:m-0 [&_.settings-heading]:border-0 [&_.settings-heading]:p-0">
         <PegasMark size={44} />
         <SettingsHeading
           title="Pegas"
           description="设置你的个人执行伙伴如何工作和与你沟通。"
         />
       </div>
-      <div className="setting-summary-row">
-        <span>执行模型</span>
-        <b>
+      <div className="setting-summary-row grid min-h-[54px] items-center gap-3 border-b border-line [grid-template-columns:100px_minmax(180px,1fr)_auto_auto] max-[820px]:[grid-template-columns:90px_1fr_auto] max-[520px]:[grid-template-columns:1fr_auto] max-[520px]:py-2.5">
+        <span className="font-medium max-[520px]:[grid-column:1/3]">
+          执行模型
+        </span>
+        <b className="text-[13px] max-[520px]:wrap-anywhere">
           {selectedProvider && selectedModel
             ? `${selectedProvider} · ${selectedModel}`
             : '服务端未提供'}
         </b>
-        <em className={availability.className}>
-          <i />
+        <em className="flex items-center gap-1.5 text-[12px] not-italic text-green-text">
+          <i
+            className={`size-[7px] rounded-full ${availability.dotClassName}`}
+          />
           {availability.label}
         </em>
         <Button
@@ -785,11 +809,13 @@ function PegasSettings({
           更换模型
         </Button>
       </div>
-      <div className="setting-summary-row">
-        <span>执行环境</span>
-        <b>隔离执行环境</b>
-        <em>
-          <i />
+      <div className="setting-summary-row grid min-h-[54px] items-center gap-3 border-b border-line [grid-template-columns:100px_minmax(180px,1fr)_auto_auto] max-[820px]:[grid-template-columns:90px_1fr_auto] max-[520px]:[grid-template-columns:1fr_auto] max-[520px]:py-2.5">
+        <span className="font-medium max-[520px]:[grid-column:1/3]">
+          执行环境
+        </span>
+        <b className="text-[13px] max-[520px]:wrap-anywhere">隔离执行环境</b>
+        <em className="flex items-center gap-1.5 text-[12px] not-italic text-green-text">
+          <i className="size-[7px] rounded-full bg-green" />
           运行时快照
         </em>
         <Button
@@ -831,8 +857,8 @@ function PegasSettings({
         ))}
       </div>
       {tab === 'model' && (
-        <div className="setting-section">
-          <h3>新建执行会话</h3>
+        <div className="setting-section py-[18px]">
+          <h3 className="mt-4 mb-2.5 text-[14px]">新建执行会话</h3>
           <div className="my-3.5 grid gap-1.5">
             <span className="text-[13px] font-medium text-ink">模型</span>
             <ModelPicker
@@ -877,7 +903,7 @@ function PegasSettings({
             凭证由 Pegas 的模型服务或隔离的 DSH profile 提供，不读取个人默认
             profile。
           </p>
-          <h3>执行池（可选）</h3>
+          <h3 className="mt-4 mb-2.5 text-[14px]">执行池（可选）</h3>
           <p className="text-[12px] leading-[1.6] text-ink-2">
             为事情级执行设置提供 fast / balanced / deep 档位。留空的池按
             fast→balanced→全局默认 显式降级，绝不静默换池。
@@ -956,8 +982,8 @@ function PegasSettings({
         />
       )}
       {tab === 'autonomy' && (
-        <div className="setting-section">
-          <h3>自主程度</h3>
+        <div className="setting-section py-[18px]">
+          <h3 className="mt-4 mb-2.5 text-[14px]">自主程度</h3>
           <p className="text-[12px] leading-[1.6] text-ink-2">
             高风险与关键风险 Action 由服务端强制进入持久
             Approval；自定义风险阈值尚未开放。
@@ -1036,15 +1062,15 @@ function BehaviorSettings({
     }
   }
   return (
-    <div className="setting-section">
+    <div className="setting-section py-[18px]">
       <div className="my-3 flex items-center gap-2 rounded-control bg-accent-tint px-3 py-2.5 text-[12px] leading-[1.6] text-ink-2">
         <CircleHelp size={16} />
         工作规则与自定义指令以持久偏好的形式提供给执行
         Agent，在每次执行中持续遵守；它们不授予新权限，高风险动作仍必须经过确认。
       </div>
-      <h3>基本行为</h3>
-      <div className="compact-field-row">
-        <span>开始工作前</span>
+      <h3 className="mt-4 mb-2.5 text-[14px]">基本行为</h3>
+      <div className="compact-field-row grid min-h-[52px] items-center gap-3.5 border-b border-line py-2 [grid-template-columns:120px_minmax(0,1fr)] max-[820px]:items-start max-[820px]:[grid-template-columns:1fr] max-[820px]:py-3">
+        <span className="font-medium">开始工作前</span>
         <Select defaultValue="always" disabled>
           <SelectTrigger
             aria-label="开始工作前"
@@ -1060,7 +1086,7 @@ function BehaviorSettings({
       <p className="text-[12px] leading-[1.6] text-ink-2">
         「高风险动作始终确认」由服务端 Approval 强制保证，不能关闭。
       </p>
-      <h3>工作规则</h3>
+      <h3 className="mt-4 mb-2.5 text-[14px]">工作规则</h3>
       {workRulesError ? (
         <div
           className="mb-4 flex items-center gap-2.5 rounded-card bg-red-tint px-3.5 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_var(--red)]"
@@ -1085,15 +1111,27 @@ function BehaviorSettings({
         <p className="my-6 text-[13px] text-ink-2">正在读取工作规则…</p>
       ) : (
         <>
-          <div className="rule-list">
-            <button disabled type="button">
+          <div className="rule-list overflow-hidden rounded-card shadow-hairline">
+            <Button
+              className="h-auto min-h-[42px] w-full justify-start gap-2.5 rounded-none border-b border-line bg-surface px-3 text-left font-normal disabled:opacity-100 disabled:text-ink-2"
+              disabled
+              size="sm"
+              type="button"
+              variant="quiet"
+            >
               <LockKeyhole size={15} />
-              <span>高风险外部操作必须确认</span>
-              <small>系统规则（已锁定）</small>
-            </button>
+              <span className="flex-1 text-ink">高风险外部操作必须确认</span>
+              <small className="text-[12px] text-ink-2">
+                系统规则（已锁定）
+              </small>
+            </Button>
             {(workRules ?? []).map(rule => (
-              <div className="rule-row" key={rule.id}>
-                <button
+              <div
+                className="rule-row flex items-center border-b border-line bg-surface last:border-b-0"
+                key={rule.id}
+              >
+                <Button
+                  className="h-auto min-h-[42px] min-w-0 flex-1 justify-start gap-2.5 rounded-none bg-surface px-3 text-left font-normal hover:bg-inset"
                   onClick={() =>
                     onOpenDrawer({
                       kind: 'rule',
@@ -1107,12 +1145,16 @@ function BehaviorSettings({
                         : {}),
                     })
                   }
+                  size="sm"
                   type="button"
+                  variant="quiet"
                 >
-                  <span>{rule.title}</span>
-                  <small>{rule.enabled ? '全局 · 启用' : '全局 · 停用'}</small>
+                  <span className="flex-1">{rule.title}</span>
+                  <small className="text-[12px] text-ink-2">
+                    {rule.enabled ? '全局 · 启用' : '全局 · 停用'}
+                  </small>
                   <Pencil size={15} />
-                </button>
+                </Button>
                 <div className="rule-toggle flex items-center px-3">
                   <Switch
                     checked={rule.enabled}
@@ -1155,7 +1197,7 @@ function BehaviorSettings({
           {actionError}
         </div>
       )}
-      <h3>自定义指令</h3>
+      <h3 className="mt-4 mb-2.5 text-[14px]">自定义指令</h3>
       {behaviorPreferencesError ? (
         <div
           className="mb-4 flex items-center gap-2.5 rounded-card bg-red-tint px-3.5 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_var(--red)]"
@@ -1180,7 +1222,7 @@ function BehaviorSettings({
         <p className="my-6 text-[13px] text-ink-2">正在读取自定义指令…</p>
       ) : (
         <>
-          <FormField className="my-3.5" label="自定义指令">
+          <FormField className="my-3.5" label="指令内容">
             <TextArea
               className="w-full resize-y"
               disabled={savingInstructions}
@@ -1337,13 +1379,13 @@ function ModelServices({
     executionReferenced.has(`${active?.name ?? ''}::${model.id}`) ||
     executionReferenced.has(`${active?.id ?? ''}::${model.id}`)
   return (
-    <div className="settings-pane">
+    <div className="settings-pane mx-auto max-w-[900px] px-9 pt-[34px] pb-10 max-[1120px]:px-6 max-[820px]:px-[18px] max-[820px]:pt-6 max-[820px]:pb-[34px]">
       <SettingsHeading
         title="模型服务"
         description="管理连接、凭证与模型目录；不决定哪些角色使用哪个模型。"
       />
-      <div className="model-service-layout">
-        <aside className="provider-list">
+      <div className="model-service-layout -mx-2.5 -mt-[22px] grid min-h-[610px] [grid-template-columns:220px_minmax(0,1fr)] max-[820px]:-mt-3 max-[820px]:mx-0 max-[820px]:block">
+        <aside className="provider-list relative border-r border-line pt-[18px] pr-3.5 pb-[60px] max-[820px]:flex max-[820px]:gap-2 max-[820px]:overflow-x-auto max-[820px]:border-r-0 max-[820px]:border-b max-[820px]:py-3 max-[820px]:pr-0 max-[820px]:pb-[18px]">
           <label className="model-search bui flex h-10 items-center gap-2 rounded-control bg-field px-3 shadow-hairline transition-shadow duration-150 focus-within:bg-surface focus-within:shadow-[0_0_0_1px_var(--accent)]">
             <Search className="shrink-0 text-ink-3" size={16} />
             <input
@@ -1354,14 +1396,17 @@ function ModelServices({
               value={query}
             />
           </label>
-          <small>已添加</small>
+          <small className="mx-1.5 mt-4 mb-1.5 block text-ink-2 max-[820px]:hidden">
+            已添加
+          </small>
           {providers
             .filter(provider =>
               provider.name.toLowerCase().includes(query.toLowerCase()),
             )
             .map(provider => (
-              <button
-                className={provider.id === active?.id ? 'is-active' : ''}
+              <Button
+                aria-current={provider.id === active?.id ? 'true' : undefined}
+                className="grid h-auto min-h-[54px] w-full [grid-template-columns:32px_1fr_auto] items-center gap-2 rounded-control p-[7px] text-left font-normal hover:bg-accent-tint aria-[current=true]:bg-accent-tint max-[820px]:w-[190px] max-[820px]:flex-none"
                 key={provider.id}
                 onClick={() => {
                   providerRequestRef.current += 1
@@ -1373,22 +1418,24 @@ function ModelServices({
                 }}
                 type="button"
               >
-                <span className="provider-glyph">
+                <span className="provider-glyph flex size-[30px] items-center justify-center rounded-control shadow-hairline">
                   <Layers3 size={18} />
                 </span>
-                <span>
+                <span className="grid gap-[3px]">
                   <strong>{provider.name}</strong>
-                  <small className={provider.available ? 'is-good' : ''}>
+                  <small
+                    className={`text-[10px] ${provider.available ? 'text-green-text' : 'text-ink-2'}`}
+                  >
                     {provider.available
                       ? '已配置'
                       : (provider.reason ?? '未配置')}
                   </small>
                 </span>
                 <ChevronRight size={15} />
-              </button>
+              </Button>
             ))}
           <Button
-            className="add-provider h-8 px-3.5 text-[13px] text-accent-ink shadow-[0_0_0_1px_var(--accent)]"
+            className="add-provider absolute right-3.5 bottom-0 left-0 h-8 w-[calc(100%-14px)] px-3.5 text-[13px] text-accent-ink shadow-[0_0_0_1px_var(--accent)] max-[820px]:hidden"
             disabled
             size="xs"
             title="服务端尚未提供新增 Provider API"
@@ -1400,14 +1447,14 @@ function ModelServices({
           </Button>
         </aside>
         {active && (
-          <div className="provider-detail">
+          <div className="provider-detail pt-[18px] pl-5 max-[820px]:pl-0 [&>header]:flex [&>header]:items-start [&>header]:justify-between max-[820px]:[&>header]:mt-4 [&_h4]:mt-[18px] [&_h4]:mb-1.5 [&_h4]:border-t [&_h4]:border-line [&_h4]:pt-3.5 [&_h4]:text-[14px] [&_dl]:m-0 [&_dl>div]:grid [&_dl>div]:min-h-[34px] [&_dl>div]:[grid-template-columns:100px_1fr] [&_dl>div]:py-[7px] [&_dt]:text-ink-2 [&_dd]:m-0">
             <header>
               <div>
-                <h3>{active.name}</h3>
+                <h3 className="mr-2.5 inline text-[20px] tracking-[-0.02em]">
+                  {active.name}
+                </h3>
                 <span
-                  className={
-                    active.available ? 'health-badge is-good' : 'health-badge'
-                  }
+                  className={`health-badge rounded-chip bg-inset px-[7px] py-1 text-[10px] ${active.available ? 'text-green-text' : 'text-ink-2'}`}
                 >
                   {status || (active.available ? '已配置' : '未连接')}
                 </span>
@@ -1548,9 +1595,15 @@ function ModelServices({
                   {active.id === response.settings.modelProvider
                     ? response.settings.modelName
                     : '未被事情归类使用'}
-                  <button onClick={onOpenRouter} type="button">
+                  <Button
+                    className="float-right h-6 px-1 text-[12px] font-normal text-accent-ink"
+                    onClick={onOpenRouter}
+                    size="xs"
+                    type="button"
+                    variant="quiet"
+                  >
                     打开设置
-                  </button>
+                  </Button>
                 </dd>
               </div>
               <div>
@@ -1563,14 +1616,20 @@ function ModelServices({
                       : active.id === response.settings.modelProvider
                         ? '跟随事情归类'
                         : '未引用'}
-                  <button onClick={onOpenVoice} type="button">
+                  <Button
+                    className="float-right h-6 px-1 text-[12px] font-normal text-accent-ink"
+                    onClick={onOpenVoice}
+                    size="xs"
+                    type="button"
+                    variant="quiet"
+                  >
                     打开设置
-                  </button>
+                  </Button>
                 </dd>
               </div>
             </dl>
             <h4>可用模型（{models.length}）</h4>
-            <div className="model-catalog-toolbar">
+            <div className="model-catalog-toolbar mt-2 flex items-center gap-2.5 max-[820px]:flex-col max-[820px]:items-stretch">
               <Button
                 className="h-8 px-3.5 text-[13px]"
                 disabled={Boolean(busy) || !canProbe}
@@ -1596,7 +1655,7 @@ function ModelServices({
                 />
               </label>
             </div>
-            <div className="model-table">
+            <div className="model-table mt-2 text-[12px] [&>div]:grid [&>div]:min-h-8 [&>div]:[grid-template-columns:1.4fr_0.8fr_0.7fr] [&>div]:gap-2 [&>div]:px-2.5 [&>div]:py-[7px] [&>div:first-child]:text-ink-2 [&>div.is-selected]:rounded-chip [&>div.is-selected]:bg-accent-tint">
               <div>
                 <b>模型</b>
                 <b>能力</b>
@@ -1614,8 +1673,8 @@ function ModelServices({
                   >
                     <span>{model.name}</span>
                     <span>{model.id}</span>
-                    <span className="is-good">
-                      <i />
+                    <span className="text-green-text">
+                      <i className="mr-[5px] inline-block size-[7px] rounded-full bg-green" />
                       {isRouterModel
                         ? '当前归类模型'
                         : isExecutionModel
@@ -1626,7 +1685,7 @@ function ModelServices({
                 )
               })}
               {!visibleModels.length && (
-                <p className="table-empty">
+                <p className="px-2.5 py-4 text-center text-ink-2">
                   点击“获取模型目录”读取服务端数据。
                 </p>
               )}
@@ -1741,13 +1800,13 @@ function RouterSettings({
     model => model.id === draft.modelName,
   )
   return (
-    <div className="settings-pane router-settings">
+    <div className="settings-pane mx-auto max-w-[900px] px-9 pt-[34px] pb-10 max-[1120px]:px-6 max-[820px]:px-[18px] max-[820px]:pt-6 max-[820px]:pb-[34px] router-settings">
       <SettingsHeading
         title="事情归类"
         description="决定一条新消息是继续已有事情，还是开始一件新事情。"
       />
-      <div className="compact-field-row">
-        <span>归类方式</span>
+      <div className="compact-field-row grid min-h-[52px] items-center gap-3.5 border-b border-line py-2 [grid-template-columns:120px_minmax(0,1fr)] max-[820px]:items-start max-[820px]:[grid-template-columns:1fr] max-[820px]:py-3">
+        <span className="font-medium">归类方式</span>
         <SegmentedControl
           ariaLabel="归类方式"
           className="bui justify-self-start"
@@ -1759,12 +1818,12 @@ function RouterSettings({
           value={draft.routerMode}
         />
       </div>
-      <div className="settings-card">
-        <div className="card-title">
+      <div className="settings-card my-3.5 rounded-card bg-surface p-[18px] shadow-card">
+        <div className="card-title flex items-start gap-3 max-[520px]:grid max-[520px]:[grid-template-columns:20px_minmax(0,1fr)] [&>div]:min-w-0 [&>div]:flex-1 [&>[role=combobox]]:max-[520px]:min-w-0 [&>[role=combobox]]:max-[520px]:max-w-full [&>[role=combobox]]:max-[520px]:justify-self-start [&>[role=combobox]]:max-[520px]:[grid-column:2]">
           <Zap size={20} />
           <div>
-            <h3>即时应答</h3>
-            <p>
+            <h3 className="mb-1 text-[13px]">即时应答</h3>
+            <p className="text-ink-2">
               日常提问和闲聊直接在对话里回答，不创建正式事情；需要动手做事时仍会走完整接单流程。
             </p>
           </div>
@@ -1780,9 +1839,9 @@ function RouterSettings({
           />
         </div>
       </div>
-      <div className="compact-field-row">
-        <span>归类模型</span>
-        <div className="router-model-fields">
+      <div className="compact-field-row grid min-h-[52px] items-center gap-3.5 border-b border-line py-2 [grid-template-columns:120px_minmax(0,1fr)] max-[820px]:items-start max-[820px]:[grid-template-columns:1fr] max-[820px]:py-3">
+        <span className="font-medium">归类模型</span>
+        <div className="router-model-fields grid min-w-0 items-center gap-2.5 [grid-template-columns:168px_minmax(0,1fr)_auto] max-[820px]:[grid-template-columns:1fr]">
           <Select
             value={draft.modelProvider}
             onValueChange={value => {
@@ -1845,17 +1904,19 @@ function RouterSettings({
               }
             />
           )}
-          <button
-            className="router-model-manual-toggle"
+          <Button
+            className="router-model-manual-toggle h-7 px-0.5 text-[12px] font-normal whitespace-nowrap text-accent-ink max-[820px]:justify-self-start"
             onClick={() => setManualModel(manual => !manual)}
+            size="xs"
             type="button"
+            variant="quiet"
           >
             {manualModel ? '从目录选择' : '手动输入模型 ID'}
-          </button>
+          </Button>
         </div>
       </div>
-      <div className="compact-field-row">
-        <span>不确定时</span>
+      <div className="compact-field-row grid min-h-[52px] items-center gap-3.5 border-b border-line py-2 [grid-template-columns:120px_minmax(0,1fr)] max-[820px]:items-start max-[820px]:[grid-template-columns:1fr] max-[820px]:py-3">
+        <span className="font-medium">不确定时</span>
         <RadioGroup
           aria-label="不确定时"
           className="radio-row bui flex flex-wrap gap-x-4 gap-y-2"
@@ -1886,7 +1947,7 @@ function RouterSettings({
           ))}
         </RadioGroup>
       </div>
-      <h3>归类规则</h3>
+      <h3 className="mt-4 mb-2.5 text-[14px]">归类规则</h3>
       {draft.routerMode === 'rules' && (
         <div className="my-3 flex items-center gap-2 rounded-control bg-accent-tint px-3 py-2.5 text-[12px] leading-[1.6] text-ink-2">
           <CircleHelp size={16} />
@@ -1917,20 +1978,40 @@ function RouterSettings({
         <p className="my-6 text-[13px] text-ink-2">正在读取归类规则…</p>
       ) : (
         <>
-          <div className="rule-list">
-            <button disabled type="button">
+          <div className="rule-list overflow-hidden rounded-card shadow-hairline">
+            <Button
+              className="h-auto min-h-[42px] w-full justify-start gap-2.5 rounded-none border-b border-line bg-surface px-3 text-left font-normal disabled:opacity-100 disabled:text-ink-2"
+              disabled
+              size="sm"
+              type="button"
+              variant="quiet"
+            >
               <LockKeyhole size={15} />
-              <span>目标明显不同则开始新事情</span>
-              <small>默认规则（已锁定）</small>
-            </button>
-            <button disabled type="button">
+              <span className="flex-1 text-ink">目标明显不同则开始新事情</span>
+              <small className="text-[12px] text-ink-2">
+                默认规则（已锁定）
+              </small>
+            </Button>
+            <Button
+              className="h-auto min-h-[42px] w-full justify-start gap-2.5 rounded-none border-b border-line bg-surface px-3 text-left font-normal disabled:opacity-100 disabled:text-ink-2"
+              disabled
+              size="sm"
+              type="button"
+              variant="quiet"
+            >
               <LockKeyhole size={15} />
-              <span>已停止的事情不自动恢复</span>
-              <small>系统规则（已锁定）</small>
-            </button>
+              <span className="flex-1 text-ink">已停止的事情不自动恢复</span>
+              <small className="text-[12px] text-ink-2">
+                系统规则（已锁定）
+              </small>
+            </Button>
             {routingRules.map(rule => (
-              <div className="rule-row" key={rule.id}>
-                <button
+              <div
+                className="rule-row flex items-center border-b border-line bg-surface last:border-b-0"
+                key={rule.id}
+              >
+                <Button
+                  className="h-auto min-h-[42px] min-w-0 flex-1 justify-start gap-2.5 rounded-none bg-surface px-3 text-left font-normal hover:bg-inset"
                   onClick={() =>
                     onOpenDrawer({
                       kind: 'routingRule',
@@ -1941,12 +2022,16 @@ function RouterSettings({
                         : {}),
                     })
                   }
+                  size="sm"
                   type="button"
+                  variant="quiet"
                 >
-                  <span>{rule.title}</span>
-                  <small>{rule.enabled ? '归类 · 启用' : '归类 · 停用'}</small>
+                  <span className="flex-1">{rule.title}</span>
+                  <small className="text-[12px] text-ink-2">
+                    {rule.enabled ? '归类 · 启用' : '归类 · 停用'}
+                  </small>
                   <Pencil size={15} />
-                </button>
+                </Button>
                 <div className="rule-toggle flex items-center px-3">
                   <Switch
                     checked={rule.enabled}
@@ -1991,8 +2076,8 @@ function RouterSettings({
           {ruleActionError}
         </div>
       )}
-      <h3>测试归类</h3>
-      <div className="test-row">
+      <h3 className="mt-4 mb-2.5 text-[14px]">测试归类</h3>
+      <div className="test-row grid items-center gap-2.5 [grid-template-columns:minmax(0,1fr)_auto] max-[520px]:[grid-template-columns:1fr]">
         <TextInput
           aria-label="测试归类消息"
           className="h-10 w-full"
@@ -2023,12 +2108,17 @@ function RouterSettings({
         </div>
       )}
       {testResult && (
-        <div className="settings-card" role="status">
-          <div className="card-title">
+        <div
+          className="settings-card my-3.5 rounded-card bg-surface p-[18px] shadow-card"
+          role="status"
+        >
+          <div className="card-title flex items-start gap-3 max-[520px]:grid max-[520px]:[grid-template-columns:20px_minmax(0,1fr)] [&>div]:min-w-0 [&>div]:flex-1 [&>[role=combobox]]:max-[520px]:min-w-0 [&>[role=combobox]]:max-[520px]:max-w-full [&>[role=combobox]]:max-[520px]:justify-self-start [&>[role=combobox]]:max-[520px]:[grid-column:2]">
             <Zap size={20} />
             <div>
-              <h3>{routingPreviewLabel(testResult)}</h3>
-              <p>{testResult.reason}</p>
+              <h3 className="mb-1 text-[13px]">
+                {routingPreviewLabel(testResult)}
+              </h3>
+              <p className="text-ink-2">{testResult.reason}</p>
             </div>
           </div>
           {testResult.question && <p>{testResult.question}</p>}
@@ -2163,17 +2253,17 @@ function VoiceSettings({
     }
   }
   return (
-    <div className="settings-pane">
+    <div className="settings-pane mx-auto max-w-[900px] px-9 pt-[34px] pb-10 max-[1120px]:px-6 max-[820px]:px-[18px] max-[820px]:pt-6 max-[820px]:pb-[34px]">
       <SettingsHeading
         title="语音与输入"
         description="配置听写、输入改写和发送前校对。"
       />
-      <div className="settings-card">
-        <div className="card-title">
+      <div className="settings-card my-3.5 rounded-card bg-surface p-[18px] shadow-card">
+        <div className="card-title flex items-start gap-3 max-[520px]:grid max-[520px]:[grid-template-columns:20px_minmax(0,1fr)] [&>div]:min-w-0 [&>div]:flex-1 [&>[role=combobox]]:max-[520px]:min-w-0 [&>[role=combobox]]:max-[520px]:max-w-full [&>[role=combobox]]:max-[520px]:justify-self-start [&>[role=combobox]]:max-[520px]:[grid-column:2]">
           <Mic size={20} />
           <div>
-            <h3>语音听写</h3>
-            <p>录音仅用于本次转写，默认不持久化。</p>
+            <h3 className="mb-1 text-[13px]">语音听写</h3>
+            <p className="text-ink-2">录音仅用于本次转写，默认不持久化。</p>
           </div>
           <Select
             onValueChange={value =>
@@ -2297,12 +2387,12 @@ function VoiceSettings({
           </>
         )}
       </div>
-      <div className="settings-card">
-        <div className="card-title">
+      <div className="settings-card my-3.5 rounded-card bg-surface p-[18px] shadow-card">
+        <div className="card-title flex items-start gap-3 max-[520px]:grid max-[520px]:[grid-template-columns:20px_minmax(0,1fr)] [&>div]:min-w-0 [&>div]:flex-1 [&>[role=combobox]]:max-[520px]:min-w-0 [&>[role=combobox]]:max-[520px]:max-w-full [&>[role=combobox]]:max-[520px]:justify-self-start [&>[role=combobox]]:max-[520px]:[grid-column:2]">
           <Sparkles size={20} />
           <div>
-            <h3>输入改写</h3>
-            <p>发送前清理口头语，不改变原意。</p>
+            <h3 className="mb-1 text-[13px]">输入改写</h3>
+            <p className="text-ink-2">发送前清理口头语，不改变原意。</p>
           </div>
         </div>
         <div className="switch-row bui flex items-center justify-between py-3">
@@ -2477,7 +2567,7 @@ function ConnectionsSettings({
   onReload?: () => void
 }) {
   return (
-    <div className="settings-pane">
+    <div className="settings-pane mx-auto max-w-[900px] px-9 pt-[34px] pb-10 max-[1120px]:px-6 max-[820px]:px-[18px] max-[820px]:pt-6 max-[820px]:pb-[34px]">
       <SettingsHeading
         title="能力与连接"
         description="查看已注册的执行节点与它们声明的能力。"
@@ -2505,20 +2595,25 @@ function ConnectionsSettings({
       ) : !nodes ? (
         <p className="my-6 text-[13px] text-ink-2">正在读取执行节点…</p>
       ) : nodes.length ? (
-        <div className="connection-grid">
+        <div className="connection-grid grid grid-cols-2 gap-2.5 max-[520px]:grid-cols-1">
           {nodes.map(node => (
-            <article key={node.id}>
-              <span>
+            <article
+              className="grid items-center gap-2.5 rounded-card bg-surface p-3.5 shadow-card [grid-template-columns:38px_1fr_auto]"
+              key={node.id}
+            >
+              <span className="flex size-9 items-center justify-center rounded-control bg-inset">
                 <Network size={19} />
               </span>
               <div>
-                <h3>{node.label}</h3>
-                <p>
+                <h3 className="text-[13px]">{node.label}</h3>
+                <p className="mt-1 text-[11px] text-ink-2">
                   {node.capabilities.length
                     ? node.capabilities.join(' · ')
                     : '未声明能力'}
                 </p>
-                <p>最近心跳：{formatRelativeTime(node.lastHeartbeatAt)}</p>
+                <p className="mt-1 text-[11px] text-ink-2">
+                  最近心跳：{formatRelativeTime(node.lastHeartbeatAt)}
+                </p>
               </div>
             </article>
           ))}
@@ -2549,7 +2644,7 @@ function MemorySettings({
     memories?.filter(memory => memory.scope === 'global').length ?? 0
   const scopedCount = (memories?.length ?? 0) - globalCount
   return (
-    <div className="settings-pane">
+    <div className="settings-pane mx-auto max-w-[900px] px-9 pt-[34px] pb-10 max-[1120px]:px-6 max-[820px]:px-[18px] max-[820px]:pt-6 max-[820px]:pb-[34px]">
       <SettingsHeading
         title="记忆"
         description="管理 Pegas 可以长期记住的内容和作用范围。"
@@ -2564,12 +2659,12 @@ function MemorySettings({
       ) : !memories ? (
         <p className="my-6 text-[13px] text-ink-2">正在读取记忆…</p>
       ) : (
-        <div className="settings-card">
-          <div className="card-title">
+        <div className="settings-card my-3.5 rounded-card bg-surface p-[18px] shadow-card">
+          <div className="card-title flex items-start gap-3 max-[520px]:grid max-[520px]:[grid-template-columns:20px_minmax(0,1fr)] [&>div]:min-w-0 [&>div]:flex-1 [&>[role=combobox]]:max-[520px]:min-w-0 [&>[role=combobox]]:max-[520px]:max-w-full [&>[role=combobox]]:max-[520px]:justify-self-start [&>[role=combobox]]:max-[520px]:[grid-column:2]">
             <Database size={20} />
             <div>
-              <h3>服务端记忆</h3>
-              <p>
+              <h3 className="mb-1 text-[13px]">服务端记忆</h3>
+              <p className="text-ink-2">
                 全局 {globalCount} 条 · Worker/事情 {scopedCount} 条
               </p>
             </div>
@@ -2603,17 +2698,19 @@ function PrivacySettings({
   onChange: (settings: RuntimeSettings) => void
 }) {
   return (
-    <div className="settings-pane">
+    <div className="settings-pane mx-auto max-w-[900px] px-9 pt-[34px] pb-10 max-[1120px]:px-6 max-[820px]:px-[18px] max-[820px]:pt-6 max-[820px]:pb-[34px]">
       <SettingsHeading
         title="隐私"
         description="控制内容发往外部模型前的保护方式，以及 Pegas 执行动作的默认权限。"
       />
-      <div className="settings-card">
-        <div className="card-title">
+      <div className="settings-card my-3.5 rounded-card bg-surface p-[18px] shadow-card">
+        <div className="card-title flex items-start gap-3 max-[520px]:grid max-[520px]:[grid-template-columns:20px_minmax(0,1fr)] [&>div]:min-w-0 [&>div]:flex-1 [&>[role=combobox]]:max-[520px]:min-w-0 [&>[role=combobox]]:max-[520px]:max-w-full [&>[role=combobox]]:max-[520px]:justify-self-start [&>[role=combobox]]:max-[520px]:[grid-column:2]">
           <LockKeyhole size={20} />
           <div>
-            <h3>默认权限档位</h3>
-            <p>决定 Pegas 执行工具时哪些动作放行、哪些需要你的审批。</p>
+            <h3 className="mb-1 text-[13px]">默认权限档位</h3>
+            <p className="text-ink-2">
+              决定 Pegas 执行工具时哪些动作放行、哪些需要你的审批。
+            </p>
           </div>
         </div>
         <FormField
@@ -2653,12 +2750,12 @@ function PrivacySettings({
           收紧对下一次工具调用立即生效；放宽只影响后续运行。单个事情可以在执行设置里覆盖此默认值。
         </p>
       </div>
-      <div className="settings-card">
-        <div className="card-title">
+      <div className="settings-card my-3.5 rounded-card bg-surface p-[18px] shadow-card">
+        <div className="card-title flex items-start gap-3 max-[520px]:grid max-[520px]:[grid-template-columns:20px_minmax(0,1fr)] [&>div]:min-w-0 [&>div]:flex-1 [&>[role=combobox]]:max-[520px]:min-w-0 [&>[role=combobox]]:max-[520px]:max-w-full [&>[role=combobox]]:max-[520px]:justify-self-start [&>[role=combobox]]:max-[520px]:[grid-column:2]">
           <ShieldCheck size={20} />
           <div>
-            <h3>自动审阅</h3>
-            <p>
+            <h3 className="mb-1 text-[13px]">自动审阅</h3>
+            <p className="text-ink-2">
               待审批操作先交给模型按你的原话初审：明确授权的放行，其余仍由你决定。
             </p>
           </div>
@@ -2680,12 +2777,14 @@ function PrivacySettings({
           只认你认证输入的原话；定时跟进等机器输入不构成新授权。审阅超时或失败一律回到人工审批，不可逆命令与控制面修改始终需要你确认。
         </p>
       </div>
-      <div className="settings-card">
-        <div className="card-title">
+      <div className="settings-card my-3.5 rounded-card bg-surface p-[18px] shadow-card">
+        <div className="card-title flex items-start gap-3 max-[520px]:grid max-[520px]:[grid-template-columns:20px_minmax(0,1fr)] [&>div]:min-w-0 [&>div]:flex-1 [&>[role=combobox]]:max-[520px]:min-w-0 [&>[role=combobox]]:max-[520px]:max-w-full [&>[role=combobox]]:max-[520px]:justify-self-start [&>[role=combobox]]:max-[520px]:[grid-column:2]">
           <Shield size={20} />
           <div>
-            <h3>敏感信息遮罩</h3>
-            <p>在可信边界外发送内容前识别并替换常见敏感字段。</p>
+            <h3 className="mb-1 text-[13px]">敏感信息遮罩</h3>
+            <p className="text-ink-2">
+              在可信边界外发送内容前识别并替换常见敏感字段。
+            </p>
           </div>
         </div>
         <div className="switch-row bui flex items-center justify-between py-3">
@@ -2764,7 +2863,7 @@ function NotificationSettings({
     }
   }
   return (
-    <div className="settings-pane">
+    <div className="settings-pane mx-auto max-w-[900px] px-9 pt-[34px] pb-10 max-[1120px]:px-6 max-[820px]:px-[18px] max-[820px]:pt-6 max-[820px]:pb-[34px]">
       <SettingsHeading
         title="通知"
         description="设置免打扰时段，让 Pegas 的通知避开你的休息时间。"
@@ -2793,12 +2892,12 @@ function NotificationSettings({
         <p className="my-6 text-[13px] text-ink-2">正在读取通知偏好…</p>
       ) : (
         <>
-          <div className="settings-card">
-            <div className="card-title">
+          <div className="settings-card my-3.5 rounded-card bg-surface p-[18px] shadow-card">
+            <div className="card-title flex items-start gap-3 max-[520px]:grid max-[520px]:[grid-template-columns:20px_minmax(0,1fr)] [&>div]:min-w-0 [&>div]:flex-1 [&>[role=combobox]]:max-[520px]:min-w-0 [&>[role=combobox]]:max-[520px]:max-w-full [&>[role=combobox]]:max-[520px]:justify-self-start [&>[role=combobox]]:max-[520px]:[grid-column:2]">
               <Bell size={20} />
               <div>
-                <h3>免打扰时段</h3>
-                <p>
+                <h3 className="mb-1 text-[13px]">免打扰时段</h3>
+                <p className="text-ink-2">
                   时段内产生的通知会保留在服务端，等时段结束后再投递，不会丢失。
                 </p>
               </div>
@@ -2813,7 +2912,7 @@ function NotificationSettings({
               />
             </div>
             {enabled && (
-              <div className="quiet-hours-row">
+              <div className="quiet-hours-row grid grid-cols-2 gap-3">
                 <FormField className="mt-2 mb-1" label="开始时间">
                   <TextInput
                     className="h-10 w-full"
@@ -2845,9 +2944,9 @@ function NotificationSettings({
               ）计算；保存时生效。
             </p>
           </div>
-          <div className="settings-inline-actions">
+          <div className="settings-inline-actions mt-3.5 flex items-center justify-end gap-3">
             <span
-              className={notice?.kind === 'error' ? 'is-error' : ''}
+              className={`flex-1 text-[12px] ${notice?.kind === 'error' ? 'text-red-text' : 'text-green-text'}`}
               role={notice?.kind === 'error' ? 'alert' : 'status'}
             >
               {notice?.message}
@@ -2967,7 +3066,7 @@ function UsageSettings({
     : undefined
   const modelRows = aggregateUsageByModel(usage?.records ?? [])
   return (
-    <div className="settings-pane">
+    <div className="settings-pane mx-auto max-w-[900px] px-9 pt-[34px] pb-10 max-[1120px]:px-6 max-[820px]:px-[18px] max-[820px]:pt-6 max-[820px]:pb-[34px]">
       <SettingsHeading
         title="模型用量"
         description="按模型、事情和 Run 查看供应商真实上报的消耗。"
@@ -2994,16 +3093,16 @@ function UsageSettings({
         </div>
       )}
       {!usage ? (
-        <div className="settings-empty">尚未取得用量数据。</div>
+        <div className="my-6 text-[13px] text-ink-2">尚未取得用量数据。</div>
       ) : (
         <>
-          <div className="usage-metrics">
-            <article>
+          <div className="usage-metrics grid grid-cols-4 gap-2.5 max-[820px]:grid-cols-2 max-[520px]:grid-cols-1">
+            <article className="grid gap-[7px] rounded-card bg-surface p-[15px] shadow-card [&_small]:text-[11px] [&_small]:text-ink-2 [&_span]:text-[11px] [&_span]:text-ink-2 [&_strong]:text-[20px] [&_strong]:leading-[1.25] [&_strong]:tracking-[-0.02em]">
               <small>总 Token</small>
               <strong>{total?.toLocaleString('zh-CN') ?? '—'}</strong>
               <span>{hasTokenUsage ? '输入 + 输出' : '执行器未回报'}</span>
             </article>
-            <article>
+            <article className="grid gap-[7px] rounded-card bg-surface p-[15px] shadow-card [&_small]:text-[11px] [&_small]:text-ink-2 [&_span]:text-[11px] [&_span]:text-ink-2 [&_strong]:text-[20px] [&_strong]:leading-[1.25] [&_strong]:tracking-[-0.02em]">
               <small>缓存读取</small>
               <strong>
                 {hasCacheUsage
@@ -3012,7 +3111,7 @@ function UsageSettings({
               </strong>
               <span>{hasCacheUsage ? '供应商上报' : '执行器未回报'}</span>
             </article>
-            <article>
+            <article className="grid gap-[7px] rounded-card bg-surface p-[15px] shadow-card [&_small]:text-[11px] [&_small]:text-ink-2 [&_span]:text-[11px] [&_span]:text-ink-2 [&_strong]:text-[20px] [&_strong]:leading-[1.25] [&_strong]:tracking-[-0.02em]">
               <small>运行时长</small>
               <strong>
                 {hasDuration
@@ -3021,7 +3120,7 @@ function UsageSettings({
               </strong>
               <span>{hasDuration ? 'Pegas 观测' : '执行器未回报'}</span>
             </article>
-            <article>
+            <article className="grid gap-[7px] rounded-card bg-surface p-[15px] shadow-card [&_small]:text-[11px] [&_small]:text-ink-2 [&_span]:text-[11px] [&_span]:text-ink-2 [&_strong]:text-[20px] [&_strong]:leading-[1.25] [&_strong]:tracking-[-0.02em]">
               <small>费用</small>
               <strong>
                 {summary?.costUsd === undefined
@@ -3033,26 +3132,34 @@ function UsageSettings({
               </span>
             </article>
           </div>
-          <div className="usage-dimension" role="group" aria-label="统计维度">
-            <button
+          <div
+            className="mt-[18px] flex gap-1.5"
+            role="group"
+            aria-label="统计维度"
+          >
+            <Button
               aria-pressed={dimension === 'run'}
-              className={dimension === 'run' ? 'is-active' : ''}
+              className="h-8 rounded-control px-3 text-[12px] aria-pressed:bg-ink aria-pressed:text-canvas aria-pressed:shadow-none"
               onClick={() => setDimension('run')}
+              size="xs"
               type="button"
+              variant="secondary"
             >
               按 Run
-            </button>
-            <button
+            </Button>
+            <Button
               aria-pressed={dimension === 'model'}
-              className={dimension === 'model' ? 'is-active' : ''}
+              className="h-8 rounded-control px-3 text-[12px] aria-pressed:bg-ink aria-pressed:text-canvas aria-pressed:shadow-none"
               onClick={() => setDimension('model')}
+              size="xs"
               type="button"
+              variant="secondary"
             >
               按模型
-            </button>
+            </Button>
           </div>
           {dimension === 'run' ? (
-            <div className="usage-table">
+            <div className="usage-table mt-[22px] text-[12px] max-[820px]:overflow-x-auto [&>div]:grid [&>div]:min-h-12 [&>div]:[grid-template-columns:2fr_repeat(4,1fr)] [&>div]:gap-2.5 [&>div]:border-b [&>div]:border-line [&>div]:p-2.5 max-[820px]:[&>div]:min-w-[620px] [&>div>span:first-child]:grid [&>div>span:first-child]:gap-[3px] [&_small]:text-ink-2">
               <div>
                 <b>模型 / Run</b>
                 <b>输入</b>
@@ -3084,7 +3191,7 @@ function UsageSettings({
               ))}
             </div>
           ) : (
-            <div className="usage-table">
+            <div className="usage-table mt-[22px] text-[12px] max-[820px]:overflow-x-auto [&>div]:grid [&>div]:min-h-12 [&>div]:[grid-template-columns:2fr_repeat(4,1fr)] [&>div]:gap-2.5 [&>div]:border-b [&>div]:border-line [&>div]:p-2.5 max-[820px]:[&>div]:min-w-[620px] [&>div>span:first-child]:grid [&>div>span:first-child]:gap-[3px] [&_small]:text-ink-2">
               <div>
                 <b>模型</b>
                 <b>输入</b>
@@ -3122,8 +3229,8 @@ function UsageSettings({
                 title="路由与改写用量"
                 description="Router 与输入改写的模型调用消耗；token 仅在供应商上报时显示。"
               />
-              <div className="usage-metrics">
-                <article>
+              <div className="usage-metrics grid grid-cols-4 gap-2.5 max-[820px]:grid-cols-2 max-[520px]:grid-cols-1">
+                <article className="grid gap-[7px] rounded-card bg-surface p-[15px] shadow-card [&_small]:text-[11px] [&_small]:text-ink-2 [&_span]:text-[11px] [&_span]:text-ink-2 [&_strong]:text-[20px] [&_strong]:leading-[1.25] [&_strong]:tracking-[-0.02em]">
                   <small>调用次数</small>
                   <strong>
                     {usage.router.summary.calls.toLocaleString('zh-CN')}
@@ -3132,7 +3239,7 @@ function UsageSettings({
                     {`成功 ${String(usage.router.summary.okCalls)} · 失败 ${String(usage.router.summary.errorCalls)}`}
                   </span>
                 </article>
-                <article>
+                <article className="grid gap-[7px] rounded-card bg-surface p-[15px] shadow-card [&_small]:text-[11px] [&_small]:text-ink-2 [&_span]:text-[11px] [&_span]:text-ink-2 [&_strong]:text-[20px] [&_strong]:leading-[1.25] [&_strong]:tracking-[-0.02em]">
                   <small>上报 Token</small>
                   <strong>
                     {usage.router.summary.reportedCalls > 0
@@ -3148,7 +3255,7 @@ function UsageSettings({
                       : '供应商未回报'}
                   </span>
                 </article>
-                <article>
+                <article className="grid gap-[7px] rounded-card bg-surface p-[15px] shadow-card [&_small]:text-[11px] [&_small]:text-ink-2 [&_span]:text-[11px] [&_span]:text-ink-2 [&_strong]:text-[20px] [&_strong]:leading-[1.25] [&_strong]:tracking-[-0.02em]">
                   <small>调用时长</small>
                   <strong>
                     {`${String(Math.round(usage.router.summary.durationMs / 1000))}s`}
@@ -3156,7 +3263,7 @@ function UsageSettings({
                   <span>Pegas 观测</span>
                 </article>
               </div>
-              <div className="usage-table">
+              <div className="usage-table mt-[22px] text-[12px] max-[820px]:overflow-x-auto [&>div]:grid [&>div]:min-h-12 [&>div]:[grid-template-columns:2fr_repeat(4,1fr)] [&>div]:gap-2.5 [&>div]:border-b [&>div]:border-line [&>div]:p-2.5 max-[820px]:[&>div]:min-w-[620px] [&>div>span:first-child]:grid [&>div>span:first-child]:gap-[3px] [&_small]:text-ink-2">
                 <div>
                   <b>模型 / 调用</b>
                   <b>输入</b>
@@ -3218,17 +3325,19 @@ function RecoverySettings({
   status?: RecoveryStatus
 }) {
   return (
-    <div className="settings-pane">
+    <div className="settings-pane mx-auto max-w-[900px] px-9 pt-[34px] pb-10 max-[1120px]:px-6 max-[820px]:px-[18px] max-[820px]:pt-6 max-[820px]:pb-[34px]">
       <SettingsHeading
         title="数据与恢复"
         description="查看本机数据与独立恢复平面的真实状态。"
       />
-      <div className="settings-card">
-        <div className="card-title">
+      <div className="settings-card my-3.5 rounded-card bg-surface p-[18px] shadow-card">
+        <div className="card-title flex items-start gap-3 max-[520px]:grid max-[520px]:[grid-template-columns:20px_minmax(0,1fr)] [&>div]:min-w-0 [&>div]:flex-1 [&>[role=combobox]]:max-[520px]:min-w-0 [&>[role=combobox]]:max-[520px]:max-w-full [&>[role=combobox]]:max-[520px]:justify-self-start [&>[role=combobox]]:max-[520px]:[grid-column:2]">
           <Database size={20} />
           <div>
-            <h3>本地数据库</h3>
-            <p>Conversation、Task 与 Run 的服务端权威记录。</p>
+            <h3 className="mb-1 text-[13px]">本地数据库</h3>
+            <p className="text-ink-2">
+              Conversation、Task 与 Run 的服务端权威记录。
+            </p>
           </div>
         </div>
         <p className="text-[12px] leading-[1.6] text-ink-2">
@@ -3245,20 +3354,18 @@ function RecoverySettings({
           导出数据（待服务端 API）
         </Button>
       </div>
-      <div className="settings-card">
-        <div className="card-title">
+      <div className="settings-card my-3.5 rounded-card bg-surface p-[18px] shadow-card">
+        <div className="card-title flex items-start gap-3 max-[520px]:grid max-[520px]:[grid-template-columns:20px_minmax(0,1fr)] [&>div]:min-w-0 [&>div]:flex-1 [&>[role=combobox]]:max-[520px]:min-w-0 [&>[role=combobox]]:max-[520px]:max-w-full [&>[role=combobox]]:max-[520px]:justify-self-start [&>[role=combobox]]:max-[520px]:[grid-column:2]">
           <RotateCw size={20} />
           <div>
-            <h3>恢复平面</h3>
-            <p>独立 Supervisor 提供状态、重启与回滚生命线。</p>
+            <h3 className="mb-1 text-[13px]">恢复平面</h3>
+            <p className="text-ink-2">
+              独立 Supervisor 提供状态、重启与回滚生命线。
+            </p>
           </div>
           {status && (
             <span
-              className={
-                status.integrity === 'ok'
-                  ? 'health-badge is-good'
-                  : 'health-badge'
-              }
+              className={`health-badge rounded-chip bg-inset px-[7px] py-1 text-[10px] ${status.integrity === 'ok' ? 'text-green-text' : 'text-ink-2'}`}
             >
               {recoveryIntegrityLabel(status)}
             </span>
@@ -3396,11 +3503,15 @@ function RecoverySettings({
 }
 function AboutSettings() {
   return (
-    <div className="settings-pane about-pane">
+    <div className="settings-pane about-pane mx-auto max-w-[900px] px-9 pt-[100px] pb-10 text-center max-[1120px]:px-6 max-[820px]:px-[18px] max-[820px]:pb-[34px]">
       <PegasMascot label="Pegas 形象" size={168} />
-      <h2>Pegas</h2>
-      <p>一个以对话为入口、以持久事情为核心的私人智能伙伴。</p>
-      <dl>
+      <h2 className="mt-3 mb-[7px] text-[26px] leading-[1.2] tracking-[-0.03em]">
+        Pegas
+      </h2>
+      <p className="text-ink-2">
+        一个以对话为入口、以持久事情为核心的私人智能伙伴。
+      </p>
+      <dl className="mx-auto mt-10 max-w-[440px] border-t border-line [&>div]:flex [&>div]:justify-between [&>div]:border-b [&>div]:border-line [&>div]:px-1 [&>div]:py-[13px] [&_dt]:text-ink-2 [&_dd]:m-0">
         <div>
           <dt>版本</dt>
           <dd>0.0.1</dd>

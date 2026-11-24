@@ -814,9 +814,16 @@ export function ConversationPage({
         </Button>
       )}
 
-      <div className="composer-wrap" ref={chatScroll.composerRef}>
+      <div
+        className="composer-wrap bui relative px-[42px] pt-3 pb-6 max-[820px]:px-3.5 max-[820px]:pt-2.5 max-[820px]:pb-3.5"
+        ref={chatScroll.composerRef}
+      >
         {trayChannels.length > 0 && (
-          <div aria-label="进行中的事情" className="task-tray" role="group">
+          <div
+            aria-label="进行中的事情"
+            className="task-tray mx-auto mb-2 flex max-w-[1040px] gap-2 overflow-x-auto pb-0.5 [scrollbar-width:thin]"
+            role="group"
+          >
             {trayChannels.map(channel => {
               const channelRun = latestRunForTask(snapshot.runs, channel.id)
               const selected = continuationChannel?.id === channel.id
@@ -860,7 +867,7 @@ export function ConversationPage({
         {confirmingStop && summaryChannel && (
           <div
             aria-labelledby="composer-stop-title"
-            className="stop-confirmation mt-3.5 rounded-card bg-red-tint p-4 shadow-hairline"
+            className="stop-confirmation mx-auto mt-3.5 mb-2.5 flex max-w-[1040px] items-center justify-between gap-3.5 rounded-card bg-red-tint p-4 shadow-hairline"
             role="alertdialog"
           >
             <div>
@@ -941,12 +948,18 @@ export function ConversationPage({
           </ol>
         )}
         {error && (
-          <div className="composer-error" role="alert">
+          <div
+            className="composer-error mx-auto mb-2 max-w-[1040px] text-[12px] text-red-text"
+            role="alert"
+          >
             {error}
           </div>
         )}
         {dictation.error && (
-          <div className="composer-error" role="alert">
+          <div
+            className="composer-error mx-auto mb-2 max-w-[1040px] text-[12px] text-red-text"
+            role="alert"
+          >
             {dictation.error}
           </div>
         )}
@@ -1004,9 +1017,10 @@ export function ConversationPage({
           aria-label="发送消息"
           className={[
             'composer',
+            'mx-auto grid max-w-[1040px] grid-rows-[auto_auto] bg-surface shadow-card transition-[border-radius,box-shadow,padding] duration-150 focus-within:shadow-raised pointer-coarse:pb-2',
             draft.includes('\n') || attachment || continuationChannel
-              ? 'is-multiline'
-              : 'is-single-line',
+              ? 'is-multiline rounded-[24px] px-3.5 py-2.5 pl-5 max-[820px]:rounded-[20px] max-[820px]:px-3 max-[820px]:py-2.5 max-[820px]:pl-4'
+              : 'is-single-line rounded-full py-1.5 pr-2 pl-5 max-[820px]:pl-4',
           ].join(' ')}
           onSubmit={event => {
             event.preventDefault()
@@ -1017,6 +1031,11 @@ export function ConversationPage({
             给 Pegas 发消息
           </label>
           <textarea
+            className={`w-full min-w-0 resize-none overflow-y-auto border-0 bg-transparent py-[7px] text-[16px] leading-[1.55] caret-accent outline-none [field-sizing:content] [max-block-size:6lh] placeholder:text-ink-2 placeholder:opacity-55 ${
+              draft.includes('\n') || attachment || continuationChannel
+                ? 'min-h-[54px] pb-3 max-[820px]:min-h-[46px] max-[820px]:pt-[5px]'
+                : 'min-h-[38px] max-[820px]:min-h-[46px] max-[820px]:pt-[5px]'
+            }`}
             enterKeyHint="send"
             id="pegas-message"
             name="message"
@@ -1042,8 +1061,11 @@ export function ConversationPage({
             rows={1}
             value={draft}
           />
-          <div className="composer-toolbar">
-            <div className="composer-tools" aria-label="输入工具">
+          <div className="composer-toolbar flex min-w-0 items-center justify-between gap-3">
+            <div
+              className="composer-tools flex items-center gap-1.5"
+              aria-label="输入工具"
+            >
               <input
                 aria-label="选择附件文件"
                 className="visually-hidden"
@@ -1055,35 +1077,39 @@ export function ConversationPage({
                 tabIndex={-1}
                 type="file"
               />
-              <button
+              <Button
                 aria-label="添加附件"
-                className="composer-add-button"
+                className="composer-add-button size-10 rounded-full p-0 text-ink-3 hover:bg-hover hover:text-ink pointer-coarse:size-11"
                 disabled={sending || dictationBusy}
                 onClick={() => attachmentInputRef.current?.click()}
+                size="sm"
                 title="添加附件（最大 25MB，随下一条消息发送）"
                 type="button"
+                variant="quiet"
               >
                 <Plus size={22} />
-              </button>
-              <button
+              </Button>
+              <Button
                 aria-label="说完直接发送"
                 aria-pressed={voiceDirectSend}
-                className={voiceDirectSend ? 'is-armed' : ''}
+                className="size-10 rounded-full p-0 text-ink-3 hover:bg-hover hover:text-ink aria-pressed:bg-accent-tint aria-pressed:text-accent-ink pointer-coarse:size-11"
                 disabled={dictationBusy}
                 onClick={() => setVoiceDirectSend(current => !current)}
+                size="sm"
                 title={
                   voiceDirectSend
                     ? '语音直发已开启：录音结束后直接发送'
                     : '开启后，录音结束会直接发送，不进入草稿'
                 }
                 type="button"
+                variant="quiet"
               >
                 <Send size={18} />
-              </button>
+              </Button>
             </div>
-            <div className="composer-actions">
+            <div className="composer-actions flex min-w-0 items-center gap-[7px]">
               {sending && (
-                <span className="composer-working">
+                <span className="composer-working mr-auto inline-flex items-center gap-1.5 text-[12px] text-ink-2">
                   <PegasMascot pose="waiting" size={30} />
                   正在整理…
                 </span>
@@ -1143,13 +1169,11 @@ export function ConversationPage({
                 }
                 variant="composer"
               />
-              <button
+              <Button
                 aria-label={
                   dictation.state === 'recording' ? '停止录音' : '语音输入'
                 }
-                className={
-                  dictation.state === 'recording' ? 'is-recording' : ''
-                }
+                className={`size-10 rounded-full p-0 text-ink-3 hover:bg-hover hover:text-ink pointer-coarse:size-11 ${dictation.state === 'recording' ? 'is-recording bg-red-tint text-red-text hover:bg-red-tint hover:text-red-text' : ''}`}
                 onClick={() => {
                   if (dictation.state === 'recording') {
                     dictation.toggle()
@@ -1161,31 +1185,37 @@ export function ConversationPage({
                   }
                   dictation.toggle()
                 }}
+                size="sm"
                 title={voiceDirectSend ? '录音并直接发送' : '语音转文字'}
                 type="button"
+                variant="quiet"
               >
                 <Mic size={20} />
-              </button>
+              </Button>
               {summaryActive && summaryChannel?.canStop && !draft.trim() ? (
-                <button
+                <Button
                   aria-label="停止"
-                  className="send-button is-stop"
+                  className="send-button is-stop size-[42px] rounded-full bg-red p-0 text-white hover:bg-red hover:brightness-95 [&_svg]:fill-current pointer-coarse:size-11"
                   disabled={stopping}
                   onClick={() => setConfirmingStop(true)}
+                  size="sm"
                   title="停止当前执行"
                   type="button"
+                  variant="quiet"
                 >
                   <Square size={16} />
-                </button>
+                </Button>
               ) : (
-                <button
+                <Button
                   aria-label="发送"
-                  className="send-button"
+                  className="send-button size-[42px] rounded-full bg-ink p-0 text-canvas hover:bg-ink hover:text-canvas hover:opacity-90 disabled:bg-line-strong disabled:text-ink-2 disabled:opacity-100 pointer-coarse:size-11"
                   disabled={!draft.trim() || sending || dictationBusy}
+                  size="sm"
                   type="submit"
+                  variant="quiet"
                 >
                   <ArrowUp size={20} />
-                </button>
+                </Button>
               )}
             </div>
           </div>

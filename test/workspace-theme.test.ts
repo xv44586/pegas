@@ -46,12 +46,19 @@ describe('sealed UI layout contracts', () => {
   })
 
   it('keeps dictation errors in composer flow', () => {
-    expect(sealedUi).toMatch(
-      /\.composer-error\s*\{[^}]*margin:\s*0 auto 8px;[^}]*max-width:\s*1040px;/,
+    const mainPages = readFileSync(
+      new URL('../web/src/sealed/MainPages.tsx', import.meta.url),
+      'utf8',
     )
-    expect(sealedUi).not.toMatch(
-      /\.composer-error\s*\{[^}]*position:\s*absolute;/,
-    )
+    const errorBlocks = [
+      ...mainPages.matchAll(/className="composer-error([^"]*)"/g),
+    ].map(match => match[1])
+    expect(errorBlocks.length).toBe(2)
+    for (const className of errorBlocks) {
+      expect(className).toContain('mx-auto mb-2 max-w-[1040px]')
+      expect(className).not.toContain('absolute')
+    }
+    expect(sealedUi).not.toMatch(/^\.composer-error/m)
   })
 
   it('makes detail drawers full height and responsive', () => {
@@ -78,11 +85,16 @@ describe('sealed UI layout contracts', () => {
   })
 
   it('separates model provider and settings layouts', () => {
-    expect(sealedUi).toMatch(
-      /\.model-service-layout\s*\{[^}]*grid-template-columns:\s*220px minmax\(0, 1fr\);/,
+    const settingsPage = readFileSync(
+      new URL('../web/src/sealed/SettingsPage.tsx', import.meta.url),
+      'utf8',
     )
-    expect(sealedUi).toContain('.router-settings')
-    expect(sealedUi).toContain('.pegas-settings')
+    expect(settingsPage).toMatch(
+      /className="model-service-layout[^"]*\[grid-template-columns:220px_minmax\(0,1fr\)\]/,
+    )
+    expect(settingsPage).toContain('router-settings')
+    expect(settingsPage).toContain('pegas-settings')
+    expect(sealedUi).not.toMatch(/^\.model-service-layout/m)
   })
 
   it('keeps every model-selection entry on the paginated shared catalog', () => {
@@ -225,25 +237,18 @@ describe('sealed UI layout contracts', () => {
   })
 
   it('stacks the composer trigger name and provider detail instead of gluing them inline', () => {
-    expect(sealedUi).toMatch(
-      /\.composer-model-button > span\s*\{[^}]*display:\s*grid;/,
-    )
-    expect(sealedUi).toMatch(
-      /\.composer-model-button strong,\s*\.composer-model-button small\s*\{[^}]*text-overflow:\s*ellipsis;/,
-    )
-    expect(sealedUi).toMatch(
-      /\.composer-model-button small\s*\{[^}]*color:\s*var\(--muted\);/,
-    )
     const modelPicker = readFileSync(
       new URL('../web/src/sealed/ModelPicker.tsx', import.meta.url),
       'utf8',
     )
+    expect(modelPicker).toContain('<span className="grid min-w-0 gap-px">')
+    expect(modelPicker).toContain('truncate font-medium')
+    expect(modelPicker).toContain('{selection?.label ?? placeholder}')
     expect(modelPicker).toContain(
-      '<strong>{selection?.label ?? placeholder}</strong>',
+      '<small className="truncate text-[11px] font-normal text-ink-2">',
     )
-    expect(modelPicker).toContain(
-      '<small>{selection?.detail ?? placeholderDetail}</small>',
-    )
+    expect(modelPicker).toContain('{selection?.detail ?? placeholderDetail}')
+    expect(sealedUi).not.toMatch(/^\.composer-model-button/m)
   })
 
   it('keeps search inputs on the single container-owned focus treatment', () => {
