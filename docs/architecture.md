@@ -273,7 +273,7 @@ Memory 为 Pegas 提供跨任务的长期认知，但不替代 Task 数据库。
 
 schema v21 与 `MEMORY-001` 实现第一版分层记忆：Memory 按 owner 隔离，作用域为 global、worker（绑定事情执行配置）与 channel（绑定事情），类别覆盖偏好、事实、情境、经验、过程与受保护引用，来源必须是用户确认或同 owner 的 Task/Run/Artifact。创建、纠正、删除支持稳定 command ID 与乐观 revision；删除永久移除正文并清除历史 command 冻结响应中的内容。Worker 执行 Run 时按 channel → worker → global 顺序有界装载适用记忆并更新最近使用时间，注入 Executor 的记忆声明为数据而非指令，不能扩大 Mandate 或权限，正文标签字符被转义防止提示注入。完整合同见 `docs/memory.md`。
 
-`MEMORY-001` 下一阶段采用双层权威模型。Pegas SQLite 中的显式 Memory 继续承担用户钉住、可确定编辑的记忆，Pegas Control Plane 继续掌握 owner、scope、来源、删除墓碑、幂等作业和最终注入。自托管 Hindsight 作为可替换 Provider，只处理从可靠 Task/Run 事件派生的抽取、索引、归并和检索。Worker 在执行前消费经过 Pegas 二次过滤与预算裁剪的结果。Router 不读取长期 Memory，它只使用 Conversation/Task 权威状态、Task Directory 与显式 Routing Policy，避免记忆归并改变路由稳定性或扩大数据暴露面。Provider 故障必须 fail-open，不能阻止 Task/Run 推进。该阶段仍为 Planned，落地边界和验收见 `docs/memory.md` 的 Hindsight MVP Intake。
+schema v49 落地 `MEMORY-001` 的双层权威 M1。Pegas SQLite 中的显式 Memory 继续承担用户钉住、可确定编辑的记忆，Pegas Control Plane 掌握 owner、scope、来源、删除墓碑、durable retain/curation job、本地召回投影和最终注入。自托管 Hindsight 是可替换 Provider，只处理可靠 Task/Run evidence 的抽取、索引、归并和检索。Worker 在 work Run 的 Executor prompt 构造前至多召回一次，并再次执行 context、tombstone 与预算过滤；Router 和 conversation lane 不读取 Hindsight。Provider 凭证只存在于 Worker adapter，Executor 不获得管理 capability。Run 终态与 job 同事务提交，网络调用在事务外异步执行；recall 故障 fail-open，删除本地 tombstone 先行并异步 invalidate。首个固定兼容基线为 Hindsight v1.2.3（MIT）完整镜像 digest `sha256:601cfdd1bd3f6053864c6458ee15259f065a01a3f83090b56a8ae57db67f8f38`。完整合同与仍未完成的真实服务 canary 见 `docs/memory.md`。
 
 ### 6. Scheduler
 

@@ -858,6 +858,33 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         })
       }
       if (
+        taskResourceUrl.pathname === '/v1/derived-memories' &&
+        request.method === 'GET'
+      ) {
+        const userId = requiredQuery(taskResourceUrl, 'userId')
+        return sendJson(response, 200, {
+          memories: options.store.listDerivedMemories(userId),
+        })
+      }
+      const derivedMemoryDeleteMatch =
+        /^\/v1\/derived-memories\/([^/]+)\/delete$/.exec(
+          taskResourceUrl.pathname,
+        )
+      if (derivedMemoryDeleteMatch && request.method === 'POST') {
+        const input = await readJson(request)
+        if (!isRecord(input) || typeof input.userId !== 'string')
+          throw new Error('userId is required')
+        const memoryId = decodeURIComponent(derivedMemoryDeleteMatch[1] ?? '')
+        const reason =
+          typeof input.reason === 'string' && input.reason.trim()
+            ? input.reason.trim()
+            : 'Deleted by user'
+        options.store.tombstoneDerivedMemory(input.userId, memoryId, reason)
+        return sendJson(response, 200, {
+          deletion: { id: memoryId, deleted: true },
+        })
+      }
+      if (
         taskResourceUrl.pathname === '/v1/memories' &&
         request.method === 'POST'
       ) {

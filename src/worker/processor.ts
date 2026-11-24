@@ -12,6 +12,11 @@ import {
   type ThinkingSummarizer,
 } from '../activity/thinking-summary.js'
 import type { RunExecutor, ToolApprovalGrant } from '../executor/executor.js'
+import type {
+  DerivedMemoryCurationService,
+  DerivedMemoryRecallService,
+  DerivedMemoryRetainService,
+} from '../memory/derived-memory.js'
 import type { Logger } from '../observability/logger.js'
 import type { MetricsRegistry } from '../observability/metrics.js'
 import type { TaskRouter } from '../router/router.js'
@@ -816,6 +821,7 @@ export async function executeClaimedRun(
   collectSubagents?: SubagentTranscriptCollector,
   thinkingSummarizer?: ThinkingSummarizerFactory,
   collectRootOutcomes?: RootToolOutcomeCollector,
+  derivedMemory?: DerivedMemoryRecallService,
 ): Promise<void> {
   const runStartedAt = performance.now()
   const observeRun = (outcome: string) => {
@@ -918,10 +924,62 @@ export async function executeClaimedRun(
   let result
   try {
     const inputEventId = store.resolveRunInputEventId(claimed.run.id)
-    const memories = store.memoryContextEntriesForTask(
+    const explicitMemories = store.memoryContextEntriesForTask(
       claimed.task.userId,
       claimed.task.id,
     )
+    let derivedMemories = [] as Awaited<
+      ReturnType<DerivedMemoryRecallService['recall']>
+    >['entries']
+    if (derivedMemory) {
+      try {
+        const recalled = await derivedMemory.recall({
+          userId: claimed.task.userId,
+          taskId: claimed.task.id,
+          runId: claimed.run.id,
+          query: [claimed.task.title, claimed.task.goal, claimed.run.input]
+            .filter(Boolean)
+            .join('\n'),
+          workingDirectory: runExecutionWorkspace(
+            claimed.run,
+            workingDirectory,
+          ),
+        })
+        const activeIds = new Set(
+          recalled.memories
+            .filter(
+              memory =>
+                !store.isDerivedMemoryTombstoned(
+                  claimed.task.userId,
+                  memory.id,
+                ),
+            )
+            .map(memory => memory.id),
+        )
+        const activeMemories = recalled.memories.filter(memory =>
+          activeIds.has(memory.id),
+        )
+        const activeEntries = recalled.entries.filter(memory =>
+          activeIds.has(memory.id),
+        )
+        store.recordDerivedMemoryRecall(
+          claimed.run.id,
+          claimed.task.userId,
+          activeMemories,
+        )
+        derivedMemories = activeEntries
+      } catch (error) {
+        telemetry?.logger?.warn('memory.recall_failed_open', {
+          runId: claimed.run.id,
+          error: error instanceof Error ? error.message : String(error),
+        })
+        telemetry?.metrics?.increment('pegas_errors_total', {
+          component: 'memory',
+          kind: 'recall',
+        })
+      }
+    }
+    const memories = [...explicitMemories, ...derivedMemories]
     const workRules = store.workRuleContextForUser(claimed.task.userId)
     const toolApprovalGrant = resolveToolApprovalGrant(store, claimed)
     result = await executor.execute({
@@ -1188,6 +1246,96 @@ export async function executeClaimedRun(
       ],
     })
   }
+}
+
+export async function processNextDerivedMemoryJob(
+  store: PegasStore,
+  service: DerivedMemoryRetainService,
+  workerId: string,
+  telemetry?: { logger?: Logger; metrics?: MetricsRegistry },
+): Promise<boolean> {
+  const job = store.claimNextDerivedMemoryJob(workerId, 30_000)
+  if (!job) return false
+  try {
+    if (!job.providerOperationId) {
+      const operationId = await service.submit(job)
+      store.markDerivedMemoryJobSubmitted(job.id, workerId, operationId)
+      return true
+    }
+    const operation = await service.operationStatus(job)
+    if (operation.status === 'completed') {
+      store.completeDerivedMemoryJob(job.id, workerId)
+      return true
+    }
+    if (operation.status === 'failed' || operation.status === 'cancelled') {
+      store.failDerivedMemoryJob(
+        job.id,
+        workerId,
+        operation.error ?? `Hindsight operation ${operation.status}`,
+      )
+      telemetry?.metrics?.increment('pegas_errors_total', {
+        component: 'memory',
+        kind: 'retain_terminal',
+      })
+      return true
+    }
+    store.retryDerivedMemoryJob(job.id, workerId, operation.status, 1_000)
+    return true
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (job.attempts >= 8) store.failDerivedMemoryJob(job.id, workerId, message)
+    else {
+      const retryAfterMs = Math.min(60_000, 500 * 2 ** (job.attempts - 1))
+      store.retryDerivedMemoryJob(job.id, workerId, message, retryAfterMs)
+    }
+    telemetry?.logger?.warn('memory.retain_retry', {
+      jobId: job.id,
+      attempts: job.attempts,
+      error: message,
+    })
+    telemetry?.metrics?.increment('pegas_errors_total', {
+      component: 'memory',
+      kind: 'retain',
+    })
+    return true
+  }
+}
+
+export async function processNextDerivedMemoryCurationJob(
+  store: PegasStore,
+  service: DerivedMemoryCurationService,
+  workerId: string,
+  telemetry?: { logger?: Logger; metrics?: MetricsRegistry },
+): Promise<boolean> {
+  const job = store.claimNextDerivedMemoryCurationJob(workerId, 30_000)
+  if (!job) return false
+  try {
+    await service.invalidate(job)
+    store.completeDerivedMemoryCurationJob(job.id, workerId)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (job.attempts >= 8)
+      store.failDerivedMemoryCurationJob(job.id, workerId, message)
+    else {
+      const retryAfterMs = Math.min(60_000, 500 * 2 ** (job.attempts - 1))
+      store.retryDerivedMemoryCurationJob(
+        job.id,
+        workerId,
+        message,
+        retryAfterMs,
+      )
+    }
+    telemetry?.logger?.warn('memory.curation_retry', {
+      jobId: job.id,
+      attempts: job.attempts,
+      error: message,
+    })
+    telemetry?.metrics?.increment('pegas_errors_total', {
+      component: 'memory',
+      kind: 'curation',
+    })
+  }
+  return true
 }
 
 function collectSubagentTranscripts(

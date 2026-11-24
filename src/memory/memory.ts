@@ -59,6 +59,9 @@ export interface MemoryContextEntry {
   category: MemoryCategory
   content: string
   source: MemorySource
+  origin?: 'explicit' | 'derived'
+  provider?: 'hindsight'
+  relevance?: number
 }
 
 export interface MemoryListOptions {

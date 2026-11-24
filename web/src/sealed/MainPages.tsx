@@ -35,6 +35,7 @@ import type {
   AutomationInvocation,
   ChannelSearchSort,
   DshModelCatalogItem,
+  DerivedMemoryRecord,
   MemoryCategory,
   MemoryDraft,
   MemoryRecord,
@@ -3274,9 +3275,11 @@ export function MemoryPage({
   actions,
   channels,
   error,
+  derivedMemories,
   memories,
   onCreate,
   onDelete,
+  onDeleteDerived,
   onReload,
   onUpdate,
   truncated,
@@ -3284,9 +3287,11 @@ export function MemoryPage({
   actions: PageActions
   channels: WorkChannel[]
   error: string
+  derivedMemories?: DerivedMemoryRecord[]
   memories?: MemoryRecord[]
   onCreate: (draft: MemoryDraft) => Promise<void>
   onDelete: (memory: MemoryRecord) => Promise<void>
+  onDeleteDerived: (memory: DerivedMemoryRecord) => Promise<void>
   onReload: () => void
   onUpdate: (memory: MemoryRecord, draft: MemoryDraft) => Promise<void>
   truncated: boolean
@@ -3301,11 +3306,27 @@ export function MemoryPage({
   const visible = (memories ?? []).filter(
     memory => filter === 'all' || memory.scope === filter,
   )
+  const visibleDerived =
+    filter === 'all' || filter === 'worker' ? (derivedMemories ?? []) : []
   async function runDelete(memory: MemoryRecord) {
     setBusyId(memory.id)
     setActionError('')
     try {
       await onDelete(memory)
+      setConfirmDeleteId(undefined)
+    } catch (caught) {
+      setActionError(
+        caught instanceof Error ? caught.message : '删除失败，请重试。',
+      )
+    } finally {
+      setBusyId('')
+    }
+  }
+  async function runDeleteDerived(memory: DerivedMemoryRecord) {
+    setBusyId(memory.id)
+    setActionError('')
+    try {
+      await onDeleteDerived(memory)
       setConfirmDeleteId(undefined)
     } catch (caught) {
       setActionError(
@@ -3380,18 +3401,28 @@ export function MemoryPage({
           {actionError}
         </div>
       )}
-      {!memories && !error && <p className="my-6 text-ink-2">正在读取记忆…</p>}
-      {memories && visible.length === 0 && !error && (
-        <EmptyCapability
-          icon={Layers3}
-          title={memories.length ? '该范围下还没有记忆' : '还没有记忆'}
-          description={
-            memories.length
-              ? '切换其他范围，或添加一条新的记忆。'
-              : '把偏好、事实或经验告诉 Pegas，它会带来源和作用范围保存。'
-          }
-        />
+      {(!memories || !derivedMemories) && !error && (
+        <p className="my-6 text-ink-2">正在读取记忆…</p>
       )}
+      {memories &&
+        derivedMemories &&
+        visible.length === 0 &&
+        visibleDerived.length === 0 &&
+        !error && (
+          <EmptyCapability
+            icon={Layers3}
+            title={
+              memories.length || derivedMemories.length
+                ? '该范围下还没有记忆'
+                : '还没有记忆'
+            }
+            description={
+              memories.length || derivedMemories.length
+                ? '切换其他范围，或添加一条新的记忆。'
+                : 'Pegas 会在事情完成后自动沉淀经验；你也可以手动添加明确偏好。'
+            }
+          />
+        )}
       {memories && visible.length > 0 && (
         <section className="record-list mb-10" aria-label="记忆列表">
           {visible.map(memory => (
@@ -3477,6 +3508,60 @@ export function MemoryPage({
           ))}
         </section>
       )}
+      {derivedMemories && visibleDerived.length > 0 && (
+        <section className="record-list" aria-label="自动沉淀的记忆">
+          {visibleDerived.map(memory => (
+            <article key={`derived:${memory.id}`}>
+              <span className="record-icon is-active">
+                <Zap size={18} />
+              </span>
+              <div className="record-copy">
+                <strong>{memory.text}</strong>
+                <small className="record-meta">
+                  Worker · 自动沉淀 · {derivedMemoryTypeLabel(memory.type)}
+                </small>
+                <small className="record-meta">
+                  来源：Hindsight
+                  {typeof memory.metadata.task_id === 'string'
+                    ? ` · 事情 ${memory.metadata.task_id.slice(0, 8)}`
+                    : ''}
+                </small>
+              </div>
+              <div className="record-actions">
+                {confirmDeleteId === memory.id ? (
+                  <>
+                    <button
+                      className="danger-button"
+                      disabled={busyId === memory.id}
+                      onClick={() => void runDeleteDerived(memory)}
+                      type="button"
+                    >
+                      确认删除
+                    </button>
+                    <button
+                      className="quiet-button"
+                      onClick={() => setConfirmDeleteId(undefined)}
+                      type="button"
+                    >
+                      保留
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    className="quiet-button"
+                    disabled={busyId === memory.id}
+                    onClick={() => setConfirmDeleteId(memory.id)}
+                    type="button"
+                  >
+                    <Trash2 size={15} />
+                    删除
+                  </button>
+                )}
+              </div>
+            </article>
+          ))}
+        </section>
+      )}
       {form && (
         <MemoryForm
           channels={channels}
@@ -3515,6 +3600,12 @@ function memoryScopeLabel(scope: MemoryScope): string {
 
 function memoryCategoryLabel(category: MemoryCategory): string {
   return memoryCategories.find(item => item.id === category)?.label ?? category
+}
+
+function derivedMemoryTypeLabel(type: DerivedMemoryRecord['type']): string {
+  if (type === 'experience') return '经验'
+  if (type === 'observation') return '归纳'
+  return '事实'
 }
 
 function automationStatusLabel(status: Automation['status']): string {

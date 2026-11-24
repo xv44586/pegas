@@ -174,4 +174,16 @@ POST /v1/memories/:memoryId/delete
 
 已经落地的显式层由 `test/memory.test.ts` 覆盖字段、作用域、来源、幂等、revision、删除清理、owner 隔离、分层装载、容量、HTTP 与 Executor 注入边界。`test/rollback-compatibility.test.ts` 覆盖 schema v21 活跃记忆的回滚保护。Web 已接入显式 Memory 的查看、创建、编辑和删除。
 
-Hindsight 派生层当前只有本文和 Feature Map 的 Intake，没有实现和自动化证据。因此 `MEMORY-001` 保持 `Partial`，不能宣称自动记忆闭环已经可用。
+M1 派生层已经实现：
+
+- `src/memory/derived-memory.ts` 定义可替换 Provider、owner bank/workspace context 的 HMAC 映射、召回二次过滤和显式来源投影；`src/memory/hindsight-provider.ts` 以直接 HTTP 接入 retain、operation status、recall、list/get 和 invalidate，不把 SDK/MCP 或 Provider 凭证交给 Executor。
+- schema v49 新增 durable retain job、curation job、本地召回投影、Run 注入证据和 tombstone。Run 成功/失败只写有界 input/outcome evidence，credential-like 内容先确定性遮盖，不写思考过程与无界工具日志；作业以稳定 UUID、`document_id`、lease 和有界重试在事务外执行。
+- 每个 work Run 在 Executor 前最多召回一次；显式 Memory 排在派生 Memory 前。Hindsight 超时、畸形响应或不可用时 fail-open，不阻断 Run；Router 和 conversation lane 均不读取 Hindsight。
+- `GET /v1/derived-memories` 与记忆页展示本地实际召回过的派生记录。删除先写 tombstone、清除正文投影并立即停止注入，再由 curation job 异步调用 Hindsight invalidate；不创建 Approval 或用户待办。
+- 配置默认关闭；启用时必须显式提供 `PEGAS_HINDSIGHT_BASE_URL` 和独立的 `PEGAS_MEMORY_HMAC_KEY`。首个验证基线固定为 Hindsight v1.2.3、MIT、完整镜像 `ghcr.io/vectorize-io/hindsight@sha256:601cfdd1bd3f6053864c6458ee15259f065a01a3f83090b56a8ae57db67f8f38`。
+
+自动化证据位于 `test/derived-memory.test.ts`、`test/derived-memory-store.test.ts`、`test/derived-memory-processor.test.ts` 与 `web/src/App.test.tsx`，覆盖 HTTP wire contract、弱相关结果丢弃、owner/context 二次隔离、Run 终态原子入队、稳定提交后只轮询不重投、失败如实措辞、recall fail-open、tombstone 防复活、异步 invalidate、API 与 Web 删除无需审批。
+
+最终质量门禁：`pnpm check` 通过 142 个测试文件 / 1433 个测试（statements 85.27%、branches 78.13%、functions 89.68%、lines 88.37%，Server/Web/Desktop 构建通过）；`pnpm smoke` 通过完整多进程 Task→Run 链路；`pnpm smoke:crash` 通过 event claim、tool call 与 write-back 三个崩溃恢复注入点。门禁期间旧 DSH 500ms SIGTERM→SIGKILL 计时用例曾在高负载下抖动两次，隔离复跑与最终全量均通过，未修改该测试或阈值。
+
+`MEMORY-001` 仍保持 `Partial`：尚未用受 Supervisor 管理、带持久 PostgreSQL 的真实 Hindsight 实例跑 retain→recall→invalidate canary，也未验证其备份恢复和版本升级；列表当前是“Pegas 实际召回投影”而非远端 bank 的完整浏览器；用户纠正的 dedicated supersede 事件和记忆效果评测仍是下一缺口。

@@ -666,6 +666,16 @@ export interface MemoryRecord extends MemoryDraft {
   lastUsedAt?: string
 }
 
+export interface DerivedMemoryRecord {
+  id: string
+  text: string
+  type: 'world' | 'experience' | 'observation'
+  score?: number
+  tags: string[]
+  metadata: Record<string, unknown>
+  state?: 'valid' | 'invalidated'
+}
+
 export interface WorkRuleDraft {
   title: string
   content: string

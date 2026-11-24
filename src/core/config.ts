@@ -56,6 +56,11 @@ export interface PegasConfig {
   modelTimeoutMs: number
   privacyMode: 'disabled' | 'mask'
   privacyHmacKey?: string
+  memoryProvider: 'disabled' | 'hindsight'
+  hindsightBaseUrl?: string
+  hindsightApiKey?: string
+  memoryHmacKey?: string
+  hindsightTimeoutMs: number
   rewriteMode: 'disabled' | 'light'
   speechProvider: 'disabled' | 'openai-compatible'
   speechBaseUrl?: string
@@ -88,6 +93,9 @@ export function loadConfig(
   const modelName = environment.PEGAS_MODEL_NAME
   const privacyMode = environment.PEGAS_PRIVACY_MODE ?? 'disabled'
   const privacyHmacKey = environment.PEGAS_PRIVACY_HMAC_KEY
+  const memoryProvider = environment.PEGAS_MEMORY_PROVIDER ?? 'disabled'
+  const hindsightBaseUrl = environment.PEGAS_HINDSIGHT_BASE_URL
+  const memoryHmacKey = environment.PEGAS_MEMORY_HMAC_KEY
   const rewriteMode = environment.PEGAS_REWRITE_MODE ?? 'disabled'
   const speechProvider =
     environment.PEGAS_SPEECH_PROVIDER ?? initialSpeechConnection.provider
@@ -113,6 +121,21 @@ export function loadConfig(
   if (privacyMode !== 'disabled' && privacyMode !== 'mask') {
     throw new Error(
       `Unsupported PEGAS_PRIVACY_MODE: ${privacyMode}. Expected disabled or mask`,
+    )
+  }
+  if (memoryProvider !== 'disabled' && memoryProvider !== 'hindsight') {
+    throw new Error(
+      `Unsupported PEGAS_MEMORY_PROVIDER: ${memoryProvider}. Expected disabled or hindsight`,
+    )
+  }
+  if (memoryProvider === 'hindsight' && !hindsightBaseUrl) {
+    throw new Error(
+      'PEGAS_HINDSIGHT_BASE_URL is required when PEGAS_MEMORY_PROVIDER=hindsight',
+    )
+  }
+  if (memoryProvider === 'hindsight' && !memoryHmacKey) {
+    throw new Error(
+      'PEGAS_MEMORY_HMAC_KEY is required when PEGAS_MEMORY_PROVIDER=hindsight',
     )
   }
   if (speechProvider === 'openai-compatible' && !speechBaseUrl) {
@@ -219,6 +242,17 @@ export function loadConfig(
     ),
     privacyMode,
     ...(privacyHmacKey ? { privacyHmacKey } : {}),
+    memoryProvider,
+    ...(hindsightBaseUrl ? { hindsightBaseUrl } : {}),
+    ...(environment.PEGAS_HINDSIGHT_API_KEY
+      ? { hindsightApiKey: environment.PEGAS_HINDSIGHT_API_KEY }
+      : {}),
+    ...(memoryHmacKey ? { memoryHmacKey } : {}),
+    hindsightTimeoutMs: parsePositiveInteger(
+      environment.PEGAS_HINDSIGHT_TIMEOUT_MS,
+      5_000,
+      'PEGAS_HINDSIGHT_TIMEOUT_MS',
+    ),
     rewriteMode,
     speechProvider,
     ...(speechBaseUrl ? { speechBaseUrl } : {}),

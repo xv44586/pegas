@@ -591,6 +591,8 @@ function installSnapshotFetch(
       return Response.json({ runs: nextSnapshot.runs })
     if (path.startsWith('/v1/outbox?'))
       return Response.json({ messages: nextSnapshot.messages })
+    if (path.startsWith('/v1/derived-memories?'))
+      return Response.json({ memories: [] })
     return undefined
   })
 }
@@ -7211,6 +7213,50 @@ describe('sealed Pegas UI', () => {
     expect(command.memory.category).toBe('fact')
     expect(command.memory.source.kind).toBe('user_confirmation')
     expect(await screen.findByText('我的工作时间是上午。')).toBeTruthy()
+  })
+
+  it('shows automatically derived memory and deletes it without approval', async () => {
+    let derived = [
+      {
+        id: 'derived-1',
+        text: '这个项目使用 pnpm。',
+        type: 'world',
+        tags: ['pegas:global'],
+        metadata: { task_id: 'task-1' },
+      },
+    ]
+    let deletion: unknown
+    installSnapshotFetch(snapshot, (path, init) => {
+      if (path.startsWith('/v1/memories?'))
+        return Response.json({ memories: [] })
+      if (path.startsWith('/v1/derived-memories?'))
+        return Response.json({ memories: derived })
+      if (
+        path === '/v1/derived-memories/derived-1/delete' &&
+        init?.method === 'POST'
+      ) {
+        deletion = JSON.parse(typeof init.body === 'string' ? init.body : '{}')
+        derived = []
+        return Response.json({ deletion: { id: 'derived-1', deleted: true } })
+      }
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: '记忆',
+      }),
+    )
+    expect(await screen.findByText('这个项目使用 pnpm。')).toBeTruthy()
+    expect(screen.getByText(/自动沉淀/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /删除/ }))
+    fireEvent.click(screen.getByRole('button', { name: '确认删除' }))
+    await waitFor(() => expect(deletion).toBeTruthy())
+    expect(deletion).toMatchObject({
+      userId: 'owner',
+      reason: 'Deleted from Pegas memory settings',
+    })
+    expect(await screen.findByText('还没有记忆')).toBeTruthy()
   })
 
   it('shows memory counts in settings and links to the memory page', async () => {

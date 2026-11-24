@@ -22,6 +22,7 @@ describe('loadConfig', () => {
       modelProvider: 'magpie',
       pushMode: 'disabled',
       privacyMode: 'disabled',
+      memoryProvider: 'disabled',
       rewriteMode: 'disabled',
       routerMode: 'model',
       schedulerPollMs: 500,
@@ -29,6 +30,24 @@ describe('loadConfig', () => {
       speechModel: 'Qwen/Qwen3-ASR-0.6B',
       speechProvider: 'openai-compatible',
       workerConcurrency: 2,
+    })
+  })
+
+  it('loads an explicit Hindsight derived-memory provider', () => {
+    expect(
+      loadConfig({
+        PEGAS_MEMORY_PROVIDER: 'hindsight',
+        PEGAS_HINDSIGHT_BASE_URL: 'http://127.0.0.1:8888',
+        PEGAS_HINDSIGHT_API_KEY: 'hsk_test',
+        PEGAS_MEMORY_HMAC_KEY: 'owner-isolation-key',
+        PEGAS_HINDSIGHT_TIMEOUT_MS: '2500',
+      }),
+    ).toMatchObject({
+      memoryProvider: 'hindsight',
+      hindsightBaseUrl: 'http://127.0.0.1:8888',
+      hindsightApiKey: 'hsk_test',
+      memoryHmacKey: 'owner-isolation-key',
+      hindsightTimeoutMs: 2500,
     })
   })
 
@@ -145,6 +164,21 @@ describe('loadConfig', () => {
     ],
     [{ PEGAS_PRIVACY_MODE: 'unsupported' }, 'Unsupported PEGAS_PRIVACY_MODE'],
     [{ PEGAS_REWRITE_MODE: 'unsupported' }, 'Unsupported PEGAS_REWRITE_MODE'],
+    [
+      { PEGAS_MEMORY_PROVIDER: 'unsupported' },
+      'Unsupported PEGAS_MEMORY_PROVIDER',
+    ],
+    [
+      { PEGAS_MEMORY_PROVIDER: 'hindsight' },
+      'PEGAS_HINDSIGHT_BASE_URL is required',
+    ],
+    [
+      {
+        PEGAS_MEMORY_PROVIDER: 'hindsight',
+        PEGAS_HINDSIGHT_BASE_URL: 'http://127.0.0.1:8888',
+      },
+      'PEGAS_MEMORY_HMAC_KEY is required',
+    ],
     [{ PEGAS_API_PORT: '0' }, 'PEGAS_API_PORT must be a positive integer'],
   ])('rejects unsafe or invalid settings', (environment, message) => {
     expect(() => loadConfig(environment)).toThrow(message)
