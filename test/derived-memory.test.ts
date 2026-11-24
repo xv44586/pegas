@@ -244,7 +244,16 @@ describe('derived memory', () => {
   })
 
   it('retains a user correction with stable provenance', async () => {
-    const provider = providerStub()
+    const retain = vi
+      .fn<
+        (
+          bankId: string,
+          input: Parameters<DerivedMemoryProvider['retain']>[1],
+        ) => Promise<string>
+      >()
+      .mockResolvedValue('operation')
+      .mockName('retain')
+    const provider = { ...providerStub(), retain }
     const service = new PegasDerivedMemoryService(provider, {
       hmacKey: 'correction-key',
     })
@@ -263,16 +272,16 @@ describe('derived memory', () => {
       }),
     ).resolves.toBe('operation')
 
-    expect(provider.retain).toHaveBeenCalledWith(
-      service.bankId('owner'),
-      expect.objectContaining({
-        operationId: 'correction-1',
-        documentId: 'pegas:correction:correction-1',
-        content: 'User correction:\nUse pnpm, not npm.',
-        tags: ['pegas:global'],
-        metadata: expect.objectContaining({ correction_of: 'old-fact' }),
-      }),
-    )
+    expect(retain).toHaveBeenCalledTimes(1)
+    const [bankId, input] = retain.mock.calls[0] ?? []
+    expect(bankId).toBe(service.bankId('owner'))
+    expect(input).toMatchObject({
+      operationId: 'correction-1',
+      documentId: 'pegas:correction:correction-1',
+      content: 'User correction:\nUse pnpm, not npm.',
+      tags: ['pegas:global'],
+      metadata: { correction_of: 'old-fact' },
+    })
   })
 })
 

@@ -164,7 +164,9 @@ try {
     }),
   )
 } finally {
-  await stopHindsight(baseEnvironment, { deleteData: true }).catch(() => {})
+  await stopHindsight(baseEnvironment, { deleteData: true }).catch(error => {
+    console.warn(`memory canary cleanup failed: ${String(error)}`)
+  })
   const safePrefix = resolve('.tmp-pegas-memory-canary-')
   if (temporaryRoot.startsWith(safePrefix))
     rmSync(temporaryRoot, { recursive: true, force: true })

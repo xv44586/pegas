@@ -5501,12 +5501,12 @@ export class PegasStore {
   listDerivedMemoryRecallAudit(
     runId: string,
     userId: string,
-  ): Array<{
+  ): {
     memoryId: string
     stage: 'retrieved' | 'filtered' | 'injected'
     reason?: string
     score?: number
-  }> {
+  }[] {
     const rows = this.#database
       .prepare(
         `SELECT memory_id, stage, reason, score
@@ -5515,12 +5515,12 @@ export class PegasStore {
          ORDER BY memory_id, CASE stage
            WHEN 'retrieved' THEN 0 WHEN 'filtered' THEN 1 ELSE 2 END`,
       )
-      .all(runId, userId) as Array<{
+      .all(runId, userId) as {
       memory_id: string
       stage: 'retrieved' | 'filtered' | 'injected'
       reason: string | null
       score: number | null
-    }>
+    }[]
     return rows.map(row => ({
       memoryId: row.memory_id,
       stage: row.stage,
@@ -15940,7 +15940,7 @@ function toDerivedMemoryCorrectionJob(
   }
 }
 
-export function derivedMemoryContentHash(value: string): string {
+function derivedMemoryContentHash(value: string): string {
   const normalized = value.trim().replaceAll(/\s+/g, ' ').toLocaleLowerCase()
   return createHash('sha256').update(normalized).digest('hex')
 }
