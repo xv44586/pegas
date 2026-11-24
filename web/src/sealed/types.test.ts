@@ -323,6 +323,7 @@ describe('DESIGN-007 attention sections and grouping', () => {
     ['approval.required', 'todo', 'confirm'],
     ['input.required', 'todo', 'answer'],
     ['goal.clarification_required', 'todo', 'answer'],
+    ['routing.clarification_required', 'todo', 'answer'],
     ['run.blocked', 'todo', 'answer'],
     ['review.ready', 'todo', 'review'],
     ['action.outcome_unknown', 'todo', 'reconcile'],

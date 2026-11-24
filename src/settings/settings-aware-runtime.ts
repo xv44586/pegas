@@ -16,12 +16,15 @@ import type { RuntimeSettings } from './runtime-settings.js'
 
 export class SettingsAwareTaskRouter implements TaskRouter {
   readonly #store: PegasStore
-  readonly #resolve: (settings: RuntimeSettings) => TaskRouter
+  readonly #resolve: (
+    settings: RuntimeSettings,
+    event: InboxEvent,
+  ) => TaskRouter
   #meteringContext: MeteredProviderContext | undefined
 
   constructor(
     store: PegasStore,
-    resolve: (settings: RuntimeSettings) => TaskRouter,
+    resolve: (settings: RuntimeSettings, event: InboxEvent) => TaskRouter,
   ) {
     this.#store = store
     this.#resolve = resolve
@@ -42,7 +45,7 @@ export class SettingsAwareTaskRouter implements TaskRouter {
       eventId: event.id,
       modelRef: `${settings.modelProvider}/${settings.modelName}`,
     }
-    return this.#resolve(settings).route(event, tasks, context)
+    return this.#resolve(settings, event).route(event, tasks, context)
   }
 }
 

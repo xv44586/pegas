@@ -176,7 +176,7 @@
 - 「目标与交付」历史修订中每个目标修订新增「查看证据记录 vN」：`GET /v1/tasks/:id/evidence?goalRevision=N&limit=20&cursor=` 按修订独立展开/缓存/续页，条目展示类型、验证结论（已通过/待验证/未通过）、完成标准、敏感级、相对时间与局限；空修订如实提示「这个修订还没有证据记录」，读取失败按修订隔离报错并可重试；切换事情时历史与证据状态整体重置。
 - 协作记录升级为层级树 + 跳转：按 `parentRelationId` 把子协作嵌套渲染在父卡片下（左侧竖线缩进，parent 缺席时按根渲染）；带 `targetTaskId` 的卡片提供「打开目标事情」，经新增 `api.channelTimeline`（单请求 `GET /v1/channels/:id/timeline`，校验投影完整性并兜底 workerIconId）打开目标事情详情抽屉并触发既有 delivery/协作/时间线加载；目标不存在或读取失败在协作区就地报错，按钮恢复可再试。
 - 证据：`pnpm check`（74 文件 / 676 测试，App.test.tsx 新增 8 条回归）、`pnpm smoke`、`pnpm review:ui -- --force`（57 张截图）；真实 Control Plane（store 级 seed：双修订 Goal + 22 条证据 + 真实 depth0/depth1 委派链 + 10 个填充事情）联调覆盖筛选参数、排序切换、8→14 续页、v2 证据 20→22 续页与 v1 隔离、协作两级跳转；axe 三主题 × 搜索对话框/证据/协作抽屉 0 违例；实拍 12 张见 `output/feature-review/live-evidence-wrapup/`。详见 `docs/feature-map.md` DESIGN-002「搜索筛选分页、按修订证据列表与协作跳转收尾」小节。
-- 仍缺：规则占位、协作发起/取消入口（owner 侧服务端契约未提供）、validity 失效事件；语音直发待真实 ASR 供应商联调；「所有事情」页服务端排序/筛选属 CHANNEL-003 后续（数据恢复占位已在 §15 接入只读状态；工作规则已在 §16 接入，归类规则仍锁定）。
+- 仍缺：协作发起/取消入口（owner 侧服务端契约未提供）、validity 失效事件；语音直发待真实 ASR 供应商联调；「所有事情」页服务端排序/筛选属 CHANNEL-003 后续（数据恢复占位已在 §15 接入只读状态；工作规则已在 §16 接入；归类规则/不确定时/测试归类已由 ROUTE-005 解锁，见 `docs/routing-rules-intake.md`）。
 
 ## 15. 数据与恢复页接入只读恢复状态（2026-11-21，RECOVERY-001）
 
@@ -190,7 +190,7 @@
 - 「设置 → Pegas → 行为与规则」从占位改为真实读写：信息横幅如实说明规则是注入执行的持久偏好、不授予新权限；锁定的基本行为行（默认语言/回复长度/自主程度）保留禁用并注明原因；系统规则「高风险外部操作必须确认」锁定展示（由 Approval 硬保证）；自定义规则列表支持添加（抽屉表单：名称/内容/启用开关）、编辑、两步确认删除与就地启停开关；自定义指令 textarea 独立保存，未变化时禁用。
 - 数据链路：`GET/POST /v1/rules`、`GET/PUT /v1/rules/:id`、`POST /v1/rules/:id/delete`（commandId 幂等 + expectedRevision，沿用记忆模式）与 `GET/PUT /v1/settings/behavior`（revision 从 0 起）。进入 Pegas 设置分类才懒加载（规则与偏好并行读取），409 冲突自动重读最新状态并如实提示，读取失败 page-error + 「重新读取」。
 - 执行语义：Worker 每次执行按创建顺序装载启用规则（≤24000 字符）与自定义指令，以 `<pegas_work_rules>` 块注入执行 prompt（声明非授权、不能绕过 Approval、`<` 转义）；停用/删除/清空对下一次执行生效。契约与边界详见 `docs/work-rules.md`。
-- 「事情归类」页的归类规则与测试归类保持锁定：那是 Router Intake 决策链路，不属于本 Feature。
+- 「事情归类」页的归类规则与测试归类当时保持锁定：那是 Router Intake 决策链路，不属于本 Feature（后续已由 ROUTE-005 落地解锁）。
 - 证据：`pnpm check`（76 文件 / 699 测试，rules 7 + Web 4 新增）、`pnpm smoke`、`pnpm review:ui -- --force`（57 张截图，behavior 面板 seed 真实规则并确定性等待）；真实 Control Plane + fake DSH（捕获 stdin 提示词）联调验证创建/停用/删除/指令变更逐次生效；axe 三主题 × 列表/抽屉 0 违例；实拍 9 张见 `output/feature-review/live-evidence-rules/`。详见 `docs/feature-map.md` RULES-001 小节。
 - 仍缺：归类规则与测试归类（Router Intake）、语言/回复长度偏好、按事情/Worker 作用域、规则遵守度的可观察证据；协作发起/取消入口与 validity 失效事件仍待服务端契约；语音直发待真实 ASR 联调。
 

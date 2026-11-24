@@ -6,6 +6,7 @@ type RouterMode = 'model' | 'rules'
 type PrivacyMode = 'disabled' | 'mask'
 type RewriteMode = 'disabled' | 'light'
 type AgentModelMode = 'profile' | 'override'
+export type RoutingUncertainty = 'new_task' | 'ask_first' | 'continue_recent'
 
 export interface RuntimeSettingsSelection {
   routerMode: RouterMode
@@ -18,6 +19,8 @@ export interface RuntimeSettingsSelection {
   rewriteMode: RewriteMode
   /** Defaults to false when omitted (rollback switch, PLAN-001 P1). */
   chatLaneEnabled?: boolean
+  /** Defaults to new_task when omitted (ROUTE-005 R3). */
+  routingUncertainty?: RoutingUncertainty
   /** Optional fast/balanced/deep pool mapping (PLAN-001 P3). */
   executionPools?: ExecutionPools
   /** Global default permission tier (APPROVAL-001 P2); defaults to standard. */

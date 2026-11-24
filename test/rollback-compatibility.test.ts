@@ -238,6 +238,53 @@ describe('durable state rollback compatibility', () => {
       rmSync(directory, { recursive: true, force: true })
     }
   })
+
+  it('allows a pre-v45 rollback with routing rules present because v45 is additive', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'pegas-rollback-routing-'))
+    const path = join(directory, 'pegas.sqlite')
+    const store = new PegasStore(path)
+    try {
+      store.createRoutingRule({
+        userId: 'owner',
+        commandId: 'rollback-routing-rule',
+        rule: {
+          title: '提到 X 项目优先进 X 事情',
+          content: '消息提到 X 项目时，优先归入标题含 X 的开放事情。',
+          enabled: true,
+        },
+      })
+      expect(() => assertRollbackCompatible(path, 44)).not.toThrow()
+      expect(() => assertRollbackCompatible(path, 45)).not.toThrow()
+      const event = store.enqueueEvent({
+        userId: 'owner',
+        type: 'user.message',
+        source: 'web',
+        authenticatedActor: 'human',
+        payload: { text: 'X 项目新想法' },
+      }).event
+      store.applyRoutingDecision(
+        event,
+        {
+          kind: 'create_task',
+          title: 'X 项目新想法',
+          goal: 'X 项目新想法',
+          input: 'X 项目新想法',
+          reason: 'matches rule',
+          matchedRuleId: 'rule-x',
+        },
+        'echo',
+      )
+      expect(() => assertRollbackCompatible(path, 45)).not.toThrow()
+      store.initializeRuntimeSettings({
+        ...runtimeSettingsDefaults(loadConfig({})),
+        routingUncertainty: 'ask_first',
+      })
+      expect(() => assertRollbackCompatible(path, 46)).not.toThrow()
+    } finally {
+      store.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
 })
 
 function clarificationGoalDraft(

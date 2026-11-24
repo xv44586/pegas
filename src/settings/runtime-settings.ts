@@ -74,6 +74,7 @@ export function runtimeSettingsDefaults(
     privacyMode: config.privacyMode,
     rewriteMode: config.rewriteMode,
     chatLaneEnabled: config.chatLaneEnabled,
+    routingUncertainty: 'new_task',
   }
 }
 
@@ -203,6 +204,15 @@ export function parseRuntimeSettingsUpdate(
     ...(typeof value.chatLaneEnabled === 'boolean'
       ? { chatLaneEnabled: value.chatLaneEnabled }
       : {}),
+    ...(value.routingUncertainty === undefined
+      ? {}
+      : {
+          routingUncertainty: enumValue(
+            value.routingUncertainty,
+            'routingUncertainty',
+            ['new_task', 'ask_first', 'continue_recent'],
+          ),
+        }),
     ...(value.executionPools === undefined
       ? {}
       : { executionPools: parseExecutionPools(value.executionPools) }),

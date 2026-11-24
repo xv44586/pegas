@@ -9,6 +9,7 @@ import {
   Globe2,
   HardDrive,
   Image as ImageIcon,
+  CircleQuestionMark,
   LockKeyhole,
   Network,
   Paperclip,
@@ -66,6 +67,7 @@ export function DetailDrawer({
   onLoadRunSubagents,
   onRetry,
   onContinue,
+  onAnswerRouting,
   onCreateRelated,
   onStop,
   onDecideApproval,
@@ -83,6 +85,7 @@ export function DetailDrawer({
   onContinue?: (
     channel: Extract<DrawerView, { kind: 'task' }>['channel'],
   ) => void
+  onAnswerRouting?: () => void
   onCreateRelated?: (
     channel: Extract<DrawerView, { kind: 'task' }>['channel'],
   ) => void
@@ -217,6 +220,19 @@ export function DetailDrawer({
         {view.kind === 'message' && (
           <MessageDetail onResolve={onResolveOutbox} view={view} />
         )}
+        {view.kind === 'routingClarification' && (
+          <RoutingClarificationDetail
+            onAnswer={
+              onAnswerRouting
+                ? () => {
+                    onAnswerRouting()
+                    onClose()
+                  }
+                : undefined
+            }
+            view={view}
+          />
+        )}
         {view.kind === 'approval' && (
           <ApprovalDetail
             key={`${view.approval.id}:${view.approval.decision?.id ?? view.approval.status}`}
@@ -284,6 +300,9 @@ export function DetailDrawer({
           />
         )}
         {view.kind === 'rule' && <RuleDetail api={api} view={view} />}
+        {view.kind === 'routingRule' && (
+          <RoutingRuleDetail api={api} view={view} />
+        )}
         {view.kind === 'preview' && (
           <PreviewDetail
             onBack={view.backLabel ? () => onChange(view) : undefined}
@@ -340,8 +359,10 @@ function drawerTitle(view: DrawerView): string {
   if (view.kind === 'reconciliation') return '核对动作的真实结果'
   if (view.kind === 'review') return '按完成标准审查交付'
   if (view.kind === 'clarification') return view.channel.title
+  if (view.kind === 'routingClarification') return '确认消息归属'
   if (view.kind === 'runtime') return '执行环境详情'
   if (view.kind === 'rule') return view.title
+  if (view.kind === 'routingRule') return view.title
   return view.title
 }
 
@@ -2250,6 +2271,46 @@ function ClarificationDetail({
   )
 }
 
+function RoutingClarificationDetail({
+  view,
+  onAnswer,
+}: {
+  view: Extract<DrawerView, { kind: 'routingClarification' }>
+  onAnswer?: () => void
+}) {
+  return (
+    <div className="drawer-body">
+      <section className="approval-card">
+        <header>
+          <CircleQuestionMark size={20} />
+          <strong>Pegas 需要先确认这条消息的归属</strong>
+        </header>
+        <p>
+          这条消息还没有进入任何事情。回答后 Pegas
+          会重新判断归属，不会丢失原始消息。
+        </p>
+      </section>
+      <section className="detail-section">
+        <h3>待确认问题</h3>
+        <p>{view.question}</p>
+      </section>
+      {view.input && (
+        <section className="detail-section">
+          <h3>原始消息</h3>
+          <p>{view.input}</p>
+        </section>
+      )}
+      <footer className="drawer-footer">
+        {onAnswer && (
+          <button className="primary-button" onClick={onAnswer} type="button">
+            去回答
+          </button>
+        )}
+      </footer>
+    </div>
+  )
+}
+
 function CollaborationSection({
   collaborations,
   error,
@@ -3333,6 +3394,149 @@ function RuleDetail({
           disabled={saving || deleting}
           onChange={event => setContent(event.target.value)}
           placeholder="描述你希望执行 Agent 持续遵守的工作方式。"
+          rows={7}
+          value={content}
+        />
+      </label>
+      <label className="switch-row">
+        启用这条规则
+        <input
+          checked={enabled}
+          disabled={saving || deleting}
+          onChange={event => setEnabled(event.target.checked)}
+          type="checkbox"
+        />
+      </label>
+      {error && (
+        <div className="page-error" role="alert">
+          {error}
+        </div>
+      )}
+      {notice && (
+        <p className="field-hint" role="status">
+          {notice}
+        </p>
+      )}
+      <footer className="drawer-footer">
+        {editing &&
+          (confirmDelete ? (
+            <button
+              className="danger-button"
+              disabled={deleting}
+              onClick={() => void remove()}
+              type="button"
+            >
+              {deleting ? '删除中…' : '确认删除'}
+            </button>
+          ) : (
+            <button
+              className="quiet-button"
+              disabled={saving || deleting}
+              onClick={() => setConfirmDelete(true)}
+              type="button"
+            >
+              删除规则
+            </button>
+          ))}
+        <button
+          className="primary-button"
+          disabled={!api || saving || deleting || !valid}
+          onClick={() => void save()}
+          type="button"
+        >
+          {saving ? '保存中…' : '保存规则'}
+        </button>
+      </footer>
+    </div>
+  )
+}
+
+function RoutingRuleDetail({
+  api,
+  view,
+}: {
+  api?: PegasApi
+  view: Extract<DrawerView, { kind: 'routingRule' }>
+}) {
+  const editing = view.rule
+  const [title, setTitle] = useState(editing?.title ?? '')
+  const [content, setContent] = useState(editing?.content ?? '')
+  const [enabled, setEnabled] = useState(editing?.enabled ?? true)
+  const [saving, setSaving] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const valid = title.trim().length > 0 && content.trim().length > 0
+  async function save() {
+    if (!api || saving || !valid) return
+    setSaving(true)
+    setError('')
+    setNotice('')
+    try {
+      const draft = {
+        title: title.trim(),
+        content: content.trim(),
+        enabled,
+      }
+      if (editing)
+        await api.updateRoutingRule(editing.id, editing.revision, draft)
+      else await api.createRoutingRule(draft)
+      setNotice('归类规则已保存，对后续归类生效。')
+      view.onSaved?.()
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 409)
+        setError(
+          '保存冲突：这条规则已在别处更新或删除。请关闭后重新打开最新状态。',
+        )
+      else setError(caught instanceof Error ? caught.message : '保存规则失败。')
+    } finally {
+      setSaving(false)
+    }
+  }
+  async function remove() {
+    if (!api || !editing || deleting) return
+    setDeleting(true)
+    setError('')
+    try {
+      await api.deleteRoutingRule(editing.id, editing.revision)
+      view.onSaved?.()
+      setNotice('规则已删除。')
+      setConfirmDelete(false)
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 409)
+        setError('删除冲突：这条规则已在别处更新。请关闭后重新打开最新状态。')
+      else setError(caught instanceof Error ? caught.message : '删除规则失败。')
+    } finally {
+      setDeleting(false)
+    }
+  }
+  return (
+    <div className="drawer-body">
+      <div className="info-banner">
+        <CircleHelp size={16} />
+        归类规则只影响「消息进哪个事情」的判断偏好，不授予新权限；已停止的事情不会自动恢复，控制指令仍走确定性链路。规则仅在「智能判断」模式下生效。
+      </div>
+      {!api && (
+        <div className="page-error" role="alert">
+          未连接服务端，无法保存规则。
+        </div>
+      )}
+      <label className="field-label">
+        规则名称
+        <input
+          disabled={saving || deleting}
+          onChange={event => setTitle(event.target.value)}
+          placeholder="例如：提到 X 项目优先进 X 事情"
+          value={title}
+        />
+      </label>
+      <label className="field-label">
+        规则内容
+        <textarea
+          disabled={saving || deleting}
+          onChange={event => setContent(event.target.value)}
+          placeholder="描述你希望消息归属遵循的偏好，例如某类消息优先进哪个事情。"
           rows={7}
           value={content}
         />

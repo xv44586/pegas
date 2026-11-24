@@ -1,4 +1,4 @@
-import { timingSafeEqual } from 'node:crypto'
+import { randomUUID, timingSafeEqual } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { readFile, stat as statFile } from 'node:fs/promises'
 import {
@@ -24,6 +24,7 @@ import {
 import { parseApprovalRuleRevocation } from '../approval/approval-rule.js'
 import { parseApprovalReviewDraft } from '../approval/approval-review.js'
 import type {
+  InboxEvent,
   NewInboxEvent,
   OutboxResolutionDraft,
   SupervisorState,
@@ -48,6 +49,9 @@ import {
 } from '../goal/goal-delivery.js'
 import { verifyVisualEvidence } from '../goal/trusted-verifier.js'
 import { AnthropicProvider } from '../model/anthropic-provider.js'
+import { createConfiguredModelProvider } from '../model/provider-factory.js'
+import { MeteredJsonModelProvider } from '../model/metered-provider.js'
+import { ModelTaskRouter, RuleBasedTaskRouter } from '../router/router.js'
 import {
   discoverModelCatalog,
   testModelConnection,
@@ -64,6 +68,7 @@ import { PrivacyMaskingProvider } from '../privacy/provider.js'
 import type { JsonModelProvider } from '../model/provider.js'
 import {
   parseRuntimeSettingsUpdate,
+  type RuntimeSettings,
   type SettingsCapabilities,
 } from '../settings/runtime-settings.js'
 import {
@@ -79,6 +84,11 @@ import {
   parseWorkRuleDelete,
   parseWorkRuleUpdate,
 } from '../rules/rules.js'
+import {
+  parseRoutingRuleCreate,
+  parseRoutingRuleDelete,
+  parseRoutingRuleUpdate,
+} from '../rules/routing-rules.js'
 import {
   parseAutomationCreate,
   parseAutomationStatusCommand,
@@ -121,6 +131,10 @@ import {
   OutboxResolutionConflictError,
   RunClaimError,
   RunMessageCommandConflictError,
+  RoutingRuleCommandConflictError,
+  RoutingRuleLimitError,
+  RoutingRuleNotFoundError,
+  RoutingRuleRevisionConflictError,
   SettingsRevisionConflictError,
   WorkerProfileReadOnlyError,
   WorkerProfileRevisionConflictError,
@@ -839,6 +853,65 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
           const deletion = options.store.deleteWorkRule(
             ruleId,
             parseWorkRuleDelete(await readJson(request)),
+          )
+          return sendJson(response, 200, { deletion })
+        }
+      }
+      if (
+        taskResourceUrl.pathname === '/v1/routing-rules' &&
+        request.method === 'GET'
+      ) {
+        const userId = requiredQuery(taskResourceUrl, 'userId')
+        const page = pageRequest(taskResourceUrl)
+        const result = options.store.listRoutingRules(
+          userId,
+          page.limit,
+          page.cursor,
+        )
+        return sendJson(response, 200, {
+          rules: result.items,
+          ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
+        })
+      }
+      if (
+        taskResourceUrl.pathname === '/v1/routing/preview' &&
+        request.method === 'POST'
+      ) {
+        return await previewRouting(request, response, options)
+      }
+      if (
+        taskResourceUrl.pathname === '/v1/routing-rules' &&
+        request.method === 'POST'
+      ) {
+        const rule = options.store.createRoutingRule(
+          parseRoutingRuleCreate(await readJson(request)),
+        )
+        return sendJson(response, 201, { rule })
+      }
+      const routingRuleResourceMatch =
+        /^\/v1\/routing-rules\/([^/]+)(?:\/(delete))?$/.exec(
+          taskResourceUrl.pathname,
+        )
+      if (routingRuleResourceMatch) {
+        const ruleId = decodeURIComponent(routingRuleResourceMatch[1] ?? '')
+        const action = routingRuleResourceMatch[2]
+        if (!action && request.method === 'GET') {
+          const userId = requiredQuery(taskResourceUrl, 'userId')
+          const rule = options.store.findRoutingRule(ruleId, userId)
+          if (!rule) return sendJson(response, 404, { error: 'not_found' })
+          return sendJson(response, 200, { rule })
+        }
+        if (!action && request.method === 'PUT') {
+          const rule = options.store.updateRoutingRule(
+            ruleId,
+            parseRoutingRuleUpdate(await readJson(request)),
+          )
+          return sendJson(response, 200, { rule })
+        }
+        if (action === 'delete' && request.method === 'POST') {
+          const deletion = options.store.deleteRoutingRule(
+            ruleId,
+            parseRoutingRuleDelete(await readJson(request)),
           )
           return sendJson(response, 200, { deletion })
         }
@@ -2257,6 +2330,16 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         return sendJson(response, 404, { error: 'not_found' })
       if (error instanceof WorkRuleLimitError)
         return sendJson(response, 409, { error: 'rule_limit' })
+      if (error instanceof RoutingRuleCommandConflictError)
+        return sendJson(response, 409, {
+          error: 'routing_rule_command_conflict',
+        })
+      if (error instanceof RoutingRuleRevisionConflictError)
+        return sendJson(response, 409, { error: 'routing_rule_conflict' })
+      if (error instanceof RoutingRuleNotFoundError)
+        return sendJson(response, 404, { error: 'not_found' })
+      if (error instanceof RoutingRuleLimitError)
+        return sendJson(response, 409, { error: 'routing_rule_limit' })
       if (error instanceof BehaviorPreferencesConflictError)
         return sendJson(response, 409, { error: 'behavior_conflict' })
       if (error instanceof RunClaimError)
@@ -2411,6 +2494,118 @@ function modelProbeConnection(
     modelName: update.settings.modelName,
     ...(apiKey ? { apiKey } : {}),
   }
+}
+
+async function previewRouting(
+  request: IncomingMessage,
+  response: ServerResponse,
+  options: ControlPlaneOptions,
+): Promise<void> {
+  const body = await readJson(request)
+  if (
+    !isRecord(body) ||
+    typeof body.userId !== 'string' ||
+    !body.userId.trim() ||
+    typeof body.text !== 'string' ||
+    !body.text.trim() ||
+    Array.from(body.text.trim()).length > 4000
+  ) {
+    throw new Error('填写 userId 与不超过 4000 字的测试消息')
+  }
+  const userId = body.userId.trim()
+  const text = body.text.trim()
+  const settings = options.store.getRuntimeSettings()
+  const candidates = options.store.listRoutingCandidates(userId)
+  const event: InboxEvent = {
+    id: `preview-${randomUUID()}`,
+    userId,
+    type: 'user.message',
+    source: 'web',
+    authenticatedActor: 'human',
+    payload: { text },
+    status: 'pending',
+    attempts: 0,
+    createdAt: new Date().toISOString(),
+  }
+  let decision
+  try {
+    const router =
+      settings.routerMode === 'model'
+        ? new ModelTaskRouter({
+            provider: previewMeteredProvider(settings, userId, options),
+            routingRules: options.store.routingRuleContextForUser(userId),
+            uncertainty: settings.routingUncertainty ?? 'new_task',
+          })
+        : new RuleBasedTaskRouter()
+    decision = await router.route(event, candidates, {
+      resolveExplicitTask: taskId => options.store.findTask(taskId, userId),
+    })
+  } catch (error) {
+    return sendJson(response, 502, {
+      error: 'routing_preview_failed',
+      message:
+        error instanceof Error ? error.message : '归类模型调用失败，请重试。',
+    })
+  }
+  if (!decision) {
+    return sendJson(response, 502, {
+      error: 'routing_preview_failed',
+      message: '归类器没有产出决策，请重试。',
+    })
+  }
+  const target =
+    'taskId' in decision && decision.taskId
+      ? candidates
+          .map(candidate => candidate.task)
+          .find(task => task.id === decision.taskId)
+      : undefined
+  return sendJson(response, 200, {
+    preview: {
+      kind: decision.kind,
+      reason: decision.reason,
+      ...('taskId' in decision && decision.taskId
+        ? { taskId: decision.taskId }
+        : {}),
+      ...(target ? { taskTitle: target.title } : {}),
+      ...('title' in decision && decision.title
+        ? { title: decision.title }
+        : {}),
+      ...('question' in decision ? { question: decision.question } : {}),
+      ...('matchedRuleId' in decision && decision.matchedRuleId
+        ? { matchedRuleId: decision.matchedRuleId }
+        : {}),
+      routerMode: settings.routerMode,
+      dryRun: true,
+    },
+  })
+}
+
+function previewMeteredProvider(
+  settings: RuntimeSettings,
+  userId: string,
+  options: ControlPlaneOptions,
+): JsonModelProvider {
+  if (!options.modelCredentialVault)
+    throw new Error('模型服务未配置，无法测试归类')
+  const provider = createConfiguredModelProvider(
+    settings,
+    options.store,
+    options.modelCredentialVault,
+    options.modelTimeoutMs ?? 15_000,
+  )
+  const masked =
+    settings.privacyMode === 'mask' && options.privacyHmacKey
+      ? new PrivacyMaskingProvider(
+          provider,
+          new DeterministicPrivacyMasker({ hmacKey: options.privacyHmacKey }),
+        )
+      : provider
+  const callId = randomUUID()
+  return new MeteredJsonModelProvider(masked, options.store, 'router', () => ({
+    userId,
+    eventId: `preview:${callId}`,
+    modelRef: `${settings.modelProvider}/${settings.modelName}`,
+  }))
 }
 
 async function testRewriteConnection(

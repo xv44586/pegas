@@ -47,6 +47,8 @@ import type {
   SettingsResponse,
   SpeechSettingsDraft,
   WorkRuleRecord,
+  RoutingRuleRecord,
+  RoutingPreview,
 } from '../types'
 import { useVoiceDictation } from '../useVoiceDictation'
 import { ModelPicker, modelSelectionKey } from './ModelPicker'
@@ -82,6 +84,8 @@ interface SettingsPageProps {
   memoriesError?: string
   workRules?: WorkRuleRecord[]
   workRulesError?: string
+  routingRules?: RoutingRuleRecord[]
+  routingRulesError?: string
   behaviorPreferences?: BehaviorPreferences
   behaviorPreferencesError?: string
   notificationPreferences?: NotificationPreferences
@@ -104,6 +108,9 @@ interface SettingsPageProps {
   onReloadUsage: () => void
   onReloadWorkRules?: () => void
   onToggleWorkRule?: (rule: WorkRuleRecord) => Promise<void>
+  onReloadRoutingRules?: () => void
+  onToggleRoutingRule?: (rule: RoutingRuleRecord) => Promise<void>
+  onTestRouting?: (text: string) => Promise<RoutingPreview>
   onSaveBehavior?: (customInstructions: string) => Promise<void>
   onReloadNotifications?: () => void
   onReloadExecutionNodes?: () => void
@@ -151,6 +158,8 @@ export function SettingsPage({
   memoriesError,
   workRules,
   workRulesError,
+  routingRules,
+  routingRulesError,
   behaviorPreferences,
   behaviorPreferencesError,
   notificationPreferences,
@@ -168,6 +177,9 @@ export function SettingsPage({
   onReloadUsage,
   onReloadWorkRules,
   onToggleWorkRule,
+  onReloadRoutingRules,
+  onToggleRoutingRule,
+  onTestRouting,
   onSaveBehavior,
   onReloadNotifications,
   onReloadExecutionNodes,
@@ -349,6 +361,12 @@ export function SettingsPage({
                     agentModels={agentModels}
                     draft={draft}
                     response={response}
+                    routingRules={routingRules}
+                    routingRulesError={routingRulesError}
+                    onOpenDrawer={onOpenDrawer}
+                    onReloadRoutingRules={onReloadRoutingRules}
+                    onToggleRoutingRule={onToggleRoutingRule}
+                    onTestRouting={onTestRouting}
                     onChange={next => {
                       if (next.modelProvider !== draft.modelProvider) {
                         const provider = response.capabilities.providers.find(
@@ -1589,14 +1607,61 @@ function RouterSettings({
   draft,
   response,
   agentModels,
+  routingRules,
+  routingRulesError,
+  onOpenDrawer,
+  onReloadRoutingRules,
+  onToggleRoutingRule,
+  onTestRouting,
   onChange,
 }: {
   draft: RuntimeSettings
   response: SettingsResponse
   agentModels?: DshModelCatalog
+  routingRules?: RoutingRuleRecord[]
+  routingRulesError?: string
+  onOpenDrawer: (drawer: DrawerView) => void
+  onReloadRoutingRules?: () => void
+  onToggleRoutingRule?: (rule: RoutingRuleRecord) => Promise<void>
+  onTestRouting?: (text: string) => Promise<RoutingPreview>
   onChange: (settings: RuntimeSettings) => void
 }) {
   const [manualModel, setManualModel] = useState(false)
+  const [togglingRuleId, setTogglingRuleId] = useState('')
+  const [ruleActionError, setRuleActionError] = useState('')
+  const [testText, setTestText] = useState('刚才那个方案再加上 Telegram')
+  const [testing, setTesting] = useState(false)
+  const [testError, setTestError] = useState('')
+  const [testResult, setTestResult] = useState<RoutingPreview>()
+  async function toggleRule(rule: RoutingRuleRecord) {
+    if (!onToggleRoutingRule || togglingRuleId) return
+    setTogglingRuleId(rule.id)
+    setRuleActionError('')
+    try {
+      await onToggleRoutingRule(rule)
+    } catch (caught) {
+      setRuleActionError(
+        caught instanceof Error ? caught.message : '更新规则失败，请重试。',
+      )
+    } finally {
+      setTogglingRuleId('')
+    }
+  }
+  async function runTest() {
+    if (!onTestRouting || testing || !testText.trim()) return
+    setTesting(true)
+    setTestError('')
+    setTestResult(undefined)
+    try {
+      setTestResult(await onTestRouting(testText.trim()))
+    } catch (caught) {
+      setTestError(
+        caught instanceof Error ? caught.message : '测试归类失败，请重试。',
+      )
+    } finally {
+      setTesting(false)
+    }
+  }
   const provider = response.capabilities.providers.find(
     item => item.id === draft.modelProvider,
   )
@@ -1729,54 +1794,199 @@ function RouterSettings({
         <span>不确定时</span>
         <div className="radio-row">
           <label>
-            <input defaultChecked disabled name="uncertain" type="radio" />
+            <input
+              checked={(draft.routingUncertainty ?? 'new_task') === 'new_task'}
+              name="uncertain"
+              onChange={() =>
+                onChange({ ...draft, routingUncertainty: 'new_task' })
+              }
+              type="radio"
+            />
             开始新事情
           </label>
           <label>
-            <input disabled name="uncertain" type="radio" />
+            <input
+              checked={draft.routingUncertainty === 'ask_first'}
+              name="uncertain"
+              onChange={() =>
+                onChange({ ...draft, routingUncertainty: 'ask_first' })
+              }
+              type="radio"
+            />
             先问我
           </label>
           <label>
-            <input disabled name="uncertain" type="radio" />
+            <input
+              checked={draft.routingUncertainty === 'continue_recent'}
+              name="uncertain"
+              onChange={() =>
+                onChange({ ...draft, routingUncertainty: 'continue_recent' })
+              }
+              type="radio"
+            />
             优先继续最近的事情
           </label>
         </div>
       </div>
       <h3>归类规则</h3>
-      <div className="rule-list">
-        <button disabled type="button">
-          <LockKeyhole size={15} />
-          <span>目标明显不同则开始新事情</span>
-          <small>默认规则（已锁定）</small>
-        </button>
-        <button disabled type="button">
-          <LockKeyhole size={15} />
-          <span>已停止的事情不自动恢复</span>
-          <small>系统规则（已锁定）</small>
-        </button>
-        <button disabled type="button">
-          <span>遇到「继续」「刚才」时优先检查最近事情</span>
-          <small>启用</small>
-          <i />
-        </button>
-      </div>
-      <button className="outline-action" disabled type="button">
-        <Plus size={16} />
-        添加规则
-      </button>
+      {draft.routerMode === 'rules' && (
+        <div className="info-banner">
+          <CircleHelp size={16} />
+          当前为「确定性规则」模式：只认显式事情引用，自定义归类规则仅在「智能判断」模式下生效。
+        </div>
+      )}
+      {routingRulesError ? (
+        <div className="page-error" role="alert">
+          {routingRulesError}
+          {onReloadRoutingRules && (
+            <button
+              className="secondary-button"
+              onClick={onReloadRoutingRules}
+              type="button"
+            >
+              <RotateCw size={15} />
+              重新读取
+            </button>
+          )}
+        </div>
+      ) : !routingRules ? (
+        <p className="page-loading">正在读取归类规则…</p>
+      ) : (
+        <>
+          <div className="rule-list">
+            <button disabled type="button">
+              <LockKeyhole size={15} />
+              <span>目标明显不同则开始新事情</span>
+              <small>默认规则（已锁定）</small>
+            </button>
+            <button disabled type="button">
+              <LockKeyhole size={15} />
+              <span>已停止的事情不自动恢复</span>
+              <small>系统规则（已锁定）</small>
+            </button>
+            {routingRules.map(rule => (
+              <div className="rule-row" key={rule.id}>
+                <button
+                  onClick={() =>
+                    onOpenDrawer({
+                      kind: 'routingRule',
+                      title: rule.title,
+                      rule,
+                      ...(onReloadRoutingRules
+                        ? { onSaved: onReloadRoutingRules }
+                        : {}),
+                    })
+                  }
+                  type="button"
+                >
+                  <span>{rule.title}</span>
+                  <small>{rule.enabled ? '归类 · 启用' : '归类 · 停用'}</small>
+                  <Pencil size={15} />
+                </button>
+                <label className="rule-toggle">
+                  <input
+                    aria-label={`${rule.enabled ? '停用' : '启用'}归类规则：${rule.title}`}
+                    checked={rule.enabled}
+                    disabled={togglingRuleId === rule.id}
+                    onChange={() => void toggleRule(rule)}
+                    type="checkbox"
+                  />
+                </label>
+              </div>
+            ))}
+          </div>
+          {routingRules.length === 0 && (
+            <p className="field-hint">
+              还没有自定义归类规则；添加后会作为归属偏好参与智能判断。
+            </p>
+          )}
+          <button
+            className="outline-action"
+            onClick={() =>
+              onOpenDrawer({
+                kind: 'routingRule',
+                title: '添加归类规则',
+                ...(onReloadRoutingRules
+                  ? { onSaved: onReloadRoutingRules }
+                  : {}),
+              })
+            }
+            type="button"
+          >
+            <Plus size={16} />
+            添加规则
+          </button>
+        </>
+      )}
+      {ruleActionError && (
+        <div className="page-error" role="alert">
+          {ruleActionError}
+        </div>
+      )}
       <h3>测试归类</h3>
       <div className="test-row">
-        <input defaultValue="刚才那个方案再加上 Telegram" disabled />
-        <button className="secondary-button" disabled type="button">
-          测试
+        <input
+          aria-label="测试归类消息"
+          onChange={event => setTestText(event.target.value)}
+          value={testText}
+        />
+        <button
+          className="secondary-button"
+          disabled={!onTestRouting || testing || !testText.trim()}
+          onClick={() => void runTest()}
+          type="button"
+        >
+          {testing ? '测试中…' : '测试'}
         </button>
       </div>
-      <div className="info-banner">
-        <LockKeyhole size={16} />
-        归类测试 API 尚未提供，测试工具暂不可用。
-      </div>
+      <p className="field-hint">
+        测试按当前已保存的归类方式、模型与规则预演归属，不会创建事情或发送通知；模型调用计入用量。
+      </p>
+      {testError && (
+        <div className="page-error" role="alert">
+          {testError}
+        </div>
+      )}
+      {testResult && (
+        <div className="settings-card" role="status">
+          <div className="card-title">
+            <Zap size={20} />
+            <div>
+              <h3>{routingPreviewLabel(testResult)}</h3>
+              <p>{testResult.reason}</p>
+            </div>
+          </div>
+          {testResult.question && <p>{testResult.question}</p>}
+          {testResult.matchedRuleId && (
+            <p className="field-hint">
+              命中规则：
+              {routingRules?.find(rule => rule.id === testResult.matchedRuleId)
+                ?.title ?? testResult.matchedRuleId}
+            </p>
+          )}
+        </div>
+      )}
     </div>
   )
+}
+
+function routingPreviewLabel(preview: RoutingPreview): string {
+  switch (preview.kind) {
+    case 'create_task':
+      return `开始新事情${preview.title ? `：${preview.title}` : ''}`
+    case 'continue_task':
+      return `继续事情${preview.taskTitle ? `：${preview.taskTitle}` : ''}`
+    case 'steer_task':
+      return `纠正事情${preview.taskTitle ? `：${preview.taskTitle}` : ''}`
+    case 'cancel_task':
+      return `停止事情${preview.taskTitle ? `：${preview.taskTitle}` : ''}`
+    case 'reply':
+      return '即时应答（不创建事情）'
+    case 'clarify':
+      return '先问你归属'
+    default:
+      return preview.kind
+  }
 }
 
 function VoiceSettings({

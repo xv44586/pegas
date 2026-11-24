@@ -519,27 +519,38 @@ export type RoutingDecision =
       reason: string
       targetResource?: 'pegas_repository'
       sourceContext?: TaskSourceContext
+      matchedRuleId?: string
     }
   | {
       kind: 'reply'
       input: string
       reason: string
+      matchedRuleId?: string
     }
   | {
       kind: 'continue_task'
       taskId: string
       input: string
       reason: string
+      matchedRuleId?: string
     }
   | {
       kind: 'steer_task'
       taskId: string
       input: string
       reason: string
+      matchedRuleId?: string
     }
   | {
       kind: 'cancel_task'
       taskId: string
+      reason: string
+      matchedRuleId?: string
+    }
+  | {
+      kind: 'clarify'
+      input: string
+      question: string
       reason: string
     }
 

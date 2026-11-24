@@ -72,7 +72,7 @@ PUT  /v1/settings/behavior
 ## 非目标
 
 - 按事情/Worker 作用域的规则覆盖（MVP 仅全局）。
-- 归类规则、测试归类与「不确定时」策略（Router Intake 后续 Feature）。
+- 归类规则、测试归类与「不确定时」策略（已登记 `ROUTE-005`，Intake 见 `docs/routing-rules-intake.md`）。
 - 默认语言/回复长度偏好与自主程度滑条（保持锁定；风险阈值由服务端 Approval 强制）。
 - 规则是否被遵守的可观察证据（属执行证据体系后续）。
 
