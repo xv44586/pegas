@@ -513,6 +513,10 @@ try {
     .click()
   await page.getByRole('heading', { name: '事情归类', exact: true }).waitFor()
   await capture(page, 'desktop-settings-router.png', 'desktop-settings-router')
+  await page
+    .getByRole('tablist', { name: '归类方式' })
+    .getByRole('tab', { name: '智能判断' })
+    .click()
   await page.getByRole('button', { name: /，归类模型名称$/ }).click()
   await assertPickerPagination(page, 'desktop settings router picker', {
     title: '归类模型',
@@ -526,6 +530,10 @@ try {
   await page
     .getByRole('dialog', { name: '归类模型' })
     .waitFor({ state: 'detached' })
+  await page
+    .getByRole('tablist', { name: '归类方式' })
+    .getByRole('tab', { name: '确定性规则' })
+    .click()
   await page
     .getByLabel('设置分类')
     .getByRole('button', { name: '语音与输入' })

@@ -66,6 +66,56 @@ import type {
   RoutingRuleRecord,
   RoutingPreview,
 } from '../types'
+
+const RULES_PAGE_SIZE = 10
+
+function RulePagination({
+  total,
+  page,
+  onPageChange,
+  label,
+}: {
+  total: number
+  page: number
+  onPageChange: (page: number) => void
+  label: string
+}) {
+  const pageCount = Math.max(1, Math.ceil(total / RULES_PAGE_SIZE))
+  if (pageCount <= 1) return null
+  const current = Math.min(page, pageCount - 1)
+  return (
+    <div
+      aria-label={label}
+      className="mt-2 flex items-center gap-2"
+      role="navigation"
+    >
+      <span className="flex-1 text-[11px] text-ink-2">
+        {current * RULES_PAGE_SIZE + 1}–
+        {Math.min((current + 1) * RULES_PAGE_SIZE, total)} / {total}
+      </span>
+      <Button
+        className="h-[30px] flex-none rounded-control px-3 text-[13px] whitespace-nowrap"
+        disabled={current === 0}
+        onClick={() => onPageChange(Math.max(0, current - 1))}
+        size="sm"
+        type="button"
+        variant="secondary"
+      >
+        上一页
+      </Button>
+      <Button
+        className="h-[30px] flex-none rounded-control px-3 text-[13px] whitespace-nowrap"
+        disabled={current >= pageCount - 1}
+        onClick={() => onPageChange(Math.min(pageCount - 1, current + 1))}
+        size="sm"
+        type="button"
+        variant="secondary"
+      >
+        下一页
+      </Button>
+    </div>
+  )
+}
 import { useVoiceDictation } from '../useVoiceDictation'
 import { ModelPicker, modelSelectionKey } from './ModelPicker'
 import { PegasMark } from './PegasMark'
@@ -393,6 +443,7 @@ export function SettingsPage({
                     onReloadWorkRules={onReloadWorkRules}
                     onSaveBehavior={onSaveBehavior}
                     onToggleWorkRule={onToggleWorkRule}
+                    onGoPrivacy={() => selectSection('privacy')}
                     workRules={workRules}
                     workRulesError={workRulesError}
                   />
@@ -748,6 +799,7 @@ function PegasSettings({
   onReloadWorkRules,
   onToggleWorkRule,
   onSaveBehavior,
+  onGoPrivacy,
 }: {
   draft: RuntimeSettings
   agentModels?: DshModelCatalog
@@ -760,6 +812,7 @@ function PegasSettings({
   onReloadWorkRules?: () => void
   onToggleWorkRule?: (rule: WorkRuleRecord) => Promise<void>
   onSaveBehavior?: (customInstructions: string) => Promise<void>
+  onGoPrivacy?: () => void
 }) {
   const [tab, setTab] = useState<'model' | 'behavior' | 'autonomy'>('model')
   const [modelPickerRequest, setModelPickerRequest] = useState(0)
@@ -1007,17 +1060,54 @@ function PegasSettings({
         <div className="setting-section py-[18px]">
           <h3 className="mt-4 mb-2.5 text-[14px]">自主程度</h3>
           <p className="text-[12px] leading-[1.6] text-ink-2">
-            高风险与关键风险 Action 由服务端强制进入持久
-            Approval；自定义风险阈值尚未开放。
+            自主程度由默认权限档位与自动审阅决定；高风险与关键风险 Action
+            始终由服务端强制进入持久 Approval，不受档位影响。
           </p>
-          <input
-            aria-label="自主程度"
-            defaultValue="62"
-            disabled
-            max="100"
-            min="0"
-            type="range"
-          />
+          <div className="compact-field-row grid min-h-[52px] items-center gap-3.5 border-b border-line py-2 [grid-template-columns:120px_minmax(0,1fr)] max-[820px]:items-start max-[820px]:[grid-template-columns:1fr] max-[820px]:py-3">
+            <span className="font-medium">默认权限档位</span>
+            <SegmentedControl
+              ariaLabel="自主程度权限档位"
+              onChange={value => onChange({ ...draft, permissionTier: value })}
+              options={[
+                { value: 'strict', label: '严格' },
+                { value: 'standard', label: '标准' },
+                { value: 'full', label: '完全访问' },
+              ]}
+              value={draft.permissionTier ?? 'standard'}
+            />
+          </div>
+          <p className="text-[12px] leading-[1.6] text-ink-2">
+            严格：只读放行，写与网络都审批；标准：区内放行，越界审批；完全访问：显式风险披露后放行。
+            收紧对下一次工具调用立即生效，放宽只影响后续运行。
+          </p>
+          <div className="switch-row bui flex items-center justify-between py-3">
+            <span className="text-[13px] text-ink">自动审阅</span>
+            <Switch
+              checked={draft.autoReviewEnabled === true}
+              label="自动审阅（自主程度）"
+              onChange={checked =>
+                onChange({ ...draft, autoReviewEnabled: checked })
+              }
+            />
+          </div>
+          <p className="text-[12px] leading-[1.6] text-ink-2">
+            待审批操作先交给模型按你的原话初审：明确授权的放行，其余仍由你决定。
+          </p>
+          {onGoPrivacy && (
+            <Button
+              className="mt-2 h-8 px-3.5 text-[13px]"
+              onClick={onGoPrivacy}
+              size="xs"
+              type="button"
+              variant="secondary"
+            >
+              <ShieldCheck size={15} />
+              前往隐私设置
+            </Button>
+          )}
+          <p className="text-[12px] leading-[1.6] text-ink-2">
+            与「隐私」页读写同一份服务端设置，修改后点击「保存更改」生效；单个事情可在执行设置里覆盖默认档位。
+          </p>
         </div>
       )}
     </div>
@@ -1048,6 +1138,16 @@ function BehaviorSettings({
   const [togglingRuleId, setTogglingRuleId] = useState('')
   const [actionError, setActionError] = useState('')
   const [instructionsNotice, setInstructionsNotice] = useState('')
+  const [rulePage, setRulePage] = useState(0)
+  const rulePageCount = Math.max(
+    1,
+    Math.ceil((workRules ?? []).length / RULES_PAGE_SIZE),
+  )
+  const currentRulePage = Math.min(rulePage, rulePageCount - 1)
+  const pagedWorkRules = (workRules ?? []).slice(
+    currentRulePage * RULES_PAGE_SIZE,
+    (currentRulePage + 1) * RULES_PAGE_SIZE,
+  )
   useEffect(() => {
     if (!behaviorPreferences) return
     setInstructions(behaviorPreferences.customInstructions)
@@ -1147,7 +1247,7 @@ function BehaviorSettings({
                 系统规则（已锁定）
               </small>
             </Button>
-            {(workRules ?? []).map(rule => (
+            {pagedWorkRules.map(rule => (
               <div
                 className="rule-row flex items-center border-b border-line bg-surface last:border-b-0"
                 key={rule.id}
@@ -1188,6 +1288,12 @@ function BehaviorSettings({
               </div>
             ))}
           </div>
+          <RulePagination
+            label="工作规则分页"
+            onPageChange={setRulePage}
+            page={rulePage}
+            total={(workRules ?? []).length}
+          />
           {(workRules ?? []).length === 0 && (
             <p className="text-[12px] leading-[1.6] text-ink-2">
               还没有自定义工作规则；添加后会注入每次执行。
@@ -1773,6 +1879,16 @@ function RouterSettings({
 }) {
   const [manualModel, setManualModel] = useState(false)
   const [togglingRuleId, setTogglingRuleId] = useState('')
+  const [rulePage, setRulePage] = useState(0)
+  const rulePageCount = Math.max(
+    1,
+    Math.ceil((routingRules ?? []).length / RULES_PAGE_SIZE),
+  )
+  const currentRulePage = Math.min(rulePage, rulePageCount - 1)
+  const pagedRoutingRules = (routingRules ?? []).slice(
+    currentRulePage * RULES_PAGE_SIZE,
+    (currentRulePage + 1) * RULES_PAGE_SIZE,
+  )
   const [ruleActionError, setRuleActionError] = useState('')
   const [testText, setTestText] = useState('刚才那个方案再加上 Telegram')
   const [testing, setTesting] = useState(false)
@@ -1809,6 +1925,9 @@ function RouterSettings({
   }
   const provider = response.capabilities.providers.find(
     item => item.id === draft.modelProvider,
+  )
+  const selectableProviders = response.capabilities.providers.filter(
+    item => item.available || item.id === draft.modelProvider,
   )
   const providerAliases = new Set(
     [draft.modelProvider, provider?.name]
@@ -1861,114 +1980,118 @@ function RouterSettings({
           />
         </div>
       </div>
-      <div className="compact-field-row grid min-h-[52px] items-center gap-3.5 border-b border-line py-2 [grid-template-columns:120px_minmax(0,1fr)] max-[820px]:items-start max-[820px]:[grid-template-columns:1fr] max-[820px]:py-3">
-        <span className="font-medium">归类模型</span>
-        <div className="router-model-fields grid min-w-0 items-center gap-2.5 [grid-template-columns:168px_minmax(0,1fr)_auto] max-[820px]:[grid-template-columns:1fr]">
-          <Select
-            value={draft.modelProvider}
-            onValueChange={value => {
-              const modelProvider = value as RuntimeSettings['modelProvider']
-              const nextProvider = response.capabilities.providers.find(
-                item => item.id === modelProvider,
-              )
+      {draft.routerMode === 'model' && (
+        <div className="compact-field-row grid min-h-[52px] items-center gap-3.5 border-b border-line py-2 [grid-template-columns:120px_minmax(0,1fr)] max-[820px]:items-start max-[820px]:[grid-template-columns:1fr] max-[820px]:py-3">
+          <span className="font-medium">归类模型</span>
+          <div className="router-model-fields grid min-w-0 items-center gap-2.5 [grid-template-columns:168px_minmax(0,1fr)_auto] max-[820px]:[grid-template-columns:1fr]">
+            <Select
+              value={draft.modelProvider}
+              onValueChange={value => {
+                const modelProvider = value as RuntimeSettings['modelProvider']
+                const nextProvider = response.capabilities.providers.find(
+                  item => item.id === modelProvider,
+                )
+                onChange({
+                  ...draft,
+                  modelProvider,
+                  modelName: nextProvider?.defaultModel ?? '',
+                })
+              }}
+            >
+              <SelectTrigger
+                aria-label="归类模型服务"
+                className="h-10 w-full rounded-control bg-field shadow-inset-field hover:bg-field"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {selectableProviders.map(item => (
+                  <SelectItem key={item.id} value={item.id}>
+                    {item.available ? item.name : `${item.name}（未配置）`}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {manualModel ? (
+              <TextInput
+                aria-label="归类模型名称"
+                className="h-10 w-full"
+                onChange={event =>
+                  onChange({ ...draft, modelName: event.target.value })
+                }
+                placeholder="输入模型 ID"
+                value={draft.modelName}
+              />
+            ) : (
+              <ModelPicker
+                ariaLabel="归类模型名称"
+                description={`${provider?.name ?? draft.modelProvider} 的完整模型目录`}
+                footer="选择后仍需点击「保存更改」生效"
+                models={providerModels}
+                onSelect={(_, model) => {
+                  if (!model) return
+                  onChange({ ...draft, modelName: model.id })
+                }}
+                placeholder={draft.modelName || '选择模型'}
+                placeholderDetail={
+                  draft.modelName && !selectedProviderModel
+                    ? `${provider?.name ?? draft.modelProvider} · 目录外模型`
+                    : undefined
+                }
+                title="归类模型"
+                value={
+                  selectedProviderModel
+                    ? modelSelectionKey(selectedProviderModel)
+                    : ''
+                }
+              />
+            )}
+            <Button
+              className="router-model-manual-toggle h-7 px-0.5 text-[12px] font-normal whitespace-nowrap text-accent-ink max-[820px]:justify-self-start"
+              onClick={() => setManualModel(manual => !manual)}
+              size="xs"
+              type="button"
+              variant="quiet"
+            >
+              {manualModel ? '从目录选择' : '手动输入模型 ID'}
+            </Button>
+          </div>
+        </div>
+      )}
+      {draft.routerMode === 'model' && (
+        <div className="compact-field-row grid min-h-[52px] items-center gap-3.5 border-b border-line py-2 [grid-template-columns:120px_minmax(0,1fr)] max-[820px]:items-start max-[820px]:[grid-template-columns:1fr] max-[820px]:py-3">
+          <span className="font-medium">不确定时</span>
+          <RadioGroup
+            aria-label="不确定时"
+            className="radio-row bui flex flex-wrap gap-x-4 gap-y-2"
+            onValueChange={value =>
               onChange({
                 ...draft,
-                modelProvider,
-                modelName: nextProvider?.defaultModel ?? '',
+                routingUncertainty: value as NonNullable<
+                  RuntimeSettings['routingUncertainty']
+                >,
               })
-            }}
+            }
+            value={draft.routingUncertainty ?? 'new_task'}
           >
-            <SelectTrigger
-              aria-label="归类模型服务"
-              className="h-10 w-full rounded-control bg-field shadow-inset-field hover:bg-field"
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {response.capabilities.providers.map(item => (
-                <SelectItem key={item.id} value={item.id}>
-                  {item.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {manualModel ? (
-            <TextInput
-              aria-label="归类模型名称"
-              className="h-10 w-full"
-              onChange={event =>
-                onChange({ ...draft, modelName: event.target.value })
-              }
-              placeholder="输入模型 ID"
-              value={draft.modelName}
-            />
-          ) : (
-            <ModelPicker
-              ariaLabel="归类模型名称"
-              description={`${provider?.name ?? draft.modelProvider} 的完整模型目录`}
-              footer="选择后仍需点击「保存更改」生效"
-              models={providerModels}
-              onSelect={(_, model) => {
-                if (!model) return
-                onChange({ ...draft, modelName: model.id })
-              }}
-              placeholder={draft.modelName || '选择模型'}
-              placeholderDetail={
-                draft.modelName && !selectedProviderModel
-                  ? `${provider?.name ?? draft.modelProvider} · 目录外模型`
-                  : undefined
-              }
-              title="归类模型"
-              value={
-                selectedProviderModel
-                  ? modelSelectionKey(selectedProviderModel)
-                  : ''
-              }
-            />
-          )}
-          <Button
-            className="router-model-manual-toggle h-7 px-0.5 text-[12px] font-normal whitespace-nowrap text-accent-ink max-[820px]:justify-self-start"
-            onClick={() => setManualModel(manual => !manual)}
-            size="xs"
-            type="button"
-            variant="quiet"
-          >
-            {manualModel ? '从目录选择' : '手动输入模型 ID'}
-          </Button>
+            {(
+              [
+                ['new_task', '开始新事情'],
+                ['ask_first', '先问我'],
+                ['continue_recent', '优先继续最近的事情'],
+              ] as const
+            ).map(([value, label]) => (
+              <label
+                className="flex min-h-8 cursor-pointer items-center gap-1.5 text-[13px] whitespace-nowrap text-ink"
+                key={value}
+              >
+                <RadioItem aria-label={label} value={value} />
+                {label}
+              </label>
+            ))}
+          </RadioGroup>
         </div>
-      </div>
-      <div className="compact-field-row grid min-h-[52px] items-center gap-3.5 border-b border-line py-2 [grid-template-columns:120px_minmax(0,1fr)] max-[820px]:items-start max-[820px]:[grid-template-columns:1fr] max-[820px]:py-3">
-        <span className="font-medium">不确定时</span>
-        <RadioGroup
-          aria-label="不确定时"
-          className="radio-row bui flex flex-wrap gap-x-4 gap-y-2"
-          onValueChange={value =>
-            onChange({
-              ...draft,
-              routingUncertainty: value as NonNullable<
-                RuntimeSettings['routingUncertainty']
-              >,
-            })
-          }
-          value={draft.routingUncertainty ?? 'new_task'}
-        >
-          {(
-            [
-              ['new_task', '开始新事情'],
-              ['ask_first', '先问我'],
-              ['continue_recent', '优先继续最近的事情'],
-            ] as const
-          ).map(([value, label]) => (
-            <label
-              className="flex min-h-8 cursor-pointer items-center gap-1.5 text-[13px] whitespace-nowrap text-ink"
-              key={value}
-            >
-              <RadioItem aria-label={label} value={value} />
-              {label}
-            </label>
-          ))}
-        </RadioGroup>
-      </div>
+      )}
       <h3 className="mt-4 mb-2.5 text-[14px]">归类规则</h3>
       {draft.routerMode === 'rules' && (
         <div className="my-3 flex items-center gap-2 rounded-control bg-accent-tint px-3 py-2.5 text-[12px] leading-[1.6] text-ink-2">
@@ -2027,7 +2150,7 @@ function RouterSettings({
                 系统规则（已锁定）
               </small>
             </Button>
-            {routingRules.map(rule => (
+            {pagedRoutingRules.map(rule => (
               <div
                 className="rule-row flex items-center border-b border-line bg-surface last:border-b-0"
                 key={rule.id}
@@ -2065,6 +2188,12 @@ function RouterSettings({
               </div>
             ))}
           </div>
+          <RulePagination
+            label="归类规则分页"
+            onPageChange={setRulePage}
+            page={rulePage}
+            total={routingRules.length}
+          />
           {routingRules.length === 0 && (
             <p className="text-[12px] leading-[1.6] text-ink-2">
               还没有自定义归类规则；添加后会作为归属偏好参与智能判断。

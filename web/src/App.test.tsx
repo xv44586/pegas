@@ -832,7 +832,9 @@ describe('sealed Pegas UI', () => {
       capabilities: {
         ...settingsResponse.capabilities,
         providers: [
-          ...settingsResponse.capabilities.providers,
+          ...settingsResponse.capabilities.providers.map(item =>
+            item.id === 'anthropic' ? { ...item, available: true } : item,
+          ),
           {
             id: 'custom',
             name: '自定义',
@@ -1095,6 +1097,127 @@ describe('sealed Pegas UI', () => {
     expect(selected.querySelector('.lucide-check')).toBeTruthy()
   })
 
+  it('wires the autonomy tab to permission tier and auto review settings', async () => {
+    let savedBody: Record<string, unknown> | undefined
+    installFetch((path, init) => {
+      if (path === '/v1/settings' && init?.method === 'PUT') {
+        savedBody = JSON.parse(
+          typeof init.body === 'string' ? init.body : '{}',
+        ) as Record<string, unknown>
+        return Response.json(settingsResponse)
+      }
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(await screen.findByRole('tab', { name: '自主程度' }))
+    expect(screen.queryByRole('slider')).toBeNull()
+    const segments = screen.getByRole('tablist', {
+      name: '自主程度权限档位',
+    })
+    expect(
+      within(segments)
+        .getByRole('tab', { name: '标准' })
+        .getAttribute('aria-selected'),
+    ).toBe('true')
+    fireEvent.click(within(segments).getByRole('tab', { name: '严格' }))
+    const autoReview = screen.getByLabelText('自动审阅（自主程度）')
+    expect(autoReview.getAttribute('aria-checked')).toBe('false')
+    fireEvent.click(autoReview)
+    fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
+    await screen.findByText('更改已保存')
+    expect(savedBody?.permissionTier).toBe('strict')
+    expect(savedBody?.autoReviewEnabled).toBe(true)
+  })
+
+  it('lists only configured providers as routing candidates and hides model fields in rules mode', async () => {
+    installFetch(path =>
+      path === '/v1/settings'
+        ? Response.json({
+            ...settingsResponse,
+            settings: {
+              ...settingsResponse.settings,
+              modelProvider: 'anthropic',
+            },
+          })
+        : undefined,
+    )
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(await screen.findByRole('button', { name: /事情归类/ }))
+    fireEvent.click(await screen.findByLabelText('归类模型服务'))
+    expect(screen.getByRole('option', { name: 'Magpie' })).toBeTruthy()
+    expect(
+      screen.getByRole('option', { name: 'Anthropic（未配置）' }),
+    ).toBeTruthy()
+    expect(screen.queryByRole('option', { name: 'OpenAI' })).toBeNull()
+    fireEvent.keyDown(screen.getByRole('listbox'), { key: 'Escape' })
+    fireEvent.click(
+      within(screen.getByRole('tablist', { name: '归类方式' })).getByRole(
+        'tab',
+        { name: '确定性规则' },
+      ),
+    )
+    expect(screen.queryByLabelText('归类模型服务')).toBeNull()
+    expect(screen.queryByText('不确定时')).toBeNull()
+    expect(screen.getByText(/当前为「确定性规则」模式/)).toBeTruthy()
+    fireEvent.click(
+      within(screen.getByRole('tablist', { name: '归类方式' })).getByRole(
+        'tab',
+        { name: '智能判断' },
+      ),
+    )
+    expect(screen.getByLabelText('归类模型服务')).toBeTruthy()
+    expect(screen.getByText('不确定时')).toBeTruthy()
+  })
+
+  it('paginates routing rules ten per page', async () => {
+    const rules = Array.from({ length: 12 }, (_, index) => ({
+      id: `rr-${String(index + 1)}`,
+      userId: 'owner',
+      title: `归类规则 ${String(index + 1).padStart(2, '0')}`,
+      content: '描述归属偏好。',
+      enabled: true,
+      revision: 1,
+      createdAt: '2026-11-21T08:00:00.000Z',
+      updatedAt: '2026-11-21T08:00:00.000Z',
+    }))
+    installFetch(path =>
+      path.startsWith('/v1/routing-rules?')
+        ? Response.json({ rules })
+        : undefined,
+    )
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(await screen.findByRole('button', { name: /事情归类/ }))
+    expect(await screen.findByText('归类规则 01')).toBeTruthy()
+    expect(screen.getByText('归类规则 10')).toBeTruthy()
+    expect(screen.queryByText('归类规则 11')).toBeNull()
+    const pagination = screen.getByRole('navigation', { name: '归类规则分页' })
+    expect(
+      within(pagination).getByRole('button', { name: '上一页' }),
+    ).toHaveProperty('disabled', true)
+    fireEvent.click(within(pagination).getByRole('button', { name: '下一页' }))
+    expect(screen.getByText('归类规则 11')).toBeTruthy()
+    expect(screen.getByText('归类规则 12')).toBeTruthy()
+    expect(screen.queryByText('归类规则 01')).toBeNull()
+    expect(
+      within(pagination).getByRole('button', { name: '下一页' }),
+    ).toHaveProperty('disabled', true)
+  })
+
   it('EXEC-005: toggles the chat lane from settings and persists the switch', async () => {
     let savedBody: Record<string, unknown> | undefined
     let currentSettings: SettingsResponse = {
@@ -1172,6 +1295,18 @@ describe('sealed Pegas UI', () => {
         }))
         return Response.json({ rule: rules[0] })
       }
+      if (path === '/v1/routing-rules' && init?.method === 'POST') {
+        const body = JSON.parse(
+          typeof init.body === 'string' ? init.body : '{}',
+        ) as { rule: { title: string; content: string; enabled: boolean } }
+        const created = {
+          ...routingRule,
+          id: 'routing-rule-new',
+          ...body.rule,
+        }
+        rules = [...rules, created]
+        return Response.json({ rule: created }, { status: 201 })
+      }
       if (path === '/v1/routing/preview' && init?.method === 'POST')
         return Response.json({
           preview: {
@@ -1242,7 +1377,9 @@ describe('sealed Pegas UI', () => {
         }),
       ).toBe(true),
     )
-    fireEvent.click(screen.getByRole('button', { name: '关闭详情' }))
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: '关闭详情' })).toBeNull(),
+    )
 
     fireEvent.click(screen.getByLabelText('先问我'))
     fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
@@ -1374,7 +1511,19 @@ describe('sealed Pegas UI', () => {
   })
 
   it('restores the saved provider and credential draft when settings are cancelled', async () => {
-    installFetch()
+    installFetch(path =>
+      path === '/v1/settings'
+        ? Response.json({
+            ...settingsResponse,
+            capabilities: {
+              ...settingsResponse.capabilities,
+              providers: settingsResponse.capabilities.providers.map(item =>
+                item.id === 'anthropic' ? { ...item, available: true } : item,
+              ),
+            },
+          })
+        : undefined,
+    )
     render(<App />)
     fireEvent.click(
       within(await screen.findByLabelText('主导航')).getByRole('button', {
@@ -5714,7 +5863,9 @@ describe('sealed Pegas UI', () => {
       capabilities: {
         ...settingsResponse.capabilities,
         providers: [
-          ...settingsResponse.capabilities.providers,
+          ...settingsResponse.capabilities.providers.map(item =>
+            item.id === 'anthropic' ? { ...item, available: true } : item,
+          ),
           {
             id: 'custom',
             name: '自定义',
@@ -10927,8 +11078,9 @@ describe('sealed Pegas UI', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: '保存规则' }))
     await waitFor(() => expect(created).toBeTruthy())
     expect((created as { rule: { enabled: boolean } }).rule.enabled).toBe(true)
-    expect(await screen.findByText('规则已保存，对后续执行生效。')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: '关闭详情' }))
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: '关闭详情' })).toBeNull(),
+    )
     expect(await screen.findByText('产品设计优先给出具体界面方案')).toBeTruthy()
     fireEvent.change(screen.getByLabelText('指令内容'), {
       target: { value: '发布前先列出回滚路径。' },

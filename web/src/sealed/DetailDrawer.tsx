@@ -314,9 +314,11 @@ export function DetailDrawer({
             run={view.run}
           />
         )}
-        {view.kind === 'rule' && <RuleDetail api={api} view={view} />}
+        {view.kind === 'rule' && (
+          <RuleDetail api={api} onClose={onClose} view={view} />
+        )}
         {view.kind === 'routingRule' && (
-          <RoutingRuleDetail api={api} view={view} />
+          <RoutingRuleDetail api={api} onClose={onClose} view={view} />
         )}
         {view.kind === 'preview' && (
           <PreviewDetail
@@ -3553,9 +3555,11 @@ function RuntimeDetail({
 
 function RuleDetail({
   api,
+  onClose,
   view,
 }: {
   api?: PegasApi
+  onClose: () => void
   view: Extract<DrawerView, { kind: 'rule' }>
 }) {
   const editing = view.rule
@@ -3566,13 +3570,11 @@ function RuleDetail({
   const [deleting, setDeleting] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [error, setError] = useState('')
-  const [notice, setNotice] = useState('')
   const valid = title.trim().length > 0 && content.trim().length > 0
   async function save() {
     if (!api || saving || !valid) return
     setSaving(true)
     setError('')
-    setNotice('')
     try {
       const draft = {
         title: title.trim(),
@@ -3581,8 +3583,9 @@ function RuleDetail({
       }
       if (editing) await api.updateWorkRule(editing.id, editing.revision, draft)
       else await api.createWorkRule(draft)
-      setNotice('规则已保存，对后续执行生效。')
       view.onSaved?.()
+      onClose()
+      return
     } catch (caught) {
       if (caught instanceof ApiError && caught.status === 409)
         setError(
@@ -3600,8 +3603,8 @@ function RuleDetail({
     try {
       await api.deleteWorkRule(editing.id, editing.revision)
       view.onSaved?.()
-      setNotice('规则已删除。')
-      setConfirmDelete(false)
+      onClose()
+      return
     } catch (caught) {
       if (caught instanceof ApiError && caught.status === 409)
         setError('删除冲突：这条规则已在别处更新。请关闭后重新打开最新状态。')
@@ -3660,11 +3663,6 @@ function RuleDetail({
           {error}
         </div>
       )}
-      {notice && (
-        <p className="text-[12px] leading-[1.6] text-ink-2" role="status">
-          {notice}
-        </p>
-      )}
       <footer className="drawer-footer">
         {editing &&
           (confirmDelete ? (
@@ -3704,9 +3702,11 @@ function RuleDetail({
 
 function RoutingRuleDetail({
   api,
+  onClose,
   view,
 }: {
   api?: PegasApi
+  onClose: () => void
   view: Extract<DrawerView, { kind: 'routingRule' }>
 }) {
   const editing = view.rule
@@ -3717,13 +3717,11 @@ function RoutingRuleDetail({
   const [deleting, setDeleting] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [error, setError] = useState('')
-  const [notice, setNotice] = useState('')
   const valid = title.trim().length > 0 && content.trim().length > 0
   async function save() {
     if (!api || saving || !valid) return
     setSaving(true)
     setError('')
-    setNotice('')
     try {
       const draft = {
         title: title.trim(),
@@ -3733,8 +3731,9 @@ function RoutingRuleDetail({
       if (editing)
         await api.updateRoutingRule(editing.id, editing.revision, draft)
       else await api.createRoutingRule(draft)
-      setNotice('归类规则已保存，对后续归类生效。')
       view.onSaved?.()
+      onClose()
+      return
     } catch (caught) {
       if (caught instanceof ApiError && caught.status === 409)
         setError(
@@ -3752,8 +3751,8 @@ function RoutingRuleDetail({
     try {
       await api.deleteRoutingRule(editing.id, editing.revision)
       view.onSaved?.()
-      setNotice('规则已删除。')
-      setConfirmDelete(false)
+      onClose()
+      return
     } catch (caught) {
       if (caught instanceof ApiError && caught.status === 409)
         setError('删除冲突：这条规则已在别处更新。请关闭后重新打开最新状态。')
@@ -3811,11 +3810,6 @@ function RoutingRuleDetail({
         >
           {error}
         </div>
-      )}
-      {notice && (
-        <p className="text-[12px] leading-[1.6] text-ink-2" role="status">
-          {notice}
-        </p>
       )}
       <footer className="drawer-footer">
         {editing &&
