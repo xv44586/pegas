@@ -38,6 +38,34 @@ Run(running) + high-risk Action
 
 所有 Approval 用户 API 强制使用已配置的实例 bearer（即使服务只监听 loopback），并以 `userId` 校验 Task owner；未配置实例 token 时这些端点 fail closed。Executor 写 API 不接受全局 bearer 代替 Run 身份，只接受短期 `x-pegas-run-claim-token`。服务端在解析业务 payload 前先验证 capability，因此错误 token 不会借由 400/403 差异探测 Action/Run 状态；已持久化命令的原 capability 仍可用于精确响应重放。
 
+### 实例 bearer 引导修复 Intake（2026-11-24）
+
+> Feature `APPROVAL-001`；worktree `pegas-worktrees/approval-001-token-bootstrap`（branch `fix/APPROVAL-001-token-bootstrap`，基线 origin/main `a294791`）。
+
+**问题（P8 发布实拍发现）**：上述 fail-closed 是有意合同（不弱化），但只有桌面端实现了「未配置时生成随机实例 bearer」；Supervisor 拉起与裸 `node dist/control-plane/main.js` 启动在无 `PEGAS_API_TOKEN` 时不生成 token，导致 approvals/actions/policy-audit/worker-profile-changes 恒 401，Web 访问令牌门永远无法通过——运行实例（launchd）实际不可审批。根因是 bootstrap 缺口，不是守卫语义错误。
+
+**用户结果**：任何本机启动路径（Supervisor/裸进程/桌面）在未显式配置 token 时都自动拥有随机实例 bearer；审批卡与 Web 令牌门恢复可用；已显式配置的 token 优先且不被覆盖。
+
+**方案（对齐桌面既有模式）**：
+
+1. 新增 `src/core/instance-token.ts`：`ensureInstanceBearer({ dataDir, environment })`——env 已有 `PEGAS_API_TOKEN` 直接沿用；否则读 `dataDir/api-token`（0600），不存在则 `randomBytes(32).base64url` 以 `wx` 模式创建（并发首启竞争时读回胜者），损坏/空文件视为缺失重建；返回值写回 `environment.PEGAS_API_TOKEN`。
+2. `control-plane/main.ts` 在 `loadConfig()` 前调用（覆盖裸启动与一切 spawn 路径）；`supervisor/main.ts` 在读取 recoveryToken 前调用（recovery API 与子进程 env 同源受益）。桌面行为不变（其 env 注入优先）。
+3. 守卫语义不改：无 token 配置时上述端点仍 fail closed（单测锁定）；非 loopback 无 token 拒启不变。
+
+**验收条件**：
+
+1. 回归先红：无 env token 时临时 dataDir 引导后 `loadConfig().apiToken` 非空、文件 0600、二次调用稳定复用、显式 env 优先、损坏文件重建。
+2. 进程级：无 `PEGAS_API_TOKEN` 裸启动 control-plane，`/v1/approvals` 无凭证 401、带引导 token 200；`/v1/tasks` 无凭证仍 200（读端点语义不变）。
+3. Supervisor 无 token 启动时 recovery API 与子进程使用同一引导 token（代码路径 + smoke 覆盖）。
+4. `pnpm check` + `pnpm smoke` + `pnpm smoke:crash` 全绿；UI/a11y 采集脚本显式注入测试 token（不依赖引导），真实浏览器门通过。
+5. 运行实例修复后：真实浏览器输入引导 token 通过令牌门，P8 探针审批卡可见并可决定。
+
+**非目标**：不改任何守卫的 fail-closed 语义；不做 token 轮换/多用户 token；不把 token 写入日志、prompt、Outbox；不改 Web 令牌门交互。
+
+**数据与权限边界**：token 文件位于 dataDir（与 model-credentials.key 同级同权限 0600），只含随机 bearer；不入库、不入 git（data/ 已忽略）。
+
+**失败与恢复**：文件不可写时启动失败并给出明确错误（不静默降级为无 token）；删除文件即下次启动重新生成（旧会话 token 失效属预期）；回滚 revert 即恢复旧行为，无 schema 变更。
+
 Worker 只把当前 claim 的 Control Plane URL、Run/Task ID 和短期 claim token 注入当前 DSH 子进程；会先剥离父进程中可能残留的同名变量以及实例 bearer、恢复 token 和模型密钥。DSH 执行合同给出创建 Approval、等待恢复和记录 Action outcome 的协议。claim 轮换后，新 Run 只收到自己的 token；该 token 不进入 prompt、对话、Outbox 或持久化明文。macOS 桌面端每次内置服务启动会生成随机实例 bearer，由 Electron session 仅对可信本机 origin 自动附加；renderer 不读取或保存该 bearer。
 
 Run capability 的 HTTP 传输固定使用 loopback。`PEGAS_API_HOST` 为 `0.0.0.0` 或 `::` 时，Worker 分别通过 `127.0.0.1` 或 `::1` 访问同一服务；绑定具体非回环 IP 时 Worker 拒绝启动 capability 通道，避免明文 claim 穿过局域网。需要远程 Control Plane 的后续部署必须另建 HTTPS/mTLS 内部通道，不能复用本协议的明文 URL。
