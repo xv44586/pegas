@@ -126,8 +126,22 @@ describe('sealed UI typography scale (DESIGN-004)', () => {
   it('keeps card body one step below outside body copy', () => {
     expect(fontSizeOf('body')).toBe('var(--text-body)')
     expect(fontSizeOf('.link-preview-card')).toBe('var(--text-caption)')
-    expect(fontSizeOf('.attention-preview')).toBe('var(--text-caption)')
     expect(fontSizeOf('.criteria-list p')).toBe('var(--text-caption)')
+    const attentionSource = readFileSync(
+      resolve(
+        import.meta.dirname,
+        '..',
+        'web',
+        'src',
+        'sealed',
+        'MainPages.tsx',
+      ),
+      'utf8',
+    )
+    expect(attentionSource).toContain(
+      'attention-preview line-clamp-1 m-0 text-[13px] leading-normal text-ink-2',
+    )
+    expect(stylesheet).not.toContain('.attention-preview {')
     const detailDrawer = readFileSync(
       resolve(
         import.meta.dirname,

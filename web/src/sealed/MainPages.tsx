@@ -45,11 +45,12 @@ import type {
 } from '../types'
 import { useVoiceDictation } from '../useVoiceDictation'
 import { PegasAgentIcon } from '../PegasAgentIcon'
-import { Button, StatusPill } from '@bui/index'
+import { Button, GlideMenu, StatusPill } from '@bui/index'
 import {
   CopyMessageButton,
   FollowUpList,
   MetaIconButton,
+  RowStatusPill,
   RunTrace,
   SayBody,
   WorkEntryButton,
@@ -1610,10 +1611,11 @@ export function WorkPage({
         hasPageSearch
         title="所有事情"
       >
-        <label className="page-search">
-          <Search size={17} />
+        <label className="page-search bui flex h-10 min-w-[280px] items-center gap-2 rounded-control bg-field px-3 shadow-hairline transition-shadow duration-150 focus-within:bg-surface focus-within:shadow-[0_0_0_1px_var(--accent)]">
+          <Search className="shrink-0 text-ink-3" size={16} />
           <input
             aria-label="搜索事情"
+            className="min-w-0 flex-1 bg-transparent text-[13px] text-ink outline-none placeholder:text-ink-3"
             onChange={event => setQuery(event.target.value)}
             placeholder="搜索事情或结果"
             type="search"
@@ -1621,8 +1623,12 @@ export function WorkPage({
           />
         </label>
       </PageHeader>
-      <div className="filter-row-wrap" ref={sortMenuRef}>
-        <div className="filter-row" role="group" aria-label="筛选">
+      <div className="filter-row-wrap relative" ref={sortMenuRef}>
+        <div
+          className="filter-row flex items-center gap-2 border-b border-line pb-4"
+          role="group"
+          aria-label="筛选"
+        >
           {(
             [
               ['all', '全部'],
@@ -1632,80 +1638,97 @@ export function WorkPage({
               ['archived', '已归档'],
             ] as const
           ).map(([id, label]) => (
-            <button
+            <Button
               aria-pressed={filter === id}
+              className="h-9 rounded-full px-4 text-[13px] aria-pressed:bg-accent-tint aria-pressed:text-accent-ink"
               key={id}
               onClick={() => setFilter(id)}
+              size="xs"
               type="button"
+              variant="secondary"
             >
               {label}
-            </button>
+            </Button>
           ))}
-          <button
+          <Button
             aria-controls={sortMenuId}
             aria-expanded={sortMenuOpen}
             aria-haspopup="menu"
             aria-label={`排序：${WORK_SORT_LABELS[sort]}`}
-            className="sort-button"
+            className="sort-button ml-auto h-9 rounded-full px-4 text-[13px]"
             onClick={() => setSortMenuOpen(current => !current)}
             ref={sortTriggerRef}
+            size="xs"
             type="button"
+            variant="secondary"
           >
             {WORK_SORT_LABELS[sort]} <ChevronDown size={15} />
-          </button>
+          </Button>
         </div>
         {sortMenuOpen && (
           <div
             aria-label="排序方式"
-            className="sort-menu"
+            className="sort-menu bui absolute right-0 top-[calc(100%+6px)] z-20 min-w-[160px] rounded-card bg-surface p-1 shadow-overlay"
             id={sortMenuId}
             role="menu"
+            style={{
+              animation: 'pop-in 150ms cubic-bezier(0.16,1,0.3,1) both',
+            }}
           >
-            {(
-              [
-                'updated',
-                'created',
-                'ended',
-              ] as const satisfies readonly ChannelSearchSort[]
-            ).map(option => (
-              <button
-                aria-checked={sort === option}
-                key={option}
-                onClick={() => {
-                  setSort(option)
-                  setSortMenuOpen(false)
-                  sortTriggerRef.current?.focus()
-                }}
-                role="menuitemradio"
-                type="button"
-              >
-                {WORK_SORT_LABELS[option]}
-                {sort === option && <Check size={15} />}
-              </button>
-            ))}
+            <GlideMenu className="flex flex-col">
+              {(
+                [
+                  'updated',
+                  'created',
+                  'ended',
+                ] as const satisfies readonly ChannelSearchSort[]
+              ).map(option => (
+                <button
+                  aria-checked={sort === option}
+                  className="relative z-10 flex min-h-[34px] items-center justify-between gap-2 rounded-control px-2.5 py-2 text-left text-[13px] text-ink aria-checked:text-accent-ink"
+                  data-menu-row
+                  key={option}
+                  onClick={() => {
+                    setSort(option)
+                    setSortMenuOpen(false)
+                    sortTriggerRef.current?.focus()
+                  }}
+                  role="menuitemradio"
+                  type="button"
+                >
+                  {WORK_SORT_LABELS[option]}
+                  {sort === option && <Check size={15} />}
+                </button>
+              ))}
+            </GlideMenu>
           </div>
         )}
       </div>
-      <section className="work-list" aria-label="事情列表">
+      <section className="work-list mb-10" aria-label="事情列表">
         {visible.length ? (
           visible.map(channel => {
             const run = latestRunForTask(snapshot.runs, channel.id)
             const state = statusLabel(channel, run)
             return (
               <button
+                className="grid w-full min-h-[78px] grid-cols-[38px_minmax(0,1fr)_auto] items-center gap-2.5 border-b border-line px-3 py-3 text-left transition-colors duration-100 hover:bg-hover min-[521px]:gap-4 min-[521px]:grid-cols-[42px_minmax(160px,1fr)_100px_80px] min-[1121px]:grid-cols-[42px_minmax(180px,1fr)_130px_90px]"
                 key={channel.id}
                 onClick={() =>
                   actions.onOpenDrawer({ kind: 'task', channel, run })
                 }
                 type="button"
               >
-                <span className="work-icon">
+                <span className="work-icon flex size-[38px] items-center justify-center">
                   <PegasAgentIcon iconId={channel.workerIconId} size={38} />
                 </span>
-                <span className="work-copy">
-                  <strong>{channel.title}</strong>
-                  <small>{channel.goal}</small>
-                  <small className="work-context">
+                <span className="work-copy grid min-w-0 gap-[5px]">
+                  <strong className="truncate text-[14px] font-medium text-ink">
+                    {channel.title}
+                  </strong>
+                  <small className="truncate text-[12px] text-ink-2">
+                    {channel.goal}
+                  </small>
+                  <small className="work-context truncate text-[11px] text-ink-3">
                     {run
                       ? [run.executor, run.executionContext?.model]
                           .filter(Boolean)
@@ -1713,8 +1736,10 @@ export function WorkPage({
                       : '尚未分配执行器'}
                   </small>
                 </span>
-                <time>{formatRelativeTime(channel.latestActivityAt)}</time>
-                <span className={`status-text status-${state}`}>{state}</span>
+                <time className="hidden text-[12px] text-ink-3 min-[521px]:block">
+                  {formatRelativeTime(channel.latestActivityAt)}
+                </time>
+                <RowStatusPill label={state} />
               </button>
             )
           })
@@ -1926,11 +1951,7 @@ function UserMessageStatus({
                 <FileText size={14} />
                 <span className="truncate">{entry.title}</span>
               </span>
-              <span
-                className={`status-text status-${entry.label} shrink-0 text-[12px] text-ink-3`}
-              >
-                {entry.label}
-              </span>
+              <RowStatusPill label={entry.label} />
             </button>
           ))}
         </div>
@@ -1980,6 +2001,23 @@ function attentionTodoIcon(kind: AttentionActionKind): typeof Check {
   if (kind === 'answer') return CircleQuestionMark
   if (kind === 'review') return CheckCircle2
   return ShieldCheck
+}
+
+const attentionIconTones: Record<string, string> = {
+  result: 'bg-green-tint text-green-text',
+  failed: 'bg-red-tint text-red-text',
+  approval: 'bg-accent-tint text-accent-ink',
+  confirm: 'bg-orange-tint text-orange-text',
+  answer: 'bg-accent-tint text-accent-ink',
+  review: 'bg-green-tint text-green-text',
+  reconcile: 'bg-inset text-ink-2',
+}
+
+const attentionKindTones: Record<string, string> = {
+  confirm: 'text-orange-text',
+  answer: 'text-accent-ink',
+  review: 'text-green-text',
+  reconcile: 'text-ink-2',
 }
 
 function attentionDeliveryNote(message: OutboxMessage): string | undefined {
@@ -2069,19 +2107,23 @@ export function AttentionPage({
       <li key={message.id}>
         <article
           aria-labelledby={titleId}
-          className={message.readAt ? 'is-read' : 'is-unread'}
+          className={`grid min-h-[88px] grid-cols-[32px_minmax(0,1fr)] items-start gap-3 border-b border-line px-2.5 py-4 transition-colors duration-100 hover:bg-hover min-[521px]:grid-cols-[32px_minmax(0,1fr)_auto] ${message.readAt ? 'is-read' : 'is-unread'}`}
         >
-          <span className={`attention-icon is-${actionKind}`}>
+          <span
+            className={`attention-icon is-${actionKind} mt-0.5 flex size-8 items-center justify-center rounded-card ${attentionIconTones[actionKind] ?? 'bg-orange-tint text-orange-text'}`}
+          >
             <TodoIcon size={18} />
           </span>
-          <div className="attention-copy">
-            <div className="attention-heading">
-              <span className={`attention-kind is-${actionKind}`}>
+          <div className="attention-copy grid min-w-0 gap-1.5">
+            <div className="attention-heading flex min-w-0 items-baseline gap-2.5">
+              <span
+                className={`attention-kind is-${actionKind} shrink-0 text-[12px] font-medium leading-[1.4] ${attentionKindTones[actionKind] ?? 'text-orange-text'}`}
+              >
                 {attentionTodoLabel(actionKind)}
               </span>
-              <h2>
+              <h2 className="m-0 min-w-0 text-[14px] font-medium">
                 <button
-                  className="attention-title"
+                  className="attention-title line-clamp-2 min-h-0 cursor-pointer p-0 text-left text-[14px] font-medium leading-[1.45] text-ink [overflow-wrap:anywhere] transition-colors duration-100 hover:text-accent-ink"
                   id={titleId}
                   onClick={() => {
                     void onOpen(message)
@@ -2093,10 +2135,17 @@ export function AttentionPage({
               </h2>
             </div>
             {summary.preview && (
-              <p className="attention-preview">{summary.preview}</p>
+              <p className="attention-preview line-clamp-1 m-0 text-[13px] leading-normal text-ink-2 [overflow-wrap:anywhere]">
+                {summary.preview}
+              </p>
             )}
-            <div className="attention-meta">
-              <span className="attention-read-state">
+            <div className="attention-meta flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-[12px] leading-[1.4] text-ink-2">
+              <span
+                className={`attention-read-state inline-flex items-center gap-1.5 ${message.readAt ? '' : 'font-medium text-ink'}`}
+              >
+                {!message.readAt && (
+                  <span className="size-1.5 rounded-full bg-accent" />
+                )}
                 {message.readAt ? '已读' : '未读'}
               </span>
               <span>来自：{source}</span>
@@ -2104,21 +2153,25 @@ export function AttentionPage({
                 {formatRelativeTime(message.createdAt)}
               </time>
               {deliveryNote && (
-                <span className="attention-delivery-note">{deliveryNote}</span>
+                <span className="attention-delivery-note text-orange-text">
+                  {deliveryNote}
+                </span>
               )}
             </div>
           </div>
-          <button
+          <Button
             aria-label={`${action.label}：${summary.title}`}
-            className="attention-action"
+            className="attention-action col-start-2 h-9 justify-self-end rounded-control px-3 text-[13px] min-[521px]:col-start-3 min-[521px]:self-center"
             onClick={() => {
               void onOpen(message)
             }}
+            size="sm"
             type="button"
+            variant="secondary"
           >
             <Icon size={15} />
             {action.label}
-          </button>
+          </Button>
         </article>
       </li>
     )
@@ -2145,6 +2198,7 @@ export function AttentionPage({
         <article
           aria-labelledby={titleId}
           className={[
+            'grid min-h-[88px] grid-cols-[32px_minmax(0,1fr)] items-start gap-3 border-b border-line px-2.5 py-4 transition-colors duration-100 hover:bg-hover min-[521px]:grid-cols-[32px_minmax(0,1fr)_auto]',
             group.unreadCount > 0 ? 'is-unread' : 'is-read',
             isExpanded ? 'is-expanded' : '',
           ]
@@ -2152,16 +2206,16 @@ export function AttentionPage({
             .join(' ')}
         >
           <span
-            className={`attention-icon ${isFailed ? 'is-failed' : 'is-result'}`}
+            className={`attention-icon mt-0.5 flex size-8 items-center justify-center rounded-card ${isFailed ? 'is-failed bg-red-tint text-red-text' : 'is-result bg-green-tint text-green-text'}`}
           >
             {isFailed ? <CircleAlert size={18} /> : <CheckCircle2 size={18} />}
           </span>
-          <div className="attention-copy">
-            <div className="attention-heading">
-              <h2>
+          <div className="attention-copy grid min-w-0 gap-1.5">
+            <div className="attention-heading flex min-w-0 items-baseline gap-2.5">
+              <h2 className="m-0 min-w-0 text-[14px] font-medium">
                 <button
                   aria-expanded={isExpanded}
-                  className="attention-title"
+                  className="attention-title line-clamp-2 min-h-0 cursor-pointer p-0 text-left text-[14px] font-medium leading-[1.45] text-ink [overflow-wrap:anywhere] transition-colors duration-100 hover:text-accent-ink"
                   id={titleId}
                   onClick={() => toggleExpanded(group.key)}
                   type="button"
@@ -2170,9 +2224,9 @@ export function AttentionPage({
                 </button>
               </h2>
             </div>
-            <p className="attention-preview">
+            <p className="attention-preview line-clamp-1 m-0 text-[13px] leading-normal text-ink-2 [overflow-wrap:anywhere]">
               <button
-                className="attention-latest"
+                className="attention-latest block w-full cursor-pointer p-0 text-left text-[13px] leading-normal text-ink-2 transition-colors duration-100 hover:text-accent-ink hover:underline"
                 onClick={() => {
                   void onOpen(group.latest)
                 }}
@@ -2181,39 +2235,42 @@ export function AttentionPage({
                 最新：{latestSummary.title}
               </button>
             </p>
-            <div className="attention-meta">
+            <div className="attention-meta flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-[12px] leading-[1.4] text-ink-2">
               {group.taskId && <span>来自：{source}</span>}
               <time dateTime={group.latest.createdAt}>
                 {formatRelativeTime(group.latest.createdAt)}
               </time>
               {group.unreadCount === 0 && <span>已读</span>}
               {attentionDeliveryNote(group.latest) && (
-                <span className="attention-delivery-note">
+                <span className="attention-delivery-note text-orange-text">
                   {attentionDeliveryNote(group.latest)}
                 </span>
               )}
             </div>
             {isExpanded && (
-              <div className="attention-group-timeline">
-                <ul role="list">
+              <div className="attention-group-timeline mt-1.5 border-t border-line pt-1.5">
+                <ul className="m-0 list-none p-0" role="list">
                   {visibleTimeline.map(message => {
                     const summary = attentionSummary(message)
                     return (
                       <li key={message.id}>
                         <button
-                          className="attention-group-entry"
+                          className="attention-group-entry flex min-h-9 w-full cursor-pointer items-center gap-2.5 rounded-control px-2 py-1 text-left text-ink-2 transition-colors duration-100 hover:bg-inset hover:text-ink"
                           onClick={() => {
                             void onOpen(message)
                           }}
                           type="button"
                         >
                           <span
-                            className={`attention-group-entry-dot${message.readAt ? '' : ' is-unread'}`}
+                            className={`attention-group-entry-dot size-1.5 shrink-0 rounded-full ${message.readAt ? 'bg-line-strong' : 'is-unread bg-accent'}`}
                           />
-                          <span className="attention-group-entry-title">
+                          <span className="attention-group-entry-title line-clamp-1 min-w-0 flex-1 text-[13px] leading-normal [overflow-wrap:anywhere]">
                             {summary.title}
                           </span>
-                          <time dateTime={message.createdAt}>
+                          <time
+                            className="shrink-0 text-[12px] text-ink-2"
+                            dateTime={message.createdAt}
+                          >
                             {formatRelativeTime(message.createdAt)}
                           </time>
                         </button>
@@ -2222,45 +2279,53 @@ export function AttentionPage({
                   })}
                 </ul>
                 {(expandedAll || timeline.length > 3) && (
-                  <button
-                    className="attention-group-more"
+                  <Button
+                    className="attention-group-more mx-auto mt-1 flex h-8 px-3 text-[12px] text-accent-ink"
                     onClick={() => toggleShowAll(group.key)}
+                    size="xs"
                     type="button"
+                    variant="quiet"
                   >
                     {expandedAll
                       ? '收起更早通知'
                       : `查看全部 ${String(group.messages.length)} 条`}
-                  </button>
+                  </Button>
                 )}
               </div>
             )}
           </div>
-          <div className="attention-group-side">
-            <span
-              className={`attention-count${isFailed ? ' is-failed' : ''}${group.unreadCount > 0 ? ' is-unread' : ''}`}
+          <div className="attention-group-side col-start-2 flex flex-wrap items-center justify-end gap-2 min-[521px]:col-start-3 min-[521px]:flex-nowrap min-[521px]:self-center">
+            <StatusPill
+              className={`attention-count h-auto px-2.5 py-[3px] text-[12px] font-normal leading-[1.4] whitespace-nowrap${isFailed ? ' is-failed' : ''}${group.unreadCount > 0 ? ' is-unread font-medium text-ink' : ''}`}
+              dot={false}
+              tone={isFailed ? 'red' : 'neutral'}
             >
               {unreadLabel}
-            </span>
-            <button
+            </StatusPill>
+            <Button
               aria-label={`${isExpanded ? '收起' : '展开'}：${groupTitle}`}
               aria-expanded={isExpanded}
-              className="attention-toggle"
+              className="attention-toggle size-8 rounded-control p-0 text-ink-2"
               onClick={() => toggleExpanded(group.key)}
+              size="xs"
               type="button"
+              variant="quiet"
             >
               {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-            </button>
-            <button
+            </Button>
+            <Button
               aria-label={`${action.label}：${groupTitle}`}
-              className="attention-action"
+              className="attention-action h-9 rounded-control px-3 text-[13px]"
               onClick={() => {
                 void onOpen(group.latest)
               }}
+              size="sm"
               type="button"
+              variant="secondary"
             >
               <ActionIcon size={15} />
               {action.label}
-            </button>
+            </Button>
           </div>
         </article>
       </li>
@@ -2278,10 +2343,11 @@ export function AttentionPage({
         hasPageSearch
         title="待你处理"
       >
-        <label className="page-search">
-          <Search size={17} />
+        <label className="page-search bui flex h-10 min-w-[280px] items-center gap-2 rounded-control bg-field px-3 shadow-hairline transition-shadow duration-150 focus-within:bg-surface focus-within:shadow-[0_0_0_1px_var(--accent)]">
+          <Search className="shrink-0 text-ink-3" size={16} />
           <input
             aria-label="搜索待处理内容"
+            className="min-w-0 flex-1 bg-transparent text-[13px] text-ink outline-none placeholder:text-ink-3"
             onChange={event => {
               setQuery(event.target.value)
               setPage(1)
@@ -2293,7 +2359,7 @@ export function AttentionPage({
         </label>
       </PageHeader>
       <div
-        className="filter-row attention-filters"
+        className="filter-row attention-filters flex items-center gap-2 overflow-x-auto border-b border-line pb-4"
         role="group"
         aria-label="筛选"
       >
@@ -2305,8 +2371,9 @@ export function AttentionPage({
             ['activity', '事情动态'],
           ] as const
         ).map(([id, label]) => (
-          <button
+          <Button
             aria-pressed={filter === id}
+            className="h-9 shrink-0 rounded-full px-4 text-[13px] aria-pressed:bg-accent-tint aria-pressed:text-accent-ink"
             key={id}
             onClick={event => {
               setFilter(id)
@@ -2317,87 +2384,104 @@ export function AttentionPage({
                   inline: 'nearest',
                 })
             }}
+            size="xs"
             type="button"
+            variant="secondary"
           >
             {label} {counts[id]}
-          </button>
+          </Button>
         ))}
       </div>
-      <section className="attention-list" aria-label="待处理列表">
+      <section className="attention-list mb-10" aria-label="待处理列表">
         {hasVisible ? (
           <>
             {(filter === 'all' || filter === 'todo') &&
               visibleTodo.length > 0 && (
-                <div className="attention-section">
-                  <h3 className="attention-section-title">
+                <div className="attention-section mt-6 first:mt-0">
+                  <h3 className="attention-section-title mb-1 flex items-baseline gap-2.5 text-[14px] font-medium text-ink">
                     待你处理
-                    <small>需要你确认、回答、验收或核对</small>
+                    <small className="text-[12px] font-normal text-ink-3">
+                      需要你确认、回答、验收或核对
+                    </small>
                   </h3>
-                  <ul className="attention-items" role="list">
+                  <ul className="attention-items m-0 list-none p-0" role="list">
                     {visibleTodo.map(renderTodoRow)}
                   </ul>
                 </div>
               )}
             {(filter === 'all' || filter === 'failed') &&
               visibleFailed.length > 0 && (
-                <div className="attention-section">
-                  <h3 className="attention-section-title">
+                <div className="attention-section mt-6 first:mt-0">
+                  <h3 className="attention-section-title mb-1 flex items-baseline gap-2.5 text-[14px] font-medium text-ink">
                     失败
-                    <small>同一事情的失败已合并</small>
+                    <small className="text-[12px] font-normal text-ink-3">
+                      同一事情的失败已合并
+                    </small>
                   </h3>
-                  <ul className="attention-items" role="list">
+                  <ul className="attention-items m-0 list-none p-0" role="list">
                     {visibleFailed.map(renderGroupRow)}
                   </ul>
                 </div>
               )}
             {(filter === 'all' || filter === 'activity') &&
               visibleActivity.length > 0 && (
-                <div className="attention-section">
-                  <h3 className="attention-section-title">
+                <div className="attention-section mt-6 first:mt-0">
+                  <h3 className="attention-section-title mb-1 flex items-baseline gap-2.5 text-[14px] font-medium text-ink">
                     事情动态
-                    <small>同一事情的通知已合并，最新在上</small>
+                    <small className="text-[12px] font-normal text-ink-3">
+                      同一事情的通知已合并，最新在上
+                    </small>
                   </h3>
-                  <ul className="attention-items" role="list">
+                  <ul className="attention-items m-0 list-none p-0" role="list">
                     {activityPage.groups.map(renderGroupRow)}
                   </ul>
                   {activityPage.pageCount > 1 && (
                     <nav
                       aria-label="事情动态分页"
-                      className="pagination attention-pagination"
+                      className="pagination attention-pagination mt-0 flex items-center gap-2 border-t border-line pt-3"
                     >
-                      <span>
+                      <span className="flex-1 text-[11px] text-ink-2">
                         第 {activityPage.rangeStart}–{activityPage.rangeEnd}{' '}
                         件事情，共 {visibleActivity.length} 件
                       </span>
-                      <button
+                      <Button
+                        className="h-[30px] rounded-control px-3 text-[13px]"
                         disabled={activityPage.page <= 1}
                         onClick={() => setPage(activityPage.page - 1)}
+                        size="sm"
                         type="button"
+                        variant="secondary"
                       >
                         上一页
-                      </button>
+                      </Button>
                       {Array.from(
                         { length: activityPage.pageCount },
                         (_, index) => index + 1,
                       ).map(candidate => (
-                        <button
+                        <Button
                           aria-current={
                             candidate === activityPage.page ? 'page' : undefined
                           }
+                          className="h-[30px] min-w-[30px] rounded-control px-2 text-[13px] aria-[current=page]:text-accent-ink aria-[current=page]:shadow-[0_0_0_1px_var(--accent)]"
                           key={candidate}
                           onClick={() => setPage(candidate)}
+                          size="sm"
                           type="button"
+                          variant="secondary"
                         >
                           {candidate}
-                        </button>
+                        </Button>
                       ))}
-                      <button
+                      <Button
+                        className="h-[30px] rounded-control px-3 text-[13px]"
                         disabled={activityPage.page >= activityPage.pageCount}
                         onClick={() => setPage(activityPage.page + 1)}
+                        size="sm"
                         type="button"
+                        variant="secondary"
                       >
                         下一页
-                      </button>
+                      </Button>
                     </nav>
                   )}
                 </div>
@@ -2829,10 +2913,8 @@ function AutomationRow({
       <div className="record-copy">
         <div className="record-title">
           <strong>{automation.title}</strong>
-          <span
-            className={`status-text status-${automationStatusLabel(automation.status)}`}
-          >
-            {automationStatusLabel(automation.status)}
+          <span className="status-text shrink-0">
+            <RowStatusPill label={automationStatusLabel(automation.status)} />
           </span>
         </div>
         <p className="automation-summary">

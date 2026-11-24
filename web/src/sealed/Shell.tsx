@@ -15,7 +15,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { SidebarNav } from '@bui/index'
+import { Button, SidebarNav } from '@bui/index'
 
 import type {
   ChannelSearchFilters,
@@ -166,20 +166,30 @@ export function PageToolbar({
 }) {
   const appearanceLabel = isDark ? '切换到明亮外观' : '切换到深色外观'
   return (
-    <div className="page-toolbar">
+    <div className="page-toolbar flex items-center gap-1">
       {showSearch && (
-        <button aria-label="全局搜索" onClick={onSearch} type="button">
+        <Button
+          aria-label="全局搜索"
+          className="size-[38px] rounded-control p-0 text-ink-2"
+          onClick={onSearch}
+          size="xs"
+          type="button"
+          variant="quiet"
+        >
           <Search size={20} />
-        </button>
+        </Button>
       )}
-      <button
+      <Button
         aria-label={appearanceLabel}
+        className="size-[38px] rounded-control p-0 text-ink-2"
         onClick={onToggleAppearance}
+        size="xs"
         title={appearanceLabel}
         type="button"
+        variant="quiet"
       >
         {isDark ? <Sun size={20} /> : <MoonStar size={20} />}
-      </button>
+      </Button>
     </div>
   )
 }

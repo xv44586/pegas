@@ -20,6 +20,29 @@ import { thinkingHeadline, toolHeadline } from './activityModel'
 
 export type FactTone = 'green' | 'orange' | 'red' | 'accent' | 'neutral'
 
+/** shared status-label → pill tone lookup for work rows, trays and menus */
+function statusTone(label: string): FactTone {
+  if (label === '已完成') return 'green'
+  if (label === '失败' || label === '执行失败') return 'red'
+  if (label === '进行中' || label === '执行中' || label === '已启用')
+    return 'accent'
+  if (label === '待确认' || label === '等待中' || label === '需要你决定')
+    return 'orange'
+  return 'neutral'
+}
+
+/** compact status pill for dense list rows — same tones, smaller footprint */
+export function RowStatusPill({ label }: { label: string }) {
+  return (
+    <StatusPill
+      className="h-5.5 shrink-0 px-2 text-[12px]"
+      tone={statusTone(label)}
+    >
+      {label}
+    </StatusPill>
+  )
+}
+
 /** BUI drawer/chat state header: tinted pill + muted copy on the plain surface. */
 export function StateHeader({
   tone,

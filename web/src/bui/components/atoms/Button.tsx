@@ -44,12 +44,15 @@ export function Button({
   variant,
   size,
   className,
+  ref,
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> &
-  VariantProps<typeof buttonVariants>) {
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  ref?: React.Ref<HTMLButtonElement>
+} & VariantProps<typeof buttonVariants>) {
   return (
     <button
       className={cn(buttonVariants({ variant, size }), className)}
+      ref={ref}
       {...props}
     />
   )

@@ -348,7 +348,9 @@ try {
     const glyph = globalThis.document.querySelector(
       '.work-icon .pegas-agent-glyph',
     )
-    const status = globalThis.document.querySelector('.status-text')
+    const status = globalThis.document.querySelector(
+      '.work-list > button > span:last-child',
+    )
     return {
       hasGlyph: !!glyph,
       glyphBox: glyph?.getBoundingClientRect().width ?? 0,

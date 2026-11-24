@@ -267,21 +267,31 @@ describe('sealed UI layout contracts', () => {
   })
 
   it('keeps page search on the same container-owned focus treatment', () => {
-    expect(sealedUi).toMatch(
-      /\.page-search:focus-within\s*\{[^}]*border-color:\s*var\(--accent\);/,
+    const mainPages = readFileSync(
+      new URL('../web/src/sealed/MainPages.tsx', import.meta.url),
+      'utf8',
     )
-    expect(sealedUi).toMatch(
-      /\.page-search input:focus-visible\s*\{[^}]*outline:\s*none;/,
-    )
-    expect(sealedUi).toMatch(
-      /\.page-search input::placeholder\s*\{[^}]*color:\s*var\(--muted\);/,
-    )
+    const searchFields = [
+      ...mainPages.matchAll(/className="page-search[^"]*"/g),
+    ].map(match => match[0])
+    expect(searchFields.length).toBeGreaterThanOrEqual(2)
+    for (const field of searchFields) {
+      expect(field).toContain('focus-within:shadow-[0_0_0_1px_var(--accent)]')
+    }
+    expect(mainPages).toContain('outline-none placeholder:text-ink-3')
+    expect(sealedUi).not.toMatch(/^\.page-search \{/m)
+    expect(sealedUi).not.toContain('.page-search:focus-within')
   })
 
   it('anchors the work sort menu to its own control', () => {
-    expect(sealedUi).toMatch(/\.filter-row-wrap\s*\{[^}]*position:\s*relative;/)
-    expect(sealedUi).toMatch(
-      /\.sort-menu\s*\{[^}]*position:\s*absolute;[^}]*z-index:/,
+    const mainPages = readFileSync(
+      new URL('../web/src/sealed/MainPages.tsx', import.meta.url),
+      'utf8',
     )
+    expect(mainPages).toContain('className="filter-row-wrap relative"')
+    expect(mainPages).toContain(
+      'sort-menu bui absolute right-0 top-[calc(100%+6px)] z-20',
+    )
+    expect(sealedUi).not.toContain('.sort-menu {')
   })
 })
