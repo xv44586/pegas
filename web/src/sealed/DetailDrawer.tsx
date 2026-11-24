@@ -9,6 +9,7 @@ import {
   Globe2,
   HardDrive,
   Image as ImageIcon,
+  CircleQuestionMark,
   LockKeyhole,
   Network,
   Paperclip,
@@ -64,6 +65,7 @@ export function DetailDrawer({
   onLoadRunSubagents,
   onRetry,
   onContinue,
+  onAnswerRouting,
   onCreateRelated,
   onStop,
   onDecideApproval,
@@ -81,6 +83,7 @@ export function DetailDrawer({
   onContinue?: (
     channel: Extract<DrawerView, { kind: 'task' }>['channel'],
   ) => void
+  onAnswerRouting?: () => void
   onCreateRelated?: (
     channel: Extract<DrawerView, { kind: 'task' }>['channel'],
   ) => void
@@ -215,6 +218,19 @@ export function DetailDrawer({
         {view.kind === 'message' && (
           <MessageDetail onResolve={onResolveOutbox} view={view} />
         )}
+        {view.kind === 'routingClarification' && (
+          <RoutingClarificationDetail
+            onAnswer={
+              onAnswerRouting
+                ? () => {
+                    onAnswerRouting()
+                    onClose()
+                  }
+                : undefined
+            }
+            view={view}
+          />
+        )}
         {view.kind === 'approval' && (
           <ApprovalDetail
             key={`${view.approval.id}:${view.approval.decision?.id ?? view.approval.status}`}
@@ -336,6 +352,7 @@ function drawerTitle(view: DrawerView): string {
   if (view.kind === 'reconciliation') return '核对动作的真实结果'
   if (view.kind === 'review') return '按完成标准审查交付'
   if (view.kind === 'clarification') return view.channel.title
+  if (view.kind === 'routingClarification') return '确认消息归属'
   if (view.kind === 'runtime') return '执行环境详情'
   if (view.kind === 'rule') return view.title
   return view.title
@@ -2110,6 +2127,46 @@ function ClarificationDetail({
             type="button"
           >
             查看事情详情
+          </button>
+        )}
+      </footer>
+    </div>
+  )
+}
+
+function RoutingClarificationDetail({
+  view,
+  onAnswer,
+}: {
+  view: Extract<DrawerView, { kind: 'routingClarification' }>
+  onAnswer?: () => void
+}) {
+  return (
+    <div className="drawer-body">
+      <section className="approval-card">
+        <header>
+          <CircleQuestionMark size={20} />
+          <strong>Pegas 需要先确认这条消息的归属</strong>
+        </header>
+        <p>
+          这条消息还没有进入任何事情。回答后 Pegas
+          会重新判断归属，不会丢失原始消息。
+        </p>
+      </section>
+      <section className="detail-section">
+        <h3>待确认问题</h3>
+        <p>{view.question}</p>
+      </section>
+      {view.input && (
+        <section className="detail-section">
+          <h3>原始消息</h3>
+          <p>{view.input}</p>
+        </section>
+      )}
+      <footer className="drawer-footer">
+        {onAnswer && (
+          <button className="primary-button" onClick={onAnswer} type="button">
+            去回答
           </button>
         )}
       </footer>

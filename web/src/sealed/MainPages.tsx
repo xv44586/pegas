@@ -56,6 +56,7 @@ import {
   attentionKind,
   attentionSummary,
   clarificationQuestions,
+  routingClarification,
   conversationAnchor,
   conversationLane,
   formatRelativeTime,
@@ -1885,6 +1886,8 @@ function attentionAction(message: OutboxMessage): {
   if (reviewProjection(message))
     return { label: '审查交付', icon: CheckCircle2 }
   if (clarificationQuestions(message))
+    return { label: '去回答', icon: CircleQuestionMark }
+  if (routingClarification(message))
     return { label: '去回答', icon: CircleQuestionMark }
   if (kind === 'approval') return { label: '查看内容', icon: ShieldCheck }
   return { label: '打开事情', icon: ArrowRight }

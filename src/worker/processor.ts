@@ -159,6 +159,10 @@ export class RoutingEventHandler implements EventHandler {
       store.applyControlIntent(event, decision)
       return
     }
+    if (decision.kind === 'clarify') {
+      store.applyRoutingClarification(event, decision)
+      return
+    }
     if (
       decision.kind === 'reply' &&
       !store.getRuntimeSettings().chatLaneEnabled

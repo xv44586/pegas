@@ -137,7 +137,7 @@ const selfChangeExecutor = config.selfChangeEnabled
       recoveryBaseUrl: config.recoveryBaseUrl,
       ...(config.recoveryToken ? { recoveryToken: config.recoveryToken } : {}),
       editor: executor,
-      compatibility: { minimumSchema: 1, maximumSchema: 41 },
+      compatibility: { minimumSchema: 1, maximumSchema: 42 },
       reviewer: 'pegas-self-change-gate',
       controlPlaneBaseUrl,
     })
@@ -383,6 +383,7 @@ function createRouter(
       ? new ModelTaskRouter({
           provider: metered(createModelProvider(settings), 'router'),
           routingRules: store.routingRuleContextForUser(event.userId),
+          uncertainty: settings.routingUncertainty ?? 'new_task',
         })
       : new RuleBasedTaskRouter()
   if (settings.rewriteMode === 'disabled') return baseRouter

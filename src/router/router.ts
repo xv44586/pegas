@@ -6,6 +6,7 @@ import type {
 } from '../core/domain.js'
 import type { JsonModelProvider } from '../model/provider.js'
 import type { RoutingRuleContext } from '../rules/routing-rules.js'
+import type { RoutingUncertainty } from '../settings/runtime-settings-selection.js'
 
 export interface TaskRouter {
   route(
@@ -102,6 +103,7 @@ export interface ModelTaskRouterOptions {
   fallback?: TaskRouter
   maximumCandidateTasks?: number
   routingRules?: RoutingRuleContext
+  uncertainty?: RoutingUncertainty
 }
 
 /**
@@ -114,12 +116,14 @@ export class ModelTaskRouter implements TaskRouter {
   readonly #fallback: TaskRouter
   readonly #maximumCandidateTasks: number
   readonly #routingRules: RoutingRuleContext
+  readonly #uncertainty: RoutingUncertainty
 
   constructor(options: ModelTaskRouterOptions) {
     this.#provider = options.provider
     this.#fallback = options.fallback ?? new RuleBasedTaskRouter()
     this.#maximumCandidateTasks = options.maximumCandidateTasks ?? 20
     this.#routingRules = options.routingRules ?? { rules: [] }
+    this.#uncertainty = options.uncertainty ?? 'new_task'
   }
 
   async route(
@@ -153,7 +157,10 @@ export class ModelTaskRouter implements TaskRouter {
 
     try {
       const answer = await this.#provider.generateJson({
-        system: routerSystemPrompt + routingRulesPrompt(this.#routingRules),
+        system:
+          routerSystemPrompt +
+          uncertaintyPrompt(this.#uncertainty) +
+          routingRulesPrompt(this.#routingRules),
         input: JSON.stringify({
           message: payload.text,
           tasks: open.map(candidate => ({
@@ -174,6 +181,7 @@ export class ModelTaskRouter implements TaskRouter {
         payload.text,
         open.map(candidate => candidate.task),
         this.#routingRules,
+        this.#uncertainty,
       )
       return sourceContext && decision.kind === 'create_task'
         ? { ...decision, sourceContext }
@@ -221,6 +229,16 @@ function routingRulesPrompt(context: RoutingRuleContext): string {
   ).replaceAll('<', '\\u003c')}\n</pegas_routing_rules>`
 }
 
+function uncertaintyPrompt(uncertainty: RoutingUncertainty): string {
+  if (uncertainty === 'ask_first') {
+    return `\nWhen you cannot confidently decide between continuing exactly one listed task and creating a new task, return:\n{"kind":"clarify","taskId":"","title":"","goal":"","question":"one short question asking the user which task this message belongs to, or whether it is a new task","reason":"short reason"}\nOnly use clarify for genuine ownership ambiguity; explicit references, casual chat and clearly new ideas are not ambiguous. Never answer the message content yourself.`
+  }
+  if (uncertainty === 'continue_recent') {
+    return `\nWhen ownership is ambiguous between a listed task and a new task, prefer continue_task for the most recently updated plausible listed task instead of creating a new task. Still prefer create_task when the message clearly introduces an independent idea.`
+  }
+  return ''
+}
+
 const routerDecisionSchema = {
   type: 'object',
   properties: {
@@ -232,12 +250,14 @@ const routerDecisionSchema = {
         'continue_task',
         'steer_task',
         'cancel_task',
+        'clarify',
       ],
     },
     taskId: { type: 'string' },
     title: { type: 'string' },
     goal: { type: 'string' },
     reason: { type: 'string' },
+    question: { type: 'string' },
     targetResource: { type: 'string', enum: ['', 'pegas_repository'] },
     matchedRuleId: { type: 'string' },
   },
@@ -298,11 +318,19 @@ function modelDecision(
   input: string,
   candidates: Task[],
   routingRules: RoutingRuleContext = { rules: [] },
+  uncertainty: RoutingUncertainty = 'new_task',
 ): RoutingDecision {
   if (!isRecord(value) || typeof value.kind !== 'string') {
     throw new Error('Router model returned an invalid decision')
   }
   const reason = requiredString(value.reason, 'reason')
+  if (value.kind === 'clarify') {
+    if (uncertainty !== 'ask_first') {
+      throw new Error('Router model returned clarify without ask_first')
+    }
+    const question = requiredString(value.question, 'question').slice(0, 400)
+    return { kind: 'clarify', input, question, reason }
+  }
   const matchedRuleId =
     typeof value.matchedRuleId === 'string' &&
     routingRules.rules.some(rule => rule.id === value.matchedRuleId)

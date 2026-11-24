@@ -97,6 +97,12 @@ export type DrawerView =
       message: OutboxMessage
     }
   | {
+      kind: 'routingClarification'
+      question: string
+      input: string
+      message: OutboxMessage
+    }
+  | {
       kind: 'rule'
       title: string
       rule?: WorkRuleRecord
@@ -293,6 +299,7 @@ export function attentionKind(message: OutboxMessage): AttentionKind {
     case 'input.required':
     case 'input.requested':
     case 'goal.clarification_required':
+    case 'routing.clarification_required':
     case 'goal.evidence_required':
     case 'run.blocked':
     case 'run.waiting':
@@ -704,6 +711,23 @@ export function clarificationQuestions(
       typeof question === 'string' && Boolean(question.trim()),
   )
   return parsed.length ? parsed : undefined
+}
+
+export function routingClarification(
+  message: OutboxMessage,
+): { question: string; input: string } | undefined {
+  if (payloadType(message.payload) !== 'routing.clarification_required')
+    return undefined
+  const record = message.payload as Record<string, unknown>
+  const question =
+    typeof record.question === 'string' && record.question.trim()
+      ? record.question.trim()
+      : undefined
+  if (!question) return undefined
+  return {
+    question,
+    input: typeof record.input === 'string' ? record.input : '',
+  }
 }
 
 export function reviewProjection(

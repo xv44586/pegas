@@ -546,6 +546,12 @@ export type RoutingDecision =
       reason: string
       matchedRuleId?: string
     }
+  | {
+      kind: 'clarify'
+      input: string
+      question: string
+      reason: string
+    }
 
 /**
  * COLLAB-001 (PLAN-001 P5): terminal facts handed from a finished or stopped

@@ -2,7 +2,7 @@
 
 > Feature：`ROUTE-005`
 >
-> 状态：Scaffold（R1 存储与 CRUD、R2 规则消费与命中证据已落地；R3–R4 未实现）
+> 状态：Partial（R1 存储、R2 规则消费、R3 不确定时策略已落地；R4 测试归类与设置页解锁未实现）
 >
 > 登记日期：2026-11-23
 
@@ -122,6 +122,7 @@
 - `new_task`/`continue_recent` 只改 prompt 判据与措辞，不改候选授权边界；`ask_first` 新增 `RoutingDecision` kind `clarify`（携带问题与原输入），由 Control Plane 落为既有澄清/待处理链路（对齐 `goal.clarification_required` 的 Outbox/待处理投影，不新造通知体系），回答走既有 continuation 重新路由；Router 不发正文。
 - `RoutingDecision` 合同扩展需同步 `routerDecisionSchema`、store `#applyTaskRoutingDecision`、畸形兜底与 fencing 回归；控制意图优先级不变。
 - 测试：三值策略持久化/省略保留、clarify 决策→待办→回答续接闭环、崩溃 resume、真实模型 ask_first 场景。
+- **落地证据（2026-11-24）**：分支 `feat/ROUTE-005-uncertainty-policy`（基线 `34de0de`）。RuntimeSettings 增加 `routingUncertainty`（schema v42 增量列，默认 `new_task`，省略保留 COALESCE 语义与 chatLaneEnabled 同款，非法值 400）；`new_task` prompt 逐字节不变（回归断言），`continue_recent` 仅追加保守判据，`ask_first` 允许 `clarify` 决策（question ≤400 字符，非 ask_first 模式收到 clarify 走既有规则兜底不阻塞）。`applyRoutingClarification` 在事务内以 `routing-clarification:<eventId>` dedupe 写 owner Outbox 待办（无 taskId、不创建 Task/Run、事件正常结算 processed），重放返回同一消息；processor 新增 clarify 分支，`applyRoutingDecision` 显式拒绝 clarify。Web：`routing.clarification_required` 归类「回答」待办，抽屉展示问题与原始消息，「去回答」回对话页不带 taskId（重新走 Router），复用既有 continuation 链路。测试：`test/routing-uncertainty.test.ts` 5 测试；`App.test.tsx` +1、`types.test.ts` +1；真实 magpie/qwen4-max 双候选歧义消息（“预算控制在两千以内，别的你看着办”）实测产出 clarify 中文问题；单候选场景真实模型倾向 continue_task（保守合理，已登记）。门禁：`pnpm check` 116 文件/1212 测试全绿（statement 85.73% / line 88.93%）、`pnpm smoke`、`pnpm smoke:crash` 通过。剩余风险：clarify 遵守度未系统评测；设置页「不确定时」radio 仍锁定（R4 解锁）；澄清待办无自动过期（用户不回答则消息保留在待办，原输入已在 payload 可追溯）。回滚：revert 即回 v41 行为，增量列旧代码忽略；已产生的澄清待办为普通 Outbox 消息可读。
 
 ### R4 只读测试归类 API + Web 解锁
 

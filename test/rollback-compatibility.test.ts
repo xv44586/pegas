@@ -275,6 +275,11 @@ describe('durable state rollback compatibility', () => {
         'echo',
       )
       expect(() => assertRollbackCompatible(path, 40)).not.toThrow()
+      store.initializeRuntimeSettings({
+        ...runtimeSettingsDefaults(loadConfig({})),
+        routingUncertainty: 'ask_first',
+      })
+      expect(() => assertRollbackCompatible(path, 41)).not.toThrow()
     } finally {
       store.close()
       rmSync(directory, { recursive: true, force: true })

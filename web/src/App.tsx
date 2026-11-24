@@ -21,6 +21,7 @@ import {
   approvalIdFromMessage,
   attentionBoard,
   clarificationQuestions,
+  routingClarification,
   isReconciliationMessage,
   latestRunForTask,
   reviewProjection,
@@ -1173,6 +1174,12 @@ export function App() {
     message: OutboxMessage,
     requestId: number,
   ): Promise<boolean> {
+    const routingQuestion = routingClarification(message)
+    if (routingQuestion) {
+      if (requestId !== attentionRequestRef.current) return false
+      setDrawer({ kind: 'routingClarification', ...routingQuestion, message })
+      return true
+    }
     const review = reviewProjection(message)
     const questions = clarificationQuestions(message)
     if (review ?? questions) {
@@ -1631,6 +1638,17 @@ export function App() {
           onLoadRunActivity={openRunWorkflow}
           onLoadRunSubagents={openSubagentTranscript}
           onContinue={channel => continueChannel(channel.id)}
+          onAnswerRouting={() => {
+            setContinuationTaskId(undefined)
+            setSourceContextTaskId(undefined)
+            setDrawer(undefined)
+            navigate('conversation')
+            window.setTimeout(() =>
+              document
+                .querySelector<HTMLTextAreaElement>('#pegas-message')
+                ?.focus(),
+            )
+          }}
           onCreateRelated={channel => {
             setSourceContextTaskId(channel.id)
             setContinuationTaskId(undefined)

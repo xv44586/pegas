@@ -860,6 +860,11 @@ ALTER TABLE routing_decisions ADD COLUMN matched_rule_id TEXT;
 ALTER TABLE routing_decisions ADD COLUMN decision_source TEXT;
 `
 
+const migration42 = `
+ALTER TABLE runtime_settings ADD COLUMN routing_uncertainty TEXT NOT NULL DEFAULT 'new_task'
+CHECK (routing_uncertainty IN ('new_task', 'ask_first', 'continue_recent'));
+`
+
 const migration39 = `
 -- DESIGN-006 phase 2: manual deletion of ended automations. The command
 -- ledger must survive the definition so frozen receipts stay replayable;
@@ -2499,6 +2504,7 @@ interface RuntimeSettingsRow {
   revision: number
   router_mode: RuntimeSettings['routerMode']
   chat_lane_enabled?: number | null
+  routing_uncertainty?: string | null
   execution_pools_json?: string | null
   model_provider: string
   model_connection_id: string | null
@@ -2720,6 +2726,7 @@ export class PegasStore {
     this.#migrate(39, migration39)
     this.#migrate(40, migration40)
     this.#migrate(41, migration41)
+    this.#migrate(42, migration42)
   }
 
   #backfillWorkerIconIds(): void {
@@ -2835,8 +2842,9 @@ export class PegasStore {
         `INSERT OR IGNORE INTO runtime_settings
           (id, revision, router_mode, model_provider, model_connection_id, model_name,
            agent_model_mode, agent_model_provider, agent_model_name,
-           privacy_mode, rewrite_mode, chat_lane_enabled, execution_pools_json, updated_at)
-         VALUES (1, 1, ?, 'openai-compatible', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           privacy_mode, rewrite_mode, chat_lane_enabled, routing_uncertainty,
+           execution_pools_json, updated_at)
+         VALUES (1, 1, ?, 'openai-compatible', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         defaults.routerMode,
@@ -2848,6 +2856,7 @@ export class PegasStore {
         defaults.privacyMode,
         defaults.rewriteMode,
         defaults.chatLaneEnabled ? 1 : 0,
+        defaults.routingUncertainty ?? 'new_task',
         JSON.stringify(defaults.executionPools ?? {}),
         now,
       )
@@ -5342,6 +5351,7 @@ export class PegasStore {
              model_name = ?, agent_model_mode = ?, agent_model_provider = ?,
              agent_model_name = ?, privacy_mode = ?, rewrite_mode = ?,
              chat_lane_enabled = COALESCE(?, chat_lane_enabled),
+             routing_uncertainty = COALESCE(?, routing_uncertainty),
              execution_pools_json = COALESCE(?, execution_pools_json),
              updated_at = ?
          WHERE id = 1 AND revision = ?`,
@@ -5360,6 +5370,7 @@ export class PegasStore {
           : settings.chatLaneEnabled
             ? 1
             : 0,
+        settings.routingUncertainty ?? null,
         settings.executionPools === undefined
           ? null
           : JSON.stringify(settings.executionPools),
@@ -5514,6 +5525,7 @@ export class PegasStore {
                model_name = ?, agent_model_mode = ?, agent_model_provider = ?,
                agent_model_name = ?, privacy_mode = ?, rewrite_mode = ?,
                chat_lane_enabled = COALESCE(?, chat_lane_enabled),
+               routing_uncertainty = COALESCE(?, routing_uncertainty),
                execution_pools_json = COALESCE(?, execution_pools_json),
                updated_at = ?
            WHERE id = 1 AND revision = ?`,
@@ -5532,6 +5544,7 @@ export class PegasStore {
             : settings.chatLaneEnabled
               ? 1
               : 0,
+          settings.routingUncertainty ?? null,
           settings.executionPools === undefined
             ? null
             : JSON.stringify(settings.executionPools),
@@ -6172,6 +6185,11 @@ export class PegasStore {
     if (decision.kind === 'steer_task' || decision.kind === 'cancel_task') {
       throw new Error('Control intents must use applyControlIntent')
     }
+    if (decision.kind === 'clarify') {
+      throw new Error(
+        'Routing clarification must use applyRoutingClarification',
+      )
+    }
     return this.#applyTaskRoutingDecision(
       event,
       decision,
@@ -6194,6 +6212,49 @@ export class PegasStore {
       const task = this.#applyControlIntentInTransaction(event, decision)
       this.#database.exec('COMMIT')
       return { task }
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  applyRoutingClarification(
+    event: InboxEvent,
+    decision: Extract<RoutingDecision, { kind: 'clarify' }>,
+  ): { message: OutboxMessage } {
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      if (event.source === 'collaboration') {
+        throw new Error('Routing clarification requires direct user routing')
+      }
+      this.#fenceRoutingWriteInTransaction(event)
+      const existing = this.#database
+        .prepare(
+          `SELECT id FROM outbox_messages
+           WHERE user_id = ? AND dedupe_key = ?`,
+        )
+        .get(event.userId, `routing-clarification:${event.id}`) as
+        { id: string } | undefined
+      if (existing) {
+        const message = this.#outboxById(existing.id)
+        this.#database.exec('COMMIT')
+        return { message }
+      }
+      const message = this.enqueueOutbox({
+        userId: event.userId,
+        channel: 'conversation',
+        dedupeKey: `routing-clarification:${event.id}`,
+        payload: {
+          type: 'routing.clarification_required',
+          eventId: event.id,
+          input: decision.input,
+          question: decision.question,
+          reason: decision.reason,
+          text: decision.question,
+        },
+      })
+      this.#database.exec('COMMIT')
+      return { message }
     } catch (error) {
       this.#database.exec('ROLLBACK')
       throw error
@@ -13711,6 +13772,11 @@ function toRuntimeSettings(row: RuntimeSettingsRow): RuntimeSettings {
     privacyMode: row.privacy_mode,
     rewriteMode: row.rewrite_mode,
     chatLaneEnabled: row.chat_lane_enabled === 1,
+    routingUncertainty:
+      row.routing_uncertainty === 'ask_first' ||
+      row.routing_uncertainty === 'continue_recent'
+        ? row.routing_uncertainty
+        : 'new_task',
     executionPools: parseStoredExecutionPools(row.execution_pools_json),
     updatedAt: row.updated_at,
   }

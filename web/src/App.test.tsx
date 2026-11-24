@@ -7102,6 +7102,62 @@ describe('sealed Pegas UI', () => {
     )
   })
 
+  it('answers a routing clarification without binding the reply to a task', async () => {
+    const sourceMessage = snapshot.messages[0]
+    if (!sourceMessage) throw new Error('Expected an outbox message fixture')
+    const routingMessage = {
+      ...sourceMessage,
+      id: 'message-routing-clarification',
+      taskId: undefined,
+      payload: {
+        type: 'routing.clarification_required',
+        eventId: 'event-routing-1',
+        input: '再补充一点',
+        question: '这条消息属于「调研 NAS」还是一个新事情？',
+        text: '这条消息属于「调研 NAS」还是一个新事情？',
+      },
+    }
+    const fetchMock = installSnapshotFetch({
+      ...snapshot,
+      messages: [routingMessage],
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /^去回答：/ }))
+    expect(
+      await screen.findByText('Pegas 需要先确认这条消息的归属'),
+    ).toBeTruthy()
+    const drawer = screen.getByRole('dialog')
+    expect(
+      within(drawer).getByText('这条消息属于「调研 NAS」还是一个新事情？'),
+    ).toBeTruthy()
+    expect(within(drawer).getByText('再补充一点')).toBeTruthy()
+    fireEvent.click(within(drawer).getByRole('button', { name: '去回答' }))
+    const composer = await screen.findByLabelText('给 Pegas 发消息')
+    fireEvent.change(composer, {
+      target: { value: '这是一个新事情，帮我调研 NAS。' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([path, init]) => {
+          if (path !== '/v1/events' || init?.method !== 'POST') return false
+          const body = JSON.parse(
+            typeof init.body === 'string' ? init.body : '{}',
+          ) as { payload?: { taskId?: string; text?: string } }
+          return (
+            body.payload?.taskId === undefined &&
+            body.payload?.text === '这是一个新事情，帮我调研 NAS。'
+          )
+        }),
+      ).toBe(true),
+    )
+  })
+
   it('shows an inline clarification card in the conversation while waiting', async () => {
     const sourceMessage = snapshot.messages[0]
     if (!sourceMessage) throw new Error('Expected an outbox message fixture')
