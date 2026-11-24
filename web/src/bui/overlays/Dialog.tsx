@@ -34,7 +34,7 @@ export function DialogContent({
         {showClose && (
           <DialogPrimitive.Close
             aria-label={closeLabel}
-            className="primitive-icon-button absolute top-3 right-3 text-ink-2 transition-colors duration-150 hover:bg-hover hover:text-ink"
+            className="primitive-icon-button pointer-coarse:size-11 absolute top-3 right-3 text-ink-2 transition-colors duration-150 hover:bg-hover hover:text-ink"
           >
             <X size={16} />
           </DialogPrimitive.Close>

@@ -1,6 +1,8 @@
 import { ArrowRight, KeyRound, RotateCw } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import { Button } from '@bui/index'
+
 import { ApiError, PegasApi } from './api'
 import { DetailDrawer } from './sealed/DetailDrawer'
 import {
@@ -398,7 +400,7 @@ export function App() {
       Boolean(drawer) ||
       searchOpen ||
       setupOpen ||
-      Boolean(document.querySelector('.modal-backdrop'))
+      Boolean(document.querySelector('.onboarding-backdrop'))
     shell.inert = modalOpen
     return () => {
       shell.inert = false
@@ -1948,13 +1950,15 @@ function AccessGate({ onToken }: { onToken: (token: string) => void }) {
             type="password"
             value={value}
           />
-          <button
-            className="primary-button"
+          <Button
+            className="h-9 px-4 text-[13px]"
             disabled={!value.trim()}
+            size="sm"
             type="submit"
+            variant="primary"
           >
             继续 <ArrowRight size={16} />
-          </button>
+          </Button>
         </form>
       </section>
     </main>

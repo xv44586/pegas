@@ -30,6 +30,8 @@ import {
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
+import { Button, SegmentedControl } from '@bui/index'
+
 import type {
   BehaviorPreferences,
   DshModelCatalog,
@@ -461,8 +463,8 @@ export function SettingsPage({
               >
                 {notice?.message}
               </span>
-              <button
-                className="secondary-button"
+              <Button
+                className="h-8 px-3.5 text-[13px]"
                 disabled={saving}
                 onClick={() => {
                   setDraft(response?.settings)
@@ -511,17 +513,23 @@ export function SettingsPage({
                     })
                 }}
                 type="button"
+
+                size="xs"
+                variant="secondary"
               >
                 取消
-              </button>
-              <button
-                className="primary-button"
+              </Button>
+              <Button
+                className="h-9 px-4 text-[13px]"
                 disabled={saving}
                 onClick={() => void save()}
                 type="button"
+
+                size="sm"
+                variant="primary"
               >
                 {saving ? '保存中…' : '保存更改'}
-              </button>
+              </Button>
             </footer>
           )}
         {confirmingFullAccess && (
@@ -543,23 +551,29 @@ export function SettingsPage({
               该默认档位会应用到所有未单独覆盖权限的事情。
             </p>
             <div className="stop-confirmation-actions">
-              <button
-                className="secondary-button"
+              <Button
+                className="h-8 px-3.5 text-[13px]"
                 onClick={() => setConfirmingFullAccess(false)}
                 type="button"
+
+                size="xs"
+                variant="secondary"
               >
                 取消
-              </button>
-              <button
-                className="secondary-button is-danger"
+              </Button>
+              <Button
+                className="h-8 px-3.5 text-[13px]"
                 onClick={() => {
                   setConfirmingFullAccess(false)
                   void save(true)
                 }}
                 type="button"
+
+                size="xs"
+                variant="danger"
               >
                 我已了解，启用完全访问
-              </button>
+              </Button>
             </div>
           </div>
         )}
@@ -739,16 +753,19 @@ function PegasSettings({
           <i />
           {availability.label}
         </em>
-        <button
-          className="secondary-button"
+        <Button
+          className="h-8 px-3.5 text-[13px]"
           onClick={() => {
             setTab('model')
             setModelPickerRequest(request => request + 1)
           }}
           type="button"
+
+          size="xs"
+          variant="secondary"
         >
           更换模型
-        </button>
+        </Button>
       </div>
       <div className="setting-summary-row">
         <span>执行环境</span>
@@ -757,43 +774,43 @@ function PegasSettings({
           <i />
           运行时快照
         </em>
-        <button
-          className="secondary-button"
+        <Button
+          className="h-8 px-3.5 text-[13px]"
           onClick={() => onOpenDrawer({ kind: 'runtime' })}
           type="button"
+
+          size="xs"
+          variant="secondary"
         >
           查看运行时
-        </button>
+        </Button>
       </div>
       <div className="info-banner">
         <CircleHelp size={16} />
         模型变更仅作用于新会话；已有会话继续使用创建时的模型。
       </div>
-      <div className="settings-tabs" role="tablist">
-        <button
-          aria-selected={tab === 'model'}
-          onClick={() => setTab('model')}
-          role="tab"
-          type="button"
-        >
-          执行模型
-        </button>
-        <button
-          aria-selected={tab === 'behavior'}
-          onClick={() => setTab('behavior')}
-          role="tab"
-          type="button"
-        >
-          行为与规则
-        </button>
-        <button
-          aria-selected={tab === 'autonomy'}
-          onClick={() => setTab('autonomy')}
-          role="tab"
-          type="button"
-        >
-          自主程度
-        </button>
+      <div
+        className="settings-tabs bui mt-3 flex gap-4 border-b border-line"
+        role="tablist"
+      >
+        {(
+          [
+            ['model', '执行模型'],
+            ['behavior', '行为与规则'],
+            ['autonomy', '自主程度'],
+          ] as const
+        ).map(([value, label]) => (
+          <button
+            aria-selected={tab === value}
+            className="-mb-px min-h-[42px] border-b-2 border-transparent px-2 text-[13px] text-ink-2 transition-colors duration-150 hover:text-ink aria-selected:border-accent aria-selected:font-medium aria-selected:text-accent-ink"
+            key={value}
+            onClick={() => setTab(value)}
+            role="tab"
+            type="button"
+          >
+            {label}
+          </button>
+        ))}
       </div>
       {tab === 'model' && (
         <div className="setting-section">
@@ -1020,14 +1037,17 @@ function BehaviorSettings({
         <div className="page-error" role="alert">
           {workRulesError}
           {onReloadWorkRules && (
-            <button
-              className="secondary-button"
+            <Button
+              className="h-8 px-3.5 text-[13px]"
               onClick={onReloadWorkRules}
               type="button"
+
+              size="xs"
+              variant="secondary"
             >
               <RotateCw size={15} />
               重新读取
-            </button>
+            </Button>
           )}
         </div>
       ) : loading ? (
@@ -1105,14 +1125,17 @@ function BehaviorSettings({
         <div className="page-error" role="alert">
           {behaviorPreferencesError}
           {onReloadWorkRules && (
-            <button
-              className="secondary-button"
+            <Button
+              className="h-8 px-3.5 text-[13px]"
               onClick={onReloadWorkRules}
               type="button"
+
+              size="xs"
+              variant="secondary"
             >
               <RotateCw size={15} />
               重新读取
-            </button>
+            </Button>
           )}
         </div>
       ) : !behaviorPreferences ? (
@@ -1131,17 +1154,20 @@ function BehaviorSettings({
           </label>
           <div className="behavior-instructions-footer">
             <span role="status">{instructionsNotice}</span>
-            <button
-              className="secondary-button"
+            <Button
+              className="h-8 px-3.5 text-[13px]"
               disabled={
                 savingInstructions ||
                 instructions.trim() === behaviorPreferences.customInstructions
               }
               onClick={() => void saveInstructions()}
               type="button"
+
+              size="xs"
+              variant="secondary"
             >
               {savingInstructions ? '保存中…' : '保存自定义指令'}
-            </button>
+            </Button>
           </div>
         </>
       )}
@@ -1280,10 +1306,11 @@ function ModelServices({
       />
       <div className="model-service-layout">
         <aside className="provider-list">
-          <label className="model-search">
-            <Search size={16} />
+          <label className="model-search bui flex h-10 items-center gap-2 rounded-control bg-field px-3 shadow-hairline transition-shadow duration-150 focus-within:bg-surface focus-within:shadow-[0_0_0_1px_var(--accent)]">
+            <Search className="shrink-0 text-ink-3" size={16} />
             <input
               aria-label="搜索模型服务"
+              className="min-w-0 flex-1 bg-transparent text-[13px] text-ink outline-none placeholder:text-ink-3"
               onChange={event => setQuery(event.target.value)}
               placeholder="搜索模型服务"
               value={query}
@@ -1345,14 +1372,17 @@ function ModelServices({
                   {status || (active.available ? '已配置' : '未连接')}
                 </span>
               </div>
-              <button
-                className="secondary-button"
+              <Button
+                className="h-8 px-3.5 text-[13px]"
                 disabled={Boolean(busy) || !canProbe}
                 onClick={() => void test()}
                 type="button"
+
+                size="xs"
+                variant="secondary"
               >
                 {busy === 'test' ? '测试中…' : '测试连接'}
-              </button>
+              </Button>
             </header>
             <h4>连接信息</h4>
             <dl>
@@ -1489,18 +1519,22 @@ function ModelServices({
             </dl>
             <h4>可用模型（{models.length}）</h4>
             <div className="model-catalog-toolbar">
-              <button
-                className="secondary-button"
+              <Button
+                className="h-8 px-3.5 text-[13px]"
                 disabled={Boolean(busy) || !canProbe}
                 onClick={() => void discover()}
                 type="button"
+
+                size="xs"
+                variant="secondary"
               >
                 {busy === 'discover' ? '读取中…' : '获取模型目录'}
-              </button>
-              <label className="model-search">
-                <Search size={16} />
+              </Button>
+              <label className="model-search bui flex h-10 min-w-0 flex-1 items-center gap-2 rounded-control bg-field px-3 shadow-hairline transition-shadow duration-150 focus-within:bg-surface focus-within:shadow-[0_0_0_1px_var(--accent)]">
+                <Search className="shrink-0 text-ink-3" size={16} />
                 <input
                   aria-label="按名称或模型 ID 搜索"
+                  className="min-w-0 flex-1 bg-transparent text-[13px] text-ink outline-none placeholder:text-ink-3"
                   onChange={event => {
                     setModelQuery(event.target.value)
                     setModelPage(0)
@@ -1546,26 +1580,32 @@ function ModelServices({
               )}
             </div>
             {visibleModels.length > pageSize && (
-              <div className="pagination">
-                <span>
+              <div className="pagination bui mt-2.5 flex items-center gap-2">
+                <span className="flex-1 text-[11px] text-ink-2">
                   {rangeStart}–{rangeEnd} / {visibleModels.length}
                 </span>
-                <button
+                <Button
+                  className="h-[30px] rounded-control px-3 text-[13px]"
                   disabled={modelPage === 0}
                   onClick={() => setModelPage(page => Math.max(0, page - 1))}
+                  size="sm"
                   type="button"
+                  variant="secondary"
                 >
                   上一页
-                </button>
-                <button
+                </Button>
+                <Button
+                  className="h-[30px] rounded-control px-3 text-[13px]"
                   disabled={modelPage >= pageCount - 1}
                   onClick={() =>
                     setModelPage(page => Math.min(pageCount - 1, page + 1))
                   }
+                  size="sm"
                   type="button"
+                  variant="secondary"
                 >
                   下一页
-                </button>
+                </Button>
               </div>
             )}
           </div>
@@ -1656,22 +1696,16 @@ function RouterSettings({
       />
       <div className="compact-field-row">
         <span>归类方式</span>
-        <div className="segmented">
-          <button
-            className={draft.routerMode === 'model' ? 'is-active' : ''}
-            onClick={() => onChange({ ...draft, routerMode: 'model' })}
-            type="button"
-          >
-            智能判断
-          </button>
-          <button
-            className={draft.routerMode === 'rules' ? 'is-active' : ''}
-            onClick={() => onChange({ ...draft, routerMode: 'rules' })}
-            type="button"
-          >
-            确定性规则
-          </button>
-        </div>
+        <SegmentedControl
+          ariaLabel="归类方式"
+          className="bui justify-self-start"
+          onChange={routerMode => onChange({ ...draft, routerMode })}
+          options={[
+            { value: 'model', label: '智能判断' },
+            { value: 'rules', label: '确定性规则' },
+          ]}
+          value={draft.routerMode}
+        />
       </div>
       <div className="settings-card">
         <div className="card-title">
@@ -1811,14 +1845,17 @@ function RouterSettings({
         <div className="page-error" role="alert">
           {routingRulesError}
           {onReloadRoutingRules && (
-            <button
-              className="secondary-button"
+            <Button
+              className="h-8 px-3.5 text-[13px]"
               onClick={onReloadRoutingRules}
               type="button"
+
+              size="xs"
+              variant="secondary"
             >
               <RotateCw size={15} />
               重新读取
-            </button>
+            </Button>
           )}
         </div>
       ) : !routingRules ? (
@@ -1902,14 +1939,17 @@ function RouterSettings({
           onChange={event => setTestText(event.target.value)}
           value={testText}
         />
-        <button
-          className="secondary-button"
+        <Button
+          className="h-8 min-w-[72px] px-3.5 text-[13px] whitespace-nowrap max-[520px]:justify-self-start"
           disabled={!onTestRouting || testing || !testText.trim()}
           onClick={() => void runTest()}
           type="button"
+
+          size="xs"
+          variant="secondary"
         >
           {testing ? '测试中…' : '测试'}
-        </button>
+        </Button>
       </div>
       <p className="field-hint">
         测试按当前已保存的归类方式、模型与规则预演归属，不会创建事情或发送通知；模型调用计入用量。
@@ -2143,8 +2183,8 @@ function VoiceSettings({
                 />
               </label>
             )}
-            <button
-              className="secondary-button"
+            <Button
+              className="h-8 px-3.5 text-[13px]"
               disabled={
                 !speechDraft.baseUrl.trim() ||
                 !speechDraft.model.trim() ||
@@ -2155,6 +2195,9 @@ function VoiceSettings({
                 dictation.toggle()
               }}
               type="button"
+
+              size="xs"
+              variant="secondary"
             >
               <Mic size={16} />
               {dictation.state === 'recording'
@@ -2162,7 +2205,7 @@ function VoiceSettings({
                 : dictation.state === 'transcribing'
                   ? '正在识别…'
                   : '录一段测试'}
-            </button>
+            </Button>
             {speechResult && (
               <p className="test-result" role="status">
                 {speechResult}
@@ -2199,26 +2242,16 @@ function VoiceSettings({
         </label>
         {draft.rewriteMode === 'light' && (
           <>
-            <div className="segmented">
-              <button
-                className={rewriteDraft.mode === 'router' ? 'is-active' : ''}
-                onClick={() =>
-                  onRewriteChange({ ...rewriteDraft, mode: 'router' })
-                }
-                type="button"
-              >
-                跟随事情归类
-              </button>
-              <button
-                className={rewriteDraft.mode === 'custom' ? 'is-active' : ''}
-                onClick={() =>
-                  onRewriteChange({ ...rewriteDraft, mode: 'custom' })
-                }
-                type="button"
-              >
-                独立服务
-              </button>
-            </div>
+            <SegmentedControl
+              ariaLabel="改写模式"
+              className="bui"
+              onChange={mode => onRewriteChange({ ...rewriteDraft, mode })}
+              options={[
+                { value: 'router', label: '跟随事情归类' },
+                { value: 'custom', label: '独立服务' },
+              ]}
+              value={rewriteDraft.mode}
+            />
             {rewriteDraft.mode === 'custom' && (
               <div className="provider-edit-fields">
                 <label className="field-label">
@@ -2309,14 +2342,17 @@ function VoiceSettings({
                 value={rewriteSample}
               />
             </label>
-            <button
-              className="secondary-button"
+            <Button
+              className="h-8 px-3.5 text-[13px]"
               disabled={rewriteTesting || !rewriteSample.trim()}
               onClick={() => void testRewrite()}
               type="button"
+
+              size="xs"
+              variant="secondary"
             >
               {rewriteTesting ? '测试中…' : '测试改写'}
-            </button>
+            </Button>
             {rewriteResult && (
               <p className="test-result" role="status">
                 {rewriteResult}
@@ -2353,14 +2389,17 @@ function ConnectionsSettings({
         <div className="page-error" role="alert">
           {error}
           {onReload && (
-            <button
-              className="secondary-button"
+            <Button
+              className="h-8 px-3.5 text-[13px]"
               onClick={onReload}
               type="button"
+
+              size="xs"
+              variant="secondary"
             >
               <RotateCw size={15} />
               重新读取
-            </button>
+            </Button>
           )}
         </div>
       ) : !nodes ? (
@@ -2432,13 +2471,16 @@ function MemorySettings({
               </p>
             </div>
           </div>
-          <button
-            className="secondary-button"
+          <Button
+            className="h-8 px-3.5 text-[13px]"
             onClick={onOpenMemory}
             type="button"
+
+            size="xs"
+            variant="secondary"
           >
             管理记忆
-          </button>
+          </Button>
         </div>
       )}
       <div className="info-banner">
@@ -2618,14 +2660,17 @@ function NotificationSettings({
         <div className="page-error" role="alert">
           {error}
           {onReload && (
-            <button
-              className="secondary-button"
+            <Button
+              className="h-8 px-3.5 text-[13px]"
               onClick={onReload}
               type="button"
+
+              size="xs"
+              variant="secondary"
             >
               <RotateCw size={15} />
               重新读取
-            </button>
+            </Button>
           )}
         </div>
       ) : !preferences ? (
@@ -2692,14 +2737,17 @@ function NotificationSettings({
             >
               {notice?.message}
             </span>
-            <button
-              className="primary-button"
+            <Button
+              className="h-9 px-4 text-[13px]"
               disabled={saving || (enabled && !validTimes)}
               onClick={() => void save()}
               type="button"
+
+              size="sm"
+              variant="primary"
             >
               {saving ? '保存中…' : '保存通知偏好'}
-            </button>
+            </Button>
           </div>
           <div className="info-banner">
             <LockKeyhole size={16} />
@@ -2816,9 +2864,15 @@ function UsageSettings({
             {error}
             {usage ? '；以下为上次成功读取的数据。' : ''}
           </span>
-          <button className="secondary-button" onClick={onRetry} type="button">
+          <Button
+            className="h-8 px-3.5 text-[13px]"
+            onClick={onRetry}
+            type="button"
+            size="xs"
+            variant="secondary"
+          >
             重新读取
-          </button>
+          </Button>
         </div>
       )}
       {!usage ? (
@@ -3063,9 +3117,15 @@ function RecoverySettings({
           在线备份目前通过服务端命令执行：<code>pnpm backup</code>；导出数据的
           HTTP API 尚未提供，这里不伪装成可点击操作。
         </p>
-        <button className="secondary-button" disabled type="button">
+        <Button
+          className="h-8 px-3.5 text-[13px]"
+          disabled
+          type="button"
+          size="xs"
+          variant="secondary"
+        >
           导出数据（待服务端 API）
-        </button>
+        </Button>
       </div>
       <div className="settings-card">
         <div className="card-title">
@@ -3090,14 +3150,17 @@ function RecoverySettings({
           <div className="page-error" role="alert">
             {error}
             {onReload && (
-              <button
-                className="secondary-button"
+              <Button
+                className="h-8 px-3.5 text-[13px]"
                 onClick={onReload}
                 type="button"
+
+                size="xs"
+                variant="secondary"
               >
                 <RotateCw size={15} />
                 重新读取
-              </button>
+              </Button>
             )}
           </div>
         ) : !status ? (
@@ -3177,14 +3240,17 @@ function RecoverySettings({
               </ul>
             )}
             {onReload && (
-              <button
-                className="secondary-button"
+              <Button
+                className="h-8 px-3.5 text-[13px]"
                 onClick={onReload}
                 type="button"
+
+                size="xs"
+                variant="secondary"
               >
                 <RotateCw size={15} />
                 刷新恢复状态
-              </button>
+              </Button>
             )}
           </>
         )}
@@ -3194,10 +3260,16 @@ function RecoverySettings({
         这里只读展示恢复状态；重启与回滚仍需在服务端恢复平面执行，Web
         不提供破坏性操作入口。
       </div>
-      <button className="danger-button" disabled type="button">
+      <Button
+        className="h-9 px-4 text-[13px]"
+        disabled
+        type="button"
+        size="sm"
+        variant="danger"
+      >
         <Trash2 size={16} />
         清除本机数据（需专门审批设计）
-      </button>
+      </Button>
     </div>
   )
 }

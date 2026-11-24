@@ -706,7 +706,7 @@ describe('sealed Pegas UI', () => {
     const input = within(dialog).getByRole('textbox', { name: '搜索事情' })
     const close = within(dialog).getByRole('button', { name: '关闭搜索' })
     close.focus()
-    fireEvent.keyDown(document, { key: 'Tab' })
+    fireEvent.keyDown(dialog, { key: 'Tab' })
     expect(document.activeElement).toBe(input)
     fireEvent.click(
       within(dialog).getByRole('button', { name: /安全自更新流程/ }),

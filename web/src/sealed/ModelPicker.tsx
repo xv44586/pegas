@@ -1,3 +1,4 @@
+import { Button } from '@bui/index'
 import { Check, ChevronDown, RotateCw, Search } from 'lucide-react'
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 
@@ -286,11 +287,12 @@ export function ModelPicker({
             </div>
             <span>{models.length} 个可用</span>
           </header>
-          <label className="composer-model-search">
-            <Search size={16} />
+          <label className="composer-model-search bui mx-0.5 flex h-10 items-center gap-2 rounded-control bg-field px-3 shadow-hairline transition-shadow duration-150 focus-within:bg-surface focus-within:shadow-[0_0_0_1px_var(--accent)]">
+            <Search className="shrink-0 text-ink-3" size={16} />
             <span className="visually-hidden">搜索模型</span>
             <input
               autoComplete="off"
+              className="min-w-0 flex-1 appearance-none bg-transparent text-[13px] text-ink outline-none placeholder:text-ink-3"
               onChange={event => {
                 setQuery(event.target.value)
                 setPage(0)
@@ -381,28 +383,34 @@ export function ModelPicker({
                 )}
           </div>
           {filteredModels.length > pageSize && (
-            <div className="composer-model-pagination pagination">
-              <span>
+            <div className="composer-model-pagination pagination bui mx-0.5 mt-0 flex items-center gap-2">
+              <span className="flex-1 text-[11px] text-ink-2">
                 {currentPage * pageSize + 1}–
                 {Math.min((currentPage + 1) * pageSize, filteredModels.length)}{' '}
                 / {filteredModels.length}
               </span>
-              <button
+              <Button
+                className="h-[30px] flex-none rounded-control px-3 text-[13px] whitespace-nowrap"
                 disabled={currentPage === 0}
                 onClick={() => setPage(Math.max(0, currentPage - 1))}
+                size="sm"
                 type="button"
+                variant="secondary"
               >
                 上一页
-              </button>
-              <button
+              </Button>
+              <Button
+                className="h-[30px] flex-none rounded-control px-3 text-[13px] whitespace-nowrap"
                 disabled={currentPage >= pageCount - 1}
                 onClick={() =>
                   setPage(Math.min(pageCount - 1, currentPage + 1))
                 }
+                size="sm"
                 type="button"
+                variant="secondary"
               >
                 下一页
-              </button>
+              </Button>
             </div>
           )}
           {error && (

@@ -10,6 +10,7 @@ import {
   Sparkles,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { Button } from '@bui/index'
 
 import type {
   DshModelCatalog,
@@ -329,22 +330,28 @@ export function Onboarding({
                       />
                     </label>
                     <div className="setup-connection-actions">
-                      <button
-                        className="secondary-button"
+                      <Button
+                        className="h-9 px-4 text-[13px]"
                         disabled={Boolean(connectionBusy) || !connectionReady}
                         onClick={() => void probeConnection('test')}
                         type="button"
+
+                        size="sm"
+                        variant="secondary"
                       >
                         {connectionBusy === 'test' ? '测试中…' : '测试连接'}
-                      </button>
-                      <button
-                        className="primary-button"
+                      </Button>
+                      <Button
+                        className="h-9 px-4 text-[13px]"
                         disabled={Boolean(connectionBusy) || !connectionReady}
                         onClick={() => void probeConnection('save')}
                         type="button"
+
+                        size="sm"
+                        variant="primary"
                       >
                         {connectionBusy === 'save' ? '保存中…' : '保存连接'}
-                      </button>
+                      </Button>
                     </div>
                     {connectionNotice && (
                       <p
@@ -428,30 +435,42 @@ export function Onboarding({
         </div>
         <footer>
           {step > 0 ? (
-            <button
-              className="secondary-button"
+            <Button
+              className="h-9 px-4 text-[13px]"
               onClick={() => setStep(currentStep => currentStep - 1)}
               type="button"
+
+              size="sm"
+              variant="secondary"
             >
               <ChevronLeft size={16} />
               上一步
-            </button>
+            </Button>
           ) : (
-            <button className="quiet-button" onClick={onComplete} type="button">
+            <Button
+              className="h-9 px-4 text-[13px] text-ink-2"
+              onClick={onComplete}
+              type="button"
+              size="sm"
+              variant="quiet"
+            >
               稍后设置
-            </button>
+            </Button>
           )}
           {step === steps.length - 1 && (
-            <button
-              className="secondary-button"
+            <Button
+              className="h-9 px-4 text-[13px]"
               onClick={onContinueSettings}
               type="button"
+
+              size="sm"
+              variant="secondary"
             >
               继续设置
-            </button>
+            </Button>
           )}
-          <button
-            className="primary-button"
+          <Button
+            className="h-9 px-4 text-[13px]"
             onClick={() =>
               step === steps.length - 1
                 ? onComplete()
@@ -459,10 +478,13 @@ export function Onboarding({
             }
             ref={primaryActionRef}
             type="button"
+
+            size="sm"
+            variant="primary"
           >
             {step === steps.length - 1 ? '进入 Pegas' : '继续'}{' '}
             <ArrowRight size={16} />
-          </button>
+          </Button>
         </footer>
       </section>
     </div>

@@ -10,12 +10,17 @@ import {
   Search,
   Settings,
   Sun,
-  X,
   Zap,
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { Button, SidebarNav } from '@bui/index'
+import {
+  Button,
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  SidebarNav,
+} from '@bui/index'
 
 import type {
   ChannelSearchFilters,
@@ -210,7 +215,6 @@ export function GlobalSearch({
   ) => Promise<ChannelSearchResult>
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
-  const dialogRef = useRef<HTMLElement>(null)
   const [query, setQuery] = useState('')
   const [result, setResult] = useState<ChannelSearchResult>()
   const [searching, setSearching] = useState(false)
@@ -367,43 +371,20 @@ export function GlobalSearch({
   }
   useEffect(() => {
     inputRef.current?.focus()
-    const containFocus = (event: KeyboardEvent) => {
-      if (event.key !== 'Tab') return
-      const focusable = Array.from(
-        dialogRef.current?.querySelectorAll<HTMLElement>(
-          'button:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])',
-        ) ?? [],
-      )
-      const first = focusable[0]
-      const last = focusable.at(-1)
-      if (!first || !last) return
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault()
-        last.focus()
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault()
-        first.focus()
-      }
-    }
-    document.addEventListener('keydown', containFocus)
-    return () => document.removeEventListener('keydown', containFocus)
   }, [])
   return (
-    <div
-      className="modal-backdrop"
-      onMouseDown={event => event.target === event.currentTarget && onClose()}
-    >
-      <section
+    <Dialog open onOpenChange={next => !next && onClose()}>
+      <DialogContent
         aria-label="全局搜索"
-        aria-modal="true"
-        className="command-dialog"
-        ref={dialogRef}
-        role="dialog"
+        className="command-dialog top-[12vh] w-[min(640px,calc(100vw-32px))] translate-y-0 overflow-hidden rounded-window p-0 max-[820px]:top-[8vh] max-[820px]:w-[calc(100vw-28px)]"
+        closeLabel="关闭搜索"
       >
-        <div className="command-input">
-          <Search size={20} />
+        <DialogTitle className="visually-hidden">全局搜索</DialogTitle>
+        <div className="flex items-center gap-3 border-b border-line py-[15px] pr-[52px] pl-[18px] pointer-coarse:pr-[64px]">
+          <Search className="shrink-0 text-ink-3" size={20} />
           <input
             aria-label="搜索事情"
+            className="min-w-0 flex-1 bg-transparent text-[15px] text-ink outline-none placeholder:text-ink-3"
             onChange={event => setQuery(event.target.value)}
             onKeyDown={event => {
               if (event.key === 'ArrowDown') {
@@ -415,31 +396,33 @@ export function GlobalSearch({
             ref={inputRef}
             value={query}
           />
-          <kbd>ESC</kbd>
         </div>
         {onSearch && (
-          <div className="command-filters">
+          <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 border-b border-line px-[18px] py-2.5">
             <div
               aria-label="搜索状态筛选"
-              className="command-filter-group"
+              className="flex flex-wrap gap-1.5"
               role="group"
             >
               {filterControls.map(control => (
-                <button
+                <Button
                   aria-pressed={control.pressed}
-                  className="command-filter"
+                  className="h-[26px] px-3 text-[12px] aria-pressed:bg-accent-tint aria-pressed:text-accent-ink aria-pressed:shadow-[0_0_0_1px_var(--accent)]"
                   key={control.label}
                   onClick={control.toggle}
+                  size="xs"
                   type="button"
+                  variant="secondary"
                 >
                   {control.label}
-                </button>
+                </Button>
               ))}
             </div>
-            <label className="command-select">
+            <label className="inline-flex items-center gap-1.5 text-[13px] text-ink-2">
               <span>排序</span>
               <select
                 aria-label="搜索排序"
+                className="h-[26px] appearance-none rounded-chip bg-surface px-1.5 text-[12px] text-ink shadow-hairline outline-none focus-visible:shadow-[0_0_0_1px_var(--accent)]"
                 onChange={event =>
                   setSort(event.target.value as ChannelSearchSort)
                 }
@@ -450,10 +433,11 @@ export function GlobalSearch({
                 <option value="ended">最近结束</option>
               </select>
             </label>
-            <label className="command-select">
+            <label className="inline-flex items-center gap-1.5 text-[13px] text-ink-2">
               <span>执行者</span>
               <select
                 aria-label="执行者筛选"
+                className="h-[26px] appearance-none rounded-chip bg-surface px-1.5 text-[12px] text-ink shadow-hairline outline-none focus-visible:shadow-[0_0_0_1px_var(--accent)]"
                 onChange={event =>
                   setWorkerIcon(event.target.value as WorkerIconId | 'all')
                 }
@@ -468,12 +452,15 @@ export function GlobalSearch({
             </label>
           </div>
         )}
-        <div className="command-dialog-body">
-          <p className="command-section-label">
+        <div className="max-h-[min(52vh,460px)] overflow-y-auto">
+          <p className="mt-3.5 mb-1.5 px-[18px] text-[11px] text-ink-2 uppercase">
             {serverMode ? '搜索结果' : '最近'}
           </p>
           {searchError && (
-            <div className="command-empty" role="alert">
+            <div
+              className="px-[18px] pt-6 pb-9 text-center text-[13px] text-ink-2"
+              role="alert"
+            >
               {searchError}
               <button
                 className="inline-link"
@@ -494,11 +481,14 @@ export function GlobalSearch({
             </div>
           )}
           {searching && !searchError && (
-            <div className="command-empty">正在搜索…</div>
+            <div className="px-[18px] pt-6 pb-9 text-center text-[13px] text-ink-2">
+              正在搜索…
+            </div>
           )}
           {!searching && !searchError && visibleChannels.length ? (
             visibleChannels.map((channel, index) => (
               <button
+                className="grid w-full grid-cols-[22px_minmax(0,1fr)_auto] items-center gap-3 px-[18px] py-3 text-left transition-colors duration-100 hover:bg-hover"
                 key={channel.id}
                 onClick={() => onOpen(channel)}
                 onKeyDown={event => {
@@ -516,42 +506,39 @@ export function GlobalSearch({
                 }}
                 type="button"
               >
-                <Clock3 size={17} />
-                <span>
-                  <strong>{channel.title}</strong>
-                  <small>{snippetFor(channel.id) ?? channel.goal}</small>
+                <Clock3 className="text-ink-3" size={17} />
+                <span className="grid min-w-0 gap-0.5">
+                  <strong className="truncate text-[13px] font-medium text-ink">
+                    {channel.title}
+                  </strong>
+                  <small className="truncate text-[12px] text-ink-2">
+                    {snippetFor(channel.id) ?? channel.goal}
+                  </small>
                 </span>
-                <ChevronRight size={16} />
+                <ChevronRight className="text-ink-3" size={16} />
               </button>
             ))
           ) : !searching && !searchError ? (
-            <div className="command-empty">
+            <div className="px-[18px] pt-6 pb-9 text-center text-[13px] text-ink-2">
               {trimmedQuery || hasFilters || channels.length
                 ? '没有匹配的事情'
                 : '还没有可搜索的事情'}
             </div>
           ) : null}
           {serverMode && !searching && Boolean(result?.nextCursor) && (
-            <button
-              className="command-load-more"
+            <Button
+              className="h-auto w-full rounded-none border-t border-line px-[18px] py-2.5 text-[13px] text-accent-ink shadow-none"
               disabled={loadingMore}
               onClick={() => void loadMore()}
               type="button"
+              variant="quiet"
             >
               {loadingMore ? '正在加载…' : '加载更多'}
-            </button>
+            </Button>
           )}
         </div>
-        <button
-          aria-label="关闭搜索"
-          className="command-close"
-          onClick={onClose}
-          type="button"
-        >
-          <X size={18} />
-        </button>
-      </section>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 

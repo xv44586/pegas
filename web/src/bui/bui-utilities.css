@@ -52,3 +52,4 @@
 }
 
 @custom-variant dark (&:where(.dark, .dark *));
+@custom-variant pointer-coarse (@media (pointer: coarse));

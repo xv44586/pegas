@@ -158,9 +158,22 @@ describe('sealed UI typography scale (DESIGN-004)', () => {
   })
 
   it('keeps button text one step below adjacent body copy', () => {
-    expect(declarationOf('.secondary-button', 'font-size')).toBe(
-      'var(--text-caption)',
+    const button = readFileSync(
+      resolve(
+        import.meta.dirname,
+        '..',
+        'web',
+        'src',
+        'bui',
+        'components',
+        'atoms',
+        'Button.tsx',
+      ),
+      'utf8',
     )
+    expect(button).toContain("sm: 'h-[27px] px-3 text-[13px]")
+    expect(stylesheet).not.toContain('.secondary-button')
+    expect(stylesheet).not.toContain('.primary-button')
     const mainPages = readFileSync(
       resolve(
         import.meta.dirname,

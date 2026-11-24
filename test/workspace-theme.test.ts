@@ -240,19 +240,8 @@ describe('sealed UI layout contracts', () => {
   })
 
   it('keeps search inputs on the single container-owned focus treatment', () => {
-    expect(sealedUi).toMatch(
-      /\.model-search\s*\{[^}]*border:\s*1px solid transparent;/,
-    )
-    expect(sealedUi).toMatch(
-      /\.model-search:focus-within\s*\{[^}]*border-color:\s*var\(--accent\);/,
-    )
-    expect(sealedUi).toMatch(/\.model-search input\s*\{[^}]*border:\s*0;/)
-    expect(sealedUi).toMatch(
-      /\.model-search input:focus-visible\s*\{[^}]*outline:\s*none;/,
-    )
-    expect(sealedUi).toMatch(
-      /\.model-search input::placeholder\s*\{[^}]*color:\s*var\(--muted\);/,
-    )
+    expect(sealedUi).not.toMatch(/^\.model-search/m)
+    expect(sealedUi).not.toContain('.model-search input')
     expect(sealedUi).not.toContain('.provider-list input')
     const settingsPage = readFileSync(
       new URL('../web/src/sealed/SettingsPage.tsx', import.meta.url),
@@ -260,10 +249,22 @@ describe('sealed UI layout contracts', () => {
     )
     const searchLabels = [
       ...settingsPage.matchAll(
-        /<label className="model-search">[\s\S]*?<\/label>/g,
+        /<label className="model-search[^"]*">[\s\S]*?<\/label>/g,
       ),
-    ]
+    ].map(match => match[0])
     expect(searchLabels.length).toBeGreaterThanOrEqual(2)
+    for (const field of searchLabels) {
+      expect(field).toContain('focus-within:shadow-[0_0_0_1px_var(--accent)]')
+      expect(field).toContain('outline-none placeholder:text-ink-3')
+    }
+    const modelPicker = readFileSync(
+      new URL('../web/src/sealed/ModelPicker.tsx', import.meta.url),
+      'utf8',
+    )
+    expect(modelPicker).toMatch(
+      /className="composer-model-search[^"]*focus-within:shadow-\[0_0_0_1px_var\(--accent\)\][^"]*"/,
+    )
+    expect(sealedUi).not.toMatch(/^\.composer-model-search/m)
   })
 
   it('keeps page search on the same container-owned focus treatment', () => {

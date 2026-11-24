@@ -1977,10 +1977,13 @@ async function assertGeometry(page, label) {
           globalThis.setTimeout(resolveSettled, 80),
         )
         const containerStyle = globalThis.getComputedStyle(search)
-        if (
-          containerStyle.borderTopColor === 'rgba(0, 0, 0, 0)' ||
-          Number.parseFloat(containerStyle.borderTopWidth) === 0
-        )
+        const hasBorder =
+          containerStyle.borderTopColor !== 'rgba(0, 0, 0, 0)' &&
+          Number.parseFloat(containerStyle.borderTopWidth) > 0
+        const hasRing =
+          containerStyle.boxShadow !== 'none' &&
+          containerStyle.boxShadow.includes('0px 0px 0px 1px')
+        if (!hasBorder && !hasRing)
           out.push('focused search container has no visible border')
       }
     }
