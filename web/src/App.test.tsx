@@ -1024,6 +1024,77 @@ describe('sealed Pegas UI', () => {
     await screen.findByText('更改已保存')
   })
 
+  it('clears the saved notice when the draft is edited again or cancelled', async () => {
+    installFetch((path, init) => {
+      if (path === '/v1/settings' && init?.method === 'PUT')
+        return Response.json(settingsResponse)
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(await screen.findByRole('button', { name: /事情归类/ }))
+    fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
+    await screen.findByText('更改已保存')
+    fireEvent.click(screen.getByLabelText('启用即时应答'))
+    expect(screen.queryByText('更改已保存')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
+    await screen.findByText('更改已保存')
+    fireEvent.click(screen.getByRole('button', { name: '取消' }))
+    expect(screen.queryByText('更改已保存')).toBeNull()
+  })
+
+  it('shows no idle spinner on the unconfigured pool fixed option', async () => {
+    installFetch((path, init) => {
+      if (path === '/v1/settings' && init?.method !== 'PUT')
+        return Response.json({
+          ...settingsResponse,
+          settings: {
+            ...settingsResponse.settings,
+            executionPools: {
+              balanced: { provider: 'Magpie', model: 'gateway/model-01' },
+            },
+          },
+        })
+      if (path === '/v1/settings/agent-models')
+        return Response.json({
+          defaultProvider: 'Magpie',
+          defaultModel: 'gateway/model-01',
+          models: [
+            {
+              provider: 'Magpie',
+              id: 'gateway/model-01',
+              name: 'Gateway Model 01',
+            },
+          ],
+        })
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(
+      await screen.findByRole('button', { name: /balanced 池模型/ }),
+    )
+    const dialog = await screen.findByRole('dialog', {
+      name: 'balanced 池模型',
+    })
+    const fixed = within(dialog).getByRole('option', { name: /未配置/ })
+    expect(fixed.getAttribute('aria-selected')).toBe('false')
+    expect(fixed.querySelector('svg')).toBeNull()
+    const selected = within(dialog).getByRole('option', {
+      name: /Gateway Model 01/,
+    })
+    expect(selected.getAttribute('aria-selected')).toBe('true')
+    expect(selected.querySelector('.lucide-check')).toBeTruthy()
+  })
+
   it('EXEC-005: toggles the chat lane from settings and persists the switch', async () => {
     let savedBody: Record<string, unknown> | undefined
     let currentSettings: SettingsResponse = {

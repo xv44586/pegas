@@ -349,7 +349,7 @@ export function ModelPicker({
           >
             {filteredFixed.map(option => {
               const isSelected = option.value === value
-              const isSaving = savingKey === option.value
+              const isSaving = savingKey !== '' && savingKey === option.value
               return (
                 <div
                   aria-disabled={Boolean(savingKey)}
@@ -390,7 +390,7 @@ export function ModelPicker({
               ? pageModels.map((model, index) => {
                   const key = modelSelectionKey(model)
                   const isSelected = key === value
-                  const isSaving = savingKey === key
+                  const isSaving = savingKey !== '' && savingKey === key
                   return (
                     <div
                       aria-disabled={Boolean(savingKey)}

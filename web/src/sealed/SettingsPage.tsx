@@ -229,6 +229,7 @@ export function SettingsPage({
   useEffect(() => setSection(initialSection), [initialSection])
   useEffect(() => {
     setDraft(response?.settings)
+    setNotice(undefined)
     setModelServiceProvider(response?.settings.modelProvider)
     const provider = response?.capabilities.providers.find(
       item => item.id === response.settings.modelProvider,
@@ -306,6 +307,26 @@ export function SettingsPage({
     onSectionChange?.(next)
   }
 
+  function editDraft(next: RuntimeSettings) {
+    setNotice(undefined)
+    setDraft(next)
+  }
+
+  function editProviderDraft(next: ModelProviderDraft) {
+    setNotice(undefined)
+    setProviderDraft(next)
+  }
+
+  function editSpeechDraft(next: SpeechSettingsDraft) {
+    setNotice(undefined)
+    setSpeechDraft(next)
+  }
+
+  function editRewriteDraft(next: RewriteSettingsDraft) {
+    setNotice(undefined)
+    setRewriteDraft(next)
+  }
+
   return (
     <div className="settings-page bui grid h-full min-h-0 [grid-template-columns:210px_minmax(0,1fr)] max-[1120px]:[grid-template-columns:190px_minmax(0,1fr)] max-[820px]:block max-[820px]:overflow-auto">
       <aside
@@ -367,7 +388,7 @@ export function SettingsPage({
                     behaviorPreferences={behaviorPreferences}
                     behaviorPreferencesError={behaviorPreferencesError}
                     draft={draft}
-                    onChange={setDraft}
+                    onChange={editDraft}
                     onOpenDrawer={onOpenDrawer}
                     onReloadWorkRules={onReloadWorkRules}
                     onSaveBehavior={onSaveBehavior}
@@ -387,7 +408,7 @@ export function SettingsPage({
                     response={response}
                     selected={modelServiceProvider}
                     setSelected={setModelServiceProvider}
-                    setProviderDraft={setProviderDraft}
+                    setProviderDraft={editProviderDraft}
                   />
                 )}
                 {section === 'router' && (
@@ -407,7 +428,7 @@ export function SettingsPage({
                           item => item.id === next.modelProvider,
                         )
                         if (provider)
-                          setProviderDraft({
+                          editProviderDraft({
                             name: provider.name,
                             protocol: provider.protocol,
                             baseUrl: provider.baseUrl,
@@ -415,7 +436,7 @@ export function SettingsPage({
                             clearApiKey: false,
                           })
                       }
-                      setDraft(next)
+                      editDraft(next)
                     }}
                   />
                 )}
@@ -425,9 +446,9 @@ export function SettingsPage({
                   providerDraft && (
                     <VoiceSettings
                       draft={draft}
-                      onChange={setDraft}
-                      onSpeechChange={setSpeechDraft}
-                      onRewriteChange={setRewriteDraft}
+                      onChange={editDraft}
+                      onSpeechChange={editSpeechDraft}
+                      onRewriteChange={editRewriteDraft}
                       onTestRewrite={onTestRewrite}
                       onTestSpeech={onTestSpeech}
                       providerDraft={providerDraft}
@@ -453,7 +474,7 @@ export function SettingsPage({
                   <PrivacySettings
                     available={response.capabilities.privacyAvailable}
                     draft={draft}
-                    onChange={setDraft}
+                    onChange={editDraft}
                   />
                 )}
                 {section === 'notifications' && (
@@ -499,6 +520,7 @@ export function SettingsPage({
                 className="h-8 px-3.5 text-[13px]"
                 disabled={saving}
                 onClick={() => {
+                  setNotice(undefined)
                   setDraft(response?.settings)
                   setModelServiceProvider(response?.settings.modelProvider)
                   const savedProvider = response?.capabilities.providers.find(
@@ -2908,7 +2930,10 @@ function NotificationSettings({
                 checked={enabled}
                 disabled={saving}
                 label="启用免打扰"
-                onChange={setEnabled}
+                onChange={next => {
+                  setNotice(undefined)
+                  setEnabled(next)
+                }}
               />
             </div>
             {enabled && (
@@ -2917,7 +2942,10 @@ function NotificationSettings({
                   <TextInput
                     className="h-10 w-full"
                     disabled={saving}
-                    onChange={event => setQuietStart(event.target.value)}
+                    onChange={event => {
+                      setNotice(undefined)
+                      setQuietStart(event.target.value)
+                    }}
                     type="time"
                     value={quietStart}
                   />
@@ -2926,7 +2954,10 @@ function NotificationSettings({
                   <TextInput
                     className="h-10 w-full"
                     disabled={saving}
-                    onChange={event => setQuietEnd(event.target.value)}
+                    onChange={event => {
+                      setNotice(undefined)
+                      setQuietEnd(event.target.value)
+                    }}
                     type="time"
                     value={quietEnd}
                   />
