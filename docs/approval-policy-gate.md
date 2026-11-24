@@ -1,6 +1,6 @@
 # 权限档位与审批 Policy Gate（APPROVAL-001 第二阶段）
 
-> 状态：P1 Gate 覆盖面、P2 权限档位对象、P3 规则批准、P4 审批卡升级、P5 自动审阅、P6 逐调用审计表、P7 档位审计 UI 已实现（见下方实现记录）；P8 对外副作用逐次人工确认 Intake 已登记（见末节）
+> 状态：P1 Gate 覆盖面、P2 权限档位对象、P3 规则批准、P4 审批卡升级、P5 自动审阅、P6 逐调用审计表、P7 档位审计 UI、P8 对外副作用逐次人工确认已实现（见下方实现记录）
 > 更新日期：2026-11-24
 > 基线：`origin/main` `74c2f8c`（Intake 初稿基线 `4baab43`）
 > 外部调研：`research/approval-permissions-codex-cindy/NOTES.md`（本地，不入库；Codex CLI/webview、Cindy Apache-2.0 docs、DSH MIT 源码）
@@ -253,3 +253,18 @@
 2. 实现三处收紧（approval.ts / dsh-approval-bridge.mjs）转绿。
 3. 载荷预览：gate/桥确定性解析 + 有界读取 + request 字段 + Web 渲染（先红后绿）。
 4. 真实 DSH 探针 + 完整门禁 + 文档/Feature Map 同步。
+
+## P8 实现记录（2026-11-24）
+
+- **实现**：
+  - 规则边界：`src/approval/approval.ts` 的 `ruleEligibleCategories` 收敛为仅 `out-of-workspace-write`；`src/storage/sqlite-store.ts` decideApproval 对 `network-egress` Action 显式拒绝 `approve_rule`（即使 prompt 误含该选项）；桥 `matchApprovalRule` 只匹配 out-of-workspace-write（投影混入 egress 规则也不命中）、`createApproval` 的 ruleEligible 排除 egress（审批卡不再出现「本事情内同类」选项）。
+  - 审阅边界：`autoReviewEligible` 排除 `network-egress`——开关开 + 认证人类原话齐备时外发仍直接人工 ask，不调用审阅模型、不产生审阅记录。
+  - 载荷预览：桥 `egressPayloadPreview` 从命令原文确定性解析发送内容（curl `-d/--data(-raw/-binary/-urlencode)/--json` 内联与 `@file`、`-F/--form` 的 `name=@file`、`-T/--upload-file`、wget `--post-file`），`@file` 从工具将实际读取的文件系统读取（canonical 路径；控制面目录拒绝代读并如实标注；单文件 4096 字符、总量 8192 字符、8 项上限，超限截断标注）；读取失败/无法解析一律诚实标注「未能读取」，不猜测。预览随 Action request `egressPayload` additive 字段持久化（无 schema 变更）。
+  - Web：`DetailDrawer.tsx` ApprovalOperationPreview 新增「发送内容预览」区（路径 + 等宽内容块 + 截断/不可读标注，`approval-egress-payload-*` 样式遵循封板合同）；无预览字段不渲染。
+- **与 Intake 的差异（如实记录）**：
+  - 「外发预览收件人结构化解析」按非目标未做：命令原文已含目标 URL，预览只补发送内容事实。
+  - 预览读取用有界 `readFileSync`（UTF-8 字符语义截断），不做流式分块读取；二进制文件按 UTF-8 解码可能产生替换字符，如实展示不假装可解析。
+  - strict 档 `web_fetch/web_search` 的 egress ask 无 bash 命令，不产载荷预览（其 URL 即全部事实）。
+- **证据（先红后绿）**：`test/approval-rules.test.ts` +2（合同拒绝 egress 指纹；store 拒绝 egress approve_rule 且 Approval 保持 pending）；`test/auto-review-bridge.test.ts` +1（egress + 审阅开 + 明确人类授权 → 零审阅调用、人工停放、无 approve_rule 选项）；`test/approval-rule-bridge.test.ts` +1（fetch 拦截注入匹配指纹的 egress 规则 → 仍 ask、无 ruleId allow 审计）；`test/egress-payload-preview.test.ts` 5（@file 事实内容、内联数据、缺失文件诚实标注、20KB 截断 ≤4096、控制面文件拒绝代读且秘密不外漏）；Web `App.test.tsx` +1（预览区渲染 + 截断/不可读标注 + 无规则选项）；真实 DSH 探针 `test/policy-gate-integration.test.ts` +1（magpie/qwen4-max：审阅开 + 明确授权 curl --data @file → 仍人工停放、零审阅 Activity、egressPayload 与落盘文件逐字一致，13.7s 实测）。`pnpm check` 131 文件 / 1361 测试全绿（statement 85.56% / branch 78.41% / function 89.85% / line 88.67%；首轮 dsh SIGKILL 计时用例并行负载抖动，隔离复跑 32/32 通过后全量复跑全绿）；`pnpm smoke`、`pnpm smoke:crash`、`pnpm review:ui --force`、`pnpm a11y:review` 0 违例通过。
+- **剩余风险**：复杂 bash（变量/引号拼接/管道构造）载荷解析不完备，未命中形式如实标注「未能解析」而非静默；egress 静态分类覆盖面不变（复杂构造绕过 ask 路由的既有风险仍由沙箱+guard 承担）；预览可能含敏感内容，站内与命令原文同等待遇，external 渠道沿用去 prompt 脱敏投影。
+- **回滚**：revert 本提交即恢复旧行为（egress 可进审阅、无载荷预览、合同允许 egress 规则）；无迁移、无数据删除、无回滚 Guard 需求；已存量 egress 规则理论上不存在（targets 恒空导致从未创建成功），若人工数据注入存在则回滚后恢复可命中——回滚前可先撤销。

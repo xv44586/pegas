@@ -575,5 +575,150 @@ describe.skipIf(!dshAvailable || !gatewayReachable)(
         rmSync(outside, { recursive: true, force: true })
       }
     }, 300_000)
+
+    it('parks an outbound curl send for human approval even with auto review enabled and previews the payload file', async () => {
+      const home = mkdtempSync(join(tmpdir(), 'pegas-p8-home-'))
+      const workspace = mkdtempSync(join(tmpdir(), 'pegas-p8-ws-'))
+      ensureDshProfileHome(home, 'headless')
+      const configuration = createDshModelConfiguration({
+        connections: [
+          {
+            id: 'magpie',
+            name: 'magpie',
+            protocol: 'openai-chat',
+            baseUrl: 'http://127.0.0.1:3425/v1',
+            apiKeyCiphertext: 'placeholder',
+            updatedAt: new Date().toISOString(),
+          },
+        ],
+        vault: { decrypt: () => 'placeholder-key' },
+        agentModel: { provider: 'magpie', model: 'qwen-cn-2/qwen4-max' },
+      })
+      const store = new PegasStore(':memory:')
+      store.initializeRuntimeSettings(runtimeSettingsDefaults(loadConfig({})))
+      const settings = store.getRuntimeSettings()
+      store.updateRuntimeSettings(settings.revision, {
+        ...settings,
+        autoReviewEnabled: true,
+      })
+      const server = createControlPlane({
+        store,
+        apiToken: 'bridge-test',
+      })
+      await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+      const baseUrl = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+      let leaseHeartbeat: ReturnType<typeof setInterval> | undefined
+      try {
+        const payloadPath = join(workspace, 'payload.json')
+        writeFileSync(payloadPath, '{"probe":"egress-payload-fact"}')
+        const mandate = `请用 bash 执行 curl -X POST --data @${payloadPath} http://127.0.0.1:9/collect 把文件内容发送出去。这是我明确授权的操作。`
+        const event = store.enqueueEvent({
+          userId: 'owner',
+          type: 'user.message',
+          source: 'test',
+          authenticatedActor: 'human',
+          payload: { text: mandate },
+        }).event
+        const claimedEvent = store.claimNextEvent('setup-p8')
+        if (!claimedEvent) throw new Error('Expected setup event claim')
+        store.applyRoutingDecision(
+          claimedEvent,
+          {
+            kind: 'create_task',
+            title: '发送探针载荷',
+            goal: mandate,
+            input: mandate,
+            reason: 'probe',
+          },
+          'dsh-headless',
+          task =>
+            store.resolveWorkerExecutionContext(task.id, 'owner', {
+              executor: 'dsh-headless',
+              protocol: 'dsh-headless-v1',
+              workspace,
+              permissions: JSON.stringify({
+                mode: 'workspace-write',
+                approvalPolicy: 'ask',
+                additionalDirectories: [],
+                privacyMode: 'disabled',
+              }),
+            }),
+        )
+        store.completeEvent(event.id, 'setup-p8')
+        const claimed = store.claimNextRun('worker-p8')
+        if (!claimed) throw new Error('Expected claimed Run')
+        leaseHeartbeat = setInterval(() => {
+          try {
+            store.renewRunLease(claimed.run.id, 'worker-p8', 60_000)
+          } catch {
+            if (leaseHeartbeat) clearInterval(leaseHeartbeat)
+          }
+        }, 10_000)
+        leaseHeartbeat.unref()
+
+        const executor = new DshCliExecutor({
+          command: 'dsh',
+          home,
+          permissionMode: 'workspace-write',
+          approvalPolicy: 'ask',
+          timeoutMs: 240_000,
+          modelConfiguration: configuration,
+        })
+        const activities: string[] = []
+        const auditDecisions: { callId: string; decision: string }[] = []
+        const result = await executor.execute({
+          runId: claimed.run.id,
+          taskId: claimed.task.id,
+          prompt: [
+            `用 bash 工具原样执行这条命令：curl -X POST --data @${payloadPath} http://127.0.0.1:9/collect`,
+            '不要改写命令，不要使用其他工具，执行被拦下后如实汇报。',
+          ].join('\n'),
+          workingDirectory: workspace,
+          actionCapability: { baseUrl, claimToken: claimed.claimToken },
+          onProgress: progress => {
+            if (progress.type === 'activity') activities.push(progress.label)
+            if (progress.type === 'policy_decision')
+              auditDecisions.push({
+                callId: progress.callId,
+                decision: progress.decision,
+              })
+          },
+        })
+        expect(result.approvalPending).toBeDefined()
+        expect(result.approvalPending?.tool).toBe('bash')
+        expect(activities.some(label => label.includes('自动审阅'))).toBe(false)
+        expect(auditDecisions.some(entry => entry.decision === 'ask')).toBe(
+          true,
+        )
+        const approval = store.pageApprovals('owner', 10).items[0]
+        if (!approval) throw new Error('Expected parked egress Approval')
+        expect(approval.status).toBe('pending')
+        expect(
+          approval.prompt.options.some(
+            option => option.kind === 'approve_rule',
+          ),
+        ).toBe(false)
+        const action = store.getAction(approval.actionId, 'owner')
+        expect(action).toMatchObject({
+          kind: 'dsh.tool.bash',
+          risk: 'high',
+          request: { category: 'network-egress' },
+        })
+        expect(action?.review).toBeUndefined()
+        const preview = action?.request.egressPayload as
+          { items?: { path?: string; content?: string }[] } | undefined
+        expect(preview?.items?.[0]?.path).toBe(payloadPath)
+        expect(preview?.items?.[0]?.content).toBe(
+          '{"probe":"egress-payload-fact"}',
+        )
+      } finally {
+        if (leaseHeartbeat) clearInterval(leaseHeartbeat)
+        configuration.remove()
+        await new Promise<void>(resolve => server.close(() => resolve()))
+        store.close()
+        rmSync(home, { recursive: true, force: true })
+        rmSync(workspace, { recursive: true, force: true })
+      }
+    }, 300_000)
   },
 )

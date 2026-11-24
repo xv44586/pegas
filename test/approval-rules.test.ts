@@ -207,6 +207,23 @@ describe('approval rule contract', () => {
       /^[0-9a-f]{64}$/,
     )
   })
+
+  it('never accepts persistent rules for outbound network egress', () => {
+    expect(() =>
+      approvalRuleFingerprint({
+        tool: 'bash',
+        category: 'network-egress',
+        targets: ['https://example.com/hook'],
+      }),
+    ).toThrow(/persistent rules/)
+    expect(() =>
+      approvalRuleFingerprint({
+        tool: 'web_fetch',
+        category: 'network-egress',
+        targets: ['https://example.com'],
+      }),
+    ).toThrow(/persistent rules/)
+  })
 })
 
 describe('approval rule persistence', () => {
@@ -295,6 +312,50 @@ describe('approval rule persistence', () => {
         optionId: 'approve_rule',
       }),
     ).toThrow(/rule/i)
+    expect(store.listApprovalRules(claimed.task.id, 'owner')).toHaveLength(0)
+    const approval = store.getApproval(result.approval.id, 'owner')
+    expect(approval?.status).toBe('pending')
+    store.close()
+  })
+
+  it('rejects approve_rule for network egress even when the prompt offers it', () => {
+    const store = new PegasStore(':memory:')
+    const claimed = createClaimedRun(store, 'worker-rule-egress')
+    const result = store.requestApproval(claimed.run.id, claimed.claimToken, {
+      kind: 'dsh.tool.bash',
+      risk: 'high',
+      idempotencyKey: `dsh-tool:${claimed.run.id}:egress-rule-1`,
+      request: {
+        tool: 'bash',
+        callId: 'egress-rule-1',
+        reason: '命令会向外部发送数据',
+        category: 'network-egress',
+        targets: ['https://example.com/hook'],
+        argumentsHash: 'hash',
+        command: 'curl -X POST -d @payload.json https://example.com/hook',
+      },
+      recoveryPoint: { step: 'before_tool_call', callId: 'egress-rule-1' },
+      approval: {
+        summary: '批准工具 bash 向外部发送数据一次',
+        impact: '命令会向外部发送数据',
+        recommendedOptionId: 'approve',
+        options: [
+          { id: 'approve', label: '批准执行一次', kind: 'approve' },
+          {
+            id: 'approve_rule',
+            label: '本事情内同类不再询问',
+            kind: 'approve_rule',
+          },
+          { id: 'reject', label: '不执行', kind: 'reject' },
+        ],
+      },
+    })
+    expect(() =>
+      store.decideApproval(result.approval.id, 'owner', {
+        commandId: 'decide-egress-rule',
+        optionId: 'approve_rule',
+      }),
+    ).toThrow(/egress|外发|对外/)
     expect(store.listApprovalRules(claimed.task.id, 'owner')).toHaveLength(0)
     const approval = store.getApproval(result.approval.id, 'owner')
     expect(approval?.status).toBe('pending')

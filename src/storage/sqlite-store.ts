@@ -10487,6 +10487,11 @@ export class PegasStore {
             'Persistent approval rules are only available for high-risk actions',
           )
         }
+        if (action.request.category === 'network-egress') {
+          throw new Error(
+            'Outbound network egress never accepts persistent approval rules',
+          )
+        }
       }
 
       const now = this.#clock.now().toISOString()
