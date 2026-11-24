@@ -60,7 +60,7 @@ export function AppShell({
 }: AppShellProps) {
   return (
     <div
-      className={page === 'settings' ? 'app-shell is-settings' : 'app-shell'}
+      className={`bui ${page === 'settings' ? 'app-shell is-settings' : 'app-shell'}`}
     >
       <a className="skip-link" href="#pegas-main">
         跳到主要内容

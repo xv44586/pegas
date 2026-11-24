@@ -1,0 +1,80 @@
+/* Scoped replacement for Tailwind preflight, which we deliberately do not
+ * import: preflight is unlayered and would strip the layered pegas shell
+ * styles. These rules reproduce only what the BUI components rely on,
+ * confined to .bui islands. They live in the `base` layer, which is declared
+ * before `utilities`, so every utility wins regardless of specificity. */
+
+@layer base {
+  :where(.bui),
+  :where(.bui *),
+  :where(.bui *::before),
+  :where(.bui *::after) {
+    box-sizing: border-box;
+    border: 0 solid;
+    margin: 0;
+    padding: 0;
+  }
+
+  :where(.bui :is(h1, h2, h3, h4, h5, h6)) {
+    font-size: inherit;
+    font-weight: inherit;
+  }
+
+  :where(.bui :is(button, input, textarea, select)) {
+    background: transparent;
+    border-radius: 0;
+    color: inherit;
+    font: inherit;
+    letter-spacing: inherit;
+    opacity: 1;
+  }
+
+  :where(.bui button) {
+    appearance: button;
+    cursor: pointer;
+  }
+
+  :where(.bui button:disabled) {
+    cursor: default;
+  }
+
+  :where(.bui textarea) {
+    resize: vertical;
+  }
+
+  :where(.bui ::placeholder) {
+    color: color-mix(in srgb, currentColor 50%, transparent);
+    opacity: 1;
+  }
+
+  :where(.bui :is(img, svg, video, canvas)) {
+    display: block;
+    vertical-align: middle;
+  }
+
+  :where(.bui :is(img, video)) {
+    height: auto;
+    max-width: 100%;
+  }
+
+  :where(.bui :is(ol, ul, menu)) {
+    list-style: none;
+  }
+
+  :where(.bui a) {
+    color: inherit;
+    text-decoration: inherit;
+  }
+
+  :where(.bui table) {
+    border-collapse: collapse;
+    border-color: currentColor;
+    text-indent: 0;
+  }
+
+  :where(.bui hr) {
+    border-top-width: 1px;
+    color: inherit;
+    height: 0;
+  }
+}

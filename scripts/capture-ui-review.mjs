@@ -725,7 +725,7 @@ try {
   )
   await dark.close()
 
-  for (const theme of ['warm', 'system']) {
+  for (const theme of ['system']) {
     const themed = await browser.newContext({
       viewport: { width: 1440, height: 900 },
       colorScheme: theme === 'system' ? 'dark' : 'light',

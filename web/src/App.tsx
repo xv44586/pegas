@@ -1011,6 +1011,7 @@ export function App() {
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
+    document.documentElement.classList.toggle('dark', isDark)
     localStorage.setItem('pegas-theme', theme)
     const colorScheme = document.querySelector<HTMLMetaElement>(
       'meta[name="color-scheme"]',
@@ -1021,7 +1022,7 @@ export function App() {
     const themeColor = document.querySelector<HTMLMetaElement>(
       'meta[name="theme-color"]',
     )
-    if (themeColor) themeColor.content = isDark ? '#151615' : '#ffffff'
+    if (themeColor) themeColor.content = isDark ? '#17181a' : '#fafafb'
   }, [isDark, theme])
 
   async function saveSettings(
@@ -1962,10 +1963,8 @@ function AccessGate({ onToken }: { onToken: (token: string) => void }) {
 
 function readTheme(): ThemeChoice {
   const value = localStorage.getItem('pegas-theme')
-  return value === 'light' ||
-    value === 'warm' ||
-    value === 'dark' ||
-    value === 'system'
+  if (value === 'warm') return 'light'
+  return value === 'light' || value === 'dark' || value === 'system'
     ? value
     : 'light'
 }

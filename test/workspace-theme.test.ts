@@ -36,11 +36,12 @@ describe('sealed UI layout contracts', () => {
     )
   })
 
-  it('implements all four appearance choices with semantic tokens', () => {
-    expect(sealedUi).toMatch(/:root\[data-theme=['"]warm['"]\]/)
+  it('implements the three appearance choices with BUI semantic tokens', () => {
+    expect(sealedUi).not.toMatch(/:root\[data-theme=['"]warm['"]\]/)
     expect(sealedUi).toMatch(/:root\[data-theme=['"]dark['"]\]/)
     expect(sealedUi).toMatch(/:root\[data-theme=['"]system['"]\]/)
-    expect(sealedUi).toMatch(/--canvas:\s*#fff;/)
+    expect(sealedUi).toMatch(/--canvas:\s*#fafafb;/)
+    expect(sealedUi).toMatch(/--accent:\s*#0071ea;/)
     expect(sealedUi).toMatch(/background:\s*var\(--canvas\)/)
   })
 

@@ -611,12 +611,6 @@ function AppearanceSettings({
       icon: Sun,
     },
     {
-      id: 'warm',
-      label: '暖纸',
-      description: '柔和米白，适合长时间阅读。',
-      icon: Sparkles,
-    },
-    {
       id: 'dark',
       label: '深色',
       description: '深色表面，适合低光环境。',

@@ -217,7 +217,7 @@ try {
   }
 
   browser = await chromium.launch({ headless: true })
-  for (const theme of ['light', 'warm', 'dark']) {
+  for (const theme of ['light', 'dark']) {
     const context = await browser.newContext({
       viewport: { width: 1440, height: 900 },
       colorScheme: theme === 'dark' ? 'dark' : 'light',

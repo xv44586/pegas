@@ -1,0 +1,1 @@
+export { IconCrossSmall } from './index'

@@ -731,11 +731,23 @@ describe('sealed Pegas UI', () => {
     )
     fireEvent.click(screen.getByRole('button', { name: /外观/ }))
     expect(screen.getByRole('heading', { name: '外观' })).toBeTruthy()
-    expect(screen.getAllByRole('radio')).toHaveLength(4)
-    fireEvent.click(screen.getByRole('radio', { name: /暖纸/ }))
-    expect(document.documentElement.dataset.theme).toBe('warm')
-    expect(localStorage.getItem('pegas-theme')).toBe('warm')
+    expect(screen.getAllByRole('radio')).toHaveLength(3)
+    expect(screen.queryByRole('radio', { name: /暖纸/ })).toBeNull()
+    fireEvent.click(screen.getByRole('radio', { name: /深色/ }))
+    expect(document.documentElement.dataset.theme).toBe('dark')
+    expect(localStorage.getItem('pegas-theme')).toBe('dark')
+    expect(document.documentElement.classList.contains('dark')).toBe(true)
     expect(screen.queryByRole('button', { name: '保存更改' })).toBeNull()
+  })
+
+  it('migrates a stored warm theme to light', async () => {
+    localStorage.setItem('pegas-theme', 'warm')
+    installFetch()
+    render(<App />)
+    await screen.findByLabelText('给 Pegas 发消息')
+    expect(document.documentElement.dataset.theme).toBe('light')
+    expect(localStorage.getItem('pegas-theme')).toBe('light')
+    expect(document.documentElement.classList.contains('dark')).toBe(false)
   })
 
   it('keeps model services, classification and Pegas settings separate', async () => {
