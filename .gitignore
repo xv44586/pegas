@@ -21,6 +21,9 @@ releases/
 .DS_Store
 *.log
 
+# Local preview runtime data.
+data-preview/
+
 # Local browser and design review artifacts.
 .playwright-cli/
 output/

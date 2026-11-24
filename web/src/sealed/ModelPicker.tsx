@@ -22,6 +22,21 @@ export function modelSelectionKey(model: DshModelCatalogItem): string {
   return `${model.provider}::${model.id}`
 }
 
+export function modelSearchRank(
+  model: Pick<DshModelCatalogItem, 'name' | 'id'>,
+  normalizedQuery: string,
+): number {
+  const name = model.name.toLocaleLowerCase()
+  const id = model.id.toLocaleLowerCase()
+  const idTail = id.slice(id.lastIndexOf('/') + 1)
+  if (name.startsWith(normalizedQuery) || idTail.startsWith(normalizedQuery))
+    return 0
+  if (name.includes(normalizedQuery) || idTail.includes(normalizedQuery))
+    return 1
+  if (id.startsWith(normalizedQuery)) return 2
+  return 3
+}
+
 export function ModelPicker({
   ariaLabel,
   models,
@@ -98,11 +113,19 @@ export function ModelPicker({
         ? [current, ...models.filter(model => model !== current)]
         : models
     }
-    return models.filter(model =>
-      `${model.name} ${model.id} ${model.provider}`
-        .toLocaleLowerCase()
-        .includes(normalizedQuery),
-    )
+    return models
+      .filter(model =>
+        `${model.name} ${model.id} ${model.provider}`
+          .toLocaleLowerCase()
+          .includes(normalizedQuery),
+      )
+      .map((model, index) => ({
+        model,
+        index,
+        rank: modelSearchRank(model, normalizedQuery),
+      }))
+      .sort((left, right) => left.rank - right.rank || left.index - right.index)
+      .map(entry => entry.model)
   }, [models, normalizedQuery, value])
   const pageSize = MODEL_PICKER_PAGE_SIZE
   const pageCount = Math.max(1, Math.ceil(filteredModels.length / pageSize))

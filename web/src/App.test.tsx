@@ -2746,6 +2746,65 @@ describe('sealed Pegas UI', () => {
     ).toBeTruthy()
   })
 
+  it('ranks model search matches by name and id-tail relevance over provider-prefix noise', async () => {
+    installFetch((path, init) => {
+      if (path === '/v1/settings' && init?.method !== 'PUT')
+        return Response.json({
+          ...settingsResponse,
+          settings: {
+            ...settingsResponse.settings,
+            agentModelProvider: 'magpie',
+            agentModelName: 'qwen-cn-2/qwen4-max',
+          },
+        })
+      if (path === '/v1/settings/agent-models')
+        return Response.json({
+          defaultProvider: 'magpie',
+          defaultModel: 'qwen-cn-2/qwen4-max',
+          models: [
+            {
+              provider: 'magpie',
+              id: 'qwen-cn-2/cmaas-glm-5.3',
+              name: 'cmaas-glm-5.3',
+            },
+            {
+              provider: 'magpie',
+              id: 'qwen-cn-2/deepseek-v4.1-flash-1017',
+              name: 'deepseek-v4.1-flash-1017',
+            },
+            {
+              provider: 'magpie',
+              id: 'qwen-cn-2/cmaas-qwen3.8-flash',
+              name: 'cmaas-qwen3.8-flash',
+            },
+            {
+              provider: 'magpie',
+              id: 'qwen-cn-2/qwen4-max',
+              name: 'Qwen4 Max',
+            },
+          ],
+        })
+      return undefined
+    })
+    render(<App />)
+    const modelButton = await screen.findByRole('button', {
+      name: /选择执行模型/,
+    })
+    await waitFor(() => expect(modelButton.textContent).toContain('Qwen4 Max'))
+    fireEvent.click(modelButton)
+    const dialog = await screen.findByRole('dialog', { name: '选择模型' })
+    fireEvent.change(within(dialog).getByPlaceholderText('搜索模型'), {
+      target: { value: 'qwen' },
+    })
+    const options = within(dialog).getAllByRole('option')
+    expect(options.map(option => option.textContent.slice(0, 20))).toEqual([
+      expect.stringContaining('Qwen4 Max'),
+      expect.stringContaining('cmaas-qwen3.8-flash'),
+      expect.stringContaining('cmaas-glm-5.3'),
+      expect.stringContaining('deepseek-v4.1-flash'),
+    ])
+  })
+
   it('paginates the Pegas execution-model and pool pickers with pinned special values', async () => {
     const catalogModels = Array.from({ length: 33 }, (_, index) => ({
       provider: 'Magpie',
