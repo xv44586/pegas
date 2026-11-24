@@ -651,4 +651,66 @@ describe('permission tier HTTP surface', () => {
       store.close()
     }
   })
+
+  it('serves the owner-scoped permission change history with bearer protection', async () => {
+    const store = new PegasStore(':memory:')
+    store.initializeRuntimeSettings(settings)
+    const task = createTask(store)
+    if (!task) throw new Error('Expected task')
+    store.updateWorkerProfile(task.id, 'owner', {
+      commandId: 'history-strict',
+      expectedRevision: 1,
+      modelMode: 'inherit',
+      permissionMode: 'strict',
+    })
+    store.updateWorkerProfile(task.id, 'owner', {
+      commandId: 'history-full',
+      expectedRevision: 2,
+      modelMode: 'inherit',
+      permissionMode: 'full',
+    })
+    const server = createControlPlane({
+      store,
+      apiToken: 'bridge-test',
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const base = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+    try {
+      const url = `${base}/v1/tasks/${encodeURIComponent(task.id)}/worker-profile/changes?userId=owner`
+      const unauthenticated = await fetch(url)
+      expect(unauthenticated.status).toBe(401)
+      const response = await fetch(url, {
+        headers: { authorization: 'Bearer bridge-test' },
+      })
+      expect(response.status).toBe(200)
+      const body = (await response.json()) as {
+        changes: {
+          commandId: string
+          revision: number
+          permissionMode?: string
+          previousPermissionMode?: string
+        }[]
+      }
+      expect(body.changes).toHaveLength(2)
+      expect(body.changes[0]).toMatchObject({
+        commandId: 'history-full',
+        revision: 3,
+        permissionMode: 'full',
+        previousPermissionMode: 'strict',
+      })
+      expect(body.changes[1]).toMatchObject({
+        commandId: 'history-strict',
+        revision: 2,
+        permissionMode: 'strict',
+      })
+      const foreign = await fetch(
+        `${base}/v1/tasks/${encodeURIComponent(task.id)}/worker-profile/changes?userId=intruder`,
+        { headers: { authorization: 'Bearer bridge-test' } },
+      )
+      expect(foreign.status).toBe(404)
+    } finally {
+      await new Promise<void>(resolve => server.close(() => resolve()))
+      store.close()
+    }
+  })
 })

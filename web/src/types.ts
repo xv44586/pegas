@@ -775,6 +775,14 @@ export interface WorkerProfileResponse {
   effective: EffectiveWorkerProfile
 }
 
+export interface PermissionTierChange {
+  commandId: string
+  revision: number
+  permissionMode?: 'inherit' | 'strict' | 'standard' | 'full'
+  previousPermissionMode?: 'inherit' | 'strict' | 'standard' | 'full'
+  createdAt: string
+}
+
 export interface NotificationPreferencesUpdate {
   expectedRevision: number
   quietStart?: string
