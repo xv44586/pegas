@@ -50,3 +50,36 @@ Electron main
 ## 失败与回滚
 
 主进程在 Control Plane 健康检查通过前不加载产品页，并在健康检查通过后才启动 Worker 与 Scheduler，避免冷启动时多个进程同时迁移新数据库。启动超时或子进程提前退出时展示本机错误页，不伪装为在线。三个服务分别运行在独立进程组中；应用退出时对整个组先发 SIGTERM，等待 7 秒（覆盖 DSH 内部 5 秒清理窗口）后再发 SIGKILL，服务主进程已经异常退出时也会清理组内残留执行器。删除 DESKTOP-001 提交即可回到纯 Web 构建；用户数据目录不随代码回滚删除。
+
+## 原生提醒（2026-11-24）
+
+> 状态：已实现。复用 Feature ID `DESKTOP-001`；本节把原「原生通知不在范围内」的边界收敛为「macOS 原生提醒在本节范围内，签名/公证/自动更新仍属后续发布 Feature」。
+
+### 用户结果
+
+桌面 App 在后台或最小化时，用户也能从 macOS 系统通知感知「需要你处理」的新事项（审批、澄清、交付审查、失败核对），点击通知直达对应事项；Dock 图标显示未读角标，回到前台处理完后角标消除。不再依赖用户主动切回窗口查看。
+
+### 方案与边界
+
+- **提醒面 = Outbox 未读事实，不是新事实来源**。Electron 主进程周期轮询既有 `GET /v1/outbox?userId=owner`（实例 bearer 仅存在于主进程），对「新出现且未读」的消息发一条 Electron `Notification`；点击通知聚焦主窗口并导航既有深链 `/?view=outbox&outbox=<messageId>`（复用 Web 恢复机制，不新增路由）。
+- **Dock 角标** = 未读 Outbox 条数（`readAt == null`），经 `app.dock.setBadge` 展示；全部已读或未连接时清除。产品已读与外部投递状态语义不变：桌面提醒不写 `readAt`、不改 `status`、不调用 resolve。
+- **不新增通知信道与进程**：不改 `src/notification/*` dispatcher、不引入 APNs/Web Push、不启动 webhook 服务；桌面内置服务 `PEGAS_PUSH_MODE=disabled` 不变。桌面提醒是纯客户端适配（长期约束：权威状态在服务端）。
+- **去重与安静**：主进程按消息 id 去重（进程生命周期内），重启后只提醒「上次可见最大 createdAt 之后」的新消息，不对历史未读补发轰炸；沿用服务端静默时段结果（Outbox 消息本身已被 quiet hours 延迟产生，客户端不复制 quiet 逻辑）。系统通知权限被拒时静默降级为仅 Dock 角标，不报错不重试。
+- **数据与权限边界**：轮询只读、owner 隔离由既有 API 保证；bearer 不进入 renderer；通知正文只用消息既有 title/摘要投影，不展示敏感 evidence 内容。
+- **失败与恢复**：轮询失败（服务停止/网络错误）指数退避并清除角标为未知态（不显示假 0）；服务恢复后继续。窗口不存在时点击通知走既有 `activate` 重开路径。
+
+### 验收条件与实现证据
+
+1. 新 Outbox 未读消息触发一次系统通知（同 id 不重复）；点击聚焦窗口并打开对应 outbox 深链。
+2. Dock 角标数与服务端未读数一致；已读后下一轮轮询消除；轮询失败不误报 0。
+3. 通知权限拒绝时降级为角标，无错误弹窗；历史未读在 App 重启后不补发通知。
+4. 不改 dispatcher/store/schema；`pnpm check` 与 `pnpm smoke:desktop` 通过，smoke 断言角标与通知调用（Electron 主进程 evaluate）。
+
+- **权威实现**：`src/desktop/attention.ts`（纯逻辑：快照解析、基线去重、角标计数、通知文案投影、失败退避计数），`src/desktop/main.ts`（主进程接线：3s 轮询受信 origin `/v1/outbox?userId=owner`，bearer 只在主进程；`Notification` 点击聚焦窗口并加载既有 `/?view=outbox&outbox=<id>` 深链；`app.dock.setBadge`；退出时停轮询并清角标）。
+- **自动化证据**：`test/desktop-attention.test.ts` 6 测试（解析拒绝坏形状、历史未读只计角标不补发通知、同 id 只通知一次、全部已读清除角标、失败不清假 0、通知不可用降级角标、深链编码、通知文案不泄漏工具参数）；`test/desktop-runtime.test.ts` +3（主进程接线合同、退出清理、smoke 角标生命周期断言存在）。
+- **真实进程证据**：`pnpm smoke:desktop` 在真实 Electron 中完成 Task→Run 后断言 Dock 角标 > 0（`app.dock.getBadge()` 主进程 evaluate），经真实已读 API 标记一条已读后断言角标下降；服务终止与进程组清理断言不回归。
+
+### 非目标
+
+- APNs、Web Push、PWA（NOTIFY-002，本期押后）；通知优先级分级（NOTIFY-001）；菜单栏常驻与全局快捷键；签名/公证/自动更新（发布 Feature）。
+- 不在桌面端复制静默时段、合并或投递重试逻辑；不新增服务端接口。

@@ -46,6 +46,34 @@ describe('desktop runtime', () => {
     expect(ready).toBeLessThan(background)
   })
 
+  it('wires native attention to the trusted origin with main-process bearer only', () => {
+    expect(desktopMain).toContain('startAttentionMonitor(appUrl, apiToken)')
+    expect(desktopMain).toContain('/v1/outbox?userId=owner')
+    expect(desktopMain).toContain('Notification.isSupported()')
+    expect(desktopMain).toContain('app.dock?.setBadge(value)')
+    const monitorStart = desktopMain.indexOf('function startAttentionMonitor')
+    expect(monitorStart).toBeGreaterThanOrEqual(0)
+    expect(desktopMain).not.toContain('notification-permission')
+  })
+
+  it('stops the attention poll and clears the badge during shutdown', () => {
+    const stopChildren = desktopMain.indexOf('function stopChildren')
+    const clearTimer = desktopMain.indexOf('clearTimeout(attentionTimer)')
+    const clearBadge = desktopMain.indexOf("app.dock?.setBadge('')")
+    expect(stopChildren).toBeGreaterThanOrEqual(0)
+    expect(clearTimer).toBeGreaterThan(stopChildren)
+    expect(clearBadge).toBeGreaterThan(stopChildren)
+  })
+
+  it('smoke asserts the dock badge lifecycle against real unread facts', () => {
+    expect(desktopSmoke).toContain('waitForUnreadBadge(application)')
+    expect(desktopSmoke).toContain('markFirstUnreadRead(window)')
+    expect(desktopSmoke).toContain(
+      'waitForBadgeBelow(application, unreadBefore)',
+    )
+    expect(desktopSmoke).toContain('app.dock?.getBadge()')
+  })
+
   it('builds an isolated loopback service environment', () => {
     const environment = desktopServiceEnvironment({
       port: 41234,
