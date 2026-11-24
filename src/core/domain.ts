@@ -590,6 +590,7 @@ export interface OutboxMessage {
   updatedAt: string
   sentAt?: string
   readAt?: string
+  expiresAt?: string
   coalesceKey?: string
   coalescedCount?: number
   mergedIntoId?: string

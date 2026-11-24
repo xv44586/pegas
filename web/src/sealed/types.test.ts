@@ -369,6 +369,47 @@ describe('DESIGN-007 attention sections and grouping', () => {
     expect(board.activity).toHaveLength(0)
   })
 
+  it('moves an expired routing clarification out of todo and keeps the honest fact as an update', () => {
+    const settledTodo = outbox(
+      'routing-todo',
+      'routing.clarification_required',
+      {
+        taskId: undefined,
+        readAt: '2026-11-24T03:00:00.000Z',
+        payload: {
+          type: 'routing.clarification_required',
+          eventId: 'event-expiry-1',
+          input: '再补充一点',
+          question: '这是新事情还是继续已有的事？',
+          text: '这是新事情还是继续已有的事？',
+        },
+      },
+    )
+    const expiredFact = outbox(
+      'routing-expired',
+      'routing.clarification_expired',
+      {
+        taskId: undefined,
+        payload: {
+          type: 'routing.clarification_expired',
+          eventId: 'event-expiry-1',
+          input: '再补充一点',
+          question: '这是新事情还是继续已有的事？',
+          expiredAt: '2026-11-24T03:00:00.000Z',
+          text: '归类澄清已过期：这条消息没有进入任何事情。如需处理，请重新发送。',
+        },
+      },
+    )
+    expect(isAttentionMessage(settledTodo)).toBe(false)
+    expect(attentionKind(expiredFact)).toBe('update')
+    expect(attentionSection(expiredFact)).toBeUndefined()
+    expect(isAttentionMessage(expiredFact)).toBe(false)
+    const board = attentionBoard([settledTodo, expiredFact])
+    expect(board.todo).toHaveLength(0)
+    expect(board.totalNotifications).toBe(0)
+    expect(board.totalUnread).toBe(0)
+  })
+
   it('keeps every actionable message as its own pinned row', () => {
     const board = attentionBoard([
       outbox('approval-a', 'approval.required', {

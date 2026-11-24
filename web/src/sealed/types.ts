@@ -320,7 +320,13 @@ export function attentionKind(message: OutboxMessage): AttentionKind {
 }
 
 export function isAttentionMessage(message: OutboxMessage): boolean {
-  return attentionKind(message) !== 'update'
+  if (attentionKind(message) === 'update') return false
+  if (
+    payloadType(message.payload) === 'routing.clarification_required' &&
+    message.readAt
+  )
+    return false
+  return true
 }
 
 export function unresolvedAttentionMessages(
