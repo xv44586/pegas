@@ -136,6 +136,43 @@ describe('write action external probe', () => {
     ).toEqual({ resolution: 'failed', matched: [], missing: [target] })
   })
 
+  it('confirms deletion only when every expected-absent target is gone', () => {
+    const directory = workspace()
+    const gone = join(directory, 'gone.md')
+    const lingering = join(directory, 'lingering.md')
+    writeFileSync(lingering, 'still here\n')
+    expect(probeWriteAction({ targets: [], absent: [gone] })).toEqual({
+      resolution: 'succeeded',
+      matched: [gone],
+      missing: [],
+    })
+    expect(
+      probeWriteAction({ targets: [], absent: [gone, lingering] }),
+    ).toEqual({
+      resolution: 'failed',
+      matched: [gone],
+      missing: [lingering],
+    })
+  })
+
+  it('combines present targets and absent targets in one probe', () => {
+    const directory = workspace()
+    const moved = join(directory, 'moved.md')
+    const source = join(directory, 'source.md')
+    writeFileSync(moved, 'landed\n')
+    expect(
+      probeWriteAction({
+        targets: [moved],
+        targetHashes: { [moved]: sha256('landed\n') },
+        absent: [source],
+      }),
+    ).toEqual({
+      resolution: 'succeeded',
+      matched: [moved, source],
+      missing: [],
+    })
+  })
+
   it('treats a missing target as confirmed failure and no declared target as inconclusive', () => {
     const directory = workspace()
     const missing = join(directory, 'absent.md')
@@ -210,6 +247,92 @@ describe('automatic action reconciliation', () => {
       expect(action?.reconciliation?.resolution).toBe('failed')
       expect(store.findTask(blocked.taskId, 'owner')).toMatchObject({
         statusReason: 'action_failed',
+      })
+    } finally {
+      store.close()
+    }
+  })
+
+  it('settles an unknown delete action once the file is really gone', () => {
+    const store = new PegasStore(':memory:')
+    const directory = workspace()
+    const target = join(directory, 'deleted.md')
+    try {
+      const event = store.enqueueEvent({
+        userId: 'owner',
+        type: 'user.message',
+        source: 'web',
+        authenticatedActor: 'human',
+        payload: { text: '删除工作区外的过期文件' },
+      }).event
+      const created = store.applyRoutingDecision(
+        event,
+        {
+          kind: 'create_task',
+          title: '删除工作区外的过期文件',
+          goal: '删除工作区外的过期文件',
+          input: '删除工作区外的过期文件',
+          reason: 'auto reconciliation test',
+        },
+        'dsh-headless',
+      )
+      const claimed = store.claimNextRun('worker-auto-delete')
+      if (!claimed) throw new Error('Expected a claimed Run')
+      const requested = store.requestApproval(
+        claimed.run.id,
+        claimed.claimToken,
+        {
+          kind: 'dsh.tool.apply_patch',
+          risk: 'high',
+          idempotencyKey: `auto-delete-${created.task.id}`,
+          request: {
+            tool: 'apply_patch',
+            callId: 'call-auto-delete',
+            category: 'out-of-workspace-write',
+            targets: [],
+            argumentsHash: 'a'.repeat(64),
+            effect: { absent: [target] },
+          },
+          recoveryPoint: {
+            step: 'before_tool_call',
+            callId: 'call-auto-delete',
+          },
+          approval: {
+            summary: '批准删除工作区外文件',
+            impact: '删除工作区之外的文件',
+            recommendedOptionId: 'approve',
+            options: [
+              { id: 'approve', label: '批准执行一次', kind: 'approve' },
+              { id: 'reject', label: '不执行', kind: 'reject' },
+            ],
+          },
+        },
+      )
+      store.decideApproval(requested.approval.id, 'owner', {
+        commandId: `approve-auto-delete-${created.task.id}`,
+        optionId: 'approve',
+      })
+      const resumed = store.claimNextRun('worker-auto-delete-resumed')
+      if (!resumed) throw new Error('Expected resumed Run')
+      store.recordActionOutcome(requested.action.id, resumed.claimToken, {
+        commandId: `outcome-auto-delete-${created.task.id}`,
+        status: 'unknown',
+        result: { reason: 'executor_completed_without_outcome' },
+      })
+      const reconciliation = new ActionReconciliation({ store })
+      const report = reconciliation.checkOnce()
+      expect(report.settled).toHaveLength(1)
+      expect(report.settled[0]).toMatchObject({
+        actionId: requested.action.id,
+        resolution: 'succeeded',
+      })
+      const action = store.getAction(requested.action.id, 'owner')
+      expect(action).toMatchObject({
+        status: 'reconciled',
+        reconciliation: {
+          resolution: 'succeeded',
+          reconciledBy: 'system:auto-reconciliation',
+        },
       })
     } finally {
       store.close()

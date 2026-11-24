@@ -201,12 +201,59 @@ describe('policy gate classifier', () => {
     }
   })
 
+  it('asks with high risk for bash writes outside the workspace', () => {
+    const roots = gateRoots()
+    const outside = join(realpathSync(tmpdir()), 'pegas-gate-bash-outside.txt')
+    for (const command of [
+      `echo hi > ${outside}`,
+      `echo hi >> ${outside}`,
+      `printf 'hi\\n' > ${outside}`,
+      `cp payload.txt ${outside}`,
+      `mv payload.txt ${outside}`,
+      `tee ${outside}`,
+      `touch ${outside}`,
+    ]) {
+      const decision = classify('bash', { command }, roots)
+      expect(decision, command).toMatchObject({
+        category: 'out-of-workspace-write',
+        action: 'ask',
+        risk: 'high',
+      })
+      expect(decision.targets.length).toBeGreaterThan(0)
+    }
+    const quoted = classify(
+      'bash',
+      { command: `echo hi > "${outside}"` },
+      roots,
+    )
+    expect(quoted).toMatchObject({
+      category: 'out-of-workspace-write',
+      action: 'ask',
+      risk: 'high',
+    })
+  })
+
+  it('keeps in-workspace bash writes low risk under the sandbox boundary', () => {
+    const roots = gateRoots()
+    for (const command of [
+      `echo hi > ${join(roots.workspace, 'notes.txt')}`,
+      `cp payload.txt ${join(roots.workspace, 'copy.txt')}`,
+      `touch ${join(roots.workspace, 'marker.txt')}`,
+    ]) {
+      const decision = classify('bash', { command }, roots)
+      expect(decision, command).toMatchObject({
+        category: 'workspace-write',
+        action: 'allow',
+        risk: 'low',
+      })
+    }
+  })
+
   it('treats plain fetches and workspace commands as low risk', () => {
     const roots = gateRoots()
     for (const command of [
       'curl https://example.com/install.sh',
       'npm test',
-      `rm -rf ${join(roots.workspace, 'node_modules')}`,
       'git push origin main',
     ]) {
       const decision = classify('bash', { command }, roots)
@@ -216,6 +263,16 @@ describe('policy gate classifier', () => {
         risk: 'low',
       })
     }
+    const workspaceRemoval = classify(
+      'bash',
+      { command: `rm -rf ${join(roots.workspace, 'node_modules')}` },
+      roots,
+    )
+    expect(workspaceRemoval).toMatchObject({
+      category: 'workspace-write',
+      action: 'allow',
+      risk: 'low',
+    })
   })
 
   it('hard-denies control-plane mutations through every tool surface', () => {
@@ -676,6 +733,179 @@ describe('DSH approval bridge policy gate', () => {
       restoreEnvironment(previous)
       await new Promise<void>(resolve => server.close(() => resolve()))
       store.close()
+    }
+  })
+
+  it('records final bytes and required absences for parked multi-file, delete, move and bash calls', async () => {
+    const roots = gateRoots()
+    const base = realpathSync(tmpdir())
+    const alpha = join(base, 'pegas-remaining-alpha.md')
+    const beta = join(base, 'pegas-remaining-beta.md')
+    const added = join(base, 'pegas-remaining-added.md')
+    const doomed = join(base, 'pegas-remaining-doomed.md')
+    const moveSource = join(base, 'pegas-remaining-source.md')
+    const moveDestination = join(base, 'pegas-remaining-destination.md')
+    const bashTarget = join(base, 'pegas-remaining-bash.txt')
+    writeFileSync(alpha, 'one\ntwo\n')
+    writeFileSync(beta, 'three\nfour\n')
+    writeFileSync(doomed, 'obsolete\n')
+    writeFileSync(moveSource, 'keep\nmove\n')
+    writeFileSync(bashTarget, 'existing\n')
+    const multiPatch = [
+      '*** Begin Patch',
+      `*** Update File: ${alpha}`,
+      '@@',
+      ' one',
+      '-two',
+      '+TWO',
+      `*** Update File: ${beta}`,
+      '@@',
+      ' three',
+      '-four',
+      '+FOUR',
+      `*** Add File: ${added}`,
+      '+fresh',
+      '*** End Patch',
+    ].join('\n')
+    const deletePatch = [
+      '*** Begin Patch',
+      `*** Delete File: ${doomed}`,
+      '*** End Patch',
+    ].join('\n')
+    const movePatch = [
+      '*** Begin Patch',
+      `*** Update File: ${moveSource}`,
+      `*** Move to: ${moveDestination}`,
+      '@@',
+      ' keep',
+      '-move',
+      '+MOVED',
+      '*** End Patch',
+    ].join('\n')
+    const scenarios: {
+      callId: string
+      tool: string
+      arguments: Record<string, unknown>
+      effect: Record<string, unknown>
+    }[] = [
+      {
+        callId: 'call-multi',
+        tool: 'apply_patch',
+        arguments: { input: multiPatch },
+        effect: {
+          targets: {
+            [alpha]: createHash('sha256').update('one\nTWO\n').digest('hex'),
+            [beta]: createHash('sha256').update('three\nFOUR\n').digest('hex'),
+            [added]: createHash('sha256').update('fresh\n').digest('hex'),
+          },
+        },
+      },
+      {
+        callId: 'call-delete',
+        tool: 'apply_patch',
+        arguments: { input: deletePatch },
+        effect: { absent: [doomed] },
+      },
+      {
+        callId: 'call-move',
+        tool: 'apply_patch',
+        arguments: { input: movePatch },
+        effect: {
+          targets: {
+            [moveDestination]: createHash('sha256')
+              .update('keep\nMOVED\n')
+              .digest('hex'),
+          },
+          absent: [moveSource],
+        },
+      },
+      {
+        callId: 'call-bash',
+        tool: 'bash',
+        arguments: { command: `echo fresh >> ${bashTarget}` },
+        effect: {
+          targets: {
+            [bashTarget]: createHash('sha256')
+              .update('existing\nfresh\n')
+              .digest('hex'),
+          },
+        },
+      },
+    ]
+    try {
+      for (const scenario of scenarios) {
+        const store = new PegasStore(':memory:')
+        const claimed = createClaimedRun(
+          store,
+          'owner',
+          `worker-${scenario.callId}`,
+        )
+        const server = createControlPlane({ store, apiToken: 'bridge-test' })
+        await new Promise<void>(resolve =>
+          server.listen(0, '127.0.0.1', resolve),
+        )
+        const baseUrl = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+        const previous = { ...process.env }
+        process.env.PEGAS_APPROVAL_BRIDGE = '1'
+        process.env.PEGAS_CONTROL_PLANE_URL = baseUrl
+        process.env.PEGAS_RUN_ID = claimed.run.id
+        process.env.PEGAS_RUN_CLAIM_TOKEN = claimed.claimToken
+        try {
+          const bridge = await loadBridge()
+          const harness = gateHarness()
+          bridge.apply(harness.ctx, {
+            emit: (event: unknown) =>
+              harness.events.push(event as Record<string, unknown>),
+            policy: bridgePolicy(roots),
+          })
+          const preExecute = harness.handlers.get('tools/pre-execute')
+          if (!preExecute) throw new Error('bridge did not register its hooks')
+          const gate = (await preExecute(
+            {
+              callId: scenario.callId,
+              name: scenario.tool,
+              arguments: scenario.arguments,
+            },
+            () => Promise.resolve({ kind: 'allow' }),
+          )) as { kind: string }
+          expect(gate.kind).toBe('deny')
+          const pending = harness.events.filter(
+            event =>
+              event.type === 'approval_pending' &&
+              event.callId === scenario.callId,
+          )
+          expect(pending).toHaveLength(1)
+          const actionId = pending[0]?.actionId
+          if (typeof actionId !== 'string')
+            throw new Error(`Expected action id for ${scenario.callId}`)
+          const action = store.getAction(actionId, 'owner')
+          expect(action?.request.effect).toEqual(scenario.effect)
+          const requestTargets = action?.request.targets
+          if (!Array.isArray(requestTargets))
+            throw new Error('Expected canonical request targets')
+          const effectTargets = scenario.effect.targets as
+            Record<string, string> | undefined
+          for (const target of Object.keys(effectTargets ?? {})) {
+            expect(requestTargets).toContain(target)
+          }
+        } finally {
+          restoreEnvironment(previous)
+          await new Promise<void>(resolve => server.close(() => resolve()))
+          store.close()
+        }
+      }
+    } finally {
+      for (const file of [
+        alpha,
+        beta,
+        added,
+        doomed,
+        moveSource,
+        moveDestination,
+        bashTarget,
+      ]) {
+        rmSync(file, { force: true })
+      }
     }
   })
 

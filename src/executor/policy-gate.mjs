@@ -342,6 +342,9 @@ function classifyBash(execution, context) {
       [],
     )
   }
+  if (writeTargets.length > 0) {
+    return judgeWriteTargets(writeTargets, context, '命令 bash')
+  }
   return decision(
     'read',
     'low',

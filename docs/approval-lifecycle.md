@@ -150,7 +150,7 @@ X-Pegas-Run-Claim-Token: <successor-capability>
 | ---------------------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
 | read                   | fs 读/搜索、web fetch/search 只读                                                  | allow，发 `policy_decision` 记录                                                                               |
 | workspace-write        | 写路径 canonical（symlink/父目录解析后）在工作区内                                 | allow，发 `policy_decision` 记录                                                                               |
-| out-of-workspace-write | 写路径越界（write/edit/apply_patch 全部目标路径）                                  | ask，risk `high`                                                                                               |
+| out-of-workspace-write | 写路径越界（write/edit/apply_patch 全部目标路径；bash 重定向/写命令目标）          | ask，risk `high`                                                                                               |
 | network-egress         | bash 命中外部发送模式（POST/上传/scp/rsync 等）                                    | ask，risk `high`                                                                                               |
 | destructive-command    | bash 命中不可逆模式（区外递归删除、force push、DROP/TRUNCATE、mkfs/dd of=/dev 等） | ask，risk `critical`                                                                                           |
 | control-plane-mutation | 写 Pegas 数据目录 / DSH home（含 bash 间接写与重定向）                             | **deny + 强制审批**，risk `critical`；同时经 `tools.guard()` 注册审批后仍生效的单调拒绝，任何 grant 都不能放行 |
@@ -187,7 +187,7 @@ claim token 只经进程环境传给 DSH 主进程，DSH 自身的 subprocess �
 
 桥接的已知边界：
 
-- Policy Gate 覆盖全部工具调用，但 bash 只做确定性静态分类：未命中模式的复杂命令按低风险交由沙箱边界执行，间接执行按 unknown 强制人工确认；execpolicy 级完整命令语义解析属后续阶段。
+- Policy Gate 覆盖全部工具调用，但 bash 只做确定性静态分类：重定向与写命令（rm/mv/cp/tee/touch 等）目标经 canonical 判定——区外 ask（out-of-workspace-write）、区内 allow（workspace-write，沙箱边界兜底）；未命中任何写/发送/不可逆模式的命令按低风险交由沙箱边界执行，间接执行按 unknown 强制人工确认；桥对「allow 但类别非 read/workspace-write」的判定一律升为 unknown ask（fail closed，不留静默放行面）；execpolicy 级完整命令语义解析属后续阶段。
 - Gate 的每次判定（allow/ask/deny）自 2026-11-24 起落 append-only `policy_call_audit` 独立审计表（含档位代次、规则引用、审阅结论与 Action 引用，`GET /v1/policy-audit` 可查），Activity 进度流只做白话展示；切档动作本身另有 append-only 审计。
 - 档位对象与运行中热切换已落地（P2），持久规则批准（approve_rule）已落地（P3），审批卡结构化渲染与通知深链已落地（P4），模型自动审阅（默认关、失败降级人工）已落地（P5）。
 - 桥现读档位是每工具调用一次本地 HTTP 往返；控制面不可达时该 Run 的工具全部按 strict 升审批，不会静默放行。
@@ -198,7 +198,7 @@ claim token 只经进程环境传给 DSH 主进程，DSH 自身的 subprocess �
 
 ## 当前限制
 
-持久对象、策略边界、API、Web 决策、恢复协议与人工核对闭环已可用；Policy Gate 覆盖全部工具调用并做确定性 risk 分级（P1），权限档位（全局默认 + 事情覆盖 + Run 快照下界 + 运行中热切换）已落地（P2），本事情内同类规则批准与撤销已落地（P3），审批卡结构化渲染与通知深链已落地（P4），模型自动审阅已落地（P5，默认关闭），逐调用独立审计表（P6）与档位审计列表 UI（P7）已落地（2026-11-24）。文件写类 unknown Action 的自动对账已由 EXEC-003 落地（2026-11-24，`system:auto-reconciliation` 探测结算；同日桥两环补齐 write/edit/单文件 apply_patch 最终字节指纹，按 sha256 判定）；仍标记为 `Partial`：bash 写与多文件/删除/移动补丁无最终字节指纹（存在性判定或留人工）、非文件类副作用仍留人工。组织级 RBAC、多人会签、超时策略与可配置风险阈值同样不在当前范围内。
+持久对象、策略边界、API、Web 决策、恢复协议与人工核对闭环已可用；Policy Gate 覆盖全部工具调用并做确定性 risk 分级（P1），权限档位（全局默认 + 事情覆盖 + Run 快照下界 + 运行中热切换）已落地（P2），本事情内同类规则批准与撤销已落地（P3），审批卡结构化渲染与通知深链已落地（P4），模型自动审阅已落地（P5，默认关闭），逐调用独立审计表（P6）与档位审计列表 UI（P7）已落地（2026-11-24）。文件写类 unknown Action 的自动对账已由 EXEC-003 落地（2026-11-24，`system:auto-reconciliation` 探测结算；同日桥四环补齐 write/edit/apply_patch（含多文件/Delete/Move）与简单 bash echo/printf 重定向的最终字节指纹与 absent 判定，按 sha256 判定；Gate 同步把 bash 区外写纳入 out-of-workspace-write ask）；仍标记为 `Partial`：复杂 bash 写（管道/复合命令/替换/变量）与非文件类副作用无静态探测面仍留人工。组织级 RBAC、多人会签、超时策略与可配置风险阈值同样不在当前范围内。
 
 ## 回滚
 

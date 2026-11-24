@@ -9,7 +9,7 @@ import { deriveWriteEffect } from './write-effect.mjs'
 /** @typedef {{ eventId: string, text: string, createdAt: string }} MandateInstruction */
 /** @typedef {{ instructions: MandateInstruction[], omitted: boolean }} MandateProjection */
 /** @typedef {{ tier: import('./policy-gate.d.ts').PolicyTier, generation: string, mismatch: boolean, rules: ApprovalRule[], autoReviewEnabled: boolean, mandate: MandateProjection }} TierState */
-/** @typedef {{ tool: string, argumentsHash: string, command?: string, effect?: { contentHash?: string, targets?: Record<string, string> }, classification?: import('./policy-gate.d.ts').ToolCallClassification }} CapturedCall */
+/** @typedef {{ tool: string, argumentsHash: string, command?: string, effect?: { contentHash?: string, targets?: Record<string, string>, absent?: string[] }, classification?: import('./policy-gate.d.ts').ToolCallClassification }} CapturedCall */
 /** @typedef {{ session?: { requestHeader?: () => { config?: { provider?: unknown, model?: unknown } } | undefined } }} ReviewAgent */
 /** @typedef {{ callId?: string | number, name: string, arguments?: unknown, agent?: ReviewAgent }} ToolExecution */
 /** @typedef {{ callId?: string | number, toolName: string, reason?: string, signal?: { aborted?: boolean } }} ApprovalRequest */
@@ -215,9 +215,30 @@ export function apply(ctx, config = {}) {
           })
           return { kind: 'deny', reason: classification.reason }
         }
-        let reviewOutcome = reviewOutcomes.get(callKey)
+      }
+      if (classification.action === 'deny') {
+        emit({
+          type: 'policy_decision',
+          callId: callKey,
+          tool: exec.name,
+          category: classification.category,
+          risk: classification.risk,
+          decision: 'deny',
+          reason: classification.reason,
+          tier: tierState.tier,
+          generation: tierState.generation,
+          mismatch: tierState.mismatch,
+          targets: classification.targets,
+        })
+        return { kind: 'deny', reason: classification.reason }
+      }
+      if (classification.action === 'ask') {
+        let reviewOutcome =
+          callKey === undefined ? undefined : reviewOutcomes.get(callKey)
         if (
           reviewOutcome === undefined &&
+          capability !== undefined &&
+          callKey !== undefined &&
           autoReviewEligible(tierState, classification) &&
           ctx.llm &&
           typeof ctx.llm.stream === 'function'
@@ -245,6 +266,9 @@ export function apply(ctx, config = {}) {
         }
         if (reviewOutcome?.decision === 'allow') {
           try {
+            if (capability === undefined || callKey === undefined) {
+              return { kind: 'ask', reason: classification.reason }
+            }
             const reviewedActionId = await createReviewedAction(
               capability,
               callKey,
@@ -311,6 +335,9 @@ export function apply(ctx, config = {}) {
         if (exec.agent !== undefined) {
           return { kind: 'ask', reason: askReason }
         }
+        if (!capability || callKey === undefined) {
+          return { kind: 'ask', reason: askReason }
+        }
         try {
           const pending = await parkCall(
             capability,
@@ -334,6 +361,42 @@ export function apply(ctx, config = {}) {
           })
         }
         return { kind: 'deny', reason: askReason }
+      }
+      if (
+        classification.category !== 'read' &&
+        classification.category !== 'workspace-write'
+      ) {
+        const escalationReason =
+          exec.name === 'bash'
+            ? '命令无法静态判定实际效果，需要你确认。'
+            : `工具 ${exec.name} 无法静态判定实际效果，需要你确认。`
+        const escalated = {
+          ...classification,
+          category: /** @type {const} */ ('unknown'),
+          risk:
+            classification.risk === 'critical'
+              ? /** @type {const} */ ('critical')
+              : /** @type {const} */ ('high'),
+          action: /** @type {const} */ ('ask'),
+          reason: escalationReason,
+        }
+        if (callKey !== undefined) {
+          gateDecisions.set(callKey, escalated)
+        }
+        emit({
+          type: 'policy_decision',
+          callId: callKey,
+          tool: exec.name,
+          category: escalated.category,
+          risk: escalated.risk,
+          decision: 'ask',
+          reason: escalationReason,
+          tier: tierState.tier,
+          generation: tierState.generation,
+          mismatch: tierState.mismatch,
+          targets: escalated.targets,
+        })
+        return { kind: 'ask', reason: escalationReason }
       }
       return next()
     },
@@ -408,7 +471,14 @@ export function apply(ctx, config = {}) {
           return 'allowed-once'
         }
       }
-      if (!capability || callKey === undefined || parked) return next()
+      if (callKey === undefined) return next()
+      if (parked) {
+        return classification?.action === 'ask' ? 'rejected' : next()
+      }
+      if (!capability) {
+        if (classification?.action === 'ask') return 'rejected'
+        return next()
+      }
       parked = true
       const reason = request.reason ?? `工具 ${request.toolName} 请求越权执行`
       try {
@@ -1294,14 +1364,16 @@ function stableHash(value) {
 /**
  * EXEC-003: record the intended external effect of a file mutation so
  * automatic reconciliation can verify the landed bytes, not just existence.
- * write declares its full content; edit and single-file apply_patch deltas
- * are replayed over the current file to derive the final bytes. Anything
- * the derivation cannot statically replay keeps no fingerprint and stays
- * on the conservative existence-or-human path.
+ * write declares its full content; edit and apply_patch deltas (including
+ * multi-file, delete and move operations) are replayed over the current
+ * files to derive the final bytes or required absences; a single literal
+ * echo/printf redirection is replayed the same way. Anything the
+ * derivation cannot statically replay keeps no fingerprint and stays on
+ * the conservative existence-or-human path.
  *
  * @param {ToolExecution} exec
  * @param {import('./policy-gate.d.ts').PolicyRoots} policy
- * @returns {{ effect?: { contentHash?: string, targets?: Record<string, string> } }}
+ * @returns {{ effect?: { contentHash?: string, targets?: Record<string, string>, absent?: string[] } }}
  */
 function capturedWriteEffect(exec, policy) {
   const effect = deriveWriteEffect(exec, policy)

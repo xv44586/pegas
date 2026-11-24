@@ -14,7 +14,7 @@ const MAX_EFFECT_FILE_BYTES = 10 * 1024 * 1024
  *
  * @param {{ name: string, arguments?: unknown }} execution
  * @param {{ workspaceRoot?: string }} context
- * @returns {{ contentHash: string } | { targets: Record<string, string> } | undefined}
+ * @returns {{ contentHash?: string, targets?: Record<string, string>, absent?: string[] } | undefined}
  */
 export function deriveWriteEffect(execution, context) {
   const arguments_ = record(execution.arguments)
@@ -29,6 +29,9 @@ export function deriveWriteEffect(execution, context) {
   }
   if (execution.name === 'apply_patch') {
     return derivePatchEffect(arguments_, context)
+  }
+  if (execution.name === 'bash') {
+    return deriveBashEffect(arguments_, context)
   }
   return undefined
 }
@@ -61,7 +64,7 @@ function deriveEditEffect(arguments_, context) {
 /**
  * @param {Record<string, unknown>} arguments_
  * @param {{ workspaceRoot?: string }} context
- * @returns {{ targets: Record<string, string> } | undefined}
+ * @returns {{ targets?: Record<string, string>, absent?: string[] } | undefined}
  */
 function derivePatchEffect(arguments_, context) {
   const patch =
@@ -72,23 +75,229 @@ function derivePatchEffect(arguments_, context) {
         : undefined
   if (patch === undefined) return undefined
   const operations = parsePatch(patch)
-  if (operations?.length !== 1) return undefined
-  const operation = operations[0]
-  if (!operation) return undefined
-  const target = targetPath(operation.path, context)
-  if (target === undefined) return undefined
-  if (operation.kind === 'add') {
-    return { targets: { [target]: hash(operation.content) } }
+  if (!operations || operations.length === 0) return undefined
+  /** @type {Record<string, string>} */
+  const targets = {}
+  /** @type {string[]} */
+  const absent = []
+  /** @type {Set<string>} */
+  const touched = new Set()
+  /** @param {string} path */
+  const claim = path => {
+    if (touched.has(path)) return false
+    touched.add(path)
+    return true
   }
-  if (operation.kind !== 'update' || operation.moveTo !== undefined)
-    return undefined
-  const original = readForEdit(target)
-  if (!original) return undefined
-  const applied = applyHunks(original.content, operation.hunks)
-  if (applied === undefined) return undefined
+  for (const operation of operations) {
+    const target = targetPath(operation.path, context)
+    if (target === undefined || !claim(target)) return undefined
+    if (operation.kind === 'delete') {
+      absent.push(target)
+      continue
+    }
+    if (operation.kind === 'add') {
+      targets[target] = hash(operation.content)
+      continue
+    }
+    const original = readForEdit(target)
+    if (!original) return undefined
+    if (operation.moveTo !== undefined) {
+      const destination = targetPath(operation.moveTo, context)
+      if (destination === undefined || !claim(destination)) return undefined
+      const moved =
+        operation.hunks.length === 0
+          ? original.content
+          : applyHunks(original.content, operation.hunks)
+      if (moved === undefined) return undefined
+      targets[destination] = hash(restoreLineEndings(moved, original.crlf))
+      absent.push(target)
+      continue
+    }
+    const applied = applyHunks(original.content, operation.hunks)
+    if (applied === undefined) return undefined
+    targets[target] = hash(restoreLineEndings(applied, original.crlf))
+  }
   return {
-    targets: { [target]: hash(restoreLineEndings(applied, original.crlf)) },
+    ...(Object.keys(targets).length > 0 ? { targets } : {}),
+    ...(absent.length > 0 ? { absent } : {}),
   }
+}
+
+/**
+ * Replay only the bash forms whose landed bytes are fully determined by
+ * the command text: a single `echo`/`printf` with literal arguments and
+ * one `>` or `>>` redirect. Pipelines, substitutions, compound commands
+ * and any other write command stay unverifiable.
+ *
+ * @param {Record<string, unknown>} arguments_
+ * @param {{ workspaceRoot?: string }} context
+ * @returns {{ targets: Record<string, string> } | undefined}
+ */
+function deriveBashEffect(arguments_, context) {
+  const command = arguments_.command
+  if (typeof command !== 'string') return undefined
+  if (/[;|&`]|\$\(|\$\{|\n/.test(command)) return undefined
+  const redirect = /(?<![>])>{1,2}(?![>])/.exec(command)
+  if (!redirect) return undefined
+  const operator = redirect[0]
+  const head = command.slice(0, redirect.index).trim()
+  const tail = command.slice(redirect.index + operator.length).trim()
+  if (tail.length === 0 || tail.includes('<') || tail.includes('>'))
+    return undefined
+  const targetTokens = splitShellWords(tail)
+  if (targetTokens?.length !== 1) return undefined
+  const target = targetPath(targetTokens[0], context)
+  if (target === undefined || target.startsWith('/dev/')) return undefined
+  const words = splitShellWords(head)
+  if (words === undefined || words.length < 2) return undefined
+  const program = words[0]
+  if (program !== 'echo' && program !== 'printf') return undefined
+  const operands = words.slice(1)
+  let body
+  if (program === 'echo') {
+    if (operands.some(word => word.startsWith('-'))) return undefined
+    body = `${operands.join(' ')}\n`
+  } else {
+    if (operands.length !== 1) return undefined
+    const format = operands[0]
+    if (format === undefined || format.includes('%')) return undefined
+    body = unescapePrintf(format)
+    if (body === undefined) return undefined
+  }
+  if (operator === '>') {
+    return { targets: { [target]: hash(body) } }
+  }
+  const original = readForEdit(target)
+  const base =
+    original === undefined
+      ? ''
+      : restoreLineEndings(original.content, original.crlf)
+  if (original === undefined && !fileMissing(target)) return undefined
+  return { targets: { [target]: hash(base + body) } }
+}
+
+/** @param {string} target */
+function fileMissing(target) {
+  try {
+    statSync(target)
+    return false
+  } catch (error) {
+    return (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      error.code === 'ENOENT'
+    )
+  }
+}
+
+/**
+ * Split a shell fragment into literal words. Returns undefined when the
+ * fragment contains anything beyond plain words and simple quoting.
+ *
+ * @param {string} fragment
+ * @returns {string[] | undefined}
+ */
+function splitShellWords(fragment) {
+  /** @type {string[]} */
+  const words = []
+  let current = ''
+  let started = false
+  let index = 0
+  while (index < fragment.length) {
+    const character = fragment[index]
+    if (character === undefined) return undefined
+    if (character === ' ' || character === '\t') {
+      if (started) words.push(current)
+      current = ''
+      started = false
+      index += 1
+      continue
+    }
+    started = true
+    if (character === "'") {
+      const close = fragment.indexOf("'", index + 1)
+      if (close === -1) return undefined
+      current += fragment.slice(index + 1, close)
+      index = close + 1
+      continue
+    }
+    if (character === '"') {
+      const close = fragment.indexOf('"', index + 1)
+      if (close === -1) return undefined
+      const inner = fragment.slice(index + 1, close)
+      if (/[$`\\]/.test(inner)) return undefined
+      current += inner
+      index = close + 1
+      continue
+    }
+    if (character === '\\') {
+      if (index + 1 >= fragment.length) return undefined
+      const escaped = fragment[index + 1]
+      if (escaped === undefined) return undefined
+      current += escaped
+      index += 2
+      continue
+    }
+    if (
+      character === '$' ||
+      character === '`' ||
+      character === '*' ||
+      character === '?'
+    ) {
+      return undefined
+    }
+    current += character
+    index += 1
+  }
+  if (started) words.push(current)
+  return words
+}
+
+/**
+ * @param {string} format
+ * @returns {string | undefined}
+ */
+function unescapePrintf(format) {
+  let result = ''
+  let index = 0
+  while (index < format.length) {
+    const character = format[index]
+    if (character === undefined) return undefined
+    if (character !== '\\') {
+      result += character
+      index += 1
+      continue
+    }
+    const next = format[index + 1]
+    if (next === undefined) return undefined
+    /** @type {Record<string, string>} */
+    const simple = {
+      n: '\n',
+      t: '\t',
+      r: '\r',
+      '\\': '\\',
+      a: '\x07',
+      b: '\b',
+      f: '\f',
+      v: '\v',
+    }
+    const replacement = simple[next]
+    if (replacement !== undefined) {
+      result += replacement
+      index += 2
+      continue
+    }
+    if (next === '0') {
+      const octal = /^[0-7]{1,3}/.exec(format.slice(index + 2))
+      const digits = octal ? octal[0] : ''
+      result += String.fromCharCode(Number.parseInt(digits || '0', 8))
+      index += 2 + digits.length
+      continue
+    }
+    return undefined
+  }
+  return result
 }
 
 /**
