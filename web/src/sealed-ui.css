@@ -5597,6 +5597,24 @@ kbd {
   color: var(--muted);
   overflow-wrap: anywhere;
 }
+.permission-history-list {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+}
+.permission-history-item {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  display: grid;
+  gap: 3px;
+  min-inline-size: 0;
+  padding: 10px 14px;
+}
+.permission-history-item small {
+  color: var(--muted);
+}
 .approval-rationale {
   display: grid;
   gap: 8px;

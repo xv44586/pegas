@@ -394,6 +394,8 @@ function installFetch(
       )
     if (/^\/v1\/tasks\/[^/]+\/approval-rules\?/.test(path))
       return Promise.resolve(Response.json({ rules: [] }))
+    if (/^\/v1\/tasks\/[^/]+\/worker-profile\/changes\?/.test(path))
+      return Promise.resolve(Response.json({ changes: [] }))
     if (/^\/v1\/tasks\/[^/]+\/worker-profile\?/.test(path))
       return Promise.resolve(
         Response.json({
@@ -7637,6 +7639,42 @@ describe('sealed Pegas UI', () => {
     expect(
       await screen.findByText('完全访问 · 这件事情的覆盖设置'),
     ).toBeTruthy()
+  })
+
+  it('shows the permission tier change history in the task drawer', async () => {
+    installFetch(path => {
+      if (
+        path.startsWith('/v1/tasks/task-1/worker-profile/changes?') ||
+        path.includes('/v1/tasks/task-1/worker-profile/changes?')
+      ) {
+        return Response.json({
+          changes: [
+            {
+              commandId: 'history-full',
+              revision: 3,
+              permissionMode: 'full',
+              previousPermissionMode: 'strict',
+              createdAt: new Date().toISOString(),
+            },
+            {
+              commandId: 'history-strict',
+              revision: 2,
+              permissionMode: 'strict',
+              previousPermissionMode: 'inherit',
+              createdAt: new Date().toISOString(),
+            },
+          ],
+        })
+      }
+      return undefined
+    })
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(screen.getByRole('button', { name: /安全自更新流程/ }))
+    expect(await screen.findByText('权限变更记录')).toBeTruthy()
+    expect(await screen.findByText('严格 → 完全访问 · v3')).toBeTruthy()
+    expect(screen.getByText('跟随全局 → 严格 · v2')).toBeTruthy()
   })
 
   it('approves a tool call as a task-scoped rule from the approval drawer', async () => {

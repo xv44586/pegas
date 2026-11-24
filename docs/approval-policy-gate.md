@@ -1,6 +1,6 @@
 # 权限档位与审批 Policy Gate（APPROVAL-001 第二阶段）
 
-> 状态：P1 Gate 覆盖面、P2 权限档位对象、P3 规则批准、P4 审批卡升级、P5 自动审阅、P6 逐调用审计表已实现（见下方实现记录）
+> 状态：P1 Gate 覆盖面、P2 权限档位对象、P3 规则批准、P4 审批卡升级、P5 自动审阅、P6 逐调用审计表、P7 档位审计 UI 已实现（见下方实现记录）
 > 更新日期：2026-11-24
 > 基线：`origin/main` `74c2f8c`（Intake 初稿基线 `4baab43`）
 > 外部调研：`research/approval-permissions-codex-cindy/NOTES.md`（本地，不入库；Codex CLI/webview、Cindy Apache-2.0 docs、DSH MIT 源码）
@@ -176,6 +176,14 @@
 - **证据**：`test/policy-call-audit.test.ts` 6 项（append-only 行+provenance、重放去重、过滤+owner 隔离、触发器禁改禁删、HTTP bearer+过滤、回滚 Guard）先红后绿；`test/dsh-cli-executor.test.ts` +1（结构化转发含 provenance）；`test/dsh-approval-bridge.test.ts` grant 单测断言 allow 事件（原「零事件」合同更新为「恰好一条 allow 审计事件」）；`test/policy-gate-integration.test.ts` 真实探针补 allow+ask 结构化断言。
 - **剩余风险**：审计写入依赖 Worker 存活时收到事件；Worker 崩溃在事件与落库之间会丢该条判定（Run 恢复链保证工具副作用不重复，但审计行不补写）——crash 窗口的审计完整性属后续加固。
 - **回滚**：v43 additive（新表+索引+触发器），旧代码忽略；Guard 在存在 rule/review 放行审计行时拒绝回滚到 <v43（这些放行的问责记录只存在于新表）；revert 提交恢复「Activity 即记录」行为，审计数据保留不删除。
+
+## P7 实现记录：档位审计 UI（2026-11-24）
+
+- **用户结果**：事情抽屉「执行设置」下方新增「权限变更记录」——每次档位切换显示「旧档 → 新档 · v版本 · 相对时间」，数据来自 P2 已有的 append-only `worker_profile_changes` 审计表；没有变更历史时不渲染该区，不产生视觉噪声。用户不再需要 API/sqlite 手查就能追溯「这件事情的权限被何时从哪档切到哪档」。
+- **实现**：`GET /v1/tasks/:id/worker-profile/changes`（bearer 401、非 owner 404，复用 `listWorkerProfileChanges`，DESC 上限 100）；`PegasApi.permissionTierChanges` + `PermissionTierChange` 类型；`PermissionTierHistorySection`（加载/错误/空态与 ApprovalRulesSection 同构，inherit 显示「跟随全局」）；`permission-history-list/item` 样式与规则列表同语言。无 schema 变更。
+- **证据**：`test/permission-profile.test.ts` +1（HTTP bearer/owner/顺序/新旧档投影，先红后绿）+ Web `App.test.tsx` +1（抽屉渲染两条历史含「严格 → 完全访问 · v3」「跟随全局 → 严格 · v2」，先红后绿）。
+- **剩余风险**：列表上限 100 条无分页（长期高频切档的事情看不到更早记录）；全局默认档位的变更历史仍在设置页审计之外（本区只覆盖 Task 覆盖切换）。
+- **回滚**：revert 提交即移除端点与 UI；无迁移、无数据删除。
 
 ## UI 设计合同（P4 输入）
 

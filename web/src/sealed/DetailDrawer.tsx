@@ -41,6 +41,7 @@ import type {
   SubagentTranscript,
   TaskDelivery,
   WorkerProfileResponse,
+  PermissionTierChange,
 } from '../types'
 import { PegasMascot } from './PegasMascot'
 import { ActivityTimeline, type ActivityDataAccess } from './ActivityTimeline'
@@ -1477,6 +1478,7 @@ function TaskDetail({
         profile={workerProfile}
         profileError={workerProfileError}
       />
+      <PermissionTierHistorySection api={api} channel={channel} />
       <ApprovalRulesSection api={api} channel={channel} />
       {confirmingStop && (
         <section
@@ -2770,6 +2772,70 @@ function permissionTierLabel(tier?: 'strict' | 'standard' | 'full') {
   if (tier === 'strict') return '严格'
   if (tier === 'full') return '完全访问'
   return '标准'
+}
+
+function permissionChangeTierLabel(
+  tier?: 'inherit' | 'strict' | 'standard' | 'full',
+) {
+  if (tier === 'inherit' || tier === undefined) return '跟随全局'
+  return permissionTierLabel(tier)
+}
+
+function PermissionTierHistorySection({
+  api,
+  channel,
+}: {
+  api?: PegasApi
+  channel: Extract<DrawerView, { kind: 'task' }>['channel']
+}) {
+  const [changes, setChanges] = useState<PermissionTierChange[]>()
+  const [loadError, setLoadError] = useState('')
+  useEffect(() => {
+    setChanges(undefined)
+    setLoadError('')
+    if (!api) return
+    let cancelled = false
+    api
+      .permissionTierChanges(channel.id)
+      .then(loaded => {
+        if (!cancelled) setChanges(loaded)
+      })
+      .catch((caught: unknown) => {
+        if (!cancelled)
+          setLoadError(
+            caught instanceof Error ? caught.message : '权限变更记录读取失败。',
+          )
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [api, channel.id])
+  if (!api || (changes?.length === 0 && !loadError)) return null
+  return (
+    <section className="detail-section">
+      <h3>权限变更记录</h3>
+      {loadError ? (
+        <p className="drawer-footnote" role="alert">
+          {loadError}
+        </p>
+      ) : !changes ? (
+        <p className="drawer-footnote">正在读取权限变更记录…</p>
+      ) : (
+        <ul className="permission-history-list">
+          {changes.map(change => (
+            <li className="permission-history-item" key={change.commandId}>
+              <strong>
+                {permissionChangeTierLabel(change.previousPermissionMode)} →{' '}
+                {permissionChangeTierLabel(change.permissionMode)} · v
+                {String(change.revision)}
+              </strong>
+              <small>{formatRelativeTime(change.createdAt)}</small>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  )
 }
 
 function ApprovalRulesSection({

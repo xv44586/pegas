@@ -1123,6 +1123,22 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
       const workerProfileMatch = /^\/v1\/tasks\/([^/]+)\/worker-profile$/.exec(
         taskResourceUrl.pathname,
       )
+      const workerProfileChangesMatch =
+        /^\/v1\/tasks\/([^/]+)\/worker-profile\/changes$/.exec(
+          taskResourceUrl.pathname,
+        )
+      if (workerProfileChangesMatch && request.method === 'GET') {
+        if (!options.apiToken || !isAuthorized(request, options.apiToken)) {
+          return sendJson(response, 401, { error: 'unauthorized' })
+        }
+        const taskId = decodeURIComponent(workerProfileChangesMatch[1] ?? '')
+        const userId = requiredQuery(taskResourceUrl, 'userId')
+        if (!options.store.findTask(taskId, userId))
+          return sendJson(response, 404, { error: 'not_found' })
+        return sendJson(response, 200, {
+          changes: options.store.listWorkerProfileChanges(taskId, userId),
+        })
+      }
       if (workerProfileMatch && request.method === 'GET') {
         const taskId = decodeURIComponent(workerProfileMatch[1] ?? '')
         const userId = requiredQuery(taskResourceUrl, 'userId')

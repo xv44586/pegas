@@ -41,6 +41,7 @@ import type {
   TaskDelivery,
   WorkChannel,
   WorkerProfileResponse,
+  PermissionTierChange,
   WorkRuleDraft,
   WorkRuleRecord,
 } from './types'
@@ -565,6 +566,17 @@ export class PegasApi {
     return this.#get<WorkerProfileResponse>(
       `/v1/tasks/${encodeURIComponent(taskId)}/worker-profile?userId=${user}`,
     )
+  }
+
+  async permissionTierChanges(taskId: string): Promise<PermissionTierChange[]> {
+    const user = encodeURIComponent(this.#userId)
+    const response = await fetch(
+      `/v1/tasks/${encodeURIComponent(taskId)}/worker-profile/changes?userId=${user}`,
+      { headers: this.#headers(true) },
+    )
+    if (!response.ok) await throwResponse(response)
+    return ((await response.json()) as { changes: PermissionTierChange[] })
+      .changes
   }
 
   async saveWorkerProfile(
