@@ -1,3 +1,5 @@
+import { pegasBotIconUrl } from '../agent-icon-id'
+
 export function PegasMark({ size = 34 }: { size?: number }) {
   return (
     <img
@@ -7,7 +9,7 @@ export function PegasMark({ size = 34 }: { size?: number }) {
       decoding="async"
       draggable={false}
       height={size}
-      src="/brand/agent-bot.webp"
+      src={pegasBotIconUrl}
       width={size}
     />
   )

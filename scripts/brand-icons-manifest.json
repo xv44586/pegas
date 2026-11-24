@@ -1,12 +1,17 @@
 {
-  "desktop/Pegas.icns": "de8b6360bb4b2ed07b57b80555f430e6b62f300dabbbc775a114edb74d355835",
-  "desktop/icon.svg": "f2eb848908a0406182dac397fd12fa59a82045b134f0be59100a606a24c3c57a",
-  "web/public/apple-touch-icon.png": "124511756cc9dafc722ef4e4cf5e5ffb525835131c48fdf5a4c065f20af5d9cd",
-  "web/public/brand/agent-bot.webp": "4b66907c69681edabf34e91a1c4c29d3b189543ebe5fc73f37e7ac648ab92cb5",
+  "desktop/Pegas.icns": "a6a49767c29df692dcbf047024ee4281fd4dacf3090653ce1e1455df1adac252",
+  "desktop/icon.png": "408d56911a019ed84d5971c404816a8529756c1c8e87287cc50bc06fded3c89b",
+  "desktop/icon.svg": "f3710c02d407736681b6431ee4b81bb9c3d0901c369681f2a3c56ec42fa84828",
+  "web/public/apple-touch-icon.png": "e27f9cb476a2ff3c5f377b0b907bbbeea39bfc3d83e27828a5912cc5313a516f",
+  "web/public/brand/agent-bot.webp": "76e5a9462394319dfbcf6a6ce7e96cabbdb0229a71741c64d152411cdc998077",
   "web/public/brand/agent-camera.webp": "0f3f64c110d5f079a6c87fa4fed80841f38e38e54ccfa4bcb0342ecd5b96b0c0",
   "web/public/brand/agent-car.webp": "e2924e4462f6b0f599e112c891c66c142a7982b805ce8d647332d6cf8fccd79e",
   "web/public/brand/agent-computer.webp": "462ab180d2cabfba4b1476a3d8086b860a286bd4656fe527216ab693e019bf18",
   "web/public/brand/agent-phone.webp": "b91b1be3fca90d8b9681e33e9d9b5c4e4a16fb3dbceaa7aea34b8806e03d124a",
-  "web/public/favicon-32.png": "b0853f8e32b2cd88f5bf8cca991e47c6938116b9fd6b94dc460e97db79dfed93",
-  "web/public/favicon.svg": "9c149f12a2d3f6a84271f3643baa2b7332ef82d98e67951cb4a46f68ea13de68"
+  "web/public/brand/pegas-flight.svg": "29d7bb0946df226b2458961f8428d7f59a5c4af3c69f5645f58206d4301b1c52",
+  "web/public/brand/pegas-home.svg": "bf2112bb9f97af3a5c0e393d74acd59d3cab75000ee62be940b528313edb5908",
+  "web/public/brand/pegas-mascot.png": "18126622127098053fdd3675b53e7c7bb3c0445a5a7c31fc0c01507ed0b2e929",
+  "web/public/brand/pegas-speaking.svg": "980ab07189342b095019c69ce305a8724f195624350aa9be2ee69d0476563668",
+  "web/public/favicon-32.png": "4d5f2d51e7689992b4fb102145383c897a3886ef2368116b5fdeb802340c9510",
+  "web/public/favicon.svg": "5f9e5d9598d59c69fbdfabb38e42df18a586d29444618f328e006656470f06fe"
 }

@@ -747,6 +747,9 @@ a {
   max-width: 100%;
   user-select: none;
 }
+.pegas-mascot-motion {
+  display: inline-flex;
+}
 .conversation-welcome h2 {
   font-size: var(--text-display);
   letter-spacing: -0.03em;
@@ -1326,7 +1329,7 @@ a {
   border-radius: 13px;
   display: grid;
   gap: 13px;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: 30px 1fr auto;
   margin-top: 14px;
   padding: 14px 16px;
   text-align: left;
@@ -1340,6 +1343,7 @@ a {
   background: var(--accent);
   border-radius: 50%;
   height: 10px;
+  justify-self: center;
   width: 10px;
 }
 .run-status-bar[data-active] > i {

@@ -66,7 +66,7 @@ describe('PegasAgentIcon', () => {
 
     const glyphs = [...container.querySelectorAll('img.pegas-agent-glyph')]
     expect(glyphs.map(glyph => glyph.getAttribute('src'))).toEqual([
-      '/brand/agent-bot.webp',
+      '/brand/agent-bot.webp?v=2',
       '/brand/agent-car.webp',
       '/brand/agent-camera.webp',
       '/brand/agent-computer.webp',

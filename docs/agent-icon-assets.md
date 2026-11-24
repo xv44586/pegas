@@ -11,11 +11,9 @@ Pegas 使用自己的图标系统替代 DS Bot 鲸鱼形象。主入口固定为
 机器人；每个新 Channel 由服务端自动分配并持久化一个 Worker 图标，用户不能指定或修改
 `workerIconId`。Worker 图标本体始终使用 Pegas 蓝；Channel 状态由独立的小徽记、文字和既有进度元素表达，不再改变 Worker 身份色。
 
-`bot`、`car`、`camera`、`computer`、`phone` 五个身份统一使用 Pegas 自有的
-柔和 3D 陶瓷质感插画（白色机体、periwinkle 蓝点缀、墨色面罩与青色眼神光，
-与 BRAND-002 形象同一风格），由 `scripts/generate-brand-icons.mjs` 裁切
-透明边距、等比缩放并居中到 256×256 透明画布，输出无损 WebP；UI 中无底板，
-插画直接落在页面背景上。此前改编自 MIT Tabler Icons 的线性 Worker 符号
+`bot` 使用 BRAND-002 确认版圆肚机器人。四种 Worker 继续使用柔和 3D
+陶瓷质感插画。透明母版由 `scripts/generate-brand-icons.mjs` 裁切、
+等比缩放并居中到 256×256 画布，输出无损 WebP。UI 中的插画直接落在页面背景上。此前改编自 MIT Tabler Icons 的线性 Worker 符号
 及其 sprite 管线已整体退役，当前产物不含第三方几何；历史记录见 git 历史
 与 `docs/pegas-mascot.md`。
 
@@ -80,7 +78,7 @@ pnpm brand:check
 
 ## 验证证据
 
-- `pnpm brand:check`：十个品牌位图产物与 sha256 manifest 完全一致。
+- `pnpm brand:check`：确认版源文件及派生产物与 SHA-256 manifest 一致。
 - `web/src/PegasAgentIcon.test.tsx`：五个身份逐一指向对应透明插画、显式宽高占位、装饰/具名可访问性与五状态徽记。
 - `test/agent-icon-assets.test.ts`：五个身份资产为 256×256 带透明通道的 WebP、RIFF 长度自洽、体积 5KB–120KB、母版 PNG 齐全、manifest 覆盖。
 - 自动化覆盖确定性分配、非法第三方 ID、历史数据回填、API 投影、旧服务兼容、固定蓝色身份与 UI 状态徽记。

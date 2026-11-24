@@ -1,5 +1,6 @@
 import type { CSSProperties } from 'react'
 
+import { pegasBotIconUrl } from './agent-icon-id'
 import type { TaskStatus, WorkerIconId } from './types'
 
 type PegasAgentIconId = 'bot' | WorkerIconId
@@ -43,7 +44,7 @@ export function PegasAgentIcon({
         decoding="async"
         draggable={false}
         height={size}
-        src={`/brand/agent-${iconId}.webp`}
+        src={iconId === 'bot' ? pegasBotIconUrl : `/brand/agent-${iconId}.webp`}
         width={size}
       />
       {status && (

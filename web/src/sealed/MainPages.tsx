@@ -1457,7 +1457,11 @@ function RunStatusBar({
       onClick={onOpen}
       type="button"
     >
-      <i data-status={run.status} />
+      {run.status === 'running' ? (
+        <PegasMascot pose="working" size={30} />
+      ) : (
+        <i data-status={run.status} />
+      )}
       <span>
         <strong className={active ? 'is-shimmer' : undefined}>
           {headline} · {channel.title}

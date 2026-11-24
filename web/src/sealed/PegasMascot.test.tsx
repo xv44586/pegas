@@ -20,28 +20,38 @@ describe('PegasMascot', () => {
     expect(named?.getAttribute('aria-label')).toBe('Pegas 形象')
   })
 
-  it('reserves layout space with the source aspect ratio', () => {
+  it('reserves a square layout for the welcome art', () => {
     const { container } = render(<PegasMascot size={160} />)
     const image = container.querySelector('img.pegas-mascot')
     expect(image?.getAttribute('width')).toBe('160')
-    expect(image?.getAttribute('height')).toBe('112')
-    expect(image?.getAttribute('src')).toBe('/brand/pegas-mascot.webp')
+    expect(image?.getAttribute('height')).toBe('160')
+    expect(image?.getAttribute('src')).toBe('/brand/pegas-home.svg')
   })
 
   it.each([
-    ['waiting', '/brand/pegas-mascot-waiting.webp', 480, 445],
-    ['celebrate', '/brand/pegas-mascot-celebrate.webp', 480, 443],
-    ['blocked', '/brand/pegas-mascot-blocked.webp', 480, 437],
-  ] as const)(
-    'serves the %s pose with its own aspect ratio',
-    (pose, src, width, height) => {
-      const { container } = render(<PegasMascot pose={pose} size={96} />)
-      const image = container.querySelector('img.pegas-mascot')
-      expect(image?.getAttribute('src')).toBe(src)
-      expect(image?.getAttribute('data-pose')).toBe(pose)
-      expect(image?.getAttribute('height')).toBe(
-        String(Math.round((96 * height) / width)),
+    ['waiting', 'pegas-home.svg'],
+    ['celebrate', 'pegas-home.svg'],
+    ['blocked', 'pegas-home.svg'],
+    ['working', 'pegas-flight.svg'],
+    ['speaking', 'pegas-speaking.svg'],
+  ] as const)('serves the %s pose on the same canvas', (pose, file) => {
+    const { container } = render(<PegasMascot pose={pose} size={96} />)
+    const image = container.querySelector('img.pegas-mascot')
+    expect(image?.getAttribute('src')).toBe(`/brand/${file}`)
+    expect(image?.getAttribute('data-pose')).toBe(pose)
+    expect(image?.getAttribute('width')).toBe('96')
+    expect(image?.getAttribute('height')).toBe('96')
+  })
+
+  it.each(['working', 'speaking'] as const)(
+    'selects a still image for the %s pose under reduced motion',
+    pose => {
+      const { container } = render(<PegasMascot pose={pose} />)
+      const source = container.querySelector('picture > source')
+      expect(source?.getAttribute('media')).toBe(
+        '(prefers-reduced-motion: reduce)',
       )
+      expect(source?.getAttribute('srcset')).toBe('/brand/pegas-home.svg')
     },
   )
 })

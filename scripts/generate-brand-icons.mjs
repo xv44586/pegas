@@ -15,9 +15,15 @@ const manifestPath = path.join(
   'scripts/brand-icons-manifest.json',
 )
 
-const tileSize = 1024
-const tileRadius = 224
-const mascotBox = { x: 132, y: 150, width: 760, height: 700 }
+const tilePath = path.join(repositoryRoot, 'desktop/icon.png')
+const approvedSources = [
+  'desktop/icon.png',
+  'desktop/icon.svg',
+  'web/public/brand/pegas-mascot.png',
+  'web/public/brand/pegas-home.svg',
+  'web/public/brand/pegas-flight.svg',
+  'web/public/brand/pegas-speaking.svg',
+]
 const agentTileSize = 256
 const agentIconIds = ['bot', 'car', 'camera', 'computer', 'phone']
 const agentSourceNames = {
@@ -29,6 +35,8 @@ const agentSourceNames = {
 }
 
 const icnsEntries = [
+  ['icp4', 16],
+  ['icp5', 32],
   ['ic07', 128],
   ['ic08', 256],
   ['ic09', 512],
@@ -46,40 +54,12 @@ function runPython(script) {
   })
 }
 
-function renderTileScript(sourcePath, outputPath) {
-  return `
-from PIL import Image, ImageDraw
-source = Image.open(${JSON.stringify(sourcePath)}).convert('RGBA')
-box = source.getchannel('A').getbbox()
-if box:
-    source = source.crop(box)
-tile = Image.new('RGBA', (${tileSize}, ${tileSize}), (0, 0, 0, 0))
-mask = Image.new('L', (${tileSize}, ${tileSize}), 0)
-ImageDraw.Draw(mask).rounded_rectangle(
-    [0, 0, ${tileSize - 1}, ${tileSize - 1}],
-    radius=${tileRadius},
-    fill=255,
-)
-tile.paste((82, 103, 248, 255), (0, 0), mask)
-scale = min(${mascotBox.width} / source.width, ${mascotBox.height} / source.height)
-resized = source.resize(
-    (round(source.width * scale), round(source.height * scale)),
-    Image.LANCZOS,
-)
-offset = (
-    ${mascotBox.x} + (${mascotBox.width} - resized.width) // 2,
-    ${mascotBox.y} + (${mascotBox.height} - resized.height) // 2,
-)
-tile.alpha_composite(resized, offset)
-tile.save(${JSON.stringify(outputPath)})
-`
-}
-
-function renderAgentAssetScript(sourcePath, outputPath) {
+function renderAgentAssetScript(sourcePath, outputPath, alphaThreshold) {
   return `
 from PIL import Image
 source = Image.open(${JSON.stringify(sourcePath)}).convert('RGBA')
-box = source.getchannel('A').getbbox()
+alpha = source.getchannel('A').point(lambda value: 255 if value > ${alphaThreshold} else 0)
+box = alpha.getbbox()
 if box:
     source = source.crop(box)
 scale = min(${agentTileSize} / source.width, ${agentTileSize} / source.height)
@@ -125,27 +105,9 @@ with open(${JSON.stringify(outputPath)}, 'w', encoding='utf-8') as handle:
 
 async function buildArtifacts() {
   await mkdir(temporaryDirectory, { recursive: true })
-  const mascotPath = path.join(
-    repositoryRoot,
-    'web/public/brand/pegas-mascot.png',
-  )
-  const tilePath = path.join(temporaryDirectory, 'tile-1024.png')
-  runPython(renderTileScript(mascotPath, tilePath))
-
-  const tileBase64 = (await readFile(tilePath)).toString('base64')
   const faviconPath = path.join(temporaryDirectory, 'favicon.svg')
   runPython(renderFaviconScript(tilePath, faviconPath))
   const artifacts = [
-    {
-      outputPath: path.join(repositoryRoot, 'desktop/icon.svg'),
-      content: Buffer.from(
-        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
-  <image href="data:image/png;base64,${tileBase64}" width="1024" height="1024"/>
-</svg>
-`,
-        'utf8',
-      ),
-    },
     {
       outputPath: path.join(repositoryRoot, 'web/public/favicon.svg'),
       content: await readFile(faviconPath),
@@ -163,7 +125,10 @@ async function buildArtifacts() {
       'web/public/brand',
       `agent-${iconId}.webp`,
     )
-    runPython(renderAgentAssetScript(sourcePath, outputPath))
+    // Ignore near-transparent edge artifacts in the generated mascot master.
+    runPython(
+      renderAgentAssetScript(sourcePath, outputPath, iconId === 'bot' ? 4 : 0),
+    )
     artifacts.push({ outputPath, content: await readFile(outputPath) })
   }
 
@@ -222,7 +187,9 @@ async function main() {
     if (failures.length) {
       for (const failure of failures)
         console.error(`Brand icon check failed: ${failure}`)
-      console.error('Run `pnpm brand:generate` to restore the assets.')
+      console.error(
+        'Restore the approved sources or run `pnpm brand:generate` after an intentional asset change.',
+      )
       process.exitCode = 1
       return
     }
@@ -232,10 +199,13 @@ async function main() {
     return
   }
   const artifacts = await buildArtifacts()
-  for (const artifact of artifacts)
-    await writeFile(artifact.outputPath, artifact.content)
   const manifest = {}
+  for (const relativePath of approvedSources) {
+    const content = await readFile(path.join(repositoryRoot, relativePath))
+    manifest[relativePath] = createHash('sha256').update(content).digest('hex')
+  }
   for (const artifact of artifacts) {
+    await writeFile(artifact.outputPath, artifact.content)
     const relativePath = path.relative(repositoryRoot, artifact.outputPath)
     manifest[relativePath] = createHash('sha256')
       .update(artifact.content)
