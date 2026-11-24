@@ -1057,7 +1057,7 @@ describe('sealed Pegas UI', () => {
     fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
     await screen.findByText('更改已保存')
     fireEvent.click(screen.getByLabelText('启用即时应答'))
-    expect(screen.queryByText('更改已保存')).toBeNull()
+    await waitFor(() => expect(screen.queryByText('更改已保存')).toBeNull())
     fireEvent.click(screen.getByRole('button', { name: '取消' }))
     await waitFor(() =>
       expect(screen.queryByRole('button', { name: '保存更改' })).toBeNull(),
@@ -2786,8 +2786,7 @@ describe('sealed Pegas UI', () => {
       })
     })
     render(<App />)
-    const toggle =
-      await screen.findByLabelText('关闭窗口后继续运行')
+    const toggle = await screen.findByLabelText('关闭窗口后继续运行')
     expect(toggle.getAttribute('aria-checked')).toBe('false')
     expect(
       screen.getByText(
@@ -2830,8 +2829,7 @@ describe('sealed Pegas UI', () => {
       })
     })
     render(<App />)
-    const toggle =
-      await screen.findByLabelText('关闭窗口后继续运行')
+    const toggle = await screen.findByLabelText('关闭窗口后继续运行')
     fireEvent.click(toggle)
     expect(await screen.findByRole('alert')).toBeTruthy()
     expect(toggle.getAttribute('aria-checked')).toBe('false')
