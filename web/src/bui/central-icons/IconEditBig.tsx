@@ -1,0 +1,1 @@
+export { IconEditBig } from './index'

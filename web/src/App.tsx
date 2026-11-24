@@ -1,6 +1,8 @@
 import { ArrowRight, KeyRound, RotateCw } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import { Button } from '@bui/index'
+
 import { ApiError, PegasApi } from './api'
 import { DetailDrawer } from './sealed/DetailDrawer'
 import {
@@ -425,7 +427,7 @@ export function App() {
       Boolean(drawer) ||
       searchOpen ||
       setupOpen ||
-      Boolean(document.querySelector('.modal-backdrop'))
+      Boolean(document.querySelector('.onboarding-backdrop'))
     shell.inert = modalOpen
     return () => {
       shell.inert = false
@@ -1038,6 +1040,7 @@ export function App() {
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
+    document.documentElement.classList.toggle('dark', isDark)
     localStorage.setItem('pegas-theme', theme)
     const colorScheme = document.querySelector<HTMLMetaElement>(
       'meta[name="color-scheme"]',
@@ -1048,7 +1051,7 @@ export function App() {
     const themeColor = document.querySelector<HTMLMetaElement>(
       'meta[name="theme-color"]',
     )
-    if (themeColor) themeColor.content = isDark ? '#151615' : '#ffffff'
+    if (themeColor) themeColor.content = isDark ? '#17181a' : '#fafafb'
   }, [isDark, theme])
 
   async function saveSettings(
@@ -1977,13 +1980,15 @@ function AccessGate({ onToken }: { onToken: (token: string) => void }) {
             type="password"
             value={value}
           />
-          <button
-            className="primary-button"
+          <Button
+            className="h-9 px-4 text-[13px]"
             disabled={!value.trim()}
+            size="sm"
             type="submit"
+            variant="primary"
           >
             继续 <ArrowRight size={16} />
-          </button>
+          </Button>
         </form>
       </section>
     </main>
@@ -1992,10 +1997,8 @@ function AccessGate({ onToken }: { onToken: (token: string) => void }) {
 
 function readTheme(): ThemeChoice {
   const value = localStorage.getItem('pegas-theme')
-  return value === 'light' ||
-    value === 'warm' ||
-    value === 'dark' ||
-    value === 'system'
+  if (value === 'warm') return 'light'
+  return value === 'light' || value === 'dark' || value === 'system'
     ? value
     : 'light'
 }

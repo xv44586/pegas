@@ -29,28 +29,36 @@ describe('sealed UI layout contracts', () => {
 
   it('keeps the desktop shell and mobile navigation geometries explicit', () => {
     expect(sealedUi).toMatch(
-      /\.app-shell\s*\{[^}]*grid-template-columns:\s*232px minmax\(0, 1fr\);[^}]*height:\s*100dvh;/,
+      /\.app-shell\s*\{[^}]*grid-template-columns:\s*224px minmax\(0, 1fr\);[^}]*height:\s*100dvh;/,
     )
     expect(sealedUi).toMatch(
       /@media \(max-width: 820px\)[\s\S]*?\.mobile-nav\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*repeat\(6, 1fr\);/,
     )
   })
 
-  it('implements all four appearance choices with semantic tokens', () => {
-    expect(sealedUi).toMatch(/:root\[data-theme=['"]warm['"]\]/)
+  it('implements the three appearance choices with BUI semantic tokens', () => {
+    expect(sealedUi).not.toMatch(/:root\[data-theme=['"]warm['"]\]/)
     expect(sealedUi).toMatch(/:root\[data-theme=['"]dark['"]\]/)
     expect(sealedUi).toMatch(/:root\[data-theme=['"]system['"]\]/)
-    expect(sealedUi).toMatch(/--canvas:\s*#fff;/)
+    expect(sealedUi).toMatch(/--canvas:\s*#fafafb;/)
+    expect(sealedUi).toMatch(/--accent:\s*#0071ea;/)
     expect(sealedUi).toMatch(/background:\s*var\(--canvas\)/)
   })
 
   it('keeps dictation errors in composer flow', () => {
-    expect(sealedUi).toMatch(
-      /\.composer-error\s*\{[^}]*margin:\s*0 auto 8px;[^}]*max-width:\s*1040px;/,
+    const mainPages = readFileSync(
+      new URL('../web/src/sealed/MainPages.tsx', import.meta.url),
+      'utf8',
     )
-    expect(sealedUi).not.toMatch(
-      /\.composer-error\s*\{[^}]*position:\s*absolute;/,
-    )
+    const errorBlocks = [
+      ...mainPages.matchAll(/className="composer-error([^"]*)"/g),
+    ].map(match => match[1])
+    expect(errorBlocks.length).toBe(2)
+    for (const className of errorBlocks) {
+      expect(className).toContain('mx-auto mb-2 max-w-[1040px]')
+      expect(className).not.toContain('absolute')
+    }
+    expect(sealedUi).not.toMatch(/^\.composer-error/m)
   })
 
   it('makes detail drawers full height and responsive', () => {
@@ -77,11 +85,16 @@ describe('sealed UI layout contracts', () => {
   })
 
   it('separates model provider and settings layouts', () => {
-    expect(sealedUi).toMatch(
-      /\.model-service-layout\s*\{[^}]*grid-template-columns:\s*220px minmax\(0, 1fr\);/,
+    const settingsPage = readFileSync(
+      new URL('../web/src/sealed/SettingsPage.tsx', import.meta.url),
+      'utf8',
     )
-    expect(sealedUi).toContain('.router-settings')
-    expect(sealedUi).toContain('.pegas-settings')
+    expect(settingsPage).toMatch(
+      /className="model-service-layout[^"]*\[grid-template-columns:220px_minmax\(0,1fr\)\]/,
+    )
+    expect(settingsPage).toContain('router-settings')
+    expect(settingsPage).toContain('pegas-settings')
+    expect(sealedUi).not.toMatch(/^\.model-service-layout/m)
   })
 
   it('keeps every model-selection entry on the paginated shared catalog', () => {
@@ -146,9 +159,13 @@ describe('sealed UI layout contracts', () => {
     expect(sealedUi).toMatch(
       /\.onboarding-dialog\s*\{(?![^}]*overflow:\s*hidden)[^}]*\}/,
     )
-    expect(sealedUi).toMatch(
-      /\.setup-form > label > input,\s*\.setup-form > \.field-label > input,\s*\.setup-form > label > select\s*\{/,
+    const onboarding = readFileSync(
+      new URL('../web/src/sealed/Onboarding.tsx', import.meta.url),
+      'utf8',
     )
+    expect(onboarding).toContain('<FormField label="默认模型">')
+    expect(onboarding).toContain('<FormField label="模型服务">')
+    expect(onboarding).not.toMatch(/<input[\s>]/)
     expect(sealedUi).not.toMatch(/\.setup-form input,/)
     const app = readFileSync(
       new URL('../web/src/App.tsx', import.meta.url),
@@ -201,7 +218,10 @@ describe('sealed UI layout contracts', () => {
     expect(app).toMatch(
       /async function testOnboardingConnection[\s\S]*?api\.testModel\(/,
     )
-    expect(sealedUi).toMatch(/\.setup-connection > label > input\s*\{/)
+    expect(onboarding).toContain('<FormField label="服务地址">')
+    expect(onboarding).toContain('<FormField label="API Key">')
+    expect(onboarding).toContain('<FormField label="探测模型">')
+    expect(sealedUi).not.toMatch(/\.setup-connection > label > input/)
     expect(sealedUi).not.toMatch(/\.setup-form input,/)
     expect(sealedUi).toMatch(
       /\.onboarding-dialog\s*\{[^}]*max-height:\s*calc\(100dvh - 12vh - 20px\);/,
@@ -217,41 +237,23 @@ describe('sealed UI layout contracts', () => {
   })
 
   it('stacks the composer trigger name and provider detail instead of gluing them inline', () => {
-    expect(sealedUi).toMatch(
-      /\.composer-model-button > span\s*\{[^}]*display:\s*grid;/,
-    )
-    expect(sealedUi).toMatch(
-      /\.composer-model-button strong,\s*\.composer-model-button small\s*\{[^}]*text-overflow:\s*ellipsis;/,
-    )
-    expect(sealedUi).toMatch(
-      /\.composer-model-button small\s*\{[^}]*color:\s*var\(--muted\);/,
-    )
     const modelPicker = readFileSync(
       new URL('../web/src/sealed/ModelPicker.tsx', import.meta.url),
       'utf8',
     )
+    expect(modelPicker).toContain('<span className="grid min-w-0 gap-px">')
+    expect(modelPicker).toContain('truncate font-medium')
+    expect(modelPicker).toContain('{selection?.label ?? placeholder}')
     expect(modelPicker).toContain(
-      '<strong>{selection?.label ?? placeholder}</strong>',
+      '<small className="truncate text-[11px] font-normal text-ink-2">',
     )
-    expect(modelPicker).toContain(
-      '<small>{selection?.detail ?? placeholderDetail}</small>',
-    )
+    expect(modelPicker).toContain('{selection?.detail ?? placeholderDetail}')
+    expect(sealedUi).not.toMatch(/^\.composer-model-button/m)
   })
 
   it('keeps search inputs on the single container-owned focus treatment', () => {
-    expect(sealedUi).toMatch(
-      /\.model-search\s*\{[^}]*border:\s*1px solid transparent;/,
-    )
-    expect(sealedUi).toMatch(
-      /\.model-search:focus-within\s*\{[^}]*border-color:\s*var\(--accent\);/,
-    )
-    expect(sealedUi).toMatch(/\.model-search input\s*\{[^}]*border:\s*0;/)
-    expect(sealedUi).toMatch(
-      /\.model-search input:focus-visible\s*\{[^}]*outline:\s*none;/,
-    )
-    expect(sealedUi).toMatch(
-      /\.model-search input::placeholder\s*\{[^}]*color:\s*var\(--muted\);/,
-    )
+    expect(sealedUi).not.toMatch(/^\.model-search/m)
+    expect(sealedUi).not.toContain('.model-search input')
     expect(sealedUi).not.toContain('.provider-list input')
     const settingsPage = readFileSync(
       new URL('../web/src/sealed/SettingsPage.tsx', import.meta.url),
@@ -259,28 +261,50 @@ describe('sealed UI layout contracts', () => {
     )
     const searchLabels = [
       ...settingsPage.matchAll(
-        /<label className="model-search">[\s\S]*?<\/label>/g,
+        /<label className="model-search[^"]*">[\s\S]*?<\/label>/g,
       ),
-    ]
+    ].map(match => match[0])
     expect(searchLabels.length).toBeGreaterThanOrEqual(2)
+    for (const field of searchLabels) {
+      expect(field).toContain('focus-within:shadow-[0_0_0_1px_var(--accent)]')
+      expect(field).toContain('outline-none placeholder:text-ink-3')
+    }
+    const modelPicker = readFileSync(
+      new URL('../web/src/sealed/ModelPicker.tsx', import.meta.url),
+      'utf8',
+    )
+    expect(modelPicker).toMatch(
+      /className="composer-model-search[^"]*focus-within:shadow-\[0_0_0_1px_var\(--accent\)\][^"]*"/,
+    )
+    expect(sealedUi).not.toMatch(/^\.composer-model-search/m)
   })
 
   it('keeps page search on the same container-owned focus treatment', () => {
-    expect(sealedUi).toMatch(
-      /\.page-search:focus-within\s*\{[^}]*border-color:\s*var\(--accent\);/,
+    const mainPages = readFileSync(
+      new URL('../web/src/sealed/MainPages.tsx', import.meta.url),
+      'utf8',
     )
-    expect(sealedUi).toMatch(
-      /\.page-search input:focus-visible\s*\{[^}]*outline:\s*none;/,
-    )
-    expect(sealedUi).toMatch(
-      /\.page-search input::placeholder\s*\{[^}]*color:\s*var\(--muted\);/,
-    )
+    const searchFields = [
+      ...mainPages.matchAll(/className="page-search[^"]*"/g),
+    ].map(match => match[0])
+    expect(searchFields.length).toBeGreaterThanOrEqual(2)
+    for (const field of searchFields) {
+      expect(field).toContain('focus-within:shadow-[0_0_0_1px_var(--accent)]')
+    }
+    expect(mainPages).toContain('outline-none placeholder:text-ink-3')
+    expect(sealedUi).not.toMatch(/^\.page-search \{/m)
+    expect(sealedUi).not.toContain('.page-search:focus-within')
   })
 
   it('anchors the work sort menu to its own control', () => {
-    expect(sealedUi).toMatch(/\.filter-row-wrap\s*\{[^}]*position:\s*relative;/)
-    expect(sealedUi).toMatch(
-      /\.sort-menu\s*\{[^}]*position:\s*absolute;[^}]*z-index:/,
+    const mainPages = readFileSync(
+      new URL('../web/src/sealed/MainPages.tsx', import.meta.url),
+      'utf8',
     )
+    expect(mainPages).toContain('className="filter-row-wrap relative"')
+    expect(mainPages).toContain(
+      'sort-menu bui absolute right-0 top-[calc(100%+6px)] z-20',
+    )
+    expect(sealedUi).not.toContain('.sort-menu {')
   })
 })

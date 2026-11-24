@@ -1,0 +1,1 @@
+export { IconSidebarLeftArrow } from './index'

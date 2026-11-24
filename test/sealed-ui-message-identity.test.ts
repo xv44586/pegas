@@ -7,6 +7,21 @@ const stylesheet = readFileSync(
   resolve(import.meta.dirname, '..', 'web', 'src', 'sealed-ui.css'),
   'utf8',
 )
+const conversationBui = readFileSync(
+  resolve(
+    import.meta.dirname,
+    '..',
+    'web',
+    'src',
+    'sealed',
+    'ConversationBui.tsx',
+  ),
+  'utf8',
+)
+const mainPages = readFileSync(
+  resolve(import.meta.dirname, '..', 'web', 'src', 'sealed', 'MainPages.tsx'),
+  'utf8',
+)
 
 function blocksFor(selector: string): string[] {
   const withoutComments = stylesheet.replace(/\/\*[\s\S]*?\*\//g, '')
@@ -84,29 +99,32 @@ describe('sealed UI quiet message identity (DESIGN-005)', () => {
     )
   })
 
-  it('styles the icon status slot and derived trigger without text labels', () => {
-    expect(declarationOf('.message-status-icon', 'color')).toBe('var(--muted)')
-    expect(declarationOf('.message-status-icon.is-failed', 'color')).toBe(
-      'var(--critical)',
+  it('styles the icon status slot and derived trigger from BUI utilities', () => {
+    expect(conversationBui).toContain('h-[22px]')
+    expect(conversationBui).toContain(
+      "accent\n          ? 'text-accent-ink hover:bg-accent-tint'\n          : 'text-ink-3 hover:bg-hover-2 hover:text-ink'",
     )
-    expect(declarationOf('.message-derived-trigger', 'color')).toBe(
-      'var(--accent-ink, var(--accent))',
+    expect(mainPages).toContain(
+      'message-status-icon is-failed inline-flex h-[22px] w-5 items-center justify-center text-red-text',
     )
-    expect(declarationOf('.message-derived-count', 'font-size')).toBe(
-      'var(--text-tiny)',
+    expect(mainPages).toContain(
+      'message-derived-count text-[11px] font-medium leading-none',
     )
+    expect(stylesheet).not.toContain('.message-status-icon')
+    expect(stylesheet).not.toContain('.message-derived-trigger')
+    expect(stylesheet).not.toContain('.message-action')
     expect(stylesheet).not.toContain('.message-delivery')
     expect(stylesheet).not.toContain('.is-derived-jump')
   })
 
   it('opens the multi-task menu below the trigger inside the scroll area', () => {
-    expect(declarationOf('.message-derived-menu', 'top')).toBe(
-      'calc(100% + 6px)',
+    expect(mainPages).toContain(
+      'message-derived-menu bui absolute right-0 top-[calc(100%+6px)] z-20 flex min-w-[250px] flex-col rounded-card bg-surface p-1 shadow-overlay',
     )
-    expect(declarationOf('.message-derived-menu', 'position')).toBe('absolute')
-    expect(declarationOf('.message-derived-menu button', 'font-size')).toBe(
-      'var(--text-caption)',
+    expect(mainPages).toContain(
+      'rounded-control px-2.5 py-2 text-left text-[13px] text-ink',
     )
+    expect(stylesheet).not.toContain('.message-derived-menu')
   })
 
   it('gives the conversation a compact single-line header without a tagline', () => {
@@ -127,10 +145,22 @@ describe('sealed UI quiet message identity (DESIGN-005)', () => {
     ).toBe('0')
   })
 
-  it('narrows the rail so the conversation keeps more width', () => {
+  it('sizes the rail to the BUI sidebar and follows its collapsed width', () => {
     expect(declarationOf('.app-shell', 'grid-template-columns')).toBe(
-      '232px minmax(0, 1fr)',
+      '224px minmax(0, 1fr)',
     )
+    expect(
+      declarationOf(
+        ".app-shell:has([data-sidebar-collapsed='true'])",
+        'grid-template-columns',
+      ),
+    ).toBe('52px minmax(0, 1fr)')
+    expect(declarationOf('.primary-rail', 'padding')).toBe('10px 0 12px')
+    expect(declarationOf('.primary-rail', 'overflow')).toBe('hidden')
+    expect(stylesheet).not.toContain('.primary-nav')
+    expect(stylesheet).not.toContain('.recent-work')
+    expect(stylesheet).not.toContain('.rail-settings')
+    expect(stylesheet).not.toMatch(/\.nav-item\b/)
   })
 
   it('converges the rail brand onto the read step at weight 500', () => {

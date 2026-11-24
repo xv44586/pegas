@@ -45,6 +45,15 @@ export default tseslint.config(
     },
   },
   {
+    files: ['web/src/bui/components/**/*.{ts,tsx}'],
+    rules: {
+      '@typescript-eslint/restrict-template-expressions': [
+        'error',
+        { allowNumber: true },
+      ],
+    },
+  },
+  {
     files: ['web/vite.config.ts'],
     languageOptions: {
       parserOptions: {

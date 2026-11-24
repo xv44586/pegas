@@ -628,7 +628,7 @@ function OutputPager({
               ? '完整输出未内联留存。'
               : '输出过长，仅保留前段记录。'}
           <button
-            className="inline-link"
+            className="inline-link mt-0 inline-flex items-center gap-[5px] font-medium text-accent-ink"
             disabled={state === 'loading'}
             onClick={() => void loadMore()}
             type="button"
@@ -645,7 +645,7 @@ function OutputPager({
         <p className="activity-empty is-error" role="alert">
           后续输出读取失败，可重试。
           <button
-            className="inline-link"
+            className="inline-link mt-0 inline-flex items-center gap-[5px] font-medium text-accent-ink"
             onClick={() => void loadMore()}
             type="button"
           >
@@ -881,7 +881,7 @@ function RunChangesCard({
           {onReviewJump && (
             <p className="changes-review-jump">
               <button
-                className="inline-link"
+                className="inline-link mt-0 inline-flex items-center gap-[5px] font-medium text-accent-ink"
                 onClick={onReviewJump}
                 type="button"
               >

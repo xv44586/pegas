@@ -11,6 +11,17 @@ const mainPages = readFileSync(
   resolve(import.meta.dirname, '..', 'web', 'src', 'sealed', 'MainPages.tsx'),
   'utf8',
 )
+const conversationBui = readFileSync(
+  resolve(
+    import.meta.dirname,
+    '..',
+    'web',
+    'src',
+    'sealed',
+    'ConversationBui.tsx',
+  ),
+  'utf8',
+)
 
 function blocksFor(selector: string): string[] {
   const withoutComments = stylesheet.replace(/\/\*[\s\S]*?\*\//g, '')
@@ -61,17 +72,12 @@ function declarationOf(selector: string, property: string): string {
 
 describe('sealed UI unified work entry (DESIGN-008)', () => {
   it('renders the work entry as the same quiet icon slot as the derived trigger', () => {
-    expect(declarationOf('.message-work-entry', 'color')).toBe(
-      'var(--accent-ink, var(--accent))',
+    expect(conversationBui).toContain('className="message-work-entry"')
+    expect(conversationBui).toContain(
+      'inline-flex h-[22px] items-center justify-center gap-[3px] rounded-[7px] px-1',
     )
-    expect(declarationOf('.message-work-entry', 'height')).toBe('22px')
-    expect(declarationOf('.message-work-entry', 'border-radius')).toBe('7px')
-    expect(declarationOf('.message-work-entry', 'background')).toBe(
-      'transparent',
-    )
-    expect(blocksFor('.message-work-entry:hover').join('\n')).toContain(
-      'background: var(--accent-softer);',
-    )
+    expect(conversationBui).toContain("'text-accent-ink hover:bg-accent-tint'")
+    expect(stylesheet).not.toContain('.message-work-entry {')
   })
 
   it('keeps the meta row visible whenever a work entry lives there', () => {
@@ -85,7 +91,13 @@ describe('sealed UI unified work entry (DESIGN-008)', () => {
   })
 
   it('converges fact-card body line height onto the card-body contract', () => {
-    expect(declarationOf('.fact-card', 'line-height')).toBe('1.55')
+    expect(mainPages).toContain(
+      'fact-card-body mt-2 grid min-w-0 justify-items-start gap-1 text-[13px] leading-[1.6] text-ink-2',
+    )
+    expect(stylesheet).not.toContain('.fact-card {')
+    expect(mainPages).toContain(
+      'mt-3.5 grid w-full max-w-[560px] min-w-0 gap-2.5 rounded-card bg-surface p-3.5 shadow-card',
+    )
   })
 
   it('caps markdown emphasis at weight 500 across chat and cards', () => {

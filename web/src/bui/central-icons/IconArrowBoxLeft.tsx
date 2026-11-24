@@ -1,0 +1,1 @@
+export { IconArrowBoxLeft } from './index'
