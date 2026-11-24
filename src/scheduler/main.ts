@@ -27,6 +27,18 @@ while (!lifecycle.stopping) {
         message: `Dispatched ${String(fired.length)} automation invocation(s)`,
       })
     }
+    const expired = store.expireDueRoutingClarifications()
+    if (expired.length > 0) {
+      metrics.increment(
+        'pegas_routing_clarifications_expired_total',
+        {},
+        expired.length,
+      )
+      logger.info('routing_clarifications.expired', {
+        count: expired.length,
+        message: `Settled ${String(expired.length)} expired routing clarification todo(s)`,
+      })
+    }
   } catch (error) {
     logger.error('scheduler.iteration_failed', error)
     metrics.increment('pegas_errors_total', {

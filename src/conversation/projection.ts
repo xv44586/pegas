@@ -52,6 +52,7 @@ const WORK_TYPES = new Set([
   'review.ready',
   'approval.resolved',
   'action.reconciled',
+  'routing.clarification_expired',
   'collaboration.returned',
   'collaboration.completed',
   'collaboration.failed',

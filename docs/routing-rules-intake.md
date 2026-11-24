@@ -2,7 +2,7 @@
 
 > Feature：`ROUTE-005`
 >
-> 状态：Usable（R1–R4 全部落地；尚未合并 main 与 Candidate 上线）
+> 状态：Usable（R1–R4 已经 PR #69 合入 main 并经 Candidate `main-92dfc88-r1` 上线；R5 澄清待办自动过期开发中）
 >
 > 登记日期：2026-11-23
 
@@ -143,3 +143,57 @@
 - **迁移重编号**：上游 main 在本 Feature 开发期间合入 APPROVAL-001（PR #65/#66，占用 v40–v43）与 EXEC-003（PR #67，占用 v44）。集成 worktree `int-route005-r1` 将本 Feature 迁移重编号：v40→v45（`routing_rules`/`routing_rule_commands`）、v41→v46（`routing_decisions` 命中证据两列）、v42→v47（`routing_uncertainty`）；self-change `maximumSchema` 42→47；`test/sqlite-store.test.ts` 迁移列表与 `test/rollback-compatibility.test.ts` 阈值同步更新。上文各阶段落地证据中的 v40/v41/v42 为当时分支上的历史编号，语义与表结构不变。全部迁移仍为纯增量（新表/新列），回滚 = revert，旧代码忽略新对象。
 - **合并态门禁（基线 origin/main `cdfb0da`，merge commit 见分支 `int-route005-r1`）**：冲突解决 6 文件（feature-map 头部合并、runtime_settings INSERT 列合并、worker/main import、迁移列表、Web api/types 可选字段并集）；上游 `test/approval-rules.test.ts` 最大迁移版本断言 44→47 同步。format/brand/lint（含 css-cascade）/typecheck/knip/build 全绿；`vitest run --coverage --no-file-parallelism` 128 文件 / 1312 测试全绿（3 次运行 2 次全绿；1 次仅既有 `dsh-cli-executor` SIGTERM→SIGKILL 计时用例抖动，该文件与 executor 源码相对 main 零 diff，隔离复跑通过，按 SCHEDULE-001 先例降低并行复跑，未改测试或阈值）；`pnpm smoke`（task 391a304a）、`pnpm smoke:crash`（event-claim/tool-call/write-back 三注入）、`pnpm review:ui --force`、`pnpm a11y:review` 0 违例、`pnpm review:canary --changed-from origin/main`（无外部服务文件变更，按规则跳过）；真实 magpie/qwen4-max 条件集成 3 测试合并态复跑通过（12.7s）。
 - **合并与上线（2026-11-24）**：第二次合并 origin/main `3dd768b`（仅 EXEC-003 发布记录 docs，冲突仅 feature-map 头部）后复跑合并态测试全绿。PR #69 经 CI run 45322184125 success 合入 main（merge `92dfc88`，main CI run 45322744431 success）。隔离发布 worktree `release-92dfc88` 完整门禁 + `pnpm smoke:self-change` + evidence `ready-for-review` 后，经 `buildSelfChangeCandidate` 构建 Candidate `main-92dfc88-r1`（schema 31–47，无破坏性迁移），APFS clonefile 重锚定复核通过，Supervisor staging→verifying→stable，schema 44→47。主仓 ff + `build:server` + kickstart 后真实 restart 验证；删除发布 worktree 后 `/readyz` 不变。实机验证：设置页三区解锁实拍、真实模型 preview（HTTP + UI 各一次）零持久化副作用（Task/Event/Outbox/routing_decisions 计数 47/87/1051/77 前后不变）、规则抽屉权限边界声明如实。active=`main-92dfc88-r1`、previous=`main-cdfb0da-r1` 可回滚；运行时回滚 `POST /v1/recovery/rollback`，代码回滚 revert merge `92dfc88`（v45–v47 纯增量，旧代码忽略）。详细发布记录见 `docs/feature-map.md` ROUTE-005 专节；实拍存 `research/route-005-live/`（本地不入库）。开发/集成/发布 worktree 与分支已清理。
+
+## R5：澄清待办自动过期（2026-11-24 Intake 登记）
+
+### 背景与缺口
+
+R3 的 `ask_first` 策略在归属歧义时产生 `routing.clarification_required` 待办（owner Outbox 消息，dedupe `routing-clarification:<eventId>`，无 taskId、不创建 Task/Run）。已登记剩余风险：该待办**无自动过期**——用户长期不回答时，「待你处理」todo 区与侧栏角标被陈旧澄清永久占用；且陈旧澄清的「去回答」会把一条过时消息重新投入路由，产生与当下上下文脱节的归属。原始消息始终保留在 payload 与已结算的 Inbox Event 中，可追溯。
+
+### 用户结果
+
+超过有效期仍未回答的归类澄清待办自动从「待你处理」撤下（角标同步递减），并在对话流与事情动态中留下一条**如实的「已过期」事实**：说明原始消息未进入任何事情、原文可见、如需处理可重新发送。不静默丢弃、不自动代答、不自动创建事情。有效期内的待办行为与现状完全一致。
+
+### 方案选型
+
+- **A. Web 端按 createdAt 过滤**：实现最薄，但权威状态在服务端（长期边界 2），iOS/macOS 等其他渠道看不到过期语义，角标口径漂移。否决。
+- **B. Outbox 全表加通用 expires_at 列 + dispatcher 拦截**：改动面波及全部通知类型与投递状态机，超出本缺口需要。否决。
+- **C. 专用到期列 + Scheduler 确定性结算（推荐）**：`outbox_messages` 增量列 `expires_at TEXT`（默认 NULL=永不过期，仅归类澄清写入）；Scheduler 每轮 poll 顺带执行 `expireDueRoutingClarifications`（复用既有 25ms–配置 poll 循环与 `#clock`，无新进程）；到期事务内把原待办标记 `read_at`（撤下 todo/角标，沿用整组已读同一语义）并 enqueue 一条 `routing.clarification_expired` Outbox 事实（dedupe `routing-clarification-expired:<eventId>`，channel=conversation，无 taskId），原待办 payload/原输入不改写不删除。Web `attentionKind` 把 expired 归为 update（事情动态），不进 todo。
+
+推荐 C：权威状态在服务端、全渠道一致；append-only 精神保持（原消息只加 read_at 结算标记，历史事实不改写）；无新表、单列增量迁移，回滚 = revert。
+
+### 验收条件
+
+1. `applyRoutingClarification` 写入 `expires_at = createdAt + TTL`；TTL 默认 **72 小时**，`PEGAS_ROUTING_CLARIFICATION_TTL_MS` 可配（正整数毫秒；非法值启动即失败，沿用 config 严格解析模式）；其他 Outbox 消息 `expires_at` 为 NULL，行为逐字节不变（回归断言）。
+2. `expireDueRoutingClarifications(limit)` 确定性幂等：只处理 `payload.type = routing.clarification_required` 且 `expires_at <= now` 且尚未过期结算的行；事务内原待办 `read_at = COALESCE(read_at, now)` + enqueue `routing.clarification_expired`（携带 eventId、原输入、question、expiredAt）；重放/并发 poll 不产生重复事实（dedupe 唯一键）；批量上限与 `fireDueAutomations` 同款校验。
+3. Scheduler 每轮调用并如实记账（`pegas_routing_clarifications_expired_total`、日志 event），崩溃恢复后下一轮补结算（无内存态）；过期结算不创建 Task/Run/Inbox Event、不触发模型调用。
+4. Web：过期事实投影为事情动态（update），原文与「未进入任何事情，如需处理请重新发送」文案如实展示；todo 区与角标不再计入已过期澄清；未到期澄清的抽屉/「去回答」链路不变（回归断言）。已读但未回答的澄清到期后同样结算。
+5. 服务端权威：iOS/macOS 等仅做投影适配即可得到一致口径（Web 测试断言 `attentionBoard` 语义即可，无需新增渠道代码）。
+6. 迁移 v48 纯增量列；`maximumSchema` 47→48；迁移列表/回滚用例同步；存在已过期结算事实时允许回滚至 47（旧代码把 expired 事实按未知类型降级为普通更新展示，原待办 read_at 已是既有语义）——回滚用例如实断言。
+
+### 非目标
+
+- 不做用户可配置的每规则/每事情 TTL（全局单值即可）；不做「过期前提醒」；不自动把过期消息转成新事情或代答（长期边界：Router 不代替用户决策）；不改 goal.clarification（Goal 澄清有自己的 Task 生命周期）；不做 Outbox 通用过期框架。
+
+### 数据与权限边界
+
+- 过期结算仅由服务端 Scheduler 以系统身份执行，无 HTTP 写入口；owner 隔离不变（事实消息 userId = 原待办 userId）。原输入只复制进事实 payload，不改写原待办与 Inbox Event。TTL 配置属实例级运维配置，不进用户设置页。
+
+### 失败与恢复
+
+- 结算事务失败整批回滚，下一轮 poll 重试（幂等 dedupe 保证恰好一条事实）；进程在「标记已读」与「enqueue 事实」之间崩溃由同一事务原子性排除。Scheduler 停止时过期延迟但不丢失（到期判定基于持久化 expires_at，恢复后补结算）。回滚 revert：v48 列旧代码忽略；已产生的 expired 事实按未知 payload 类型走兼容降级（普通更新行），原待办保持已读，无数据破坏。
+
+### 测试计划（先红后绿）
+
+- `test/routing-clarification-expiry.test.ts`：TTL 写入/默认值/配置解析；到期结算幂等（重放同 dedupe）；未到期不结算；已读未回答同样结算；expired 事实 payload 合同；不产生 Task/Run/Event；批量上限；fake clock 推进验证 Scheduler 循环调用与计数。
+- `web/src/sealed/types.test.ts`：expired 归 update 不进 todo、角标口径；`App.test.tsx`：过期事实卡文案与原文展示、todo 撤下。
+- `test/sqlite-store.test.ts` 迁移列表 +48；`test/rollback-compatibility.test.ts` 过期事实存在时允许回滚 47。
+- 门禁：`pnpm check` + `pnpm smoke` + `pnpm smoke:crash`（持久化链路）；真实实例实机验证一条真实澄清的到期路径（短 TTL 环境变量实例）。
+
+### R5 落地证据（2026-11-24）
+
+- 分支 `feat/ROUTE-005-clarification-expiry`（基线 intake `5fdf98d`）。schema **v48** 增量列 `outbox_messages.expires_at` + 部分索引（NULL=永不过期，仅归类澄清写入）；`PEGAS_ROUTING_CLARIFICATION_TTL_MS` 默认 72h（config 严格正整数，`.env.example` 已登记）；`PegasStore` 构造选项 `routingClarificationTtlMs`（worker/control-plane 入口接线）；`applyRoutingClarification` 事务内写入 expiresAt；`expireDueRoutingClarifications(limit)` 单事务幂等结算：原待办 `read_at=COALESCE`（保留首读时间）+ enqueue `routing.clarification_expired` 事实（dedupe `routing-clarification-expired:<eventId>`，携带 eventId/原输入/question/expiredAt，无 taskId），NOT EXISTS 防重放；Scheduler 每轮 poll 调用并记 `pegas_routing_clarifications_expired_total` 与日志。Web：已读归类澄清不再进 todo/角标（`isAttentionMessage`），expired 事实按 update 兼容降级不进待处理；conversation 投影把 expired 显式归 work/card；消息抽屉展示「原始消息」原文。`maximumSchema` 47→48。
+- 测试先红后绿：`test/routing-clarification-expiry.test.ts` 4 测试（TTL 解析/非法拒绝、expiresAt 写入与普通消息不受影响、到期恰好一次结算+事实合同+零 Task/Event、已读保留首读时间+批量上限）先红（4 失败）后绿；`test/conversation-projection.test.ts` +1（expired work/card 无 anchor）；`web/src/sealed/types.test.ts` +1（settled todo 撤下、expired update、角标 0）；`App.test.tsx` +1（待处理「全部 0」、无去回答按钮）；`test/rollback-compatibility.test.ts` +1（过期结算后允许回滚 47）；迁移列表 +48、上游 approval-rules 最大版本断言 47→48。
+- 门禁：`pnpm check` 129 文件 / 1319 测试全绿（statement 85.65% / branch 78.45% / function 89.9% / line 88.73%）、`pnpm smoke`（task 0063fbf0）、`pnpm smoke:crash`（三注入通过；首跑一次进程收尾非零退出复跑通过）、`pnpm review:ui --force`、`pnpm a11y:review` 0 违例、canary 按规则跳过。
+- 真实多进程验证：独立数据目录起真实 control-plane + scheduler（TTL=3000ms），seed 真实澄清待办 → HTTP 观察 expiresAt 写入 → 5s 后原待办 readAt 置位 + `routing.clarification_expired` 事实出现（原输入逐字保留）→ tasks=0（零 Task/Run 副作用）。脚本 `/tmp/route005-expiry-live.mjs`（本地，不入库）。
+- 剩余风险：TTL 为实例级运维配置，无每用户/每事情覆盖（按非目标登记）；过期事实无「重新发送」一键动作（用户手动重发，原文可见）。回滚：revert 即回 v47 行为，v48 列旧代码忽略；已产生的 expired 事实按未知类型走兼容降级（普通更新），原待办保持已读，无数据破坏。

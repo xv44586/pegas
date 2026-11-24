@@ -98,7 +98,9 @@ const controlPlaneBaseUrl = localControlPlaneBaseUrl(
   config.apiHost,
   config.apiPort,
 )
-const store = new PegasStore(config.databasePath)
+const store = new PegasStore(config.databasePath, {
+  routingClarificationTtlMs: config.routingClarificationTtlMs,
+})
 const modelCredentialVault = loadModelCredentialVault(
   config.modelCredentialKeyPath,
 )
@@ -138,7 +140,7 @@ const selfChangeExecutor = config.selfChangeEnabled
       recoveryBaseUrl: config.recoveryBaseUrl,
       ...(config.recoveryToken ? { recoveryToken: config.recoveryToken } : {}),
       editor: executor,
-      compatibility: { minimumSchema: 1, maximumSchema: 47 },
+      compatibility: { minimumSchema: 1, maximumSchema: 48 },
       reviewer: 'pegas-self-change-gate',
       controlPlaneBaseUrl,
     })

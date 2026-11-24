@@ -851,12 +851,26 @@ function MessageDetail({
   const text = textFromPayload(view.message.payload)
   const message = view.message
   const needsResolution = Boolean(onResolve) && needsOutboxResolution(message)
+  const expiredInput =
+    message.payload &&
+    typeof message.payload === 'object' &&
+    (message.payload as { type?: unknown }).type ===
+      'routing.clarification_expired' &&
+    typeof (message.payload as { input?: unknown }).input === 'string'
+      ? (message.payload as { input: string }).input
+      : undefined
   return (
     <div className="drawer-body">
       <section className="detail-section">
         <h3>消息内容</h3>
         <p>{text || '服务端没有提供消息正文。'}</p>
       </section>
+      {expiredInput && (
+        <section className="detail-section">
+          <h3>原始消息</h3>
+          <p>{expiredInput}</p>
+        </section>
+      )}
       <section className="detail-section metadata-list">
         <h3>消息信息</h3>
         <dl>
