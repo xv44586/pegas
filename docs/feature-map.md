@@ -483,6 +483,12 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - 剩余未勾选项均为客户端或已声明非目标：响应式 Web/PWA 完整壳层（DESIGN-002）、iOS 登录/APNs/恢复界面（MOBILE-001）、Remote Sandbox 节点（EXEC-004 非目标）。
 - 收尾门禁：74 个测试文件、650 个测试（statement 85.04%、branch 78.34%、function 89.11%、line 87.83%）；`pnpm check`、`pnpm smoke`、`pnpm smoke:desktop`、`pnpm smoke:healthcheck` 均通过；主分支合并后重建并复跑 smoke。
 
+### MVP 本期范围裁剪（2026-11-24，用户决策）
+
+- 本期目标收敛为**桌面端 MVP**，以封板 Web（桌面 + 390px 移动端已封板）作为测试与验证入口；DESKTOP-001 已 Usable，签名/公证/自动更新/原生通知为剩余加固。
+- 明确押后（重新启用时回到对应 Feature Intake）：MOBILE-001 全部（iOS 登录/UI/恢复入口）、APNs 与 Web Push（NOTIFY-002）、PWA 壳、Memory 自动抽取与语义检索（MEMORY-001，本期保持手动 CRUD + 按需加载）、多渠道回复地址与投递偏好（CHANNEL）。
+- 据此刷新 `docs/mvp-plan.md`：已落地项如实勾选（Web 澄清卡/Review Pack 卡/证据画廊为 DESIGN-002 §12、DSH tool-call 幂等与对账为 APPROVAL-001/EXEC-003、Memory Web CRUD 与只读节点列表为 DESIGN-002、归类规则/测试归类为 ROUTE-005 R1–R5）；「手机长期使用闭环」改为「桌面端本期闭环」+ 押后清单 + 桌面端剩余待补（Idea/Trigger 意图、SELF-001 签名与 worktree 清理、OBS-001 聚合告警、GOAL-001 validity、CONV-001 多附件、DESKTOP-001 加固）。纯文档变更，无代码/schema 改动。
+
 ### GOAL-001：目标形成与证据化交付（2026-11-21）
 
 - **用户结果**：用户可以用不完整的愿望、问题、例子或语音开始；实际 Executor 帮助其澄清期望结果、关键上下文、前置条件、权限和完成标准。交付时，用户在 Outbox 按 success criteria 审查 evidence，而不是阅读代码、工具调用或处理过程。
