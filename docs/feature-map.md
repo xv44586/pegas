@@ -862,6 +862,13 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - **非目标**：不在本 Intake 实现代码；不做 Developer ID 签名/公证/DMG；不引入 pm2（macOS 用 launchd，Electron 自身即 Supervisor 的守护层）。
 - **临时措施（本机运维，不入库）**：2026-11-22 起本机常驻实例以 launchd LaunchAgent（`~/Library/LaunchAgents/com.pegas.supervisor.plist`）托管裸 Supervisor，含 KeepAlive 与开机自启；DESKTOP-001 实现接管后移除该临时 plist。
 - **当前状态**：Scaffold（仅 Intake 登记，无实现）；权威实现规划 `src/desktop/main.ts`, `src/desktop/runtime.ts`, `src/supervisor/*`。
+- **常驻决策定稿（2026-11-24，用户决策）**：常驻不是默认行为，是桌面端设置里的显式开关。
+  - **默认不常驻**：沿用现有 App 生命周期——窗口全部关闭（macOS 上 Cmd+Q 退出）即停止服务；定时自动化仅在 App 运行期间执行，设置页与首次开启常驻时如实告知这一限制。
+  - **设置入口**：封板设置「Pegas」分类新增「后台运行」区块，含常驻开关（默认关）与状态说明（开=窗口关闭后服务继续运行、定时自动化照常触发；关=退出 App 即停止服务）。开关状态是桌面本机偏好，权威保存在桌面主进程（userData 下配置），不进入服务端 runtime_settings——它是「这台 Mac 上进程怎么活」的本机事实，不是跨端产品状态；Web 连接外部实例时该区块如实显示「由该实例的部署方式决定」只读态，不伪造开关。
+  - **开启常驻的实现路径**：桌面主进程注册 launchd LoginItem 托管 Supervisor（`app.setLoginItemSettings` 或等价 LaunchAgent），Electron 退化为窗口壳连接本机 API；关闭常驻时注销 LoginItem 并回到 App 生命周期守护。切换必须幂等、失败如实报错并保留原状态，不静默半切换。
+  - **关闭窗口的语义**：常驻开=关窗只藏窗口（Dock 点击/activate 重开），服务与原生提醒继续；常驻关=维持现有 `window-all-closed`/`before-quit` 停止链路。两种模式下 SIGTERM→SIGKILL 升级与单实例互斥（条件 5）不变。
+  - **验收补充**：开关往返（开→关→开）后 LoginItem 注册状态与进程归属一致；常驻开时关窗后 Scheduler 仍触发一次到期 Automation（真实进程 smoke）；常驻关时退出后进程组清零（既有 smoke 断言不回归）；Web 外部实例只读态有测试。
+  - 该决策满足条件 4「决策写入验收条件后才开始实现」；实现仍须独立 worktree 按 TDD 推进。
 
 ## Feature 开发协议
 
