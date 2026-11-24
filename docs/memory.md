@@ -2,17 +2,15 @@
 
 > Feature：`MEMORY-001`
 >
-> 状态：Partial
+> 状态：Usable
 >
-> 更新日期：2026-11-24
+> 更新日期：2026-11-25
 
-本文同时记录已经落地的显式 Memory 合同和下一阶段已采纳、尚未实现的 Hindsight 最小闭环。设计内容不能当作实现证据。Feature 在自动积累、受控召回、删除不复活和真实自托管集成得到自动化证据前保持 `Partial`。
+本文记录已经落地的显式 Memory 合同和 Hindsight 派生记忆最小闭环。`Usable` 表示自动积累、受控召回、无需审批的纠正/删除、完整 bank 同步和真实自托管恢复链路已经形成可运行纵向闭环；它不代表效果评测、跨架构镜像和远端备份已经 Hardened。
 
 ## 用户结果
 
-已经实现的结果：用户可以把偏好、事实、情境、经验、过程和受保护引用保存为持久 Memory，并按全局、Worker（事情执行配置）和 Channel（事情）三个作用域查看、纠正与删除。执行 Run 时，Pegas 有界装载当前 Task 适用的显式记忆并提供给实际 Executor。
-
-下一阶段结果：用户不需要逐条创建或审批派生 Memory。实际 Worker 完成工作、得到可验证失败、收到用户明确纠正或要求记住时，Pegas 在后台积累有来源的经验。下一次相关 Run 在开始前召回少量适用记忆。用户可以检查和删除派生记忆，删除后它不能因重试、重建或旧事件重放再次出现。
+用户可以把偏好、事实、情境、经验、过程和受保护引用保存为持久显式 Memory，并按全局、Worker（事情执行配置）和 Channel（事情）三个作用域查看、纠正与删除。对于派生 Memory，用户不需要逐条创建或审批：实际 Worker 在 Run 成功或失败后异步提交有界证据，下一次相关 work Run 在开始前召回少量适用记忆。用户可以查看完整派生 bank、直接纠正或删除；旧内容立即停止注入，Provider 恢复、ID 重建和后台重试不会绕过 Pegas tombstone。
 
 ## 架构决定
 
@@ -72,7 +70,7 @@ POST /v1/memories/:memoryId/delete
 - 记忆以 `<pegas_memory>` 数据块注入，声明为背景数据而非系统指令。它不能扩大 Mandate、权限或当前输入。与用户输入、Mandate 或真实工具检查冲突时以后者为准。
 - 正文中的 `<` 转义为 `\u003c`。`sensitive_reference` 只保存受保护引用文本，密钥仍留在 credential vault。
 
-## Hindsight MVP Intake（Planned）
+## Hindsight M1（已实现）
 
 ### 最小闭环
 
@@ -93,12 +91,11 @@ POST /v1/memories/:memoryId/delete
 
 ### 自动写入事件
 
-第一版只从四类可追溯事件生成 durable job：
+第一版只从三类可追溯事件生成 durable job：
 
 1. **Run success**：保存已验证结果、关键决策和确实有效的方法。
 2. **Run failure**：只保存证据已经支持的失败原因和恢复方式。模型猜测、瞬时错误和未核实归因不能成为稳定经验。
-3. **用户明确纠正或要求记住**：由拥有完整 Task/Run 上下文的实际 Worker 或后台提取步骤识别，Pegas 校验来源后新增或 supersede。Router 不参与判断。
-4. **Task 完成**：保存最终决策、剩余风险和下次继续所需的最小上下文。
+3. **用户明确纠正**：记忆页提交 dedicated correction command；Pegas 在同一事务内落旧内容 tombstone、移除投影并创建 durable supersede job。Router 不参与判断。用户主动要求保存一个新事实时继续使用显式 Memory 创建入口。
 
 默认后台自动处理，不要求用户逐条批准。弱单次推断只保留在事件历史，不直接形成稳定规则。只有显式规则互相冲突并阻塞当前任务、敏感内容无法安全保存，或 scope 歧义会显著影响后续行为时才询问用户。
 
@@ -106,10 +103,10 @@ POST /v1/memories/:memoryId/delete
 
 ### Bank、来源和幂等映射
 
-- 每个 owner 使用独立 Hindsight bank：`pegas-owner:<opaque-owner-hash>`。哈希必须由服务端密钥派生，不能把原始 owner ID 发送给 Provider。
-- 派生记录至少带 `taskId`、`runId`、`eventId`、`sourceRevision`、`outcome`、`scope` 和 `capturedAt`。用户界面只展示必要来源，不暴露内部 bank ID。
+- 每个 owner 使用独立 Hindsight bank：`pegas-owner-<opaque-owner-hmac>`。HMAC 使用独立服务端密钥派生，不把原始 owner ID 发送给 Provider。
+- Run 派生记录带 `task_id`、`run_id`、`source_kind` 和 HMAC 后的 `context_key`；纠正记录带 `correction_of`。用户界面只展示必要来源，不暴露内部 bank ID。
 - 全局经验标记 `scope:global`。局部经验使用服务端从 execution snapshot 得到的规范化、HMAC 后 `execution-context` key。第一版明确以规范化 workspace 根路径作为输入，不发送原始路径。不同 worktree 保持不同 context，跨 worktree 聚合押后到稳定 Project/Repository 领域对象建立以后。context key 缺失时不能把局部经验降级为全局。
-- `document_id` 使用稳定来源，例如 `pegas-run:<runId>` 或 `pegas-task:<taskId>:final`。memory job ID 由 event ID 与 source revision 派生。相同事件重放必须命中同一操作，不能生成重复记录。
+- `document_id` 使用稳定的 `pegas:run:<runId>` 或 `pegas:correction:<jobId>`。Run/kind 唯一约束和 correction command fingerprint 在首次事务后固定 job/operation ID；相同事件或命令重放不能生成重复记录。
 
 ### 受控召回
 
@@ -125,7 +122,7 @@ POST /v1/memories/:memoryId/delete
 记忆页继续以 Pegas API 为唯一入口，合并展示显式与派生记录：
 
 - 显式记录保留完整编辑、revision 和作用域操作。
-- 派生记录展示有界摘要、来源 Task/Run、scope、生成时间和最近注入时间。第一版至少支持查看和删除，编辑可以延后。
+- 派生记录展示有界摘要、来源 Task/Run、scope、生成时间和最近注入时间；支持查看、删除和 dedicated correction。纠正和删除都在后台执行，不创建 Approval 或用户待办。
 - 用户删除派生记录时，Pegas 先写 tombstone 并立即从列表默认视图和后续注入中排除，再异步调用 Provider 删除或 invalidate。
 - tombstone 保存稳定来源键和最小审计信息，不保留已删除正文。旧事件、重试和索引重建必须先检查 tombstone。
 
@@ -156,7 +153,8 @@ POST /v1/memories/:memoryId/delete
 - 删除采用本地 tombstone 先行。远端删除失败时后台重试，本地列表和 prompt 继续保持删除状态。
 - Hindsight 关闭或不可用时，当前 schema v21 显式 Memory 的 CRUD、分层装载和 prompt 形状保持兼容。Provider 开关是回滚入口。
 - 新增数据库对象必须是纯增量。旧版本可以忽略 memory job、派生投影和 tombstone 表，不得覆盖或格式化现有显式 Memory。
-- 开发与自动化可以使用临时 Hindsight 实例。官方嵌入式存储仅用于开发和本地试点，状态保持 `Partial`。升级 `Usable` 前必须验证受 Supervisor 管理的服务、持久数据库、备份恢复、删除一致性和升级回滚。
+- `pnpm memory:up` 以 Docker `unless-stopped` 独立监督 Hindsight 和外部 pgvector/PostgreSQL，只绑定 loopback API；数据库使用命名 volume。`pnpm memory:backup` 生成一致性 zip，`pnpm memory:restore <archive> --confirm-restore` 先停 API、用一次性 admin 容器恢复，再重建服务。Provider 故障不会把 Pegas Worker 一起拉倒。
+- `pnpm smoke:memory` 使用唯一临时容器/网络/volume，验证 v1.2.2 → v1.2.3 同库升级、owner 隔离、retain/recall/invalidate、纠正和 backup→mutation→restore。脚本只清理自己创建的资源。
 
 ## 非目标
 
@@ -176,14 +174,14 @@ POST /v1/memories/:memoryId/delete
 
 M1 派生层已经实现：
 
-- `src/memory/derived-memory.ts` 定义可替换 Provider、owner bank/workspace context 的 HMAC 映射、召回二次过滤和显式来源投影；`src/memory/hindsight-provider.ts` 以直接 HTTP 接入 retain、operation status、recall、list/get 和 invalidate，不把 SDK/MCP 或 Provider 凭证交给 Executor。
-- schema v49 新增 durable retain job、curation job、本地召回投影、Run 注入证据和 tombstone。Run 成功/失败只写有界 input/outcome evidence，credential-like 内容先确定性遮盖，不写思考过程与无界工具日志；作业以稳定 UUID、`document_id`、lease 和有界重试在事务外执行。
-- 每个 work Run 在 Executor 前最多召回一次；显式 Memory 排在派生 Memory 前。Hindsight 超时、畸形响应或不可用时 fail-open，不阻断 Run；Router 和 conversation lane 均不读取 Hindsight。
-- `GET /v1/derived-memories` 与记忆页展示本地实际召回过的派生记录。删除先写 tombstone、清除正文投影并立即停止注入，再由 curation job 异步调用 Hindsight invalidate；不创建 Approval 或用户待办。
-- 配置默认关闭；启用时必须显式提供 `PEGAS_HINDSIGHT_BASE_URL` 和独立的 `PEGAS_MEMORY_HMAC_KEY`。首个验证基线固定为 Hindsight v1.2.3、MIT、完整镜像 `ghcr.io/vectorize-io/hindsight@sha256:601cfdd1bd3f6053864c6458ee15259f065a01a3f83090b56a8ae57db67f8f38`。
+- `src/memory/derived-memory.ts` 定义可替换 Provider、owner bank/workspace context 的 HMAC 映射、召回二次过滤和 dedicated correction；`src/memory/hindsight-provider.ts` 以直接 HTTP 接入 retain、operation status、recall、完整分页 list/get 和 invalidate，不把 SDK/MCP 或 Provider 凭证交给 Executor。
+- schema v49 新增 durable retain/curation job、本地召回投影、Run 注入证据和 tombstone；schema v50 增加内容哈希 tombstone、durable correction、完整 bank 同步健康状态与 `retrieved/filtered/injected` recall audit。Run 成功/失败只写有界 input/outcome evidence，credential-like 内容先确定性遮盖，不写思考过程与无界工具日志。
+- 每个 work Run 在 Executor 前最多召回一次；显式 Memory 排在派生 Memory 前。Hindsight 超时、畸形响应或不可用时 fail-open，不阻断 Run；Router 和 conversation lane 均不读取 Hindsight。同步失败保留最后成功投影并暴露健康状态。
+- `GET /v1/derived-memories` 和记忆页展示定期同步的完整有效 bank。`POST /v1/derived-memories/:id/correct` 以 command ID 幂等 supersede；删除/纠正先落 ID + 内容哈希 tombstone、清正文并立即停止注入，再由后台作业收敛 Provider，不产生 Approval 或待办。
+- `scripts/hindsight-ops.mjs` 提供 loopback、`unless-stopped`、外部持久 PostgreSQL、备份和显式确认恢复；`scripts/smoke-memory.mjs` 是可重复的真实 Provider canary。默认 linux/arm64 基线固定到 Hindsight v1.2.3 manifest `sha256:4b903ed2cbf029d6d305030b0005002d61d6a3b1d9b85867fb459351dcaa671c`（multi-arch index `sha256:601cfdd1bd3f6053864c6458ee15259f065a01a3f83090b56a8ae57db67f8f38`，MIT）与 pgvector/pg18 manifest `sha256:38681dc6eaf55308e2a4c6de392d131652dcfac70e1263e35cd9b5ea3fe39782`；其他架构必须显式固定并重新跑 canary。
 
-自动化证据位于 `test/derived-memory.test.ts`、`test/derived-memory-store.test.ts`、`test/derived-memory-processor.test.ts` 与 `web/src/App.test.tsx`，覆盖 HTTP wire contract、弱相关结果丢弃、owner/context 二次隔离、Run 终态原子入队、稳定提交后只轮询不重投、失败如实措辞、recall fail-open、tombstone 防复活、异步 invalidate、API 与 Web 删除无需审批。
+自动化证据位于 `test/derived-memory.test.ts`、`test/derived-memory-store.test.ts`、`test/derived-memory-processor.test.ts`、`test/hindsight-runtime.test.ts` 与 `web/src/App.test.tsx`，覆盖 wire contract、完整分页、owner/context 隔离、预算与全阶段审计、原子入队、submit→poll 不重投、fail-open、ID 重建防复活、异步 curation、dedicated correction、完整同步与无需审批 UI。
 
-最终质量门禁：`pnpm check` 通过 142 个测试文件 / 1433 个测试（statements 85.27%、branches 78.13%、functions 89.68%、lines 88.37%，Server/Web/Desktop 构建通过）；`pnpm smoke` 通过完整多进程 Task→Run 链路；`pnpm smoke:crash` 通过 event claim、tool call 与 write-back 三个崩溃恢复注入点。门禁期间旧 DSH 500ms SIGTERM→SIGKILL 计时用例曾在高负载下抖动两次，隔离复跑与最终全量均通过，未修改该测试或阈值。
+最终门禁和真实 canary 的精确测试数量、覆盖率及输出记录在 `docs/feature-map.md` 的 MEMORY-001 M1 小节。
 
-`MEMORY-001` 仍保持 `Partial`：尚未用受 Supervisor 管理、带持久 PostgreSQL 的真实 Hindsight 实例跑 retain→recall→invalidate canary，也未验证其备份恢复和版本升级；列表当前是“Pegas 实际召回投影”而非远端 bank 的完整浏览器；用户纠正的 dedicated supersede 事件和记忆效果评测仍是下一缺口。
+`MEMORY-001` 达到 `Usable`。剩余 hardening：给非 arm64 平台建立并固定独立镜像基线；增加加密远端/off-site backup 与定期恢复演练；用真实长期任务集评估召回命中、旧结论率和 token 成本；当单 owner 超过 10,000 条有效派生记录时改为可持续游标浏览。这些缺口不阻断当前单机 linux/arm64 最小闭环，但在完成前不能标为 `Hardened`。

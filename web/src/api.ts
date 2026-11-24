@@ -815,6 +815,25 @@ export class PegasApi {
     if (!response.ok) await throwResponse(response)
   }
 
+  async correctDerivedMemory(
+    memoryId: string,
+    correction: string,
+  ): Promise<void> {
+    const response = await fetch(
+      `/v1/derived-memories/${encodeURIComponent(memoryId)}/correct`,
+      {
+        method: 'POST',
+        headers: this.#headers(true),
+        body: JSON.stringify({
+          userId: this.#userId,
+          commandId: crypto.randomUUID(),
+          correction,
+        }),
+      },
+    )
+    if (!response.ok) await throwResponse(response)
+  }
+
   async workRules(): Promise<{ rules: WorkRuleRecord[]; nextCursor?: string }> {
     const params = new URLSearchParams({ userId: this.#userId, limit: '200' })
     return this.#get<{ rules: WorkRuleRecord[]; nextCursor?: string }>(

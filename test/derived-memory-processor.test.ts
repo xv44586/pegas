@@ -9,12 +9,16 @@ import type {
   DerivedMemoryRecallService,
   DerivedMemoryRetainService,
   DerivedMemoryCurationService,
+  DerivedMemoryBrowseService,
+  DerivedMemoryCorrectionService,
 } from '../src/memory/derived-memory.js'
 import { PegasStore } from '../src/storage/sqlite-store.js'
 import {
   executeClaimedRun,
   processNextDerivedMemoryJob,
   processNextDerivedMemoryCurationJob,
+  processNextDerivedMemoryCorrectionJob,
+  synchronizeDerivedMemories,
 } from '../src/worker/processor.js'
 
 describe('derived memory Run integration', () => {
@@ -99,6 +103,18 @@ describe('derived memory Run integration', () => {
     expect(store.listDerivedMemories('owner').map(memory => memory.id)).toEqual(
       ['active'],
     )
+    expect(store.listDerivedMemoryRecallAudit(claimed.run.id, 'owner')).toEqual(
+      [
+        { memoryId: 'active', stage: 'retrieved' },
+        { memoryId: 'active', stage: 'injected' },
+        { memoryId: 'deleted', stage: 'retrieved' },
+        {
+          memoryId: 'deleted',
+          stage: 'filtered',
+          reason: 'local_tombstone',
+        },
+      ],
+    )
     store.close()
   })
 
@@ -133,6 +149,16 @@ describe('derived memory Run integration', () => {
 
   it('delivers a tombstone to the provider asynchronously', async () => {
     const store = new PegasStore(':memory:')
+    const claimed = createClaimedRun(store)
+    store.recordDerivedMemoryRecall(claimed.run.id, 'owner', [
+      {
+        id: 'memory-1',
+        text: 'wrong fact',
+        type: 'world',
+        tags: ['pegas:global'],
+        metadata: {},
+      },
+    ])
     store.tombstoneDerivedMemory('owner', 'memory-1', 'wrong fact')
     const invalidate = vi.fn().mockResolvedValue(undefined)
     const curation: DerivedMemoryCurationService = { invalidate }
@@ -150,6 +176,68 @@ describe('derived memory Run integration', () => {
         reason: 'wrong fact',
       }),
     )
+    store.close()
+  })
+
+  it('submits and polls a durable user correction exactly once', async () => {
+    const store = new PegasStore(':memory:', { derivedMemoryEnabled: true })
+    const claimed = createClaimedRun(store)
+    store.recordDerivedMemoryRecall(claimed.run.id, 'owner', [
+      {
+        id: 'memory-1',
+        text: 'Use npm.',
+        type: 'world',
+        tags: ['pegas:global'],
+        metadata: {},
+      },
+    ])
+    store.correctDerivedMemory('owner', 'memory-1', {
+      commandId: 'correction-command',
+      correction: 'Use pnpm.',
+    })
+    const submitCorrection = vi.fn().mockResolvedValue('operation-1')
+    const correctionStatus = vi.fn().mockResolvedValue({
+      status: 'completed',
+    })
+    const service: DerivedMemoryCorrectionService = {
+      submitCorrection,
+      correctionStatus,
+    }
+
+    await expect(
+      processNextDerivedMemoryCorrectionJob(store, service, 'memory-worker'),
+    ).resolves.toBe(true)
+    await expect(
+      processNextDerivedMemoryCorrectionJob(store, service, 'memory-worker'),
+    ).resolves.toBe(true)
+    await expect(
+      processNextDerivedMemoryCorrectionJob(store, service, 'memory-worker'),
+    ).resolves.toBe(false)
+    expect(submitCorrection).toHaveBeenCalledTimes(1)
+    expect(correctionStatus).toHaveBeenCalledTimes(1)
+    store.close()
+  })
+
+  it('synchronizes the complete provider projection without blocking runs', async () => {
+    const store = new PegasStore(':memory:', { derivedMemoryEnabled: true })
+    createClaimedRun(store)
+    const list = vi.fn().mockResolvedValue([
+      {
+        id: 'provider-memory',
+        text: 'Use pnpm.',
+        type: 'world',
+        tags: ['pegas:global'],
+        metadata: {},
+        state: 'valid',
+      },
+    ])
+    const service: DerivedMemoryBrowseService = { list }
+
+    await expect(synchronizeDerivedMemories(store, service)).resolves.toBe(1)
+    expect(list).toHaveBeenCalledWith('owner')
+    expect(store.listDerivedMemories('owner')).toMatchObject([
+      { id: 'provider-memory' },
+    ])
     store.close()
   })
 })

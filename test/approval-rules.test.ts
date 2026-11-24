@@ -515,7 +515,7 @@ describe('approval rule persistence', () => {
       const versions = db
         .prepare('SELECT MAX(version) AS version FROM schema_migrations')
         .get() as { version: number }
-      expect(versions.version).toBe(49)
+      expect(versions.version).toBe(50)
       const decisionKinds = db
         .prepare('SELECT kind FROM approval_decisions')
         .all() as { kind: string }[]

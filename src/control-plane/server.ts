@@ -864,7 +864,31 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         const userId = requiredQuery(taskResourceUrl, 'userId')
         return sendJson(response, 200, {
           memories: options.store.listDerivedMemories(userId),
+          sync: options.store.derivedMemorySyncState(userId) ?? null,
         })
+      }
+      const derivedMemoryCorrectionMatch =
+        /^\/v1\/derived-memories\/([^/]+)\/correct$/.exec(
+          taskResourceUrl.pathname,
+        )
+      if (derivedMemoryCorrectionMatch && request.method === 'POST') {
+        const input = await readJson(request)
+        if (
+          !isRecord(input) ||
+          typeof input.userId !== 'string' ||
+          typeof input.commandId !== 'string' ||
+          typeof input.correction !== 'string'
+        )
+          throw new Error('userId, commandId and correction are required')
+        const memoryId = decodeURIComponent(
+          derivedMemoryCorrectionMatch[1] ?? '',
+        )
+        const correction = options.store.correctDerivedMemory(
+          input.userId,
+          memoryId,
+          { commandId: input.commandId, correction: input.correction },
+        )
+        return sendJson(response, 202, { correction })
       }
       const derivedMemoryDeleteMatch =
         /^\/v1\/derived-memories\/([^/]+)\/delete$/.exec(

@@ -1571,6 +1571,10 @@ export function App() {
               await api.deleteDerivedMemory(memory.id)
               await loadMemories()
             }}
+            onCorrectDerived={async (memory, correction) => {
+              await api.correctDerivedMemory(memory.id, correction)
+              await loadMemories()
+            }}
             onReload={() => void loadMemories()}
             onUpdate={async (memory, draft) => {
               await api.updateMemory(memory.id, memory.revision, draft)

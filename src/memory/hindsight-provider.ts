@@ -113,12 +113,23 @@ export class HindsightProvider implements DerivedMemoryProvider {
   }
 
   async list(bankId: string): Promise<DerivedMemory[]> {
-    const result = await this.#json(
-      `/v1/default/banks/${encodeURIComponent(bankId)}/memories/list?limit=100&state=valid`,
-    )
-    return arrayField(result, 'items')
-      .map(parseMemory)
-      .filter((memory): memory is DerivedMemory => memory !== undefined)
+    const memories: DerivedMemory[] = []
+    for (let offset = 0; offset < 10_000; offset += 100) {
+      const result = await this.#json(
+        `/v1/default/banks/${encodeURIComponent(bankId)}/memories/list?limit=100&offset=${String(offset)}&state=valid`,
+      )
+      const page = arrayField(result, 'items')
+        .map(parseMemory)
+        .filter((memory): memory is DerivedMemory => memory !== undefined)
+      memories.push(...page)
+      const total = numberField(result, 'total')
+      if (
+        page.length < 100 ||
+        (total !== undefined && memories.length >= total)
+      )
+        return memories
+    }
+    throw new Error('Hindsight memory listing exceeded 10,000 records')
   }
 
   async get(bankId: string, memoryId: string): Promise<DerivedMemory> {

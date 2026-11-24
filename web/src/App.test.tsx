@@ -7259,6 +7259,66 @@ describe('sealed Pegas UI', () => {
     expect(await screen.findByText('还没有记忆')).toBeTruthy()
   })
 
+  it('corrects automatically derived memory without creating approval work', async () => {
+    let correction: unknown
+    let derived = [
+      {
+        id: 'derived-wrong',
+        text: '这个项目使用 npm。',
+        type: 'world',
+        tags: ['pegas:global'],
+        metadata: {},
+      },
+    ]
+    installSnapshotFetch(snapshot, (path, init) => {
+      if (path.startsWith('/v1/memories?'))
+        return Response.json({ memories: [] })
+      if (path.startsWith('/v1/derived-memories?'))
+        return Response.json({ memories: derived, sync: null })
+      if (
+        path === '/v1/derived-memories/derived-wrong/correct' &&
+        init?.method === 'POST'
+      ) {
+        correction = JSON.parse(
+          typeof init.body === 'string' ? init.body : '{}',
+        )
+        derived = []
+        return Response.json(
+          {
+            correction: {
+              memoryId: 'derived-wrong',
+              correctionJobId: 'job-1',
+              status: 'pending',
+            },
+          },
+          { status: 202 },
+        )
+      }
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: '记忆',
+      }),
+    )
+    expect(await screen.findByText('这个项目使用 npm。')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '纠正' }))
+    const dialog = screen.getByRole('dialog', { name: '纠正自动记忆' })
+    fireEvent.change(within(dialog).getByLabelText('正确内容'), {
+      target: { value: '这个项目使用 pnpm。' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存纠正' }))
+    await waitFor(() => expect(correction).toBeTruthy())
+    expect(correction).toMatchObject({
+      userId: 'owner',
+      correction: '这个项目使用 pnpm。',
+    })
+    expect(correction).toHaveProperty('commandId')
+    expect(screen.queryByText(/需要你决定/)).toBeNull()
+    expect(await screen.findByText('还没有记忆')).toBeTruthy()
+  })
+
   it('shows memory counts in settings and links to the memory page', async () => {
     installSnapshotFetch(snapshot, path => {
       if (path.startsWith('/v1/memories?'))

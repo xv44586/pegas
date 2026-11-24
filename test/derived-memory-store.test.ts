@@ -83,6 +83,67 @@ describe('derived memory durable jobs', () => {
     store.close()
   })
 
+  it('suppresses regenerated memories with the same normalized content', () => {
+    const store = new PegasStore(':memory:', { derivedMemoryEnabled: true })
+    const claimed = createClaimedRun(store, 'owner', 'worker')
+    store.recordDerivedMemoryRecall(claimed.run.id, 'owner', [
+      {
+        id: 'old-id',
+        text: 'Always use PNPM for this repository.',
+        type: 'world',
+        tags: ['pegas:global'],
+        metadata: {},
+      },
+    ])
+    store.tombstoneDerivedMemory('owner', 'old-id', 'user deleted')
+
+    const regenerated = {
+      id: 'new-id',
+      text: '  always   use pnpm for this repository.  ',
+      type: 'world' as const,
+      tags: ['pegas:global'],
+      metadata: {},
+    }
+    expect(store.isDerivedMemorySuppressed('owner', regenerated)).toBe(true)
+    store.recordDerivedMemoryRecall(claimed.run.id, 'owner', [regenerated])
+    expect(store.listDerivedMemories('owner')).toEqual([])
+    store.close()
+  })
+
+  it('reconciles a complete provider listing and records sync health', () => {
+    const store = new PegasStore(':memory:', { derivedMemoryEnabled: true })
+    const claimed = createClaimedRun(store, 'owner', 'worker')
+    store.recordDerivedMemoryRecall(claimed.run.id, 'owner', [
+      {
+        id: 'stale',
+        text: 'stale projection',
+        type: 'world',
+        tags: ['pegas:global'],
+        metadata: {},
+      },
+    ])
+
+    store.replaceDerivedMemoryCache('owner', [
+      {
+        id: 'current',
+        text: 'current provider fact',
+        type: 'experience',
+        tags: ['pegas:global'],
+        metadata: {},
+        state: 'valid',
+      },
+    ])
+
+    expect(store.listDerivedMemories('owner').map(memory => memory.id)).toEqual(
+      ['current'],
+    )
+    expect(store.derivedMemorySyncState('owner')).toMatchObject({
+      status: 'healthy',
+      memoryCount: 1,
+    })
+    store.close()
+  })
+
   it('exposes derived-memory browse and delete without an approval prompt', async () => {
     const store = new PegasStore(':memory:', { derivedMemoryEnabled: true })
     const claimed = createClaimedRun(store, 'owner', 'worker')
@@ -117,6 +178,67 @@ describe('derived memory durable jobs', () => {
     expect(
       store.claimNextDerivedMemoryCurationJob('memory-worker', 30_000),
     ).toMatchObject({ userId: 'owner', memoryId: 'memory/http' })
+    await new Promise<void>(resolve => server.close(() => resolve()))
+    store.close()
+  })
+
+  it('accepts an idempotent user correction without creating approval work', async () => {
+    const store = new PegasStore(':memory:', { derivedMemoryEnabled: true })
+    const claimed = createClaimedRun(store, 'owner', 'worker')
+    store.recordDerivedMemoryRecall(claimed.run.id, 'owner', [
+      {
+        id: 'memory-to-correct',
+        text: 'Use npm.',
+        type: 'world',
+        tags: ['pegas:global'],
+        metadata: { task_id: claimed.task.id },
+      },
+    ])
+    const server = createControlPlane({ store })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const base = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+    const body = {
+      userId: 'owner',
+      commandId: 'correct-command',
+      correction: 'Use pnpm.',
+    }
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const response = await fetch(
+        `${base}/v1/derived-memories/memory-to-correct/correct`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        },
+      )
+      expect(response.status).toBe(202)
+      expect(await response.json()).toMatchObject({
+        correction: {
+          memoryId: 'memory-to-correct',
+          status: 'pending',
+        },
+      })
+    }
+
+    expect(
+      store.claimNextDerivedMemoryCorrectionJob('memory-worker', 30_000),
+    ).toMatchObject({
+      userId: 'owner',
+      memoryId: 'memory-to-correct',
+      replacementText: 'Use pnpm.',
+    })
+    expect(
+      store.claimNextDerivedMemoryCurationJob('curation-worker', 30_000),
+    ).toMatchObject({
+      userId: 'owner',
+      memoryId: 'memory-to-correct',
+      memoryType: 'world',
+      reason: 'Superseded by a user correction',
+    })
+    expect(
+      store.pageApprovals('owner', 10, undefined, 'pending').items,
+    ).toEqual([])
     await new Promise<void>(resolve => server.close(() => resolve()))
     store.close()
   })

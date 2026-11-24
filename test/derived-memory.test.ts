@@ -60,6 +60,20 @@ describe('derived memory', () => {
       provider: 'hindsight',
       scope: 'worker',
     })
+    expect(memories.audit).toEqual(
+      expect.arrayContaining([
+        {
+          memoryId: 'wrong-context',
+          stage: 'filtered',
+          reason: 'context_mismatch',
+        },
+        {
+          memoryId: 'invalidated',
+          stage: 'filtered',
+          reason: 'invalidated',
+        },
+      ]),
+    )
     expect(recall).toHaveBeenCalledWith(
       service.bankId('owner'),
       expect.objectContaining({
@@ -177,6 +191,88 @@ describe('derived memory', () => {
       ),
     ).toBeLessThanOrEqual(200)
     expect(result.entries).toHaveLength(1)
+    expect(
+      result.audit.filter(record => record.reason === 'budget'),
+    ).toHaveLength(2)
+  })
+
+  it('paginates the complete valid bank when browsing derived memories', async () => {
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          items: Array.from({ length: 100 }, (_, index) => ({
+            id: `memory-${String(index)}`,
+            text: `fact ${String(index)}`,
+            fact_type: 'world',
+            state: 'valid',
+            tags: ['pegas:global'],
+          })),
+          total: 101,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          items: [
+            {
+              id: 'memory-100',
+              text: 'last fact',
+              fact_type: 'experience',
+              state: 'valid',
+              tags: ['pegas:global'],
+            },
+          ],
+          total: 101,
+        }),
+      )
+    const provider = new HindsightProvider({
+      baseUrl: 'http://hindsight.local',
+      fetch: request,
+    })
+
+    await expect(provider.list('bank')).resolves.toHaveLength(101)
+    expect(request).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining('limit=100&offset=0&state=valid'),
+      expect.any(Object),
+    )
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('limit=100&offset=100&state=valid'),
+      expect.any(Object),
+    )
+  })
+
+  it('retains a user correction with stable provenance', async () => {
+    const provider = providerStub()
+    const service = new PegasDerivedMemoryService(provider, {
+      hmacKey: 'correction-key',
+    })
+
+    await expect(
+      service.submitCorrection({
+        id: 'correction-1',
+        commandId: 'command-1',
+        userId: 'owner',
+        memoryId: 'old-fact',
+        memoryType: 'world',
+        replacementText: 'Use pnpm, not npm.',
+        tags: ['pegas:global'],
+        metadata: {},
+        attempts: 1,
+      }),
+    ).resolves.toBe('operation')
+
+    expect(provider.retain).toHaveBeenCalledWith(
+      service.bankId('owner'),
+      expect.objectContaining({
+        operationId: 'correction-1',
+        documentId: 'pegas:correction:correction-1',
+        content: 'User correction:\nUse pnpm, not npm.',
+        tags: ['pegas:global'],
+        metadata: expect.objectContaining({ correction_of: 'old-fact' }),
+      }),
+    )
   })
 })
 

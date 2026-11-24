@@ -3280,6 +3280,7 @@ export function MemoryPage({
   onCreate,
   onDelete,
   onDeleteDerived,
+  onCorrectDerived,
   onReload,
   onUpdate,
   truncated,
@@ -3292,6 +3293,10 @@ export function MemoryPage({
   onCreate: (draft: MemoryDraft) => Promise<void>
   onDelete: (memory: MemoryRecord) => Promise<void>
   onDeleteDerived: (memory: DerivedMemoryRecord) => Promise<void>
+  onCorrectDerived: (
+    memory: DerivedMemoryRecord,
+    correction: string,
+  ) => Promise<void>
   onReload: () => void
   onUpdate: (memory: MemoryRecord, draft: MemoryDraft) => Promise<void>
   truncated: boolean
@@ -3302,6 +3307,8 @@ export function MemoryPage({
   >()
   const [busyId, setBusyId] = useState('')
   const [confirmDeleteId, setConfirmDeleteId] = useState<string>()
+  const [correctionMemory, setCorrectionMemory] =
+    useState<DerivedMemoryRecord>()
   const [actionError, setActionError] = useState('')
   const visible = (memories ?? []).filter(
     memory => filter === 'all' || memory.scope === filter,
@@ -3528,6 +3535,14 @@ export function MemoryPage({
                 </small>
               </div>
               <div className="record-actions">
+                <button
+                  className="secondary-button"
+                  disabled={busyId === memory.id}
+                  onClick={() => setCorrectionMemory(memory)}
+                  type="button"
+                >
+                  纠正
+                </button>
                 {confirmDeleteId === memory.id ? (
                   <>
                     <button
@@ -3574,6 +3589,16 @@ export function MemoryPage({
           }}
         />
       )}
+      {correctionMemory && (
+        <DerivedMemoryCorrectionForm
+          memory={correctionMemory}
+          onCancel={() => setCorrectionMemory(undefined)}
+          onSubmit={async correction => {
+            await onCorrectDerived(correctionMemory, correction)
+            setCorrectionMemory(undefined)
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -3606,6 +3631,104 @@ function derivedMemoryTypeLabel(type: DerivedMemoryRecord['type']): string {
   if (type === 'experience') return '经验'
   if (type === 'observation') return '归纳'
   return '事实'
+}
+
+function DerivedMemoryCorrectionForm({
+  memory,
+  onCancel,
+  onSubmit,
+}: {
+  memory: DerivedMemoryRecord
+  onCancel: () => void
+  onSubmit: (correction: string) => Promise<void>
+}) {
+  const [correction, setCorrection] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const dialogRef = useRef<HTMLElement>(null)
+  useEffect(() => {
+    dialogRef.current?.focus()
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onCancel()
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onCancel])
+  async function submit() {
+    if (saving) return
+    const next = correction.trim()
+    if (!next) {
+      setError('请写下正确内容。')
+      return
+    }
+    setSaving(true)
+    setError('')
+    try {
+      await onSubmit(next)
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '纠正失败，请重试。')
+    } finally {
+      setSaving(false)
+    }
+  }
+  return (
+    <div
+      className="modal-backdrop"
+      onMouseDown={event => event.target === event.currentTarget && onCancel()}
+    >
+      <section
+        aria-label="纠正自动记忆"
+        aria-modal="true"
+        className="command-dialog record-form"
+        ref={dialogRef}
+        role="dialog"
+        tabIndex={-1}
+      >
+        <header className="record-form-header">
+          <h2>纠正自动记忆</h2>
+          <button aria-label="关闭" onClick={onCancel} type="button">
+            <X size={18} />
+          </button>
+        </header>
+        <div className="record-form-body">
+          {error && (
+            <div className="page-error" role="alert">
+              {error}
+            </div>
+          )}
+          <p className="field-hint">原内容：{memory.text}</p>
+          <label className="field-label">
+            正确内容
+            <textarea
+              maxLength={4_000}
+              onChange={event => setCorrection(event.target.value)}
+              rows={3}
+              value={correction}
+            />
+          </label>
+          <p className="field-hint">
+            旧内容会立即停止注入；新内容由 Worker 在后台沉淀，不需要审批。
+          </p>
+        </div>
+        <footer className="record-form-footer">
+          <button className="quiet-button" onClick={onCancel} type="button">
+            取消
+          </button>
+          <button
+            className="primary-button"
+            disabled={saving}
+            onClick={() => void submit()}
+            type="button"
+          >
+            {saving ? '保存中…' : '保存纠正'}
+          </button>
+        </footer>
+      </section>
+    </div>
+  )
 }
 
 function automationStatusLabel(status: Automation['status']): string {

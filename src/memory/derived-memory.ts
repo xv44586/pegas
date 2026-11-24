@@ -56,10 +56,24 @@ export interface DerivedMemoryRecallRequest {
   workingDirectory: string
 }
 
+export interface DerivedMemoryRecallAudit {
+  memoryId: string
+  stage: 'retrieved' | 'filtered'
+  reason?:
+    | 'invalidated'
+    | 'context_mismatch'
+    | 'result_limit'
+    | 'budget'
+    | 'empty'
+    | 'local_tombstone'
+  score?: number
+}
+
 export interface DerivedMemoryRecallService {
   recall(request: DerivedMemoryRecallRequest): Promise<{
     entries: MemoryContextEntry[]
     memories: DerivedMemory[]
+    audit?: DerivedMemoryRecallAudit[]
   }>
 }
 
@@ -88,6 +102,7 @@ export interface DerivedMemoryCurationJob {
   id: string
   userId: string
   memoryId: string
+  memoryType?: DerivedMemoryType
   reason: string
   attempts: number
 }
@@ -96,11 +111,38 @@ export interface DerivedMemoryCurationService {
   invalidate(job: DerivedMemoryCurationJob): Promise<void>
 }
 
+export interface DerivedMemoryCorrectionJob {
+  id: string
+  commandId: string
+  userId: string
+  memoryId: string
+  memoryType: DerivedMemoryType
+  replacementText: string
+  tags: string[]
+  metadata: Record<string, unknown>
+  providerOperationId?: string
+  attempts: number
+}
+
+export interface DerivedMemoryCorrectionService {
+  submitCorrection(job: DerivedMemoryCorrectionJob): Promise<string>
+  correctionStatus(job: DerivedMemoryCorrectionJob): Promise<{
+    status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled'
+    error?: string
+  }>
+}
+
+export interface DerivedMemoryBrowseService {
+  list(userId: string): Promise<DerivedMemory[]>
+}
+
 export class PegasDerivedMemoryService
   implements
     DerivedMemoryRecallService,
     DerivedMemoryRetainService,
-    DerivedMemoryCurationService
+    DerivedMemoryCurationService,
+    DerivedMemoryCorrectionService,
+    DerivedMemoryBrowseService
 {
   readonly #provider: DerivedMemoryProvider
   readonly #hmacKey: string
@@ -134,9 +176,11 @@ export class PegasDerivedMemoryService
     return opaqueKey('workspace', resolve(workingDirectory), this.#hmacKey)
   }
 
-  async recall(
-    request: DerivedMemoryRecallRequest,
-  ): Promise<{ entries: MemoryContextEntry[]; memories: DerivedMemory[] }> {
+  async recall(request: DerivedMemoryRecallRequest): Promise<{
+    entries: MemoryContextEntry[]
+    memories: DerivedMemory[]
+    audit: DerivedMemoryRecallAudit[]
+  }> {
     const contextKey = this.contextKey(request.workingDirectory)
     const allowedTags = ['pegas:global', `pegas:context:${contextKey}`]
     const memories = await this.#provider.recall(this.bankId(request.userId), {
@@ -144,22 +188,47 @@ export class PegasDerivedMemoryService
       maxTokens: this.#maximumTokens,
       tags: allowedTags,
     })
-    const candidates = memories
-      .filter(memory => memory.state !== 'invalidated')
-      .filter(memory => memory.tags.some(tag => allowedTags.includes(tag)))
-      .slice(0, this.#maximumResults)
+    const audit: DerivedMemoryRecallAudit[] = memories.map(memory => ({
+      memoryId: memory.id,
+      stage: 'retrieved',
+      ...(memory.score === undefined ? {} : { score: memory.score }),
+    }))
+    const candidates: DerivedMemory[] = []
+    for (const memory of memories) {
+      let reason: DerivedMemoryRecallAudit['reason']
+      if (memory.state === 'invalidated') reason = 'invalidated'
+      else if (!memory.tags.some(tag => allowedTags.includes(tag)))
+        reason = 'context_mismatch'
+      else if (candidates.length >= this.#maximumResults)
+        reason = 'result_limit'
+      if (reason) {
+        audit.push({
+          memoryId: memory.id,
+          stage: 'filtered',
+          reason,
+          ...(memory.score === undefined ? {} : { score: memory.score }),
+        })
+      } else candidates.push(memory)
+    }
     const selected: DerivedMemory[] = []
     const maximumCharacters = this.#maximumTokens * 4
     let usedCharacters = 0
     for (const memory of candidates) {
       const remaining = maximumCharacters - usedCharacters - 200
-      if (remaining <= 0) break
+      if (remaining <= 0) {
+        audit.push(filteredAudit(memory, 'budget'))
+        continue
+      }
       const text = memory.text.slice(0, Math.min(4_000, remaining))
-      if (!text) continue
+      if (!text) {
+        audit.push(filteredAudit(memory, 'empty'))
+        continue
+      }
       selected.push({ ...memory, text })
       usedCharacters += text.length + 200
     }
     return {
+      audit,
       memories: selected,
       entries: selected.map(memory => ({
         id: memory.id,
@@ -203,11 +272,53 @@ export class PegasDerivedMemoryService
   }
 
   invalidate(job: DerivedMemoryCurationJob): Promise<void> {
+    if (job.memoryType === 'observation') return Promise.resolve()
     return this.#provider.invalidate(
       this.bankId(job.userId),
       job.memoryId,
       job.reason,
     )
+  }
+
+  list(userId: string): Promise<DerivedMemory[]> {
+    return this.#provider.list(this.bankId(userId))
+  }
+
+  async submitCorrection(job: DerivedMemoryCorrectionJob): Promise<string> {
+    return this.#provider.retain(this.bankId(job.userId), {
+      operationId: job.id,
+      documentId: `pegas:correction:${job.id}`,
+      content: `User correction:\n${job.replacementText}`,
+      context: 'Pegas user-confirmed correction',
+      tags: job.tags.length > 0 ? job.tags : ['pegas:global'],
+      metadata: {
+        ...job.metadata,
+        source: 'pegas',
+        source_kind: 'user_correction',
+        correction_of: job.memoryId,
+      },
+    })
+  }
+
+  correctionStatus(job: DerivedMemoryCorrectionJob) {
+    if (!job.providerOperationId)
+      throw new Error('Derived memory correction has no provider operation ID')
+    return this.#provider.operationStatus(
+      this.bankId(job.userId),
+      job.providerOperationId,
+    )
+  }
+}
+
+function filteredAudit(
+  memory: DerivedMemory,
+  reason: NonNullable<DerivedMemoryRecallAudit['reason']>,
+): DerivedMemoryRecallAudit {
+  return {
+    memoryId: memory.id,
+    stage: 'filtered',
+    reason,
+    ...(memory.score === undefined ? {} : { score: memory.score }),
   }
 }
 

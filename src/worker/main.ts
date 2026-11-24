@@ -63,6 +63,8 @@ import {
   processNextEvent,
   processNextDerivedMemoryJob,
   processNextDerivedMemoryCurationJob,
+  processNextDerivedMemoryCorrectionJob,
+  synchronizeDerivedMemories,
   RoutingEventHandler,
   type RootToolOutcomeCollector,
   type SubagentTranscriptCollector,
@@ -161,7 +163,7 @@ const selfChangeExecutor = config.selfChangeEnabled
       recoveryBaseUrl: config.recoveryBaseUrl,
       ...(config.recoveryToken ? { recoveryToken: config.recoveryToken } : {}),
       editor: executor,
-      compatibility: { minimumSchema: 1, maximumSchema: 49 },
+      compatibility: { minimumSchema: 1, maximumSchema: 50 },
       reviewer: 'pegas-self-change-gate',
       controlPlaneBaseUrl,
     })
@@ -254,6 +256,7 @@ const shutdown = new AbortController()
 const activeRuns = new Set<Promise<void>>()
 const activeChatRuns = new Set<Promise<void>>()
 let activeMemoryJob: Promise<boolean> | undefined
+let nextMemorySyncAt = 0
 
 const nodeCapabilities = [
   'dsh',
@@ -315,19 +318,31 @@ while (!lifecycle.stopping) {
 
   if (derivedMemory && !activeMemoryJob) {
     const processing = (async () => {
-      const handled = await processNextDerivedMemoryJob(
+      const corrected = await processNextDerivedMemoryCorrectionJob(
         store,
         derivedMemory,
         `${workerId}:memory`,
         telemetry,
       )
-      if (handled) return true
-      return processNextDerivedMemoryCurationJob(
+      if (corrected) return true
+      const curated = await processNextDerivedMemoryCurationJob(
         store,
         derivedMemory,
         `${workerId}:memory`,
         telemetry,
       )
+      if (curated) return true
+      const retained = await processNextDerivedMemoryJob(
+        store,
+        derivedMemory,
+        `${workerId}:memory`,
+        telemetry,
+      )
+      if (retained) return true
+      if (Date.now() < nextMemorySyncAt) return false
+      nextMemorySyncAt = Date.now() + config.memorySyncMs
+      await synchronizeDerivedMemories(store, derivedMemory, telemetry)
+      return false
     })()
       .catch((error: unknown) => {
         logger.error('memory.job_persistence_failed', error, { workerId })

@@ -61,6 +61,7 @@ export interface PegasConfig {
   hindsightApiKey?: string
   memoryHmacKey?: string
   hindsightTimeoutMs: number
+  memorySyncMs: number
   rewriteMode: 'disabled' | 'light'
   speechProvider: 'disabled' | 'openai-compatible'
   speechBaseUrl?: string
@@ -252,6 +253,11 @@ export function loadConfig(
       environment.PEGAS_HINDSIGHT_TIMEOUT_MS,
       5_000,
       'PEGAS_HINDSIGHT_TIMEOUT_MS',
+    ),
+    memorySyncMs: parsePositiveInteger(
+      environment.PEGAS_MEMORY_SYNC_MS,
+      60_000,
+      'PEGAS_MEMORY_SYNC_MS',
     ),
     rewriteMode,
     speechProvider,
