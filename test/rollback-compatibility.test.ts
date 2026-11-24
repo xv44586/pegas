@@ -239,7 +239,7 @@ describe('durable state rollback compatibility', () => {
     }
   })
 
-  it('allows a pre-v40 rollback with routing rules present because v40 is additive', () => {
+  it('allows a pre-v45 rollback with routing rules present because v45 is additive', () => {
     const directory = mkdtempSync(join(tmpdir(), 'pegas-rollback-routing-'))
     const path = join(directory, 'pegas.sqlite')
     const store = new PegasStore(path)
@@ -253,8 +253,8 @@ describe('durable state rollback compatibility', () => {
           enabled: true,
         },
       })
-      expect(() => assertRollbackCompatible(path, 39)).not.toThrow()
-      expect(() => assertRollbackCompatible(path, 40)).not.toThrow()
+      expect(() => assertRollbackCompatible(path, 44)).not.toThrow()
+      expect(() => assertRollbackCompatible(path, 45)).not.toThrow()
       const event = store.enqueueEvent({
         userId: 'owner',
         type: 'user.message',
@@ -274,12 +274,12 @@ describe('durable state rollback compatibility', () => {
         },
         'echo',
       )
-      expect(() => assertRollbackCompatible(path, 40)).not.toThrow()
+      expect(() => assertRollbackCompatible(path, 45)).not.toThrow()
       store.initializeRuntimeSettings({
         ...runtimeSettingsDefaults(loadConfig({})),
         routingUncertainty: 'ask_first',
       })
-      expect(() => assertRollbackCompatible(path, 41)).not.toThrow()
+      expect(() => assertRollbackCompatible(path, 46)).not.toThrow()
     } finally {
       store.close()
       rmSync(directory, { recursive: true, force: true })

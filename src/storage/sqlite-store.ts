@@ -825,7 +825,7 @@ CREATE TABLE run_activity_output_pages (
 );
 `
 
-const migration40 = `
+const migration45 = `
 CREATE TABLE routing_rules (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
@@ -855,12 +855,12 @@ CREATE INDEX routing_rule_commands_by_rule
 ON routing_rule_commands (rule_id);
 `
 
-const migration41 = `
+const migration46 = `
 ALTER TABLE routing_decisions ADD COLUMN matched_rule_id TEXT;
 ALTER TABLE routing_decisions ADD COLUMN decision_source TEXT;
 `
 
-const migration42 = `
+const migration47 = `
 ALTER TABLE runtime_settings ADD COLUMN routing_uncertainty TEXT NOT NULL DEFAULT 'new_task'
 CHECK (routing_uncertainty IN ('new_task', 'ask_first', 'continue_recent'));
 `
@@ -2724,9 +2724,9 @@ export class PegasStore {
     this.#migrate(37, migration37)
     this.#migrate(38, migration38)
     this.#migrate(39, migration39)
-    this.#migrate(40, migration40)
-    this.#migrate(41, migration41)
-    this.#migrate(42, migration42)
+    this.#migrate(45, migration45)
+    this.#migrate(46, migration46)
+    this.#migrate(47, migration47)
   }
 
   #backfillWorkerIconIds(): void {

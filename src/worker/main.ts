@@ -137,7 +137,7 @@ const selfChangeExecutor = config.selfChangeEnabled
       recoveryBaseUrl: config.recoveryBaseUrl,
       ...(config.recoveryToken ? { recoveryToken: config.recoveryToken } : {}),
       editor: executor,
-      compatibility: { minimumSchema: 1, maximumSchema: 42 },
+      compatibility: { minimumSchema: 1, maximumSchema: 47 },
       reviewer: 'pegas-self-change-gate',
       controlPlaneBaseUrl,
     })

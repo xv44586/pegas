@@ -137,3 +137,7 @@
 - R1–R4 依次经集成 worktree 合入 main，每步 CI 全绿 + 合并态 `pnpm check` + `pnpm smoke`（R2 起涉及路由决策持久化，必须含 `pnpm smoke:crash`）。
 - 全部合入后：Feature Map ROUTE-005 升级（按证据如实定 Partial/Usable）、`router-worker-design.md` 决策 4 扩展、`sealed-ui-rebuild.md` 占位解锁、经 Candidate + Supervisor 上线并实机验证三场景（规则命中/ask_first 澄清/测试归类）。
 - 风险登记：prompt 注入规则的真实模型遵守度需实测（与 RULES-001 同类缺口）；`clarify` kind 是决策合同首次扩展，回滚需确认 v41 增量列兼容；`ask_first` 若澄清链路契约不齐，R3 可先只落 `new_task`/`continue_recent` 并把 `ask_first` 单独拆出，不得为赶进度伪造待办。
+
+### 集成记录（2026-11-24）
+
+- **迁移重编号**：上游 main 在本 Feature 开发期间合入 APPROVAL-001（PR #65/#66，占用 v40–v43）与 EXEC-003（PR #67，占用 v44）。集成 worktree `int-route005-r1` 将本 Feature 迁移重编号：v40→v45（`routing_rules`/`routing_rule_commands`）、v41→v46（`routing_decisions` 命中证据两列）、v42→v47（`routing_uncertainty`）；self-change `maximumSchema` 42→47；`test/sqlite-store.test.ts` 迁移列表与 `test/rollback-compatibility.test.ts` 阈值同步更新。上文各阶段落地证据中的 v40/v41/v42 为当时分支上的历史编号，语义与表结构不变。全部迁移仍为纯增量（新表/新列），回滚 = revert，旧代码忽略新对象。
