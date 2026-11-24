@@ -2,7 +2,7 @@
 
 > Feature：`EXEC-003`
 >
-> 状态：Partial（真实进程崩溃点注入已覆盖；文件写类 unknown Action 的自动对账已落地，非文件类副作用仍留人工核对）
+> 状态：Partial（真实进程崩溃点注入已覆盖；文件写类 unknown Action 的自动对账已落地，无指纹复杂 bash 写由模型辅助对账，非文件类副作用仍留人工核对）
 >
 > 更新日期：2026-11-24
 
@@ -42,6 +42,6 @@ Clock 只改变进程内时间来源，不改变数据库格式。DSH 的权限�
 
 ## 未知写副作用自动对账（2026-11-24）
 
-`src/observability/action-reconciliation.ts` 在对账进程内主动探测 `unknown` 文件写 Action 的外部事实：全部目标存在（有 `request.effect.contentHash` 或逐目标 `effect.targets` 时还要求 sha256 一致）且全部 `effect.absent` 目标确已消失 → 自动核对 `succeeded`；目标缺失、指纹不符或应删除的文件仍存在 → 自动核对 `failed`（绝不判成功、绝不重试副作用）。bash 必须有逐目标指纹才探测；无指纹的增量写、非文件类或无 targets 且无 absent 的动作保持 `unknown` 留人工。结算复用 `reconcileAction` 同一 append-only 事务（身份 `system:auto-reconciliation`、commandId `auto-reconcile:<actionId>` 幂等，Outbox `action.reconciled` 带 `reconciledBy` 与自动核对文案），核对记录带 `automatic=1`（schema v44）；存在自动核对事实时 Rollback Guard 拒绝回滚到 schema < 44。`PEGAS_AUTO_RECONCILE=disabled` 可关闭。证据：`test/action-auto-reconciliation.test.ts` 11 个测试；语义详见 `docs/observability.md` 与 `docs/approval-lifecycle.md`。
+`src/observability/action-reconciliation.ts` 在对账进程内主动探测 `unknown` 文件写 Action 的外部事实：全部目标存在（有 `request.effect.contentHash` 或逐目标 `effect.targets` 时还要求 sha256 一致）且全部 `effect.absent` 目标确已消失 → 自动核对 `succeeded`；目标缺失、指纹不符或应删除的文件仍存在 → 自动核对 `failed`（绝不判成功、绝不重试副作用）。bash 必须有逐目标指纹才探测；无指纹的增量写、非文件类或无 targets 且无 absent 的动作保持 `unknown` 留人工。无静态指纹的复杂 bash 写由第五环模型辅助对账接管（`src/observability/model-reconciliation.ts`）：以任务目标 + 命令原文 + 逐目标现状（存在性/大小/修改时间/≤8KB 全文）为证据调用控制面模型做严格 JSON 判定，succeeded/failed 走同一结算事务、note 标注模型判定；证据超限（命令 >16384 字符、目标 >8KB 或不可读）、模型失败/超时/形状不符/inconclusive 一律留 `unknown` 人工，模型绝不触发重试。结算复用 `reconcileAction` 同一 append-only 事务（身份 `system:auto-reconciliation`、commandId `auto-reconcile:<actionId>` 幂等，Outbox `action.reconciled` 带 `reconciledBy` 与自动核对文案），核对记录带 `automatic=1`（schema v44）；存在自动核对事实时 Rollback Guard 拒绝回滚到 schema < 44。`PEGAS_AUTO_RECONCILE=disabled` 可关闭全部自动结算，`PEGAS_MODEL_RECONCILE=disabled` 只关模型判定保留静态探测。证据：`test/action-auto-reconciliation.test.ts` 11 个测试 + `test/action-model-reconciliation.test.ts` 6 个 + `test/model-reconciliation-judge.test.ts` 5 个；语义详见 `docs/observability.md` 与 `docs/approval-lifecycle.md`。
 
 指纹来源（2026-11-24 四环补齐）：审批桥在 pre-execute 经 `src/executor/write-effect.mjs` 推导预期落盘字节——`write` 哈希完整 content;`edit` 读原文件按执行器同款字面替换语义推导最终内容（含 CRLF 行尾还原与 replace_all）;`apply_patch` 以 Codex 风格 hunk 重放任意操作数补丁：Add/Update 推导逐目标最终字节（`request.effect.targets` 映射）、Delete 记 `effect.absent`（要求消失）、Move 推导目标字节 + 源路径 absent,同一 canonical 路径被两个操作触碰时放弃;`bash` 仅单条 echo/printf 字面参数 + 单个 `>`/`>>` 重定向可推导（`>>` 读原文件拼接）。推导 fail closed:不唯一命中、hunk 不匹配、二进制或超限文件、复杂 bash（管道/复合命令/替换/变量/通配符/多重定向）一律不记录指纹,退回存在性判定或人工。剩余边界:复杂 bash 写与非文件类副作用（网络发布、消息发送等）无静态探测面,仍必须人工核对;推导依赖 pre-execute 时的原文件快照,若批准等待期间第三方改写原文件,推导指纹与真实执行结果可能不一致（会判 failed 留人工,不会误判成功）;多文件补丁部分执行（执行器顺序执行首败即停不回滚）探测判 failed,是正确保守行为。

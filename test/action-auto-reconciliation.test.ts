@@ -190,7 +190,7 @@ describe('write action external probe', () => {
 })
 
 describe('automatic action reconciliation', () => {
-  it('settles an unknown write from external facts and unblocks the task', () => {
+  it('settles an unknown write from external facts and unblocks the task', async () => {
     const store = new PegasStore(':memory:')
     const directory = workspace()
     const target = join(directory, 'settled.md')
@@ -198,7 +198,7 @@ describe('automatic action reconciliation', () => {
     try {
       const blocked = createUnknownWriteAction(store, target, sha256('landed'))
       const reconciliation = new ActionReconciliation({ store })
-      const report = reconciliation.checkOnce()
+      const report = await reconciliation.checkOnce()
       expect(report.settled).toHaveLength(1)
       expect(report.settled[0]).toMatchObject({
         actionId: blocked.actionId,
@@ -222,21 +222,21 @@ describe('automatic action reconciliation', () => {
         actionId: blocked.actionId,
         resolution: 'succeeded',
       })
-      const again = reconciliation.checkOnce()
+      const again = await reconciliation.checkOnce()
       expect(again.settled).toHaveLength(0)
     } finally {
       store.close()
     }
   })
 
-  it('settles a missing target as failed and keeps the task blocked', () => {
+  it('settles a missing target as failed and keeps the task blocked', async () => {
     const store = new PegasStore(':memory:')
     const directory = workspace()
     const target = join(directory, 'never-written.md')
     try {
       const blocked = createUnknownWriteAction(store, target)
       const reconciliation = new ActionReconciliation({ store })
-      const report = reconciliation.checkOnce()
+      const report = await reconciliation.checkOnce()
       expect(report.settled).toHaveLength(1)
       expect(report.settled[0]).toMatchObject({
         actionId: blocked.actionId,
@@ -253,7 +253,7 @@ describe('automatic action reconciliation', () => {
     }
   })
 
-  it('settles an unknown delete action once the file is really gone', () => {
+  it('settles an unknown delete action once the file is really gone', async () => {
     const store = new PegasStore(':memory:')
     const directory = workspace()
     const target = join(directory, 'deleted.md')
@@ -320,7 +320,7 @@ describe('automatic action reconciliation', () => {
         result: { reason: 'executor_completed_without_outcome' },
       })
       const reconciliation = new ActionReconciliation({ store })
-      const report = reconciliation.checkOnce()
+      const report = await reconciliation.checkOnce()
       expect(report.settled).toHaveLength(1)
       expect(report.settled[0]).toMatchObject({
         actionId: requested.action.id,
@@ -339,7 +339,7 @@ describe('automatic action reconciliation', () => {
     }
   })
 
-  it('never probes non-write kinds or content-hash mismatches into success', () => {
+  it('never probes non-write kinds or content-hash mismatches into success', async () => {
     const store = new PegasStore(':memory:')
     const directory = workspace()
     const target = join(directory, 'mismatch.md')
@@ -351,7 +351,7 @@ describe('automatic action reconciliation', () => {
         sha256('expected content'),
       )
       const reconciliation = new ActionReconciliation({ store })
-      const report = reconciliation.checkOnce()
+      const report = await reconciliation.checkOnce()
       expect(report.settled[0]).toMatchObject({ resolution: 'failed' })
       expect(store.getAction(blocked.actionId, 'owner')?.status).toBe(
         'reconciled',
@@ -361,7 +361,7 @@ describe('automatic action reconciliation', () => {
     }
   })
 
-  it('leaves unknown non-file actions to human reconciliation', () => {
+  it('leaves unknown non-file actions to human reconciliation', async () => {
     const store = new PegasStore(':memory:')
     try {
       const event = store.enqueueEvent({
@@ -413,7 +413,7 @@ describe('automatic action reconciliation', () => {
         result: { providerRequestId: 'request-1' },
       })
       const reconciliation = new ActionReconciliation({ store })
-      const report = reconciliation.checkOnce()
+      const report = await reconciliation.checkOnce()
       expect(report.settled).toHaveLength(0)
       expect(report.inconclusive).toContain(requested.action.id)
       expect(store.getAction(requested.action.id, 'owner')?.status).toBe(
