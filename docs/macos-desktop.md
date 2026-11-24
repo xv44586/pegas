@@ -39,6 +39,13 @@ Electron main
 
 生成的本地 Candidate 位于 `releases/desktop/mac-arm64/Pegas.app`。它带封板蓝色 Pegas 图标，但不会自动签名或公证；首次分发前必须新增发布 Feature 处理 Developer ID、notary、DMG 与更新通道。
 
+## 后台运行与常驻（决策定稿，2026-11-24，未实现）
+
+- **默认不常驻**：退出 App 即停止内置服务；定时自动化仅在 App 运行期间执行。这是现状行为的如实声明，不是新限制。
+- **常驻是设置开关，不是默认**：设置「Pegas」分类将新增「后台运行」开关（默认关）。开启后窗口关闭只隐藏窗口，Supervisor 经 launchd LoginItem 托管继续运行，定时自动化与原生提醒照常；关闭后注销 LoginItem，回到 App 生命周期守护。
+- 开关是本机偏好（桌面主进程 userData 配置），不进入服务端 runtime_settings；Web 连接外部实例时显示只读说明，不提供假开关。
+- 完整验收条件见 `docs/feature-map.md`「Supervisor 接管桌面服务与常驻守护 Intake」的常驻决策定稿节；实现与 Supervisor 接管同 Feature 推进。
+
 ## 验证证据
 
 - 12 个桌面运行时自动化测试覆盖隔离环境、可信回环 origin 与 bearer 注入、回环端口、Control Plane ready 后的数据库写入进程启动顺序、ASAR 服务路径、优雅退出、SIGKILL 升级、macOS 进程组信号、异常 leader 的残留执行器清理，以及首次设置遮罩下的 smoke 恢复路径。
