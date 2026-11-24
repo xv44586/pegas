@@ -49,9 +49,17 @@ import { isDelegationEntry } from './activityModel'
 import {
   Button,
   buttonVariants,
+  FormField,
   RadioGroup,
   RadioItem,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  Switch,
   TextArea,
+  TextInput,
 } from '@bui/index'
 import { StateHeader, type FactTone } from './ConversationBui'
 import { ModelPicker } from './ModelPicker'
@@ -521,7 +529,10 @@ function ApprovalDetail({
           />
         </label>
         {(error || view.decisionError) && (
-          <p className="settings-error" role="alert">
+          <p
+            className="settings-error mb-3 rounded-card bg-red-tint px-3 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_color-mix(in_srgb,var(--red)_22%,transparent)]"
+            role="alert"
+          >
             {error || view.decisionError}
           </p>
         )}
@@ -538,7 +549,7 @@ function ApprovalDetail({
             {submitting ? '正在提交…' : '提交决定'}
           </Button>
         ) : (
-          <span className="drawer-footnote">
+          <span className="drawer-footnote mt-2.5 block text-[12px] leading-[1.6] text-ink-2">
             {approvalFootnote(view.approval.status)}
           </span>
         )}
@@ -770,7 +781,10 @@ function ReconciliationForm({
         />
       </label>
       {error && (
-        <p className="settings-error" role="alert">
+        <p
+          className="settings-error mb-3 rounded-card bg-red-tint px-3 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_color-mix(in_srgb,var(--red)_22%,transparent)]"
+          role="alert"
+        >
           {error}
         </p>
       )}
@@ -833,7 +847,7 @@ function ReconciliationDetail({
       )}
       {!needsReconciliation && !action.reconciliation && (
         <footer className="drawer-footer">
-          <span className="drawer-footnote">
+          <span className="drawer-footnote mt-2.5 block text-[12px] leading-[1.6] text-ink-2">
             当前状态无需人工核对；如有疑问请查看事情详情。
           </span>
         </footer>
@@ -938,7 +952,7 @@ function MessageDetail({
       {needsResolution && onResolve && (
         <OutboxResolutionForm message={message} onResolve={onResolve} />
       )}
-      <div className="info-banner">
+      <div className="my-3 flex items-center gap-2 rounded-control bg-accent-tint px-3 py-2.5 text-[12px] leading-[1.6] text-ink-2">
         <LockKeyhole size={16} />
         此消息没有关联事情；这里只展示服务端保存的原始消息。
       </div>
@@ -1043,7 +1057,10 @@ function OutboxResolutionForm({
         />
       </label>
       {error && (
-        <p className="settings-error" role="alert">
+        <p
+          className="settings-error mb-3 rounded-card bg-red-tint px-3 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_color-mix(in_srgb,var(--red)_22%,transparent)]"
+          role="alert"
+        >
           {error}
         </p>
       )}
@@ -1271,7 +1288,7 @@ function TaskDetail({
         )}
         {completedOutput && completedOutput.length > 600 && (
           <button
-            className="inline-link"
+            className="inline-link mt-2 inline-flex items-center gap-[5px] font-medium text-accent-ink"
             onClick={() => setSummaryExpanded(current => !current)}
             type="button"
           >
@@ -1365,24 +1382,27 @@ function TaskDetail({
                             ` · 工具 ${String(progress.toolCalls)} 次 · ${String(progress.steps)} 步推理`}
                         </summary>
                         {activityError && (
-                          <p className="settings-error" role="alert">
+                          <p
+                            className="settings-error mb-3 rounded-card bg-red-tint px-3 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_color-mix(in_srgb,var(--red)_22%,transparent)]"
+                            role="alert"
+                          >
                             {activityError}
                           </p>
                         )}
                         {!activity && !activityError && (
-                          <p className="drawer-footnote">
+                          <p className="drawer-footnote mt-2.5 text-[12px] leading-[1.6] text-ink-2">
                             正在读取完整执行记录。
                           </p>
                         )}
                         {activity?.entries.length === 0 && (
-                          <p className="drawer-footnote">
+                          <p className="drawer-footnote mt-2.5 text-[12px] leading-[1.6] text-ink-2">
                             这次运行没有留存执行记录（旧版本运行或直接应答）。
                           </p>
                         )}
                         {activity && activity.entries.length > 0 && (
                           <>
                             {activity.truncated && (
-                              <p className="drawer-footnote">
+                              <p className="drawer-footnote mt-2.5 text-[12px] leading-[1.6] text-ink-2">
                                 记录过长，仅显示最近 {activity.entries.length}{' '}
                                 条。
                               </p>
@@ -1407,7 +1427,10 @@ function TaskDetail({
                           </>
                         )}
                         {subagentError && (
-                          <p className="drawer-footnote" role="alert">
+                          <p
+                            className="drawer-footnote mt-2.5 text-[12px] leading-[1.6] text-red-text"
+                            role="alert"
+                          >
                             子任务记录读取失败：{subagentError}
                           </p>
                         )}
@@ -1457,7 +1480,10 @@ function TaskDetail({
       <section className="detail-section">
         <h3>Channel 时间线</h3>
         {timelineError ? (
-          <p className="settings-error" role="alert">
+          <p
+            className="settings-error mb-3 rounded-card bg-red-tint px-3 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_color-mix(in_srgb,var(--red)_22%,transparent)]"
+            role="alert"
+          >
             {timelineError}
           </p>
         ) : timelineItems.length ? (
@@ -1506,7 +1532,7 @@ function TaskDetail({
                 )}
                 {item.text.length > 520 && (
                   <button
-                    className="inline-link"
+                    className="inline-link mt-2 inline-flex items-center gap-[5px] font-medium text-accent-ink"
                     onClick={() =>
                       setExpandedTimeline(current => {
                         const next = new Set(current)
@@ -1529,7 +1555,9 @@ function TaskDetail({
             ))}
           </ol>
         ) : (
-          <p className="drawer-footnote">正在读取这件事的完整时间线。</p>
+          <p className="drawer-footnote mt-2.5 text-[12px] leading-[1.6] text-ink-2">
+            正在读取这件事的完整时间线。
+          </p>
         )}
       </section>
       {usage && (
@@ -1637,7 +1665,9 @@ function TaskDetail({
           </Button>
         )}
         {channel.status === 'cancelled' && (
-          <span className="drawer-footnote">等待服务端返回下一步条件。</span>
+          <span className="drawer-footnote mt-2.5 block text-[12px] leading-[1.6] text-ink-2">
+            等待服务端返回下一步条件。
+          </span>
         )}
         {(channel.status === 'cancelled' || channel.status === 'completed') &&
           onCreateRelated && (
@@ -1726,7 +1756,11 @@ function EvidenceGallery({
   onOpenEvidence?: (evidence: ReviewEvidencePreview) => void
 }) {
   if (!evidence.length)
-    return <p className="drawer-footnote">本次交付没有可展示的证据。</p>
+    return (
+      <p className="drawer-footnote mt-2.5 text-[12px] leading-[1.6] text-ink-2">
+        本次交付没有可展示的证据。
+      </p>
+    )
   return (
     <ul aria-label="证据画廊" className="evidence-gallery">
       {evidence.map(item => (
@@ -2004,7 +2038,10 @@ function DeliverySection({
     <section className="detail-section">
       <h3>目标与交付</h3>
       {error && (
-        <p className="settings-error" role="alert">
+        <p
+          className="settings-error mb-3 rounded-card bg-red-tint px-3 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_color-mix(in_srgb,var(--red)_22%,transparent)]"
+          role="alert"
+        >
           {error}
         </p>
       )}
@@ -2032,7 +2069,7 @@ function DeliverySection({
         </>
       ) : (
         goal && (
-          <p className="drawer-footnote">
+          <p className="drawer-footnote mt-2.5 text-[12px] leading-[1.6] text-ink-2">
             还没有 Review Pack；执行完成后会按完成标准生成审查结论。
           </p>
         )
@@ -2043,7 +2080,7 @@ function DeliverySection({
       />
       {api && pendingEvidence.length > 0 && (
         <div className="evidence-verify">
-          <p className="drawer-footnote">
+          <p className="drawer-footnote mt-2.5 text-[12px] leading-[1.6] text-ink-2">
             有 {String(pendingEvidence.length)} 条证据等待可信验证。
           </p>
           {pendingEvidence.map(item => (
@@ -2062,16 +2099,23 @@ function DeliverySection({
             </Button>
           ))}
           {verifyError && (
-            <p className="settings-error" role="alert">
+            <p
+              className="settings-error mb-3 rounded-card bg-red-tint px-3 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_color-mix(in_srgb,var(--red)_22%,transparent)]"
+              role="alert"
+            >
               {verifyError}
             </p>
           )}
-          {verifyNotice && <p className="drawer-footnote">{verifyNotice}</p>}
+          {verifyNotice && (
+            <p className="drawer-footnote mt-2.5 text-[12px] leading-[1.6] text-ink-2">
+              {verifyNotice}
+            </p>
+          )}
         </div>
       )}
       {api && (
         <button
-          className="inline-link"
+          className="inline-link mt-2 inline-flex items-center gap-[5px] font-medium text-accent-ink"
           onClick={() => void toggleHistory()}
           type="button"
         >
@@ -2081,10 +2125,15 @@ function DeliverySection({
       {historyOpen && (
         <div className="delivery-history">
           {historyLoading && (
-            <p className="drawer-footnote">正在读取历史修订。</p>
+            <p className="drawer-footnote mt-2.5 text-[12px] leading-[1.6] text-ink-2">
+              正在读取历史修订。
+            </p>
           )}
           {historyError && (
-            <p className="settings-error" role="alert">
+            <p
+              className="settings-error mb-3 rounded-card bg-red-tint px-3 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_color-mix(in_srgb,var(--red)_22%,transparent)]"
+              role="alert"
+            >
               {historyError}
             </p>
           )}
@@ -2108,7 +2157,7 @@ function DeliverySection({
                         <p>{contract.desiredOutcome}</p>
                         <small>{formatRelativeTime(contract.createdAt)}</small>
                         <button
-                          className="inline-link"
+                          className="inline-link mt-2 inline-flex items-center gap-[5px] font-medium text-accent-ink"
                           onClick={() => toggleRevisionEvidence(revision)}
                           type="button"
                         >
@@ -2119,15 +2168,18 @@ function DeliverySection({
                         {expanded && (
                           <div className="revision-evidence">
                             {busy && !page && (
-                              <p className="drawer-footnote">
+                              <p className="drawer-footnote mt-2.5 text-[12px] leading-[1.6] text-ink-2">
                                 正在读取证据记录。
                               </p>
                             )}
                             {evidenceError && (
-                              <p className="settings-error" role="alert">
+                              <p
+                                className="settings-error mb-3 rounded-card bg-red-tint px-3 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_color-mix(in_srgb,var(--red)_22%,transparent)]"
+                                role="alert"
+                              >
                                 {evidenceError}
                                 <button
-                                  className="inline-link"
+                                  className="inline-link mt-2 inline-flex items-center gap-[5px] font-medium text-accent-ink"
                                   onClick={() =>
                                     void loadRevisionEvidence(revision)
                                   }
@@ -2163,13 +2215,13 @@ function DeliverySection({
                                     ))}
                                   </ul>
                                 ) : (
-                                  <p className="drawer-footnote">
+                                  <p className="drawer-footnote mt-2.5 text-[12px] leading-[1.6] text-ink-2">
                                     这个修订还没有证据记录。
                                   </p>
                                 )}
                                 {page.nextCursor && (
                                   <button
-                                    className="inline-link"
+                                    className="inline-link mt-2 inline-flex items-center gap-[5px] font-medium text-accent-ink"
                                     disabled={busy}
                                     onClick={() => {
                                       const cursor = page.nextCursor
@@ -2193,7 +2245,9 @@ function DeliverySection({
                   })}
                 </ol>
               ) : (
-                <p className="drawer-footnote">还没有目标修订记录。</p>
+                <p className="drawer-footnote mt-2.5 text-[12px] leading-[1.6] text-ink-2">
+                  还没有目标修订记录。
+                </p>
               )}
               <h4>Review Pack 历史</h4>
               {history.reviewPacks.length ? (
@@ -2216,7 +2270,9 @@ function DeliverySection({
                   ))}
                 </ol>
               ) : (
-                <p className="drawer-footnote">还没有 Review Pack 历史。</p>
+                <p className="drawer-footnote mt-2.5 text-[12px] leading-[1.6] text-ink-2">
+                  还没有 Review Pack 历史。
+                </p>
               )}
             </>
           )}
@@ -2462,7 +2518,7 @@ function CollaborationSection({
         )}
         {relation.targetTaskId && onOpenTarget && (
           <button
-            className="inline-link"
+            className="inline-link mt-2 inline-flex items-center gap-[5px] font-medium text-accent-ink"
             disabled={Boolean(openingId)}
             onClick={() => {
               const targetTaskId = relation.targetTaskId
@@ -2494,12 +2550,18 @@ function CollaborationSection({
     <section className="detail-section">
       <h3>协作记录</h3>
       {error && (
-        <p className="settings-error" role="alert">
+        <p
+          className="settings-error mb-3 rounded-card bg-red-tint px-3 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_color-mix(in_srgb,var(--red)_22%,transparent)]"
+          role="alert"
+        >
           {error}
         </p>
       )}
       {openError && (
-        <p className="settings-error" role="alert">
+        <p
+          className="settings-error mb-3 rounded-card bg-red-tint px-3 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_color-mix(in_srgb,var(--red)_22%,transparent)]"
+          role="alert"
+        >
           {openError}
         </p>
       )}
@@ -2693,7 +2755,10 @@ function WorkerProfileSection({
     <section className="detail-section worker-profile-section">
       <h3>事情级执行设置</h3>
       {profileError && (
-        <p className="settings-error" role="alert">
+        <p
+          className="settings-error mb-3 rounded-card bg-red-tint px-3 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_color-mix(in_srgb,var(--red)_22%,transparent)]"
+          role="alert"
+        >
           {profileError}
         </p>
       )}
@@ -2731,98 +2796,152 @@ function WorkerProfileSection({
             </dl>
           </div>
           {readOnly || !api ? (
-            <p className="drawer-footnote">
+            <p className="drawer-footnote mt-2.5 text-[12px] leading-[1.6] text-ink-2">
               {readOnly
                 ? '事情已归档，执行设置为只读。'
                 : '当前为只读预览，无法修改执行设置。'}
             </p>
           ) : (
             <>
-              <label className="field-label">
-                执行模型
-                <select
+              <FormField
+                className="my-3.5"
+                htmlFor="task-model-mode"
+                label="执行模型"
+              >
+                <Select
                   disabled={saving}
-                  onChange={event =>
+                  onValueChange={value =>
                     void openEditor(
-                      event.target.value === 'override'
-                        ? 'override'
-                        : 'inherit',
+                      value === 'override' ? 'override' : 'inherit',
                     )
                   }
                   value={modelMode}
                 >
-                  <option value="inherit">跟随 Pegas 全局设置</option>
-                  <option value="override">为这件事情指定模型</option>
-                </select>
-              </label>
+                  <SelectTrigger
+                    className="h-10 w-full rounded-control bg-field shadow-inset-field hover:bg-field"
+                    id="task-model-mode"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="inherit">跟随 Pegas 全局设置</SelectItem>
+                    <SelectItem value="override">为这件事情指定模型</SelectItem>
+                  </SelectContent>
+                </Select>
+              </FormField>
               {modelMode === 'inherit' && (
-                <label className="field-label">
-                  执行池
-                  <select
+                <FormField
+                  className="my-3.5"
+                  htmlFor="task-pool"
+                  label="执行池"
+                >
+                  <Select
                     disabled={saving}
-                    onChange={event =>
+                    onValueChange={value =>
                       setPool(
-                        event.target.value === 'fast' ||
-                          event.target.value === 'balanced' ||
-                          event.target.value === 'deep'
-                          ? event.target.value
+                        value === 'fast' ||
+                          value === 'balanced' ||
+                          value === 'deep'
+                          ? value
                           : '',
                       )
                     }
-                    value={pool}
+                    value={pool || 'default'}
                   >
-                    <option value="">不指定（全局默认）</option>
-                    <option value="fast">fast · 轻快省</option>
-                    <option value="balanced">balanced · 均衡</option>
-                    <option value="deep">deep · 深度</option>
-                  </select>
-                </label>
+                    <SelectTrigger
+                      className="h-10 w-full rounded-control bg-field shadow-inset-field hover:bg-field"
+                      id="task-pool"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="default">
+                        不指定（全局默认）
+                      </SelectItem>
+                      <SelectItem value="fast">fast · 轻快省</SelectItem>
+                      <SelectItem value="balanced">balanced · 均衡</SelectItem>
+                      <SelectItem value="deep">deep · 深度</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </FormField>
               )}
-              <label className="field-label">
-                推理档位
-                <select
+              <FormField
+                className="my-3.5"
+                htmlFor="task-effort"
+                label="推理档位"
+              >
+                <Select
                   disabled={saving}
-                  onChange={event => setEffort(event.target.value)}
-                  value={effort}
+                  onValueChange={value =>
+                    setEffort(value === 'default' ? '' : value)
+                  }
+                  value={effort || 'default'}
                 >
-                  <option value="">跟随模型默认</option>
-                  <option value="low">low · 轻快</option>
-                  <option value="medium">medium · 均衡</option>
-                  <option value="high">high · 深入</option>
-                  <option value="max">max · 全力</option>
-                  {effort &&
-                    !['low', 'medium', 'high', 'max'].includes(effort) && (
-                      <option value={effort}>{effort}</option>
-                    )}
-                </select>
-              </label>
-              <label className="field-label">
-                权限档位
-                <select
+                  <SelectTrigger
+                    className="h-10 w-full rounded-control bg-field shadow-inset-field hover:bg-field"
+                    id="task-effort"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="default">跟随模型默认</SelectItem>
+                    <SelectItem value="low">low · 轻快</SelectItem>
+                    <SelectItem value="medium">medium · 均衡</SelectItem>
+                    <SelectItem value="high">high · 深入</SelectItem>
+                    <SelectItem value="max">max · 全力</SelectItem>
+                    {effort &&
+                      !['low', 'medium', 'high', 'max'].includes(effort) && (
+                        <SelectItem value={effort}>{effort}</SelectItem>
+                      )}
+                  </SelectContent>
+                </Select>
+              </FormField>
+              <FormField
+                className="my-3.5"
+                htmlFor="task-permission-tier"
+                label="权限档位"
+              >
+                <Select
                   disabled={saving}
-                  onChange={event =>
+                  onValueChange={value =>
                     setPermissionMode(
-                      event.target.value === 'strict' ||
-                        event.target.value === 'standard' ||
-                        event.target.value === 'full'
-                        ? event.target.value
+                      value === 'strict' ||
+                        value === 'standard' ||
+                        value === 'full'
+                        ? value
                         : 'inherit',
                     )
                   }
                   value={permissionMode}
                 >
-                  <option value="inherit">跟随 Pegas 全局设置</option>
-                  <option value="standard">标准 · 区内放行，越界审批</option>
-                  <option value="strict">严格 · 只读，写与网络都审批</option>
-                  <option value="full">完全访问 · 显式风险披露</option>
-                </select>
-              </label>
-              <p className="drawer-footnote">
+                  <SelectTrigger
+                    className="h-10 w-full rounded-control bg-field shadow-inset-field hover:bg-field"
+                    id="task-permission-tier"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="inherit">跟随 Pegas 全局设置</SelectItem>
+                    <SelectItem value="standard">
+                      标准 · 区内放行，越界审批
+                    </SelectItem>
+                    <SelectItem value="strict">
+                      严格 · 只读，写与网络都审批
+                    </SelectItem>
+                    <SelectItem value="full">
+                      完全访问 · 显式风险披露
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </FormField>
+              <p className="drawer-footnote mt-2.5 text-[12px] leading-[1.6] text-ink-2">
                 收紧对下一次工具调用立即生效；放宽只影响后续运行，不越过已排队运行的能力上限。
               </p>
               {modelMode === 'override' && (
-                <div className="field-label">
-                  <span>指定模型</span>
+                <div className="my-3.5 grid gap-1.5">
+                  <span className="text-[13px] font-medium text-ink">
+                    指定模型
+                  </span>
                   <ModelPicker
                     ariaLabel="指定模型"
                     disabled={saving || !catalog}
@@ -2841,7 +2960,10 @@ function WorkerProfileSection({
                 </div>
               )}
               {catalogError && (
-                <div className="settings-error" role="alert">
+                <div
+                  className="settings-error mb-3 rounded-card bg-red-tint px-3 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_color-mix(in_srgb,var(--red)_22%,transparent)]"
+                  role="alert"
+                >
                   {catalogError}
                   <button
                     disabled={catalogLoading}
@@ -2853,11 +2975,18 @@ function WorkerProfileSection({
                 </div>
               )}
               {saveError && (
-                <p className="settings-error" role="alert">
+                <p
+                  className="settings-error mb-3 rounded-card bg-red-tint px-3 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_color-mix(in_srgb,var(--red)_22%,transparent)]"
+                  role="alert"
+                >
                   {saveError}
                 </p>
               )}
-              {saveNotice && <p className="drawer-footnote">{saveNotice}</p>}
+              {saveNotice && (
+                <p className="drawer-footnote mt-2.5 text-[12px] leading-[1.6] text-ink-2">
+                  {saveNotice}
+                </p>
+              )}
               <Button
                 variant="secondary"
                 size="sm"
@@ -2869,7 +2998,7 @@ function WorkerProfileSection({
               >
                 {saving ? '正在保存…' : '保存执行设置'}
               </Button>
-              <p className="drawer-footnote">
+              <p className="drawer-footnote mt-2.5 text-[12px] leading-[1.6] text-ink-2">
                 只影响这件事情的后续运行；已完成的运行记录不会改写。
               </p>
             </>
@@ -2966,11 +3095,16 @@ function PermissionTierHistorySection({
     <section className="detail-section">
       <h3>权限变更记录</h3>
       {loadError ? (
-        <p className="drawer-footnote" role="alert">
+        <p
+          className="drawer-footnote mt-2.5 text-[12px] leading-[1.6] text-red-text"
+          role="alert"
+        >
           {loadError}
         </p>
       ) : !changes ? (
-        <p className="drawer-footnote">正在读取权限变更记录…</p>
+        <p className="drawer-footnote mt-2.5 text-[12px] leading-[1.6] text-ink-2">
+          正在读取权限变更记录…
+        </p>
       ) : (
         <ul className="permission-history-list">
           {changes.map(change => (
@@ -3043,13 +3177,18 @@ function ApprovalRulesSection({
     <section className="detail-section">
       <h3>已批准规则</h3>
       {loadError ? (
-        <p className="drawer-footnote" role="alert">
+        <p
+          className="drawer-footnote mt-2.5 text-[12px] leading-[1.6] text-red-text"
+          role="alert"
+        >
           {loadError}
         </p>
       ) : !rules ? (
-        <p className="drawer-footnote">正在读取规则…</p>
+        <p className="drawer-footnote mt-2.5 text-[12px] leading-[1.6] text-ink-2">
+          正在读取规则…
+        </p>
       ) : rules.length === 0 ? (
-        <p className="drawer-footnote">
+        <p className="drawer-footnote mt-2.5 text-[12px] leading-[1.6] text-ink-2">
           还没有持久规则。批准审批时选择「本事情内同类不再询问」会在这里生成可撤销的规则。
         </p>
       ) : (
@@ -3083,7 +3222,10 @@ function ApprovalRulesSection({
         </ul>
       )}
       {revokeError && (
-        <p className="drawer-footnote" role="alert">
+        <p
+          className="drawer-footnote mt-2.5 text-[12px] leading-[1.6] text-red-text"
+          role="alert"
+        >
           {revokeError}
         </p>
       )}
@@ -3258,7 +3400,10 @@ function SubagentCard({
           </div>
         )}
         {subagentError && (
-          <p className="drawer-footnote" role="alert">
+          <p
+            className="drawer-footnote mt-2.5 text-[12px] leading-[1.6] text-red-text"
+            role="alert"
+          >
             子任务执行记录读取失败：{subagentError}
           </p>
         )}
@@ -3274,13 +3419,13 @@ function SubagentCard({
             </details>
           ))
         ) : (
-          <p className="drawer-footnote">
+          <p className="drawer-footnote mt-2.5 text-[12px] leading-[1.6] text-ink-2">
             {entry.status === 'started'
               ? '子 agent 运行中；执行记录会随运行持续留存，可稍后重新读取。'
               : '没有留存子 agent 执行记录（旧版本运行或日志不可读）。'}
             {runId && onLoadSubagents && (
               <button
-                className="inline-link"
+                className="inline-link mt-2 inline-flex items-center gap-[5px] font-medium text-accent-ink"
                 onClick={() => onLoadSubagents(runId)}
                 type="button"
               >
@@ -3361,11 +3506,16 @@ function RuntimeDetail({
       <section className="detail-section">
         <h3>已注册执行节点</h3>
         {nodesError ? (
-          <p className="settings-error" role="alert">
+          <p
+            className="settings-error mb-3 rounded-card bg-red-tint px-3 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_color-mix(in_srgb,var(--red)_22%,transparent)]"
+            role="alert"
+          >
             {nodesError}
           </p>
         ) : !nodes ? (
-          <p className="drawer-footnote">正在读取执行节点。</p>
+          <p className="drawer-footnote mt-2.5 text-[12px] leading-[1.6] text-ink-2">
+            正在读取执行节点。
+          </p>
         ) : nodes.length ? (
           <ol className="execution-node-list">
             {nodes.map(node => (
@@ -3388,12 +3538,12 @@ function RuntimeDetail({
             ))}
           </ol>
         ) : (
-          <p className="drawer-footnote">
+          <p className="drawer-footnote mt-2.5 text-[12px] leading-[1.6] text-ink-2">
             还没有 Worker 注册为执行节点；控制面自身仍可执行事情。
           </p>
         )}
       </section>
-      <div className="info-banner">
+      <div className="my-3 flex items-center gap-2 rounded-control bg-accent-tint px-3 py-2.5 text-[12px] leading-[1.6] text-ink-2">
         <LockKeyhole size={16} />
         这里只展示服务端已记录的执行快照；未返回的字段不会推断。
       </div>
@@ -3462,50 +3612,56 @@ function RuleDetail({
   }
   return (
     <div className="drawer-body bui">
-      <div className="info-banner">
+      <div className="my-3 flex items-center gap-2 rounded-control bg-accent-tint px-3 py-2.5 text-[12px] leading-[1.6] text-ink-2">
         <CircleHelp size={16} />
         规则以持久偏好的形式注入每次执行，不授予新权限，也不能绕过高风险动作确认。
       </div>
       {!api && (
-        <div className="page-error" role="alert">
+        <div
+          className="mb-4 flex items-center gap-2.5 rounded-card bg-red-tint px-3.5 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_var(--red)]"
+          role="alert"
+        >
           未连接服务端，无法保存规则。
         </div>
       )}
-      <label className="field-label">
-        规则名称
-        <input
+      <FormField className="my-3.5" label="规则名称">
+        <TextInput
+          className="h-10 w-full"
           disabled={saving || deleting}
           onChange={event => setTitle(event.target.value)}
           placeholder="例如：发布前先说明回滚路径"
           value={title}
         />
-      </label>
-      <label className="field-label">
-        规则内容
-        <textarea
+      </FormField>
+      <FormField className="my-3.5" label="规则内容">
+        <TextArea
+          className="w-full resize-y"
           disabled={saving || deleting}
           onChange={event => setContent(event.target.value)}
           placeholder="描述你希望执行 Agent 持续遵守的工作方式。"
           rows={7}
           value={content}
         />
-      </label>
-      <label className="switch-row">
-        启用这条规则
-        <input
+      </FormField>
+      <div className="switch-row bui flex items-center justify-between py-3">
+        <span className="text-[13px] text-ink">启用这条规则</span>
+        <Switch
           checked={enabled}
           disabled={saving || deleting}
-          onChange={event => setEnabled(event.target.checked)}
-          type="checkbox"
+          label="启用这条规则"
+          onChange={setEnabled}
         />
-      </label>
+      </div>
       {error && (
-        <div className="page-error" role="alert">
+        <div
+          className="mb-4 flex items-center gap-2.5 rounded-card bg-red-tint px-3.5 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_var(--red)]"
+          role="alert"
+        >
           {error}
         </div>
       )}
       {notice && (
-        <p className="field-hint" role="status">
+        <p className="text-[12px] leading-[1.6] text-ink-2" role="status">
           {notice}
         </p>
       )}
@@ -3608,50 +3764,56 @@ function RoutingRuleDetail({
   }
   return (
     <div className="drawer-body bui">
-      <div className="info-banner">
+      <div className="my-3 flex items-center gap-2 rounded-control bg-accent-tint px-3 py-2.5 text-[12px] leading-[1.6] text-ink-2">
         <CircleHelp size={16} />
         归类规则只影响「消息进哪个事情」的判断偏好，不授予新权限；已停止的事情不会自动恢复，控制指令仍走确定性链路。规则仅在「智能判断」模式下生效。
       </div>
       {!api && (
-        <div className="page-error" role="alert">
+        <div
+          className="mb-4 flex items-center gap-2.5 rounded-card bg-red-tint px-3.5 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_var(--red)]"
+          role="alert"
+        >
           未连接服务端，无法保存规则。
         </div>
       )}
-      <label className="field-label">
-        规则名称
-        <input
+      <FormField className="my-3.5" label="规则名称">
+        <TextInput
+          className="h-10 w-full"
           disabled={saving || deleting}
           onChange={event => setTitle(event.target.value)}
           placeholder="例如：提到 X 项目优先进 X 事情"
           value={title}
         />
-      </label>
-      <label className="field-label">
-        规则内容
-        <textarea
+      </FormField>
+      <FormField className="my-3.5" label="规则内容">
+        <TextArea
+          className="w-full resize-y"
           disabled={saving || deleting}
           onChange={event => setContent(event.target.value)}
           placeholder="描述你希望消息归属遵循的偏好，例如某类消息优先进哪个事情。"
           rows={7}
           value={content}
         />
-      </label>
-      <label className="switch-row">
-        启用这条规则
-        <input
+      </FormField>
+      <div className="switch-row bui flex items-center justify-between py-3">
+        <span className="text-[13px] text-ink">启用这条规则</span>
+        <Switch
           checked={enabled}
           disabled={saving || deleting}
-          onChange={event => setEnabled(event.target.checked)}
-          type="checkbox"
+          label="启用这条规则"
+          onChange={setEnabled}
         />
-      </label>
+      </div>
       {error && (
-        <div className="page-error" role="alert">
+        <div
+          className="mb-4 flex items-center gap-2.5 rounded-card bg-red-tint px-3.5 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_var(--red)]"
+          role="alert"
+        >
           {error}
         </div>
       )}
       {notice && (
-        <p className="field-hint" role="status">
+        <p className="text-[12px] leading-[1.6] text-ink-2" role="status">
           {notice}
         </p>
       )}
@@ -3771,7 +3933,7 @@ function PreviewDetail({
     <div className="drawer-body bui">
       {onBack && view.backLabel && (
         <button
-          className="inline-link preview-back"
+          className="inline-link preview-back inline-flex items-center gap-[5px] font-medium text-accent-ink"
           onClick={onBack}
           type="button"
         >

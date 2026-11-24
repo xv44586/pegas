@@ -19,6 +19,11 @@ import {
   Dialog,
   DialogContent,
   DialogTitle,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   SidebarNav,
 } from '@bui/index'
 
@@ -418,38 +423,48 @@ export function GlobalSearch({
                 </Button>
               ))}
             </div>
-            <label className="inline-flex items-center gap-1.5 text-[13px] text-ink-2">
+            <div className="inline-flex items-center gap-1.5 text-[13px] text-ink-2">
               <span>排序</span>
-              <select
-                aria-label="搜索排序"
-                className="h-[26px] appearance-none rounded-chip bg-surface px-1.5 text-[12px] text-ink shadow-hairline outline-none focus-visible:shadow-[0_0_0_1px_var(--accent)]"
-                onChange={event =>
-                  setSort(event.target.value as ChannelSearchSort)
-                }
+              <Select
+                onValueChange={value => setSort(value as ChannelSearchSort)}
                 value={sort}
               >
-                <option value="updated">最近更新</option>
-                <option value="created">最近创建</option>
-                <option value="ended">最近结束</option>
-              </select>
-            </label>
-            <label className="inline-flex items-center gap-1.5 text-[13px] text-ink-2">
+                <SelectTrigger
+                  aria-label="搜索排序"
+                  className="h-[26px] rounded-chip px-2 text-[12px] font-normal shadow-hairline hover:bg-inset"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="updated">最近更新</SelectItem>
+                  <SelectItem value="created">最近创建</SelectItem>
+                  <SelectItem value="ended">最近结束</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="inline-flex items-center gap-1.5 text-[13px] text-ink-2">
               <span>执行者</span>
-              <select
-                aria-label="执行者筛选"
-                className="h-[26px] appearance-none rounded-chip bg-surface px-1.5 text-[12px] text-ink shadow-hairline outline-none focus-visible:shadow-[0_0_0_1px_var(--accent)]"
-                onChange={event =>
-                  setWorkerIcon(event.target.value as WorkerIconId | 'all')
+              <Select
+                onValueChange={value =>
+                  setWorkerIcon(value as WorkerIconId | 'all')
                 }
                 value={workerIcon}
               >
-                <option value="all">全部</option>
-                <option value="car">汽车</option>
-                <option value="camera">相机</option>
-                <option value="computer">电脑</option>
-                <option value="phone">手机</option>
-              </select>
-            </label>
+                <SelectTrigger
+                  aria-label="执行者筛选"
+                  className="h-[26px] rounded-chip px-2 text-[12px] font-normal shadow-hairline hover:bg-inset"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">全部</SelectItem>
+                  <SelectItem value="car">汽车</SelectItem>
+                  <SelectItem value="camera">相机</SelectItem>
+                  <SelectItem value="computer">电脑</SelectItem>
+                  <SelectItem value="phone">手机</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
         )}
         <div className="max-h-[min(52vh,460px)] overflow-y-auto">
@@ -463,7 +478,7 @@ export function GlobalSearch({
             >
               {searchError}
               <button
-                className="inline-link"
+                className="inline-link mt-0 inline-flex items-center gap-[5px] font-medium text-accent-ink"
                 onClick={() =>
                   runSearch(trimmedQuery, {
                     sort,

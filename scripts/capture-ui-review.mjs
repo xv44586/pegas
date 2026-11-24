@@ -531,8 +531,9 @@ try {
     .getByRole('button', { name: '语音与输入' })
     .click()
   await page.getByRole('heading', { name: '语音与输入', exact: true }).waitFor()
-  await page.getByLabel('语音服务').selectOption('openai-compatible')
-  await page.getByLabel('启用轻量改写').check()
+  await page.getByLabel('语音服务').click()
+  await page.getByRole('option', { name: 'OpenAI 兼容' }).click()
+  await page.getByRole('switch', { name: '启用轻量改写' }).click()
   await capture(page, 'desktop-settings-voice.png', 'desktop-settings-voice')
   await page.getByRole('button', { name: '测试改写' }).scrollIntoViewIfNeeded()
   await capture(
@@ -943,8 +944,9 @@ try {
     .getByLabel('设置分类')
     .getByRole('button', { name: '语音与输入', exact: true })
     .click()
-  await mobilePage.getByLabel('语音服务').selectOption('openai-compatible')
-  await mobilePage.getByLabel('启用轻量改写').check()
+  await mobilePage.getByLabel('语音服务').click()
+  await mobilePage.getByRole('option', { name: 'OpenAI 兼容' }).click()
+  await mobilePage.getByRole('switch', { name: '启用轻量改写' }).click()
   await mobilePage
     .getByRole('button', { name: '测试改写' })
     .scrollIntoViewIfNeeded()
@@ -1797,16 +1799,19 @@ async function assertGeometry(page, label) {
           `settings layers do not meet ${String(Math.round(scrollRect.bottom))}..${String(Math.round(footerRect.top))}`,
         )
     }
-    for (const element of globalThis.document.querySelectorAll('select')) {
-      const rect = element.getBoundingClientRect()
+    if (globalThis.document.querySelector('select'))
+      out.push('native select remains after BUI migration')
+    for (const trigger of globalThis.document.querySelectorAll(
+      '.settings-page [role="combobox"], .detail-drawer [role="combobox"]',
+    )) {
+      const rect = trigger.getBoundingClientRect()
       if (!rect.width || !rect.height) continue
-      const style = globalThis.getComputedStyle(element)
-      if (style.appearance !== 'none')
-        out.push(`select keeps native appearance (${style.appearance})`)
-      if (rect.height < 40)
-        out.push(`select is too short (${String(Math.round(rect.height))})`)
-      if (Number.parseFloat(style.paddingRight) < 32)
-        out.push(`select chevron padding is too small (${style.paddingRight})`)
+      if (rect.height < 36)
+        out.push(
+          `select trigger is too short (${String(Math.round(rect.height))})`,
+        )
+      if (trigger.scrollWidth > trigger.clientWidth + 1)
+        out.push('select trigger clips horizontally')
     }
     if (globalThis.matchMedia('(pointer: coarse)').matches) {
       for (const control of globalThis.document.querySelectorAll(
@@ -1878,11 +1883,18 @@ async function assertGeometry(page, label) {
       if (label.scrollWidth > label.clientWidth + 1)
         out.push('radio label wraps or clips')
     }
+    for (const item of globalThis.document.querySelectorAll(
+      '.radio-row [role="radio"], .appearance-options [role="radio"]',
+    )) {
+      const rect = item.getBoundingClientRect()
+      if (rect.width && (rect.width < 16 || rect.height < 16))
+        out.push('radio item is too small')
+    }
     for (const toggle of globalThis.document.querySelectorAll(
-      ".switch-row input[type='checkbox']",
+      '.switch-row [role="switch"]',
     )) {
       const rect = toggle.getBoundingClientRect()
-      if (Math.abs(rect.width - 40) > 1 || Math.abs(rect.height - 22) > 1)
+      if (Math.abs(rect.width - 40) > 1 || Math.abs(rect.height - 24) > 1)
         out.push(
           `switch track changed size (${String(Math.round(rect.width))}x${String(Math.round(rect.height))})`,
         )

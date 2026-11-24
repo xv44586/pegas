@@ -10,7 +10,7 @@ import {
   Sparkles,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { Button } from '@bui/index'
+import { Button, FormField, TextInput } from '@bui/index'
 
 import type {
   DshModelCatalog,
@@ -281,9 +281,9 @@ export function Onboarding({
                       尚未配置模型连接。填写服务地址与 API Key
                       并保存后，即可选择默认模型；凭证只保存在服务端。
                     </p>
-                    <label>
-                      服务地址
-                      <input
+                    <FormField label="服务地址">
+                      <TextInput
+                        className="h-10 w-full read-only:text-ink-2"
                         autoComplete="off"
                         onChange={event =>
                           setConnectionDraft(current => ({
@@ -295,10 +295,10 @@ export function Onboarding({
                         readOnly={!connectionCustom}
                         value={effectiveBaseUrl}
                       />
-                    </label>
-                    <label>
-                      API Key
-                      <input
+                    </FormField>
+                    <FormField label="API Key">
+                      <TextInput
+                        className="h-10 w-full"
                         autoComplete="off"
                         onChange={event =>
                           setConnectionDraft(current => ({
@@ -314,10 +314,10 @@ export function Onboarding({
                         type="password"
                         value={connectionDraft.apiKey}
                       />
-                    </label>
-                    <label>
-                      探测模型
-                      <input
+                    </FormField>
+                    <FormField label="探测模型">
+                      <TextInput
+                        className="h-10 w-full"
                         autoComplete="off"
                         onChange={event =>
                           setConnectionDraft(current => ({
@@ -328,7 +328,7 @@ export function Onboarding({
                         placeholder={probeModelPlaceholder}
                         value={connectionDraft.modelName}
                       />
-                    </label>
+                    </FormField>
                     <div className="setup-connection-actions">
                       <Button
                         className="h-9 px-4 text-[13px]"
@@ -357,7 +357,7 @@ export function Onboarding({
                       <p
                         className={
                           connectionNotice.kind === 'error'
-                            ? 'settings-error'
+                            ? 'settings-error rounded-card bg-red-tint px-3 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_color-mix(in_srgb,var(--red)_22%,transparent)]'
                             : 'setup-connection-ok'
                         }
                         role={
@@ -369,9 +369,9 @@ export function Onboarding({
                     )}
                   </div>
                 )}
-              <label>
-                模型服务
-                <input
+              <FormField label="模型服务">
+                <TextInput
+                  className="h-10 w-full"
                   disabled
                   value={
                     configuredModel?.provider ??
@@ -382,9 +382,8 @@ export function Onboarding({
                     '尚未连接'
                   }
                 />
-              </label>
-              <div className="field-label">
-                <span>默认模型</span>
+              </FormField>
+              <FormField label="默认模型">
                 {onSelectModel ? (
                   <ModelPicker
                     ariaLabel="默认模型"
@@ -402,9 +401,13 @@ export function Onboarding({
                     }
                   />
                 ) : (
-                  <input disabled value={configuredModelId ?? '服务端未提供'} />
+                  <TextInput
+                    className="h-10 w-full"
+                    disabled
+                    value={configuredModelId ?? '服务端未提供'}
+                  />
                 )}
-              </div>
+              </FormField>
               <small>
                 默认模型来自模型服务的完整目录；连接与凭证仍在设置中管理。
               </small>

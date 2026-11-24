@@ -608,6 +608,11 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+async function chooseOption(label: string, option: string) {
+  fireEvent.click(screen.getByLabelText(label))
+  fireEvent.click(await screen.findByRole('option', { name: option }))
+}
+
 function mainCanvas(): HTMLElement {
   const main = document.querySelector<HTMLElement>('.main-canvas')
   if (!main) throw new Error('main canvas is not rendered')
@@ -912,9 +917,7 @@ describe('sealed Pegas UI', () => {
       }),
     )
     fireEvent.click(screen.getByRole('button', { name: /语音与输入/ }))
-    fireEvent.change(screen.getByLabelText('语音服务'), {
-      target: { value: 'openai-compatible' },
-    })
+    await chooseOption('语音服务', 'OpenAI 兼容')
     const speechAddress = screen.getAllByLabelText('服务地址')[0]
     expect(speechAddress).toBeTruthy()
     if (!speechAddress) return
@@ -988,9 +991,11 @@ describe('sealed Pegas UI', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /事情归类/ }))
     const routerProvider = screen.getByLabelText('归类模型服务')
-    expect(routerProvider.tagName).toBe('SELECT')
+    expect(routerProvider.getAttribute('role')).toBe('combobox')
     fireEvent.click(screen.getByRole('button', { name: /语音与输入/ }))
-    expect(screen.getByLabelText('语音服务').tagName).toBe('SELECT')
+    expect(screen.getByLabelText('语音服务').getAttribute('role')).toBe(
+      'combobox',
+    )
   })
 
   it('disables settings fields while a save is in flight', async () => {
@@ -1051,24 +1056,22 @@ describe('sealed Pegas UI', () => {
     )
     fireEvent.click(await screen.findByRole('button', { name: /事情归类/ }))
     const toggle = screen.getByLabelText('启用即时应答')
-    expect(toggle).toHaveProperty('checked', false)
+    expect(toggle.getAttribute('aria-checked')).toBe('false')
     fireEvent.click(toggle)
-    expect(toggle).toHaveProperty('checked', true)
+    expect(toggle.getAttribute('aria-checked')).toBe('true')
     fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
     await screen.findByText('更改已保存')
     expect(savedBody?.chatLaneEnabled).toBe(true)
-    expect(screen.getByLabelText('启用即时应答')).toHaveProperty(
-      'checked',
-      true,
-    )
+    expect(
+      screen.getByLabelText('启用即时应答').getAttribute('aria-checked'),
+    ).toBe('true')
     fireEvent.click(screen.getByLabelText('启用即时应答'))
     fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
     await screen.findByText('更改已保存')
     expect(savedBody?.chatLaneEnabled).toBe(false)
-    expect(screen.getByLabelText('启用即时应答')).toHaveProperty(
-      'checked',
-      false,
-    )
+    expect(
+      screen.getByLabelText('启用即时应答').getAttribute('aria-checked'),
+    ).toBe('false')
   })
 
   it('ROUTE-005: manages routing rules, uncertainty policy and dry-run preview', async () => {
@@ -1308,17 +1311,13 @@ describe('sealed Pegas UI', () => {
       }),
     )
     fireEvent.click(screen.getByRole('button', { name: /事情归类/ }))
-    fireEvent.change(screen.getByLabelText('归类模型服务'), {
-      target: { value: 'anthropic' },
-    })
-    expect(screen.getByLabelText('归类模型服务')).toHaveProperty(
-      'value',
-      'anthropic',
+    await chooseOption('归类模型服务', 'Anthropic')
+    expect(screen.getByLabelText('归类模型服务').textContent).toContain(
+      'Anthropic',
     )
     fireEvent.click(screen.getByRole('button', { name: '取消' }))
-    expect(screen.getByLabelText('归类模型服务')).toHaveProperty(
-      'value',
-      'magpie',
+    expect(screen.getByLabelText('归类模型服务').textContent).toContain(
+      'Magpie',
     )
     fireEvent.click(screen.getByRole('button', { name: /模型服务/ }))
     expect(screen.getByLabelText('服务地址')).toHaveProperty(
@@ -3014,7 +3013,10 @@ describe('sealed Pegas UI', () => {
     expect(await screen.findByText('事情级执行设置')).toBeTruthy()
     const drawer = await screen.findByLabelText('工作详情')
     const overrideSelect = await within(drawer).findByLabelText('执行模型')
-    fireEvent.change(overrideSelect, { target: { value: 'override' } })
+    fireEvent.click(overrideSelect)
+    fireEvent.click(
+      await screen.findByRole('option', { name: '为这件事情指定模型' }),
+    )
     const alert = await within(drawer).findByRole('alert')
     expect(alert.textContent).toContain('目录暂时不可用')
     const retry = within(alert).getByRole('button', { name: '重试' })
@@ -5149,15 +5151,13 @@ describe('sealed Pegas UI', () => {
     )
     fireEvent.click(screen.getByRole('button', { name: /模型服务/ }))
     const providerProtocol = screen.getByLabelText('接口协议')
-    expect(providerProtocol.tagName).toBe('SELECT')
-    fireEvent.change(providerProtocol, {
-      target: { value: 'anthropic-messages' },
-    })
-    expect(providerProtocol).toHaveProperty('value', 'anthropic-messages')
+    expect(providerProtocol.getAttribute('role')).toBe('combobox')
+    await chooseOption('接口协议', 'Anthropic Messages')
+    expect(providerProtocol.textContent).toContain('Anthropic Messages')
 
     fireEvent.click(screen.getByRole('button', { name: /语音与输入/ }))
     const rewriteProtocol = screen.getByLabelText('改写接口协议')
-    expect(rewriteProtocol.tagName).toBe('SELECT')
+    expect(rewriteProtocol.getAttribute('role')).toBe('combobox')
     expect(screen.getByLabelText('清除改写服务 API Key')).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: /隐私/ }))
@@ -5201,9 +5201,9 @@ describe('sealed Pegas UI', () => {
     )
     fireEvent.click(screen.getByRole('button', { name: /隐私/ }))
     const tierSelect = await screen.findByLabelText('全局权限档位')
-    expect(tierSelect).toHaveProperty('value', 'standard')
+    expect(tierSelect.textContent).toContain('标准')
 
-    fireEvent.change(tierSelect, { target: { value: 'strict' } })
+    await chooseOption('全局权限档位', '严格 · 只读，写与网络都审批')
     fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
     expect(await screen.findByText('更改已保存')).toBeTruthy()
     expect(submitted).toMatchObject({
@@ -5211,15 +5211,12 @@ describe('sealed Pegas UI', () => {
       permissionTier: 'strict',
     })
     await waitFor(() =>
-      expect(screen.getByLabelText('全局权限档位')).toHaveProperty(
-        'value',
-        'strict',
+      expect(screen.getByLabelText('全局权限档位').textContent).toContain(
+        '严格',
       ),
     )
 
-    fireEvent.change(screen.getByLabelText('全局权限档位'), {
-      target: { value: 'full' },
-    })
+    await chooseOption('全局权限档位', '完全访问 · 显式风险披露')
     fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
     const riskDialog = await screen.findByRole('dialog', {
       name: '确认完全访问风险',
@@ -5240,9 +5237,8 @@ describe('sealed Pegas UI', () => {
       }),
     )
     expect(await screen.findByText('更改已保存')).toBeTruthy()
-    expect(screen.getByLabelText('全局权限档位')).toHaveProperty(
-      'value',
-      'full',
+    expect(screen.getByLabelText('全局权限档位').textContent).toContain(
+      '完全访问',
     )
   })
 
@@ -5630,9 +5626,7 @@ describe('sealed Pegas UI', () => {
       ).toBe(true),
     )
     fireEvent.click(screen.getByRole('button', { name: /事情归类/ }))
-    fireEvent.change(screen.getByLabelText('归类模型服务'), {
-      target: { value: 'anthropic' },
-    })
+    await chooseOption('归类模型服务', 'Anthropic')
     expect(
       screen.getByRole('button', { name: /，归类模型名称$/ }).textContent,
     ).toContain('claude-sonnet-4-5')
@@ -7726,9 +7720,7 @@ describe('sealed Pegas UI', () => {
     )
     expect(await screen.findByText('事情级执行设置')).toBeTruthy()
     expect(await screen.findByText('Pegas 全局设置')).toBeTruthy()
-    fireEvent.change(screen.getByLabelText('执行模型'), {
-      target: { value: 'override' },
-    })
+    await chooseOption('执行模型', '为这件事情指定模型')
     const modelPicker = await screen.findByRole('button', {
       name: /，指定模型$/,
     })
@@ -7807,12 +7799,11 @@ describe('sealed Pegas UI', () => {
       within(mainCanvas()).getByRole('button', { name: /安全自更新流程/ }),
     )
     expect(await screen.findByText('事情级执行设置')).toBeTruthy()
-    fireEvent.change(await screen.findByLabelText('执行池'), {
-      target: { value: 'fast' },
-    })
+    await screen.findByLabelText('执行池')
+    await chooseOption('执行池', 'fast · 轻快省')
     const effortSelect = screen.getByLabelText('推理档位')
-    expect(effortSelect.tagName).toBe('SELECT')
-    fireEvent.change(effortSelect, { target: { value: 'low' } })
+    expect(effortSelect.getAttribute('role')).toBe('combobox')
+    await chooseOption('推理档位', 'low · 轻快')
     fireEvent.click(screen.getByRole('button', { name: '保存执行设置' }))
     expect(
       await screen.findByText('执行设置已保存，对后续运行生效。'),
@@ -7880,8 +7871,8 @@ describe('sealed Pegas UI', () => {
       within(mainCanvas()).getByRole('button', { name: /安全自更新流程/ }),
     )
     expect(await screen.findByText('事情级执行设置')).toBeTruthy()
-    const tierSelect = await screen.findByLabelText('权限档位')
-    fireEvent.change(tierSelect, { target: { value: 'strict' } })
+    await screen.findByLabelText('权限档位')
+    await chooseOption('权限档位', '严格 · 只读，写与网络都审批')
     fireEvent.click(screen.getByRole('button', { name: '保存执行设置' }))
     expect(
       await screen.findByText('执行设置已保存，对后续运行生效。'),
@@ -7894,9 +7885,7 @@ describe('sealed Pegas UI', () => {
     })
     expect(await screen.findByText('严格 · 这件事情的覆盖设置')).toBeTruthy()
 
-    fireEvent.change(screen.getByLabelText('权限档位'), {
-      target: { value: 'full' },
-    })
+    await chooseOption('权限档位', '完全访问 · 显式风险披露')
     fireEvent.click(screen.getByRole('button', { name: '保存执行设置' }))
     const riskDialog = await screen.findByRole('dialog', {
       name: '确认完全访问风险',
@@ -8249,15 +8238,14 @@ describe('sealed Pegas UI', () => {
     )
     fireEvent.click(screen.getByRole('button', { name: /隐私/ }))
     const reviewSwitch = await screen.findByLabelText('启用自动审阅')
-    expect(reviewSwitch).toHaveProperty('checked', false)
+    expect(reviewSwitch.getAttribute('aria-checked')).toBe('false')
     fireEvent.click(reviewSwitch)
     fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
     expect(await screen.findByText('更改已保存')).toBeTruthy()
     expect(submitted).toMatchObject({ autoReviewEnabled: true })
-    expect(screen.getByLabelText('启用自动审阅')).toHaveProperty(
-      'checked',
-      true,
-    )
+    expect(
+      screen.getByLabelText('启用自动审阅').getAttribute('aria-checked'),
+    ).toBe('true')
   })
 
   it('shows the auto review verdict on the approval card', async () => {
@@ -10010,12 +9998,10 @@ describe('sealed Pegas UI', () => {
     expect(endedFilter.getAttribute('aria-pressed')).toBe('true')
     fireEvent.click(within(dialog).getByRole('button', { name: '进行中' }))
     fireEvent.click(within(dialog).getByRole('button', { name: '需关注' }))
-    fireEvent.change(within(dialog).getByLabelText('搜索排序'), {
-      target: { value: 'created' },
-    })
-    fireEvent.change(within(dialog).getByLabelText('执行者筛选'), {
-      target: { value: 'computer' },
-    })
+    fireEvent.click(within(dialog).getByLabelText('搜索排序'))
+    fireEvent.click(await screen.findByRole('option', { name: '最近创建' }))
+    fireEvent.click(within(dialog).getByLabelText('执行者筛选'))
+    fireEvent.click(await screen.findByRole('option', { name: '电脑' }))
     expect(
       await within(dialog).findByRole('button', { name: /安全自更新流程/ }),
     ).toBeTruthy()

@@ -147,9 +147,13 @@ describe('sealed UI layout contracts', () => {
     expect(sealedUi).toMatch(
       /\.onboarding-dialog\s*\{(?![^}]*overflow:\s*hidden)[^}]*\}/,
     )
-    expect(sealedUi).toMatch(
-      /\.setup-form > label > input,\s*\.setup-form > \.field-label > input,\s*\.setup-form > label > select\s*\{/,
+    const onboarding = readFileSync(
+      new URL('../web/src/sealed/Onboarding.tsx', import.meta.url),
+      'utf8',
     )
+    expect(onboarding).toContain('<FormField label="默认模型">')
+    expect(onboarding).toContain('<FormField label="模型服务">')
+    expect(onboarding).not.toMatch(/<input[\s>]/)
     expect(sealedUi).not.toMatch(/\.setup-form input,/)
     const app = readFileSync(
       new URL('../web/src/App.tsx', import.meta.url),
@@ -202,7 +206,10 @@ describe('sealed UI layout contracts', () => {
     expect(app).toMatch(
       /async function testOnboardingConnection[\s\S]*?api\.testModel\(/,
     )
-    expect(sealedUi).toMatch(/\.setup-connection > label > input\s*\{/)
+    expect(onboarding).toContain('<FormField label="服务地址">')
+    expect(onboarding).toContain('<FormField label="API Key">')
+    expect(onboarding).toContain('<FormField label="探测模型">')
+    expect(sealedUi).not.toMatch(/\.setup-connection > label > input/)
     expect(sealedUi).not.toMatch(/\.setup-form input,/)
     expect(sealedUi).toMatch(
       /\.onboarding-dialog\s*\{[^}]*max-height:\s*calc\(100dvh - 12vh - 20px\);/,

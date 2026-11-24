@@ -58,6 +58,7 @@ export function SelectTrigger({
     <SelectPrimitive.Trigger
       className={cn(
         'inline-flex h-8 items-center justify-between gap-2 rounded-full bg-surface px-3 text-[13px] font-medium text-ink shadow-btn transition-colors duration-150 hover:bg-inset',
+        '[&>span:first-child]:min-w-0 [&>span:first-child]:truncate',
         className,
       )}
       {...props}

@@ -2,19 +2,26 @@ export function Switch({
   checked,
   onChange,
   label,
+  disabled = false,
+  className = '',
 }: {
   checked: boolean
   onChange: (v: boolean) => void
   label?: string
+  disabled?: boolean
+  className?: string
 }) {
   return (
     <button
       role="switch"
       aria-checked={checked}
       aria-label={label}
+      disabled={disabled}
+      type="button"
       onClick={() => onChange(!checked)}
       className={`relative h-6 w-10 shrink-0 rounded-full transition-colors duration-200
-        ${checked ? 'bg-ink' : 'bg-line-strong'}`}
+        disabled:opacity-50 disabled:pointer-events-none
+        ${checked ? 'bg-ink' : 'bg-line-strong'} ${className}`}
     >
       <span
         className="absolute top-0.5 left-0.5 size-5 rounded-full bg-white

@@ -30,7 +30,21 @@ import {
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
-import { Button, SegmentedControl } from '@bui/index'
+import {
+  Button,
+  FormField,
+  RadioGroup,
+  RadioItem,
+  SegmentedControl,
+  Switch,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  TextArea,
+  TextInput,
+} from '@bui/index'
 
 import type {
   BehaviorPreferences,
@@ -293,7 +307,7 @@ export function SettingsPage({
   }
 
   return (
-    <div className="settings-page">
+    <div className="settings-page bui">
       <aside className="settings-nav" aria-label="设置分类">
         <div className="settings-nav-title">
           <h1>设置</h1>
@@ -326,7 +340,7 @@ export function SettingsPage({
                 theme={theme}
               />
             ) : !draft || !response ? (
-              <div className="settings-loading">正在读取设置…</div>
+              <div className="p-12 text-[13px] text-ink-2">正在读取设置…</div>
             ) : (
               <>
                 {section === 'pegas' && (
@@ -639,9 +653,17 @@ function AppearanceSettings({
       />
       <fieldset>
         <legend>主题</legend>
-        <div className="appearance-options">
+        <RadioGroup
+          aria-label="主题"
+          className="appearance-options bui grid grid-cols-2 gap-3 max-[820px]:grid-cols-1"
+          onValueChange={value => onChange(value as ThemeChoice)}
+          value={theme}
+        >
           {choices.map(({ id, label, description, icon: Icon }) => (
-            <label className={theme === id ? 'is-active' : ''} key={id}>
+            <label
+              className="grid min-h-[104px] cursor-pointer grid-cols-[76px_minmax(0,1fr)_18px] items-center gap-3.5 rounded-card bg-surface p-3.5 shadow-hairline transition-shadow duration-150 hover:bg-inset has-[[data-state=checked]]:bg-accent-tint has-[[data-state=checked]]:shadow-[0_0_0_1px_var(--accent)] has-[[data-focus-visible]]:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_33%,transparent)]"
+              key={id}
+            >
               <span
                 aria-hidden="true"
                 className={`appearance-preview is-${id}`}
@@ -650,25 +672,21 @@ function AppearanceSettings({
                 <i />
                 <i />
               </span>
-              <span className="appearance-option-copy">
-                <span>
+              <span className="grid min-w-0 gap-1.5">
+                <span className="flex items-center gap-2 text-[13px] font-medium text-ink">
                   <Icon size={17} />
                   <strong>{label}</strong>
                 </span>
-                <small>{description}</small>
+                <small className="text-[12px] leading-normal text-ink-2">
+                  {description}
+                </small>
               </span>
-              <input
-                checked={theme === id}
-                name="appearance-theme"
-                onChange={() => onChange(id)}
-                type="radio"
-                value={id}
-              />
+              <RadioItem aria-label={label} value={id} />
             </label>
           ))}
-        </div>
+        </RadioGroup>
       </fieldset>
-      <div className="info-banner">
+      <div className="my-3 flex items-center gap-2 rounded-control bg-accent-tint px-3 py-2.5 text-[12px] leading-[1.6] text-ink-2">
         <CircleHelp size={16} />
         更改会立即生效，并保存在当前设备。
       </div>
@@ -785,7 +803,7 @@ function PegasSettings({
           查看运行时
         </Button>
       </div>
-      <div className="info-banner">
+      <div className="my-3 flex items-center gap-2 rounded-control bg-accent-tint px-3 py-2.5 text-[12px] leading-[1.6] text-ink-2">
         <CircleHelp size={16} />
         模型变更仅作用于新会话；已有会话继续使用创建时的模型。
       </div>
@@ -815,8 +833,8 @@ function PegasSettings({
       {tab === 'model' && (
         <div className="setting-section">
           <h3>新建执行会话</h3>
-          <div className="field-label">
-            <span>模型</span>
+          <div className="my-3.5 grid gap-1.5">
+            <span className="text-[13px] font-medium text-ink">模型</span>
             <ModelPicker
               ariaLabel="模型"
               fixedOptions={[
@@ -855,12 +873,12 @@ function PegasSettings({
               }
             />
           </div>
-          <p className="field-hint">
+          <p className="text-[12px] leading-[1.6] text-ink-2">
             凭证由 Pegas 的模型服务或隔离的 DSH profile 提供，不读取个人默认
             profile。
           </p>
           <h3>执行池（可选）</h3>
-          <p className="field-hint">
+          <p className="text-[12px] leading-[1.6] text-ink-2">
             为事情级执行设置提供 fast / balanced / deep 档位。留空的池按
             fast→balanced→全局默认 显式降级，绝不静默换池。
           </p>
@@ -877,8 +895,10 @@ function PegasSettings({
                     poolModel.provider.toLocaleLowerCase()),
             )
             return (
-              <div className="field-label" key={poolKey}>
-                <span>{poolKey} 池模型</span>
+              <div className="my-3.5 grid gap-1.5" key={poolKey}>
+                <span className="text-[13px] font-medium text-ink">
+                  {poolKey} 池模型
+                </span>
                 <ModelPicker
                   ariaLabel={`${poolKey} 池模型`}
                   fixedOptions={[
@@ -938,7 +958,7 @@ function PegasSettings({
       {tab === 'autonomy' && (
         <div className="setting-section">
           <h3>自主程度</h3>
-          <p className="setting-copy">
+          <p className="text-[12px] leading-[1.6] text-ink-2">
             高风险与关键风险 Action 由服务端强制进入持久
             Approval；自定义风险阈值尚未开放。
           </p>
@@ -1017,7 +1037,7 @@ function BehaviorSettings({
   }
   return (
     <div className="setting-section">
-      <div className="info-banner">
+      <div className="my-3 flex items-center gap-2 rounded-control bg-accent-tint px-3 py-2.5 text-[12px] leading-[1.6] text-ink-2">
         <CircleHelp size={16} />
         工作规则与自定义指令以持久偏好的形式提供给执行
         Agent，在每次执行中持续遵守；它们不授予新权限，高风险动作仍必须经过确认。
@@ -1025,16 +1045,27 @@ function BehaviorSettings({
       <h3>基本行为</h3>
       <div className="compact-field-row">
         <span>开始工作前</span>
-        <select defaultValue="高风险动作始终确认" disabled>
-          <option>高风险动作始终确认</option>
-        </select>
+        <Select defaultValue="always" disabled>
+          <SelectTrigger
+            aria-label="开始工作前"
+            className="h-10 w-full rounded-control bg-field shadow-inset-field hover:bg-field"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="always">高风险动作始终确认</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
-      <p className="field-hint">
+      <p className="text-[12px] leading-[1.6] text-ink-2">
         「高风险动作始终确认」由服务端 Approval 强制保证，不能关闭。
       </p>
       <h3>工作规则</h3>
       {workRulesError ? (
-        <div className="page-error" role="alert">
+        <div
+          className="mb-4 flex items-center gap-2.5 rounded-card bg-red-tint px-3.5 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_var(--red)]"
+          role="alert"
+        >
           {workRulesError}
           {onReloadWorkRules && (
             <Button
@@ -1051,7 +1082,7 @@ function BehaviorSettings({
           )}
         </div>
       ) : loading ? (
-        <p className="page-loading">正在读取工作规则…</p>
+        <p className="my-6 text-[13px] text-ink-2">正在读取工作规则…</p>
       ) : (
         <>
           <div className="rule-list">
@@ -1082,25 +1113,24 @@ function BehaviorSettings({
                   <small>{rule.enabled ? '全局 · 启用' : '全局 · 停用'}</small>
                   <Pencil size={15} />
                 </button>
-                <label className="rule-toggle">
-                  <input
-                    aria-label={`${rule.enabled ? '停用' : '启用'}规则：${rule.title}`}
+                <div className="rule-toggle flex items-center px-3">
+                  <Switch
                     checked={rule.enabled}
                     disabled={togglingRuleId === rule.id}
+                    label={`${rule.enabled ? '停用' : '启用'}规则：${rule.title}`}
                     onChange={() => void toggle(rule)}
-                    type="checkbox"
                   />
-                </label>
+                </div>
               </div>
             ))}
           </div>
           {(workRules ?? []).length === 0 && (
-            <p className="field-hint">
+            <p className="text-[12px] leading-[1.6] text-ink-2">
               还没有自定义工作规则；添加后会注入每次执行。
             </p>
           )}
-          <button
-            className="outline-action"
+          <Button
+            className="mt-2 h-8 px-3.5 text-[13px] text-accent-ink shadow-[0_0_0_1px_var(--accent)]"
             onClick={() =>
               onOpenDrawer({
                 kind: 'rule',
@@ -1108,21 +1138,29 @@ function BehaviorSettings({
                 ...(onReloadWorkRules ? { onSaved: onReloadWorkRules } : {}),
               })
             }
+            size="xs"
             type="button"
+            variant="secondary"
           >
             <Plus size={16} />
             添加规则
-          </button>
+          </Button>
         </>
       )}
       {actionError && (
-        <div className="page-error" role="alert">
+        <div
+          className="mb-4 flex items-center gap-2.5 rounded-card bg-red-tint px-3.5 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_var(--red)]"
+          role="alert"
+        >
           {actionError}
         </div>
       )}
       <h3>自定义指令</h3>
       {behaviorPreferencesError ? (
-        <div className="page-error" role="alert">
+        <div
+          className="mb-4 flex items-center gap-2.5 rounded-card bg-red-tint px-3.5 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_var(--red)]"
+          role="alert"
+        >
           {behaviorPreferencesError}
           {onReloadWorkRules && (
             <Button
@@ -1139,20 +1177,20 @@ function BehaviorSettings({
           )}
         </div>
       ) : !behaviorPreferences ? (
-        <p className="page-loading">正在读取自定义指令…</p>
+        <p className="my-6 text-[13px] text-ink-2">正在读取自定义指令…</p>
       ) : (
         <>
-          <label className="field-label">
-            自定义指令
-            <textarea
+          <FormField className="my-3.5" label="自定义指令">
+            <TextArea
+              className="w-full resize-y"
               disabled={savingInstructions}
               onChange={event => setInstructions(event.target.value)}
               placeholder="例如：涉及产品设计时，优先给出具体界面方案；涉及发布操作时，先列出回滚路径。"
               rows={3}
               value={instructions}
             />
-          </label>
-          <div className="behavior-instructions-footer">
+          </FormField>
+          <div className="mt-2 flex items-center justify-between gap-3 [&>span]:text-[12px] [&>span]:text-ink-2">
             <span role="status">{instructionsNotice}</span>
             <Button
               className="h-8 px-3.5 text-[13px]"
@@ -1349,15 +1387,17 @@ function ModelServices({
                 <ChevronRight size={15} />
               </button>
             ))}
-          <button
-            className="outline-action add-provider"
+          <Button
+            className="add-provider h-8 px-3.5 text-[13px] text-accent-ink shadow-[0_0_0_1px_var(--accent)]"
             disabled
+            size="xs"
             title="服务端尚未提供新增 Provider API"
             type="button"
+            variant="secondary"
           >
             <Plus size={16} />
             添加模型服务
-          </button>
+          </Button>
         </aside>
         {active && (
           <div className="provider-detail">
@@ -1404,30 +1444,40 @@ function ModelServices({
             {active.id === draft.modelProvider && providerDraft ? (
               <div className="provider-edit-fields">
                 {active.id === 'custom' && (
-                  <label className="field-label">
-                    接口协议
-                    <select
-                      onChange={event =>
+                  <FormField
+                    className="my-3.5"
+                    htmlFor="provider-protocol"
+                    label="接口协议"
+                  >
+                    <Select
+                      onValueChange={value =>
                         setProviderDraft({
                           ...providerDraft,
-                          protocol: event.target
-                            .value as ModelProviderDraft['protocol'],
+                          protocol: value as ModelProviderDraft['protocol'],
                         })
                       }
                       value={providerDraft.protocol}
                     >
-                      <option value="openai-chat">
-                        OpenAI Chat Completions
-                      </option>
-                      <option value="anthropic-messages">
-                        Anthropic Messages
-                      </option>
-                    </select>
-                  </label>
+                      <SelectTrigger
+                        className="h-10 w-full rounded-control bg-field shadow-inset-field hover:bg-field"
+                        id="provider-protocol"
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="openai-chat">
+                          OpenAI Chat Completions
+                        </SelectItem>
+                        <SelectItem value="anthropic-messages">
+                          Anthropic Messages
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </FormField>
                 )}
-                <label className="field-label">
-                  服务地址
-                  <input
+                <FormField className="my-3.5" label="服务地址">
+                  <TextInput
+                    className="h-10 w-full"
                     onChange={event =>
                       setProviderDraft({
                         ...providerDraft,
@@ -1437,11 +1487,11 @@ function ModelServices({
                     readOnly={active.id !== 'custom'}
                     value={providerDraft.baseUrl}
                   />
-                </label>
-                <label className="field-label">
-                  API Key
-                  <input
+                </FormField>
+                <FormField className="my-3.5" label="API Key">
+                  <TextInput
                     autoComplete="off"
+                    className="h-10 w-full"
                     onChange={event =>
                       setProviderDraft({
                         ...providerDraft,
@@ -1457,33 +1507,35 @@ function ModelServices({
                     type="password"
                     value={providerDraft.apiKey}
                   />
-                </label>
+                </FormField>
                 {active.hasApiKey && (
-                  <label className="switch-row">
-                    清除已保存的 API Key
-                    <input
+                  <div className="switch-row bui flex items-center justify-between py-3">
+                    <span className="text-[13px] text-ink">
+                      清除已保存的 API Key
+                    </span>
+                    <Switch
                       checked={providerDraft.clearApiKey}
-                      onChange={event =>
+                      label="清除已保存的 API Key"
+                      onChange={checked =>
                         setProviderDraft({
                           ...providerDraft,
-                          clearApiKey: event.target.checked,
+                          clearApiKey: checked,
                           apiKey: '',
                         })
                       }
-                      type="checkbox"
                     />
-                  </label>
+                  </div>
                 )}
               </div>
             ) : (
-              <div className="info-banner">
+              <div className="my-3 flex items-center gap-2 rounded-control bg-accent-tint px-3 py-2.5 text-[12px] leading-[1.6] text-ink-2">
                 <LockKeyhole size={16} />
                 当前服务端只允许编辑事情归类正在使用的
                 Provider；请先在“事情归类”中选用。
               </div>
             )}
             {!canProbe && (
-              <div className="info-banner">
+              <div className="my-3 flex items-center gap-2 rounded-control bg-accent-tint px-3 py-2.5 text-[12px] leading-[1.6] text-ink-2">
                 <LockKeyhole size={16} />
                 请先在“事情归类”中选用并填写模型，再测试连接或读取目录。
               </div>
@@ -1717,27 +1769,24 @@ function RouterSettings({
             </p>
           </div>
         </div>
-        <label className="switch-row">
-          启用即时应答
-          <input
-            aria-label="启用即时应答"
+        <div className="switch-row bui flex items-center justify-between py-3">
+          <span className="text-[13px] text-ink">启用即时应答</span>
+          <Switch
             checked={draft.chatLaneEnabled === true}
-            onChange={event =>
-              onChange({ ...draft, chatLaneEnabled: event.target.checked })
+            label="启用即时应答"
+            onChange={checked =>
+              onChange({ ...draft, chatLaneEnabled: checked })
             }
-            type="checkbox"
           />
-        </label>
+        </div>
       </div>
       <div className="compact-field-row">
         <span>归类模型</span>
         <div className="router-model-fields">
-          <select
-            aria-label="归类模型服务"
+          <Select
             value={draft.modelProvider}
-            onChange={event => {
-              const modelProvider = event.target
-                .value as RuntimeSettings['modelProvider']
+            onValueChange={value => {
+              const modelProvider = value as RuntimeSettings['modelProvider']
               const nextProvider = response.capabilities.providers.find(
                 item => item.id === modelProvider,
               )
@@ -1748,15 +1797,24 @@ function RouterSettings({
               })
             }}
           >
-            {response.capabilities.providers.map(item => (
-              <option key={item.id} value={item.id}>
-                {item.name}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger
+              aria-label="归类模型服务"
+              className="h-10 w-full rounded-control bg-field shadow-inset-field hover:bg-field"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {response.capabilities.providers.map(item => (
+                <SelectItem key={item.id} value={item.id}>
+                  {item.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           {manualModel ? (
-            <input
+            <TextInput
               aria-label="归类模型名称"
+              className="h-10 w-full"
               onChange={event =>
                 onChange({ ...draft, modelName: event.target.value })
               }
@@ -1798,51 +1856,48 @@ function RouterSettings({
       </div>
       <div className="compact-field-row">
         <span>不确定时</span>
-        <div className="radio-row">
-          <label>
-            <input
-              checked={(draft.routingUncertainty ?? 'new_task') === 'new_task'}
-              name="uncertain"
-              onChange={() =>
-                onChange({ ...draft, routingUncertainty: 'new_task' })
-              }
-              type="radio"
-            />
-            开始新事情
-          </label>
-          <label>
-            <input
-              checked={draft.routingUncertainty === 'ask_first'}
-              name="uncertain"
-              onChange={() =>
-                onChange({ ...draft, routingUncertainty: 'ask_first' })
-              }
-              type="radio"
-            />
-            先问我
-          </label>
-          <label>
-            <input
-              checked={draft.routingUncertainty === 'continue_recent'}
-              name="uncertain"
-              onChange={() =>
-                onChange({ ...draft, routingUncertainty: 'continue_recent' })
-              }
-              type="radio"
-            />
-            优先继续最近的事情
-          </label>
-        </div>
+        <RadioGroup
+          aria-label="不确定时"
+          className="radio-row bui flex flex-wrap gap-x-4 gap-y-2"
+          onValueChange={value =>
+            onChange({
+              ...draft,
+              routingUncertainty: value as NonNullable<
+                RuntimeSettings['routingUncertainty']
+              >,
+            })
+          }
+          value={draft.routingUncertainty ?? 'new_task'}
+        >
+          {(
+            [
+              ['new_task', '开始新事情'],
+              ['ask_first', '先问我'],
+              ['continue_recent', '优先继续最近的事情'],
+            ] as const
+          ).map(([value, label]) => (
+            <label
+              className="flex min-h-8 cursor-pointer items-center gap-1.5 text-[13px] whitespace-nowrap text-ink"
+              key={value}
+            >
+              <RadioItem aria-label={label} value={value} />
+              {label}
+            </label>
+          ))}
+        </RadioGroup>
       </div>
       <h3>归类规则</h3>
       {draft.routerMode === 'rules' && (
-        <div className="info-banner">
+        <div className="my-3 flex items-center gap-2 rounded-control bg-accent-tint px-3 py-2.5 text-[12px] leading-[1.6] text-ink-2">
           <CircleHelp size={16} />
           当前为「确定性规则」模式：只认显式事情引用，自定义归类规则仅在「智能判断」模式下生效。
         </div>
       )}
       {routingRulesError ? (
-        <div className="page-error" role="alert">
+        <div
+          className="mb-4 flex items-center gap-2.5 rounded-card bg-red-tint px-3.5 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_var(--red)]"
+          role="alert"
+        >
           {routingRulesError}
           {onReloadRoutingRules && (
             <Button
@@ -1859,7 +1914,7 @@ function RouterSettings({
           )}
         </div>
       ) : !routingRules ? (
-        <p className="page-loading">正在读取归类规则…</p>
+        <p className="my-6 text-[13px] text-ink-2">正在读取归类规则…</p>
       ) : (
         <>
           <div className="rule-list">
@@ -1892,25 +1947,24 @@ function RouterSettings({
                   <small>{rule.enabled ? '归类 · 启用' : '归类 · 停用'}</small>
                   <Pencil size={15} />
                 </button>
-                <label className="rule-toggle">
-                  <input
-                    aria-label={`${rule.enabled ? '停用' : '启用'}归类规则：${rule.title}`}
+                <div className="rule-toggle flex items-center px-3">
+                  <Switch
                     checked={rule.enabled}
                     disabled={togglingRuleId === rule.id}
+                    label={`${rule.enabled ? '停用' : '启用'}归类规则：${rule.title}`}
                     onChange={() => void toggleRule(rule)}
-                    type="checkbox"
                   />
-                </label>
+                </div>
               </div>
             ))}
           </div>
           {routingRules.length === 0 && (
-            <p className="field-hint">
+            <p className="text-[12px] leading-[1.6] text-ink-2">
               还没有自定义归类规则；添加后会作为归属偏好参与智能判断。
             </p>
           )}
-          <button
-            className="outline-action"
+          <Button
+            className="mt-2 h-8 px-3.5 text-[13px] text-accent-ink shadow-[0_0_0_1px_var(--accent)]"
             onClick={() =>
               onOpenDrawer({
                 kind: 'routingRule',
@@ -1920,22 +1974,28 @@ function RouterSettings({
                   : {}),
               })
             }
+            size="xs"
             type="button"
+            variant="secondary"
           >
             <Plus size={16} />
             添加规则
-          </button>
+          </Button>
         </>
       )}
       {ruleActionError && (
-        <div className="page-error" role="alert">
+        <div
+          className="mb-4 flex items-center gap-2.5 rounded-card bg-red-tint px-3.5 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_var(--red)]"
+          role="alert"
+        >
           {ruleActionError}
         </div>
       )}
       <h3>测试归类</h3>
       <div className="test-row">
-        <input
+        <TextInput
           aria-label="测试归类消息"
+          className="h-10 w-full"
           onChange={event => setTestText(event.target.value)}
           value={testText}
         />
@@ -1951,11 +2011,14 @@ function RouterSettings({
           {testing ? '测试中…' : '测试'}
         </Button>
       </div>
-      <p className="field-hint">
+      <p className="text-[12px] leading-[1.6] text-ink-2">
         测试按当前已保存的归类方式、模型与规则预演归属，不会创建事情或发送通知；模型调用计入用量。
       </p>
       {testError && (
-        <div className="page-error" role="alert">
+        <div
+          className="mb-4 flex items-center gap-2.5 rounded-card bg-red-tint px-3.5 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_var(--red)]"
+          role="alert"
+        >
           {testError}
         </div>
       )}
@@ -1970,7 +2033,7 @@ function RouterSettings({
           </div>
           {testResult.question && <p>{testResult.question}</p>}
           {testResult.matchedRuleId && (
-            <p className="field-hint">
+            <p className="text-[12px] leading-[1.6] text-ink-2">
               命中规则：
               {routingRules?.find(rule => rule.id === testResult.matchedRuleId)
                 ?.title ?? testResult.matchedRuleId}
@@ -2112,25 +2175,32 @@ function VoiceSettings({
             <h3>语音听写</h3>
             <p>录音仅用于本次转写，默认不持久化。</p>
           </div>
-          <select
-            aria-label="语音服务"
-            onChange={event =>
+          <Select
+            onValueChange={value =>
               onSpeechChange({
                 ...speechDraft,
-                provider: event.target.value as SpeechSettingsDraft['provider'],
+                provider: value as SpeechSettingsDraft['provider'],
               })
             }
             value={speechDraft.provider}
           >
-            <option value="disabled">关闭</option>
-            <option value="openai-compatible">OpenAI 兼容</option>
-          </select>
+            <SelectTrigger
+              aria-label="语音服务"
+              className="h-9 max-w-full min-w-0 rounded-control bg-field shadow-inset-field hover:bg-field"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="disabled">关闭</SelectItem>
+              <SelectItem value="openai-compatible">OpenAI 兼容</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
         {speechDraft.provider === 'openai-compatible' && (
           <>
-            <label className="field-label">
-              服务地址
-              <input
+            <FormField className="my-3.5" label="服务地址">
+              <TextInput
+                className="h-10 w-full"
                 onChange={event =>
                   onSpeechChange({
                     ...speechDraft,
@@ -2139,20 +2209,20 @@ function VoiceSettings({
                 }
                 value={speechDraft.baseUrl}
               />
-            </label>
-            <label className="field-label">
-              模型
-              <input
+            </FormField>
+            <FormField className="my-3.5" label="模型">
+              <TextInput
+                className="h-10 w-full"
                 onChange={event =>
                   onSpeechChange({ ...speechDraft, model: event.target.value })
                 }
                 value={speechDraft.model}
               />
-            </label>
-            <label className="field-label">
-              API Key
-              <input
+            </FormField>
+            <FormField className="my-3.5" label="API Key">
+              <TextInput
                 autoComplete="off"
+                className="h-10 w-full"
                 onChange={event =>
                   onSpeechChange({
                     ...speechDraft,
@@ -2166,22 +2236,24 @@ function VoiceSettings({
                 type="password"
                 value={speechDraft.apiKey}
               />
-            </label>
+            </FormField>
             {speechDraft.hasApiKey && (
-              <label className="switch-row">
-                清除已保存的 API Key
-                <input
+              <div className="switch-row bui flex items-center justify-between py-3">
+                <span className="text-[13px] text-ink">
+                  清除已保存的 API Key
+                </span>
+                <Switch
                   checked={speechDraft.clearApiKey}
-                  onChange={event =>
+                  label="清除已保存的 API Key"
+                  onChange={checked =>
                     onSpeechChange({
                       ...speechDraft,
-                      clearApiKey: event.target.checked,
+                      clearApiKey: checked,
                       apiKey: '',
                     })
                   }
-                  type="checkbox"
                 />
-              </label>
+              </div>
             )}
             <Button
               className="h-8 px-3.5 text-[13px]"
@@ -2207,12 +2279,18 @@ function VoiceSettings({
                   : '录一段测试'}
             </Button>
             {speechResult && (
-              <p className="test-result" role="status">
+              <p
+                className="mt-2 flex items-center gap-2 rounded-control bg-accent-tint px-3 py-2 text-[12px] text-accent-ink"
+                role="status"
+              >
                 {speechResult}
               </p>
             )}
             {dictation.error && (
-              <p className="settings-error" role="alert">
+              <p
+                className="mb-3 rounded-card bg-red-tint px-3 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_color-mix(in_srgb,var(--red)_22%,transparent)]"
+                role="alert"
+              >
                 {dictation.error}
               </p>
             )}
@@ -2227,19 +2305,19 @@ function VoiceSettings({
             <p>发送前清理口头语，不改变原意。</p>
           </div>
         </div>
-        <label className="switch-row">
-          启用轻量改写
-          <input
+        <div className="switch-row bui flex items-center justify-between py-3">
+          <span className="text-[13px] text-ink">启用轻量改写</span>
+          <Switch
             checked={draft.rewriteMode === 'light'}
-            onChange={event =>
+            label="启用轻量改写"
+            onChange={checked =>
               onChange({
                 ...draft,
-                rewriteMode: event.target.checked ? 'light' : 'disabled',
+                rewriteMode: checked ? 'light' : 'disabled',
               })
             }
-            type="checkbox"
           />
-        </label>
+        </div>
         {draft.rewriteMode === 'light' && (
           <>
             <SegmentedControl
@@ -2254,27 +2332,39 @@ function VoiceSettings({
             />
             {rewriteDraft.mode === 'custom' && (
               <div className="provider-edit-fields">
-                <label className="field-label">
-                  改写接口协议
-                  <select
-                    onChange={event =>
+                <FormField
+                  className="my-3.5"
+                  htmlFor="rewrite-protocol"
+                  label="改写接口协议"
+                >
+                  <Select
+                    onValueChange={value =>
                       onRewriteChange({
                         ...rewriteDraft,
-                        protocol: event.target
-                          .value as RewriteSettingsDraft['protocol'],
+                        protocol: value as RewriteSettingsDraft['protocol'],
                       })
                     }
                     value={rewriteDraft.protocol}
                   >
-                    <option value="openai-chat">OpenAI Chat Completions</option>
-                    <option value="anthropic-messages">
-                      Anthropic Messages
-                    </option>
-                  </select>
-                </label>
-                <label className="field-label">
-                  服务地址
-                  <input
+                    <SelectTrigger
+                      className="h-10 w-full rounded-control bg-field shadow-inset-field hover:bg-field"
+                      id="rewrite-protocol"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="openai-chat">
+                        OpenAI Chat Completions
+                      </SelectItem>
+                      <SelectItem value="anthropic-messages">
+                        Anthropic Messages
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </FormField>
+                <FormField className="my-3.5" label="服务地址">
+                  <TextInput
+                    className="h-10 w-full"
                     onChange={event =>
                       onRewriteChange({
                         ...rewriteDraft,
@@ -2283,10 +2373,10 @@ function VoiceSettings({
                     }
                     value={rewriteDraft.baseUrl}
                   />
-                </label>
-                <label className="field-label">
-                  模型
-                  <input
+                </FormField>
+                <FormField className="my-3.5" label="模型">
+                  <TextInput
+                    className="h-10 w-full"
                     onChange={event =>
                       onRewriteChange({
                         ...rewriteDraft,
@@ -2295,11 +2385,11 @@ function VoiceSettings({
                     }
                     value={rewriteDraft.model}
                   />
-                </label>
-                <label className="field-label">
-                  API Key
-                  <input
+                </FormField>
+                <FormField className="my-3.5" label="API Key">
+                  <TextInput
                     autoComplete="off"
+                    className="h-10 w-full"
                     onChange={event =>
                       onRewriteChange({
                         ...rewriteDraft,
@@ -2313,35 +2403,36 @@ function VoiceSettings({
                     type="password"
                     value={rewriteDraft.apiKey}
                   />
-                </label>
+                </FormField>
                 {rewriteDraft.hasApiKey && (
-                  <label className="switch-row">
-                    清除改写服务 API Key
-                    <input
-                      aria-label="清除改写服务 API Key"
+                  <div className="switch-row bui flex items-center justify-between py-3">
+                    <span className="text-[13px] text-ink">
+                      清除改写服务 API Key
+                    </span>
+                    <Switch
                       checked={rewriteDraft.clearApiKey}
-                      onChange={event =>
+                      label="清除改写服务 API Key"
+                      onChange={checked =>
                         onRewriteChange({
                           ...rewriteDraft,
-                          clearApiKey: event.target.checked,
+                          clearApiKey: checked,
                           apiKey: '',
                         })
                       }
-                      type="checkbox"
                     />
-                  </label>
+                  </div>
                 )}
               </div>
             )}
-            <label className="field-label">
-              测试文本
-              <textarea
+            <FormField className="my-3.5" label="测试文本">
+              <TextArea
+                className="w-full resize-y"
                 maxLength={4000}
                 onChange={event => setRewriteSample(event.target.value)}
                 rows={3}
                 value={rewriteSample}
               />
-            </label>
+            </FormField>
             <Button
               className="h-8 px-3.5 text-[13px]"
               disabled={rewriteTesting || !rewriteSample.trim()}
@@ -2354,12 +2445,18 @@ function VoiceSettings({
               {rewriteTesting ? '测试中…' : '测试改写'}
             </Button>
             {rewriteResult && (
-              <p className="test-result" role="status">
+              <p
+                className="mt-2 flex items-center gap-2 rounded-control bg-accent-tint px-3 py-2 text-[12px] text-accent-ink"
+                role="status"
+              >
                 {rewriteResult}
               </p>
             )}
             {rewriteError && (
-              <p className="settings-error" role="alert">
+              <p
+                className="mb-3 rounded-card bg-red-tint px-3 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_color-mix(in_srgb,var(--red)_22%,transparent)]"
+                role="alert"
+              >
                 {rewriteError}
               </p>
             )}
@@ -2386,7 +2483,10 @@ function ConnectionsSettings({
         description="查看已注册的执行节点与它们声明的能力。"
       />
       {error ? (
-        <div className="page-error" role="alert">
+        <div
+          className="mb-4 flex items-center gap-2.5 rounded-card bg-red-tint px-3.5 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_var(--red)]"
+          role="alert"
+        >
           {error}
           {onReload && (
             <Button
@@ -2403,7 +2503,7 @@ function ConnectionsSettings({
           )}
         </div>
       ) : !nodes ? (
-        <p className="page-loading">正在读取执行节点…</p>
+        <p className="my-6 text-[13px] text-ink-2">正在读取执行节点…</p>
       ) : nodes.length ? (
         <div className="connection-grid">
           {nodes.map(node => (
@@ -2424,11 +2524,11 @@ function ConnectionsSettings({
           ))}
         </div>
       ) : (
-        <p className="settings-help">
+        <p className="text-[12px] leading-[1.6] text-ink-2">
           还没有 Worker 注册为执行节点；控制面自身仍可执行事情。
         </p>
       )}
-      <div className="info-banner">
+      <div className="my-3 flex items-center gap-2 rounded-control bg-accent-tint px-3 py-2.5 text-[12px] leading-[1.6] text-ink-2">
         <LockKeyhole size={16} />
         这里只列出服务端已注册的执行节点；工具授权清单 API
         尚未提供，不代表当前已授权。
@@ -2455,11 +2555,14 @@ function MemorySettings({
         description="管理 Pegas 可以长期记住的内容和作用范围。"
       />
       {error ? (
-        <div className="page-error" role="alert">
+        <div
+          className="mb-4 flex items-center gap-2.5 rounded-card bg-red-tint px-3.5 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_var(--red)]"
+          role="alert"
+        >
           {error}
         </div>
       ) : !memories ? (
-        <p className="page-loading">正在读取记忆…</p>
+        <p className="my-6 text-[13px] text-ink-2">正在读取记忆…</p>
       ) : (
         <div className="settings-card">
           <div className="card-title">
@@ -2483,7 +2586,7 @@ function MemorySettings({
           </Button>
         </div>
       )}
-      <div className="info-banner">
+      <div className="my-3 flex items-center gap-2 rounded-control bg-accent-tint px-3 py-2.5 text-[12px] leading-[1.6] text-ink-2">
         <LockKeyhole size={16} />
         记忆的添加、修改与删除在“记忆”页完成；执行时只装载适用范围。
       </div>
@@ -2513,28 +2616,40 @@ function PrivacySettings({
             <p>决定 Pegas 执行工具时哪些动作放行、哪些需要你的审批。</p>
           </div>
         </div>
-        <label className="field-label">
-          全局权限档位
-          <select
-            aria-label="全局权限档位"
-            onChange={event =>
+        <FormField
+          className="my-3.5"
+          htmlFor="global-permission-tier"
+          label="全局权限档位"
+        >
+          <Select
+            onValueChange={value =>
               onChange({
                 ...draft,
                 permissionTier:
-                  event.target.value === 'strict' ||
-                  event.target.value === 'full'
-                    ? event.target.value
-                    : 'standard',
+                  value === 'strict' || value === 'full' ? value : 'standard',
               })
             }
             value={draft.permissionTier ?? 'standard'}
           >
-            <option value="standard">标准 · 区内放行，越界审批</option>
-            <option value="strict">严格 · 只读，写与网络都审批</option>
-            <option value="full">完全访问 · 显式风险披露</option>
-          </select>
-        </label>
-        <p className="settings-help">
+            <SelectTrigger
+              aria-label="全局权限档位"
+              className="h-10 w-full rounded-control bg-field shadow-inset-field hover:bg-field"
+              id="global-permission-tier"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="standard">
+                标准 · 区内放行，越界审批
+              </SelectItem>
+              <SelectItem value="strict">
+                严格 · 只读，写与网络都审批
+              </SelectItem>
+              <SelectItem value="full">完全访问 · 显式风险披露</SelectItem>
+            </SelectContent>
+          </Select>
+        </FormField>
+        <p className="text-[12px] leading-[1.6] text-ink-2">
           收紧对下一次工具调用立即生效；放宽只影响后续运行。单个事情可以在执行设置里覆盖此默认值。
         </p>
       </div>
@@ -2548,21 +2663,20 @@ function PrivacySettings({
             </p>
           </div>
         </div>
-        <label className="switch-row">
-          启用自动审阅
-          <input
-            aria-label="启用自动审阅"
+        <div className="switch-row bui flex items-center justify-between py-3">
+          <span className="text-[13px] text-ink">启用自动审阅</span>
+          <Switch
             checked={draft.autoReviewEnabled === true}
-            onChange={event =>
+            label="启用自动审阅"
+            onChange={checked =>
               onChange({
                 ...draft,
-                autoReviewEnabled: event.target.checked,
+                autoReviewEnabled: checked,
               })
             }
-            type="checkbox"
           />
-        </label>
-        <p className="settings-help">
+        </div>
+        <p className="text-[12px] leading-[1.6] text-ink-2">
           只认你认证输入的原话；定时跟进等机器输入不构成新授权。审阅超时或失败一律回到人工审批，不可逆命令与控制面修改始终需要你确认。
         </p>
       </div>
@@ -2574,28 +2688,27 @@ function PrivacySettings({
             <p>在可信边界外发送内容前识别并替换常见敏感字段。</p>
           </div>
         </div>
-        <label className="switch-row">
-          启用遮罩
-          <input
-            aria-label="启用遮罩"
+        <div className="switch-row bui flex items-center justify-between py-3">
+          <span className="text-[13px] text-ink">启用遮罩</span>
+          <Switch
             checked={draft.privacyMode === 'mask'}
             disabled={!available}
-            onChange={event =>
+            label="启用遮罩"
+            onChange={checked =>
               onChange({
                 ...draft,
-                privacyMode: event.target.checked ? 'mask' : 'disabled',
+                privacyMode: checked ? 'mask' : 'disabled',
               })
             }
-            type="checkbox"
           />
-        </label>
+        </div>
         {!available && (
-          <p className="settings-help">
+          <p className="text-[12px] leading-[1.6] text-ink-2">
             服务端尚未配置隐私 HMAC key，暂时无法启用遮罩。
           </p>
         )}
       </div>
-      <div className="info-banner">
+      <div className="my-3 flex items-center gap-2 rounded-control bg-accent-tint px-3 py-2.5 text-[12px] leading-[1.6] text-ink-2">
         <LockKeyhole size={16} />
         模型服务密钥只写入服务端，读取设置时不会回显明文。
       </div>
@@ -2657,7 +2770,10 @@ function NotificationSettings({
         description="设置免打扰时段，让 Pegas 的通知避开你的休息时间。"
       />
       {error ? (
-        <div className="page-error" role="alert">
+        <div
+          className="mb-4 flex items-center gap-2.5 rounded-card bg-red-tint px-3.5 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_var(--red)]"
+          role="alert"
+        >
           {error}
           {onReload && (
             <Button
@@ -2674,7 +2790,7 @@ function NotificationSettings({
           )}
         </div>
       ) : !preferences ? (
-        <p className="page-loading">正在读取通知偏好…</p>
+        <p className="my-6 text-[13px] text-ink-2">正在读取通知偏好…</p>
       ) : (
         <>
           <div className="settings-card">
@@ -2687,44 +2803,43 @@ function NotificationSettings({
                 </p>
               </div>
             </div>
-            <label className="switch-row">
-              启用免打扰
-              <input
-                aria-label="启用免打扰"
+            <div className="switch-row bui flex items-center justify-between py-3">
+              <span className="text-[13px] text-ink">启用免打扰</span>
+              <Switch
                 checked={enabled}
                 disabled={saving}
-                onChange={event => setEnabled(event.target.checked)}
-                type="checkbox"
+                label="启用免打扰"
+                onChange={setEnabled}
               />
-            </label>
+            </div>
             {enabled && (
               <div className="quiet-hours-row">
-                <label className="field-label">
-                  开始时间
-                  <input
+                <FormField className="mt-2 mb-1" label="开始时间">
+                  <TextInput
+                    className="h-10 w-full"
                     disabled={saving}
                     onChange={event => setQuietStart(event.target.value)}
                     type="time"
                     value={quietStart}
                   />
-                </label>
-                <label className="field-label">
-                  结束时间
-                  <input
+                </FormField>
+                <FormField className="mt-2 mb-1" label="结束时间">
+                  <TextInput
+                    className="h-10 w-full"
                     disabled={saving}
                     onChange={event => setQuietEnd(event.target.value)}
                     type="time"
                     value={quietEnd}
                   />
-                </label>
+                </FormField>
               </div>
             )}
             {enabled && !validTimes && (
-              <p className="settings-help">
+              <p className="text-[12px] leading-[1.6] text-ink-2">
                 请填写完整的开始与结束时间（24 小时制）。
               </p>
             )}
-            <p className="settings-help">
+            <p className="text-[12px] leading-[1.6] text-ink-2">
               时区按当前设备（UTC
               {formatUtcOffset(-new Date().getTimezoneOffset())}
               ）计算；保存时生效。
@@ -2749,7 +2864,7 @@ function NotificationSettings({
               {saving ? '保存中…' : '保存通知偏好'}
             </Button>
           </div>
-          <div className="info-banner">
+          <div className="my-3 flex items-center gap-2 rounded-control bg-accent-tint px-3 py-2.5 text-[12px] leading-[1.6] text-ink-2">
             <LockKeyhole size={16} />
             按通知类型分别开关的偏好 API 尚未提供；当前服务端只支持免打扰时段。
           </div>
@@ -2858,7 +2973,10 @@ function UsageSettings({
         description="按模型、事情和 Run 查看供应商真实上报的消耗。"
       />
       {error && (
-        <div className="info-banner usage-load-error" role="alert">
+        <div
+          className="my-3 flex items-center justify-between gap-2 rounded-control bg-accent-tint px-3 py-2.5 text-[12px] leading-[1.6] text-ink-2"
+          role="alert"
+        >
           <span>
             <CircleAlert size={16} />
             {error}
@@ -3113,7 +3231,7 @@ function RecoverySettings({
             <p>Conversation、Task 与 Run 的服务端权威记录。</p>
           </div>
         </div>
-        <p className="settings-help">
+        <p className="text-[12px] leading-[1.6] text-ink-2">
           在线备份目前通过服务端命令执行：<code>pnpm backup</code>；导出数据的
           HTTP API 尚未提供，这里不伪装成可点击操作。
         </p>
@@ -3147,7 +3265,10 @@ function RecoverySettings({
           )}
         </div>
         {error ? (
-          <div className="page-error" role="alert">
+          <div
+            className="mb-4 flex items-center gap-2.5 rounded-card bg-red-tint px-3.5 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_var(--red)]"
+            role="alert"
+          >
             {error}
             {onReload && (
               <Button
@@ -3164,7 +3285,7 @@ function RecoverySettings({
             )}
           </div>
         ) : !status ? (
-          <p className="page-loading">正在读取恢复状态…</p>
+          <p className="my-6 text-[13px] text-ink-2">正在读取恢复状态…</p>
         ) : (
           <>
             {status.active ? (
@@ -3227,7 +3348,7 @@ function RecoverySettings({
                 </dl>
               </div>
             ) : (
-              <p className="settings-help">
+              <p className="text-[12px] leading-[1.6] text-ink-2">
                 恢复平面当前不可用；这不影响本机数据，只表示独立 Supervisor
                 生命线暂时无法读取。
               </p>
@@ -3255,7 +3376,7 @@ function RecoverySettings({
           </>
         )}
       </div>
-      <div className="info-banner">
+      <div className="my-3 flex items-center gap-2 rounded-control bg-accent-tint px-3 py-2.5 text-[12px] leading-[1.6] text-ink-2">
         <LockKeyhole size={16} />
         这里只读展示恢复状态；重启与回滚仍需在服务端恢复平面执行，Web
         不提供破坏性操作入口。

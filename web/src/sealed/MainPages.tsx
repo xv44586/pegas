@@ -675,7 +675,7 @@ export function ConversationPage({
           )}
           {message.text.length > 520 && message.lane === 'say' && (
             <button
-              className="inline-link mt-2 inline-flex items-center gap-[5px] font-medium text-accent-ink"
+              className="mt-2 inline-flex items-center gap-[5px] font-medium text-accent-ink"
               onClick={() =>
                 setExpandedMessages(current => {
                   const next = new Set(current)
@@ -1398,7 +1398,7 @@ function FactCard({
         <MarkdownMessage content={expanded ? message.text : collapsedBody} />
         {message.text.length > 520 && (
           <button
-            className="inline-link mt-2 inline-flex items-center gap-[5px] font-medium text-accent-ink"
+            className="mt-2 inline-flex items-center gap-[5px] font-medium text-accent-ink"
             onClick={onToggleExpanded}
             type="button"
           >
@@ -2706,7 +2706,7 @@ export function AutomationPage({
         >
           {error}
           <button
-            className="inline-link mt-0 inline-flex items-center gap-[5px] font-medium text-inherit"
+            className="mt-0 inline-flex items-center gap-[5px] font-medium text-inherit"
             onClick={onReload}
             type="button"
           >
@@ -3135,7 +3135,7 @@ function AutomationRow({
             >
               {historyError}
               <button
-                className="inline-link mt-0 inline-flex items-center gap-[5px] font-medium text-accent-ink"
+                className="mt-0 inline-flex items-center gap-[5px] font-medium text-accent-ink"
                 onClick={() => void onToggleHistory(automation)}
                 type="button"
               >
@@ -3186,7 +3186,7 @@ function AutomationRow({
                         )}
                         {invocationChannel && onOpenChannel && (
                           <button
-                            className="inline-link mt-0 inline-flex items-center gap-[5px] font-medium text-accent-ink"
+                            className="mt-0 inline-flex items-center gap-[5px] font-medium text-accent-ink"
                             onClick={() => onOpenChannel(invocationChannel)}
                             type="button"
                           >
@@ -3204,7 +3204,7 @@ function AutomationRow({
                   >
                     {historyMoreError}
                     <button
-                      className="inline-link mt-0 inline-flex items-center gap-[5px] font-medium text-accent-ink"
+                      className="mt-0 inline-flex items-center gap-[5px] font-medium text-accent-ink"
                       onClick={() => void onLoadMoreHistory(automation)}
                       type="button"
                     >
@@ -3319,7 +3319,7 @@ export function MemoryPage({
         ))}
       </div>
       {truncated && (
-        <p className="field-hint text-[12px] leading-[1.6] text-ink-2">
+        <p className="text-[12px] leading-[1.6] text-ink-2">
           仅显示最近的一部分记忆；完整列表以服务端为准。
         </p>
       )}
@@ -3330,7 +3330,7 @@ export function MemoryPage({
         >
           {error}
           <button
-            className="inline-link mt-0 inline-flex items-center gap-[5px] font-medium text-inherit"
+            className="mt-0 inline-flex items-center gap-[5px] font-medium text-inherit"
             onClick={onReload}
             type="button"
           >
@@ -3869,7 +3869,7 @@ function MemoryForm({
               </Select>
             </FormField>
           )}
-          <p className="field-hint text-[12px] leading-[1.6] text-ink-2">
+          <p className="text-[12px] leading-[1.6] text-ink-2">
             {draft
               ? '来源保持服务端记录不变；修改会以新修订保存。'
               : '手动添加的记忆来源记为“用户确认”。'}
