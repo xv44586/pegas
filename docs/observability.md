@@ -42,9 +42,20 @@
 - **欠账视图**：`store.listOwedDeliveries(userId?)` 列出终态 Run（completed/failed）中通知仍 pending/sending/failed/unknown（含 merged 到未 sent 消息）的清单；只有 sent 确认或人工 `resolveOutboxMessage` 清算欠账，投递失败 ≠ 结清。
 - **四类 finding**（`store.listReconciliationFindings`）：`unreported`（终态超过阈值无 sent 确认，排除已被 retry/steering 后继接管的 Run）、`never_started`（开放 work Task 无 Run）、`stranded`（queued 超窗且匹配执行节点在线）、`stale_waiting`（审批已决/委派已结/用户输入已到但 waiting Run 未唤醒）。
 - **边界（沿用 OBS-001 Watchdog 约束）**：只读，不写任何产品状态，不自动修复；finding 只产生 `pegas_reconciliation_findings_total{kind}`、`pegas_owed_deliveries` 指标与 `reconciliation.finding` 结构化日志（仅 durable 标识）。修复走既有 lease 过期、retry、人工核对路径。
-- **运行**：独立进程 `pnpm dev:reconciliation` / `pnpm start:reconciliation`；`PEGAS_RECONCILE_INTERVAL_MS`（默认 60000）、`PEGAS_RECONCILE_UNREPORTED_AFTER_MS`/`NEVER_STARTED_AFTER_MS`/`STALE_WAITING_AFTER_MS`（默认 300000）、`PEGAS_RECONCILE_STRANDED_AFTER_MS`（默认 120000）；非法配置启动即失败。对账进程崩溃不影响主链路（独立 SQLite 连接，回归验证）。
+- **运行**：独立进程 `pnpm dev:reconciliation` / `pnpm start:reconciliation`（Supervisor 自 2026-11-24 起随 Release 一并拉起）；`PEGAS_RECONCILE_INTERVAL_MS`（默认 60000）、`PEGAS_RECONCILE_UNREPORTED_AFTER_MS`/`NEVER_STARTED_AFTER_MS`/`STALE_WAITING_AFTER_MS`（默认 300000）、`PEGAS_RECONCILE_STRANDED_AFTER_MS`（默认 120000）；非法配置启动即失败。对账进程崩溃不影响主链路（独立 SQLite 连接，回归验证）。
 - **API**：`GET /v1/reconciliation?userId=`（与主 API 同一 bearer 鉴权）返回 `{owed, findings}` 只读投影。
 - **证据**：`test/delivery-reconciliation.test.ts` 14 个测试（四类 finding 故障注入、欠账清算语义、只读与崩溃隔离边界、配置 fail-closed、API 鉴权）。
+
+## 未知写副作用自动对账（EXEC-003）
+
+`src/observability/action-reconciliation.ts` 在同一对账进程内提供第二职责：主动探测 `unknown` 状态的文件写 Action 的外部事实，并通过既有人工核对同一事务链路结算（`system:auto-reconciliation` 身份）。它与上面的只读交付对账边界不同——**允许写**，但只写既有 append-only reconciliation 通道，从不重试副作用本身：
+
+- **可探测范围**：`kind` 为 `dsh.tool.*`、tool ∈ {write, edit, apply_patch}、category ∈ {out-of-workspace-write, workspace-write} 且 `request.targets` 为非空字符串数组。全部目标存在（记录过 `request.effect.contentHash` 时还要求 sha256 一致）→ `succeeded`；目标缺失或指纹不符 → `failed`（绝不判成功）。edit/apply_patch 无 contentHash、非文件类或无 targets 的动作保持 `unknown` 留人工核对。
+- **结算幂等**：commandId `auto-reconcile:<actionId>`，复用 `reconcileAction` 事务（核对记录 + Action reconciled + Task 原因 + 唤醒 + `action.reconciled` Outbox，payload 带 `reconciledBy` 与自动核对文案）。核对记录带 `automatic=1` 标记（schema v44）。
+- **观测**：`pegas_action_auto_reconciliations_total{resolution}` 指标与 `action.auto_reconciled` / `action.auto_reconcile_failed` 结构化日志（仅 durable 标识与探测结论）。
+- **配置**：`PEGAS_AUTO_RECONCILE`（默认 enabled；`disabled` 关闭探测只保留只读交付对账；其他值启动即失败）。
+- **回滚**：存在 `automatic=1` 核对记录时，Rollback Guard 拒绝回滚到 schema < 44 的 Release；人工核对记录不触发该 Guard（沿用 v23 语义）。
+- **证据**：`test/action-auto-reconciliation.test.ts` 7 个测试（指纹命中/不符、缺失判失败、非文件类留人工、幂等重跑、Outbox、Guard 区分人工/自动）。
 
 ## 非目标
 

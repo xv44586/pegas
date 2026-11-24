@@ -2,9 +2,9 @@
 
 > Feature：`EXEC-003`
 >
-> 状态：Partial（真实进程崩溃点注入已覆盖；未知副作用的自动对账仍缺）
+> 状态：Partial（真实进程崩溃点注入已覆盖；文件写类 unknown Action 的自动对账已落地，非文件类副作用仍留人工核对）
 >
-> 更新日期：2026-11-21
+> 更新日期：2026-11-24
 
 ## 用户结果
 
@@ -39,3 +39,9 @@ Clock 只改变进程内时间来源，不改变数据库格式。DSH 的权限�
 崩溃点由消息文本中的 `[crash:…]` 标记触发，每个场景以 marker 文件保证只崩溃一次；副作用计数按 Task 统计 marker 行数，任何错误恢复实现都会因重复副作用或重复完成而失败。该 smoke 走生产 lease 时长，全程约 90 秒；不进入 `pnpm check`，作为进程级恢复证据单独运行。
 
 边界：测试替身证明的是 Pegas 自身的领取/写回/恢复边界不丢不重；真实第三方工具的“未知副作用”仍必须由 Action Protocol 的 idempotency/reconciliation 处置，session 恢复不等于工具调用可安全重试。
+
+## 未知写副作用自动对账（2026-11-24）
+
+`src/observability/action-reconciliation.ts` 在对账进程内主动探测 `unknown` 文件写 Action 的外部事实：全部目标存在（有 `request.effect.contentHash` 时还要求 sha256 一致）→ 自动核对 `succeeded`；目标缺失或指纹不符 → 自动核对 `failed`（绝不判成功、绝不重试副作用）。edit/apply_patch 无指纹、非文件类或无 targets 的动作保持 `unknown` 留人工。结算复用 `reconcileAction` 同一 append-only 事务（身份 `system:auto-reconciliation`、commandId `auto-reconcile:<actionId>` 幂等，Outbox `action.reconciled` 带 `reconciledBy` 与自动核对文案），核对记录带 `automatic=1`（schema v44）；存在自动核对事实时 Rollback Guard 拒绝回滚到 schema < 44。`PEGAS_AUTO_RECONCILE=disabled` 可关闭。证据：`test/action-auto-reconciliation.test.ts` 7 个测试；语义详见 `docs/observability.md` 与 `docs/approval-lifecycle.md`。
+
+剩余缺口：桥尚未在创建 Action 时记录 write 的 `effect.contentHash`（当前真实链路 write 只有存在性判定，存在 ≠ 本次写入）；非文件类副作用（网络发布、消息发送等）无静态探测面，仍必须人工核对。

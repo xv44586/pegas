@@ -64,6 +64,7 @@ export interface ActionReconciliation {
   previousStatus: 'failed' | 'unknown'
   previousResult?: Record<string, unknown>
   reconciledBy: string
+  automatic?: boolean
   createdAt: string
 }
 

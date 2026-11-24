@@ -12,6 +12,7 @@ const permissionTierSchemaVersion = 40
 const approvalRuleSchemaVersion = 41
 const approvalReviewSchemaVersion = 42
 const policyCallAuditSchemaVersion = 43
+const autoReconciliationSchemaVersion = 44
 
 export class RollbackCompatibilityError extends Error {}
 
@@ -228,6 +229,22 @@ export function assertRollbackCompatible(
       if (accountableAllowance) {
         throw new RollbackCompatibilityError(
           'Rollback is unsafe while rule or review allowances exist only in the call audit table',
+        )
+      }
+    }
+    if (
+      currentVersion >= autoReconciliationSchemaVersion &&
+      targetMaximumSchema < autoReconciliationSchemaVersion
+    ) {
+      const automaticSettlement = database
+        .prepare(
+          `SELECT 1 FROM action_reconciliations
+           WHERE automatic = 1 LIMIT 1`,
+        )
+        .get()
+      if (automaticSettlement) {
+        throw new RollbackCompatibilityError(
+          'Rollback is unsafe while automatically reconciled Action facts exist',
         )
       }
     }
