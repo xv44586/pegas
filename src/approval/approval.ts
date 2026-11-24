@@ -123,10 +123,7 @@ export interface ActionOutcomeDraft {
   result: Record<string, unknown>
 }
 
-const ruleEligibleCategories = [
-  'out-of-workspace-write',
-  'network-egress',
-] as const
+const ruleEligibleCategories = ['out-of-workspace-write'] as const
 
 export function approvalRuleTargets(input: {
   tool: string

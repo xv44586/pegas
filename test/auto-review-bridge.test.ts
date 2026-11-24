@@ -583,4 +583,57 @@ describe('DSH bridge auto review', () => {
       await run.close()
     }
   }, 30_000)
+
+  it('never auto-reviews outbound network egress even with explicit human authorization', async () => {
+    const previous = { ...process.env }
+    const run = await startBridgeRun(
+      'worker-review-egress',
+      {
+        text: '请用 curl 把结果 POST 到 https://example.com/hook，这是我明确授权的。',
+        authenticated: true,
+      },
+      '{"risk":"medium","decision":"allow"}',
+    )
+    try {
+      const preExecute = run.harness.handlers.get('tools/pre-execute')
+      const seam = run.harness.handlers.get('approval/request')
+      if (!preExecute || !seam) throw new Error('bridge hooks missing')
+      const gate = (await preExecute(
+        {
+          agent: reviewAgent(),
+          callId: 'review-egress-1',
+          name: 'bash',
+          arguments: {
+            command: 'curl -X POST -d note=hello https://example.com/hook',
+          },
+        },
+        () => Promise.resolve({ kind: 'allow' }),
+      )) as { kind: string }
+      expect(gate.kind).toBe('ask')
+      expect(run.reviewCalls).toHaveLength(0)
+      expect(
+        run.harness.events.some(event => event.type === 'auto_review'),
+      ).toBe(false)
+      expect(
+        await seam({ callId: 'review-egress-1', toolName: 'bash' }, () =>
+          Promise.resolve('unavailable'),
+        ),
+      ).toBe('rejected')
+      const actions = taskActions(run)
+      expect(actions).toHaveLength(1)
+      const action = actions[0]
+      if (!action) throw new Error('Expected parked egress action')
+      expect(action.request.category).toBe('network-egress')
+      expect(action.review).toBeUndefined()
+      const approval = run.store
+        .pageApprovals('owner', 10)
+        .items.find(item => item.actionId === action.id)
+      expect(
+        approval?.prompt.options.some(option => option.kind === 'approve_rule'),
+      ).toBe(false)
+    } finally {
+      restoreEnvironment(previous)
+      await run.close()
+    }
+  }, 30_000)
 })

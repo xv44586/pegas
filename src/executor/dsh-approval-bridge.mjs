@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto'
+import { readFileSync, statSync } from 'node:fs'
+import { isAbsolute, join, resolve, sep } from 'node:path'
 
 import { canonicalRuleTarget, classifyToolCall } from './policy-gate.mjs'
 import { deriveWriteEffect } from './write-effect.mjs'
@@ -350,6 +352,7 @@ export function apply(ctx, config = {}) {
             emit,
             tierState,
             reviewOutcome,
+            policy,
           )
           if (pending) parked = true
         } catch (error) {
@@ -428,6 +431,8 @@ export function apply(ctx, config = {}) {
             captured,
             emit,
             gateTiers.get(callKey),
+            undefined,
+            policy,
           )
           if (!pending) parked = false
         } catch (error) {
@@ -495,6 +500,7 @@ export function apply(ctx, config = {}) {
           emit,
           seamTier,
           seamReview,
+          policy,
         )
         if (!pending) parked = false
       } catch (error) {
@@ -565,6 +571,7 @@ function escalateClassification(reason) {
  * @param {(event: Record<string, unknown>) => void} emit
  * @param {TierState | undefined} [tierState]
  * @param {ReviewOutcome | undefined} [review]
+ * @param {import('./policy-gate.d.ts').PolicyRoots} [policy]
  * @returns {Promise<boolean>}
  */
 async function parkCall(
@@ -576,6 +583,7 @@ async function parkCall(
   emit,
   tierState,
   review,
+  policy,
 ) {
   const pending = await createApproval(capability, {
     callKey,
@@ -584,6 +592,7 @@ async function parkCall(
     captured,
     tierState,
     review,
+    policy,
   })
   emit({
     type: 'approval_pending',
@@ -717,10 +726,7 @@ function normalizeRules(value) {
 function matchApprovalRule(tierState, execution, classification, policy) {
   if (tierState.mismatch) return undefined
   if (classification.risk !== 'high') return undefined
-  if (
-    classification.category !== 'out-of-workspace-write' &&
-    classification.category !== 'network-egress'
-  ) {
+  if (classification.category !== 'out-of-workspace-write') {
     return undefined
   }
   const targets = classification.targets
@@ -821,15 +827,27 @@ function normalizePolicy(value) {
 
 /**
  * @param {BridgeCapability} capability
- * @param {{ callKey: string, tool: string, classification: import('./policy-gate.d.ts').ToolCallClassification, captured?: CapturedCall, tierState?: { tier: string, generation: string, mismatch: boolean }, review?: ReviewOutcome }} input
+ * @param {{ callKey: string, tool: string, classification: import('./policy-gate.d.ts').ToolCallClassification, captured?: CapturedCall, tierState?: { tier: string, generation: string, mismatch: boolean }, review?: ReviewOutcome, policy?: import('./policy-gate.d.ts').PolicyRoots }} input
  * @returns {Promise<{ actionId: string, approvalId: string }>}
  */
 async function createApproval(capability, input) {
   const ruleEligible =
     input.classification.risk === 'high' &&
-    (input.classification.category === 'out-of-workspace-write' ||
-      input.classification.category === 'network-egress') &&
+    input.classification.category === 'out-of-workspace-write' &&
     input.classification.targets.length > 0
+  const egressPayload =
+    input.classification.category === 'network-egress' &&
+    input.tool === 'bash' &&
+    input.captured?.command !== undefined
+      ? egressPayloadPreview(
+          {
+            name: input.tool,
+            arguments: { command: input.captured.command },
+          },
+          input.classification,
+          input.policy ?? {},
+        )
+      : undefined
   const action = {
     kind: `dsh.tool.${input.tool}`,
     risk: input.classification.risk === 'critical' ? 'critical' : 'high',
@@ -847,6 +865,7 @@ async function createApproval(capability, input) {
       ...(input.captured?.command === undefined
         ? {}
         : { command: input.captured.command }),
+      ...(egressPayload === undefined ? {} : { egressPayload }),
       ...(input.tierState
         ? {
             tier: input.tierState.tier,
@@ -933,6 +952,7 @@ function autoReviewEligible(tierState, classification) {
     !tierState.mismatch &&
     classification.action === 'ask' &&
     classification.risk === 'high' &&
+    classification.category !== 'network-egress' &&
     tierState.mandate.instructions.length > 0
   )
 }
@@ -1378,6 +1398,171 @@ function stableHash(value) {
 function capturedWriteEffect(exec, policy) {
   const effect = deriveWriteEffect(exec, policy)
   return effect === undefined ? {} : { effect }
+}
+
+const EGRESS_PAYLOAD_ITEM_LIMIT = 4096
+const EGRESS_PAYLOAD_TOTAL_LIMIT = 8192
+const EGRESS_PAYLOAD_MAX_ITEMS = 8
+
+/**
+ * @typedef {{ path: string, content?: string, truncated?: boolean, error?: string }} EgressPayloadItem
+ * @typedef {{ items: EgressPayloadItem[], omitted?: boolean }} EgressPayloadPreview
+ */
+
+/**
+ * Derives a bounded, fact-based preview of what an egress command would send.
+ * Inline data is shown verbatim; @file references are read from the actual
+ * filesystem the tool would read. Anything unreadable is reported honestly.
+ * @param {{ name: string, arguments?: unknown }} exec
+ * @param {import('./policy-gate.d.ts').ToolCallClassification} classification
+ * @param {import('./policy-gate.d.ts').PolicyRoots} policy
+ * @returns {EgressPayloadPreview | undefined}
+ */
+function egressPayloadPreview(exec, classification, policy) {
+  if (classification.category !== 'network-egress') return undefined
+  if (exec.name !== 'bash') return undefined
+  const args = exec.arguments
+  const command =
+    args && typeof args === 'object' && !Array.isArray(args)
+      ? /** @type {Record<string, unknown>} */ (args).command
+      : undefined
+  if (typeof command !== 'string' || command.trim() === '') return undefined
+  const references = egressPayloadReferences(command)
+  if (references.length === 0) {
+    return {
+      items: [
+        {
+          path: '',
+          error: '未能从命令中确定性解析发送内容，请以命令原文为准。',
+        },
+      ],
+    }
+  }
+  const items = []
+  let budget = EGRESS_PAYLOAD_TOTAL_LIMIT
+  for (const reference of references.slice(0, EGRESS_PAYLOAD_MAX_ITEMS)) {
+    if (reference.inline !== undefined) {
+      const content = reference.inline.slice(
+        0,
+        Math.min(EGRESS_PAYLOAD_ITEM_LIMIT, budget),
+      )
+      items.push({
+        path: '',
+        content,
+        ...(content.length < reference.inline.length
+          ? { truncated: true }
+          : {}),
+      })
+      budget -= content.length
+      continue
+    }
+    const path = reference.path ?? ''
+    const resolved = isAbsolute(path)
+      ? resolve(path)
+      : policy.workspaceRoot
+        ? join(policy.workspaceRoot, path)
+        : resolve(path)
+    const canonical = canonicalRuleTarget(resolved, policy) ?? resolved
+    const protectedRoots = (policy.protectedRoots ?? []).map(root =>
+      canonicalRuleTarget(root, policy),
+    )
+    if (
+      protectedRoots.some(
+        root =>
+          root !== undefined &&
+          (canonical === root || canonical.startsWith(root + sep)),
+      )
+    ) {
+      items.push({
+        path: resolved,
+        error: '发送内容位于 Pegas 控制面目录，未代为读取。',
+      })
+      continue
+    }
+    items.push(readEgressPayloadFile(resolved, canonical, budget))
+    const last = items[items.length - 1]
+    if (last?.content !== undefined) budget -= last.content.length
+  }
+  return {
+    items,
+    ...(references.length > EGRESS_PAYLOAD_MAX_ITEMS ? { omitted: true } : {}),
+  }
+}
+
+/**
+ * @param {string} command
+ * @returns {{ inline?: string, path?: string }[]}
+ */
+function egressPayloadReferences(command) {
+  const references = []
+  const pattern =
+    /(?:^|\s)(?:-d|--data(?:-raw|-binary|-urlencode)?|--json|-F|--form(?:-string)?|-T|--upload-file|--post-file)(?:\s+|=)?("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s;|&]+)/g
+  for (;;) {
+    const match = pattern.exec(command)
+    if (!match) break
+    const raw = match[1]
+    if (raw === undefined) continue
+    const value = unquoteEgressToken(raw)
+    if (value === '') continue
+    if (value.startsWith('@')) {
+      const path = value.slice(1).split(';')[0] ?? ''
+      if (path !== '' && path !== '-') references.push({ path })
+      continue
+    }
+    const formFile = /@("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^;\s]+)/.exec(
+      value,
+    )
+    if (
+      (match[0].includes('-F') || match[0].includes('--form')) &&
+      formFile?.[1] !== undefined
+    ) {
+      references.push({ path: unquoteEgressToken(formFile[1]) })
+      continue
+    }
+    references.push({ inline: value })
+  }
+  return references
+}
+
+/**
+ * @param {string} token
+ * @returns {string}
+ */
+function unquoteEgressToken(token) {
+  if (
+    (token.startsWith('"') && token.endsWith('"')) ||
+    (token.startsWith("'") && token.endsWith("'"))
+  ) {
+    return token.slice(1, -1)
+  }
+  return token
+}
+
+/**
+ * @param {string} displayPath
+ * @param {string} canonicalPath
+ * @param {number} budget
+ * @returns {EgressPayloadItem}
+ */
+function readEgressPayloadFile(displayPath, canonicalPath, budget) {
+  const limit = Math.min(EGRESS_PAYLOAD_ITEM_LIMIT, Math.max(budget, 0))
+  if (limit === 0) {
+    return { path: displayPath, error: '预览总量已达上限，未读取该文件。' }
+  }
+  try {
+    const size = statSync(canonicalPath).size
+    const content = readFileSync(canonicalPath, 'utf8')
+    return {
+      path: displayPath,
+      content: content.slice(0, limit),
+      ...(size > limit || content.length > limit ? { truncated: true } : {}),
+    }
+  } catch {
+    return {
+      path: displayPath,
+      error: '未能读取发送内容（文件不存在或不可读）。',
+    }
+  }
 }
 
 /**
