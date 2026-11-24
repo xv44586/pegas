@@ -86,4 +86,4 @@ PUT  /v1/settings/behavior
 - **非目标**：不新增任何服务端偏好字段或 API；不做 say 车道长度偏好（如将来需要归 ROUTE-004/CONV 系列单独登记）；不动自主程度滑条与风险阈值语义；不改工作规则/自定义指令的存储与注入。
 - **数据与权限边界**：纯前端展示收敛 + 文档，无 schema/API/注入链路变更。
 - **失败与恢复**：回滚 revert 即恢复占位展示，无数据影响。
-- **落地证据**：见 Feature Map RULES-001 修订条目（开发分支 `feat/RULES-001-behavior-cleanup`）。
+- **落地证据（2026-11-24）**：分支 `feat/RULES-001-behavior-cleanup`（基线 intake `e575b3a`）。`SettingsPage.tsx` 删除默认语言 select、回复长度 segmented 与对应提示句；「开始工作前」行与 Approval 声明、「自主程度」tab、「语音与输入」分类原样保留。测试先行：`App.test.tsx` 工作规则用例新增占位删除断言（默认语言/回复长度/旧提示不出现，开始工作前仍在）先红后绿。门禁：`pnpm check` 130 文件 / 1335 测试全绿、`pnpm smoke`（task 36187af8）、`pnpm review:ui --force`、`pnpm a11y:review` 0 违例。纯前端展示收敛，无 schema/API/注入链路变更；回滚 revert 即恢复占位，无数据影响。文档同步：docs/work-rules.md、docs/sealed-ui-rebuild.md §16、Feature Map RULES-001。

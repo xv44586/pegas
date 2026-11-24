@@ -1013,35 +1013,13 @@ function BehaviorSettings({
       </div>
       <h3>基本行为</h3>
       <div className="compact-field-row">
-        <span>默认语言</span>
-        <select defaultValue="中文" disabled>
-          <option>中文</option>
-          <option>English</option>
-        </select>
-      </div>
-      <div className="compact-field-row">
-        <span>回复长度</span>
-        <div className="segmented">
-          <button disabled type="button">
-            简洁
-          </button>
-          <button className="is-active" disabled type="button">
-            适中
-          </button>
-          <button disabled type="button">
-            详细
-          </button>
-        </div>
-      </div>
-      <div className="compact-field-row">
         <span>开始工作前</span>
         <select defaultValue="高风险动作始终确认" disabled>
           <option>高风险动作始终确认</option>
         </select>
       </div>
       <p className="field-hint">
-        语言与回复长度偏好尚未开放服务端设置；「高风险动作始终确认」由服务端
-        Approval 强制保证，不能关闭。
+        「高风险动作始终确认」由服务端 Approval 强制保证，不能关闭。
       </p>
       <h3>工作规则</h3>
       {workRulesError ? (

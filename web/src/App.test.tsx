@@ -10626,6 +10626,11 @@ describe('sealed Pegas UI', () => {
     expect(await screen.findByText('发布前先说明回滚路径')).toBeTruthy()
     expect(screen.getByText('高风险外部操作必须确认')).toBeTruthy()
     expect(screen.queryByText(/规则服务尚未建立/)).toBeNull()
+    expect(screen.queryByText('默认语言')).toBeNull()
+    expect(screen.queryByText('回复长度')).toBeNull()
+    expect(screen.queryByText(/语言与回复长度偏好尚未开放/)).toBeNull()
+    const confirmField = screen.getByText('开始工作前')
+    expect(confirmField).toBeTruthy()
     fireEvent.click(screen.getByLabelText('停用规则：发布前先说明回滚路径'))
     await waitFor(() => expect(toggled).toBeTruthy())
     const command = toggled as {
