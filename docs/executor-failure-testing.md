@@ -28,6 +28,12 @@ Worker、DSH 或机器在任务执行期间失败时，Pegas 可以在明确的 
 
 Clock 只改变进程内时间来源，不改变数据库格式。DSH 的权限参数和 workspace grant 保持不变。无法确定的外部副作用仍是 `EXEC-003` 的下一缺口；在该模型落地前，Pegas 不能把“session 可恢复”等同于“工具调用可以安全重试”。
 
+## 真实子进程计时稳定性（2026-11-24）
+
+SIGTERM→SIGKILL 回归继续使用真实 Node 子进程，并在收到 session PID 后断言进程最终不存在。测试执行超时由 500ms 调整为 2s，为慢 CI runner 的进程启动留出预算；30ms 终止宽限、SIGTERM 忽略与 SIGKILL 升级路径不变。该修改只修复测试时序，不改变 `DshCliExecutor` 的生产默认超时、权限、数据或恢复行为。
+
+同一用例在 2026-11-22、2026-11-23 和 2026-11-24 的并行完整门禁中分别出现过「超时先于 session PID」抖动，因此把“真实子进程行为超时不得同时充当启动就绪预算”晋升为自动化约束。回滚本测试提交即可恢复旧预算；运行时代码无需回滚。
+
 ## 真实进程崩溃点注入（2026-11-21）
 
 `pnpm smoke:crash`（`scripts/smoke-crash-recovery.mjs`）用真实 Control Plane / Worker 进程和临时 SQLite 数据目录验证 MVP 场景 2。测试替身 DSH 经 `PEGAS_DSH_COMMAND` 注入，在三个持久崩溃点把 Worker 进程 SIGKILL（连同自身），随后由 harness 重启新 Worker：
