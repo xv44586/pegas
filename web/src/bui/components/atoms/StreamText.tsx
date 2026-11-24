@@ -15,6 +15,7 @@ export function StreamText({
   tickMs = 9,
   blurTail = 6,
   caret = true,
+  settle = false,
   className,
   onProgress,
   onDone,
@@ -28,6 +29,8 @@ export function StreamText({
   blurTail?: number
   /** render the caret (solid while streaming, blinks once idle) */
   caret?: boolean
+  /** render the full string immediately — for settled server facts */
+  settle?: boolean
   className?: string
   /** fires each tick — useful for re-anchoring UI to reflowing text */
   onProgress?: () => void
@@ -41,6 +44,11 @@ export function StreamText({
   onDoneRef.current = onDone
 
   useEffect(() => {
+    if (settle) {
+      setCount(text.length)
+      onDoneRef.current?.()
+      return
+    }
     setCount(0)
     let i = 0
     const id = setInterval(() => {
@@ -53,7 +61,7 @@ export function StreamText({
       }
     }, tickMs)
     return () => clearInterval(id)
-  }, [text, charsPerTick, tickMs])
+  }, [text, charsPerTick, tickMs, settle])
 
   const streaming = count < text.length
   const shown = text.slice(0, count)

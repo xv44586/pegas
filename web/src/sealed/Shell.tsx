@@ -4,7 +4,6 @@ import {
   CheckCircle2,
   ChevronRight,
   Clock3,
-  FileText,
   Layers3,
   MessageCircle,
   MoonStar,
@@ -16,6 +15,8 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+import { SidebarNav } from '@bui/index'
+
 import type {
   ChannelSearchFilters,
   ChannelSearchResult,
@@ -26,6 +27,15 @@ import type {
 import { PegasMark } from './PegasMark'
 import { PegasMascot, type PegasMascotPose } from './PegasMascot'
 import type { AppPage } from './types'
+
+const APP_PAGES: readonly AppPage[] = [
+  'conversation',
+  'work',
+  'attention',
+  'automation',
+  'memory',
+  'settings',
+]
 
 const navItems: readonly {
   id: AppPage
@@ -65,70 +75,56 @@ export function AppShell({
       <a className="skip-link" href="#pegas-main">
         跳到主要内容
       </a>
-      <aside className="primary-rail" aria-label="主导航">
-        <div className="brand-lockup">
-          <PegasMark size={30} />
-          <div>
-            <strong>Pegas</strong>
-            <span className={`connection-${connectionStatus}`}>
-              <i />
-              {connectionStatus === 'online'
-                ? '在线'
-                : connectionStatus === 'connecting'
-                  ? '连接中'
-                  : '离线'}
-            </span>
-          </div>
-        </div>
-
-        <nav className="primary-nav">
-          {navItems.map(({ id, label, icon: Icon }) => (
-            <button
-              className={page === id ? 'nav-item is-active' : 'nav-item'}
-              key={id}
-              onClick={() => onNavigate(id)}
-              type="button"
-            >
-              <Icon size={19} strokeWidth={1.8} />
-              <span>{label}</span>
-              {id === 'attention' && attentionTodoCount > 0 && (
-                <b aria-label={`${String(attentionTodoCount)} 件待办`}>
-                  {Math.min(attentionTodoCount, 99)}
-                </b>
-              )}
-            </button>
-          ))}
-        </nav>
-
-        {page === 'conversation' && channels.length > 0 && (
-          <section className="recent-work" aria-labelledby="recent-work-title">
-            <p id="recent-work-title">最近的事情</p>
-            {channels.slice(0, 3).map(channel => (
-              <button
-                key={channel.id}
-                onClick={() => onOpenChannel(channel)}
-                type="button"
-              >
-                <FileText size={16} />
-                <span>{channel.title}</span>
-              </button>
-            ))}
-          </section>
-        )}
-
-        <button
-          className={
-            page === 'settings'
-              ? 'nav-item is-active rail-settings'
-              : 'nav-item rail-settings'
+      <div className="primary-rail bui-rail">
+        <SidebarNav
+          ariaLabel="主导航"
+          fill
+          showNewChat={false}
+          activeNav={page}
+          navItems={navItems.map(({ id, label, icon: Icon }) => ({
+            key: id,
+            label,
+            icon: <Icon size={18} strokeWidth={1.8} />,
+            count:
+              id === 'attention' && attentionTodoCount > 0
+                ? String(Math.min(attentionTodoCount, 99))
+                : undefined,
+          }))}
+          onNavigate={key => {
+            const target = APP_PAGES.find(item => item === key)
+            if (target) onNavigate(target)
+          }}
+          recentsLabel="最近的事情"
+          recentsNavKey="conversation"
+          recents={channels.slice(0, 8).map(channel => ({
+            id: channel.id,
+            label: channel.title,
+          }))}
+          onPick={id => {
+            const channel = channels.find(item => item.id === id)
+            if (channel) onOpenChannel(channel)
+          }}
+          footerLabel="设置"
+          footerIcon={<Settings size={15} />}
+          onFooterClick={() => onNavigate('settings')}
+          workspaceSlot={
+            <div className="brand-lockup sidebar-workspace-control absolute left-2 top-0 flex h-10 items-center gap-2 px-2">
+              <PegasMark size={26} />
+              <div className="sidebar-copy grid min-w-0">
+                <strong>Pegas</strong>
+                <span className={`connection-${connectionStatus}`}>
+                  <i />
+                  {connectionStatus === 'online'
+                    ? '在线'
+                    : connectionStatus === 'connecting'
+                      ? '连接中'
+                      : '离线'}
+                </span>
+              </div>
+            </div>
           }
-          onClick={() => onNavigate('settings')}
-          type="button"
-        >
-          <Settings size={19} />
-          <span>设置</span>
-        </button>
-      </aside>
+        />
+      </div>
       <main className="main-canvas" id="pegas-main">
         {children}
       </main>

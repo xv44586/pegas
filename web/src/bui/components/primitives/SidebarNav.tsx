@@ -50,6 +50,7 @@ export interface SidebarRecent {
   id: string
   label: string
   prompt?: string
+  navKey?: string
 }
 
 const DEFAULT_RECENTS: SidebarRecent[] = [
@@ -65,8 +66,12 @@ const DEFAULT_RECENTS: SidebarRecent[] = [
 
 interface SidebarNavProps {
   activeTitle?: string | null
+  /** accessible name of the rail landmark (host apps keep their own) */
+  ariaLabel?: string
   className?: string
   fill?: boolean
+  /** nav key that recent-item clicks activate (defaults to 'chats') */
+  recentsNavKey?: string
   onNewChat?: () => void
   onPick?: (id: string, label: string, prompt?: string) => void
   /** controlled primary-nav selection (e.g. "home" | "invite") */
@@ -84,6 +89,8 @@ interface SidebarNavProps {
   onFooterClick?: () => void
   recents?: SidebarRecent[]
   variant?: string
+  /** brand row content — host supplies mark + name + status */
+  workspaceSlot?: ReactNode
 }
 
 const SIDEBAR_MOTION = {
@@ -153,7 +160,10 @@ function RailButton({
         {label}
       </span>
       {count && (
-        <span className="sidebar-copy mr-2 shrink-0 text-[12px] font-medium tabular-nums text-ink-3">
+        <span
+          data-count
+          className="sidebar-copy mr-2 shrink-0 text-[12px] font-medium tabular-nums text-ink-3"
+        >
           {count}
         </span>
       )}
@@ -242,8 +252,10 @@ function WorkspaceMenu({
 
 export default function SidebarNav({
   activeTitle,
+  ariaLabel = '工作区导航',
   className = '',
   fill = false,
+  recentsNavKey = 'chats',
   onNewChat,
   onPick,
   activeNav,
@@ -255,6 +267,7 @@ export default function SidebarNav({
   footerIcon,
   onFooterClick,
   recents = DEFAULT_RECENTS,
+  workspaceSlot,
 }: SidebarNavProps) {
   const [collapsed, setCollapsed] = useState(false)
   const [internalNav, setInternalNav] = useState('chats')
@@ -309,7 +322,7 @@ export default function SidebarNav({
   return (
     <aside
       data-sidebar-collapsed={collapsed}
-      aria-label="工作区导航"
+      aria-label={ariaLabel}
       className={`relative flex shrink-0 overflow-hidden transition-[width] ${fill ? 'h-full' : 'h-[600px]'} ${className}`}
       style={
         {
@@ -326,38 +339,46 @@ export default function SidebarNav({
     >
       <div className="flex min-h-0 w-[224px] shrink-0 flex-col">
         <div className="relative mb-2.5 h-10 shrink-0">
-          <button
-            ref={workspaceButtonRef}
-            data-workspace-trigger
-            type="button"
-            aria-expanded={workspaceOpen}
-            aria-hidden={collapsed}
-            tabIndex={collapsed ? -1 : 0}
-            onClick={() => {
-              if (!workspaceOpen && workspaceButtonRef.current) {
-                const rect = workspaceButtonRef.current.getBoundingClientRect()
-                setWorkspacePosition({ top: rect.bottom + 6, left: rect.left })
-              }
-              setWorkspaceOpen(open => !open)
-            }}
-            className="sidebar-workspace-control absolute left-2 top-1 flex h-8 w-[164px] items-center rounded-[8px] px-2 text-left transition-[background-color,transform] duration-100 hover:bg-hover-2 active:scale-[0.99]"
-          >
-            <span className="sidebar-logo flex size-5 shrink-0 items-center justify-center text-ink">
-              <IconPopsicle2 size={18} />
-            </span>
-            <span className="sidebar-copy ml-1.5 min-w-0 flex-1 truncate text-[14px] font-medium text-ink-2">
-              {WORKSPACE.name}
-            </span>
-            <span className="sidebar-copy ml-1 flex shrink-0 text-ink-3">
-              <IconChevronDownSmall size={16} />
-            </span>
-          </button>
+          {workspaceSlot ?? (
+            <>
+              <button
+                ref={workspaceButtonRef}
+                data-workspace-trigger
+                type="button"
+                aria-expanded={workspaceOpen}
+                aria-hidden={collapsed}
+                tabIndex={collapsed ? -1 : 0}
+                onClick={() => {
+                  if (!workspaceOpen && workspaceButtonRef.current) {
+                    const rect =
+                      workspaceButtonRef.current.getBoundingClientRect()
+                    setWorkspacePosition({
+                      top: rect.bottom + 6,
+                      left: rect.left,
+                    })
+                  }
+                  setWorkspaceOpen(open => !open)
+                }}
+                className="sidebar-workspace-control absolute left-2 top-1 flex h-8 w-[164px] items-center rounded-[8px] px-2 text-left transition-[background-color,transform] duration-100 hover:bg-hover-2 active:scale-[0.99]"
+              >
+                <span className="sidebar-logo flex size-5 shrink-0 items-center justify-center text-ink">
+                  <IconPopsicle2 size={18} />
+                </span>
+                <span className="sidebar-copy ml-1.5 min-w-0 flex-1 truncate text-[14px] font-medium text-ink-2">
+                  {WORKSPACE.name}
+                </span>
+                <span className="sidebar-copy ml-1 flex shrink-0 text-ink-3">
+                  <IconChevronDownSmall size={16} />
+                </span>
+              </button>
 
-          {workspaceOpen && (
-            <WorkspaceMenu
-              position={workspacePosition}
-              onClose={() => setWorkspaceOpen(false)}
-            />
+              {workspaceOpen && (
+                <WorkspaceMenu
+                  position={workspacePosition}
+                  onClose={() => setWorkspaceOpen(false)}
+                />
+              )}
+            </>
           )}
 
           <button
@@ -410,7 +431,7 @@ export default function SidebarNav({
           <div className="sidebar-copy relative mx-2 mb-1 h-8">
             <div
               aria-hidden={searchOpen}
-              className={`absolute inset-0 flex items-center gap-1.5 px-2 text-[12.5px] font-medium text-ink-3 transition-[opacity,transform] ${searchOpen ? 'pointer-events-none -translate-x-1 opacity-0' : 'translate-x-0 opacity-100'}`}
+              className={`absolute inset-0 flex items-center gap-1.5 px-2 text-[12.5px] font-medium text-ink-2 transition-[opacity,transform] ${searchOpen ? 'pointer-events-none -translate-x-1 opacity-0' : 'translate-x-0 opacity-100'}`}
               style={{
                 transitionDuration: `${CHAT_SEARCH_MOTION.duration}ms`,
                 transitionTimingFunction: CHAT_SEARCH_MOTION.easing,
@@ -480,7 +501,7 @@ export default function SidebarNav({
                   type="button"
                   title={item.label}
                   onClick={() => {
-                    selectNav('chats')
+                    selectNav(item.navKey ?? recentsNavKey)
                     if (activeTitle === undefined)
                       setDemoActiveTitle(item.label)
                     onPick?.(item.id, item.label, item.prompt)
@@ -498,7 +519,7 @@ export default function SidebarNav({
               )
             })}
             {query && visibleRecents.length === 0 && (
-              <div className="sidebar-copy mx-2 px-2 py-2 text-[12.5px] text-ink-3">
+              <div className="sidebar-copy mx-2 px-2 py-2 text-[12.5px] text-ink-2">
                 没有匹配的对话
               </div>
             )}

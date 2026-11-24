@@ -280,7 +280,7 @@ try {
 
   await page
     .getByLabel('主导航')
-    .getByRole('button', { name: '所有事情' })
+    .getByRole('button', { name: /^所有事情/ })
     .click()
   await page.getByRole('heading', { name: '所有事情', exact: true }).waitFor()
   const workSearchInput = page.getByLabel('搜索事情', { exact: true })
@@ -322,7 +322,7 @@ try {
 
   await page
     .getByLabel('主导航')
-    .getByRole('button', { name: '待你处理' })
+    .getByRole('button', { name: /^待你处理/ })
     .click()
   await page.getByRole('heading', { name: '待你处理', exact: true }).waitFor()
   await page.getByLabel('待处理列表').getByRole('article').first().waitFor()
@@ -370,7 +370,7 @@ try {
 
   await page
     .getByLabel('主导航')
-    .getByRole('button', { name: '自动化' })
+    .getByRole('button', { name: /^自动化/ })
     .click()
   await page.getByRole('heading', { name: '自动化', exact: true }).waitFor()
   await page.getByText('晨间简报').waitFor()
@@ -404,12 +404,12 @@ try {
   await endedHistoryRow.getByRole('button', { name: '触发记录' }).click()
   await page.getByRole('button', { name: /已结束 2/ }).click()
 
-  await page.getByLabel('主导航').getByRole('button', { name: '记忆' }).click()
+  await page.getByLabel('主导航').getByRole('button', { name: /^记忆/ }).click()
   await page.getByRole('heading', { name: '记忆', exact: true }).waitFor()
   await page.getByText('我喜欢安静、白底、信息层级清楚的界面。').waitFor()
   await capture(page, 'desktop-memory.png', 'desktop-memory')
 
-  await page.getByLabel('主导航').getByRole('button', { name: '对话' }).click()
+  await page.getByLabel('主导航').getByRole('button', { name: /^对话/ }).click()
   await page
     .getByLabel('主导航')
     .getByRole('button')
@@ -426,10 +426,7 @@ try {
   }
   await page.getByRole('button', { name: '关闭详情' }).click()
 
-  await page
-    .getByLabel('主导航')
-    .getByRole('button', { name: '设置', exact: true })
-    .click()
+  await page.getByLabel('主导航').getByRole('button', { name: /^设置/ }).click()
   await page.getByRole('heading', { name: 'Pegas', exact: true }).waitFor()
   await capture(page, 'desktop-settings-pegas.png', 'desktop-settings-pegas')
   await page.getByRole('button', { name: '更换模型' }).click()
@@ -699,7 +696,7 @@ try {
   await capture(darkPage, 'desktop-dark.png', 'desktop-dark')
   await darkPage
     .getByLabel('主导航')
-    .getByRole('button', { name: '待你处理' })
+    .getByRole('button', { name: /^待你处理/ })
     .click()
   await darkPage
     .getByRole('heading', { name: '待你处理', exact: true })
@@ -712,7 +709,7 @@ try {
   )
   await darkPage
     .getByLabel('主导航')
-    .getByRole('button', { name: '设置', exact: true })
+    .getByRole('button', { name: /^设置/ })
     .click()
   await darkPage
     .getByLabel('设置分类')
@@ -745,7 +742,7 @@ try {
     await capture(themedPage, `desktop-${theme}.png`, `desktop-${theme}`)
     await themedPage
       .getByLabel('主导航')
-      .getByRole('button', { name: '待你处理' })
+      .getByRole('button', { name: /^待你处理/ })
       .click()
     await themedPage
       .getByRole('heading', { name: '待你处理', exact: true })
@@ -797,7 +794,7 @@ try {
   await mobilePage.keyboard.press('Escape')
   await mobilePage
     .getByLabel('移动端主导航')
-    .getByRole('button', { name: '所有事情' })
+    .getByRole('button', { name: /^所有事情/ })
     .click()
   await mobilePage
     .getByRole('heading', { name: '所有事情', exact: true })
@@ -828,7 +825,7 @@ try {
   await capture(mobilePage, 'mobile-all-work.png', 'mobile-all-work')
   await mobilePage
     .getByLabel('移动端主导航')
-    .getByRole('button', { name: '待你处理' })
+    .getByRole('button', { name: /^待你处理/ })
     .click()
   await mobilePage
     .getByRole('heading', { name: '待你处理', exact: true })
@@ -875,7 +872,7 @@ try {
   await mobilePage.getByRole('button', { name: '关闭详情' }).click()
   await mobilePage
     .getByLabel('移动端主导航')
-    .getByRole('button', { name: '所有事情' })
+    .getByRole('button', { name: /^所有事情/ })
     .click()
   await mobilePage
     .getByRole('heading', { name: '所有事情', exact: true })
@@ -892,7 +889,7 @@ try {
   }
   await mobilePage
     .getByLabel('移动端主导航')
-    .getByRole('button', { name: '自动化' })
+    .getByRole('button', { name: /^自动化/ })
     .click()
   await mobilePage
     .getByRole('heading', { name: '自动化', exact: true })
@@ -918,7 +915,7 @@ try {
   await mobileEndedHistoryRow.getByRole('button', { name: '触发记录' }).click()
   await mobilePage
     .getByLabel('移动端主导航')
-    .getByRole('button', { name: '设置' })
+    .getByRole('button', { name: /^设置/ })
     .click()
   await mobilePage
     .getByRole('heading', { name: 'Pegas', exact: true })

@@ -19,6 +19,8 @@ export const buttonVariants = cva(
         ghost: 'bg-hover-2 text-ink hover:bg-line-strong',
         accent: `bg-accent text-white hover:bg-accent-fill-hover dark:text-page ${filledShadow}`,
         success: `bg-green text-white hover:brightness-95 dark:text-page ${filledShadow}`,
+        danger:
+          'bg-transparent text-red-text shadow-[inset_0_0_0_1px_var(--red)] hover:bg-red-tint',
         /* transparent until hovered — for dense toolbars/action rows */
         quiet: 'text-ink hover:bg-hover',
       },

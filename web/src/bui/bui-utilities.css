@@ -4,6 +4,7 @@
 @source './components';
 @source './central-icons';
 @source './overlays';
+@source '../sealed';
 
 @theme inline {
   --color-page: var(--page);

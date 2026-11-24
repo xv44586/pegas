@@ -169,6 +169,9 @@ export default function ToolChips({
   diffLines = DIFF_LINES,
   labels,
   className,
+  fill = false,
+  settle = false,
+  onOpenFile,
   onOpenChange,
   onToggleRow,
 }: {
@@ -179,6 +182,12 @@ export default function ToolChips({
   diffLines?: Record<string, ToolDiffLine[]>
   labels?: Partial<ToolChipsLabels>
   className?: string
+  /** fill the parent width instead of the gallery's fixed measure */
+  fill?: boolean
+  /** reveal every row immediately — for settled server facts */
+  settle?: boolean
+  /** open the host's file/diff surface when a diff chip is pressed */
+  onOpenFile?: (file: string) => void
   onOpenChange?: (open: boolean) => void
   onToggleRow?: (label: string, open: boolean) => void
 } = {}) {
@@ -214,10 +223,14 @@ export default function ToolChips({
   const total = steps.length + 1 // rows, then diff chips
 
   useEffect(() => {
+    if (settle) {
+      setStep(total)
+      return
+    }
     if (step >= total) return
     const t = setTimeout(() => setStep(s => s + 1), STEP_MS)
     return () => clearTimeout(t)
-  }, [step, total])
+  }, [step, total, settle])
 
   const toggleRow = (label: string) =>
     setOpenRows(current => {
@@ -230,7 +243,7 @@ export default function ToolChips({
 
   return (
     <div
-      className={`min-h-[220px] w-full max-w-80 pb-1${className ? ` ${className}` : ''}`}
+      className={`${fill ? '' : 'min-h-[220px] max-w-80'} w-full pb-1${className ? ` ${className}` : ''}`}
     >
       {/* collapsed run header */}
       <button
@@ -372,7 +385,8 @@ export default function ToolChips({
                   <button
                     type="button"
                     aria-expanded={preview?.file === d.file}
-                    aria-label={`Show diff for ${d.file}`}
+                    aria-label={`查看 ${d.file} 的改动`}
+                    onClick={() => onOpenFile?.(d.file)}
                     onFocus={openPreview(d.file)}
                     onBlur={closePreview(d.file)}
                     className="inline-flex h-7 max-w-full items-center gap-2 rounded-chip
@@ -394,17 +408,19 @@ export default function ToolChips({
                   </button>
                 </span>
               ))}
-              <button
-                type="button"
-                className="inline-flex h-7 items-center rounded-chip px-1.5 font-mono text-[11.5px] text-ink-3
+              {copy.more && (
+                <button
+                  type="button"
+                  className="inline-flex h-7 items-center rounded-chip px-1.5 font-mono text-[11.5px] text-ink-3
               underline decoration-transparent underline-offset-2 transition-colors duration-100
               hover:text-ink-2 hover:decoration-current"
-                style={{
-                  animation: `fade-in 300ms ease-out ${diffs.length * 80}ms both`,
-                }}
-              >
-                {copy.more}
-              </button>
+                  style={{
+                    animation: `fade-in 300ms ease-out ${diffs.length * 80}ms both`,
+                  }}
+                >
+                  {copy.more}
+                </button>
+              )}
             </div>
           )}
         </div>

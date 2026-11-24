@@ -59,7 +59,12 @@ export { default as TaskRows } from './components/primitives/TaskRows'
 export type { TaskDetail } from './components/primitives/TaskRows'
 export { default as ThinkingState } from './components/primitives/ThinkingState'
 export { default as ToolChips } from './components/primitives/ToolChips'
-export type { ToolDetailLine } from './components/primitives/ToolChips'
+export type {
+  ToolDetailLine,
+  ToolDiff,
+  ToolDiffLine,
+  ToolStep,
+} from './components/primitives/ToolChips'
 
 export {
   Dialog,

@@ -128,19 +128,44 @@ describe('sealed UI typography scale (DESIGN-004)', () => {
     expect(fontSizeOf('.link-preview-card')).toBe('var(--text-caption)')
     expect(fontSizeOf('.attention-preview')).toBe('var(--text-caption)')
     expect(fontSizeOf('.criteria-list p')).toBe('var(--text-caption)')
-    expect(fontSizeOf('.approval-card p')).toBe('var(--text-caption)')
+    const detailDrawer = readFileSync(
+      resolve(
+        import.meta.dirname,
+        '..',
+        'web',
+        'src',
+        'sealed',
+        'DetailDrawer.tsx',
+      ),
+      'utf8',
+    )
+    expect(detailDrawer).toContain('text-[13px] leading-[1.55] text-ink-2')
+    expect(stylesheet).not.toContain('.approval-card p')
   })
 
   it('keeps button text one step below adjacent body copy', () => {
     expect(declarationOf('.secondary-button', 'font-size')).toBe(
       'var(--text-caption)',
     )
-    expect(fontSizeOf('.composer-queue li')).toBe('var(--text-caption)')
-    expect(fontSizeOf('.composer-queue button')).toBe('var(--text-small)')
-    expect(fontSizeOf('.composer-context')).toBe('var(--text-caption)')
-    expect(declarationOf('.composer-context button', 'font-size')).toBe(
-      'var(--text-small)',
+    const mainPages = readFileSync(
+      resolve(
+        import.meta.dirname,
+        '..',
+        'web',
+        'src',
+        'sealed',
+        'MainPages.tsx',
+      ),
+      'utf8',
     )
+    expect(mainPages).toContain(
+      'flex min-h-9 items-center gap-2 rounded-card bg-surface px-2 py-1 text-[13px] shadow-hairline',
+    )
+    expect(mainPages).toContain(
+      'composer-context mx-auto mb-2 flex min-h-[38px] w-full max-w-[1040px] items-center justify-between gap-3 rounded-card bg-accent-tint px-3 py-1.5 text-[13px] text-ink-2',
+    )
+    expect(stylesheet).not.toContain('.composer-queue li')
+    expect(stylesheet).not.toContain('.composer-context {')
   })
 
   it('unifies page-level display titles on one step', () => {
@@ -217,9 +242,12 @@ describe('sealed UI typography scale (DESIGN-004)', () => {
     expect(stylesheet).not.toContain('.composer-queue-position')
   })
 
-  it('removes the drawer eyebrow and redundant state-hero status label', () => {
+  it('removes the drawer eyebrow and the tinted state-hero block', () => {
     expect(stylesheet).not.toContain('.drawer-header small')
-    expect(stylesheet).not.toContain('.state-hero small')
+    expect(stylesheet).not.toContain('.state-hero ')
+    expect(stylesheet).not.toContain('.state-失败')
+    expect(stylesheet).not.toContain('.state-待确认')
+    expect(stylesheet).not.toContain('.state-已完成 {')
   })
 
   it('keeps markdown headings at the surrounding card scale', () => {
@@ -234,8 +262,18 @@ describe('sealed UI typography scale (DESIGN-004)', () => {
   })
 
   it('lets the drawer summary column shrink so wide code blocks scroll inside the card', () => {
-    expect(declarationOf('.state-hero > div', 'min-width')).toBe('0')
-    expect(declarationOf('.state-hero > div', 'flex')).toBe('1')
+    const conversationBui = readFileSync(
+      resolve(
+        import.meta.dirname,
+        '..',
+        'web',
+        'src',
+        'sealed',
+        'ConversationBui.tsx',
+      ),
+      'utf8',
+    )
+    expect(conversationBui).toContain('bui-state-header')
     expect(declarationOf('.message-markdown', 'min-width')).toBe('0')
     expect(declarationOf('.message-markdown pre', 'max-width')).toBe('100%')
     expect(declarationOf('.message-markdown table', 'overflow-x')).toBe('auto')

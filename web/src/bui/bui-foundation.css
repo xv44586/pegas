@@ -50,7 +50,7 @@
   --orange-text: oklch(0.555 0.179 49.902);
   --orange-tint: oklch(0.964 0.021 67.581);
   --red: oklch(0.621 0.192 23.042);
-  --red-text: oklch(0.559 0.192 23.042);
+  --red-text: oklch(0.55 0.192 23.042);
   --red-tint: oklch(0.956 0.017 17.462);
 
   --tooltip-bg: oklch(0.272 0.008 264.435);
@@ -104,7 +104,7 @@
   --orange-text: oklch(0.746 0.156 55.642);
   --orange-tint: oklch(0.746 0.156 55.642 / 0.14);
   --red: oklch(0.666 0.18 21.433);
-  --red-text: oklch(0.666 0.18 21.433);
+  --red-text: oklch(0.72 0.18 21.433);
   --red-tint: oklch(0.666 0.18 21.433 / 0.14);
   --tooltip-bg: oklch(0.182 0.004 264.459);
   --tooltip-fg: oklch(0.964 0.002 247.839);

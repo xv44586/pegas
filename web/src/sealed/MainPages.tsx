@@ -9,7 +9,6 @@ import {
   ChevronUp,
   CircleAlert,
   CircleQuestionMark,
-  Copy,
   FileText,
   Layers3,
   Link2,
@@ -46,6 +45,16 @@ import type {
 } from '../types'
 import { useVoiceDictation } from '../useVoiceDictation'
 import { PegasAgentIcon } from '../PegasAgentIcon'
+import { Button, StatusPill } from '@bui/index'
+import {
+  CopyMessageButton,
+  FollowUpList,
+  MetaIconButton,
+  RunTrace,
+  SayBody,
+  WorkEntryButton,
+  type FactTone,
+} from './ConversationBui'
 import { ModelPicker, modelSelectionKey } from './ModelPicker'
 import { PegasMascot } from './PegasMascot'
 import { EmptyCapability, PageToolbar } from './Shell'
@@ -609,6 +618,10 @@ export function ConversationPage({
               onJumpToMessage={jumpToMessage}
               onOpenAttention={onOpenAttention}
               onOpenTask={openTaskDetails}
+              onFollowUp={text => {
+                if (message.taskId) onSelectTask(message.taskId)
+                onDraftChange(text)
+              }}
               onToggleExpanded={() =>
                 setExpandedMessages(current => {
                   const next = new Set(current)
@@ -626,21 +639,15 @@ export function ConversationPage({
                   <span>「{message.cue.title}」</span>
                 </p>
               )}
-              <MarkdownMessage
-                content={
+              <SayBody
+                linkPreviewLoader={url => api.linkPreview(url)}
+                streaming={message.streaming}
+                text={
                   message.text.length > 520 && !expandedMessages.has(message.id)
                     ? `${message.text.slice(0, 520)}…`
                     : message.text
                 }
-                linkPreviewLoader={url => api.linkPreview(url)}
               />
-              {message.streaming && (
-                <span
-                  aria-label="正在输入"
-                  className="say-stream-caret"
-                  role="status"
-                />
-              )}
             </>
           )}
           {message.role === 'user' && message.attachment && (
@@ -682,9 +689,8 @@ export function ConversationPage({
             />
           )}
           {workEntry && (
-            <button
-              aria-label={`${workEntry.label}：${workEntry.channel.title}`}
-              className="message-work-entry"
+            <WorkEntryButton
+              label={workEntry.label}
               onClick={() => {
                 if (
                   workEntry.label === '审查交付' &&
@@ -701,25 +707,14 @@ export function ConversationPage({
                 }
                 openTaskDetails(workEntry.channel.id)
               }}
-              title={workEntry.label}
-              type="button"
-            >
-              <Link2 size={14} />
-            </button>
+              taskTitle={workEntry.channel.title}
+            />
           )}
           <time dateTime={message.at}>{formatRelativeTime(message.at)}</time>
-          <button
-            aria-label={copiedMessageId === message.id ? '已复制' : '复制消息'}
-            className="message-action"
-            onClick={() => void copyMessage(message.id, message.text)}
-            type="button"
-          >
-            {copiedMessageId === message.id ? (
-              <Check size={14} />
-            ) : (
-              <Copy size={14} />
-            )}
-          </button>
+          <CopyMessageButton
+            copied={copiedMessageId === message.id}
+            onCopy={() => void copyMessage(message.id, message.text)}
+          />
         </div>
       </article>
     )
@@ -772,6 +767,7 @@ export function ConversationPage({
 
           {summaryChannel && summaryRun && (
             <RunStatusBar
+              api={api}
               channel={summaryChannel}
               messages={snapshot.messages}
               onOpen={() =>
@@ -791,13 +787,15 @@ export function ConversationPage({
       </div>
 
       {chatScroll.hasNewReplies && (
-        <button
+        <Button
           className="new-replies-button"
           onClick={chatScroll.jumpToBottom}
+          size="sm"
           type="button"
+          variant="secondary"
         >
           新回复 <ArrowUp size={14} className="is-flipped" />
-        </button>
+        </Button>
       )}
 
       <div className="composer-wrap" ref={chatScroll.composerRef}>
@@ -810,7 +808,7 @@ export function ConversationPage({
               return (
                 <button
                   aria-pressed={selected}
-                  className="task-tray-item"
+                  className="task-tray-item inline-flex h-[34px] max-w-[260px] shrink-0 items-center gap-[7px] rounded-full bg-surface px-3 text-[13px] shadow-hairline transition-colors duration-150 hover:bg-inset aria-pressed:bg-accent-tint aria-pressed:text-accent-ink"
                   data-status={
                     waitingOnUser
                       ? 'attention'
@@ -832,8 +830,12 @@ export function ConversationPage({
                   type="button"
                 >
                   <i aria-hidden="true" />
-                  <span className="task-tray-title">{channel.title}</span>
-                  <small>{statusLabel(channel, channelRun)}</small>
+                  <span className="task-tray-title min-w-0 truncate">
+                    {channel.title}
+                  </span>
+                  <small className="shrink-0 text-[11px] text-ink-3">
+                    {statusLabel(channel, channelRun)}
+                  </small>
                 </button>
               )
             })}
@@ -842,38 +844,55 @@ export function ConversationPage({
         {confirmingStop && summaryChannel && (
           <div
             aria-labelledby="composer-stop-title"
-            className="stop-confirmation"
+            className="stop-confirmation mt-3.5 rounded-card bg-red-tint p-4 shadow-hairline"
             role="alertdialog"
           >
             <div>
-              <strong id="composer-stop-title">确定停止这件事？</strong>
-              <p>
+              <strong className="text-red-text" id="composer-stop-title">
+                确定停止这件事？
+              </strong>
+              <p className="mt-1 text-[13px] leading-[1.55] text-ink-2">
                 停止后无法继续当前运行；历史记录会保留，你仍可重新发起事情。
               </p>
             </div>
-            <div className="stop-confirmation-actions">
-              <button onClick={() => setConfirmingStop(false)} type="button">
+            <div className="stop-confirmation-actions flex shrink-0 gap-2">
+              <Button
+                onClick={() => setConfirmingStop(false)}
+                size="sm"
+                type="button"
+                variant="secondary"
+              >
                 继续执行
-              </button>
-              <button
-                className="is-danger"
+              </Button>
+              <Button
                 disabled={stopping}
                 onClick={() => void stopSummary()}
+                size="sm"
                 type="button"
+                variant="danger"
               >
                 {stopping ? '正在停止…' : '确认停止'}
-              </button>
+              </Button>
             </div>
           </div>
         )}
         {queuedMessages.length > 0 && (
-          <ol aria-label="排队消息" className="composer-queue">
+          <ol
+            aria-label="排队消息"
+            className="composer-queue mx-auto mb-2 grid w-full max-w-[1040px] gap-1.5"
+          >
             {queuedMessages.map((item, index) => (
-              <li key={item.id}>
-                <span className="composer-queue-preview" title={item.text}>
+              <li
+                className="flex min-h-9 items-center gap-2 rounded-card bg-surface px-2 py-1 text-[13px] shadow-hairline"
+                key={item.id}
+              >
+                <span
+                  className="composer-queue-preview min-w-0 flex-1 truncate text-ink-2"
+                  title={item.text}
+                >
                   {item.text}
                 </span>
-                <button
+                <Button
                   aria-label={`编辑排队消息 ${String(index + 1)}`}
                   onClick={() => {
                     setQueuedMessages(current =>
@@ -881,21 +900,26 @@ export function ConversationPage({
                     )
                     onDraftChange(item.text)
                   }}
+                  size="xs"
                   type="button"
+                  variant="quiet"
                 >
                   编辑
-                </button>
-                <button
+                </Button>
+                <Button
                   aria-label={`删除排队消息 ${String(index + 1)}`}
+                  className="w-7 px-0"
                   onClick={() =>
                     setQueuedMessages(current =>
                       current.filter(entry => entry.id !== item.id),
                     )
                   }
+                  size="xs"
                   type="button"
+                  variant="quiet"
                 >
                   <Trash2 size={14} />
-                </button>
+                </Button>
               </li>
             ))}
           </ol>
@@ -911,47 +935,53 @@ export function ConversationPage({
           </div>
         )}
         {attachment && (
-          <div className="composer-context" role="status">
+          <div
+            className="composer-context mx-auto mb-2 flex min-h-[38px] w-full max-w-[1040px] items-center justify-between gap-3 rounded-card bg-accent-tint px-3 py-1.5 text-[13px] text-ink-2"
+            role="status"
+          >
             <span>
               附件：<strong>{attachment.name}</strong> ·{' '}
               {formatFileSize(attachment.size)}
             </span>
-            <button
-              aria-label="移除附件"
+            <MetaIconButton
+              label="移除附件"
               onClick={() => setAttachment(undefined)}
-              type="button"
             >
               <X size={15} />
-            </button>
+            </MetaIconButton>
           </div>
         )}
         {continuationChannel && (
-          <div className="composer-context" role="status">
+          <div
+            className="composer-context mx-auto mb-2 flex min-h-[38px] w-full max-w-[1040px] items-center justify-between gap-3 rounded-card bg-accent-tint px-3 py-1.5 text-[13px] text-ink-2"
+            role="status"
+          >
             <span>
               继续事情：<strong>{continuationChannel.title}</strong>
             </span>
-            <button
-              aria-label="取消继续当前事情"
+            <MetaIconButton
+              label="取消继续当前事情"
               onClick={onClearContinuation}
-              type="button"
             >
               <X size={15} />
-            </button>
+            </MetaIconButton>
           </div>
         )}
         {sourceContextChannel && (
-          <div className="composer-context" role="status">
+          <div
+            className="composer-context mx-auto mb-2 flex min-h-[38px] w-full max-w-[1040px] items-center justify-between gap-3 rounded-card bg-accent-tint px-3 py-1.5 text-[13px] text-ink-2"
+            role="status"
+          >
             <span>
               新建相关事情，携带终态摘要：
               <strong>{sourceContextChannel.title}</strong>
             </span>
-            <button
-              aria-label="取消携带来源事情摘要"
+            <MetaIconButton
+              label="取消携带来源事情摘要"
               onClick={onClearSourceContext}
-              type="button"
             >
               <X size={15} />
-            </button>
+            </MetaIconButton>
           </div>
         )}
         <form
@@ -1043,26 +1073,30 @@ export function ConversationPage({
                 </span>
               )}
               {canSteer && draft.trim() && (
-                <button
-                  className="composer-steer-button"
+                <Button
+                  className="composer-steer-button h-[34px] rounded-full bg-accent-tint px-3 text-[13px] font-medium text-accent-ink hover:bg-accent-tint hover:brightness-95"
                   disabled={sending || dictationBusy}
                   onClick={() => void steer()}
+                  size="xs"
                   title="不打断当前执行，把这条指示立即交给正在做的事情"
                   type="button"
+                  variant="quiet"
                 >
                   <Zap size={15} /> 插话
-                </button>
+                </Button>
               )}
               {canQueue && draft.trim() && (
-                <button
-                  className="composer-queue-button"
+                <Button
+                  className="composer-queue-button h-[34px] rounded-full bg-accent-tint px-3 text-[13px] font-medium text-accent-ink hover:bg-accent-tint hover:brightness-95"
                   disabled={sending || dictationBusy}
                   onClick={queueDraft}
+                  size="xs"
                   title="选中的事情完成后自动发送这条消息"
                   type="button"
+                  variant="quiet"
                 >
                   排队
-                </button>
+                </Button>
               )}
               <ModelPicker
                 ariaLabel="选择执行模型"
@@ -1236,6 +1270,22 @@ function factCardHeading(message: FactCardMessage): {
   return { icon: Layers3, label: '工作进展' }
 }
 
+function factCardTone(message: FactCardMessage): FactTone {
+  if (message.lane === 'decide') return message.resolved ? 'neutral' : 'orange'
+  const type =
+    message.source?.payload &&
+    typeof message.source.payload === 'object' &&
+    typeof (message.source.payload as { type?: unknown }).type === 'string'
+      ? (message.source.payload as { type: string }).type
+      : undefined
+  if (type === 'run.failed' || type === 'action.failed') return 'red'
+  if (type === 'run.completed')
+    return message.source && hasActiveAutomationFact(message.source.payload)
+      ? 'accent'
+      : 'green'
+  return 'neutral'
+}
+
 function FactCard({
   message,
   snapshot,
@@ -1247,6 +1297,7 @@ function FactCard({
   onOpenTask,
   onAnswerClarification,
   onOpenAttention,
+  onFollowUp,
 }: {
   message: FactCardMessage
   snapshot: Snapshot
@@ -1258,9 +1309,10 @@ function FactCard({
   onOpenTask: (taskId: string | undefined) => void
   onAnswerClarification: (channel: Snapshot['channels'][number]) => void
   onOpenAttention: (message: OutboxMessage) => Promise<void>
+  onFollowUp: (text: string) => void
 }) {
   const heading = factCardHeading(message)
-  const Icon = heading.icon
+  const tone = factCardTone(message)
   const channel = message.taskId
     ? snapshot.channels.find(item => item.id === message.taskId)
     : undefined
@@ -1294,19 +1346,20 @@ function FactCard({
     <section
       aria-label={`${heading.label}：${channel?.title ?? summary.title}`}
       className={[
+        'bui',
         'fact-card',
         `is-${message.lane}`,
-        message.resolved ? 'is-resolved' : '',
+        'mt-3.5 grid w-full max-w-[560px] min-w-0 gap-2.5 rounded-card bg-surface p-3.5 shadow-card',
+        message.resolved ? 'opacity-70' : '',
       ]
         .filter(Boolean)
         .join(' ')}
     >
-      <header className="fact-card-header">
-        <Icon size={16} />
-        <strong>{heading.label}</strong>
+      <div className="fact-card-header flex min-w-0 flex-wrap items-center gap-2">
+        <StatusPill tone={tone}>{heading.label}</StatusPill>
         {channel && !hideTaskTitle && (
           <button
-            className="fact-card-task"
+            className="fact-card-task min-w-0 truncate text-[12px] text-ink-3 transition-colors duration-100 hover:text-ink hover:underline"
             onClick={() => onOpenTask(message.taskId)}
             type="button"
           >
@@ -1316,7 +1369,7 @@ function FactCard({
         {originVisible && originEventId && (
           <button
             aria-label="回到发起消息"
-            className="fact-card-origin"
+            className="fact-card-origin ml-auto flex size-6 items-center justify-center rounded-[6px] text-ink-3 transition-colors duration-100 hover:bg-hover-2 hover:text-ink"
             onClick={() => onJumpToMessage(originEventId)}
             title="回到发起消息"
             type="button"
@@ -1324,8 +1377,8 @@ function FactCard({
             <ArrowUpToLine size={14} />
           </button>
         )}
-      </header>
-      <div className="fact-card-body">
+      </div>
+      <div className="fact-card-body mt-2 grid min-w-0 justify-items-start gap-1 text-[13px] leading-[1.6] text-ink-2">
         <MarkdownMessage content={expanded ? message.text : collapsedBody} />
         {message.text.length > 520 && (
           <button
@@ -1338,9 +1391,10 @@ function FactCard({
         )}
       </div>
       {message.lane === 'decide' && !message.resolved && (
-        <div className="fact-card-actions">
-          <button
-            className="primary-button"
+        <div className="fact-card-actions mt-2.5 flex gap-2">
+          <Button
+            size="sm"
+            variant="accent"
             onClick={() => {
               if (message.review && channel && message.source) {
                 actions.onOpenDrawer({
@@ -1374,12 +1428,24 @@ function FactCard({
               }
               onOpenTask(message.taskId)
             }}
-            type="button"
           >
             {decideLabel} <ArrowRight size={15} />
-          </button>
+          </Button>
         </div>
       )}
+      {message.lane === 'work' &&
+        tone === 'green' &&
+        channel?.status === 'completed' && (
+          <FollowUpList
+            items={[
+              '这件事还有哪些没做完？',
+              '把这次结果整理成一段摘要',
+              '结果里有哪些风险需要注意？',
+            ]}
+            label="下一步"
+            onPick={onFollowUp}
+          />
+        )}
     </section>
   )
 }
@@ -1392,47 +1458,21 @@ function escapeHtml(value: string): string {
     .replace(/"/gu, '&quot;')
 }
 
-const WAITING_PHRASES = [
-  '正在梳理思路',
-  '正在拆解步骤',
-  '正在核对已有信息',
-  '正在推进这件事',
-] as const
-
-const LONG_WAIT_PHRASES = [
-  '这件事比平时花的时间长一些',
-  '还在继续推进，可以先去忙别的',
-  '仍在处理中，有结果会第一时间回来',
-] as const
-
 function RunStatusBar({
   channel,
   run,
   messages,
+  api,
   onOpen,
 }: {
   channel: WorkChannel
   run: NonNullable<ReturnType<typeof latestRunForTask>>
   messages: readonly OutboxMessage[]
+  api: PegasApi
   onOpen: () => void
 }) {
   const active = run.status === 'running' || run.status === 'queued'
   const progressText = latestRunProgressText(messages, run.id)
-  const [phraseIndex, setPhraseIndex] = useState(0)
-  useEffect(() => {
-    if (!active || progressText) return
-    const started = Date.parse(run.createdAt)
-    const timer = window.setInterval(() => {
-      setPhraseIndex(current => current + 1)
-    }, 5000)
-    const elapsed = Date.now() - started
-    if (elapsed > 120_000) setPhraseIndex(current => current + 1)
-    return () => window.clearInterval(timer)
-  }, [active, progressText, run.createdAt])
-  const elapsedLong = Date.now() - Date.parse(run.createdAt) > 120_000
-  const waitingPhrase = elapsedLong
-    ? LONG_WAIT_PHRASES[phraseIndex % LONG_WAIT_PHRASES.length]
-    : WAITING_PHRASES[phraseIndex % WAITING_PHRASES.length]
   const duration = formatRunDuration(run)
   const headline = active
     ? statusLabel(channel, run)
@@ -1443,29 +1483,56 @@ function RunStatusBar({
         : run.status === 'cancelled'
           ? '已停止'
           : '等待中'
+  const tone: FactTone = active
+    ? 'accent'
+    : run.status === 'completed'
+      ? 'green'
+      : run.status === 'failed'
+        ? 'red'
+        : 'neutral'
   const detail = active
-    ? (progressText ?? waitingPhrase)
+    ? undefined
     : run.status === 'completed' && duration
       ? `工作了 ${duration}`
       : run.status === 'failed'
         ? (run.lastError ?? '可以重试或补充说明后继续')
         : `${(run.output ?? channel.goal).slice(0, 160)}${(run.output ?? channel.goal).length > 160 ? '…' : ''}`
+  const summary = `${headline} · ${channel.title}${
+    detail ? ` ${detail}` : progressText ? ` ${progressText}` : ''
+  }`
   return (
-    <button
-      className="run-status-bar"
+    <section
+      className="bui run-status-card mt-3.5 w-full rounded-card bg-surface p-3.5 shadow-card"
       data-active={active || undefined}
-      onClick={onOpen}
-      type="button"
     >
-      <i data-status={run.status} />
-      <span>
-        <strong className={active ? 'is-shimmer' : undefined}>
-          {headline} · {channel.title}
-        </strong>
-        <small>{detail}</small>
-      </span>
-      <ArrowRight size={18} />
-    </button>
+      <button
+        aria-label={summary}
+        className="run-status-bar flex w-full items-center gap-2.5 text-left"
+        onClick={onOpen}
+        type="button"
+      >
+        <StatusPill tone={tone}>{headline}</StatusPill>
+        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink">
+          {channel.title}
+        </span>
+        <ArrowRight
+          className="shrink-0 text-ink-3 transition-transform duration-150"
+          size={16}
+        />
+      </button>
+      {detail && (
+        <p className="mt-1.5 truncate text-[12.5px] text-ink-2">{detail}</p>
+      )}
+      {active && (
+        <RunTrace
+          active={active}
+          api={api}
+          onOpen={onOpen}
+          {...(progressText ? { progressText } : {})}
+          runId={run.id}
+        />
+      )}
+    </section>
   )
 }
 
@@ -1729,21 +1796,22 @@ function UserMessageStatus({
       <span className="message-status">
         <span
           aria-label="发送失败"
-          className="message-status-icon is-failed"
+          className="message-status-icon is-failed inline-flex h-[22px] w-5 items-center justify-center text-red-text"
           role="img"
           title="发送失败"
         >
           <CircleAlert size={14} />
         </span>
-        <button
-          className="message-action is-retry"
+        <Button
+          className="h-[22px] px-1.5 text-[12px]"
           disabled={retrying}
           onClick={onRetry}
-          type="button"
+          size="xs"
+          variant="quiet"
         >
           <RotateCw size={14} />
           {retrying ? '重试中…' : '重试'}
-        </button>
+        </Button>
       </span>
     )
   }
@@ -1753,14 +1821,17 @@ function UserMessageStatus({
       <span className="message-status">
         <span
           aria-label={label}
-          className={`message-status-icon${
+          className={`message-status-icon inline-flex h-[22px] w-5 items-center justify-center text-ink-3${
             message.status === 'processing' ? ' is-processing' : ''
           }`}
           role="img"
           title={label}
         >
           {message.status === 'processing' ? (
-            <LoaderCircle size={14} />
+            <LoaderCircle
+              size={14}
+              style={{ animation: 'spin 900ms linear infinite' }}
+            />
           ) : (
             <Check size={14} />
           )}
@@ -1774,15 +1845,15 @@ function UserMessageStatus({
     const fact = snapshot.messages.find(item => item.id === targetId)
     return (
       <span className="message-status">
-        <button
-          aria-label="查看工作详情"
+        <MetaIconButton
+          accent
           className="message-derived-trigger"
+          label="查看工作详情"
           onClick={() => onOpenTask(fact?.taskId)}
           title="查看工作详情"
-          type="button"
         >
           <Link2 size={14} />
-        </button>
+        </MetaIconButton>
       </span>
     )
   }
@@ -1820,21 +1891,22 @@ function UserMessageStatus({
         aria-expanded={menuOpen}
         aria-haspopup="menu"
         aria-label={`查看工作详情：${String(message.derivedIds.length)} 个事情`}
-        className="message-derived-trigger"
+        className="message-derived-trigger inline-flex h-[22px] items-center justify-center gap-[3px] rounded-[7px] px-1 text-accent-ink transition-colors duration-100 hover:bg-accent-tint"
         onClick={() => setMenuOpen(current => !current)}
         ref={triggerRef}
         title={`查看工作详情 · ${String(message.derivedIds.length)} 个事情`}
         type="button"
       >
         <Link2 size={14} />
-        <span className="message-derived-count">
+        <span className="message-derived-count text-[11px] font-medium leading-none">
           {message.derivedIds.length}
         </span>
       </button>
       {menuOpen && (
         <div
           aria-label="这条消息派生的事情"
-          className="message-derived-menu"
+          className="message-derived-menu bui absolute right-0 top-[calc(100%+6px)] z-20 flex min-w-[250px] flex-col rounded-card bg-surface p-1 shadow-overlay"
+          style={{ animation: 'pop-in 150ms cubic-bezier(0.16,1,0.3,1) both' }}
           id={menuId}
           ref={menuRef}
           role="menu"
@@ -1842,6 +1914,7 @@ function UserMessageStatus({
           {entries.map(entry => (
             <button
               key={entry.id}
+              className="flex items-center justify-between gap-2 rounded-control px-2.5 py-2 text-left text-[13px] text-ink transition-colors duration-100 hover:bg-hover-2"
               onClick={() => {
                 setMenuOpen(false)
                 onOpenTask(entry.taskId)
@@ -1849,11 +1922,13 @@ function UserMessageStatus({
               role="menuitem"
               type="button"
             >
-              <span className="derived-task-name">
+              <span className="derived-task-name inline-flex min-w-0 items-center gap-[7px]">
                 <FileText size={14} />
-                <span>{entry.title}</span>
+                <span className="truncate">{entry.title}</span>
               </span>
-              <span className={`status-text status-${entry.label}`}>
+              <span
+                className={`status-text status-${entry.label} shrink-0 text-[12px] text-ink-3`}
+              >
                 {entry.label}
               </span>
             </button>

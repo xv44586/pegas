@@ -138,6 +138,8 @@ export default function ThinkingState({
   active,
   done,
   icon,
+  working: workingOverride,
+  fill = false,
 }: {
   variant?: string
   onSettled?: () => void
@@ -147,6 +149,10 @@ export default function ThinkingState({
   done?: string
   /** override the header glyph (defaults to the sparkle) */
   icon?: ReactNode
+  /** fact-driven working state — host supplies the run fact instead of the demo clock */
+  working?: boolean
+  /** fill the parent width instead of the gallery's fixed measure */
+  fill?: boolean
 }) {
   const stage = useSequence(STAGES)
   const [manualExpanded, setManualExpanded] = useState<boolean | null>(null)
@@ -165,9 +171,15 @@ export default function ThinkingState({
   }
   const autoExpanded = stage >= 1 && stage < 4
   const expanded = manualExpanded ?? autoExpanded
-  const working = stage < 3
+  const working = workingOverride ?? stage < 3
   const visible =
-    stage < 2 ? 0 : stage === 2 ? Math.min(2, v.rows.length) : v.rows.length
+    workingOverride !== undefined
+      ? v.rows.length
+      : stage < 2
+        ? 0
+        : stage === 2
+          ? Math.min(2, v.rows.length)
+          : v.rows.length
   const traceRef = useRef<HTMLDivElement>(null)
   const [lineHeight, setLineHeight] = useState(0)
   useLayoutEffect(() => {
@@ -185,9 +197,9 @@ export default function ThinkingState({
   return (
     <div
       key={variant}
-      className="flex w-full max-w-95 flex-col"
+      className={`flex w-full flex-col ${fill ? '' : 'max-w-95'}`}
       style={{
-        minHeight: working || expanded ? 176 : undefined,
+        minHeight: !fill && (working || expanded) ? 176 : undefined,
         transition: 'min-height 400ms cubic-bezier(0.23,1,0.32,1)',
       }}
     >

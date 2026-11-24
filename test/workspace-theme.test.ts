@@ -29,7 +29,7 @@ describe('sealed UI layout contracts', () => {
 
   it('keeps the desktop shell and mobile navigation geometries explicit', () => {
     expect(sealedUi).toMatch(
-      /\.app-shell\s*\{[^}]*grid-template-columns:\s*232px minmax\(0, 1fr\);[^}]*height:\s*100dvh;/,
+      /\.app-shell\s*\{[^}]*grid-template-columns:\s*224px minmax\(0, 1fr\);[^}]*height:\s*100dvh;/,
     )
     expect(sealedUi).toMatch(
       /@media \(max-width: 820px\)[\s\S]*?\.mobile-nav\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*repeat\(6, 1fr\);/,

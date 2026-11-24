@@ -187,12 +187,14 @@ body {
   color: var(--ink);
   font-size: var(--text-body);
 }
-button,
-input,
-textarea,
-select {
-  color: inherit;
-  font: inherit;
+@layer base {
+  button,
+  input,
+  textarea,
+  select {
+    color: inherit;
+    font: inherit;
+  }
 }
 button {
   border: 0;
@@ -247,10 +249,14 @@ a {
 
 .app-shell {
   display: grid;
-  grid-template-columns: 232px minmax(0, 1fr);
+  grid-template-columns: 224px minmax(0, 1fr);
   height: 100dvh;
   min-height: 620px;
   overflow: hidden;
+  transition: grid-template-columns 280ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.app-shell:has([data-sidebar-collapsed='true']) {
+  grid-template-columns: 52px minmax(0, 1fr);
 }
 .app-shell.is-settings {
   grid-template-columns: minmax(0, 1fr);
@@ -261,17 +267,16 @@ a {
 .primary-rail {
   background: var(--rail);
   border-right: 1px solid var(--line);
-  display: flex;
-  flex-direction: column;
+  min-height: 0;
   min-width: 0;
-  padding: 16px 10px 12px;
+  overflow: hidden;
+  padding: 10px 0 12px;
 }
-.brand-lockup {
+.primary-rail .brand-lockup {
   align-items: center;
   display: flex;
   gap: 9px;
-  min-height: 44px;
-  padding: 0 8px 12px;
+  min-height: 0;
 }
 .pegas-mark {
   display: block;
@@ -292,8 +297,10 @@ a {
   gap: 5px;
   margin-top: 3px;
 }
+.brand-lockup > div {
+  line-height: 1.2;
+}
 .brand-lockup i,
-.state-hero i,
 .health-badge i,
 .setting-summary-row em i {
   background: var(--positive);
@@ -308,89 +315,6 @@ a {
 .brand-lockup .connection-offline i,
 .setting-summary-row em.is-unavailable i {
   background: var(--critical);
-}
-.primary-nav {
-  display: grid;
-  gap: 3px;
-  margin-top: 14px;
-}
-.nav-item {
-  align-items: center;
-  background: transparent;
-  border-radius: 10px;
-  color: var(--ink-soft);
-  display: grid;
-  font-weight: 500;
-  gap: 9px;
-  grid-template-columns: 20px 1fr auto;
-  min-height: 38px;
-  padding: 0 10px;
-  text-align: left;
-  width: 100%;
-}
-.nav-item:hover {
-  background: var(--surface-hover);
-}
-.nav-item.is-active {
-  background: var(--accent-soft);
-  color: var(--accent-ink, var(--accent));
-  position: relative;
-}
-.nav-item.is-active::before {
-  background: var(--accent);
-  border-radius: 0 4px 4px 0;
-  content: '';
-  height: 28px;
-  left: -10px;
-  position: absolute;
-  width: 3px;
-}
-.nav-item b {
-  align-items: center;
-  background: var(--caution-badge);
-  border-radius: 99px;
-  color: var(--caution-badge-ink);
-  display: flex;
-  font-size: var(--text-tiny);
-  height: 22px;
-  justify-content: center;
-  min-width: 22px;
-  padding: 0 6px;
-}
-.rail-settings {
-  margin-top: auto;
-}
-.recent-work {
-  border-top: 1px solid var(--line);
-  margin: 14px 8px 0;
-  padding-top: 12px;
-}
-.recent-work > p {
-  color: var(--muted);
-  font-size: var(--text-small);
-  letter-spacing: 0.02em;
-  margin: 0 10px 10px;
-}
-.recent-work button {
-  align-items: center;
-  background: transparent;
-  border-radius: 8px;
-  color: var(--ink-soft);
-  display: flex;
-  font-size: var(--text-caption);
-  gap: 10px;
-  overflow: hidden;
-  padding: 8px;
-  text-align: left;
-  width: 100%;
-}
-.recent-work button:hover {
-  background: var(--surface-hover);
-}
-.recent-work span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .main-canvas {
   background: var(--canvas);
@@ -826,125 +750,12 @@ a {
   gap: 6px;
   position: relative;
 }
-.message-status-icon {
-  align-items: center;
-  color: var(--muted);
-  display: inline-flex;
-  height: 22px;
-  justify-content: center;
-  width: 20px;
-}
-.message-status-icon.is-failed {
-  color: var(--critical);
-}
-.message-status-icon.is-processing svg {
-  animation: status-spin 1.2s linear infinite;
-}
-@keyframes status-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-.message-derived-trigger {
-  align-items: center;
-  background: transparent;
-  border-radius: 7px;
-  color: var(--accent-ink, var(--accent));
-  display: inline-flex;
-  gap: 3px;
-  height: 22px;
-  justify-content: center;
-  padding: 0 4px;
-}
-.message-derived-trigger:hover {
-  background: var(--accent-softer);
-}
-.message-work-entry {
-  align-items: center;
-  background: transparent;
-  border-radius: 7px;
-  color: var(--accent-ink, var(--accent));
-  display: inline-flex;
-  height: 22px;
-  justify-content: center;
-  padding: 0 4px;
-}
-.message-work-entry:hover {
-  background: var(--accent-softer);
-}
 .message-row.has-work-entry .message-meta {
   opacity: 1;
-}
-.message-derived-count {
-  font-size: var(--text-tiny);
-  font-weight: 500;
-  line-height: 1;
-}
-.message-derived-menu {
-  background: var(--surface-raised);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  box-shadow: var(--shadow-pop);
-  display: flex;
-  flex-direction: column;
-  min-width: 250px;
-  padding: 6px;
-  position: absolute;
-  right: 0;
-  top: calc(100% + 6px);
-  z-index: 20;
-}
-.message-derived-menu button {
-  align-items: center;
-  background: transparent;
-  border-radius: 8px;
-  color: var(--ink);
-  display: flex;
-  font-size: var(--text-caption);
-  gap: 8px;
-  justify-content: space-between;
-  padding: 8px 10px;
-  text-align: left;
-}
-.message-derived-menu button:hover {
-  background: var(--surface);
-}
-.message-derived-menu .derived-task-name {
-  align-items: center;
-  display: inline-flex;
-  gap: 7px;
-  min-width: 0;
-}
-.message-derived-menu .derived-task-name span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.message-derived-menu .status-text {
-  flex: 0 0 auto;
-  font-size: var(--text-small);
 }
 .message-row.is-user[data-send-animating] .message-content {
   transform-origin: top left;
   will-change: transform, opacity;
-}
-.message-action {
-  align-items: center;
-  background: transparent;
-  border-radius: 8px;
-  color: var(--muted);
-  display: inline-flex;
-  gap: 4px;
-  height: 22px;
-  justify-content: center;
-  padding: 0 5px;
-}
-.message-action:hover {
-  background: var(--surface-hover);
-  color: var(--ink);
-}
-.message-action.is-retry {
-  color: var(--critical);
 }
 .message-row.is-pegas .message-content {
   animation: message-reveal 300ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
@@ -978,81 +789,6 @@ a {
   font-weight: 500;
 }
 
-.fact-card {
-  background: var(--surface-raised);
-  border: 1px solid var(--line);
-  border-radius: 13px;
-  display: grid;
-  font-size: var(--text-caption);
-  gap: 10px;
-  line-height: 1.55;
-  max-width: 560px;
-  min-width: 0;
-  padding: 12px 14px;
-}
-.fact-card.is-decide {
-  border-color: var(--line-strong);
-}
-.fact-card.is-resolved {
-  opacity: 0.72;
-}
-.fact-card-header {
-  align-items: center;
-  color: var(--muted);
-  display: flex;
-  font-size: var(--text-caption);
-  gap: 8px;
-  min-width: 0;
-}
-.fact-card-header strong {
-  color: var(--ink);
-  font-weight: 500;
-  white-space: nowrap;
-}
-.fact-card.is-decide .fact-card-header > svg {
-  color: var(--accent-ink, var(--accent));
-}
-.fact-card-task {
-  background: transparent;
-  color: var(--muted);
-  font-size: var(--text-small);
-  min-width: 0;
-  overflow: hidden;
-  padding: 0;
-  text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.fact-card-task:hover {
-  color: var(--ink);
-  text-decoration: underline;
-}
-.fact-card-origin {
-  align-items: center;
-  background: transparent;
-  border-radius: 8px;
-  color: var(--muted);
-  display: inline-flex;
-  height: 24px;
-  justify-content: center;
-  margin-left: auto;
-  padding: 0;
-  width: 24px;
-}
-.fact-card-origin:hover {
-  background: var(--surface-hover);
-  color: var(--ink);
-}
-.fact-card-body {
-  display: grid;
-  gap: 4px;
-  justify-items: start;
-  min-width: 0;
-}
-.fact-card-actions {
-  display: flex;
-  gap: 8px;
-}
 .message-row.is-anchor-highlight .message-content {
   animation: anchor-flash 1.6s ease-out;
 }
@@ -1141,6 +877,16 @@ a {
 }
 .message-markdown p {
   margin: 0.65em 0;
+}
+.message-markdown ul {
+  list-style: disc;
+  margin: 0.65em 0;
+  padding-inline-start: 1.4em;
+}
+.message-markdown ol {
+  list-style: decimal;
+  margin: 0.65em 0;
+  padding-inline-start: 1.4em;
 }
 .message-markdown pre {
   background: var(--surface);
@@ -1288,54 +1034,6 @@ a {
   margin-top: 8px;
   padding: 0;
 }
-.clarification-card,
-.review-card {
-  background: var(--surface-raised);
-  border: 1px solid var(--line);
-  border-radius: 13px;
-  display: grid;
-  gap: 10px;
-  justify-items: start;
-  margin-top: 14px;
-  padding: 14px 16px;
-}
-.clarification-card header,
-.review-card header {
-  align-items: center;
-  color: var(--accent-ink, var(--accent));
-  display: flex;
-  font-size: var(--text-caption);
-  gap: 8px;
-}
-.clarification-card .clarification-questions {
-  margin: 0;
-}
-.run-status-bar {
-  align-items: center;
-  background: transparent;
-  border: 1px solid var(--line);
-  border-radius: 13px;
-  display: grid;
-  gap: 13px;
-  grid-template-columns: auto 1fr auto;
-  margin-top: 14px;
-  padding: 14px 16px;
-  text-align: left;
-  width: 100%;
-}
-.run-status-bar:hover {
-  background: var(--surface);
-  border-color: var(--line-strong);
-}
-.run-status-bar > i {
-  background: var(--accent);
-  border-radius: 50%;
-  height: 10px;
-  width: 10px;
-}
-.run-status-bar[data-active] > i {
-  animation: status-dot-pulse 1.6s ease-in-out infinite;
-}
 @keyframes status-dot-pulse {
   0%,
   100% {
@@ -1345,72 +1043,16 @@ a {
     opacity: 0.35;
   }
 }
-.run-status-bar > i[data-status='failed'] {
-  background: var(--critical);
-}
-.run-status-bar > i[data-status='waiting'] {
-  background: var(--caution);
-}
-.run-status-bar > i[data-status='completed'] {
-  background: var(--positive);
-}
-.run-status-bar > i[data-status='cancelled'] {
-  background: var(--faint);
-}
-.run-status-bar span {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
-}
-.run-status-bar small {
-  color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.run-status-bar strong.is-shimmer {
-  animation: text-shimmer 3s ease-in-out 0.6s infinite;
-  background: currentcolor
-    linear-gradient(
-      to left,
-      currentcolor,
-      color-mix(in srgb, var(--canvas) 65%, currentcolor) 50%,
-      currentcolor
-    );
-  background-clip: text;
-  background-size: 50% 200%;
-  -webkit-text-fill-color: transparent;
-}
-@keyframes text-shimmer {
-  0% {
-    background-position: -100% 0;
-  }
-  70%,
-  100% {
-    background-position: 250% 0;
-  }
-}
 .new-replies-button {
-  align-items: center;
-  background: var(--surface-raised);
-  border: 1px solid var(--line);
-  border-radius: 999px;
   bottom: 150px;
-  box-shadow: var(--shadow-pop);
-  color: var(--ink-soft);
-  display: inline-flex;
-  font-size: var(--text-caption);
-  font-weight: 500;
-  gap: 6px;
-  height: 34px;
+  box-shadow: var(--shadow-overlay);
   left: 50%;
-  padding: 0 14px;
   position: absolute;
   transform: translateX(-50%);
   z-index: 20;
 }
-.new-replies-button:hover {
-  background: var(--surface-hover);
+.new-replies-button:active {
+  transform: translateX(-50%) scale(0.96);
 }
 .new-replies-button .is-flipped {
   transform: rotate(180deg);
@@ -1428,30 +1070,8 @@ a {
   padding-bottom: 2px;
   scrollbar-width: thin;
 }
-.task-tray-item {
-  align-items: center;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  display: inline-flex;
-  flex-shrink: 0;
-  font-size: var(--text-caption);
-  gap: 7px;
-  height: 34px;
-  max-width: 260px;
-  padding: 0 12px;
-}
-.task-tray-item:hover {
-  background: var(--surface-hover);
-  border-color: var(--line-strong);
-}
-.task-tray-item[aria-pressed='true'] {
-  background: var(--accent-softer);
-  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
-  color: var(--accent-ink, var(--accent));
-}
 .task-tray-item > i {
-  background: var(--faint);
+  background: var(--ink-3);
   border-radius: 50%;
   flex-shrink: 0;
   height: 8px;
@@ -1462,84 +1082,7 @@ a {
   background: var(--accent);
 }
 .task-tray-item[data-status='attention'] > i {
-  background: var(--caution);
-}
-.task-tray-title {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.task-tray-item small {
-  color: var(--muted);
-  flex-shrink: 0;
-  font-size: var(--text-tiny);
-}
-.task-tray-item[aria-pressed='true'] small {
-  color: inherit;
-}
-.composer-queue {
-  display: grid;
-  gap: 6px;
-  list-style: none;
-  margin: 0 auto 8px;
-  max-width: 1040px;
-  padding: 0;
-}
-.composer-queue li {
-  align-items: center;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  display: flex;
-  font-size: var(--text-caption);
-  gap: 8px;
-  min-height: 36px;
-  padding: 4px 8px;
-}
-.composer-queue-preview {
-  color: var(--ink-soft);
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.composer-queue button {
-  align-items: center;
-  background: transparent;
-  border-radius: 8px;
-  color: var(--muted);
-  display: inline-flex;
-  flex-shrink: 0;
-  font-size: var(--text-small);
-  height: 26px;
-  justify-content: center;
-  padding: 0 7px;
-}
-.composer-queue button:hover {
-  background: var(--surface-hover);
-  color: var(--ink);
-}
-.composer-steer-button,
-.composer-queue-button {
-  align-items: center;
-  background: var(--accent-softer);
-  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line));
-  border-radius: 999px;
-  color: var(--accent-ink, var(--accent));
-  display: inline-flex;
-  font-size: var(--text-caption);
-  font-weight: 500;
-  gap: 5px;
-  height: 34px;
-  padding: 0 12px;
-  width: auto;
-}
-.composer-steer-button:hover:not(:disabled),
-.composer-queue-button:hover:not(:disabled) {
-  background: var(--accent-soft);
-  color: var(--accent-ink, var(--accent));
+  background: var(--orange);
 }
 .composer-wrap .stop-confirmation {
   align-items: center;
@@ -1549,80 +1092,18 @@ a {
   margin: 0 auto 10px;
   max-width: 1040px;
 }
-.composer-wrap .stop-confirmation p {
-  font-size: var(--text-caption);
-  margin: 4px 0 0;
-}
-.stop-confirmation-actions {
-  display: flex;
-  flex-shrink: 0;
-  gap: 8px;
-}
-.stop-confirmation-actions button {
-  background: var(--surface-raised);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  color: var(--ink-soft);
-  font-size: var(--text-caption);
-  font-weight: 500;
-  height: 34px;
-  padding: 0 13px;
-}
-.stop-confirmation-actions button.is-danger {
-  background: var(--critical);
-  border-color: transparent;
-  color: #fff;
-}
-.stop-confirmation-actions button.is-danger:disabled {
-  opacity: 0.6;
-}
-.composer-context {
-  align-items: center;
-  background: var(--accent-softer);
-  border: 1px solid color-mix(in srgb, var(--accent) 16%, var(--line));
-  border-radius: 12px;
-  color: var(--ink-soft);
-  display: flex;
-  font-size: var(--text-caption);
-  gap: 12px;
-  justify-content: space-between;
-  margin: 0 auto 8px;
-  max-width: 1040px;
-  min-height: 38px;
-  padding: 6px 8px 6px 13px;
-}
-.composer-context strong {
-  color: var(--ink);
-}
-.composer-context button {
-  align-items: center;
-  background: transparent;
-  border-radius: 8px;
-  color: var(--muted);
-  display: flex;
-  font-size: var(--text-small);
-  height: 28px;
-  justify-content: center;
-  width: 28px;
-}
-.composer-context button:hover {
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  color: var(--ink);
-}
 .composer {
-  background: var(--surface-raised);
-  border: 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
   border-radius: 24px;
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--ink) 5%, transparent),
-    0 2px 8px color-mix(in srgb, var(--ink) 5%, transparent),
-    0 4px 40px 8px color-mix(in srgb, var(--ink) 3%, transparent);
+  box-shadow: var(--shadow-card);
   display: grid;
   grid-template-rows: auto auto;
   margin: 0 auto;
   max-width: 1040px;
   padding: 10px 14px 10px 20px;
   transition:
+    border-color 150ms ease,
     border-radius 180ms ease,
     box-shadow 140ms ease,
     padding 180ms ease;
@@ -1636,10 +1117,8 @@ a {
   padding: 7px 0;
 }
 .composer:focus-within {
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--accent) 42%, var(--line-strong)),
-    0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent),
-    0 10px 32px color-mix(in srgb, var(--ink) 6%, transparent);
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow-raised);
   outline: 0;
 }
 .composer-toolbar {
@@ -1672,7 +1151,7 @@ a {
   align-items: center;
   background: transparent;
   border-radius: 50%;
-  color: var(--muted);
+  color: var(--ink-3);
   display: flex;
   height: 40px;
   justify-content: center;
@@ -1683,19 +1162,19 @@ a {
   width: 40px;
 }
 .composer button:hover:not(:disabled) {
-  background: var(--surface);
+  background: var(--hover);
   color: var(--ink);
 }
 .composer button:active:not(:disabled) {
   transform: scale(0.96);
 }
 .composer button.is-recording {
-  background: var(--critical-soft);
-  color: var(--critical);
+  background: var(--red-tint);
+  color: var(--red-text);
 }
 .composer button.is-armed {
-  background: var(--accent-softer);
-  color: var(--accent);
+  background: var(--accent-tint);
+  color: var(--accent-ink);
 }
 .composer textarea {
   background: transparent;
@@ -2046,27 +1525,29 @@ a {
   }
 }
 .composer .send-button {
-  background: var(--accent);
-  color: var(--accent-contrast);
+  background: var(--ink);
+  color: var(--surface);
   height: 42px;
   width: 42px;
 }
-.composer .send-button:hover {
-  background: var(--accent-hover);
-  color: var(--accent-contrast);
+.composer .send-button:hover:not(:disabled) {
+  background: var(--ink);
+  color: var(--surface);
+  opacity: 0.9;
 }
 .composer .send-button:disabled {
-  background: var(--surface);
-  color: var(--faint);
+  background: var(--line-strong);
+  color: var(--ink-2);
   opacity: 1;
 }
 .composer .send-button.is-stop {
-  background: var(--critical);
+  background: var(--red);
   color: #fff;
 }
-.composer .send-button.is-stop:hover {
-  background: color-mix(in srgb, var(--critical) 86%, var(--ink));
+.composer .send-button.is-stop:hover:not(:disabled) {
+  background: var(--red);
   color: #fff;
+  opacity: 0.9;
 }
 .composer .send-button.is-stop svg {
   fill: currentcolor;
@@ -3879,55 +3360,6 @@ kbd {
   overflow: auto;
   padding: 20px 22px 0;
 }
-.state-hero {
-  align-items: flex-start;
-  background: var(--accent-softer);
-  border: 1px solid var(--accent-soft);
-  border-radius: 14px;
-  display: flex;
-  gap: 13px;
-  padding: 16px;
-}
-.state-hero > span {
-  color: var(--accent-ink, var(--accent));
-}
-.state-hero > div {
-  flex: 1;
-  min-width: 0;
-}
-.state-hero h3 {
-  font-size: var(--text-caption);
-  margin: 4px 0 5px;
-}
-.state-hero p {
-  color: var(--muted);
-  line-height: 1.55;
-  margin: 0;
-}
-.state-失败 {
-  background: var(--critical-soft);
-  border-color: color-mix(in srgb, var(--critical) 22%, transparent);
-}
-.state-失败 > span,
-.state-失败 small {
-  color: var(--critical);
-}
-.state-待确认 {
-  background: var(--caution-soft);
-  border-color: color-mix(in srgb, var(--caution) 22%, transparent);
-}
-.state-待确认 > span,
-.state-待确认 small {
-  color: var(--caution);
-}
-.state-已完成 {
-  background: var(--positive-soft);
-  border-color: color-mix(in srgb, var(--positive) 22%, transparent);
-}
-.state-已完成 > span,
-.state-已完成 small {
-  color: var(--positive);
-}
 .settings-error {
   background: var(--critical-soft);
   border: 1px solid color-mix(in srgb, var(--critical) 22%, transparent);
@@ -5165,11 +4597,11 @@ kbd {
 .metadata-list dl {
   margin: 0;
 }
+.approval-meta > div {
+  grid-template-columns: 70px minmax(0, 1fr);
+}
 .metadata-list dl > div {
   border-bottom: 1px solid var(--line);
-  display: grid;
-  gap: 12px;
-  grid-template-columns: 110px 1fr;
   min-height: 42px;
   padding: 11px 0;
 }
@@ -5191,53 +4623,6 @@ kbd {
   margin: 24px -22px 0;
   padding: 14px 22px;
   position: sticky;
-}
-.approval-card,
-.failure-card,
-.collaboration-card {
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  margin-top: 14px;
-  padding: 15px;
-}
-.approval-card header,
-.failure-card header {
-  align-items: center;
-  display: flex;
-  gap: 8px;
-}
-.approval-card p,
-.failure-card p,
-.collaboration-card p {
-  color: var(--muted);
-  font-size: var(--text-caption);
-  line-height: 1.55;
-}
-.approval-card dl > div {
-  display: grid;
-  grid-template-columns: 70px 1fr;
-  padding: 5px 0;
-}
-.approval-card dt {
-  color: var(--muted);
-}
-.approval-card dd {
-  margin: 0;
-}
-.approval-source {
-  margin: 8px 0 0;
-}
-.approval-source-link {
-  background: transparent;
-  border: 0;
-  color: var(--accent);
-  cursor: pointer;
-  font-size: var(--text-caption);
-  padding: 0;
-  text-align: start;
-}
-.approval-source-link:hover {
-  text-decoration: underline;
 }
 .approval-operation {
   border: 1px solid var(--line);
@@ -5279,13 +4664,6 @@ kbd {
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: var(--text-caption);
   overflow-wrap: anywhere;
-}
-.approval-reason {
-  margin-top: 10px;
-}
-.approval-review {
-  color: var(--muted);
-  margin-top: 10px;
 }
 .delivery-history {
   border: 1px solid var(--line);
@@ -5489,38 +4867,6 @@ kbd {
 .settings-inline-actions > span.is-error {
   color: var(--critical);
 }
-.approval-result {
-  background: var(--surface-subtle);
-  border-radius: 10px;
-  color: var(--muted);
-  margin: 12px 0 0;
-  overflow-wrap: anywhere;
-  padding: 10px 12px;
-  white-space: pre-wrap;
-}
-.reconciliation-record {
-  background: var(--surface-subtle);
-  border-radius: 10px;
-  display: grid;
-  gap: 5px;
-  margin-top: 12px;
-  padding: 10px 12px;
-}
-.reconciliation-record p {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-.reconciliation-record small {
-  color: var(--muted);
-}
-.reconciliation-hint {
-  color: var(--muted);
-  font-size: var(--text-caption);
-  margin: 8px 0 0;
-}
-.detail-section > .primary-button {
-  margin-top: 14px;
-}
 .approval-options {
   border: 0;
   margin: 0;
@@ -5530,32 +4876,6 @@ kbd {
 .approval-options legend {
   font-weight: 500;
   padding: 0;
-}
-.approval-option {
-  align-items: flex-start;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  cursor: pointer;
-  display: flex;
-  gap: 12px;
-  margin-top: 10px;
-  padding: 13px 14px;
-}
-.approval-option:has(input:checked) {
-  background: var(--accent-soft);
-  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
-}
-.approval-option input {
-  flex: 0 0 auto;
-  margin-top: 3px;
-}
-.approval-option span {
-  display: grid;
-  gap: 3px;
-}
-.approval-option small,
-.approval-rationale span {
-  color: var(--muted);
 }
 .approval-rule-list {
   display: grid;
@@ -5600,37 +4920,11 @@ kbd {
 .permission-history-item small {
   color: var(--muted);
 }
-.approval-rationale {
-  display: grid;
-  gap: 8px;
-  margin-top: 16px;
-}
-.approval-rationale textarea {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  color: var(--text);
-  font: inherit;
-  min-height: 88px;
-  padding: 11px 12px;
-  resize: vertical;
-  width: 100%;
-}
 .drawer-actions {
   display: flex;
   gap: 8px;
   justify-content: flex-end;
   margin-top: 13px;
-}
-.failure-card {
-  background: var(--critical-soft);
-  border-color: color-mix(in srgb, var(--critical) 22%, transparent);
-}
-.failure-card header {
-  color: var(--critical);
-}
-.failure-card small {
-  color: var(--muted);
 }
 .stop-confirmation {
   background: var(--critical-soft);
@@ -5639,36 +4933,9 @@ kbd {
   margin-top: 14px;
   padding: 15px;
 }
-.stop-confirmation header {
-  align-items: center;
-  color: var(--critical);
-  display: flex;
-  gap: 8px;
-}
 .stop-confirmation p {
   color: var(--ink-soft);
   line-height: 1.55;
-  margin-bottom: 0;
-}
-.stop-confirmation > small {
-  color: var(--critical);
-  display: block;
-  margin-top: 8px;
-}
-.collaboration-card {
-  align-items: flex-start;
-  background: var(--accent-softer);
-  display: flex;
-  gap: 11px;
-}
-.collaboration-card > svg {
-  color: var(--accent);
-  flex: 0 0 auto;
-}
-.collaboration-card strong {
-  color: var(--accent);
-}
-.collaboration-card p {
   margin-bottom: 0;
 }
 .agent-branches {
@@ -6130,19 +5397,6 @@ kbd {
 }
 
 @media (max-width: 1120px) {
-  .app-shell {
-    grid-template-columns: 200px minmax(0, 1fr);
-  }
-  .primary-rail {
-    padding-left: 10px;
-    padding-right: 10px;
-  }
-  .brand-lockup {
-    padding-left: 8px;
-  }
-  .nav-item.is-active::before {
-    left: -10px;
-  }
   .settings-page {
     grid-template-columns: 190px minmax(0, 1fr);
   }
@@ -6507,7 +5761,6 @@ kbd {
 
 @media (pointer: coarse) {
   button,
-  .nav-item,
   input:not([type='checkbox']):not([type='radio']),
   select {
     min-height: 44px;

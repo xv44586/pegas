@@ -111,11 +111,22 @@ export interface StreamingLabels {
   sources: string
   /** heading above the follow-up prompts */
   followUps: string
+  /** accessible names for the action row */
+  copy: string
+  copied: string
+  retry: string
+  helpful: string
+  notHelpful: string
 }
 
 const DEFAULT_LABELS: StreamingLabels = {
   sources: '3 个来源',
   followUps: '继续追问',
+  copy: '复制回复',
+  copied: '已复制',
+  retry: '重新生成',
+  helpful: '有帮助',
+  notHelpful: '没帮助',
 }
 
 export default function StreamingText({
@@ -125,6 +136,10 @@ export default function StreamingText({
   labels,
   loop = true,
   fill = false,
+  settle = false,
+  onCopy,
+  onRetry,
+  onFeedback,
   onDone,
   onFollowUp,
 }: {
@@ -141,6 +156,14 @@ export default function StreamingText({
   loop?: boolean
   /** fill the parent width instead of the gallery's fixed measure */
   fill?: boolean
+  /** render the settled fact immediately — no reveal clock */
+  settle?: boolean
+  /** host copy handler for the settled reply */
+  onCopy?: () => Promise<void> | void
+  /** host retry handler; the action hides when absent */
+  onRetry?: () => void
+  /** host feedback handler; the actions hide when absent */
+  onFeedback?: (helpful: boolean) => void
   onDone?: () => void
   /** fired when a follow-up prompt is chosen */
   onFollowUp?: (text: string, index: number) => void
@@ -148,9 +171,11 @@ export default function StreamingText({
   const l = { ...DEFAULT_LABELS, ...labels }
   const [count, setCount] = useState(0)
   const [sourcesOpen, setSourcesOpen] = useState(false)
-  const done = count >= content.length
+  const [copied, setCopied] = useState(false)
+  const done = settle || count >= content.length
 
   useEffect(() => {
+    if (settle) return
     if (done && !loop) {
       onDone?.()
       return
@@ -160,12 +185,18 @@ export default function StreamingText({
       done ? HOLD_MS : WORD_MS,
     )
     return () => clearTimeout(t)
-  }, [count, done, loop])
+  }, [count, done, loop, settle])
+
+  useEffect(() => {
+    if (settle) onDone?.()
+  }, [settle, onDone])
+
+  const shown = settle ? content : content.slice(0, count)
 
   return (
     <div className={fill ? 'w-full' : 'min-h-[15.5rem] w-full max-w-95'}>
       <p className="text-[13px] leading-relaxed text-ink">
-        {content.slice(0, count).map((token, i) =>
+        {shown.map((token, i) =>
           token.cite ? (
             <SourceChip key={i} source={sources[0]} />
           ) : (
@@ -187,46 +218,82 @@ export default function StreamingText({
         className="mt-2 flex items-center gap-0.5 transition-opacity duration-400"
         style={{ opacity: done ? 1 : 0, pointerEvents: done ? 'auto' : 'none' }}
       >
-        {ACTION_ICONS.map((icon, i) => (
-          <button
-            key={i}
-            type="button"
-            aria-label="Action"
-            className="flex size-6 items-center justify-center rounded-[6px] text-ink-3
+        {[
+          {
+            key: 'copy',
+            label: copied ? l.copied : l.copy,
+            show: onCopy !== undefined,
+            press: () => {
+              void (async () => {
+                await onCopy?.()
+                setCopied(true)
+                window.setTimeout(() => setCopied(false), 1500)
+              })()
+            },
+          },
+          {
+            key: 'retry',
+            label: l.retry,
+            show: onRetry !== undefined,
+            press: () => onRetry?.(),
+          },
+          {
+            key: 'up',
+            label: l.helpful,
+            show: onFeedback !== undefined,
+            press: () => onFeedback?.(true),
+          },
+          {
+            key: 'down',
+            label: l.notHelpful,
+            show: onFeedback !== undefined,
+            press: () => onFeedback?.(false),
+          },
+        ].map((action, i) =>
+          action.show ? (
+            <button
+              key={action.key}
+              type="button"
+              aria-label={action.label}
+              onClick={action.press}
+              className="flex size-6 items-center justify-center rounded-[6px] text-ink-3
               transition-colors duration-100 hover:bg-hover-2 hover:text-ink-2"
-          >
-            <svg
-              width="15"
-              height="15"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
             >
-              {icon}
-            </svg>
+              <svg
+                width="15"
+                height="15"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                {ACTION_ICONS[i]}
+              </svg>
+            </button>
+          ) : null,
+        )}
+        {sources.length > 0 && (
+          <button
+            type="button"
+            aria-expanded={sourcesOpen}
+            onClick={() => setSourcesOpen(current => !current)}
+            className="ml-1.5 flex items-center gap-1.5 rounded-[6px] px-1 py-0.5 text-left transition-colors duration-150 hover:bg-hover"
+          >
+            <span className="flex -space-x-1">
+              {sources.map(source => (
+                <img
+                  key={source.domain}
+                  src={sourceImage(source)}
+                  alt=""
+                  className="source-avatar size-3.5 rounded-full bg-surface shadow-[0_0_0_1.5px_var(--canvas)]"
+                />
+              ))}
+            </span>
+            <span className="text-[12px] text-ink-2">{l.sources}</span>
           </button>
-        ))}
-        <button
-          type="button"
-          aria-expanded={sourcesOpen}
-          onClick={() => setSourcesOpen(current => !current)}
-          className="ml-1.5 flex items-center gap-1.5 rounded-[6px] px-1 py-0.5 text-left transition-colors duration-150 hover:bg-hover"
-        >
-          <span className="flex -space-x-1">
-            {sources.map(source => (
-              <img
-                key={source.domain}
-                src={sourceImage(source)}
-                alt=""
-                className="source-avatar size-3.5 rounded-full bg-surface shadow-[0_0_0_1.5px_var(--canvas)]"
-              />
-            ))}
-          </span>
-          <span className="text-[12px] text-ink-2">{l.sources}</span>
-        </button>
+        )}
       </div>
 
       <div
@@ -263,46 +330,51 @@ export default function StreamingText({
       </div>
 
       {/* follow-ups */}
-      <div
-        className="mt-2.5 transition-opacity duration-400"
-        style={{ opacity: done ? 1 : 0, pointerEvents: done ? 'auto' : 'none' }}
-      >
-        <p className="text-[12px] font-medium text-ink-2">{l.followUps}</p>
-        <div className="mt-0.5 flex flex-col">
-          {followUps.map((text, i) => (
-            <button
-              key={text}
-              onClick={() => onFollowUp?.(text, i)}
-              className="-mx-1.5 flex items-center gap-2 rounded-[7px] border-b border-line
+      {followUps.length > 0 && (
+        <div
+          className="mt-2.5 transition-opacity duration-400"
+          style={{
+            opacity: done ? 1 : 0,
+            pointerEvents: done ? 'auto' : 'none',
+          }}
+        >
+          <p className="text-[12px] font-medium text-ink-2">{l.followUps}</p>
+          <div className="mt-0.5 flex flex-col">
+            {followUps.map((text, i) => (
+              <button
+                key={text}
+                onClick={() => onFollowUp?.(text, i)}
+                className="-mx-1.5 flex items-center gap-2 rounded-[7px] border-b border-line
                 px-1.5 py-1.5 text-left text-[12.5px] text-ink transition-colors
                 duration-100 hover:bg-hover-2"
-              style={
-                done
-                  ? {
-                      animation: `fade-up 350ms cubic-bezier(0.23,1,0.32,1) ${i * 90}ms both`,
-                    }
-                  : { opacity: 0 }
-              }
-            >
-              <svg
-                width="11"
-                height="11"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="var(--ink-3)"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className="shrink-0"
+                style={
+                  done
+                    ? {
+                        animation: `fade-up 350ms cubic-bezier(0.23,1,0.32,1) ${i * 90}ms both`,
+                      }
+                    : { opacity: 0 }
+                }
               >
-                <path d="M9 10l-5 5 5 5" />
-                <path d="M20 4v7a4 4 0 0 1-4 4H4" />
-              </svg>
-              {text}
-            </button>
-          ))}
+                <svg
+                  width="11"
+                  height="11"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="var(--ink-3)"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="shrink-0"
+                >
+                  <path d="M9 10l-5 5 5 5" />
+                  <path d="M20 4v7a4 4 0 0 1-4 4H4" />
+                </svg>
+                {text}
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   )
 }

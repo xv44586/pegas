@@ -1,6 +1,5 @@
 import {
   AlertTriangle,
-  CalendarClock,
   CheckCircle2,
   CircleHelp,
   Clock3,
@@ -47,6 +46,14 @@ import type {
 import { PegasMascot } from './PegasMascot'
 import { ActivityTimeline, type ActivityDataAccess } from './ActivityTimeline'
 import { isDelegationEntry } from './activityModel'
+import {
+  Button,
+  buttonVariants,
+  RadioGroup,
+  RadioItem,
+  TextArea,
+} from '@bui/index'
+import { StateHeader, type FactTone } from './ConversationBui'
 import { ModelPicker } from './ModelPicker'
 import {
   formatRelativeTime,
@@ -420,9 +427,9 @@ function ApprovalDetail({
   }
 
   return (
-    <div className="drawer-body">
-      <section className="approval-card">
-        <header>
+    <div className="drawer-body bui">
+      <section className="approval-card mt-3.5 grid gap-2.5 rounded-card bg-surface p-4 shadow-card">
+        <header className="flex items-center gap-2">
           {pending ? (
             <PegasMascot label="Pegas 等待你的决定" pose="blocked" size={40} />
           ) : (
@@ -431,10 +438,10 @@ function ApprovalDetail({
           <strong>{view.approval.prompt.summary}</strong>
         </header>
         {channel && (
-          <p className="approval-source">
+          <p className="approval-source text-[13px] text-ink-2">
             {onOpenTask ? (
               <button
-                className="approval-source-link"
+                className="approval-source-link text-left text-[13px] text-accent-ink hover:underline"
                 onClick={onOpenTask}
                 type="button"
               >
@@ -447,18 +454,20 @@ function ApprovalDetail({
         )}
         <ApprovalOperationPreview action={view.action} />
         {view.action.review && (
-          <p className="approval-review">
+          <p className="approval-review text-[13px] text-ink-2">
             {approvalReviewLabel(view.action.review)}
           </p>
         )}
-        <p className="approval-reason">需要你决定：{approvalReason(view)}</p>
-        <dl>
+        <p className="approval-reason text-[13px] leading-[1.55] text-ink-2">
+          需要你决定：{approvalReason(view)}
+        </p>
+        <dl className="approval-meta grid text-[13px]">
           <Meta label="状态" value={approvalStatus(view.approval.status)} />
           <Meta label="Action" value={actionStatus(view.action.status)} />
           <Meta label="Run" value={view.approval.requestRunId} />
         </dl>
         {view.action.result && (
-          <pre className="approval-result">
+          <pre className="approval-result mt-1 overflow-x-auto whitespace-pre-wrap break-words rounded-control bg-inset px-3 py-2.5 text-[12.5px] text-ink-2">
             {JSON.stringify(view.action.result, null, 2)}
           </pre>
         )}
@@ -470,30 +479,41 @@ function ApprovalDetail({
       <section className="detail-section">
         <fieldset className="approval-options">
           <legend>你的决定</legend>
-          {view.approval.prompt.options.map(option => (
-            <label className="approval-option" key={option.id}>
-              <input
-                checked={selected === option.id}
-                disabled={!pending || submitting}
-                name={`approval-${view.approval.id}`}
-                onChange={() => setSelected(option.id)}
-                type="radio"
-              />
-              <span>
-                <strong>
-                  {option.label}
-                  {option.id === view.approval.prompt.recommendedOptionId
-                    ? ' · 建议'
-                    : ''}
-                </strong>
-                {option.description && <small>{option.description}</small>}
-              </span>
-            </label>
-          ))}
+          <RadioGroup
+            aria-label="你的决定"
+            disabled={!pending || submitting}
+            onValueChange={value => setSelected(value)}
+            value={selected}
+          >
+            {view.approval.prompt.options.map(option => (
+              <label
+                className="approval-option mt-2.5 flex cursor-pointer items-start gap-3 rounded-card border border-line px-3.5 py-3 transition-colors duration-150 hover:bg-hover-2 has-[[data-state=checked]]:border-accent has-[[data-state=checked]]:bg-accent-tint"
+                key={option.id}
+              >
+                <RadioItem
+                  aria-label={option.label}
+                  className="mt-[3px]"
+                  value={option.id}
+                />
+                <span className="grid min-w-0 gap-[3px]">
+                  <strong>
+                    {option.label}
+                    {option.id === view.approval.prompt.recommendedOptionId
+                      ? ' · 建议'
+                      : ''}
+                  </strong>
+                  {option.description && (
+                    <small className="text-ink-3">{option.description}</small>
+                  )}
+                </span>
+              </label>
+            ))}
+          </RadioGroup>
         </fieldset>
-        <label className="approval-rationale">
-          <span>补充说明（可选）</span>
-          <textarea
+        <label className="approval-rationale mt-4 grid gap-2">
+          <span className="text-ink-2">补充说明（可选）</span>
+          <TextArea
+            className="min-h-[88px] w-full resize-y"
             disabled={!pending || submitting}
             onChange={event => setRationale(event.target.value)}
             placeholder="告诉 Pegas 需要注意什么"
@@ -508,14 +528,15 @@ function ApprovalDetail({
       </section>
       <footer className="drawer-footer">
         {pending && onDecide ? (
-          <button
-            className="primary-button"
+          <Button
+            variant="accent"
+            size="sm"
             disabled={submitting}
             onClick={() => void submitDecision()}
             type="button"
           >
             {submitting ? '正在提交…' : '提交决定'}
-          </button>
+          </Button>
         ) : (
           <span className="drawer-footnote">
             {approvalFootnote(view.approval.status)}
@@ -641,15 +662,15 @@ function approvalFootnote(
 function ReconciliationRecord({ action }: { action: DurableAction }) {
   if (!action.reconciliation) return null
   return (
-    <div className="reconciliation-record">
+    <div className="reconciliation-record mt-3 grid gap-[5px] rounded-control bg-inset px-3 py-2.5">
       <strong>
         人工核对：
         {action.reconciliation.resolution === 'succeeded'
           ? '确认已成功'
           : '确认已失败'}
       </strong>
-      <p>{action.reconciliation.note}</p>
-      <small>
+      <p className="break-words text-[13px]">{action.reconciliation.note}</p>
+      <small className="text-ink-3">
         核对前状态：
         {action.reconciliation.previousStatus === 'unknown'
           ? '结果未知'
@@ -696,41 +717,51 @@ function ReconciliationForm({
     <section className="detail-section">
       <fieldset className="approval-options">
         <legend>人工核对结论</legend>
-        <p className="reconciliation-hint">
+        <p className="reconciliation-hint mt-2 text-[13px] leading-[1.55] text-ink-2">
           这个动作的外部结果
           {action.status === 'unknown' ? '未知' : '被记录为失败'}
           。请先在外部系统核实真实结果，再选择结论；结论会永久记录并决定是否允许继续。
         </p>
-        <label className="approval-option">
-          <input
-            checked={resolution === 'succeeded'}
-            disabled={submitting}
-            name={`reconcile-${action.id}`}
-            onChange={() => setResolution('succeeded')}
-            type="radio"
-          />
-          <span>
-            <strong>确认已成功</strong>
-            <small>外部副作用实际已发生，允许 Pegas 继续后续工作</small>
-          </span>
-        </label>
-        <label className="approval-option">
-          <input
-            checked={resolution === 'failed'}
-            disabled={submitting}
-            name={`reconcile-${action.id}`}
-            onChange={() => setResolution('failed')}
-            type="radio"
-          />
-          <span>
-            <strong>确认已失败</strong>
-            <small>外部副作用没有发生，保持失败事实并继续阻塞重试</small>
-          </span>
-        </label>
+        <RadioGroup
+          aria-label="人工核对结论"
+          disabled={submitting}
+          onValueChange={value =>
+            setResolution(value === 'succeeded' ? 'succeeded' : 'failed')
+          }
+          value={resolution}
+        >
+          <label className="approval-option mt-2.5 flex cursor-pointer items-start gap-3 rounded-card border border-line px-3.5 py-3 transition-colors duration-150 hover:bg-hover-2 has-[[data-state=checked]]:border-accent has-[[data-state=checked]]:bg-accent-tint">
+            <RadioItem
+              aria-label="确认已成功"
+              className="mt-[3px]"
+              value="succeeded"
+            />
+            <span className="grid min-w-0 gap-[3px]">
+              <strong>确认已成功</strong>
+              <small className="text-ink-3">
+                外部副作用实际已发生，允许 Pegas 继续后续工作
+              </small>
+            </span>
+          </label>
+          <label className="approval-option mt-2.5 flex cursor-pointer items-start gap-3 rounded-card border border-line px-3.5 py-3 transition-colors duration-150 hover:bg-hover-2 has-[[data-state=checked]]:border-accent has-[[data-state=checked]]:bg-accent-tint">
+            <RadioItem
+              aria-label="确认已失败"
+              className="mt-[3px]"
+              value="failed"
+            />
+            <span className="grid min-w-0 gap-[3px]">
+              <strong>确认已失败</strong>
+              <small className="text-ink-3">
+                外部副作用没有发生，保持失败事实并继续阻塞重试
+              </small>
+            </span>
+          </label>
+        </RadioGroup>
       </fieldset>
-      <label className="approval-rationale">
-        <span>核对依据（必填）</span>
-        <textarea
+      <label className="approval-rationale mt-4 grid gap-2">
+        <span className="text-ink-2">核对依据（必填）</span>
+        <TextArea
+          className="min-h-[88px] w-full resize-y"
           disabled={submitting}
           maxLength={2000}
           onChange={event => setNote(event.target.value)}
@@ -743,14 +774,15 @@ function ReconciliationForm({
           {error}
         </p>
       )}
-      <button
-        className="primary-button"
+      <Button
+        variant="accent"
+        size="sm"
         disabled={submitting || !note.trim()}
         onClick={() => void submit()}
         type="button"
       >
         {submitting ? '正在提交…' : '提交核对结论'}
-      </button>
+      </Button>
     </section>
   )
 }
@@ -771,26 +803,26 @@ function ReconciliationDetail({
     !action.reconciliation &&
     (action.status === 'unknown' || action.status === 'failed')
   return (
-    <div className="drawer-body">
-      <section className="approval-card">
-        <header>
+    <div className="drawer-body bui">
+      <section className="approval-card mt-3.5 grid gap-2.5 rounded-card bg-surface p-4 shadow-card">
+        <header className="flex items-center gap-2">
           <ShieldCheck size={20} />
           <strong>高风险动作需要人工核对</strong>
         </header>
-        <p>
+        <p className="text-[13px] leading-[1.55] text-ink-2">
           Pegas 已记录这个动作的执行结果，但无法确定外部系统的真实状态。
           请核实后提交结论，Pegas 才会决定是否继续。
         </p>
-        <dl>
+        <dl className="approval-meta grid text-[13px]">
           <Meta label="动作类型" value={action.kind} />
           <Meta label="Action" value={actionStatus(action.status)} />
           <Meta label="Run" value={action.requestRunId} />
         </dl>
-        <pre className="approval-result">
+        <pre className="approval-result mt-1 overflow-x-auto whitespace-pre-wrap break-words rounded-control bg-inset px-3 py-2.5 text-[12.5px] text-ink-2">
           {JSON.stringify(action.request, null, 2)}
         </pre>
         {action.result && (
-          <pre className="approval-result">
+          <pre className="approval-result mt-1 overflow-x-auto whitespace-pre-wrap break-words rounded-control bg-inset px-3 py-2.5 text-[12.5px] text-ink-2">
             {JSON.stringify(action.result, null, 2)}
           </pre>
         )}
@@ -860,7 +892,7 @@ function MessageDetail({
       ? (message.payload as { input: string }).input
       : undefined
   return (
-    <div className="drawer-body">
+    <div className="drawer-body bui">
       <section className="detail-section">
         <h3>消息内容</h3>
         <p>{text || '服务端没有提供消息正文。'}</p>
@@ -886,14 +918,14 @@ function MessageDetail({
       {message.resolution && (
         <section className="detail-section">
           <h3>人工核对记录</h3>
-          <div className="reconciliation-record">
+          <div className="reconciliation-record mt-3 grid gap-[5px] rounded-control bg-inset px-3 py-2.5">
             <strong>
               {message.resolution.resolution === 'sent'
                 ? '人工核对：确认已送达'
                 : '人工核对：确认未送达'}
             </strong>
-            <p>{message.resolution.note}</p>
-            <small>
+            <p className="break-words text-[13px]">{message.resolution.note}</p>
+            <small className="text-ink-3">
               核对前状态：
               {message.resolution.previousStatus === 'unknown'
                 ? '投递结果未知'
@@ -960,41 +992,49 @@ function OutboxResolutionForm({
     <section className="detail-section">
       <fieldset className="approval-options">
         <legend>核对真实投递结果</legend>
-        <p className="reconciliation-hint">
+        <p className="reconciliation-hint mt-2 text-[13px] leading-[1.55] text-ink-2">
           这条通知
           {message.status === 'unknown' ? '的投递结果未知' : '被记录为投递失败'}
           。请在外部渠道（如邮件、IM）核实是否真的收到，再提交结论；结论会永久记录。
         </p>
-        <label className="approval-option">
-          <input
-            checked={resolution === 'sent'}
-            disabled={submitting}
-            name={`outbox-resolve-${message.id}`}
-            onChange={() => setResolution('sent')}
-            type="radio"
-          />
-          <span>
-            <strong>确认已送达</strong>
-            <small>外部渠道实际收到了这条通知</small>
-          </span>
-        </label>
-        <label className="approval-option">
-          <input
-            checked={resolution === 'failed'}
-            disabled={submitting}
-            name={`outbox-resolve-${message.id}`}
-            onChange={() => setResolution('failed')}
-            type="radio"
-          />
-          <span>
-            <strong>确认未送达</strong>
-            <small>外部渠道没有收到，保留失败事实</small>
-          </span>
-        </label>
+        <RadioGroup
+          aria-label="核对真实投递结果"
+          disabled={submitting}
+          onValueChange={value =>
+            setResolution(value === 'sent' ? 'sent' : 'failed')
+          }
+          value={resolution}
+        >
+          <label className="approval-option mt-2.5 flex cursor-pointer items-start gap-3 rounded-card border border-line px-3.5 py-3 transition-colors duration-150 hover:bg-hover-2 has-[[data-state=checked]]:border-accent has-[[data-state=checked]]:bg-accent-tint">
+            <RadioItem
+              aria-label="确认已送达"
+              className="mt-[3px]"
+              value="sent"
+            />
+            <span className="grid min-w-0 gap-[3px]">
+              <strong>确认已送达</strong>
+              <small className="text-ink-3">外部渠道实际收到了这条通知</small>
+            </span>
+          </label>
+          <label className="approval-option mt-2.5 flex cursor-pointer items-start gap-3 rounded-card border border-line px-3.5 py-3 transition-colors duration-150 hover:bg-hover-2 has-[[data-state=checked]]:border-accent has-[[data-state=checked]]:bg-accent-tint">
+            <RadioItem
+              aria-label="确认未送达"
+              className="mt-[3px]"
+              value="failed"
+            />
+            <span className="grid min-w-0 gap-[3px]">
+              <strong>确认未送达</strong>
+              <small className="text-ink-3">
+                外部渠道没有收到，保留失败事实
+              </small>
+            </span>
+          </label>
+        </RadioGroup>
       </fieldset>
-      <label className="approval-rationale">
-        <span>核对依据（必填）</span>
-        <textarea
+      <label className="approval-rationale mt-4 grid gap-2">
+        <span className="text-ink-2">核对依据（必填）</span>
+        <TextArea
+          className="min-h-[88px] w-full resize-y"
           disabled={submitting}
           maxLength={2000}
           onChange={event => setNote(event.target.value)}
@@ -1007,14 +1047,15 @@ function OutboxResolutionForm({
           {error}
         </p>
       )}
-      <button
-        className="primary-button"
+      <Button
+        variant="accent"
+        size="sm"
         disabled={submitting || !note.trim()}
         onClick={() => void submit()}
         type="button"
       >
         {submitting ? '正在提交…' : '提交投递核对'}
-      </button>
+      </Button>
     </section>
   )
 }
@@ -1210,44 +1251,51 @@ function TaskDetail({
   }
 
   return (
-    <div className="drawer-body">
-      <section className={`state-hero state-${state}`}>
-        <span>{stateIcon(state)}</span>
-        <div>
-          <h3>{stateHeadline(state)}</h3>
-          {completedOutput ? (
-            <div className="state-hero-markdown">
-              <MarkdownMessage
-                content={
-                  completedOutput.length > 600 && !summaryExpanded
-                    ? `${completedOutput.slice(0, 600)}…`
-                    : completedOutput
-                }
-              />
-            </div>
-          ) : (
-            <p>{stateDescription(state, run)}</p>
-          )}
-          {completedOutput && completedOutput.length > 600 && (
-            <button
-              className="inline-link"
-              onClick={() => setSummaryExpanded(current => !current)}
-              type="button"
-            >
-              {summaryExpanded ? '收起结果' : '展开完整结果'}
-            </button>
-          )}
-        </div>
-      </section>
+    <div className="drawer-body bui">
+      <StateHeader label={state} tone={stateTone(state)}>
+        <h3 className="m-0 text-[13px] font-medium text-ink">
+          {stateHeadline(state)}
+        </h3>
+        {completedOutput ? (
+          <div className="state-hero-markdown mt-1">
+            <MarkdownMessage
+              content={
+                completedOutput.length > 600 && !summaryExpanded
+                  ? `${completedOutput.slice(0, 600)}…`
+                  : completedOutput
+              }
+            />
+          </div>
+        ) : (
+          <p className="mt-1">{stateDescription(state, run)}</p>
+        )}
+        {completedOutput && completedOutput.length > 600 && (
+          <button
+            className="inline-link"
+            onClick={() => setSummaryExpanded(current => !current)}
+            type="button"
+          >
+            {summaryExpanded ? '收起结果' : '展开完整结果'}
+          </button>
+        )}
+      </StateHeader>
       {state === '失败' && (
-        <section className="failure-card">
-          <header>
-            <AlertTriangle size={19} />
-            <strong>执行已停止</strong>
-          </header>
-          <p>{run?.lastError ?? '服务端没有提供失败原因。'}</p>
-          <small>重试会创建新的运行记录；既有记录会保留。</small>
-          {retryError && <small role="alert">{retryError}</small>}
+        <section className="mt-3.5 rounded-card bg-surface p-3.5 shadow-card">
+          <p className="flex items-center gap-1.5 text-[13px] font-medium text-red-text">
+            <AlertTriangle size={15} />
+            执行已停止
+          </p>
+          <p className="mt-1.5 text-[13px] leading-[1.6] text-ink-2">
+            {run?.lastError ?? '服务端没有提供失败原因。'}
+          </p>
+          <p className="mt-1 text-[12px] text-ink-3">
+            重试会创建新的运行记录；既有记录会保留。
+          </p>
+          {retryError && (
+            <p className="mt-1 text-[12px] text-red-text" role="alert">
+              {retryError}
+            </p>
+          )}
         </section>
       )}
       <section className="detail-section">
@@ -1266,7 +1314,7 @@ function TaskDetail({
         <ol className="progress-list">
           <li className="is-done">
             <CheckCircle2 size={14} />
-            <span>
+            <span className="grid min-w-0 gap-[3px]">
               <strong>事情已创建</strong>
               <small>{formatRelativeTime(channel.createdAt)}</small>
             </span>
@@ -1380,7 +1428,7 @@ function TaskDetail({
           ) : (
             <li>
               <Clock3 size={14} />
-              <span>
+              <span className="grid min-w-0 gap-[3px]">
                 <strong>等待运行记录</strong>
                 <small>服务端尚未返回 Run</small>
               </span>
@@ -1518,77 +1566,89 @@ function TaskDetail({
       {confirmingStop && (
         <section
           aria-labelledby="stop-confirmation-title"
-          className="stop-confirmation"
+          className="stop-confirmation mt-3.5 rounded-card bg-red-tint p-4 shadow-hairline"
           role="alertdialog"
         >
-          <header>
+          <header className="flex items-center gap-2 text-red-text">
             <AlertTriangle size={18} />
             <strong id="stop-confirmation-title">确定停止这件事？</strong>
           </header>
-          <p>停止后无法继续当前运行；历史记录会保留，你仍可重新发起事情。</p>
-          {stopError && <small role="alert">{stopError}</small>}
+          <p className="mt-1.5 text-[13px] leading-[1.55] text-ink-2">
+            停止后无法继续当前运行；历史记录会保留，你仍可重新发起事情。
+          </p>
+          {stopError && (
+            <small className="mt-2 block text-red-text" role="alert">
+              {stopError}
+            </small>
+          )}
           <div className="drawer-actions">
-            <button
-              className="secondary-button"
+            <Button
+              variant="secondary"
+              size="sm"
               disabled={stopping}
               onClick={() => setConfirmingStop(false)}
               type="button"
             >
               取消
-            </button>
-            <button
-              className="danger-button"
+            </Button>
+            <Button
+              variant="danger"
+              size="sm"
               disabled={stopping}
               onClick={() => void stopChannel()}
               type="button"
             >
               {stopping ? '正在停止…' : '确认停止'}
-            </button>
+            </Button>
           </div>
         </section>
       )}
       <footer className="drawer-footer">
         {state === '失败' && run && (
-          <button
-            className="secondary-button"
+          <Button
+            variant="secondary"
+            size="sm"
             disabled={retrying}
             onClick={() => void retryRun()}
             type="button"
           >
             <RotateCw size={16} />
             {retrying ? '正在重试…' : '重试'}
-          </button>
+          </Button>
         )}
         {channel.status !== 'cancelled' && onContinue && (
-          <button
-            className="primary-button"
+          <Button
+            variant="accent"
+            size="sm"
             onClick={() => onContinue(channel)}
             type="button"
           >
             继续追问
-          </button>
+          </Button>
         )}
         {channel.canStop && onStop && (
-          <button
-            className="danger-button"
+          <Button
+            variant="danger"
+            size="sm"
             onClick={() => setConfirmingStop(true)}
             type="button"
           >
             停止事情
-          </button>
+          </Button>
         )}
         {channel.status === 'cancelled' && (
           <span className="drawer-footnote">等待服务端返回下一步条件。</span>
         )}
         {(channel.status === 'cancelled' || channel.status === 'completed') &&
           onCreateRelated && (
-            <button
-              className="primary-button"
+            <Button
+              variant="accent"
+              size="sm"
               onClick={() => onCreateRelated(channel)}
               type="button"
             >
               新建相关事情
-            </button>
+            </Button>
           )}
       </footer>
     </div>
@@ -1598,9 +1658,11 @@ function TaskDetail({
 function Meta({ label, value }: { label: string; value?: string }) {
   const displayValue = value?.trim()
   return (
-    <div>
-      <dt>{label}</dt>
-      <dd>{displayValue?.length ? displayValue : '服务端未提供'}</dd>
+    <div className="grid grid-cols-[110px_minmax(0,1fr)] gap-3 py-[5px]">
+      <dt className="text-ink-2">{label}</dt>
+      <dd className="break-words">
+        {displayValue?.length ? displayValue : '服务端未提供'}
+      </dd>
     </div>
   )
 }
@@ -1985,8 +2047,9 @@ function DeliverySection({
             有 {String(pendingEvidence.length)} 条证据等待可信验证。
           </p>
           {pendingEvidence.map(item => (
-            <button
-              className="secondary-button"
+            <Button
+              variant="secondary"
+              size="sm"
               disabled={Boolean(verifyingId)}
               key={item.id}
               onClick={() => void verifyEvidence(item.id)}
@@ -1996,7 +2059,7 @@ function DeliverySection({
               {verifyingId === item.id
                 ? '正在验证…'
                 : `验证证据 ${item.id.slice(0, 8)}`}
-            </button>
+            </Button>
           ))}
           {verifyError && (
             <p className="settings-error" role="alert">
@@ -2181,25 +2244,31 @@ function ReviewDetail({
     ]) ?? [],
   )
   return (
-    <div className="drawer-body">
-      <section
-        className={`state-hero state-${review.finalOutcome === 'completed' ? '已完成' : review.finalOutcome === 'partial' ? '待确认' : '失败'}`}
+    <div className="drawer-body bui">
+      <StateHeader
+        label={
+          review.finalOutcome === 'completed'
+            ? '已完成'
+            : review.finalOutcome === 'partial'
+              ? '待确认'
+              : '失败'
+        }
+        tone={
+          review.finalOutcome === 'completed'
+            ? 'green'
+            : review.finalOutcome === 'partial'
+              ? 'orange'
+              : 'red'
+        }
       >
-        <span>
-          {review.finalOutcome === 'completed' ? (
-            <CheckCircle2 size={22} />
-          ) : (
-            <AlertTriangle size={22} />
-          )}
-        </span>
-        <div>
-          <h3>目标修订 v{String(review.goalRevision)} 的交付审查</h3>
-          <p>
-            {outcomeLabel(review.finalOutcome)}
-            ：结论来自服务端 Review Pack，按完成标准与证据生成。
-          </p>
-        </div>
-      </section>
+        <h3 className="m-0 text-[13px] font-medium text-ink">
+          目标修订 v{String(review.goalRevision)} 的交付审查
+        </h3>
+        <p className="mt-1">
+          {outcomeLabel(review.finalOutcome)}
+          ：结论来自服务端 Review Pack，按完成标准与证据生成。
+        </p>
+      </StateHeader>
       <section className="detail-section">
         <h3>完成标准</h3>
         <CriteriaList criteria={review.criteria} statements={statements} />
@@ -2220,16 +2289,16 @@ function ReviewDetail({
       {review.rollback && (
         <section className="detail-section">
           <h3>回滚说明</h3>
-          <pre className="approval-result">
+          <pre className="approval-result mt-1 overflow-x-auto whitespace-pre-wrap break-words rounded-control bg-inset px-3 py-2.5 text-[12.5px] text-ink-2">
             {JSON.stringify(review.rollback, null, 2)}
           </pre>
         </section>
       )}
       <footer className="drawer-footer">
         {onOpenTask && (
-          <button className="primary-button" onClick={onOpenTask} type="button">
+          <Button variant="accent" size="sm" onClick={onOpenTask} type="button">
             打开事情详情与审计时间线
-          </button>
+          </Button>
         )}
       </footer>
     </div>
@@ -2246,20 +2315,23 @@ function ClarificationDetail({
   onOpenTask?: () => void
 }) {
   return (
-    <div className="drawer-body">
-      <section className="approval-card">
-        <header>
+    <div className="drawer-body bui">
+      <section className="approval-card mt-3.5 grid gap-2.5 rounded-card bg-surface p-4 shadow-card">
+        <header className="flex items-center gap-2">
           <ShieldCheck size={20} />
           <strong>Pegas 需要先确认这些问题</strong>
         </header>
-        <p>
+        <p className="text-[13px] leading-[1.55] text-ink-2">
           这些信息会实质改变结果、权限或风险。回答后 Pegas
           会按当前目标修订继续执行，不会丢失已有进展。
         </p>
       </section>
       <section className="detail-section">
         <h3>待澄清问题</h3>
-        <ol aria-label="待澄清问题" className="clarification-questions">
+        <ol
+          aria-label="待澄清问题"
+          className="clarification-questions grid list-decimal gap-2 pl-[22px] text-[13px] leading-[1.6]"
+        >
           {questions.map((question, index) => (
             <li key={`${String(index)}-${question}`}>{question}</li>
           ))}
@@ -2267,18 +2339,19 @@ function ClarificationDetail({
       </section>
       <footer className="drawer-footer">
         {onAnswer && (
-          <button className="primary-button" onClick={onAnswer} type="button">
+          <Button variant="accent" size="sm" onClick={onAnswer} type="button">
             去回答
-          </button>
+          </Button>
         )}
         {onOpenTask && (
-          <button
-            className="secondary-button"
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={onOpenTask}
             type="button"
           >
             查看事情详情
-          </button>
+          </Button>
         )}
       </footer>
     </div>
@@ -2293,13 +2366,13 @@ function RoutingClarificationDetail({
   onAnswer?: () => void
 }) {
   return (
-    <div className="drawer-body">
-      <section className="approval-card">
-        <header>
+    <div className="drawer-body bui">
+      <section className="approval-card mt-3.5 grid gap-2.5 rounded-card bg-surface p-4 shadow-card">
+        <header className="flex items-center gap-2">
           <CircleQuestionMark size={20} />
           <strong>Pegas 需要先确认这条消息的归属</strong>
         </header>
-        <p>
+        <p className="text-[13px] leading-[1.55] text-ink-2">
           这条消息还没有进入任何事情。回答后 Pegas
           会重新判断归属，不会丢失原始消息。
         </p>
@@ -2316,9 +2389,9 @@ function RoutingClarificationDetail({
       )}
       <footer className="drawer-footer">
         {onAnswer && (
-          <button className="primary-button" onClick={onAnswer} type="button">
+          <Button variant="accent" size="sm" onClick={onAnswer} type="button">
             去回答
-          </button>
+          </Button>
         )}
       </footer>
     </div>
@@ -2785,8 +2858,9 @@ function WorkerProfileSection({
                 </p>
               )}
               {saveNotice && <p className="drawer-footnote">{saveNotice}</p>}
-              <button
-                className="secondary-button"
+              <Button
+                variant="secondary"
+                size="sm"
                 disabled={
                   saving || (modelMode === 'override' && !selectedModel)
                 }
@@ -2794,7 +2868,7 @@ function WorkerProfileSection({
                 type="button"
               >
                 {saving ? '正在保存…' : '保存执行设置'}
-              </button>
+              </Button>
               <p className="drawer-footnote">
                 只影响这件事情的后续运行；已完成的运行记录不会改写。
               </p>
@@ -2806,28 +2880,30 @@ function WorkerProfileSection({
         <div
           aria-labelledby="full-access-risk-title"
           aria-modal="true"
-          className="stop-confirmation"
+          className="stop-confirmation mt-3.5 rounded-card bg-red-tint p-4 shadow-hairline"
           role="dialog"
         >
-          <header>
+          <header className="flex items-center gap-2 text-red-text">
             <AlertTriangle size={18} />
             <strong id="full-access-risk-title">确认完全访问风险</strong>
           </header>
-          <p>
+          <p className="mt-1.5 text-[13px] leading-[1.55] text-ink-2">
             完全访问档位下，Pegas 不再拦截工作区之外的写入与命令副作用；
             高风险动作仍会请求你的审批，控制面自修改仍被强制拦截。
             请只在你信任这件事情的完整目标时启用。
           </p>
-          <div className="stop-confirmation-actions">
-            <button
-              className="secondary-button"
+          <div className="stop-confirmation-actions mt-3 flex justify-end gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
               onClick={() => setConfirmingFullAccess(false)}
               type="button"
             >
               取消
-            </button>
-            <button
-              className="secondary-button is-danger"
+            </Button>
+            <Button
+              variant="danger"
+              size="sm"
               onClick={() => {
                 setConfirmingFullAccess(false)
                 void save(true)
@@ -2835,7 +2911,7 @@ function WorkerProfileSection({
               type="button"
             >
               我已了解，启用完全访问
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -2992,14 +3068,15 @@ function ApprovalRulesSection({
                 </small>
               </div>
               {rule.status === 'active' && (
-                <button
-                  className="secondary-button"
+                <Button
+                  variant="secondary"
+                  size="sm"
                   disabled={revokingId !== ''}
                   onClick={() => void revoke(rule)}
                   type="button"
                 >
                   {revokingId === rule.id ? '撤销中…' : '撤销规则'}
-                </button>
+                </Button>
               )}
             </li>
           ))}
@@ -3065,12 +3142,13 @@ function workerProfileSourceLabel(source?: 'global' | 'task') {
   if (source === 'task') return '这件事情'
   return undefined
 }
-function stateIcon(state: string) {
-  if (state === '已完成') return <CheckCircle2 size={24} />
-  if (state === '已安排') return <CalendarClock size={24} />
-  if (state === '失败') return <AlertTriangle size={24} />
-  if (state === '进行中') return <RotateCw size={24} />
-  return <Clock3 size={24} />
+function stateTone(state: string): FactTone {
+  if (state === '已完成') return 'green'
+  if (state === '已安排') return 'accent'
+  if (state === '失败') return 'red'
+  if (state === '进行中') return 'accent'
+  if (state === '待确认') return 'orange'
+  return 'neutral'
 }
 function runProgressClass(state: string) {
   if (state === '已完成') return 'is-done'
@@ -3261,7 +3339,7 @@ function RuntimeDetail({
   nodesError?: string
 }) {
   return (
-    <div className="drawer-body">
+    <div className="drawer-body bui">
       <section className="runtime-identity">
         <HardDrive size={23} />
         <div>
@@ -3383,7 +3461,7 @@ function RuleDetail({
     }
   }
   return (
-    <div className="drawer-body">
+    <div className="drawer-body bui">
       <div className="info-banner">
         <CircleHelp size={16} />
         规则以持久偏好的形式注入每次执行，不授予新权限，也不能绕过高风险动作确认。
@@ -3434,32 +3512,35 @@ function RuleDetail({
       <footer className="drawer-footer">
         {editing &&
           (confirmDelete ? (
-            <button
-              className="danger-button"
+            <Button
+              variant="danger"
+              size="sm"
               disabled={deleting}
               onClick={() => void remove()}
               type="button"
             >
               {deleting ? '删除中…' : '确认删除'}
-            </button>
+            </Button>
           ) : (
-            <button
-              className="quiet-button"
+            <Button
+              variant="quiet"
+              size="sm"
               disabled={saving || deleting}
               onClick={() => setConfirmDelete(true)}
               type="button"
             >
               删除规则
-            </button>
+            </Button>
           ))}
-        <button
-          className="primary-button"
+        <Button
+          variant="accent"
+          size="sm"
           disabled={!api || saving || deleting || !valid}
           onClick={() => void save()}
           type="button"
         >
           {saving ? '保存中…' : '保存规则'}
-        </button>
+        </Button>
       </footer>
     </div>
   )
@@ -3526,7 +3607,7 @@ function RoutingRuleDetail({
     }
   }
   return (
-    <div className="drawer-body">
+    <div className="drawer-body bui">
       <div className="info-banner">
         <CircleHelp size={16} />
         归类规则只影响「消息进哪个事情」的判断偏好，不授予新权限；已停止的事情不会自动恢复，控制指令仍走确定性链路。规则仅在「智能判断」模式下生效。
@@ -3577,32 +3658,35 @@ function RoutingRuleDetail({
       <footer className="drawer-footer">
         {editing &&
           (confirmDelete ? (
-            <button
-              className="danger-button"
+            <Button
+              variant="danger"
+              size="sm"
               disabled={deleting}
               onClick={() => void remove()}
               type="button"
             >
               {deleting ? '删除中…' : '确认删除'}
-            </button>
+            </Button>
           ) : (
-            <button
-              className="quiet-button"
+            <Button
+              variant="quiet"
+              size="sm"
               disabled={saving || deleting}
               onClick={() => setConfirmDelete(true)}
               type="button"
             >
               删除规则
-            </button>
+            </Button>
           ))}
-        <button
-          className="primary-button"
+        <Button
+          variant="accent"
+          size="sm"
           disabled={!api || saving || deleting || !valid}
           onClick={() => void save()}
           type="button"
         >
           {saving ? '保存中…' : '保存规则'}
-        </button>
+        </Button>
       </footer>
     </div>
   )
@@ -3684,7 +3768,7 @@ function PreviewDetail({
           ? Play
           : FileText
   return (
-    <div className="drawer-body">
+    <div className="drawer-body bui">
       {onBack && view.backLabel && (
         <button
           className="inline-link preview-back"
@@ -3732,7 +3816,7 @@ function PreviewDetail({
       {(view.url ?? contentUrl) && (
         <footer className="drawer-footer">
           <a
-            className="primary-button"
+            className={buttonVariants({ variant: 'accent', size: 'sm' })}
             href={view.url ?? contentUrl}
             rel="noreferrer"
             target="_blank"
