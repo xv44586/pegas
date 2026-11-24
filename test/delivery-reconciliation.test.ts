@@ -556,6 +556,7 @@ describe('NOTIFY-006 watchdog boundary', () => {
       strandedAfterMs: 120_000,
       staleWaitingAfterMs: 300_000,
       autoReconcile: true,
+      modelReconcile: true,
     })
     expect(
       parseReconciliationConfig({
@@ -566,6 +567,12 @@ describe('NOTIFY-006 watchdog boundary', () => {
     expect(
       parseReconciliationConfig({ PEGAS_AUTO_RECONCILE: 'disabled' }),
     ).toMatchObject({ autoReconcile: false })
+    expect(
+      parseReconciliationConfig({ PEGAS_MODEL_RECONCILE: 'disabled' }),
+    ).toMatchObject({ modelReconcile: false })
+    expect(() =>
+      parseReconciliationConfig({ PEGAS_MODEL_RECONCILE: 'maybe' }),
+    ).toThrow(/PEGAS_MODEL_RECONCILE/)
     expect(() =>
       parseReconciliationConfig({ PEGAS_AUTO_RECONCILE: 'maybe' }),
     ).toThrow(/PEGAS_AUTO_RECONCILE/)

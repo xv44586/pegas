@@ -69,6 +69,7 @@ export interface ReconciliationWatchdogConfig {
   strandedAfterMs: number
   staleWaitingAfterMs: number
   autoReconcile: boolean
+  modelReconcile: boolean
 }
 
 export function parseReconciliationConfig(
@@ -93,6 +94,7 @@ export function parseReconciliationConfig(
       300_000,
     ),
     autoReconcile: parseAutoReconcileMode(env.PEGAS_AUTO_RECONCILE),
+    modelReconcile: parseModelReconcileMode(env.PEGAS_MODEL_RECONCILE),
   }
 }
 
@@ -101,6 +103,13 @@ function parseAutoReconcileMode(value: string | undefined): boolean {
     return true
   if (value === 'disabled') return false
   throw new Error(`Expected PEGAS_AUTO_RECONCILE to be enabled or disabled`)
+}
+
+function parseModelReconcileMode(value: string | undefined): boolean {
+  if (value === undefined || value.trim() === '' || value === 'enabled')
+    return true
+  if (value === 'disabled') return false
+  throw new Error(`Expected PEGAS_MODEL_RECONCILE to be enabled or disabled`)
 }
 
 function positiveInt(value: string | undefined, fallback: number): number {
