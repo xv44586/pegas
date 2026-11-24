@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs'
@@ -432,6 +433,137 @@ describe.skipIf(!dshAvailable || !gatewayReachable)(
         for (const action of withFingerprint) {
           const effect = action?.request.effect as { contentHash: string }
           expect(effect.contentHash).toBe(landedHash)
+        }
+      } finally {
+        if (leaseHeartbeat) clearInterval(leaseHeartbeat)
+        configuration.remove()
+        await new Promise<void>(resolve => server.close(() => resolve()))
+        store.close()
+        rmSync(home, { recursive: true, force: true })
+        rmSync(workspace, { recursive: true, force: true })
+        rmSync(outside, { recursive: true, force: true })
+      }
+    }, 300_000)
+
+    it('derives a bash append fingerprint that matches the bytes the real executor lands', async () => {
+      const home = mkdtempSync(join(tmpdir(), 'pegas-bashfp-home-'))
+      const workspace = mkdtempSync(join(tmpdir(), 'pegas-bashfp-ws-'))
+      const outside = mkdtempSync(join(tmpdir(), 'pegas-bashfp-outside-'))
+      ensureDshProfileHome(home, 'headless')
+      const configuration = createDshModelConfiguration({
+        connections: [
+          {
+            id: 'magpie',
+            name: 'magpie',
+            protocol: 'openai-chat',
+            baseUrl: 'http://127.0.0.1:3425/v1',
+            apiKeyCiphertext: 'placeholder',
+            updatedAt: new Date().toISOString(),
+          },
+        ],
+        vault: { decrypt: () => 'placeholder-key' },
+        agentModel: { provider: 'magpie', model: 'qwen-cn-2/qwen4-max' },
+      })
+      const store = new PegasStore(':memory:')
+      store.initializeRuntimeSettings(runtimeSettingsDefaults(loadConfig({})))
+      const settings = store.getRuntimeSettings()
+      store.updateRuntimeSettings(settings.revision, {
+        ...settings,
+        autoReviewEnabled: true,
+      })
+      const server = createControlPlane({
+        store,
+        apiToken: 'bridge-test',
+      })
+      await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+      const baseUrl = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+      let leaseHeartbeat: ReturnType<typeof setInterval> | undefined
+      const appendTarget = join(realpathSync(outside), 'append-me.txt')
+      writeFileSync(appendTarget, 'existing\n')
+      try {
+        const mandate = `请用 bash 工具执行且只执行这一条命令：echo fresh >> ${appendTarget} 。这是我明确授权的唯一修改。完成后汇报结果。不要使用其他工具，不要写其他文件。`
+        const event = store.enqueueEvent({
+          userId: 'owner',
+          type: 'user.message',
+          source: 'test',
+          authenticatedActor: 'human',
+          payload: { text: mandate },
+        }).event
+        const claimedEvent = store.claimNextEvent('setup-bashfp')
+        if (!claimedEvent) throw new Error('Expected setup event claim')
+        store.applyRoutingDecision(
+          claimedEvent,
+          {
+            kind: 'create_task',
+            title: '追加授权目标文件',
+            goal: mandate,
+            input: mandate,
+            reason: 'probe',
+          },
+          'dsh-headless',
+          task =>
+            store.resolveWorkerExecutionContext(task.id, 'owner', {
+              executor: 'dsh-headless',
+              protocol: 'dsh-headless-v1',
+              workspace,
+              permissions: JSON.stringify({
+                mode: 'workspace-write',
+                approvalPolicy: 'ask',
+                additionalDirectories: [],
+                privacyMode: 'disabled',
+              }),
+            }),
+        )
+        store.completeEvent(event.id, 'setup-bashfp')
+        const claimed = store.claimNextRun('worker-bashfp')
+        if (!claimed) throw new Error('Expected claimed Run')
+        leaseHeartbeat = setInterval(() => {
+          try {
+            store.renewRunLease(claimed.run.id, 'worker-bashfp', 60_000)
+          } catch {
+            if (leaseHeartbeat) clearInterval(leaseHeartbeat)
+          }
+        }, 10_000)
+        leaseHeartbeat.unref()
+
+        const executor = new DshCliExecutor({
+          command: 'dsh',
+          home,
+          permissionMode: 'workspace-write',
+          approvalPolicy: 'ask',
+          timeoutMs: 240_000,
+          modelConfiguration: configuration,
+        })
+        const result = await executor.execute({
+          runId: claimed.run.id,
+          taskId: claimed.task.id,
+          prompt: mandate,
+          workingDirectory: workspace,
+          actionCapability: { baseUrl, claimToken: claimed.claimToken },
+        })
+        expect(result.approvalPending).toBeUndefined()
+        expect(readFileSync(appendTarget, 'utf8')).toBe('existing\nfresh\n')
+        const bashActions = store
+          .pageApprovals('owner', 10)
+          .items.map(item => store.getAction(item.actionId, 'owner'))
+          .filter(action => action?.kind === 'dsh.tool.bash')
+        expect(bashActions.length).toBeGreaterThan(0)
+        const landedHash = createHash('sha256')
+          .update(readFileSync(appendTarget))
+          .digest('hex')
+        const withFingerprint = bashActions.filter(action => {
+          const effect = action?.request.effect as
+            { targets?: Record<string, unknown> } | undefined
+          return typeof effect?.targets?.[appendTarget] === 'string'
+        })
+        expect(withFingerprint.length).toBeGreaterThan(0)
+        for (const action of withFingerprint) {
+          const effect = action?.request.effect as {
+            targets: Record<string, string>
+          }
+          expect(effect.targets[appendTarget]).toBe(landedHash)
+          const requestTargets = action?.request.targets
+          expect(requestTargets).toContain(appendTarget)
         }
       } finally {
         if (leaseHeartbeat) clearInterval(leaseHeartbeat)

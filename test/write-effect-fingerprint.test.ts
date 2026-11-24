@@ -219,62 +219,12 @@ describe('write effect fingerprint derivation', () => {
     })
   })
 
-  it('refuses multi-file, delete, move and unmatched patches honestly', () => {
+  it('refuses unmatched patches honestly', () => {
     const roots = workspace()
     const first = join(roots.outside, 'one.md')
     const second = join(roots.outside, 'two.md')
     writeFileSync(first, 'a\n')
     writeFileSync(second, 'b\n')
-    expect(
-      derive(
-        'apply_patch',
-        {
-          input: [
-            '*** Begin Patch',
-            `*** Update File: ${first}`,
-            '@@',
-            '-a',
-            '+A',
-            `*** Update File: ${second}`,
-            '@@',
-            '-b',
-            '+B',
-            '*** End Patch',
-          ].join('\n'),
-        },
-        roots.workspace,
-      ),
-    ).toBeUndefined()
-    expect(
-      derive(
-        'apply_patch',
-        {
-          input: [
-            '*** Begin Patch',
-            `*** Delete File: ${first}`,
-            '*** End Patch',
-          ].join('\n'),
-        },
-        roots.workspace,
-      ),
-    ).toBeUndefined()
-    expect(
-      derive(
-        'apply_patch',
-        {
-          input: [
-            '*** Begin Patch',
-            `*** Update File: ${first}`,
-            `*** Move to: ${join(roots.outside, 'moved.md')}`,
-            '@@',
-            '-a',
-            '+A',
-            '*** End Patch',
-          ].join('\n'),
-        },
-        roots.workspace,
-      ),
-    ).toBeUndefined()
     expect(
       derive(
         'apply_patch',
@@ -325,5 +275,165 @@ describe('write effect fingerprint derivation', () => {
       derive('bash', { command: 'echo x' }, roots.workspace),
     ).toBeUndefined()
     expect(derive('read', {}, roots.workspace)).toBeUndefined()
+  })
+
+  it('derives per-file final bytes for a multi-file update patch', () => {
+    const roots = workspace()
+    const first = join(roots.outside, 'multi-one.md')
+    const second = join(roots.outside, 'multi-two.md')
+    writeFileSync(first, 'a\n')
+    writeFileSync(second, 'b\n')
+    const effect = derive(
+      'apply_patch',
+      {
+        input: [
+          '*** Begin Patch',
+          `*** Update File: ${first}`,
+          '@@',
+          '-a',
+          '+A',
+          `*** Update File: ${second}`,
+          '@@',
+          '-b',
+          '+B',
+          '*** End Patch',
+        ].join('\n'),
+      },
+      roots.workspace,
+    )
+    expect(effect).toEqual({
+      targets: {
+        [first]: sha256('A\n'),
+        [second]: sha256('B\n'),
+      },
+    })
+  })
+
+  it('expects deleted files to be absent', () => {
+    const roots = workspace()
+    const target = join(roots.outside, 'doomed.md')
+    writeFileSync(target, 'gone soon\n')
+    const effect = derive(
+      'apply_patch',
+      {
+        input: [
+          '*** Begin Patch',
+          `*** Delete File: ${target}`,
+          '*** End Patch',
+        ].join('\n'),
+      },
+      roots.workspace,
+    )
+    expect(effect).toEqual({ absent: [target] })
+  })
+
+  it('derives the moved destination bytes and the absent source', () => {
+    const roots = workspace()
+    const source = join(roots.outside, 'before.md')
+    const destination = join(roots.outside, 'after.md')
+    writeFileSync(source, 'x\ny\n')
+    const effect = derive(
+      'apply_patch',
+      {
+        input: [
+          '*** Begin Patch',
+          `*** Update File: ${source}`,
+          `*** Move to: ${destination}`,
+          '@@',
+          '-x',
+          '+X',
+          ' y',
+          '*** End Patch',
+        ].join('\n'),
+      },
+      roots.workspace,
+    )
+    expect(effect).toEqual({
+      targets: { [destination]: sha256('X\ny\n') },
+      absent: [source],
+    })
+  })
+
+  it('refuses a patch whose operations touch the same canonical path twice', () => {
+    const roots = workspace()
+    const target = join(roots.outside, 'twice.md')
+    writeFileSync(target, 'a\n')
+    expect(
+      derive(
+        'apply_patch',
+        {
+          input: [
+            '*** Begin Patch',
+            `*** Update File: ${target}`,
+            '@@',
+            '-a',
+            '+A',
+            `*** Delete File: ${target}`,
+            '*** End Patch',
+          ].join('\n'),
+        },
+        roots.workspace,
+      ),
+    ).toBeUndefined()
+  })
+
+  it('derives the appended bytes of a simple bash append redirect', () => {
+    const roots = workspace()
+    const target = join(roots.outside, 'log.txt')
+    writeFileSync(target, 'line one\n')
+    const effect = derive(
+      'bash',
+      { command: `echo "line two" >> ${target}` },
+      roots.workspace,
+    )
+    expect(effect).toEqual({
+      targets: { [target]: sha256('line one\nline two\n') },
+    })
+  })
+
+  it('derives a full overwrite from a single-argument echo redirect', () => {
+    const roots = workspace()
+    const target = join(roots.outside, 'fresh.txt')
+    const effect = derive(
+      'bash',
+      { command: `echo 'hello world' > ${target}` },
+      roots.workspace,
+    )
+    expect(effect).toEqual({
+      targets: { [target]: sha256('hello world\n') },
+    })
+  })
+
+  it('derives printf output with escape sequences', () => {
+    const roots = workspace()
+    const target = join(roots.outside, 'printf.txt')
+    const effect = derive(
+      'bash',
+      { command: `printf 'a\\nb\\n' > ${target}` },
+      roots.workspace,
+    )
+    expect(effect).toEqual({
+      targets: { [target]: sha256('a\nb\n') },
+    })
+  })
+
+  it('refuses bash forms it cannot statically replay', () => {
+    const roots = workspace()
+    const target = join(roots.outside, 'complex.txt')
+    writeFileSync(target, 'base\n')
+    for (const command of [
+      `cat other.txt >> ${target}`,
+      `echo $(date) > ${target}`,
+      `echo one > ${target} && echo two > ${target}`,
+      `echo x | tee ${target}`,
+      `echo "unterminated > ${target}`,
+      `echo x >> ${target}; echo y >> ${target}`,
+      `echo x > /dev/null`,
+    ]) {
+      expect(
+        derive('bash', { command }, roots.workspace),
+        command,
+      ).toBeUndefined()
+    }
   })
 })

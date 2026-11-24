@@ -113,7 +113,7 @@ describe('DSH approval bridge plugin', () => {
       const exec = {
         callId: 'call-42',
         name: 'bash',
-        arguments: { command: 'touch /outside' },
+        arguments: { command: 'chmod 777 /outside' },
       }
       await preExecute(exec, () => Promise.resolve({ kind: 'allow' }))
       const outcome = await approvalRequest(
@@ -145,7 +145,7 @@ describe('DSH approval bridge plugin', () => {
         request: {
           tool: 'bash',
           callId: 'call-42',
-          argumentsHash: stableHash({ command: 'touch /outside' }),
+          argumentsHash: stableHash({ command: 'chmod 777 /outside' }),
         },
       })
       expect(store.listRuns(claimed.task.id).at(-1)).toMatchObject({

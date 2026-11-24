@@ -16,8 +16,10 @@ export function probeWriteAction(input: {
   targets: readonly string[]
   contentHash?: string
   targetHashes?: Record<string, string>
+  absent?: readonly string[]
 }): WriteProbeResult {
-  if (input.targets.length === 0)
+  const absent = input.absent ?? []
+  if (input.targets.length === 0 && absent.length === 0)
     return { resolution: 'inconclusive', matched: [], missing: [] }
   const matched: string[] = []
   const missing: string[] = []
@@ -42,6 +44,23 @@ export function probeWriteAction(input: {
       missing.push(target)
     }
   }
+  for (const target of absent) {
+    try {
+      statSync(target)
+      missing.push(target)
+    } catch (error) {
+      if (
+        typeof error === 'object' &&
+        error !== null &&
+        'code' in error &&
+        error.code === 'ENOENT'
+      ) {
+        matched.push(target)
+      } else {
+        missing.push(target)
+      }
+    }
+  }
   if (missing.length > 0) return { resolution: 'failed', matched, missing }
   return { resolution: 'succeeded', matched, missing }
 }
@@ -54,6 +73,7 @@ export interface ActionReconciliationOptions {
     targets: readonly string[]
     contentHash?: string
     targetHashes?: Record<string, string>
+    absent?: readonly string[]
   }) => WriteProbeResult
   limit?: number
 }
@@ -108,8 +128,8 @@ export class ActionReconciliation {
       }
       const note =
         probed.resolution === 'succeeded'
-          ? `自动探测确认全部目标已存在${hasFingerprint(probeInput) ? '且内容指纹一致' : ''}：${probed.matched.join('、')}。`
-          : `自动探测确认目标缺失${hasFingerprint(probeInput) ? '或内容指纹不一致' : ''}：${probed.missing.join('、')}。副作用未发生或未按预期发生。`
+          ? `自动探测确认外部状态与预期一致${hasFingerprint(probeInput) ? '（含内容指纹）' : ''}：${probed.matched.join('、')}。`
+          : `自动探测确认外部状态与预期不符（目标缺失、指纹不一致或应删除的文件仍存在）：${probed.missing.join('、')}。副作用未发生或未按预期发生。`
       try {
         this.#store.reconcileAction(action.id, autoReconciler, {
           commandId: `auto-reconcile:${action.id}`,
@@ -145,11 +165,17 @@ function writeProbeInput(action: DurableAction & { userId: string }):
       targets: readonly string[]
       contentHash?: string
       targetHashes?: Record<string, string>
+      absent?: readonly string[]
     }
   | undefined {
   if (!action.kind.startsWith('dsh.tool.')) return undefined
   const tool = action.request.tool
-  if (tool !== 'write' && tool !== 'edit' && tool !== 'apply_patch')
+  if (
+    tool !== 'write' &&
+    tool !== 'edit' &&
+    tool !== 'apply_patch' &&
+    tool !== 'bash'
+  )
     return undefined
   const category = action.request.category
   if (category !== 'out-of-workspace-write' && category !== 'workspace-write')
@@ -157,7 +183,6 @@ function writeProbeInput(action: DurableAction & { userId: string }):
   const targets = action.request.targets
   if (
     !Array.isArray(targets) ||
-    targets.length === 0 ||
     !targets.every(target => typeof target === 'string')
   )
     return undefined
@@ -171,11 +196,16 @@ function writeProbeInput(action: DurableAction & { userId: string }):
       ? effect.contentHash
       : undefined
   const targetHashes = parseTargetHashes(effect, targets)
-  if (tool !== 'write' && !contentHash && !targetHashes) return undefined
+  const absent = parseAbsent(effect)
+  if (targets.length === 0 && !absent) return undefined
+  if (tool !== 'write' && !contentHash && !targetHashes && !absent)
+    return undefined
+  if (tool === 'bash' && !targetHashes) return undefined
   return {
     targets,
     ...(contentHash ? { contentHash } : {}),
     ...(targetHashes ? { targetHashes } : {}),
+    ...(absent ? { absent } : {}),
   }
 }
 
@@ -211,4 +241,17 @@ function hasFingerprint(input: {
   targetHashes?: Record<string, string>
 }): boolean {
   return input.contentHash !== undefined || input.targetHashes !== undefined
+}
+
+function parseAbsent(effect: unknown): readonly string[] | undefined {
+  if (
+    typeof effect !== 'object' ||
+    effect === null ||
+    !('absent' in effect) ||
+    !Array.isArray(effect.absent) ||
+    effect.absent.length === 0 ||
+    !effect.absent.every(target => typeof target === 'string')
+  )
+    return undefined
+  return effect.absent
 }

@@ -185,6 +185,15 @@
 - **剩余风险**：列表上限 100 条无分页（长期高频切档的事情看不到更早记录）；全局默认档位的变更历史仍在设置页审计之外（本区只覆盖 Task 覆盖切换）。
 - **回滚**：revert 提交即移除端点与 UI；无迁移、无数据删除。
 
+## Gate 修正记录：bash 区外写纳入 ask（2026-11-24，随 EXEC-003 第四环）
+
+- **背景（如实记录 P1 缺口）**：P1 的 `classifyBash` 提取了 `bashWriteTargets` 但只用于 control-plane 保护判定，区外写（`echo x > /tmp/f`、`cp a /tmp/b`、`tee`、`touch` 等）落到最终 read/allow 分支——与 Intake「写路径越界→ask」意图不符，DSH 沙箱升级 seam 是唯一兜底。EXEC-003 第四环补 bash 写指纹时经真实探针暴露此缺口。
+- **修正**：`classifyBash` 在 destructive/egress 判定之后、最终 read 分支之前，对 `writeTargets` 非空的命令走 `judgeWriteTargets`（区外→out-of-workspace-write ask high；区内→workspace-write allow low，沙箱边界兜底；无边界信息→unknown ask）。`rm -rf` 等 destructive 优先级不变。桥同步修正：ask/review/park 判定不再依赖 capability 存在（无 capability 时 ask 返回 ask、seam 拒绝已 ask 的调用）；「allow 但类别非 read/workspace-write」一律升 unknown ask（fail closed）。
+- **证据（先红后绿）**：`test/policy-gate.test.ts` +2（bash 区外写七形式 ask + 引号目标；区内写 allow）；既有「区内 rm -rf 判 read」用例更新为 workspace-write（allow 不变，类别如实）；`test/dsh-approval-bridge.test.ts` seam 用例改用无边界信息命令并断言 ask 停放；真实 DSH bash append 探针（授权区外 `echo fresh >>`→ask→审阅 allow→effect.targets 指纹与落盘 sha256 一致）。
+- **影响**：standard 档下区外 bash 写从「静默 allow（依赖沙箱 seam）」变为显式审批/审阅路由，可命中 P3 规则与 P5 审阅；strict/full 档行为不变（strict 本就全 ask，full 由风险确认承担）。
+- **剩余风险**：复杂 bash（管道/复合/替换/变量）目标提取仍不完备，未命中写模式的命令仍交沙箱边界（Intake 已声明非安全边界）；execpolicy 级完整命令语义解析仍属后续阶段。
+- **回滚**：revert 即恢复旧分类；无迁移、无数据删除。
+
 ## UI 设计合同（P4 输入）
 
 - 审批卡：标题=动作白话摘要；副行=来源事情 + 触发消息锚点；主体=结构化操作预览（命令等宽块/路径列表/网络 host+方法）；「需要你决定」reason 行；选项=仅这一次 / 本事情内同类（说明指纹范围）/ 拒绝；备注可选；主按钮一个。
