@@ -20,6 +20,7 @@ import type {
   MemoryDraft,
   MemoryRecord,
   MemoryScope,
+  DesktopResidency,
   ModelCatalogItem,
   ModelUsageReport,
   NotificationPreferences,
@@ -562,6 +563,20 @@ export class PegasApi {
 
   async recoveryStatus(): Promise<RecoveryStatus> {
     return this.#get<RecoveryStatus>('/v1/recovery/status')
+  }
+
+  async desktopResidency(): Promise<DesktopResidency> {
+    return this.#get<DesktopResidency>('/v1/desktop/residency')
+  }
+
+  async saveDesktopResidency(resident: boolean): Promise<DesktopResidency> {
+    const response = await fetch('/v1/desktop/residency', {
+      method: 'PUT',
+      headers: this.#headers(true),
+      body: JSON.stringify({ resident }),
+    })
+    if (!response.ok) await throwResponse(response)
+    return (await response.json()) as DesktopResidency
   }
 
   async workerProfile(taskId: string): Promise<WorkerProfileResponse> {

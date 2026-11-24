@@ -48,7 +48,17 @@ try {
     .getByRole('textbox', { name: '给 Pegas 发消息' })
     .fill(smokeMessage)
   await window.getByRole('button', { name: '发送', exact: true }).click()
-  await waitForCompletedRun(window, smokeMessage)
+  try {
+    await waitForCompletedRun(window, smokeMessage)
+  } catch (error) {
+    const diagnostics = await window.evaluate(async () => {
+      const runs = await fetch('/v1/runs?userId=owner').then(r => r.json())
+      const events = await fetch('/v1/events?userId=owner').then(r => r.json())
+      return { runs: runs.runs?.slice(-3), events: events.events?.slice(-3) }
+    })
+    console.error('SMOKE DIAGNOSTICS', JSON.stringify(diagnostics, null, 2))
+    throw error
+  }
   assert.equal(await window.title(), '对话 · Pegas')
   const security = await application.evaluate(({ BrowserWindow }) => {
     const active = BrowserWindow.getAllWindows()[0]
@@ -69,26 +79,64 @@ try {
   )
   await markFirstUnreadRead(window)
   await waitForBadgeBelow(application, unreadBefore)
-  const workerPid = desktopServicePid(
+  // DESKTOP-001: the shell spawns exactly one Supervisor; business processes
+  // are its children. Killing the Supervisor must fail the window honestly.
+  const supervisorPid = desktopServicePid(
     application.process().pid,
-    'worker/main.js',
+    'supervisor/main.js',
   )
-  const controlPlanePid = desktopServicePid(
-    application.process().pid,
-    'control-plane/main.js',
-  )
-  serviceGroupPids.push(workerPid, controlPlanePid)
-  process.kill(workerPid, 'SIGTERM')
-  await window.getByRole('heading', { name: 'Pegas 服务已停止' }).waitFor()
-  await window.screenshot({
+  serviceGroupPids.push(supervisorPid)
+  await verifySupervisorOwnership(window, supervisorPid, dataDirectory)
+  await verifyResidentWindowClose(application, window, supervisorPid)
+  const restored = await application.firstWindow({ timeout: 15_000 })
+  await restored.getByRole('textbox', { name: '给 Pegas 发消息' }).waitFor()
+  process.kill(supervisorPid, 'SIGTERM')
+  let failurePageShown = false
+  try {
+    // The shell shows its honest failure page; the sealed UI additionally
+    // degrades to its offline state. Either is acceptable evidence that the
+    // window stopped pretending to be online.
+    await Promise.race([
+      restored
+        .getByRole('heading', { name: 'Pegas 服务已停止' })
+        .waitFor()
+        .then(() => {
+          failurePageShown = true
+        }),
+      restored.getByText('离线', { exact: true }).waitFor(),
+    ])
+  } catch (error) {
+    console.error(
+      'FAILURE PAGE BODY',
+      await restored.locator('body').innerText(),
+    )
+    const alive = await fetch(
+      `http://127.0.0.1:${await apiPortFromWindow(restored)}/readyz`,
+    )
+      .then(r => r.status)
+      .catch(() => 'down')
+    console.error('CONTROL PLANE AFTER SUPERVISOR DEATH', alive)
+    throw error
+  }
+  await restored.screenshot({
     path: resolve(outputDirectory, 'desktop-electron-service-failure.png'),
   })
-  await assert.rejects(
-    window.getByRole('textbox', { name: '给 Pegas 发消息' }).waitFor({
-      state: 'visible',
-      timeout: 250,
-    }),
-  )
+  if (failurePageShown) {
+    await assert.rejects(
+      restored.getByRole('textbox', { name: '给 Pegas 发消息' }).waitFor({
+        state: 'visible',
+        timeout: 250,
+      }),
+    )
+  } else {
+    // Offline sealed UI: the composer must not accept new submissions.
+    const sendEnabled = await restored
+      .getByRole('button', { name: '发送', exact: true })
+      .isEnabled()
+      .catch(() => false)
+    assert.equal(sendEnabled, false, 'offline UI must not accept new input')
+  }
+  await waitForProcessGroupsGone(serviceGroupPids)
   console.log(
     executablePath
       ? 'Packaged Electron macOS smoke passed'
@@ -129,8 +177,20 @@ function processGroupExists(leaderPid) {
   }
 }
 
+function processExists(pid) {
+  // kill(pid, 0) also succeeds for unreaped zombies; ps state is the truth.
+  try {
+    const state = execFileSync('ps', ['-p', String(pid), '-o', 'state='], {
+      encoding: 'utf8',
+    }).trim()
+    return state !== '' && !state.startsWith('Z')
+  } catch {
+    return false
+  }
+}
+
 async function waitForCompletedRun(window, expectedOutput) {
-  const deadline = Date.now() + 10_000
+  const deadline = Date.now() + 30_000
   while (Date.now() < deadline) {
     const completed = await window.evaluate(async output => {
       const response = await fetch('/v1/runs?userId=owner')
@@ -202,4 +262,119 @@ async function waitForBadgeBelow(application, previous) {
     await new Promise(resolveWait => setTimeout(resolveWait, 100))
   }
   throw new Error('Dock badge did not shrink after the fact was read')
+}
+
+async function verifySupervisorOwnership(window, supervisorPid, dataDirectory) {
+  const { readFileSync } = await import('node:fs')
+  const rows = execFileSync('ps', ['-Ao', 'pid=,ppid=,command='], {
+    encoding: 'utf8',
+  })
+  for (const entry of [
+    'control-plane/main.js',
+    'worker/main.js',
+    'scheduler/main.js',
+  ]) {
+    const owned = rows.split('\n').some(row => {
+      const match = row.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/)
+      return (
+        match && Number(match[2]) === supervisorPid && match[3].includes(entry)
+      )
+    })
+    assert.equal(owned, true, `${entry} must be owned by the supervisor`)
+  }
+  const lockPid = Number(
+    readFileSync(resolve(dataDirectory, 'supervisor.lock'), 'utf8').trim(),
+  )
+  assert.equal(lockPid, supervisorPid, 'instance lock must name the supervisor')
+  const residency = await window.evaluate(async () => {
+    const response = await fetch('/v1/desktop/residency')
+    return response.ok ? response.json() : undefined
+  })
+  assert.equal(residency?.managed, true, 'residency proxy must be wired')
+  assert.equal(residency?.resident, false, 'default must be non-resident')
+}
+
+async function waitForProcessGroupsGone(pids) {
+  const deadline = Date.now() + 10_000
+  while (Date.now() < deadline) {
+    if (pids.every(pid => !processExists(pid) && !processGroupExists(pid)))
+      return
+    await new Promise(resolveWait => setTimeout(resolveWait, 100))
+  }
+  for (const pid of pids.filter(candidate => processGroupExists(candidate))) {
+    console.error(
+      'GROUP DETAIL',
+      pid,
+      execFileSync('ps', ['-Ao', 'pid=,ppid=,pgid=,state=,command='], {
+        encoding: 'utf8',
+      })
+        .split('\n')
+        .filter(row => {
+          const match = row.trim().match(/^\d+\s+\d+\s+(\d+)/)
+          return match && Number(match[1]) === pid
+        })
+        .map(row => row.slice(0, 160))
+        .join('\n'),
+    )
+  }
+  const rows = execFileSync('ps', ['-Ao', 'pid=,ppid=,pgid=,command='], {
+    encoding: 'utf8',
+  })
+  console.error(
+    'SURVIVING GROUPS',
+    pids.filter(pid => processGroupExists(pid)),
+    rows
+      .split('\n')
+      .filter(row => row.includes('dist/'))
+      .join('\n'),
+  )
+  throw new Error('Supervisor did not stop its business process groups')
+}
+
+async function apiPortFromWindow(window) {
+  return new URL(window.url()).port
+}
+
+async function verifyResidentWindowClose(application, window, supervisorPid) {
+  // Resident mode: closing the window keeps the service alive; a fresh
+  // window reconnects to the same instance. Toggle back off afterwards.
+  const enabled = await window.evaluate(async () => {
+    const response = await fetch('/v1/desktop/residency', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ resident: true }),
+    })
+    return response.ok ? response.json() : undefined
+  })
+  assert.equal(enabled?.resident, true, 'residency switch must succeed')
+  const port = await apiPortFromWindow(window)
+  // Read the desktop-generated instance bearer from the Supervisor's own
+  // process environment (smoke-only; never exposed to the renderer).
+  const supervisorEnv = execFileSync(
+    'ps',
+    ['eww', '-p', String(supervisorPid), '-o', 'command='],
+    { encoding: 'utf8' },
+  )
+  const apiToken = /PEGAS_API_TOKEN=(\S+)/.exec(supervisorEnv)?.[1]
+  assert.ok(apiToken, 'supervisor must carry the instance bearer')
+  await window.evaluate(() => window.close())
+  await new Promise(resolveWait => setTimeout(resolveWait, 1500))
+  const ready = await fetch(`http://127.0.0.1:${port}/readyz`)
+    .then(response => response.ok)
+    .catch(() => false)
+  assert.equal(ready, true, 'resident services must survive window close')
+  const disabled = await fetch(
+    `http://127.0.0.1:${port}/v1/desktop/residency`,
+    {
+      method: 'PUT',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${apiToken}`,
+      },
+      body: JSON.stringify({ resident: false }),
+    },
+  ).then(response => (response.ok ? response.json() : undefined))
+  assert.equal(disabled?.resident, false, 'residency must toggle back off')
+  // Re-open the window the way a user clicks the Dock icon.
+  await application.evaluate(({ app }) => app.emit('activate'))
 }

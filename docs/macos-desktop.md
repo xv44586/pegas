@@ -7,15 +7,19 @@
 
 ## 架构决定
 
-macOS 第一版是封板 Web UI 的安全桌面适配层，不是第二套产品。Electron 主进程启动现有 Control Plane、Worker 与 Scheduler；Renderer 通过本机 HTTP 使用相同 Conversation、Task、Run、Outbox、设置、Automation 和恢复事实。桌面端不复制 Router、Executor 或数据库实现。
+macOS 第一版是封板 Web UI 的安全桌面适配层，不是第二套产品。Electron 主进程只启动一个 Supervisor；Control Plane、Worker、Scheduler 等业务进程全部由 Supervisor 作为子进程守护（两层守护单一归属）。Renderer 通过本机 HTTP 使用相同 Conversation、Task、Run、Outbox、设置、Automation 和恢复事实。桌面端不复制 Router、Executor 或数据库实现。
 
 ```text
 Electron main
 ├── BrowserWindow ── http://127.0.0.1:<ephemeral-port> ── sealed Web UI
-├── Control Plane ── SQLite under app.getPath('userData')
-├── Worker ───────── same data directory and existing executor boundary
-└── Scheduler ────── same SQLite and durable Event Inbox
+├── residency API ── 127.0.0.1:<ephemeral-port>（本机常驻偏好，bearer 鉴权）
+└── Supervisor ──── data/supervisor.lock 单实例互斥 + recovery API
+    ├── Control Plane ── SQLite under app.getPath('userData')
+    ├── Worker ───────── same data directory and existing executor boundary
+    └── Scheduler ────── same SQLite and durable Event Inbox
 ```
+
+App 生命周期模式下 Supervisor 以 `PEGAS_SUPERVISOR_RESTART=disabled` 运行：业务进程意外死亡时 Supervisor 不静默复活服务，而是记录失败并退出，窗口诚实展示故障页。版本切换、回滚与迁移审批仍由同一 Supervisor 的 recovery API 提供。业务进程各自领导进程组（`detached`），Supervisor 停止时对组发信号，执行器后代不会成为孤儿。
 
 ## 安全与权限
 
@@ -39,24 +43,28 @@ Electron main
 
 生成的本地 Candidate 位于 `releases/desktop/mac-arm64/Pegas.app`。它带封板蓝色 Pegas 图标，但不会自动签名或公证；首次分发前必须新增发布 Feature 处理 Developer ID、notary、DMG 与更新通道。
 
-## 后台运行与常驻（决策定稿，2026-11-24，未实现）
+## 后台运行与常驻（2026-11-24 实现）
 
-- **默认不常驻**：退出 App 即停止内置服务；定时自动化仅在 App 运行期间执行。这是现状行为的如实声明，不是新限制。
-- **常驻是设置开关，不是默认**：设置「Pegas」分类将新增「后台运行」开关（默认关）。开启后窗口关闭只隐藏窗口，Supervisor 经 launchd LoginItem 托管继续运行，定时自动化与原生提醒照常；关闭后注销 LoginItem，回到 App 生命周期守护。
-- 开关是本机偏好（桌面主进程 userData 配置），不进入服务端 runtime_settings；Web 连接外部实例时显示只读说明，不提供假开关。
-- 完整验收条件见 `docs/feature-map.md`「Supervisor 接管桌面服务与常驻守护 Intake」的常驻决策定稿节；实现与 Supervisor 接管同 Feature 推进。
+- **默认不常驻**：退出 App 即停止内置服务；定时自动化仅在 App 运行期间执行。设置页如实告知这一限制。
+- **常驻是设置开关，不是默认**：封板设置「Pegas」分类的「后台运行」区块提供「关闭窗口后继续运行」开关（默认关）。开启后关闭窗口只结束窗口，App 与 Supervisor 继续运行（`window-all-closed` 不退出，Dock 点击 activate 重开窗口），并经 `app.setLoginItemSettings({ openAtLogin, openAsHidden })` 注册 launchd LoginItem 开机自启；关闭后注销 LoginItem，回到 App 生命周期守护。
+- **本机偏好，不进服务端**：开关权威保存在桌面主进程 userData 下 `desktop.json`（原子写入，损坏时回落默认关），不进入服务端 runtime_settings。主进程在本机回环端口提供 bearer 鉴权的 `GET/PUT /desktop/residency`；Control Plane 以服务端持有的 token 同源代理 `/v1/desktop/residency`，Renderer 不接触桌面 token。
+- **切换幂等、失败保留原状态**：LoginItem 注册成功才持久化偏好；失败返回 `residency_switch_failed` 并保留原状态，不静默半切换。
+- **外部实例只读**：Web/桌面壳连接外部实例（未配置 `PEGAS_DESKTOP_RESIDENCY_URL`）时，代理返回 `managed:false` 与「由该实例的部署方式决定」说明，设置页显示只读态，不提供假开关。
+- 验收条件见 `docs/feature-map.md`「Supervisor 接管桌面服务与常驻守护 Intake」的常驻决策定稿节。
+- **已知限制**：开发态 `setLoginItemSettings` 指向 Electron 开发二进制，LoginItem 的实际开机自启效果需在打包态人工验收；常驻开时 Cmd+Q 仍显式退出并停止服务（只有关闭窗口才保活）。
 
 ## 验证证据
 
-- 12 个桌面运行时自动化测试覆盖隔离环境、可信回环 origin 与 bearer 注入、回环端口、Control Plane ready 后的数据库写入进程启动顺序、ASAR 服务路径、优雅退出、SIGKILL 升级、macOS 进程组信号、异常 leader 的残留执行器清理，以及首次设置遮罩下的 smoke 恢复路径。
-- 开发态与打包态 Electron smoke 均通过 UI 提交 Task 并等待 Worker 完成 Run；随后终止 Worker，确认产品页立即撤下且不再接受输入，并在故障页出现后立刻退出，断言 Control Plane 与 Worker 进程组均已消失。
+- 桌面运行时自动化测试覆盖隔离环境、可信回环 origin 与 bearer 注入、回环端口、Supervisor 单一入口接线（`PEGAS_SUPERVISOR_RESTART=disabled`、residency URL 注入）、ASAR 服务路径、优雅退出、SIGKILL 升级、macOS 进程组信号、异常 leader 的残留执行器清理，以及首次设置遮罩下的 smoke 恢复路径。
+- 常驻链路测试：`test/desktop-residency.test.ts`（偏好读写原子性/损坏回落、LoginItem 成功才持久化、失败保留原状态、幂等）、`test/desktop-residency-proxy.test.ts`（只读投影、bearer/方法约束、同源代理读写、上游失败诚实透传）、`test/supervisor-instance-lock.test.ts`（单实例互斥、stale 回收、release 幂等）、`test/supervisor-child-lifecycle.test.ts`（信号退出判定、SIGTERM→SIGKILL 升级不挂起、进程组信号回退）。
+- 开发态 Electron smoke 通过 UI 提交 Task 并等待 Worker 完成 Run；断言业务进程 ppid=Supervisor、`supervisor.lock` 内容=Supervisor pid、residency 代理 `managed:true` 默认不常驻；开常驻→真实关窗→服务 `/readyz` 仍存活→关回常驻→activate 重开窗；随后 SIGTERM 终止 Supervisor，确认窗口诚实展示故障（故障页或封板离线态）且不再接受输入，Supervisor 与全部业务进程组清零。
 - 两类 Electron smoke 同时验证窗口标题、无控制台错误，以及 `contextIsolation: true`、`sandbox: true`、`nodeIntegration: false`。
 - `pnpm check` 通过 46 个测试文件、450 个测试；独立 `pnpm smoke` 与 `pnpm smoke:desktop` 通过真实 Task→Run 闭环，后者还监督 Worker 与 Scheduler。
 - 主界面和服务失败截图分别保存为 `output/feature-review/media/desktop-electron-macos.png` 与 `output/feature-review/media/desktop-electron-service-failure.png`，均不提交到仓库。
 
 ## 失败与回滚
 
-主进程在 Control Plane 健康检查通过前不加载产品页，并在健康检查通过后才启动 Worker 与 Scheduler，避免冷启动时多个进程同时迁移新数据库。启动超时或子进程提前退出时展示本机错误页，不伪装为在线。三个服务分别运行在独立进程组中；应用退出时对整个组先发 SIGTERM，等待 7 秒（覆盖 DSH 内部 5 秒清理窗口）后再发 SIGKILL，服务主进程已经异常退出时也会清理组内残留执行器。删除 DESKTOP-001 提交即可回到纯 Web 构建；用户数据目录不随代码回滚删除。
+Supervisor 在 Control Plane 健康检查通过前不启动数据库写入进程，避免冷启动时多个进程同时迁移新数据库；主进程在 Control Plane ready 前不加载产品页。启动超时或 Supervisor 提前退出时展示本机错误页，不伪装为在线。业务进程分别运行在独立进程组中；Supervisor 停止时对整个组先发 SIGTERM，宽限后再发 SIGKILL（退出判定同时看 `exitCode` 与 `signalCode`，信号杀死的子进程不会让停止链路挂起），服务主进程已经异常退出时也会清理组内残留执行器。删除 DESKTOP-001 提交即可回到纯 Web 构建；用户数据目录不随代码回滚删除。
 
 ## 原生提醒（2026-11-24）
 

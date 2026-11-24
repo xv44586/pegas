@@ -46,6 +46,7 @@ import type {
   NotificationPreferencesUpdate,
   OutboxMessage,
   RecoveryStatus,
+  DesktopResidency,
   RuntimeSettings,
   RewriteSettingsDraft,
   SpeechSettingsDraft,
@@ -97,6 +98,8 @@ export function App() {
   const [executionNodesError, setExecutionNodesError] = useState('')
   const [recoveryStatus, setRecoveryStatus] = useState<RecoveryStatus>()
   const [recoveryStatusError, setRecoveryStatusError] = useState('')
+  const [residency, setResidency] = useState<DesktopResidency>()
+  const [residencyError, setResidencyError] = useState('')
   const [theme, setTheme] = useState<ThemeChoice>(() => readTheme())
   const [systemDark, setSystemDark] = useState(() => systemPrefersDark())
   const [loading, setLoading] = useState(true)
@@ -296,6 +299,26 @@ export function App() {
     }
   }, [api])
 
+  const loadResidency = useCallback(async () => {
+    try {
+      setResidency(await api.desktopResidency())
+      setResidencyError('')
+    } catch (caught) {
+      setResidencyError(
+        caught instanceof Error ? caught.message : '无法读取后台运行状态。',
+      )
+    }
+  }, [api])
+
+  const toggleResidency = useCallback(
+    async (resident: boolean) => {
+      const saved = await api.saveDesktopResidency(resident)
+      setResidency(saved)
+      setResidencyError('')
+    },
+    [api],
+  )
+
   useEffect(() => {
     if (page === 'automation') void loadAutomations()
     if (
@@ -305,7 +328,10 @@ export function App() {
       void loadMemories()
     if (page === 'settings' && settingsSection === 'notifications')
       void loadNotificationPreferences()
-    if (page === 'settings' && settingsSection === 'pegas') void loadWorkRules()
+    if (page === 'settings' && settingsSection === 'pegas') {
+      void loadWorkRules()
+      void loadResidency()
+    }
     if (page === 'settings' && settingsSection === 'router')
       void loadRoutingRules()
     if (page === 'settings' && settingsSection === 'connections')
@@ -319,6 +345,7 @@ export function App() {
     loadMemories,
     loadNotificationPreferences,
     loadWorkRules,
+    loadResidency,
     loadRoutingRules,
     loadExecutionNodes,
     loadRecoveryStatus,
@@ -1547,6 +1574,9 @@ export function App() {
             executionNodes={executionNodes}
             executionNodesError={executionNodesError}
             initialSection={settingsSection}
+            residency={residency}
+            residencyError={residencyError}
+            onToggleResidency={toggleResidency}
             memories={memories}
             memoriesError={memoriesError}
             notificationPreferences={notificationPreferences}

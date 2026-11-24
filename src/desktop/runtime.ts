@@ -107,6 +107,7 @@ export function desktopServiceEnvironment({
     ...(testMode
       ? {
           PEGAS_EXECUTOR: 'echo',
+          PEGAS_ROUTER: 'rules',
           PEGAS_EVENT_POLL_MS: '25',
           PEGAS_SPEECH_PROVIDER: 'disabled',
         }

@@ -38,12 +38,44 @@ describe('desktop runtime', () => {
   })
 
   it('starts database writers only after the Control Plane is ready', () => {
-    const controlPlane = desktopMain.indexOf("['control-plane/main.js']")
+    // DESKTOP-001: the shell spawns exactly one Supervisor before waiting for
+    // readiness; business processes are the Supervisor's children, never
+    // direct Electron children.
+    const supervisor = desktopMain.indexOf('startSupervisorEntry(')
     const ready = desktopMain.indexOf('await waitForControlPlane(appUrl)')
-    const background = desktopMain.indexOf("'worker/main.js'")
-    expect(controlPlane).toBeGreaterThanOrEqual(0)
-    expect(controlPlane).toBeLessThan(ready)
-    expect(ready).toBeLessThan(background)
+    expect(supervisor).toBeGreaterThanOrEqual(0)
+    expect(desktopMain).toContain("'supervisor/main.js'")
+    expect(desktopMain).not.toContain("['control-plane/main.js']")
+    expect(desktopMain).not.toContain("'worker/main.js',")
+    const spawnCall = desktopMain.indexOf(
+      'startSupervisorEntry(port, recoveryPort, residencyPort, dataDir, apiToken)',
+    )
+    expect(spawnCall).toBeGreaterThanOrEqual(0)
+    expect(spawnCall).toBeLessThan(ready)
+    expect(desktopMain).toContain("PEGAS_SUPERVISOR_RESTART: 'disabled'")
+  })
+
+  it('keeps residency machine-local and default-off with honest window semantics', () => {
+    expect(desktopMain).toContain(
+      'residentMode = readResidencyPreference(preferenceDirectory).resident',
+    )
+    const windowClosed = desktopMain.indexOf("app.on('window-all-closed'")
+    const residentGuard = desktopMain.indexOf('if (residentMode) return')
+    expect(windowClosed).toBeGreaterThanOrEqual(0)
+    expect(residentGuard).toBeGreaterThan(windowClosed)
+    expect(desktopMain).toContain('app.setLoginItemSettings(settings)')
+    expect(desktopMain).toContain('PEGAS_DESKTOP_RESIDENCY_URL')
+  })
+
+  it('test mode uses deterministic rules routing so smoke never depends on a live model', () => {
+    const environment = desktopServiceEnvironment({
+      port: 41234,
+      dataDir: '/tmp/pegas-desktop-test',
+      apiToken: 'debug-token',
+      testMode: true,
+      environment: {},
+    })
+    expect(environment.PEGAS_ROUTER).toBe('rules')
   })
 
   it('wires native attention to the trusted origin with main-process bearer only', () => {
