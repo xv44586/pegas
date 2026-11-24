@@ -1047,6 +1047,119 @@ describe('sealed Pegas UI', () => {
     )
   })
 
+  it('ROUTE-005: manages routing rules, uncertainty policy and dry-run preview', async () => {
+    const routingRule = {
+      id: 'routing-rule-1',
+      userId: 'user-1',
+      title: '提到 X 项目优先进 X 事情',
+      content: '消息提到 X 项目时优先归入 X 事情。',
+      enabled: true,
+      revision: 1,
+      createdAt: '2026-11-24T00:00:00.000Z',
+      updatedAt: '2026-11-24T00:00:00.000Z',
+    }
+    let rules = [routingRule]
+    let savedBody: Record<string, unknown> | undefined
+    let currentSettings: SettingsResponse = settingsResponse
+    const fetchMock = installFetch((path, init) => {
+      if (path.startsWith('/v1/routing-rules?')) return Response.json({ rules })
+      if (path.startsWith('/v1/routing-rules/') && init?.method === 'PUT') {
+        const body = JSON.parse(
+          typeof init.body === 'string' ? init.body : '{}',
+        ) as { rule: { enabled: boolean } }
+        rules = rules.map(rule => ({
+          ...rule,
+          enabled: body.rule.enabled,
+          revision: rule.revision + 1,
+        }))
+        return Response.json({ rule: rules[0] })
+      }
+      if (path === '/v1/routing/preview' && init?.method === 'POST')
+        return Response.json({
+          preview: {
+            kind: 'continue_task',
+            taskId: 'task-x',
+            taskTitle: 'X 项目',
+            reason: '命中 X 项目归类规则',
+            matchedRuleId: 'routing-rule-1',
+            routerMode: 'model',
+            dryRun: true,
+          },
+        })
+      if (path === '/v1/settings' && init?.method === 'PUT') {
+        savedBody = JSON.parse(
+          typeof init.body === 'string' ? init.body : '{}',
+        ) as Record<string, unknown>
+        currentSettings = {
+          ...currentSettings,
+          settings: {
+            ...currentSettings.settings,
+            revision: currentSettings.settings.revision + 1,
+            routingUncertainty: 'ask_first',
+          },
+        }
+        return Response.json(currentSettings)
+      }
+      if (path === '/v1/settings') return Response.json(currentSettings)
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(await screen.findByRole('button', { name: /事情归类/ }))
+    expect(await screen.findByText('提到 X 项目优先进 X 事情')).toBeTruthy()
+    expect(screen.getByText('归类 · 启用')).toBeTruthy()
+    expect(screen.getByText('已停止的事情不自动恢复')).toBeTruthy()
+
+    const toggle = screen.getByLabelText(
+      '停用归类规则：提到 X 项目优先进 X 事情',
+    )
+    fireEvent.click(toggle)
+    await screen.findByText('归类 · 停用')
+
+    fireEvent.click(screen.getByRole('button', { name: '添加规则' }))
+    const drawer = await screen.findByRole('dialog')
+    expect(
+      within(drawer).getByText(/归类规则只影响「消息进哪个事情」/),
+    ).toBeTruthy()
+    fireEvent.change(within(drawer).getByLabelText('规则名称'), {
+      target: { value: '新归类规则' },
+    })
+    fireEvent.change(within(drawer).getByLabelText('规则内容'), {
+      target: { value: '描述归属偏好。' },
+    })
+    fireEvent.click(within(drawer).getByRole('button', { name: '保存规则' }))
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([path, init]) => {
+          if (path !== '/v1/routing-rules' || init?.method !== 'POST')
+            return false
+          const body = JSON.parse(
+            typeof init.body === 'string' ? init.body : '{}',
+          ) as { rule?: { title?: string } }
+          return body.rule?.title === '新归类规则'
+        }),
+      ).toBe(true),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '关闭详情' }))
+
+    fireEvent.click(screen.getByLabelText('先问我'))
+    fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
+    await screen.findByText('更改已保存')
+    expect(savedBody?.routingUncertainty).toBe('ask_first')
+
+    fireEvent.change(screen.getByLabelText('测试归类消息'), {
+      target: { value: 'X 项目再加一个想法' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '测试' }))
+    expect(await screen.findByText('继续事情：X 项目')).toBeTruthy()
+    expect(screen.getByText('命中 X 项目归类规则')).toBeTruthy()
+    expect(screen.getByText(/命中规则：提到 X 项目优先进 X 事情/)).toBeTruthy()
+  })
+
   it('keeps model-service Router shortcuts in sync with the URL', async () => {
     installFetch()
     render(<App />)

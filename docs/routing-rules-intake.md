@@ -2,7 +2,7 @@
 
 > Feature：`ROUTE-005`
 >
-> 状态：Partial（R1 存储、R2 规则消费、R3 不确定时策略已落地；R4 测试归类与设置页解锁未实现）
+> 状态：Usable（R1–R4 全部落地；尚未合并 main 与 Candidate 上线）
 >
 > 登记日期：2026-11-23
 
@@ -130,6 +130,7 @@
 - `POST /v1/routing/preview`：bearer + owner，输入一句话，复用 `listRoutingCandidates` 投影 + 当前生效 routerMode/规则/策略执行 dry-run，返回决策/理由/命中规则；零持久化副作用回归断言（Task/Run/Outbox/routing_decisions 均无新行）；模型调用计量 `component=router` 如实入账；超时/失败返回诚实错误不兜底成假决策。
 - Web `SettingsPage` 解锁三区：归类规则列表/添加/编辑/启停/删除（复用工作规则抽屉模式，409 自动重读）、不确定时 radio（读写 R3 设置）、测试归类输入+结果卡；rules 模式下规则区如实标注仅作用于智能判断。
 - 门禁：`App.test.tsx` 回归、`workspace-theme` 合同、`pnpm review:ui --force`、`pnpm a11y:review` 三主题 + 390px。
+- **落地证据（2026-11-24）**：分支 `feat/ROUTE-005-preview-and-ui`（基线 `5637b34`）。`POST /v1/routing/preview`：bearer + owner，输入 ≤4000 字，复用 `listRoutingCandidates` + 当前已保存 routerMode/规则/策略执行 dry-run（合成事件不落库），返回 kind/reason/taskTitle/title/question/matchedRuleId；模型调用经 `MeteredJsonModelProvider` 以 `component=router` 如实入账（eventId=`preview:<uuid>` 不指向真实事件）；模型失败/未配置返回诚实 502 `routing_preview_failed` 不兜底假决策；privacyMode=mask 时经 PrivacyMaskingProvider。Web 解锁：归类规则列表/添加/编辑/启停/删除（`routingRule` 抽屉复用工作规则模式，409 提示重开）、rules 模式如实标注规则仅作用于智能判断、「不确定时」三值 radio 走既有保存链（省略保留）、测试归类输入+结果卡（含命中规则名）；系统硬规则保持锁定。测试：`test/routing-preview.test.ts` 2 测试（零持久化副作用断言：Task/Event/Outbox/routing_decisions 均无新行）；`App.test.tsx` +1 全链路（规则渲染/启停 PUT/添加 POST/radio 保存 payload/preview 结果卡）；真实 magpie/qwen4-max HTTP preview 条件集成（命中规则+零副作用+计量入账）。门禁：`pnpm check` 117 文件/1216 测试全绿（statement 85.55% / line 88.75%）、`pnpm smoke`、`pnpm smoke:crash`、`pnpm review:ui --force`、`pnpm a11y:review` 0 违例。剩余风险：preview 使用已保存设置而非未保存草稿（UI 已如实说明）；真实模型遵守度未系统评测。回滚：revert 即恢复锁定占位与无 preview API，v40–v42 增量旧代码忽略。
 
 ### 集成与完成
 

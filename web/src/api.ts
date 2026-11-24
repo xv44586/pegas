@@ -42,6 +42,9 @@ import type {
   WorkerProfileResponse,
   WorkRuleDraft,
   WorkRuleRecord,
+  RoutingRuleDraft,
+  RoutingRuleRecord,
+  RoutingPreview,
 } from './types'
 import { fallbackWorkerIconId, isWorkerIconId } from './agent-icon-id'
 
@@ -818,6 +821,81 @@ export class PegasApi {
     if (!response.ok) await throwResponse(response)
   }
 
+  async routingRules(): Promise<{
+    rules: RoutingRuleRecord[]
+    nextCursor?: string
+  }> {
+    const params = new URLSearchParams({ userId: this.#userId, limit: '200' })
+    return this.#get<{ rules: RoutingRuleRecord[]; nextCursor?: string }>(
+      `/v1/routing-rules?${params.toString()}`,
+    )
+  }
+
+  async createRoutingRule(draft: RoutingRuleDraft): Promise<RoutingRuleRecord> {
+    const response = await fetch('/v1/routing-rules', {
+      method: 'POST',
+      headers: this.#headers(true),
+      body: JSON.stringify({
+        userId: this.#userId,
+        commandId: crypto.randomUUID(),
+        rule: draft,
+      }),
+    })
+    if (!response.ok) await throwResponse(response)
+    return ((await response.json()) as { rule: RoutingRuleRecord }).rule
+  }
+
+  async updateRoutingRule(
+    ruleId: string,
+    expectedRevision: number,
+    draft: RoutingRuleDraft,
+  ): Promise<RoutingRuleRecord> {
+    const response = await fetch(
+      `/v1/routing-rules/${encodeURIComponent(ruleId)}`,
+      {
+        method: 'PUT',
+        headers: this.#headers(true),
+        body: JSON.stringify({
+          userId: this.#userId,
+          commandId: crypto.randomUUID(),
+          expectedRevision,
+          rule: draft,
+        }),
+      },
+    )
+    if (!response.ok) await throwResponse(response)
+    return ((await response.json()) as { rule: RoutingRuleRecord }).rule
+  }
+
+  async deleteRoutingRule(
+    ruleId: string,
+    expectedRevision: number,
+  ): Promise<void> {
+    const response = await fetch(
+      `/v1/routing-rules/${encodeURIComponent(ruleId)}/delete`,
+      {
+        method: 'POST',
+        headers: this.#headers(true),
+        body: JSON.stringify({
+          userId: this.#userId,
+          commandId: crypto.randomUUID(),
+          expectedRevision,
+        }),
+      },
+    )
+    if (!response.ok) await throwResponse(response)
+  }
+
+  async routingPreview(text: string): Promise<RoutingPreview> {
+    const response = await fetch('/v1/routing/preview', {
+      method: 'POST',
+      headers: this.#headers(true),
+      body: JSON.stringify({ userId: this.#userId, text }),
+    })
+    if (!response.ok) await throwResponse(response)
+    return ((await response.json()) as { preview: RoutingPreview }).preview
+  }
+
   async behaviorPreferences(): Promise<BehaviorPreferences> {
     const user = encodeURIComponent(this.#userId)
     const response = await this.#get<{ preferences: BehaviorPreferences }>(
@@ -932,6 +1010,9 @@ export class PegasApi {
         ...(settings.chatLaneEnabled === undefined
           ? {}
           : { chatLaneEnabled: settings.chatLaneEnabled }),
+        ...(settings.routingUncertainty === undefined
+          ? {}
+          : { routingUncertainty: settings.routingUncertainty }),
         ...(settings.executionPools === undefined
           ? {}
           : { executionPools: settings.executionPools }),

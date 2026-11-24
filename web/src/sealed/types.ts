@@ -21,6 +21,7 @@ import type {
   WorkChannel,
   WorkerProfileResponse,
   WorkRuleRecord,
+  RoutingRuleRecord,
 } from '../types'
 
 export type AppPage =
@@ -107,6 +108,12 @@ export type DrawerView =
       title: string
       rule?: WorkRuleRecord
       behavior?: BehaviorPreferences
+      onSaved?: () => void
+    }
+  | {
+      kind: 'routingRule'
+      title: string
+      rule?: RoutingRuleRecord
       onSaved?: () => void
     }
   | {

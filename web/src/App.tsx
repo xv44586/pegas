@@ -50,6 +50,7 @@ import type {
   RewriteSettingsDraft,
   SpeechSettingsDraft,
   WorkRuleRecord,
+  RoutingRuleRecord,
 } from './types'
 
 const userId = 'owner'
@@ -82,6 +83,8 @@ export function App() {
   const [memoriesError, setMemoriesError] = useState('')
   const [memoriesTruncated, setMemoriesTruncated] = useState(false)
   const [workRules, setWorkRules] = useState<WorkRuleRecord[]>()
+  const [routingRules, setRoutingRules] = useState<RoutingRuleRecord[]>()
+  const [routingRulesError, setRoutingRulesError] = useState('')
   const [workRulesError, setWorkRulesError] = useState('')
   const [behaviorPreferences, setBehaviorPreferences] =
     useState<BehaviorPreferences>()
@@ -117,6 +120,7 @@ export function App() {
   const automationsRequestRef = useRef(0)
   const memoriesRequestRef = useRef(0)
   const workRulesRequestRef = useRef(0)
+  const routingRulesRequestRef = useRef(0)
   const notificationsRequestRef = useRef(0)
   const nodesRequestRef = useRef(0)
   const recoveryRequestRef = useRef(0)
@@ -244,6 +248,22 @@ export function App() {
     }
   }, [api])
 
+  const loadRoutingRules = useCallback(async () => {
+    const requestId = routingRulesRequestRef.current + 1
+    routingRulesRequestRef.current = requestId
+    try {
+      const result = await api.routingRules()
+      if (requestId !== routingRulesRequestRef.current) return
+      setRoutingRules(result.rules)
+      setRoutingRulesError('')
+    } catch (caught) {
+      if (requestId !== routingRulesRequestRef.current) return
+      setRoutingRulesError(
+        caught instanceof Error ? caught.message : '无法读取归类规则。',
+      )
+    }
+  }, [api])
+
   const loadExecutionNodes = useCallback(async () => {
     const requestId = nodesRequestRef.current + 1
     nodesRequestRef.current = requestId
@@ -286,6 +306,8 @@ export function App() {
     if (page === 'settings' && settingsSection === 'notifications')
       void loadNotificationPreferences()
     if (page === 'settings' && settingsSection === 'pegas') void loadWorkRules()
+    if (page === 'settings' && settingsSection === 'router')
+      void loadRoutingRules()
     if (page === 'settings' && settingsSection === 'connections')
       void loadExecutionNodes()
     if (page === 'settings' && settingsSection === 'recovery')
@@ -297,6 +319,7 @@ export function App() {
     loadMemories,
     loadNotificationPreferences,
     loadWorkRules,
+    loadRoutingRules,
     loadExecutionNodes,
     loadRecoveryStatus,
   ])
@@ -1530,6 +1553,29 @@ export function App() {
             onReloadRecovery={() => void loadRecoveryStatus()}
             onReloadUsage={() => void loadUsage()}
             onReloadWorkRules={() => void loadWorkRules()}
+            routingRules={routingRules}
+            routingRulesError={routingRulesError}
+            onReloadRoutingRules={() => void loadRoutingRules()}
+            onToggleRoutingRule={async rule => {
+              try {
+                await api.updateRoutingRule(rule.id, rule.revision, {
+                  title: rule.title,
+                  content: rule.content,
+                  enabled: !rule.enabled,
+                })
+              } catch (caught) {
+                if (caught instanceof ApiError && caught.status === 409) {
+                  await loadRoutingRules()
+                  throw new Error(
+                    '更新冲突：这条规则已在别处更新，已读取最新状态。',
+                    { cause: caught },
+                  )
+                }
+                throw caught
+              }
+              await loadRoutingRules()
+            }}
+            onTestRouting={text => api.routingPreview(text)}
             onSaveNotifications={async (
               update: NotificationPreferencesUpdate,
             ) => {

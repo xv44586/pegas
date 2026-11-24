@@ -425,6 +425,7 @@ export interface RuntimeSettings {
   privacyMode: 'disabled' | 'mask'
   rewriteMode: 'disabled' | 'light'
   chatLaneEnabled?: boolean
+  routingUncertainty?: 'new_task' | 'ask_first' | 'continue_recent'
   executionPools?: Partial<
     Record<'fast' | 'balanced' | 'deep', { provider: string; model: string }>
   >
@@ -667,6 +668,32 @@ export interface WorkRuleRecord extends WorkRuleDraft {
   revision: number
   createdAt: string
   updatedAt: string
+}
+
+export interface RoutingRuleDraft {
+  title: string
+  content: string
+  enabled: boolean
+}
+
+export interface RoutingRuleRecord extends RoutingRuleDraft {
+  id: string
+  userId: string
+  revision: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface RoutingPreview {
+  kind: string
+  reason: string
+  taskId?: string
+  taskTitle?: string
+  title?: string
+  question?: string
+  matchedRuleId?: string
+  routerMode: 'model' | 'rules'
+  dryRun: true
 }
 
 export interface BehaviorPreferences {
