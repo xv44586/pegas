@@ -273,6 +273,8 @@ Memory 为 Pegas 提供跨任务的长期认知，但不替代 Task 数据库。
 
 schema v21 与 `MEMORY-001` 实现第一版分层记忆：Memory 按 owner 隔离，作用域为 global、worker（绑定事情执行配置）与 channel（绑定事情），类别覆盖偏好、事实、情境、经验、过程与受保护引用，来源必须是用户确认或同 owner 的 Task/Run/Artifact。创建、纠正、删除支持稳定 command ID 与乐观 revision；删除永久移除正文并清除历史 command 冻结响应中的内容。Worker 执行 Run 时按 channel → worker → global 顺序有界装载适用记忆并更新最近使用时间，注入 Executor 的记忆声明为数据而非指令，不能扩大 Mandate 或权限，正文标签字符被转义防止提示注入。完整合同见 `docs/memory.md`。
 
+`MEMORY-001` 下一阶段采用双层权威模型。Pegas SQLite 中的显式 Memory 继续承担用户钉住、可确定编辑的记忆，Pegas Control Plane 继续掌握 owner、scope、来源、删除墓碑、幂等作业和最终注入。自托管 Hindsight 作为可替换 Provider，只处理从可靠 Task/Run 事件派生的抽取、索引、归并和检索。Worker 在执行前消费经过 Pegas 二次过滤与预算裁剪的结果。Router 不读取长期 Memory，它只使用 Conversation/Task 权威状态、Task Directory 与显式 Routing Policy，避免记忆归并改变路由稳定性或扩大数据暴露面。Provider 故障必须 fail-open，不能阻止 Task/Run 推进。该阶段仍为 Planned，落地边界和验收见 `docs/memory.md` 的 Hindsight MVP Intake。
+
 ### 6. Scheduler
 
 Scheduler 管理：
