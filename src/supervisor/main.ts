@@ -26,6 +26,12 @@ import {
 import { LifecycleTransitionBarrier } from './lifecycle-transition.js'
 import { performRollbackTransition } from './rollback-transition.js'
 import { resolveSupervisorRuntimePaths } from './runtime-paths.js'
+import { acquireSupervisorInstanceLock } from './instance-lock.js'
+import {
+  childHasExited,
+  onceChildExited,
+  stopChildProcesses,
+} from './child-lifecycle.js'
 
 const statePath = resolve(
   process.env.PEGAS_SUPERVISOR_STATE ?? './data/supervisor.json',
@@ -33,6 +39,7 @@ const statePath = resolve(
 const { dataDir, databasePath } = resolveSupervisorRuntimePaths(
   process.env.PEGAS_DATA_DIR,
 )
+const instanceLock = acquireSupervisorInstanceLock(dataDir)
 ensureInstanceBearer({ dataDir, environment: process.env })
 const recoveryHost = process.env.PEGAS_RECOVERY_HOST ?? '127.0.0.1'
 const recoveryPort = positiveInteger(process.env.PEGAS_RECOVERY_PORT, 4318)
@@ -266,18 +273,27 @@ while (!lifecycle.stopRequested) {
     })
   }
 
-  await Promise.race(children.map(child => onceExited(child)))
+  await Promise.race(children.map(child => onceChildExited(child)))
   if (restartWasRequested()) {
     await lifecycleTransitions.wait()
     continue
   }
   // These flags can change in signal and recovery API callbacks while awaiting child exit.
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-  if (!lifecycle.stopRequested && !lifecycle.restartRequested) {
+  if (!stopWasRequested() && !restartWasRequested()) {
     await stopChildren()
     state.recordFailure(
       `A process in release ${release.id} exited unexpectedly`,
     )
+    if (process.env.PEGAS_SUPERVISOR_RESTART === 'disabled') {
+      // Desktop app-lifecycle mode: an unexpected business-process death is
+      // terminal for this run. Exit honestly so the shell can show its failure
+      // page instead of silently resurrecting services the user quit.
+      logger.error('supervisor.exiting_after_failure', undefined, {
+        releaseId: release.id,
+        message: 'Automatic restart is disabled; supervisor exiting',
+      })
+      break
+    }
     await wait(1000)
   }
 }
@@ -286,6 +302,7 @@ await stopChildren()
 await new Promise<void>(resolveClose =>
   recoveryServer.close(() => resolveClose()),
 )
+instanceLock.release()
 
 function startProcess(release: ReleaseRef, entrypoint: string): ChildProcess {
   const child = spawn(
@@ -293,6 +310,7 @@ function startProcess(release: ReleaseRef, entrypoint: string): ChildProcess {
     [resolve(release.root, 'dist', entrypoint)],
     {
       cwd: release.root,
+      detached: process.platform !== 'win32',
       env: {
         ...process.env,
         PEGAS_DATA_DIR: dataDir,
@@ -307,6 +325,11 @@ function startProcess(release: ReleaseRef, entrypoint: string): ChildProcess {
 function restartWasRequested(): boolean {
   // Recovery callbacks can mutate this flag while the main loop awaits I/O.
   return lifecycle.restartRequested
+}
+
+function stopWasRequested(): boolean {
+  // Signal handlers can mutate this flag while the main loop awaits I/O.
+  return lifecycle.stopRequested
 }
 
 async function waitForHealth(
@@ -340,10 +363,12 @@ async function staysAlive(
   durationMs: number,
 ): Promise<boolean> {
   const exited = await Promise.race([
-    Promise.race(processes.map(child => onceExited(child))).then(() => true),
+    Promise.race(processes.map(child => onceChildExited(child))).then(
+      () => true,
+    ),
     wait(durationMs).then(() => false),
   ])
-  return !exited && processes.every(child => child.exitCode === null)
+  return !exited && processes.every(child => !childHasExited(child))
 }
 
 async function recoverFromFailure(reason: string): Promise<void> {
@@ -386,21 +411,8 @@ function assertRollbackAllowed(): void {
 }
 
 async function stopChildren(): Promise<void> {
-  const running = children.filter(child => child.exitCode === null)
-  for (const child of running) child.kill('SIGTERM')
-  await Promise.race([
-    Promise.all(running.map(child => onceExited(child))),
-    wait(5000),
-  ])
-  const stubborn = running.filter(child => child.exitCode === null)
-  for (const child of stubborn) child.kill('SIGKILL')
-  await Promise.all(stubborn.map(child => onceExited(child)))
+  await stopChildProcesses(children)
   children = []
-}
-
-function onceExited(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null) return Promise.resolve()
-  return new Promise(resolveExit => child.once('exit', () => resolveExit()))
 }
 
 function requestStop(signal: string): void {

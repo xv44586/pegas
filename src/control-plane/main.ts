@@ -78,6 +78,14 @@ const server = createControlPlane({
     baseUrl: config.recoveryBaseUrl,
     ...(config.recoveryToken ? { token: config.recoveryToken } : {}),
   },
+  ...(process.env.PEGAS_DESKTOP_RESIDENCY_URL
+    ? {
+        desktopResidency: {
+          baseUrl: process.env.PEGAS_DESKTOP_RESIDENCY_URL,
+          ...(config.apiToken ? { token: config.apiToken } : {}),
+        },
+      }
+    : {}),
   agentModelCatalog: () => loadAgentModelCatalog(),
 })
 

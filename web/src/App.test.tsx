@@ -2487,6 +2487,90 @@ describe('sealed Pegas UI', () => {
     expect(window.location.search).toContain('section=voice')
   })
 
+  it('shows an honest read-only residency note for plain server deployments', async () => {
+    window.history.replaceState({}, '', '/?view=settings&section=pegas')
+    installFetch(path =>
+      path === '/v1/desktop/residency'
+        ? Response.json({
+            managed: false,
+            diagnostics: [
+              '此实例不是由桌面 App 托管；后台运行由该实例的部署方式决定。',
+            ],
+          })
+        : undefined,
+    )
+    render(<App />)
+    expect(await screen.findByText(/此实例不是由桌面 App 托管/u)).toBeTruthy()
+    expect(screen.queryByLabelText('关闭窗口后继续运行')).toBeNull()
+  })
+
+  it('toggles desktop residency through the proxy and discloses the lifecycle honestly', async () => {
+    window.history.replaceState({}, '', '/?view=settings&section=pegas')
+    let resident = false
+    const switches: boolean[] = []
+    installFetch((path, init) => {
+      if (path !== '/v1/desktop/residency') return undefined
+      if (init?.method === 'PUT') {
+        const body = JSON.parse(
+          typeof init.body === 'string' ? init.body : '{}',
+        ) as { resident: boolean }
+        switches.push(body.resident)
+        resident = body.resident
+      }
+      return Response.json({
+        managed: true,
+        resident,
+        loginItemRegistered: resident,
+      })
+    })
+    render(<App />)
+    const toggle =
+      await screen.findByLabelText<HTMLInputElement>('关闭窗口后继续运行')
+    expect(toggle.checked).toBe(false)
+    expect(
+      screen.getByText(
+        '退出 App 即停止服务；定时自动化仅在 App 打开期间运行。',
+      ),
+    ).toBeTruthy()
+    fireEvent.click(toggle)
+    await waitFor(() => expect(toggle.checked).toBe(true))
+    expect(switches).toEqual([true])
+    expect(
+      screen.getByText(
+        '关闭窗口只隐藏窗口，服务与定时自动化继续运行，登录本机时自动启动。',
+      ),
+    ).toBeTruthy()
+    fireEvent.click(toggle)
+    await waitFor(() => expect(toggle.checked).toBe(false))
+    expect(switches).toEqual([true, false])
+  })
+
+  it('failed residency switches keep the previous state and show the error', async () => {
+    window.history.replaceState({}, '', '/?view=settings&section=pegas')
+    installFetch((path, init) => {
+      if (path !== '/v1/desktop/residency') return undefined
+      if (init?.method === 'PUT')
+        return new Response(
+          JSON.stringify({
+            error: 'residency_switch_failed',
+            message: 'login item registration failed',
+          }),
+          { status: 502, headers: { 'content-type': 'application/json' } },
+        )
+      return Response.json({
+        managed: true,
+        resident: false,
+        loginItemRegistered: false,
+      })
+    })
+    render(<App />)
+    const toggle =
+      await screen.findByLabelText<HTMLInputElement>('关闭窗口后继续运行')
+    fireEvent.click(toggle)
+    expect(await screen.findByRole('alert')).toBeTruthy()
+    expect(toggle.checked).toBe(false)
+  })
+
   it('restores a URL-backed Channel drawer and preserves its scoped timeline', async () => {
     window.history.replaceState({}, '', '/?channel=task-1')
     installFetch(path =>
