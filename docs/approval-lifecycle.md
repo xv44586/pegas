@@ -187,7 +187,7 @@ claim token 只经进程环境传给 DSH 主进程，DSH 自身的 subprocess �
 桥接的已知边界：
 
 - Policy Gate 覆盖全部工具调用，但 bash 只做确定性静态分类：未命中模式的复杂命令按低风险交由沙箱边界执行，间接执行按 unknown 强制人工确认；execpolicy 级完整命令语义解析属后续阶段。
-- Gate 的 allow 记录目前经 `policy_decision` 事件进入 Run Activity 进度流（含档位与代次指纹），逐调用独立审计表仍未落；切档动作本身已有 append-only 审计。
+- Gate 的每次判定（allow/ask/deny）自 2026-11-24 起落 append-only `policy_call_audit` 独立审计表（含档位代次、规则引用、审阅结论与 Action 引用，`GET /v1/policy-audit` 可查），Activity 进度流只做白话展示；切档动作本身另有 append-only 审计。
 - 档位对象与运行中热切换已落地（P2），持久规则批准（approve_rule）已落地（P3），审批卡结构化渲染与通知深链已落地（P4），模型自动审阅（默认关、失败降级人工）已落地（P5）。
 - 桥现读档位是每工具调用一次本地 HTTP 往返；控制面不可达时该 Run 的工具全部按 strict 升审批，不会静默放行。
 - 同一 DSH 进程只停放第一个越权调用；并行的其余审批请求 fall through 到 DSH 默认 `unavailable`，fail closed。

@@ -115,6 +115,20 @@ export function apply(ctx, config = {}) {
         if (granted) {
           grantConsumed = true
           grantedCalls.set(callKey, grant.actionId)
+          emit({
+            type: 'policy_decision',
+            callId: callKey,
+            tool: exec.name,
+            category: classification.category,
+            risk: classification.risk,
+            decision: 'allow',
+            reason: '已按你批准的一次性授权放行本次调用。',
+            actionId: grant.actionId,
+            tier: tierState.tier,
+            generation: tierState.generation,
+            mismatch: tierState.mismatch,
+            targets: classification.targets,
+          })
           return next()
         }
         const reviewedActionId = reviewedCalls.get(callKey)
@@ -138,6 +152,7 @@ export function apply(ctx, config = {}) {
             tier: tierState.tier,
             generation: tierState.generation,
             mismatch: tierState.mismatch,
+            targets: classification.targets,
           })
           if (exec.agent !== undefined) return next()
           return { kind: 'allow' }
@@ -161,6 +176,7 @@ export function apply(ctx, config = {}) {
             tier: tierState.tier,
             generation: tierState.generation,
             mismatch: tierState.mismatch,
+            targets: classification.targets,
           })
           if (exec.agent !== undefined) return next()
           return { kind: 'allow' }
@@ -177,6 +193,7 @@ export function apply(ctx, config = {}) {
             tier: tierState.tier,
             generation: tierState.generation,
             mismatch: tierState.mismatch,
+            targets: classification.targets,
           })
           return next()
         }
@@ -192,6 +209,7 @@ export function apply(ctx, config = {}) {
             tier: tierState.tier,
             generation: tierState.generation,
             mismatch: tierState.mismatch,
+            targets: classification.targets,
           })
           return { kind: 'deny', reason: classification.reason }
         }
@@ -249,6 +267,7 @@ export function apply(ctx, config = {}) {
               tier: tierState.tier,
               generation: tierState.generation,
               mismatch: tierState.mismatch,
+              targets: classification.targets,
             })
             if (exec.agent !== undefined) return await next()
             return { kind: 'allow' }
@@ -282,6 +301,7 @@ export function apply(ctx, config = {}) {
           tier: tierState.tier,
           generation: tierState.generation,
           mismatch: tierState.mismatch,
+          targets: classification.targets,
           ...(reviewOutcome === undefined
             ? {}
             : { reviewDecision: reviewOutcome.decision }),

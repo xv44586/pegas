@@ -239,7 +239,16 @@ describe('DSH approval bridge plugin', () => {
         status: 'succeeded',
         result: { tool: 'bash', callId: 'call-new' },
       })
-      expect(events).toEqual([])
+      expect(events.filter(event => event.type === 'approval_pending')).toEqual(
+        [],
+      )
+      expect(events).toHaveLength(1)
+      expect(events[0]).toMatchObject({
+        type: 'policy_decision',
+        callId: 'call-new',
+        decision: 'allow',
+        actionId: requested.action.id,
+      })
 
       const differentExec = {
         agent: {},

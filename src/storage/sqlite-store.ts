@@ -1000,6 +1000,50 @@ BEGIN
 END;
 `
 
+const migration43 = `
+-- APPROVAL-001: per-call Policy Gate audit. One append-only row per gate
+-- decision so rule hits and auto-review allowances stay accountable even
+-- when no Approval card was ever shown.
+CREATE TABLE policy_call_audit (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL REFERENCES runs(id),
+  task_id TEXT NOT NULL REFERENCES tasks(id),
+  call_id TEXT NOT NULL,
+  tool TEXT NOT NULL,
+  category TEXT NOT NULL,
+  risk TEXT NOT NULL,
+  decision TEXT NOT NULL CHECK (decision IN ('allow','ask','deny')),
+  reason TEXT NOT NULL,
+  tier TEXT,
+  generation TEXT,
+  mismatch INTEGER NOT NULL DEFAULT 0 CHECK (mismatch IN (0, 1)),
+  rule_id TEXT,
+  review_decision TEXT CHECK (review_decision IN ('allow','deny','failed')),
+  action_id TEXT,
+  targets_json TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  UNIQUE (run_id, call_id)
+);
+
+CREATE INDEX policy_call_audit_by_task_time
+ON policy_call_audit (task_id, created_at DESC, id DESC);
+
+CREATE INDEX policy_call_audit_by_rule
+ON policy_call_audit (rule_id, created_at DESC);
+
+CREATE TRIGGER policy_call_audit_no_update
+BEFORE UPDATE ON policy_call_audit
+BEGIN
+  SELECT RAISE(ABORT, 'policy_call_audit rows are append-only');
+END;
+
+CREATE TRIGGER policy_call_audit_no_delete
+BEFORE DELETE ON policy_call_audit
+BEGIN
+  SELECT RAISE(ABORT, 'policy_call_audit rows cannot be deleted');
+END;
+`
+
 const migration32 = `
 ALTER TABLE tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'work'
 CHECK (kind IN ('work', 'conversation'));
@@ -2848,6 +2892,7 @@ export class PegasStore {
     this.#migrate(40, migration40)
     this.#migrate(41, migration41)
     this.#migrate(42, migration42)
+    this.#migrate(43, migration43)
   }
 
   #backfillWorkerIconIds(): void {
@@ -11251,6 +11296,181 @@ export class PegasStore {
   ): void {
     if (!this.ownsRun(runId, workerId)) return
     this.#completeRunActivityToolCall(runId, callId, outcome)
+  }
+
+  appendPolicyCallAudit(
+    runId: string,
+    workerId: string,
+    entry: {
+      callId: string
+      tool: string
+      category: string
+      risk: string
+      decision: 'allow' | 'ask' | 'deny'
+      reason: string
+      tier?: string
+      generation?: string
+      mismatch?: boolean
+      ruleId?: string
+      reviewDecision?: 'allow' | 'deny' | 'failed'
+      actionId?: string
+      targets?: readonly string[]
+    },
+  ): void {
+    if (!this.ownsRun(runId, workerId)) return
+    this.#database
+      .prepare(
+        `INSERT INTO policy_call_audit
+          (run_id, task_id, call_id, tool, category, risk, decision, reason,
+           tier, generation, mismatch, rule_id, review_decision, action_id,
+           targets_json, created_at)
+         SELECT ?, runs.task_id, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+         FROM runs WHERE runs.id = ?
+         ON CONFLICT (run_id, call_id) DO NOTHING`,
+      )
+      .run(
+        runId,
+        entry.callId,
+        entry.tool,
+        entry.category,
+        entry.risk,
+        entry.decision,
+        entry.reason.slice(0, 2_000),
+        entry.tier ?? null,
+        entry.generation ?? null,
+        entry.mismatch ? 1 : 0,
+        entry.ruleId ?? null,
+        entry.reviewDecision ?? null,
+        entry.actionId ?? null,
+        JSON.stringify(entry.targets ?? []),
+        this.#clock.now().toISOString(),
+        runId,
+      )
+  }
+
+  listPolicyCallAudit(
+    userId: string,
+    filters: {
+      taskId?: string
+      runId?: string
+      decision?: 'allow' | 'ask' | 'deny'
+      category?: string
+      ruleId?: string
+      limit?: number
+      cursor?: string
+    } = {},
+  ): CursorPage<{
+    id: string
+    runId: string
+    taskId: string
+    callId: string
+    tool: string
+    category: string
+    risk: string
+    decision: 'allow' | 'ask' | 'deny'
+    reason: string
+    tier?: string
+    generation?: string
+    mismatch: boolean
+    ruleId?: string
+    reviewDecision?: 'allow' | 'deny' | 'failed'
+    actionId?: string
+    targets: string[]
+    createdAt: string
+  }> {
+    const limit = filters.limit ?? 50
+    let cursorCreatedAt: string | null = null
+    let cursorId: number | null = null
+    if (filters.cursor) {
+      const cursorRow = this.#database
+        .prepare(
+          `SELECT policy_call_audit.created_at, policy_call_audit.id
+           FROM policy_call_audit
+           INNER JOIN tasks ON tasks.id = policy_call_audit.task_id
+           WHERE policy_call_audit.id = ? AND tasks.user_id = ?`,
+        )
+        .get(filters.cursor, userId) as
+        { created_at: string; id: number } | undefined
+      if (!cursorRow) throw new Error('Pagination cursor is invalid')
+      cursorCreatedAt = cursorRow.created_at
+      cursorId = cursorRow.id
+    }
+    const rows = this.#database
+      .prepare(
+        `SELECT policy_call_audit.* FROM policy_call_audit
+         INNER JOIN tasks ON tasks.id = policy_call_audit.task_id
+         WHERE tasks.user_id = ?
+           AND (? IS NULL OR policy_call_audit.task_id = ?)
+           AND (? IS NULL OR policy_call_audit.run_id = ?)
+           AND (? IS NULL OR policy_call_audit.decision = ?)
+           AND (? IS NULL OR policy_call_audit.category = ?)
+           AND (? IS NULL OR policy_call_audit.rule_id = ?)
+           AND (? IS NULL OR policy_call_audit.created_at < ?
+             OR (policy_call_audit.created_at = ?
+               AND policy_call_audit.id < ?))
+         ORDER BY policy_call_audit.created_at DESC, policy_call_audit.id DESC
+         LIMIT ?`,
+      )
+      .all(
+        userId,
+        filters.taskId ?? null,
+        filters.taskId ?? null,
+        filters.runId ?? null,
+        filters.runId ?? null,
+        filters.decision ?? null,
+        filters.decision ?? null,
+        filters.category ?? null,
+        filters.category ?? null,
+        filters.ruleId ?? null,
+        filters.ruleId ?? null,
+        cursorCreatedAt,
+        cursorCreatedAt,
+        cursorCreatedAt,
+        cursorId,
+        limit + 1,
+      ) as unknown as {
+      id: number
+      run_id: string
+      task_id: string
+      call_id: string
+      tool: string
+      category: string
+      risk: string
+      decision: 'allow' | 'ask' | 'deny'
+      reason: string
+      tier: string | null
+      generation: string | null
+      mismatch: number
+      rule_id: string | null
+      review_decision: 'allow' | 'deny' | 'failed' | null
+      action_id: string | null
+      targets_json: string
+      created_at: string
+    }[]
+    const pageRows = rows.slice(0, limit)
+    const items = pageRows.map(row => ({
+      id: String(row.id),
+      runId: row.run_id,
+      taskId: row.task_id,
+      callId: row.call_id,
+      tool: row.tool,
+      category: row.category,
+      risk: row.risk,
+      decision: row.decision,
+      reason: row.reason,
+      ...(row.tier ? { tier: row.tier } : {}),
+      ...(row.generation ? { generation: row.generation } : {}),
+      mismatch: row.mismatch === 1,
+      ...(row.rule_id ? { ruleId: row.rule_id } : {}),
+      ...(row.review_decision ? { reviewDecision: row.review_decision } : {}),
+      ...(row.action_id ? { actionId: row.action_id } : {}),
+      targets: JSON.parse(row.targets_json) as string[],
+      createdAt: row.created_at,
+    }))
+    const last = pageRows.at(-1)
+    return rows.length > limit && last
+      ? { items, nextCursor: String(last.id) }
+      : { items }
   }
 
   /**

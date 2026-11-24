@@ -11,6 +11,7 @@ const chatLaneSchemaVersion = 32
 const permissionTierSchemaVersion = 40
 const approvalRuleSchemaVersion = 41
 const approvalReviewSchemaVersion = 42
+const policyCallAuditSchemaVersion = 43
 
 export class RollbackCompatibilityError extends Error {}
 
@@ -209,6 +210,24 @@ export function assertRollbackCompatible(
       if (enabledReview) {
         throw new RollbackCompatibilityError(
           'Rollback is unsafe while auto review is enabled',
+        )
+      }
+    }
+    if (
+      currentVersion >= policyCallAuditSchemaVersion &&
+      targetMaximumSchema < policyCallAuditSchemaVersion
+    ) {
+      const accountableAllowance = database
+        .prepare(
+          `SELECT 1 FROM policy_call_audit
+           WHERE decision = 'allow'
+             AND (rule_id IS NOT NULL OR review_decision IS NOT NULL)
+           LIMIT 1`,
+        )
+        .get()
+      if (accountableAllowance) {
+        throw new RollbackCompatibilityError(
+          'Rollback is unsafe while rule or review allowances exist only in the call audit table',
         )
       }
     }

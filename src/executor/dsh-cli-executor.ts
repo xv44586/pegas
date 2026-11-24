@@ -93,6 +93,13 @@ interface DshPolicyDecisionEvent {
   risk: string
   decision: string
   reason: string
+  tier?: string
+  generation?: string
+  mismatch?: boolean
+  ruleId?: string
+  reviewDecision?: 'allow' | 'deny' | 'failed'
+  actionId?: string
+  targets?: string[]
 }
 
 interface DshAutoReviewEvent {
@@ -445,6 +452,30 @@ export class DshCliExecutor implements RunExecutor {
           input.onProgress?.({
             type: 'activity',
             label: policyActivityLabel(event),
+          })
+          input.onProgress?.({
+            type: 'policy_decision',
+            callId: event.callId,
+            tool: event.tool,
+            category: event.category,
+            risk: event.risk,
+            decision: event.decision,
+            reason: event.reason,
+            ...(event.tier !== undefined ? { tier: event.tier } : {}),
+            ...(event.generation !== undefined
+              ? { generation: event.generation }
+              : {}),
+            ...(event.mismatch !== undefined
+              ? { mismatch: event.mismatch }
+              : {}),
+            ...(event.ruleId !== undefined ? { ruleId: event.ruleId } : {}),
+            ...(event.reviewDecision !== undefined
+              ? { reviewDecision: event.reviewDecision }
+              : {}),
+            ...(event.actionId !== undefined
+              ? { actionId: event.actionId }
+              : {}),
+            ...(event.targets !== undefined ? { targets: event.targets } : {}),
           })
         }
         if (event.type === 'auto_review') {
@@ -867,6 +898,26 @@ function parseDshEvent(
       risk: parsed.risk,
       decision: parsed.decision,
       reason: parsed.reason,
+      ...(typeof parsed.tier === 'string' ? { tier: parsed.tier } : {}),
+      ...(typeof parsed.generation === 'string'
+        ? { generation: parsed.generation }
+        : {}),
+      ...(typeof parsed.mismatch === 'boolean'
+        ? { mismatch: parsed.mismatch }
+        : {}),
+      ...(typeof parsed.ruleId === 'string' ? { ruleId: parsed.ruleId } : {}),
+      ...(parsed.reviewDecision === 'allow' ||
+      parsed.reviewDecision === 'deny' ||
+      parsed.reviewDecision === 'failed'
+        ? { reviewDecision: parsed.reviewDecision }
+        : {}),
+      ...(typeof parsed.actionId === 'string'
+        ? { actionId: parsed.actionId }
+        : {}),
+      ...(Array.isArray(parsed.targets) &&
+      parsed.targets.every(target => typeof target === 'string')
+        ? { targets: parsed.targets }
+        : {}),
     }
   }
   if (
