@@ -1,6 +1,7 @@
 import { resolve } from 'node:path'
 
 import { loadConfig } from '../core/config.js'
+import { ensureInstanceBearer } from '../core/instance-token.js'
 import {
   createDshModelConfiguration,
   ensureDshProfileHome,
@@ -20,6 +21,10 @@ import { createLogger } from '../observability/logger.js'
 import { MetricsRegistry } from '../observability/metrics.js'
 import { createControlPlane } from './server.js'
 
+ensureInstanceBearer({
+  dataDir: resolve(process.env.PEGAS_DATA_DIR ?? './data'),
+  environment: process.env,
+})
 const config = loadConfig()
 const logger = createLogger({ service: 'control-plane' })
 const metrics = new MetricsRegistry()

@@ -324,6 +324,18 @@
 - Enforcement：尚未晋升；已有模拟 DSH scrub 行为的端到端回归守住 claim 通道。若其他凭证（approval grant、privacy key 等）再因中间层过滤不可达，按同类计数。
 - Owner / next action：CONV-006 接线时复核 chat lane 只读通道同样经 capability 文件可达；评估把「真实 DSH probe 验证 run-capability API」纳入发布 checklist。
 
+### LESSON-20261124-01：发布验证必须覆盖真实用户入口的关键动作，而不止产物一致性
+
+- Rule：Release 关键路径 smoke 必须至少一次从真实用户入口（Web/桌面）完成该 Release 的核心用户动作（如审批决定），不能只验证 `/readyz`、字节一致与服务端 API 直探；启动路径差异（launchd/Supervisor/裸进程/桌面）产生的配置缺口只有真实入口能暴露。
+- Why：APPROVAL-001 P8 发布（Candidate main-7bf4fdd-r1）restart/字节一致/服务端探针全部通过，但运行实例无 `PEGAS_API_TOKEN`（launchd 环境未配置，Supervisor 不生成），审批类端点按 fail-closed 合同恒 401，Web 访问令牌门永远无法通过——用户实际不可审批，直到下一次真实入口核验才发现。桌面端早有随机 bearer 生成，Supervisor/裸启动路径缺失同等 bootstrap。
+- Feature：APPROVAL-001（同样约束 SELF-001 发布 checklist）
+- Evidence：P8 发布记录「相邻观察」（docs/approval-policy-gate.md）；修复 PR #86（`src/core/instance-token.ts` + `test/instance-token.test.ts` 真实裸进程回归：无凭证 401 / 引导 token 200）；docs/approval-lifecycle.md 引导实现记录。
+- Seen：1（2026-11-24）
+- Severity：normal
+- Status：Observed
+- Enforcement：尚未晋升；已有真实裸进程 bearer 回归。再次出现「产物一致但用户入口不可用」时按同类计数；晋升时把「真实入口完成一次核心动作」纳入发布 checklist 或自动化。
+- Owner / next action：SELF-001 发布流程复核时评估自动化（Playwright 真实入口审批探针）；与 LESSON-20261123-02（凭证须真实执行链路可达）同族但断点不同（启动配置 vs 中间层过滤），暂不合并计数。
+
 <!--
 ### LESSON-YYYYMMDD-NN：简短标题
 
