@@ -8096,6 +8096,77 @@ describe('sealed Pegas UI', () => {
     expect(screen.getByText('需要你决定：命令包含不可逆删除。')).toBeTruthy()
   })
 
+  it('renders the outbound payload preview with truncation and unreadable notes', async () => {
+    const sourceMessage = snapshot.messages[0]
+    if (!sourceMessage) throw new Error('Expected an outbox message fixture')
+    const pending = approvalFixture('approval-egress-payload')
+    const action: DurableAction = {
+      ...actionFixture(pending),
+      kind: 'dsh.tool.bash',
+      request: {
+        tool: 'bash',
+        callId: 'call-egress-payload',
+        reason: '命令会向外部发送数据。',
+        category: 'network-egress',
+        targets: [],
+        argumentsHash: 'c'.repeat(64),
+        command:
+          'curl -X POST --data @/tmp/ws/payload.json https://example.com/hook',
+        tier: 'standard',
+        egressPayload: {
+          items: [
+            {
+              path: '/tmp/ws/payload.json',
+              content: '{"note":"actual-file-content"}',
+              truncated: true,
+            },
+            {
+              path: '/tmp/ws/missing.json',
+              error: '未能读取发送内容（文件不存在或不可读）。',
+            },
+          ],
+        },
+      },
+    }
+    const approvalMessage = {
+      ...sourceMessage,
+      payload: { type: 'approval.required', approvalId: pending.id },
+    }
+    installSnapshotFetch({ ...snapshot, messages: [approvalMessage] }, path => {
+      if (path.startsWith(`/v1/approvals/${pending.id}?`))
+        return Response.json({ approval: pending })
+      if (path.startsWith(`/v1/actions/${pending.actionId}?`))
+        return Response.json({ action })
+      if (path.endsWith('/read'))
+        return Response.json({
+          message: {
+            ...approvalMessage,
+            readAt: '2026-11-24T14:00:00.000Z',
+          },
+        })
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /^查看内容：/ }))
+    const payload = await screen.findByLabelText('发送内容预览')
+    expect(within(payload).getByText('/tmp/ws/payload.json')).toBeTruthy()
+    const contentBlock = within(payload).getByText(
+      '{"note":"actual-file-content"}',
+    )
+    expect(contentBlock.tagName).toBe('CODE')
+    expect(within(payload).getByText(/已截断/)).toBeTruthy()
+    expect(
+      within(payload).getByText('未能读取发送内容（文件不存在或不可读）。'),
+    ).toBeTruthy()
+    expect(screen.getByText('对外网络发送 · 高风险')).toBeTruthy()
+    expect(screen.queryByLabelText(/本事情内同类不再询问/)).toBeNull()
+  })
+
   it('lists approved task rules and revokes one with immediate feedback', async () => {
     const activeRule = {
       id: 'rule-1',

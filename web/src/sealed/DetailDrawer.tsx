@@ -555,6 +555,7 @@ function ApprovalOperationPreview({ action }: { action: DurableAction }) {
     : []
   const command =
     typeof request.command === 'string' ? request.command : undefined
+  const egressPayload = approvalEgressPayload(request.egressPayload)
   const tier =
     request.tier === 'strict' ||
     request.tier === 'standard' ||
@@ -592,8 +593,84 @@ function ApprovalOperationPreview({ action }: { action: DurableAction }) {
           ))}
         </ul>
       )}
+      {egressPayload && (
+        <div aria-label="发送内容预览" className="approval-egress-payload">
+          <p className="approval-egress-payload-title">发送内容预览</p>
+          <ul className="approval-egress-payload-list">
+            {egressPayload.items.map((item, index) => (
+              <li key={`${item.path}:${String(index)}`}>
+                {item.path !== '' && (
+                  <p className="approval-egress-payload-path">
+                    <code>{item.path}</code>
+                    {item.truncated === true && <span> · 已截断</span>}
+                  </p>
+                )}
+                {item.content !== undefined && (
+                  <pre className="approval-command">
+                    <code>{item.content}</code>
+                  </pre>
+                )}
+                {item.content === undefined && item.path === '' && (
+                  <p className="approval-egress-payload-note">
+                    {item.error ?? '未能读取发送内容。'}
+                  </p>
+                )}
+                {item.content !== undefined &&
+                  item.path === '' &&
+                  item.truncated === true && (
+                    <p className="approval-egress-payload-note">已截断</p>
+                  )}
+                {item.path !== '' && item.error !== undefined && (
+                  <p className="approval-egress-payload-note">{item.error}</p>
+                )}
+              </li>
+            ))}
+          </ul>
+          {egressPayload.omitted === true && (
+            <p className="approval-egress-payload-note">
+              发送内容项过多，仅预览前几项。
+            </p>
+          )}
+        </div>
+      )}
     </section>
   )
+}
+
+interface ApprovalEgressPayloadItem {
+  path: string
+  content?: string
+  truncated?: boolean
+  error?: string
+}
+
+function approvalEgressPayload(
+  value: unknown,
+): { items: ApprovalEgressPayloadItem[]; omitted?: boolean } | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    return undefined
+  const record = value as Record<string, unknown>
+  if (!Array.isArray(record.items)) return undefined
+  const items = record.items.flatMap(item => {
+    if (typeof item !== 'object' || item === null || Array.isArray(item))
+      return []
+    const entry = item as Record<string, unknown>
+    return [
+      {
+        path: typeof entry.path === 'string' ? entry.path : '',
+        ...(typeof entry.content === 'string'
+          ? { content: entry.content }
+          : {}),
+        ...(entry.truncated === true ? { truncated: true } : {}),
+        ...(typeof entry.error === 'string' ? { error: entry.error } : {}),
+      },
+    ]
+  })
+  if (items.length === 0) return undefined
+  return {
+    items,
+    ...(record.omitted === true ? { omitted: true } : {}),
+  }
 }
 
 function approvalCategoryLabel(category: string): string {

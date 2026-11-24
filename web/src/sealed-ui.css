@@ -5295,6 +5295,34 @@ kbd {
   font-size: var(--text-caption);
   overflow-wrap: anywhere;
 }
+.approval-egress-payload {
+  display: grid;
+  gap: 6px;
+}
+.approval-egress-payload-title {
+  font-weight: 500;
+  margin: 0;
+}
+.approval-egress-payload-list {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.approval-egress-payload-path {
+  margin: 0 0 4px;
+}
+.approval-egress-payload-path code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--text-caption);
+  overflow-wrap: anywhere;
+}
+.approval-egress-payload-note {
+  color: var(--text-muted);
+  font-size: var(--text-caption);
+  margin: 0;
+}
 .approval-reason {
   margin-top: 10px;
 }

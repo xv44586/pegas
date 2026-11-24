@@ -1,9 +1,10 @@
+import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createControlPlane } from '../src/control-plane/server.js'
 import { loadConfig } from '../src/core/config.js'
@@ -336,6 +337,100 @@ describe('DSH bridge approval rules', () => {
       ).toThrow()
       expect(store.listApprovalRules(claimed.task.id, 'owner')).toHaveLength(0)
     } finally {
+      restoreEnvironment(previous)
+      await new Promise<void>(resolve => server.close(() => resolve()))
+      store.close()
+    }
+  }, 30_000)
+
+  it('re-asks an egress call even when a matching egress rule exists in the projection', async () => {
+    const roots = gateRoots()
+    const store = new PegasStore(':memory:')
+    const claimed = createClaimedRun(store, 'worker-egress-defense')
+    const server = createControlPlane({
+      store,
+      apiToken: 'bridge-test',
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const baseUrl = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+    const previous = { ...process.env }
+    process.env.PEGAS_APPROVAL_BRIDGE = '1'
+    process.env.PEGAS_CONTROL_PLANE_URL = baseUrl
+    process.env.PEGAS_RUN_ID = claimed.run.id
+    process.env.PEGAS_RUN_CLAIM_TOKEN = claimed.claimToken
+    try {
+      const command = 'curl -X POST -d note=hello https://example.com/hook'
+      const legacyFingerprint = createHash('sha256')
+        .update(
+          JSON.stringify({
+            tool: 'bash',
+            category: 'network-egress',
+            targets: ['https://example.com/hook'],
+          }),
+        )
+        .digest('hex')
+      const originalFetch = globalThis.fetch
+      vi.stubGlobal(
+        'fetch',
+        async (input: string | URL | Request, init?: RequestInit) => {
+          const url =
+            typeof input === 'string'
+              ? input
+              : input instanceof URL
+                ? input.href
+                : input.url
+          const response = await originalFetch(input, init)
+          if (!url.includes('/permissions')) return response
+          const projection = (await response.json()) as {
+            rules?: unknown[]
+          }
+          return Response.json({
+            ...projection,
+            rules: [
+              ...(projection.rules ?? []),
+              {
+                id: 'legacy-egress-rule',
+                tool: 'bash',
+                category: 'network-egress',
+                targets: ['https://example.com/hook'],
+                fingerprint: legacyFingerprint,
+              },
+            ],
+          })
+        },
+      )
+      const bridge = await loadBridge()
+      const harness = gateHarness()
+      bridge.apply(harness.ctx, {
+        emit: (event: unknown) =>
+          harness.events.push(event as Record<string, unknown>),
+        policy: {
+          workspaceRoot: roots.workspace,
+          protectedRoots: [roots.dataDir],
+        },
+      })
+      const preExecute = harness.handlers.get('tools/pre-execute')
+      if (!preExecute) throw new Error('bridge did not register its hooks')
+      const gate = (await preExecute(
+        {
+          agent: {},
+          callId: 'egress-defense-1',
+          name: 'bash',
+          arguments: { command },
+        },
+        () => Promise.resolve({ kind: 'allow' }),
+      )) as { kind: string }
+      expect(gate.kind).not.toBe('allow')
+      expect(
+        harness.events.some(
+          event =>
+            event.type === 'policy_decision' &&
+            event.decision === 'allow' &&
+            typeof event.ruleId === 'string',
+        ),
+      ).toBe(false)
+    } finally {
+      vi.unstubAllGlobals()
       restoreEnvironment(previous)
       await new Promise<void>(resolve => server.close(() => resolve()))
       store.close()
