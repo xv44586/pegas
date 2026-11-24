@@ -1044,6 +1044,15 @@ BEGIN
 END;
 `
 
+const migration44 = `
+-- EXEC-003: automatic reconciliation marker. System settlements through
+-- the external write probe are distinguishable from human ones so the
+-- rollback guard can refuse dropping below the probing release while
+-- automatically settled facts exist.
+ALTER TABLE action_reconciliations ADD COLUMN automatic INTEGER NOT NULL DEFAULT 0
+CHECK (automatic IN (0, 1));
+`
+
 const migration32 = `
 ALTER TABLE tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'work'
 CHECK (kind IN ('work', 'conversation'));
@@ -2406,6 +2415,7 @@ interface ActionReconciliationRow {
   previous_result_json: string | null
   request_fingerprint: string
   reconciled_by: string
+  automatic: number
   created_at: string
 }
 
@@ -2893,6 +2903,7 @@ export class PegasStore {
     this.#migrate(41, migration41)
     this.#migrate(42, migration42)
     this.#migrate(43, migration43)
+    this.#migrate(44, migration44)
   }
 
   #backfillWorkerIconIds(): void {
@@ -9557,6 +9568,35 @@ export class PegasStore {
     userId: string,
     draft: ActionReconciliationDraft,
   ): DurableAction {
+    return this.#reconcileAction(actionId, userId, draft)
+  }
+
+  listUnknownActions(
+    options: { limit?: number } = {},
+  ): (DurableAction & { userId: string })[] {
+    const limit = options.limit ?? 50
+    const rows = this.#database
+      .prepare(
+        `SELECT actions.*, tasks.user_id FROM actions
+         INNER JOIN tasks ON tasks.id = actions.task_id
+         WHERE actions.protocol_version = 1 AND actions.status = 'unknown'
+           AND NOT EXISTS (
+             SELECT 1 FROM action_reconciliations rec
+             WHERE rec.action_id = actions.id)
+         ORDER BY actions.updated_at ASC LIMIT ?`,
+      )
+      .all(limit) as unknown as (ActionRow & { user_id: string })[]
+    return rows.map(row => ({
+      ...this.#actionWithReconciliation(row),
+      userId: row.user_id,
+    }))
+  }
+
+  #reconcileAction(
+    actionId: string,
+    userId: string,
+    draft: ActionReconciliationDraft,
+  ): DurableAction {
     const fingerprint = createHash('sha256')
       .update(stableJson(draft))
       .digest('hex')
@@ -9574,20 +9614,13 @@ export class PegasStore {
           throw new ActionReconciliationConflictError(
             'Reconciliation command ID is already used with a different payload',
           )
-        const replayed = this.getAction(replay.action_id, userId)
+        const replayed = this.#actionForReconciler(replay.action_id, userId)
         if (replayed?.id !== actionId)
           throw new ActionNotFoundError('Action not found')
         this.#database.exec('COMMIT')
         return replayed
       }
-      const row = this.#database
-        .prepare(
-          `SELECT actions.* FROM actions
-           INNER JOIN tasks ON tasks.id = actions.task_id
-           WHERE actions.id = ? AND tasks.user_id = ?
-             AND actions.protocol_version = 1`,
-        )
-        .get(actionId, userId) as unknown as ActionRow | undefined
+      const row = this.#actionRowForReconciler(actionId, userId)
       if (!row) throw new ActionNotFoundError('Action not found')
       const existingForAction = this.#database
         .prepare('SELECT 1 FROM action_reconciliations WHERE action_id = ?')
@@ -9599,12 +9632,14 @@ export class PegasStore {
       if (row.status !== 'failed' && row.status !== 'unknown')
         throw new Error('Only a failed or unknown Action can be reconciled')
       const now = this.#clock.now().toISOString()
+      const automatic = userId === 'system:auto-reconciliation'
       this.#database
         .prepare(
           `INSERT INTO action_reconciliations
             (id, action_id, command_id, resolution, note, previous_status,
-             previous_result_json, request_fingerprint, reconciled_by, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             previous_result_json, request_fingerprint, reconciled_by,
+             automatic, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           randomUUID(),
@@ -9616,6 +9651,7 @@ export class PegasStore {
           row.result_json,
           fingerprint,
           userId,
+          automatic ? 1 : 0,
           now,
         )
       // The original outcome stays auditable in the reconciliation record;
@@ -9666,8 +9702,9 @@ export class PegasStore {
             )
         }
       }
+      const ownerId = this.#taskById(row.task_id).userId
       this.enqueueOutbox({
-        userId,
+        userId: ownerId,
         taskId: row.task_id,
         channel: 'conversation',
         dedupeKey: `action-reconciled:${actionId}`,
@@ -9676,13 +9713,17 @@ export class PegasStore {
           taskId: row.task_id,
           actionId,
           resolution: draft.resolution,
-          text:
-            draft.resolution === 'succeeded'
+          ...(automatic ? { reconciledBy: 'system:auto-reconciliation' } : {}),
+          text: automatic
+            ? draft.resolution === 'succeeded'
+              ? '已自动核对：探测确认动作成功，事情可以继续。'
+              : '已自动核对：探测确认动作未成功，外部状态已记录。'
+            : draft.resolution === 'succeeded'
               ? '已人工核对：动作确认成功，事情可以继续。'
               : '已人工核对：动作确认失败，外部状态已记录。',
         },
       })
-      const reconciled = this.getAction(actionId, userId)
+      const reconciled = this.#actionForReconciler(actionId, userId)
       if (!reconciled) throw new ActionNotFoundError('Action not found')
       this.#database.exec('COMMIT')
       return reconciled
@@ -9690,6 +9731,36 @@ export class PegasStore {
       this.#database.exec('ROLLBACK')
       throw error
     }
+  }
+
+  #actionRowForReconciler(
+    actionId: string,
+    reconcilerId: string,
+  ): ActionRow | undefined {
+    if (reconcilerId === 'system:auto-reconciliation') {
+      return this.#database
+        .prepare(
+          `SELECT * FROM actions
+           WHERE id = ? AND protocol_version = 1`,
+        )
+        .get(actionId) as unknown as ActionRow | undefined
+    }
+    return this.#database
+      .prepare(
+        `SELECT actions.* FROM actions
+         INNER JOIN tasks ON tasks.id = actions.task_id
+         WHERE actions.id = ? AND tasks.user_id = ?
+           AND actions.protocol_version = 1`,
+      )
+      .get(actionId, reconcilerId) as unknown as ActionRow | undefined
+  }
+
+  #actionForReconciler(
+    actionId: string,
+    reconcilerId: string,
+  ): DurableAction | undefined {
+    const row = this.#actionRowForReconciler(actionId, reconcilerId)
+    return row ? this.#actionWithReconciliation(row) : undefined
   }
 
   #actionWithReconciliation(row: ActionRow): DurableAction {
@@ -14465,6 +14536,7 @@ function toActionReconciliation(
         }
       : {}),
     reconciledBy: row.reconciled_by,
+    ...(row.automatic === 1 ? { automatic: true } : {}),
     createdAt: row.created_at,
   }
 }

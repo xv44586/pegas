@@ -1,5 +1,6 @@
 import { loadConfig } from '../core/config.js'
 import { PegasStore } from '../storage/sqlite-store.js'
+import { ActionReconciliation } from './action-reconciliation.js'
 import {
   DeliveryReconciliation,
   parseReconciliationConfig,
@@ -23,6 +24,9 @@ const reconciliation = new DeliveryReconciliation({
     staleWaitingAfterMs: reconcileConfig.staleWaitingAfterMs,
   },
 })
+const actionReconciliation = reconcileConfig.autoReconcile
+  ? new ActionReconciliation({ store, logger, metrics })
+  : undefined
 const lifecycle = { stopping: false }
 
 process.on('SIGINT', requestStop)
@@ -30,7 +34,10 @@ process.on('SIGTERM', requestStop)
 
 logger.info('service.started', {
   intervalMs: reconcileConfig.intervalMs,
-  message: 'Pegas delivery reconciliation watchdog started (read-only)',
+  autoReconcile: reconcileConfig.autoReconcile,
+  message: reconcileConfig.autoReconcile
+    ? 'Pegas reconciliation watchdog started (read-only delivery findings plus automatic write probes)'
+    : 'Pegas delivery reconciliation watchdog started (read-only)',
 })
 
 while (!lifecycle.stopping) {
@@ -40,6 +47,15 @@ while (!lifecycle.stopping) {
       owedCount: report.owedCount,
       findingCount: report.findings.length,
     })
+    if (actionReconciliation) {
+      const settled = actionReconciliation.checkOnce()
+      if (settled.settled.length > 0 || settled.inconclusive.length > 0) {
+        logger.info('action.reconciliation_checked', {
+          settledCount: settled.settled.length,
+          inconclusiveCount: settled.inconclusive.length,
+        })
+      }
+    }
   } catch (error) {
     logger.error('reconciliation.iteration_failed', error)
     metrics.increment('pegas_errors_total', {

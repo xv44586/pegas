@@ -228,6 +228,10 @@ while (!lifecycle.stopRequested) {
 
   const worker = startProcess(release, 'worker/main.js')
   const scheduler = startProcess(release, 'scheduler/main.js')
+  const reconciliation = startProcess(
+    release,
+    'observability/reconciliation-main.js',
+  )
   const dispatcher =
     process.env.PEGAS_PUSH_MODE === 'webhook'
       ? startProcess(release, 'notification/main.js')
@@ -236,6 +240,7 @@ while (!lifecycle.stopRequested) {
     controlPlane,
     worker,
     scheduler,
+    reconciliation,
     ...(dispatcher ? [dispatcher] : []),
   ]
 

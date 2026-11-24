@@ -61,6 +61,7 @@ Run capability 的 HTTP 传输固定使用 loopback。`PEGAS_API_HOST` 为 `0.0.
 - `resolution=failed`：外部失败成为人工确认的事实。Task 保持开放并显示 `action_failed`，但 retry、Goal revision、协作与新 Approval 仍被拒绝——确认失败不等于问题已解决，后续处理需要用户显式停止或新的产品级恢复路径。Review Pack 不会把该 side effect 计为成功。
 - Task 停止后仍允许核对已 `unknown` 的 Action（外部副作用审计不随 Task 结束消失），但不再改写 ended Task 的状态。
 - 写入核对记录、Action 状态、Task 原因、唤醒事件与 `action.reconciled` Outbox 在同一事务提交。
+- **自动核对（EXEC-003，2026-11-24）**：对账进程可对文件写类 `unknown` Action 主动探测外部事实并走同一事务结算，核对人为 `system:auto-reconciliation`，commandId `auto-reconcile:<actionId>` 幂等；Outbox payload 带 `reconciledBy` 与自动核对文案。目标缺失或内容指纹不符只会结算为 `failed`，绝不判成功；非文件类或无法静态判定的动作保持 `unknown` 留人工。核对记录带 `automatic=1` 标记（schema v44），详见 `docs/observability.md`。
 
 创建 Action 的 `idempotencyKey`、决定的 `commandId` 和 outcome 的 `commandId` 都是幂等键。相同键和相同 payload 返回已有对象；相同键配不同 payload 会拒绝，不会悄悄覆盖审计事实。Run claim token 只保存 SHA-256 digest，不通过 API 或 Outbox 回显。
 
@@ -197,8 +198,10 @@ claim token 只经进程环境传给 DSH 主进程，DSH 自身的 subprocess �
 
 ## 当前限制
 
-持久对象、策略边界、API、Web 决策、恢复协议与人工核对闭环已可用；Policy Gate 覆盖全部工具调用并做确定性 risk 分级（P1），权限档位（全局默认 + 事情覆盖 + Run 快照下界 + 运行中热切换）已落地（P2），本事情内同类规则批准与撤销已落地（P3），审批卡结构化渲染与通知深链已落地（P4），模型自动审阅已落地（P5，默认关闭）。仍标记为 `Partial`：由验证器主动探测外部状态的自动对账、逐调用独立审计表与档位审计列表 UI 属于后续阶段。组织级 RBAC、多人会签、超时策略与可配置风险阈值同样不在当前范围内。
+持久对象、策略边界、API、Web 决策、恢复协议与人工核对闭环已可用；Policy Gate 覆盖全部工具调用并做确定性 risk 分级（P1），权限档位（全局默认 + 事情覆盖 + Run 快照下界 + 运行中热切换）已落地（P2），本事情内同类规则批准与撤销已落地（P3），审批卡结构化渲染与通知深链已落地（P4），模型自动审阅已落地（P5，默认关闭），逐调用独立审计表（P6）与档位审计列表 UI（P7）已落地（2026-11-24）。文件写类 unknown Action 的自动对账已由 EXEC-003 落地（2026-11-24，`system:auto-reconciliation` 探测结算）；仍标记为 `Partial`：桥未记录 write 内容指纹（存在性判定弱于指纹判定）、非文件类副作用仍留人工。组织级 RBAC、多人会签、超时策略与可配置风险阈值同样不在当前范围内。
 
 ## 回滚
 
 schema v23 只新增 `action_reconciliations` 表与 trigger。存在 `status='reconciled'` 的 Action 时，回滚到不支持 v23 的 Release 会被 Rollback Guard 以 `rollback_incompatible` 拒绝：旧版本不认识该状态，会把人工确认过的外部事实误判为仍在等待或允许绕过。未核对的 `failed`/`unknown` Action 在旧版本中仍被原有 fence 阻塞，可以安全回滚。
+
+schema v44 为 `action_reconciliations` 追加 `automatic` 标记列（默认 0，人工核对不受影响）。存在 `automatic=1` 的自动核对记录时，回滚到 schema < 44 的 Release 被拒绝：旧版本没有探测语义，会把系统结算的事实误当作人工确认。仅有 v44 列而全部为人工核对时可安全回滚（v23 Guard 仍按 reconciled 状态独立生效）。
