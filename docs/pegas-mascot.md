@@ -75,6 +75,31 @@ Pegas 使用确认版圆肚机器人作为自己的视觉身份。奶白机身�
   Node 22.22.2 通过，覆盖应用启动、
   完成 Run、Dock 未读计数和服务故障退出回收。
 
+## 合并与上线（2026-11-24）
+
+- PR #96 经 CI run `45433842847` 全绿后合入 main，merge commit 为
+  `f2c4031941f6a5ca77f6f80d1a1a0d678b7435d3`；main CI run
+  `45434985863` 的 `pnpm check` 与 `pnpm smoke` 同样成功。
+- 隔离 release worktree 在 exact merge commit 上通过 `pnpm smoke:self-change`，
+  再由 `buildSelfChangeCandidate` 重跑 140 个测试文件、1440 个测试与 smoke，
+  生成 `main-f2c4031-r1`。Candidate 兼容 schema 31–48，无迁移；CI、测试、
+  Review Report 和人工审核均绑定同一 commit。
+- `node_modules` 使用 APFS clonefile 实体化，1901 个内部符号链接均验证为
+  tree-relative；重算 artifact attestation 与 manifest 后再次通过完整性校验。
+  Recovery API staging 从 verifying 自动确认 stable，随后更新并重启 launchd
+  Supervisor；删除 release worktree 后再次通过 Recovery restart。
+- 运行实例 active=`main-f2c4031-r1`，previous=`main-a9dca1e-r1`，恢复状态
+  integrity=`ok`。线上 favicon、32px 图标、Apple touch icon、应用内头像与
+  home/flight/speaking 三个 SVG 共 7 个资源均与 Candidate SHA-256 一致；
+  `/readyz`、events、channels、runs、outbox 均为 200。真实 Chromium 验证
+  BUI 对话页标题、侧栏机器人、favicon、flight SVG MIME 与 1440px 零横溢。
+- `releases/desktop/mac-arm64/Pegas.app` 已从最新 main 重建，包内 ICNS 与
+  `desktop/Pegas.icns` 字节一致，打包态 Electron smoke 通过。当前机器没有
+  已安装的 `/Applications/Pegas.app`，因此未替换系统应用；产物仍未签名或公证，
+  与 DESKTOP-001 的既有非目标一致。
+- 运行时回滚使用 Recovery API 切回 previous；代码回滚 revert merge
+  `f2c4031`。本次没有 schema 或数据变化，旧 Release 可直接读取现有数据。
+
 ## 下一缺口
 
 VOICE-002 接入真实语音播放后，播报开始和结束将驱动 `speaking`，包括
