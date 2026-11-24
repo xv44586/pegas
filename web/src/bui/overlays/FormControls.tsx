@@ -119,14 +119,16 @@ export function FormField({
   hint,
   children,
   className,
+  htmlFor,
 }: {
   label: ReactNode
   hint?: ReactNode
   children: ReactNode
   className?: string
+  htmlFor?: string
 }) {
   return (
-    <label className={cn('grid gap-1.5', className)}>
+    <label className={cn('grid gap-1.5', className)} htmlFor={htmlFor}>
       <span className="text-[13px] font-medium text-ink">{label}</span>
       {children}
       {hint && <span className="text-[12px] text-ink-3">{hint}</span>}

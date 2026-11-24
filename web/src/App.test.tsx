@@ -6817,9 +6817,8 @@ describe('sealed Pegas UI', () => {
     fireEvent.change(within(dialog).getByLabelText('内容'), {
       target: { value: '我的工作时间是上午。' },
     })
-    fireEvent.change(within(dialog).getByLabelText('类别'), {
-      target: { value: 'fact' },
-    })
+    fireEvent.click(within(dialog).getByLabelText('类别'))
+    fireEvent.click(await screen.findByRole('option', { name: '事实' }))
     fireEvent.click(within(dialog).getByRole('button', { name: '保存' }))
     await waitFor(() => expect(created).toBeTruthy())
     const command = created as {

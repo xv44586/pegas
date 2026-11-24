@@ -51,4 +51,20 @@ if (
   }
 }
 
+if (
+  typeof Element !== 'undefined' &&
+  typeof Element.prototype.hasPointerCapture !== 'function'
+) {
+  Element.prototype.hasPointerCapture = function hasPointerCapture(): boolean {
+    return false
+  }
+  Element.prototype.setPointerCapture = function setPointerCapture(): void {
+    return undefined
+  }
+  Element.prototype.releasePointerCapture =
+    function releasePointerCapture(): void {
+      return undefined
+    }
+}
+
 export {}

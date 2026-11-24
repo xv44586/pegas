@@ -45,7 +45,22 @@ import type {
 } from '../types'
 import { useVoiceDictation } from '../useVoiceDictation'
 import { PegasAgentIcon } from '../PegasAgentIcon'
-import { Button, GlideMenu, StatusPill } from '@bui/index'
+import {
+  Button,
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  FormField,
+  GlideMenu,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  StatusPill,
+  TextArea,
+  TextInput,
+} from '@bui/index'
 import {
   CopyMessageButton,
   FollowUpList,
@@ -660,7 +675,7 @@ export function ConversationPage({
           )}
           {message.text.length > 520 && message.lane === 'say' && (
             <button
-              className="inline-link"
+              className="inline-link mt-2 inline-flex items-center gap-[5px] font-medium text-accent-ink"
               onClick={() =>
                 setExpandedMessages(current => {
                   const next = new Set(current)
@@ -1383,7 +1398,7 @@ function FactCard({
         <MarkdownMessage content={expanded ? message.text : collapsedBody} />
         {message.text.length > 520 && (
           <button
-            className="inline-link"
+            className="inline-link mt-2 inline-flex items-center gap-[5px] font-medium text-accent-ink"
             onClick={onToggleExpanded}
             type="button"
           >
@@ -2659,44 +2674,56 @@ export function AutomationPage({
         description="让 Pegas 在合适的时候自动开始"
         title="自动化"
       >
-        <button
-          className="primary-button page-header-action"
+        <Button
+          className="page-header-action h-9 px-4 text-[13px]"
           onClick={() => setForm({ mode: 'create' })}
+          size="sm"
           type="button"
+          variant="primary"
         >
           <Plus size={16} />
           新建自动化
-        </button>
+        </Button>
       </PageHeader>
-      <div className="metric-strip">
-        <span>
+      <div className="metric-strip mb-9 flex overflow-x-auto rounded-card border border-line p-4">
+        <span className="flex shrink-0 items-center gap-2 border-r border-line px-4 text-green-text first:pl-0 sm:px-8">
           <Check size={17} />
           已启用 <b>{activeCount}</b>
         </span>
-        <span>
+        <span className="flex shrink-0 items-center gap-2 border-r border-line px-4 text-orange-text sm:px-8">
           <PauseCircle size={17} />
           已暂停 <b>{pausedCount}</b>
         </span>
-        <span>
+        <span className="flex shrink-0 items-center gap-2 px-4 text-ink-2 sm:px-8">
           <CircleAlert size={17} />
           已结束 <b>{endedCount}</b>
         </span>
       </div>
       {error && (
-        <div className="page-error" role="alert">
+        <div
+          className="mb-4 flex items-center gap-2.5 rounded-card border border-red bg-red-tint px-3.5 py-2.5 text-[13px] text-red-text"
+          role="alert"
+        >
           {error}
-          <button className="inline-link" onClick={onReload} type="button">
+          <button
+            className="inline-link mt-0 inline-flex items-center gap-[5px] font-medium text-inherit"
+            onClick={onReload}
+            type="button"
+          >
             重试
           </button>
         </div>
       )}
       {actionError && (
-        <div className="page-error" role="alert">
+        <div
+          className="mb-4 flex items-center gap-2.5 rounded-card border border-red bg-red-tint px-3.5 py-2.5 text-[13px] text-red-text"
+          role="alert"
+        >
           {actionError}
         </div>
       )}
       {!automations && !error && (
-        <p className="page-loading">正在读取自动化…</p>
+        <p className="my-6 text-ink-2">正在读取自动化…</p>
       )}
       {automations?.length === 0 && !error && (
         <EmptyCapability
@@ -2706,8 +2733,8 @@ export function AutomationPage({
         />
       )}
       {automations && automations.length > 0 && (
-        <div className="automation-lists">
-          <section className="record-list" aria-label="自动化列表">
+        <div className="automation-lists mb-10 [&_.record-list]:mb-0">
+          <section className="record-list mb-10" aria-label="自动化列表">
             {sortLiveAutomations(
               hasLiveAutomations(automations)
                 ? automations.filter(item => !isEndedAutomation(item))
@@ -2746,19 +2773,24 @@ export function AutomationPage({
             ))}
           </section>
           {hasLiveAutomations(automations) && endedCount > 0 && (
-            <section className="automation-ended" aria-label="已结束的自动化">
-              <button
+            <section
+              className="automation-ended mt-3"
+              aria-label="已结束的自动化"
+            >
+              <Button
                 aria-expanded={showEnded}
-                className="quiet-button automation-ended-toggle"
+                className="automation-ended-toggle mb-1 ml-2.5 h-8 px-3 text-[13px] text-ink-2"
                 onClick={() => setShowEnded(current => !current)}
+                size="xs"
                 type="button"
+                variant="quiet"
               >
                 <ChevronDown
-                  className={showEnded ? 'is-open' : undefined}
+                  className={`transition-transform duration-150 ${showEnded ? 'rotate-180' : ''}`}
                   size={15}
                 />
                 已结束 {endedCount}
-              </button>
+              </Button>
               {showEnded && (
                 <div className="record-list">
                   {sortEndedAutomations(
@@ -2906,21 +2938,34 @@ function AutomationRow({
 }) {
   const promptRegionId = useId()
   return (
-    <article key={automation.id}>
-      <span className={`record-icon is-${automation.status}`}>
+    <article
+      key={automation.id}
+      className="grid grid-cols-[34px_minmax(0,1fr)] items-start gap-3.5 border-b border-line px-2.5 py-4 min-[821px]:grid-cols-[40px_minmax(0,1fr)_auto]"
+    >
+      <span
+        className={`record-icon is-${automation.status} flex size-[38px] items-center justify-center rounded-full ${
+          automation.status === 'active'
+            ? 'bg-accent-tint text-accent-ink'
+            : automation.status === 'paused'
+              ? 'bg-orange-tint text-orange-text'
+              : 'bg-inset text-ink-2'
+        }`}
+      >
         <Zap size={18} />
       </span>
-      <div className="record-copy">
-        <div className="record-title">
-          <strong>{automation.title}</strong>
+      <div className="record-copy grid min-w-0 gap-[5px]">
+        <div className="record-title flex items-baseline justify-between gap-3">
+          <strong className="text-[14px] [overflow-wrap:anywhere]">
+            {automation.title}
+          </strong>
           <span className="status-text shrink-0">
             <RowStatusPill label={automationStatusLabel(automation.status)} />
           </span>
         </div>
-        <p className="automation-summary">
+        <p className="automation-summary line-clamp-1 m-0 text-[13px] text-ink-2 [overflow-wrap:anywhere]">
           {automationPromptSummary(automation.prompt)}
         </p>
-        <small className="record-meta">
+        <small className="record-meta text-[12px] text-ink-2 [overflow-wrap:anywhere]">
           {describeSchedule(automation)} ·{' '}
           {automation.target.kind === 'new_task'
             ? '每次创建新事情'
@@ -2942,127 +2987,155 @@ function AutomationRow({
             : ''}
         </small>
         {promptOpen && (
-          <pre className="automation-prompt" id={promptRegionId}>
+          <pre
+            className="automation-prompt mt-1 max-h-[320px] overflow-auto rounded-card bg-inset px-3.5 py-3 font-sans text-[13px] leading-[1.65] whitespace-pre-wrap text-ink-2 [overflow-wrap:anywhere]"
+            id={promptRegionId}
+          >
             {automation.prompt}
           </pre>
         )}
       </div>
-      <div className="record-actions">
-        <button
+      <div className="record-actions col-span-full flex flex-wrap items-center justify-start gap-2 min-[821px]:col-start-2 min-[821px]:justify-end">
+        <Button
           aria-controls={promptRegionId}
           aria-expanded={promptOpen}
-          className="quiet-button"
+          className="h-8 px-3 text-[13px] text-ink-2"
           onClick={onTogglePrompt}
+          size="xs"
           type="button"
+          variant="quiet"
         >
           {promptOpen ? '收起指令' : '查看指令'}
-        </button>
-        <button
+        </Button>
+        <Button
           aria-expanded={historyId === automation.id}
-          className="quiet-button"
+          className="h-8 px-3 text-[13px] text-ink-2"
           onClick={() => void onToggleHistory(automation)}
+          size="xs"
           type="button"
+          variant="quiet"
         >
           触发记录
-        </button>
+        </Button>
         {(automation.status === 'active' || automation.status === 'paused') && (
-          <button
-            className="secondary-button"
+          <Button
+            className="h-8 px-3.5 text-[13px]"
             disabled={busyId === automation.id}
             onClick={onEdit}
+            size="xs"
             type="button"
+            variant="secondary"
           >
             编辑
-          </button>
+          </Button>
         )}
         {automation.status === 'active' && (
-          <button
-            className="secondary-button"
+          <Button
+            className="h-8 px-3.5 text-[13px]"
             disabled={busyId === automation.id}
             onClick={() => void onRunStatus(automation, 'pause')}
+            size="xs"
             type="button"
+            variant="secondary"
           >
             暂停
-          </button>
+          </Button>
         )}
         {automation.status === 'paused' && (
-          <button
-            className="secondary-button"
+          <Button
+            className="h-8 px-3.5 text-[13px]"
             disabled={busyId === automation.id}
             onClick={() => void onRunStatus(automation, 'resume')}
+            size="xs"
             type="button"
+            variant="secondary"
           >
             恢复
-          </button>
+          </Button>
         )}
         {(automation.status === 'active' || automation.status === 'paused') &&
           (confirmCancelId === automation.id ? (
             <>
-              <button
-                className="danger-button"
+              <Button
+                className="h-8 px-3.5 text-[13px]"
                 disabled={busyId === automation.id}
                 onClick={() => void onRunStatus(automation, 'cancel')}
+                size="xs"
                 type="button"
+                variant="danger"
               >
                 确认结束
-              </button>
-              <button
-                className="quiet-button"
+              </Button>
+              <Button
+                className="h-8 px-3 text-[13px] text-ink-2"
                 onClick={onCancelConfirm}
+                size="xs"
                 type="button"
+                variant="quiet"
               >
                 保留
-              </button>
+              </Button>
             </>
           ) : (
-            <button
-              className="quiet-button"
+            <Button
+              className="h-8 px-3 text-[13px] text-ink-2"
               disabled={busyId === automation.id}
               onClick={onConfirmCancel}
+              size="xs"
               type="button"
+              variant="quiet"
             >
               结束
-            </button>
+            </Button>
           ))}
         {isEndedAutomation(automation) &&
           onDelete &&
           (confirmDeleteId === automation.id ? (
             <>
-              <button
-                className="danger-button"
+              <Button
+                className="h-8 px-3.5 text-[13px]"
                 disabled={busyId === automation.id}
                 onClick={() => void onDelete()}
+                size="xs"
                 type="button"
+                variant="danger"
               >
                 确认删除
-              </button>
-              <button
-                className="quiet-button"
+              </Button>
+              <Button
+                className="h-8 px-3 text-[13px] text-ink-2"
                 onClick={onCancelDelete}
+                size="xs"
                 type="button"
+                variant="quiet"
               >
                 保留
-              </button>
+              </Button>
             </>
           ) : (
-            <button
-              className="quiet-button"
+            <Button
+              className="h-8 px-3 text-[13px] text-ink-2"
               disabled={busyId === automation.id}
               onClick={onConfirmDelete}
+              size="xs"
               type="button"
+              variant="quiet"
             >
               删除
-            </button>
+            </Button>
           ))}
       </div>
       {historyId === automation.id && (
-        <div className="record-history">
+        <div className="record-history col-span-full rounded-card bg-inset px-3.5 py-2.5 text-ink-2 min-[821px]:col-start-2">
           {historyLoading && <small>正在读取触发记录…</small>}
           {historyError && (
-            <small className="record-history-error" role="alert">
+            <small
+              className="record-history-error flex items-center gap-2 text-red-text"
+              role="alert"
+            >
               {historyError}
               <button
-                className="inline-link"
+                className="inline-link mt-0 inline-flex items-center gap-[5px] font-medium text-accent-ink"
                 onClick={() => void onToggleHistory(automation)}
                 type="button"
               >
@@ -3075,17 +3148,25 @@ function AutomationRow({
             invocations &&
             (invocations.length ? (
               <>
-                <ul aria-label="触发记录">
+                <ul
+                  className="m-0 grid list-none gap-2 p-0"
+                  aria-label="触发记录"
+                >
                   {invocations.map(invocation => {
                     const invocationChannel = invocation.taskId
                       ? channels.find(item => item.id === invocation.taskId)
                       : undefined
                     return (
-                      <li key={invocation.id}>
+                      <li
+                        key={invocation.id}
+                        className="flex flex-wrap items-baseline gap-2.5 text-[13px]"
+                      >
                         <span
                           className={`invocation-status is-${invocation.status}`}
                         >
-                          {invocationStatusLabel(invocation.status)}
+                          <RowStatusPill
+                            label={invocationStatusLabel(invocation.status)}
+                          />
                         </span>
                         <span>
                           计划 {formatDateTime(invocation.scheduledFor)}
@@ -3094,18 +3175,18 @@ function AutomationRow({
                           <span>尝试 {invocation.attempts} 次</span>
                         )}
                         {invocation.summary && (
-                          <span className="invocation-summary">
+                          <span className="invocation-summary min-w-0 flex-[1_1_160px] truncate text-ink">
                             {invocation.summary}
                           </span>
                         )}
                         {invocation.lastError && (
-                          <span className="invocation-error">
+                          <span className="invocation-error text-red-text [overflow-wrap:anywhere]">
                             {invocation.lastError}
                           </span>
                         )}
                         {invocationChannel && onOpenChannel && (
                           <button
-                            className="inline-link"
+                            className="inline-link mt-0 inline-flex items-center gap-[5px] font-medium text-accent-ink"
                             onClick={() => onOpenChannel(invocationChannel)}
                             type="button"
                           >
@@ -3117,10 +3198,13 @@ function AutomationRow({
                   })}
                 </ul>
                 {historyMoreError && (
-                  <small className="record-history-error" role="alert">
+                  <small
+                    className="record-history-error mt-2 flex items-center gap-2 text-red-text"
+                    role="alert"
+                  >
                     {historyMoreError}
                     <button
-                      className="inline-link"
+                      className="inline-link mt-0 inline-flex items-center gap-[5px] font-medium text-accent-ink"
                       onClick={() => void onLoadMoreHistory(automation)}
                       type="button"
                     >
@@ -3129,15 +3213,17 @@ function AutomationRow({
                   </small>
                 )}
                 {historyCursor && (
-                  <div className="history-more">
-                    <button
-                      className="quiet-button"
+                  <div className="history-more mt-2.5 flex justify-center">
+                    <Button
+                      className="h-8 px-3 text-[13px] text-ink-2"
                       disabled={historyLoadingMore}
                       onClick={() => void onLoadMoreHistory(automation)}
+                      size="xs"
                       type="button"
+                      variant="quiet"
                     >
                       {historyLoadingMore ? '正在加载…' : '加载更多'}
-                    </button>
+                    </Button>
                   </div>
                 )}
               </>
@@ -3202,46 +3288,65 @@ export function MemoryPage({
         description="查看、修改或删除 Pegas 记住的内容"
         title="记忆"
       >
-        <button
-          className="primary-button page-header-action"
+        <Button
+          className="page-header-action h-9 px-4 text-[13px]"
           onClick={() => setForm({ mode: 'create' })}
+          size="sm"
           type="button"
+          variant="primary"
         >
           <Plus size={16} />
           添加记忆
-        </button>
+        </Button>
       </PageHeader>
-      <div className="filter-row" role="group" aria-label="筛选">
+      <div
+        className="filter-row flex items-center gap-2 overflow-x-auto border-b border-line pb-4"
+        role="group"
+        aria-label="筛选"
+      >
         {memoryScopes.map(scope => (
-          <button
+          <Button
             aria-pressed={filter === scope.id}
+            className="h-9 shrink-0 rounded-full px-4 text-[13px] aria-pressed:bg-accent-tint aria-pressed:text-accent-ink"
             key={scope.id}
             onClick={() => setFilter(scope.id)}
+            size="xs"
             type="button"
+            variant="secondary"
           >
             {scope.label}
-          </button>
+          </Button>
         ))}
       </div>
       {truncated && (
-        <p className="field-hint">
+        <p className="field-hint text-[12px] leading-[1.6] text-ink-2">
           仅显示最近的一部分记忆；完整列表以服务端为准。
         </p>
       )}
       {error && (
-        <div className="page-error" role="alert">
+        <div
+          className="mb-4 flex items-center gap-2.5 rounded-card border border-red bg-red-tint px-3.5 py-2.5 text-[13px] text-red-text"
+          role="alert"
+        >
           {error}
-          <button className="inline-link" onClick={onReload} type="button">
+          <button
+            className="inline-link mt-0 inline-flex items-center gap-[5px] font-medium text-inherit"
+            onClick={onReload}
+            type="button"
+          >
             重试
           </button>
         </div>
       )}
       {actionError && (
-        <div className="page-error" role="alert">
+        <div
+          className="mb-4 flex items-center gap-2.5 rounded-card border border-red bg-red-tint px-3.5 py-2.5 text-[13px] text-red-text"
+          role="alert"
+        >
           {actionError}
         </div>
       )}
-      {!memories && !error && <p className="page-loading">正在读取记忆…</p>}
+      {!memories && !error && <p className="my-6 text-ink-2">正在读取记忆…</p>}
       {memories && visible.length === 0 && !error && (
         <EmptyCapability
           icon={Layers3}
@@ -3254,15 +3359,20 @@ export function MemoryPage({
         />
       )}
       {memories && visible.length > 0 && (
-        <section className="record-list" aria-label="记忆列表">
+        <section className="record-list mb-10" aria-label="记忆列表">
           {visible.map(memory => (
-            <article key={memory.id}>
-              <span className="record-icon is-active">
+            <article
+              key={memory.id}
+              className="grid grid-cols-[34px_minmax(0,1fr)] items-start gap-3.5 border-b border-line px-2.5 py-4 min-[821px]:grid-cols-[40px_minmax(0,1fr)_auto]"
+            >
+              <span className="record-icon is-active flex size-[38px] items-center justify-center rounded-full bg-accent-tint text-accent-ink">
                 <Layers3 size={18} />
               </span>
-              <div className="record-copy">
-                <strong>{memory.content}</strong>
-                <small className="record-meta">
+              <div className="record-copy grid min-w-0 gap-[5px]">
+                <strong className="text-[14px] [overflow-wrap:anywhere]">
+                  {memory.content}
+                </strong>
+                <small className="record-meta text-[12px] text-ink-2 [overflow-wrap:anywhere]">
                   {memoryScopeLabel(memory.scope)}
                   {memory.taskId
                     ? ` · ${
@@ -3275,50 +3385,58 @@ export function MemoryPage({
                     ? '来源：用户确认'
                     : `来源：${memory.source.kind}`}
                 </small>
-                <small className="record-meta">
+                <small className="record-meta text-[12px] text-ink-2 [overflow-wrap:anywhere]">
                   更新于 {formatRelativeTime(memory.updatedAt)}
                   {memory.lastUsedAt
                     ? ` · 最近使用 ${formatRelativeTime(memory.lastUsedAt)}`
                     : ''}
                 </small>
               </div>
-              <div className="record-actions">
-                <button
-                  className="secondary-button"
+              <div className="record-actions col-span-full flex flex-wrap items-center justify-start gap-2 min-[821px]:col-start-2 min-[821px]:justify-end">
+                <Button
+                  className="h-8 px-3.5 text-[13px]"
                   disabled={busyId === memory.id}
                   onClick={() => setForm({ mode: 'edit', memory })}
+                  size="xs"
                   type="button"
+                  variant="secondary"
                 >
                   编辑
-                </button>
+                </Button>
                 {confirmDeleteId === memory.id ? (
                   <>
-                    <button
-                      className="danger-button"
+                    <Button
+                      className="h-8 px-3.5 text-[13px]"
                       disabled={busyId === memory.id}
                       onClick={() => void runDelete(memory)}
+                      size="xs"
                       type="button"
+                      variant="danger"
                     >
                       确认删除
-                    </button>
-                    <button
-                      className="quiet-button"
+                    </Button>
+                    <Button
+                      className="h-8 px-3 text-[13px] text-ink-2"
                       onClick={() => setConfirmDeleteId(undefined)}
+                      size="xs"
                       type="button"
+                      variant="quiet"
                     >
                       保留
-                    </button>
+                    </Button>
                   </>
                 ) : (
-                  <button
-                    className="quiet-button"
+                  <Button
+                    className="h-8 px-3 text-[13px] text-ink-2"
                     disabled={busyId === memory.id}
                     onClick={() => setConfirmDeleteId(memory.id)}
+                    size="xs"
                     type="button"
+                    variant="quiet"
                   >
                     <Trash2 size={15} />
                     删除
-                  </button>
+                  </Button>
                 )}
               </div>
             </article>
@@ -3438,18 +3556,6 @@ function AutomationForm({
   )
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
-  const dialogRef = useRef<HTMLElement>(null)
-  useEffect(() => {
-    dialogRef.current?.focus()
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        onCancel()
-      }
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [onCancel])
   async function submit() {
     if (saving) return
     if (!title.trim() || !prompt.trim()) {
@@ -3492,122 +3598,146 @@ function AutomationForm({
     }
   }
   return (
-    <div
-      className="modal-backdrop"
-      onMouseDown={event => event.target === event.currentTarget && onCancel()}
-    >
-      <section
+    <Dialog open onOpenChange={open => !open && onCancel()}>
+      <DialogContent
         aria-label={draft ? '编辑自动化' : '新建自动化'}
-        aria-modal="true"
-        className="command-dialog record-form"
-        ref={dialogRef}
-        role="dialog"
-        tabIndex={-1}
+        aria-describedby={undefined}
+        className="record-form flex max-h-[min(720px,86dvh)] w-[min(560px,calc(100vw-32px))] flex-col p-0"
       >
-        <header className="record-form-header">
-          <h2>{draft ? '编辑自动化' : '新建自动化'}</h2>
-          <button aria-label="关闭" onClick={onCancel} type="button">
-            <X size={18} />
-          </button>
+        <header className="record-form-header flex items-center justify-between border-b border-line px-4.5 py-3.5">
+          <DialogTitle>{draft ? '编辑自动化' : '新建自动化'}</DialogTitle>
         </header>
-        <div className="record-form-body">
+        <div className="record-form-body overflow-auto px-4.5 py-4">
           {error && (
-            <div className="page-error" role="alert">
+            <div
+              className="mb-4 flex items-center gap-2.5 rounded-card border border-red bg-red-tint px-3.5 py-2.5 text-[13px] text-red-text"
+              role="alert"
+            >
               {error}
             </div>
           )}
-          <label className="field-label">
-            名称
-            <input
+          <FormField className="my-3.5" label="名称">
+            <TextInput
               onChange={event => setTitle(event.target.value)}
               value={title}
             />
-          </label>
-          <label className="field-label">
-            意图
-            <textarea
+          </FormField>
+          <FormField className="my-3.5" label="意图">
+            <TextArea
               onChange={event => setPrompt(event.target.value)}
               rows={3}
               value={prompt}
             />
-          </label>
-          <label className="field-label">
-            触发方式
-            <select
-              onChange={event =>
-                setKind(event.target.value as 'interval' | 'once')
-              }
+          </FormField>
+          <FormField
+            className="my-3.5"
+            htmlFor="automation-kind"
+            label="触发方式"
+          >
+            <Select
+              onValueChange={value => setKind(value as 'interval' | 'once')}
               value={kind}
             >
-              <option value="interval">固定间隔</option>
-              <option value="once">一次性</option>
-            </select>
-          </label>
+              <SelectTrigger
+                className="h-9 w-full rounded-control"
+                id="automation-kind"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="interval">固定间隔</SelectItem>
+                <SelectItem value="once">一次性</SelectItem>
+              </SelectContent>
+            </Select>
+          </FormField>
           {kind === 'interval' ? (
-            <label className="field-label">
-              间隔（分钟）
-              <input
+            <FormField className="my-3.5" label="间隔（分钟）">
+              <TextInput
                 min={1}
                 onChange={event => setEveryMinutes(event.target.value)}
                 type="number"
                 value={everyMinutes}
               />
-            </label>
+            </FormField>
           ) : (
-            <label className="field-label">
-              执行时间
-              <input
+            <FormField className="my-3.5" label="执行时间">
+              <TextInput
                 onChange={event => setOnceAt(event.target.value)}
                 type="datetime-local"
                 value={onceAt}
               />
-            </label>
+            </FormField>
           )}
-          <label className="field-label">
-            目标
-            <select
-              onChange={event =>
-                setTargetKind(
-                  event.target.value as 'new_task' | 'existing_task',
-                )
+          <FormField
+            className="my-3.5"
+            htmlFor="automation-target"
+            label="目标"
+          >
+            <Select
+              onValueChange={value =>
+                setTargetKind(value as 'new_task' | 'existing_task')
               }
               value={targetKind}
             >
-              <option value="new_task">每次创建新事情</option>
-              <option value="existing_task">续接已有事情</option>
-            </select>
-          </label>
-          {targetKind === 'existing_task' && (
-            <label className="field-label">
-              事情
-              <select
-                onChange={event => setTargetTaskId(event.target.value)}
-                value={targetTaskId}
+              <SelectTrigger
+                className="h-9 w-full rounded-control"
+                id="automation-target"
               >
-                {channels.map(channel => (
-                  <option key={channel.id} value={channel.id}>
-                    {channel.title}
-                  </option>
-                ))}
-              </select>
-            </label>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="new_task">每次创建新事情</SelectItem>
+                <SelectItem value="existing_task">续接已有事情</SelectItem>
+              </SelectContent>
+            </Select>
+          </FormField>
+          {targetKind === 'existing_task' && (
+            <FormField
+              className="my-3.5"
+              htmlFor="automation-task"
+              label="事情"
+            >
+              <Select onValueChange={setTargetTaskId} value={targetTaskId}>
+                <SelectTrigger
+                  className="h-9 w-full rounded-control"
+                  id="automation-task"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {channels.map(channel => (
+                    <SelectItem key={channel.id} value={channel.id}>
+                      {channel.title}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormField>
           )}
         </div>
-        <footer className="record-form-footer">
-          <button className="quiet-button" onClick={onCancel} type="button">
+        <footer className="record-form-footer flex items-center justify-end gap-2 border-t border-line px-4.5 py-3">
+          <Button
+            className="h-9 px-4 text-[13px] text-ink-2"
+            onClick={onCancel}
+            size="sm"
+            type="button"
+            variant="quiet"
+          >
             取消
-          </button>
-          <button
-            className="primary-button"
+          </Button>
+          <Button
+            className="h-9 px-4 text-[13px]"
             disabled={saving}
             onClick={() => void submit()}
+            size="sm"
             type="button"
+            variant="primary"
           >
             {saving ? '保存中…' : '保存'}
-          </button>
+          </Button>
         </footer>
-      </section>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -3630,18 +3760,6 @@ function MemoryForm({
   const [content, setContent] = useState(draft?.content ?? '')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
-  const dialogRef = useRef<HTMLElement>(null)
-  useEffect(() => {
-    dialogRef.current?.focus()
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        onCancel()
-      }
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [onCancel])
   async function submit() {
     if (saving) return
     if (!content.trim()) {
@@ -3669,99 +3787,116 @@ function MemoryForm({
     }
   }
   return (
-    <div
-      className="modal-backdrop"
-      onMouseDown={event => event.target === event.currentTarget && onCancel()}
-    >
-      <section
+    <Dialog open onOpenChange={open => !open && onCancel()}>
+      <DialogContent
         aria-label={draft ? '编辑记忆' : '添加记忆'}
-        aria-modal="true"
-        className="command-dialog record-form"
-        ref={dialogRef}
-        role="dialog"
-        tabIndex={-1}
+        aria-describedby={undefined}
+        className="record-form flex max-h-[min(720px,86dvh)] w-[min(560px,calc(100vw-32px))] flex-col p-0"
       >
-        <header className="record-form-header">
-          <h2>{draft ? '编辑记忆' : '添加记忆'}</h2>
-          <button aria-label="关闭" onClick={onCancel} type="button">
-            <X size={18} />
-          </button>
+        <header className="record-form-header flex items-center justify-between border-b border-line px-4.5 py-3.5">
+          <DialogTitle>{draft ? '编辑记忆' : '添加记忆'}</DialogTitle>
         </header>
-        <div className="record-form-body">
+        <div className="record-form-body overflow-auto px-4.5 py-4">
           {error && (
-            <div className="page-error" role="alert">
+            <div
+              className="mb-4 flex items-center gap-2.5 rounded-card border border-red bg-red-tint px-3.5 py-2.5 text-[13px] text-red-text"
+              role="alert"
+            >
               {error}
             </div>
           )}
-          <label className="field-label">
-            内容
-            <textarea
+          <FormField className="my-3.5" label="内容">
+            <TextArea
               onChange={event => setContent(event.target.value)}
               rows={3}
               value={content}
             />
-          </label>
-          <label className="field-label">
-            类别
-            <select
-              onChange={event =>
-                setCategory(event.target.value as MemoryCategory)
-              }
+          </FormField>
+          <FormField className="my-3.5" htmlFor="memory-category" label="类别">
+            <Select
+              onValueChange={value => setCategory(value as MemoryCategory)}
               value={category}
             >
-              {memoryCategories.map(item => (
-                <option key={item.id} value={item.id}>
-                  {item.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="field-label">
-            作用范围
-            <select
-              onChange={event => setScope(event.target.value as MemoryScope)}
+              <SelectTrigger
+                className="h-9 w-full rounded-control"
+                id="memory-category"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {memoryCategories.map(item => (
+                  <SelectItem key={item.id} value={item.id}>
+                    {item.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FormField>
+          <FormField className="my-3.5" htmlFor="memory-scope" label="作用范围">
+            <Select
+              onValueChange={value => setScope(value as MemoryScope)}
               value={scope}
             >
-              <option value="global">全局</option>
-              <option value="worker">Worker</option>
-              <option value="channel">事情</option>
-            </select>
-          </label>
-          {scope !== 'global' && (
-            <label className="field-label">
-              事情
-              <select
-                onChange={event => setTaskId(event.target.value)}
-                value={taskId}
+              <SelectTrigger
+                className="h-9 w-full rounded-control"
+                id="memory-scope"
               >
-                {channels.map(channel => (
-                  <option key={channel.id} value={channel.id}>
-                    {channel.title}
-                  </option>
-                ))}
-              </select>
-            </label>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="global">全局</SelectItem>
+                <SelectItem value="worker">Worker</SelectItem>
+                <SelectItem value="channel">事情</SelectItem>
+              </SelectContent>
+            </Select>
+          </FormField>
+          {scope !== 'global' && (
+            <FormField className="my-3.5" htmlFor="memory-task" label="事情">
+              <Select onValueChange={setTaskId} value={taskId}>
+                <SelectTrigger
+                  className="h-9 w-full rounded-control"
+                  id="memory-task"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {channels.map(channel => (
+                    <SelectItem key={channel.id} value={channel.id}>
+                      {channel.title}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormField>
           )}
-          <p className="field-hint">
+          <p className="field-hint text-[12px] leading-[1.6] text-ink-2">
             {draft
               ? '来源保持服务端记录不变；修改会以新修订保存。'
               : '手动添加的记忆来源记为“用户确认”。'}
           </p>
         </div>
-        <footer className="record-form-footer">
-          <button className="quiet-button" onClick={onCancel} type="button">
+        <footer className="record-form-footer flex items-center justify-end gap-2 border-t border-line px-4.5 py-3">
+          <Button
+            className="h-9 px-4 text-[13px] text-ink-2"
+            onClick={onCancel}
+            size="sm"
+            type="button"
+            variant="quiet"
+          >
             取消
-          </button>
-          <button
-            className="primary-button"
+          </Button>
+          <Button
+            className="h-9 px-4 text-[13px]"
             disabled={saving}
             onClick={() => void submit()}
+            size="sm"
             type="button"
+            variant="primary"
           >
             {saving ? '保存中…' : '保存'}
-          </button>
+          </Button>
         </footer>
-      </section>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }

@@ -22,11 +22,22 @@ export type FactTone = 'green' | 'orange' | 'red' | 'accent' | 'neutral'
 
 /** shared status-label → pill tone lookup for work rows, trays and menus */
 function statusTone(label: string): FactTone {
-  if (label === '已完成') return 'green'
+  if (label === '已完成' || label === '已派发') return 'green'
   if (label === '失败' || label === '执行失败') return 'red'
-  if (label === '进行中' || label === '执行中' || label === '已启用')
+  if (
+    label === '进行中' ||
+    label === '执行中' ||
+    label === '已启用' ||
+    label === '处理中'
+  )
     return 'accent'
-  if (label === '待确认' || label === '等待中' || label === '需要你决定')
+  if (
+    label === '待确认' ||
+    label === '等待中' ||
+    label === '需要你决定' ||
+    label === '已暂停' ||
+    label === '待触发'
+  )
     return 'orange'
   return 'neutral'
 }
