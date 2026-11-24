@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 
 import { canonicalRuleTarget, classifyToolCall } from './policy-gate.mjs'
+import { deriveWriteEffect } from './write-effect.mjs'
 
 /** @typedef {{ baseUrl: string, runId: string, claimToken: string }} BridgeCapability */
 /** @typedef {{ actionId: string, tool: string, argumentsHash: string }} ToolGrant */
@@ -8,7 +9,7 @@ import { canonicalRuleTarget, classifyToolCall } from './policy-gate.mjs'
 /** @typedef {{ eventId: string, text: string, createdAt: string }} MandateInstruction */
 /** @typedef {{ instructions: MandateInstruction[], omitted: boolean }} MandateProjection */
 /** @typedef {{ tier: import('./policy-gate.d.ts').PolicyTier, generation: string, mismatch: boolean, rules: ApprovalRule[], autoReviewEnabled: boolean, mandate: MandateProjection }} TierState */
-/** @typedef {{ tool: string, argumentsHash: string, command?: string, effect?: { contentHash: string }, classification?: import('./policy-gate.d.ts').ToolCallClassification }} CapturedCall */
+/** @typedef {{ tool: string, argumentsHash: string, command?: string, effect?: { contentHash?: string, targets?: Record<string, string> }, classification?: import('./policy-gate.d.ts').ToolCallClassification }} CapturedCall */
 /** @typedef {{ session?: { requestHeader?: () => { config?: { provider?: unknown, model?: unknown } } | undefined } }} ReviewAgent */
 /** @typedef {{ callId?: string | number, name: string, arguments?: unknown, agent?: ReviewAgent }} ToolExecution */
 /** @typedef {{ callId?: string | number, toolName: string, reason?: string, signal?: { aborted?: boolean } }} ApprovalRequest */
@@ -93,7 +94,7 @@ export function apply(ctx, config = {}) {
           typeof exec.arguments.command === 'string'
             ? { command: exec.arguments.command }
             : {}),
-          ...(writeContentEffect(exec) ?? {}),
+          ...capturedWriteEffect(exec, policy),
           classification,
         })
         gateDecisions.set(callKey, classification)
@@ -1291,30 +1292,20 @@ function stableHash(value) {
 }
 
 /**
- * EXEC-003: record the intended external effect of a full-content write so
+ * EXEC-003: record the intended external effect of a file mutation so
  * automatic reconciliation can verify the landed bytes, not just existence.
- * Only the write tool declares its complete final content; edit/apply_patch
- * carry deltas and stay on existence-or-human judgement.
+ * write declares its full content; edit and single-file apply_patch deltas
+ * are replayed over the current file to derive the final bytes. Anything
+ * the derivation cannot statically replay keeps no fingerprint and stays
+ * on the conservative existence-or-human path.
  *
  * @param {ToolExecution} exec
- * @returns {{ effect: { contentHash: string } } | undefined}
+ * @param {import('./policy-gate.d.ts').PolicyRoots} policy
+ * @returns {{ effect?: { contentHash?: string, targets?: Record<string, string> } }}
  */
-function writeContentEffect(exec) {
-  if (exec.name !== 'write') return undefined
-  if (
-    typeof exec.arguments !== 'object' ||
-    exec.arguments === null ||
-    !('content' in exec.arguments) ||
-    typeof exec.arguments.content !== 'string'
-  )
-    return undefined
-  return {
-    effect: {
-      contentHash: createHash('sha256')
-        .update(exec.arguments.content)
-        .digest('hex'),
-    },
-  }
+function capturedWriteEffect(exec, policy) {
+  const effect = deriveWriteEffect(exec, policy)
+  return effect === undefined ? {} : { effect }
 }
 
 /**

@@ -50,13 +50,13 @@
 
 `src/observability/action-reconciliation.ts` 在同一对账进程内提供第二职责：主动探测 `unknown` 状态的文件写 Action 的外部事实，并通过既有人工核对同一事务链路结算（`system:auto-reconciliation` 身份）。它与上面的只读交付对账边界不同——**允许写**，但只写既有 append-only reconciliation 通道，从不重试副作用本身：
 
-- **可探测范围**：`kind` 为 `dsh.tool.*`、tool ∈ {write, edit, apply_patch}、category ∈ {out-of-workspace-write, workspace-write} 且 `request.targets` 为非空字符串数组。全部目标存在（记录过 `request.effect.contentHash` 时还要求 sha256 一致）→ `succeeded`；目标缺失或指纹不符 → `failed`（绝不判成功）。edit/apply_patch 无 contentHash、非文件类或无 targets 的动作保持 `unknown` 留人工核对。
-- **指纹来源（2026-11-24 补齐）**：审批桥在 `tools/pre-execute` 捕获 `write` 调用的完整 `content` 参数并计算 sha256,随 `request.effect.contentHash` 写入 Action(人工审批与自动审阅放行两条路径都带)。`edit`/`apply_patch` 只携带增量 delta、无法静态推导最终字节,不记录指纹——它们仍是存在性判定或留人工。真实 DSH write 落盘字节与参数 content 一致由 `test/policy-gate-integration.test.ts` 探针断言(64hex 形状 + 落盘内容)。
+- **可探测范围**：`kind` 为 `dsh.tool.*`、tool ∈ {write, edit, apply_patch}、category ∈ {out-of-workspace-write, workspace-write} 且 `request.targets` 为非空字符串数组。全部目标存在（记录过指纹时还要求 sha256 一致：单目标 `request.effect.contentHash` 或逐目标 `request.effect.targets` 映射）→ `succeeded`；目标缺失或指纹不符 → `failed`（绝不判成功）。无法静态推导指纹的 edit/apply_patch、非文件类或无 targets 的动作保持 `unknown` 留人工核对。
+- **指纹来源（2026-11-24 两环补齐）**：审批桥在 `tools/pre-execute` 经 `src/executor/write-effect.mjs` 推导预期落盘字节——`write` 直接哈希完整 `content`；`edit` 读原文件（LF 归一 + 行尾风格检测）按执行器同款字面替换语义（唯一命中或 replace_all）推导最终内容并还原行尾；单文件 `apply_patch`（Add/Update，不含 Delete/Move/多文件）以 Codex 风格 hunk 解析与 seek 语义在原文件上重放。推导只读文件系统、10MB 上限、二进制/非 UTF-8/不唯一命中/hunk 不匹配一律放弃指纹（fail closed 退回存在性或人工）。人工审批与自动审阅放行两条路径都带。真实 DSH write/edit 落盘字节与推导一致由 `test/policy-gate-integration.test.ts` 探针断言。
 - **结算幂等**：commandId `auto-reconcile:<actionId>`，复用 `reconcileAction` 事务（核对记录 + Action reconciled + Task 原因 + 唤醒 + `action.reconciled` Outbox，payload 带 `reconciledBy` 与自动核对文案）。核对记录带 `automatic=1` 标记（schema v44）。
 - **观测**：`pegas_action_auto_reconciliations_total{resolution}` 指标与 `action.auto_reconciled` / `action.auto_reconcile_failed` 结构化日志（仅 durable 标识与探测结论）。
 - **配置**：`PEGAS_AUTO_RECONCILE`（默认 enabled；`disabled` 关闭探测只保留只读交付对账；其他值启动即失败）。
 - **回滚**：存在 `automatic=1` 核对记录时，Rollback Guard 拒绝回滚到 schema < 44 的 Release；人工核对记录不触发该 Guard（沿用 v23 语义）。
-- **证据**：`test/action-auto-reconciliation.test.ts` 7 个测试（指纹命中/不符、缺失判失败、非文件类留人工、幂等重跑、Outbox、Guard 区分人工/自动）；桥指纹采集回归 `test/policy-gate.test.ts`（park 路径 effect.contentHash 精确值）与 `test/auto-review-bridge.test.ts`（审阅放行路径）；真实 DSH 双探针断言指纹形状。
+- **证据**：`test/action-auto-reconciliation.test.ts` 8 个测试（指纹命中/不符、逐目标哈希命中/不符、缺失判失败、非文件类留人工、幂等重跑、Outbox、Guard 区分人工/自动）；推导单测 `test/write-effect-fingerprint.test.ts` 11 个（write/edit/CRLF/replace_all/patch Add/Update/EOF 锚定/多文件与 Delete/Move 拒绝/相对路径）；桥采集回归 `test/policy-gate.test.ts`（edit 与 apply_patch park 路径精确值）与 `test/auto-review-bridge.test.ts`（审阅放行路径）；真实 DSH 三探针（write park/审阅 + edit 落盘一致）。
 
 ## 非目标
 

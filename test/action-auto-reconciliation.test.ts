@@ -118,6 +118,24 @@ describe('write action external probe', () => {
     ).toEqual({ resolution: 'failed', matched: [], missing: [target] })
   })
 
+  it('verifies per-target hashes for delta writes', () => {
+    const directory = workspace()
+    const target = join(directory, 'patched.md')
+    writeFileSync(target, 'final bytes\n')
+    expect(
+      probeWriteAction({
+        targets: [target],
+        targetHashes: { [target]: sha256('final bytes\n') },
+      }),
+    ).toEqual({ resolution: 'succeeded', matched: [target], missing: [] })
+    expect(
+      probeWriteAction({
+        targets: [target],
+        targetHashes: { [target]: sha256('other bytes\n') },
+      }),
+    ).toEqual({ resolution: 'failed', matched: [], missing: [target] })
+  })
+
   it('treats a missing target as confirmed failure and no declared target as inconclusive', () => {
     const directory = workspace()
     const missing = join(directory, 'absent.md')

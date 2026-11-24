@@ -15,6 +15,7 @@ export interface WriteProbeResult {
 export function probeWriteAction(input: {
   targets: readonly string[]
   contentHash?: string
+  targetHashes?: Record<string, string>
 }): WriteProbeResult {
   if (input.targets.length === 0)
     return { resolution: 'inconclusive', matched: [], missing: [] }
@@ -26,11 +27,12 @@ export function probeWriteAction(input: {
         missing.push(target)
         continue
       }
-      if (input.contentHash) {
+      const expected = input.targetHashes?.[target] ?? input.contentHash
+      if (expected) {
         const actual = createHash('sha256')
           .update(readFileSync(target))
           .digest('hex')
-        if (actual !== input.contentHash) {
+        if (actual !== expected) {
           missing.push(target)
           continue
         }
@@ -51,6 +53,7 @@ export interface ActionReconciliationOptions {
   probe?: (input: {
     targets: readonly string[]
     contentHash?: string
+    targetHashes?: Record<string, string>
   }) => WriteProbeResult
   limit?: number
 }
@@ -105,8 +108,8 @@ export class ActionReconciliation {
       }
       const note =
         probed.resolution === 'succeeded'
-          ? `自动探测确认全部目标已存在${probeInput.contentHash ? '且内容指纹一致' : ''}：${probed.matched.join('、')}。`
-          : `自动探测确认目标缺失${probeInput.contentHash ? '或内容指纹不一致' : ''}：${probed.missing.join('、')}。副作用未发生或未按预期发生。`
+          ? `自动探测确认全部目标已存在${hasFingerprint(probeInput) ? '且内容指纹一致' : ''}：${probed.matched.join('、')}。`
+          : `自动探测确认目标缺失${hasFingerprint(probeInput) ? '或内容指纹不一致' : ''}：${probed.missing.join('、')}。副作用未发生或未按预期发生。`
       try {
         this.#store.reconcileAction(action.id, autoReconciler, {
           commandId: `auto-reconcile:${action.id}`,
@@ -137,9 +140,13 @@ export class ActionReconciliation {
   }
 }
 
-function writeProbeInput(
-  action: DurableAction & { userId: string },
-): { targets: readonly string[]; contentHash?: string } | undefined {
+function writeProbeInput(action: DurableAction & { userId: string }):
+  | {
+      targets: readonly string[]
+      contentHash?: string
+      targetHashes?: Record<string, string>
+    }
+  | undefined {
   if (!action.kind.startsWith('dsh.tool.')) return undefined
   const tool = action.request.tool
   if (tool !== 'write' && tool !== 'edit' && tool !== 'apply_patch')
@@ -163,9 +170,45 @@ function writeProbeInput(
     /^[0-9a-f]{64}$/.test(effect.contentHash)
       ? effect.contentHash
       : undefined
-  if (tool !== 'write' && !contentHash) return undefined
+  const targetHashes = parseTargetHashes(effect, targets)
+  if (tool !== 'write' && !contentHash && !targetHashes) return undefined
   return {
     targets,
     ...(contentHash ? { contentHash } : {}),
+    ...(targetHashes ? { targetHashes } : {}),
   }
+}
+
+function parseTargetHashes(
+  effect: unknown,
+  targets: readonly unknown[],
+): Record<string, string> | undefined {
+  if (
+    typeof effect !== 'object' ||
+    effect === null ||
+    !('targets' in effect) ||
+    typeof effect.targets !== 'object' ||
+    effect.targets === null ||
+    Array.isArray(effect.targets)
+  )
+    return undefined
+  const entries = Object.entries(effect.targets)
+  const hashes: Record<string, string> = {}
+  for (const [target, value] of entries) {
+    if (typeof value !== 'string' || !/^[0-9a-f]{64}$/.test(value))
+      return undefined
+    hashes[target] = value
+  }
+  const covered = targets.every(
+    target => typeof target === 'string' && hashes[target] !== undefined,
+  )
+  if (!covered || entries.length === 0) return undefined
+  return hashes
+}
+
+function hasFingerprint(input: {
+  contentHash?: string
+  targetHashes?: Record<string, string>
+}): boolean {
+  return input.contentHash !== undefined || input.targetHashes !== undefined
 }

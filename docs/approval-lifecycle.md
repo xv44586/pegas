@@ -61,7 +61,7 @@ Run capability 的 HTTP 传输固定使用 loopback。`PEGAS_API_HOST` 为 `0.0.
 - `resolution=failed`：外部失败成为人工确认的事实。Task 保持开放并显示 `action_failed`，但 retry、Goal revision、协作与新 Approval 仍被拒绝——确认失败不等于问题已解决，后续处理需要用户显式停止或新的产品级恢复路径。Review Pack 不会把该 side effect 计为成功。
 - Task 停止后仍允许核对已 `unknown` 的 Action（外部副作用审计不随 Task 结束消失），但不再改写 ended Task 的状态。
 - 写入核对记录、Action 状态、Task 原因、唤醒事件与 `action.reconciled` Outbox 在同一事务提交。
-- **自动核对（EXEC-003，2026-11-24）**：对账进程可对文件写类 `unknown` Action 主动探测外部事实并走同一事务结算，核对人为 `system:auto-reconciliation`，commandId `auto-reconcile:<actionId>` 幂等；Outbox payload 带 `reconciledBy` 与自动核对文案。目标缺失或内容指纹不符只会结算为 `failed`，绝不判成功；非文件类或无法静态判定的动作保持 `unknown` 留人工。核对记录带 `automatic=1` 标记（schema v44），详见 `docs/observability.md`。桥在创建 Action 时为 `write` 调用记录完整内容的 sha256（`request.effect.contentHash`，人工审批与自动审阅放行都带），write 类自动核对按指纹判定；edit/apply_patch 只有增量 delta，不记录指纹。
+- **自动核对（EXEC-003，2026-11-24）**：对账进程可对文件写类 `unknown` Action 主动探测外部事实并走同一事务结算，核对人为 `system:auto-reconciliation`，commandId `auto-reconcile:<actionId>` 幂等；Outbox payload 带 `reconciledBy` 与自动核对文案。目标缺失或内容指纹不符只会结算为 `failed`，绝不判成功；非文件类或无法静态判定的动作保持 `unknown` 留人工。核对记录带 `automatic=1` 标记（schema v44），详见 `docs/observability.md`。桥在创建 Action 时推导预期落盘字节（人工审批与自动审阅放行都带）：`write` 记录完整内容 sha256（`request.effect.contentHash`）；`edit` 与单文件 `apply_patch` 增量在原文件上重放推导最终字节（edit 用 contentHash，patch 用逐目标 `effect.targets` 映射）；无法静态推导（多文件/Delete/Move 补丁、命中不唯一等）不记录指纹，fail closed。
 
 创建 Action 的 `idempotencyKey`、决定的 `commandId` 和 outcome 的 `commandId` 都是幂等键。相同键和相同 payload 返回已有对象；相同键配不同 payload 会拒绝，不会悄悄覆盖审计事实。Run claim token 只保存 SHA-256 digest，不通过 API 或 Outbox 回显。
 
@@ -198,7 +198,7 @@ claim token 只经进程环境传给 DSH 主进程，DSH 自身的 subprocess �
 
 ## 当前限制
 
-持久对象、策略边界、API、Web 决策、恢复协议与人工核对闭环已可用；Policy Gate 覆盖全部工具调用并做确定性 risk 分级（P1），权限档位（全局默认 + 事情覆盖 + Run 快照下界 + 运行中热切换）已落地（P2），本事情内同类规则批准与撤销已落地（P3），审批卡结构化渲染与通知深链已落地（P4），模型自动审阅已落地（P5，默认关闭），逐调用独立审计表（P6）与档位审计列表 UI（P7）已落地（2026-11-24）。文件写类 unknown Action 的自动对账已由 EXEC-003 落地（2026-11-24，`system:auto-reconciliation` 探测结算；同日桥补齐 write 内容指纹，write 类按 sha256 判定）；仍标记为 `Partial`：edit/apply_patch 增量写与 bash 写无最终字节指纹（存在性判定或留人工）、非文件类副作用仍留人工。组织级 RBAC、多人会签、超时策略与可配置风险阈值同样不在当前范围内。
+持久对象、策略边界、API、Web 决策、恢复协议与人工核对闭环已可用；Policy Gate 覆盖全部工具调用并做确定性 risk 分级（P1），权限档位（全局默认 + 事情覆盖 + Run 快照下界 + 运行中热切换）已落地（P2），本事情内同类规则批准与撤销已落地（P3），审批卡结构化渲染与通知深链已落地（P4），模型自动审阅已落地（P5，默认关闭），逐调用独立审计表（P6）与档位审计列表 UI（P7）已落地（2026-11-24）。文件写类 unknown Action 的自动对账已由 EXEC-003 落地（2026-11-24，`system:auto-reconciliation` 探测结算；同日桥两环补齐 write/edit/单文件 apply_patch 最终字节指纹，按 sha256 判定）；仍标记为 `Partial`：bash 写与多文件/删除/移动补丁无最终字节指纹（存在性判定或留人工）、非文件类副作用仍留人工。组织级 RBAC、多人会签、超时策略与可配置风险阈值同样不在当前范围内。
 
 ## 回滚
 
