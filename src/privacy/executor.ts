@@ -59,6 +59,12 @@ export class PrivacyMaskingExecutor implements RunExecutor {
         }
       case 'step':
         return event
+      case 'policy_decision':
+        return {
+          ...event,
+          reason: restore(event.reason),
+          targets: event.targets?.map(target => restore(target)),
+        }
     }
   }
 }

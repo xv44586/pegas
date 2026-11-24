@@ -1,4 +1,5 @@
 import {
+  AlertTriangle,
   Bell,
   Bot,
   Box,
@@ -19,6 +20,7 @@ import {
   RotateCw,
   Search,
   Shield,
+  ShieldCheck,
   SlidersHorizontal,
   Sparkles,
   Sun,
@@ -207,6 +209,7 @@ export function SettingsPage({
   const [providerDraft, setProviderDraft] = useState<ModelProviderDraft>()
   const [speechDraft, setSpeechDraft] = useState<SpeechSettingsDraft>()
   const [rewriteDraft, setRewriteDraft] = useState<RewriteSettingsDraft>()
+  const [confirmingFullAccess, setConfirmingFullAccess] = useState(false)
   useEffect(() => setSection(initialSection), [initialSection])
   useEffect(() => {
     setDraft(response?.settings)
@@ -256,8 +259,16 @@ export function SettingsPage({
     )
   }, [response])
 
-  async function save() {
+  async function save(skipFullAccessConfirmation = false) {
     if (!draft || !providerDraft || saving) return
+    if (
+      draft.permissionTier === 'full' &&
+      response?.settings.permissionTier !== 'full' &&
+      !skipFullAccessConfirmation
+    ) {
+      setConfirmingFullAccess(true)
+      return
+    }
     setSaving(true)
     setNotice(undefined)
     try {
@@ -513,6 +524,45 @@ export function SettingsPage({
               </button>
             </footer>
           )}
+        {confirmingFullAccess && (
+          <div
+            aria-labelledby="settings-full-access-risk-title"
+            aria-modal="true"
+            className="stop-confirmation"
+            role="dialog"
+          >
+            <header>
+              <AlertTriangle size={18} />
+              <strong id="settings-full-access-risk-title">
+                确认完全访问风险
+              </strong>
+            </header>
+            <p>
+              完全访问档位下，Pegas 不再拦截工作区之外的写入与命令副作用；
+              高风险动作仍会请求你的审批，控制面自修改仍被强制拦截。
+              该默认档位会应用到所有未单独覆盖权限的事情。
+            </p>
+            <div className="stop-confirmation-actions">
+              <button
+                className="secondary-button"
+                onClick={() => setConfirmingFullAccess(false)}
+                type="button"
+              >
+                取消
+              </button>
+              <button
+                className="secondary-button is-danger"
+                onClick={() => {
+                  setConfirmingFullAccess(false)
+                  void save(true)
+                }}
+                type="button"
+              >
+                我已了解，启用完全访问
+              </button>
+            </div>
+          </div>
+        )}
       </section>
     </div>
   )
@@ -2439,8 +2489,69 @@ function PrivacySettings({
     <div className="settings-pane">
       <SettingsHeading
         title="隐私"
-        description="控制内容发往外部模型前的保护方式。"
+        description="控制内容发往外部模型前的保护方式，以及 Pegas 执行动作的默认权限。"
       />
+      <div className="settings-card">
+        <div className="card-title">
+          <LockKeyhole size={20} />
+          <div>
+            <h3>默认权限档位</h3>
+            <p>决定 Pegas 执行工具时哪些动作放行、哪些需要你的审批。</p>
+          </div>
+        </div>
+        <label className="field-label">
+          全局权限档位
+          <select
+            aria-label="全局权限档位"
+            onChange={event =>
+              onChange({
+                ...draft,
+                permissionTier:
+                  event.target.value === 'strict' ||
+                  event.target.value === 'full'
+                    ? event.target.value
+                    : 'standard',
+              })
+            }
+            value={draft.permissionTier ?? 'standard'}
+          >
+            <option value="standard">标准 · 区内放行，越界审批</option>
+            <option value="strict">严格 · 只读，写与网络都审批</option>
+            <option value="full">完全访问 · 显式风险披露</option>
+          </select>
+        </label>
+        <p className="settings-help">
+          收紧对下一次工具调用立即生效；放宽只影响后续运行。单个事情可以在执行设置里覆盖此默认值。
+        </p>
+      </div>
+      <div className="settings-card">
+        <div className="card-title">
+          <ShieldCheck size={20} />
+          <div>
+            <h3>自动审阅</h3>
+            <p>
+              待审批操作先交给模型按你的原话初审：明确授权的放行，其余仍由你决定。
+            </p>
+          </div>
+        </div>
+        <label className="switch-row">
+          启用自动审阅
+          <input
+            aria-label="启用自动审阅"
+            checked={draft.autoReviewEnabled === true}
+            onChange={event =>
+              onChange({
+                ...draft,
+                autoReviewEnabled: event.target.checked,
+              })
+            }
+            type="checkbox"
+          />
+        </label>
+        <p className="settings-help">
+          只认你认证输入的原话；定时跟进等机器输入不构成新授权。审阅超时或失败一律回到人工审批，不可逆命令与控制面修改始终需要你确认。
+        </p>
+      </div>
       <div className="settings-card">
         <div className="card-title">
           <Shield size={20} />

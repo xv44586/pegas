@@ -18,7 +18,12 @@ export const approvalStatuses = [
 ] as const
 export type ApprovalStatus = (typeof approvalStatuses)[number]
 
-const approvalDecisionKinds = ['approve', 'reject', 'revise'] as const
+const approvalDecisionKinds = [
+  'approve',
+  'approve_rule',
+  'reject',
+  'revise',
+] as const
 type ApprovalDecisionKind = (typeof approvalDecisionKinds)[number]
 
 interface ApprovalOption {
@@ -59,6 +64,7 @@ export interface ActionReconciliation {
   previousStatus: 'failed' | 'unknown'
   previousResult?: Record<string, unknown>
   reconciledBy: string
+  automatic?: boolean
   createdAt: string
 }
 
@@ -75,6 +81,7 @@ export interface DurableAction {
   recoveryPoint: Record<string, unknown>
   result?: Record<string, unknown>
   reconciliation?: ActionReconciliation
+  review?: import('./approval-review.js').ApprovalReview
   createdAt: string
   updatedAt: string
 }
@@ -114,6 +121,35 @@ export interface ActionOutcomeDraft {
   commandId: string
   status: 'succeeded' | 'failed' | 'unknown'
   result: Record<string, unknown>
+}
+
+const ruleEligibleCategories = [
+  'out-of-workspace-write',
+  'network-egress',
+] as const
+
+export function approvalRuleTargets(input: {
+  tool: string
+  category: string
+  targets: readonly string[]
+}): { tool: string; category: string; targets: string[] } {
+  if (typeof input.tool !== 'string' || input.tool.trim() === '') {
+    throw new Error('rule.tool is required')
+  }
+  if (
+    !ruleEligibleCategories.includes(
+      input.category as (typeof ruleEligibleCategories)[number],
+    )
+  ) {
+    throw new Error('Action category does not accept persistent rules')
+  }
+  const targets = [...new Set(input.targets)]
+    .filter(target => typeof target === 'string' && target.trim() !== '')
+    .sort()
+  if (targets.length === 0) {
+    throw new Error('Persistent rules require at least one canonical target')
+  }
+  return { tool: input.tool, category: input.category, targets }
 }
 
 export function approvalRequired(risk: ActionRisk): boolean {

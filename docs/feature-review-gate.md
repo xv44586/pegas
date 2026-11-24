@@ -4,7 +4,7 @@
 >
 > 状态：Usable
 >
-> 更新日期：2026-11-19
+> 更新日期：2026-11-24
 
 ## 用户结果
 
@@ -31,9 +31,10 @@ Pegas 把可重复的测试能力和验收契约永久保留在仓库中，但�
 1. PR 标题必须包含 Feature ID；验收条件仍以 Feature Map 和测试代码为准。
 2. CI 显式检出 PR 的完整 head SHA（而不是 GitHub 临时生成的 merge commit）；`pnpm check` 和 `pnpm smoke` 完成后，再根据 diff 判断是否包含 Web 改动。
 3. Web 改动运行 `pnpm review:ui`：在临时数据目录中启动构建后的 Pegas 和 echo Worker，生成首页、工作区展开、侧栏收缩、设置、插件详情和 390px 窄屏截图，同时检查页面、输入器和面板是否越界。
-4. `pnpm review:evidence` 收集准确 head SHA、changed files、命令摘要和临时媒体的大小及 SHA-256，生成报告和 Markdown 摘要。
-5. Web 改动没有截图、外部服务代码改动没有脱敏 canary，都会自动产生关键 `Not tried`，报告状态为 `incomplete` 并让 CI 失败。
-6. 审核记录必须写明 reviewed commit SHA；之后有新 push 时必须重新运行和审核。
+4. `src/model|speech|notification` 或 `services` 改动运行 `pnpm review:canary`（`scripts/capture-dependency-canary.mjs`）：在临时数据目录中启动构建后的 control-plane、echo Worker 和真实 notification dispatcher，向 loopback webhook 接收器投递 approval.required，核验幂等键、消息 ID、outbox 深链、prompt 不出信任边界、落库 sent 与站内完整 payload，写出只含字段名与断言结论的 `notification-real-service-canary.json`。
+5. `pnpm review:evidence` 收集准确 head SHA、changed files、命令摘要和临时媒体的大小及 SHA-256，生成报告和 Markdown 摘要。
+6. Web 改动没有截图、外部服务代码改动没有脱敏 canary，都会自动产生关键 `Not tried`，报告状态为 `incomplete` 并让 CI 失败。
+7. 审核记录必须写明 reviewed commit SHA；之后有新 push 时必须重新运行和审核。
 
 ## 证据层级与完成声明
 
@@ -57,6 +58,7 @@ Pegas 把可重复的测试能力和验收契约永久保留在仓库中，但�
 pnpm check
 pnpm smoke
 pnpm review:ui -- --changed-from origin/main
+pnpm review:canary -- --changed-from origin/main
 pnpm review:evidence -- \
   --changed-from origin/main \
   --feature QUALITY-001 \
@@ -77,7 +79,7 @@ stage 完成后临时报告可以删除；Candidate manifest 已保留必要摘�
 
 ## 数据与权限边界
 
-- GitHub 托管 CI 不持有生产模型、ASR 或通知凭证；真实依赖 canary 在受控 Candidate 环境执行。
+- GitHub 托管 CI 不持有生产模型、ASR 或通知凭证。通知投递 canary 使用真实 dispatcher 进程和 loopback webhook 接收器，在 CI 内即可执行且不产生外部副作用；需要生产凭证的模型/ASR canary 仍在受控 Candidate 环境执行。
 - 报告不得包含 API key、token、环境变量、用户原文或上游响应全文。
 - UI collector 使用临时 HOME/数据目录和 echo Executor，不读取或修改当前运行中的 Pegas。
 - 截图和日志只进入短期 artifact，不提交到主分支。
@@ -93,4 +95,4 @@ stage 完成后临时报告可以删除；Candidate manifest 已保留必要摘�
 
 ## 仍需加固
 
-当前 UI collector 覆盖 Pegas 的通用壳层状态，CSS cascade lint 会阻断主题覆盖切换为 column flex 时遗漏 `align-items` 重置；具体 Feature 的特殊页面状态仍应通过相应 Playwright 测试永久编码。外部服务路径已经在缺少 canary 时阻断，但通用 Candidate canary runner 仍需随 SelfChange 执行器一起完成，合并后运行实例验证也仍是发布阶段责任。
+当前 UI collector 覆盖 Pegas 的通用壳层状态，CSS cascade lint 会阻断主题覆盖切换为 column flex 时遗漏 `align-items` 重置；具体 Feature 的特殊页面状态仍应通过相应 Playwright 测试永久编码。通知投递已有 CI 内真实 dispatcher canary（2026-11-24）；需要生产凭证的模型/ASR canary 与受控 Candidate 环境的通用 runner 仍需随 SelfChange 执行器一起完成，合并后运行实例验证也仍是发布阶段责任。

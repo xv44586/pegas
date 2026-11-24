@@ -401,6 +401,98 @@ console.log(JSON.stringify({
     ])
   })
 
+  it('projects auto review verdicts as activity progress', async () => {
+    const command = fakeDsh(`
+console.log(JSON.stringify({ type: 'session', sessionId: 'session-test' }))
+console.log(JSON.stringify({
+  type: 'auto_review',
+  callId: 'call-review',
+  tool: 'write',
+  decision: 'deny',
+  risk: 'medium',
+  reason: '目标超出授权'
+}))
+console.log(JSON.stringify({
+  type: 'auto_review',
+  callId: 'call-review-2',
+  tool: 'write',
+  decision: 'allow',
+  risk: 'medium'
+}))
+console.log(JSON.stringify({
+  type: 'final',
+  sessionId: 'session-test',
+  text: 'finished',
+  reason: { kind: 'completed' }
+}))
+`)
+    const executor = new DshCliExecutor({ command })
+    const activities: string[] = []
+    await executor.execute({
+      runId: 'run-1',
+      taskId: 'task-1',
+      prompt: 'do the work',
+      workingDirectory: process.cwd(),
+      onProgress: event => {
+        if (event.type === 'activity') activities.push(event.label)
+      },
+    })
+    expect(activities).toContain('自动审阅未放行 write：目标超出授权')
+    expect(activities).toContain('自动审阅已按你的原话授权放行 write')
+  })
+
+  it('forwards gate decisions with audit provenance as structured progress', async () => {
+    const command = fakeDsh(`
+console.log(JSON.stringify({ type: 'session', sessionId: 'session-test' }))
+console.log(JSON.stringify({
+  type: 'policy_decision',
+  callId: 'call-audit',
+  tool: 'write',
+  category: 'out-of-workspace-write',
+  risk: 'high',
+  decision: 'allow',
+  reason: '命中本事情已批准规则。',
+  ruleId: 'rule-7',
+  reviewDecision: 'allow',
+  actionId: 'action-7',
+  tier: 'standard',
+  generation: 'gen-7',
+  mismatch: false,
+  targets: ['/tmp/outside/report.md']
+}))
+console.log(JSON.stringify({
+  type: 'final',
+  sessionId: 'session-test',
+  text: 'finished',
+  reason: { kind: 'completed' }
+}))
+`)
+    const executor = new DshCliExecutor({ command })
+    const decisions: Record<string, unknown>[] = []
+    await executor.execute({
+      runId: 'run-1',
+      taskId: 'task-1',
+      prompt: 'do the work',
+      workingDirectory: process.cwd(),
+      onProgress: event => {
+        if (event.type === 'policy_decision') decisions.push({ ...event })
+      },
+    })
+    expect(decisions).toHaveLength(1)
+    expect(decisions[0]).toMatchObject({
+      callId: 'call-audit',
+      tool: 'write',
+      decision: 'allow',
+      ruleId: 'rule-7',
+      reviewDecision: 'allow',
+      actionId: 'action-7',
+      tier: 'standard',
+      generation: 'gen-7',
+      mismatch: false,
+      targets: ['/tmp/outside/report.md'],
+    })
+  })
+
   it('does not mistake a direct answer for an acknowledgement', async () => {
     const command = fakeDsh(`
 console.log(JSON.stringify({ type: 'session', sessionId: 'session-test' }))

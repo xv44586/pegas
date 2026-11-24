@@ -118,6 +118,7 @@ export interface ConversationProjection {
 
 export type Approval = ServerApproval
 export type DurableAction = ServerDurableAction
+export type ApprovalRule = ServerApprovalRule
 
 export interface Snapshot {
   events: InboxEvent[]
@@ -426,6 +427,8 @@ export interface RuntimeSettings {
   rewriteMode: 'disabled' | 'light'
   chatLaneEnabled?: boolean
   routingUncertainty?: 'new_task' | 'ask_first' | 'continue_recent'
+  permissionTier?: 'strict' | 'standard' | 'full'
+  autoReviewEnabled?: boolean
   executionPools?: Partial<
     Record<'fast' | 'balanced' | 'deep', { provider: string; model: string }>
   >
@@ -706,6 +709,7 @@ import type {
   Approval as ServerApproval,
   DurableAction as ServerDurableAction,
 } from '../../src/approval/approval'
+import type { ApprovalRule as ServerApprovalRule } from '../../src/approval/approval-rule'
 import type {
   GoalContract as ServerGoalContract,
   ReviewPack as ServerReviewPack,
@@ -796,6 +800,14 @@ export interface ChannelRelation {
 export interface WorkerProfileResponse {
   profile: WorkerProfile
   effective: EffectiveWorkerProfile
+}
+
+export interface PermissionTierChange {
+  commandId: string
+  revision: number
+  permissionMode?: 'inherit' | 'strict' | 'standard' | 'full'
+  previousPermissionMode?: 'inherit' | 'strict' | 'standard' | 'full'
+  createdAt: string
 }
 
 export interface NotificationPreferencesUpdate {

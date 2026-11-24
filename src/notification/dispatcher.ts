@@ -50,7 +50,18 @@ export class OutboxDispatcher {
       // Uncontrolled channels only ever receive the redacted delivery
       // projection; the durable Outbox row keeps the full in-app payload.
       const delivery = this.#channel.external
-        ? { ...message, payload: externalDeliveryPayload(message.payload) }
+        ? {
+            ...message,
+            payload: externalDeliveryPayload(
+              typeof message.payload === 'object' &&
+                message.payload !== null &&
+                !Array.isArray(message.payload) &&
+                (message.payload as { type?: unknown }).type ===
+                  'approval.required'
+                ? { ...message.payload, messageId: message.id }
+                : message.payload,
+            ),
+          }
         : message
       await this.#channel.deliver(delivery, signal)
       this.#store.markOutboxSent(message.id, this.#dispatcherId)

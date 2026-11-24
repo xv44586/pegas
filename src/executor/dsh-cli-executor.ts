@@ -24,6 +24,7 @@ export interface DshCliExecutorOptions {
   agentModel?: { provider: string; model: string }
   reasoningEffort?: string
   approvalBridgePath?: string
+  policyProtectedRoots?: string[]
   readonlySurfacePath?: string
   privacyMasker?: TextPrivacyMasker
   modelConfiguration?: DshModelConfiguration
@@ -84,6 +85,32 @@ interface DshApprovalBridgeErrorEvent {
   message: string
 }
 
+interface DshPolicyDecisionEvent {
+  type: 'policy_decision'
+  callId: string
+  tool: string
+  category: string
+  risk: string
+  decision: string
+  reason: string
+  tier?: string
+  generation?: string
+  mismatch?: boolean
+  ruleId?: string
+  reviewDecision?: 'allow' | 'deny' | 'failed'
+  actionId?: string
+  targets?: string[]
+}
+
+interface DshAutoReviewEvent {
+  type: 'auto_review'
+  callId: string
+  tool: string
+  decision: 'allow' | 'deny' | 'failed'
+  risk?: string
+  reason?: string
+}
+
 interface DshStatusEvent {
   type: 'status'
   phase: string
@@ -110,6 +137,7 @@ export class DshCliExecutor implements RunExecutor {
   readonly #agentModel?: { provider: string; model: string }
   readonly #reasoningEffort?: string
   readonly #approvalBridgePath: string
+  readonly #policyProtectedRoots: string[]
   readonly #readonlySurfacePath: string
   readonly #privacyMasker?: TextPrivacyMasker
   readonly #modelConfiguration?: DshModelConfiguration
@@ -129,6 +157,7 @@ export class DshCliExecutor implements RunExecutor {
     this.#reasoningEffort = options.reasoningEffort
     this.#approvalBridgePath =
       options.approvalBridgePath ?? defaultApprovalBridgePath()
+    this.#policyProtectedRoots = options.policyProtectedRoots ?? []
     this.#readonlySurfacePath =
       options.readonlySurfacePath ?? defaultReadonlySurfacePath()
     this.#privacyMasker = options.privacyMasker
@@ -180,6 +209,13 @@ export class DshCliExecutor implements RunExecutor {
       ? createApprovalBridgePatch(
           this.#approvalBridgePath,
           input.toolApprovalGrant,
+          {
+            workspaceRoot: input.workingDirectory,
+            protectedRoots: [
+              ...this.#policyProtectedRoots,
+              ...(this.#home ? [this.#home] : []),
+            ],
+          },
         )
       : undefined
     const readonlyPatch =
@@ -411,6 +447,42 @@ export class DshCliExecutor implements RunExecutor {
         }
         if (event.type === 'approval_pending') {
           approvalPending = event
+        }
+        if (event.type === 'policy_decision') {
+          input.onProgress?.({
+            type: 'activity',
+            label: policyActivityLabel(event),
+          })
+          input.onProgress?.({
+            type: 'policy_decision',
+            callId: event.callId,
+            tool: event.tool,
+            category: event.category,
+            risk: event.risk,
+            decision: event.decision,
+            reason: event.reason,
+            ...(event.tier !== undefined ? { tier: event.tier } : {}),
+            ...(event.generation !== undefined
+              ? { generation: event.generation }
+              : {}),
+            ...(event.mismatch !== undefined
+              ? { mismatch: event.mismatch }
+              : {}),
+            ...(event.ruleId !== undefined ? { ruleId: event.ruleId } : {}),
+            ...(event.reviewDecision !== undefined
+              ? { reviewDecision: event.reviewDecision }
+              : {}),
+            ...(event.actionId !== undefined
+              ? { actionId: event.actionId }
+              : {}),
+            ...(event.targets !== undefined ? { targets: event.targets } : {}),
+          })
+        }
+        if (event.type === 'auto_review') {
+          input.onProgress?.({
+            type: 'activity',
+            label: autoReviewActivityLabel(event),
+          })
         }
         if (event.type === 'approval_bridge_error') {
           streamError = `Approval bridge failed to ${event.stage}: ${event.message}`
@@ -673,9 +745,14 @@ function createReadonlySurfacePatch(
 function createApprovalBridgePatch(
   bridgePath: string,
   grant?: ExecutorInput['toolApprovalGrant'],
+  policy?: { workspaceRoot: string; protectedRoots: string[] },
 ): { path: string; remove: () => void } {
   const directory = mkdtempSync(join(tmpdir(), 'pegas-dsh-approval-'))
   const path = join(directory, 'approval-bridge.json')
+  const config = {
+    ...(grant ? { grant } : {}),
+    ...(policy ? { policy } : {}),
+  }
   writeFileSync(
     path,
     JSON.stringify([
@@ -684,7 +761,7 @@ function createApprovalBridgePatch(
           {
             id: 'pegas-approval-bridge',
             name: bridgePath,
-            ...(grant ? { config: { grant } } : {}),
+            ...(Object.keys(config).length > 0 ? { config } : {}),
           },
         ],
       },
@@ -719,6 +796,8 @@ function parseDshEvent(
   | DshThinkingEvent
   | DshApprovalPendingEvent
   | DshApprovalBridgeErrorEvent
+  | DshPolicyDecisionEvent
+  | DshAutoReviewEvent
   | DshStatusEvent
   | DshOtherEvent {
   const parsed = JSON.parse(line) as unknown
@@ -802,6 +881,64 @@ function parseDshEvent(
       message: parsed.message,
     }
   }
+  if (
+    parsed.type === 'policy_decision' &&
+    typeof parsed.callId === 'string' &&
+    typeof parsed.tool === 'string' &&
+    typeof parsed.category === 'string' &&
+    typeof parsed.risk === 'string' &&
+    typeof parsed.decision === 'string' &&
+    typeof parsed.reason === 'string'
+  ) {
+    return {
+      type: 'policy_decision',
+      callId: parsed.callId,
+      tool: parsed.tool,
+      category: parsed.category,
+      risk: parsed.risk,
+      decision: parsed.decision,
+      reason: parsed.reason,
+      ...(typeof parsed.tier === 'string' ? { tier: parsed.tier } : {}),
+      ...(typeof parsed.generation === 'string'
+        ? { generation: parsed.generation }
+        : {}),
+      ...(typeof parsed.mismatch === 'boolean'
+        ? { mismatch: parsed.mismatch }
+        : {}),
+      ...(typeof parsed.ruleId === 'string' ? { ruleId: parsed.ruleId } : {}),
+      ...(parsed.reviewDecision === 'allow' ||
+      parsed.reviewDecision === 'deny' ||
+      parsed.reviewDecision === 'failed'
+        ? { reviewDecision: parsed.reviewDecision }
+        : {}),
+      ...(typeof parsed.actionId === 'string'
+        ? { actionId: parsed.actionId }
+        : {}),
+      ...(Array.isArray(parsed.targets) &&
+      parsed.targets.every(target => typeof target === 'string')
+        ? { targets: parsed.targets }
+        : {}),
+    }
+  }
+  if (
+    parsed.type === 'auto_review' &&
+    typeof parsed.callId === 'string' &&
+    typeof parsed.tool === 'string' &&
+    (parsed.decision === 'allow' ||
+      parsed.decision === 'deny' ||
+      parsed.decision === 'failed')
+  ) {
+    return {
+      type: 'auto_review',
+      callId: parsed.callId,
+      tool: parsed.tool,
+      decision: parsed.decision,
+      ...(typeof parsed.risk === 'string' ? { risk: parsed.risk } : {}),
+      ...(typeof parsed.reason === 'string'
+        ? { reason: parsed.reason.slice(0, 2_000) }
+        : {}),
+    }
+  }
   if (parsed.type === 'status' && typeof parsed.phase === 'string') {
     return {
       type: 'status',
@@ -815,6 +952,28 @@ function parseDshEvent(
     }
   }
   return { type: 'other' }
+}
+
+function policyActivityLabel(event: DshPolicyDecisionEvent): string {
+  if (event.decision === 'deny') {
+    return `已拦截 ${event.tool}：${event.reason}`
+  }
+  if (event.category === 'read') {
+    return `安全检查通过：${event.tool}（只读）`
+  }
+  return `安全检查通过：${event.tool}（工作区内写入）`
+}
+
+function autoReviewActivityLabel(event: DshAutoReviewEvent): string {
+  if (event.decision === 'allow') {
+    return `自动审阅已按你的原话授权放行 ${event.tool}`
+  }
+  if (event.decision === 'deny') {
+    return event.reason
+      ? `自动审阅未放行 ${event.tool}：${event.reason}`
+      : `自动审阅未放行 ${event.tool}，等待你的决定`
+  }
+  return `自动审阅未能给出结论（${event.tool}），等待你的决定`
 }
 
 function parseTokenUsage(value: unknown): ModelTokenUsage {

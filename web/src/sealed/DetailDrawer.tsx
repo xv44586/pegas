@@ -23,6 +23,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ApiError, type PegasApi } from '../api'
 import { MarkdownMessage } from '../MarkdownMessage'
 import type {
+  ApprovalRule,
   ChannelEvidencePage,
   ChannelRelation,
   DurableAction,
@@ -41,6 +42,7 @@ import type {
   SubagentTranscript,
   TaskDelivery,
   WorkerProfileResponse,
+  PermissionTierChange,
 } from '../types'
 import { PegasMascot } from './PegasMascot'
 import { ActivityTimeline, type ActivityDataAccess } from './ActivityTimeline'
@@ -234,7 +236,9 @@ export function DetailDrawer({
         {view.kind === 'approval' && (
           <ApprovalDetail
             key={`${view.approval.id}:${view.approval.decision?.id ?? view.approval.status}`}
+            channel={view.channel}
             onDecide={onDecideApproval}
+            onOpenTask={approvalTaskOpener(view.channel, onOpenView)}
             onReconcile={onReconcileAction}
             view={view}
           />
@@ -366,6 +370,8 @@ function ApprovalDetail({
   view,
   onDecide,
   onReconcile,
+  channel,
+  onOpenTask,
 }: {
   view: Extract<DrawerView, { kind: 'approval' }>
   onDecide?: (
@@ -378,6 +384,8 @@ function ApprovalDetail({
     resolution: 'succeeded' | 'failed',
     note: string,
   ) => Promise<void>
+  channel?: Extract<DrawerView, { kind: 'task' }>['channel']
+  onOpenTask?: () => void
 }) {
   const pending = view.approval.status === 'pending'
   const [selected, setSelected] = useState(
@@ -422,7 +430,28 @@ function ApprovalDetail({
           )}
           <strong>{view.approval.prompt.summary}</strong>
         </header>
-        <p>{view.approval.prompt.impact}</p>
+        {channel && (
+          <p className="approval-source">
+            {onOpenTask ? (
+              <button
+                className="approval-source-link"
+                onClick={onOpenTask}
+                type="button"
+              >
+                来自事情：{channel.title}
+              </button>
+            ) : (
+              <span>来自事情：{channel.title}</span>
+            )}
+          </p>
+        )}
+        <ApprovalOperationPreview action={view.action} />
+        {view.action.review && (
+          <p className="approval-review">
+            {approvalReviewLabel(view.action.review)}
+          </p>
+        )}
+        <p className="approval-reason">需要你决定：{approvalReason(view)}</p>
         <dl>
           <Meta label="状态" value={approvalStatus(view.approval.status)} />
           <Meta label="Action" value={actionStatus(view.action.status)} />
@@ -495,6 +524,108 @@ function ApprovalDetail({
       </footer>
     </div>
   )
+}
+
+function approvalReason(
+  view: Extract<DrawerView, { kind: 'approval' }>,
+): string {
+  const reason = view.action.request.reason
+  return typeof reason === 'string' && reason.trim() !== ''
+    ? reason
+    : view.approval.prompt.impact
+}
+
+function approvalTaskOpener(
+  channel: Extract<DrawerView, { kind: 'task' }>['channel'] | undefined,
+  onOpenView?: (view: DrawerView) => void,
+): (() => void) | undefined {
+  if (!channel || !onOpenView) return undefined
+  return () => onOpenView({ kind: 'task', channel })
+}
+
+function ApprovalOperationPreview({ action }: { action: DurableAction }) {
+  const request = action.request
+  const tool = typeof request.tool === 'string' ? request.tool : undefined
+  const category =
+    typeof request.category === 'string' ? request.category : undefined
+  const targets = Array.isArray(request.targets)
+    ? request.targets.filter(
+        (target): target is string => typeof target === 'string',
+      )
+    : []
+  const command =
+    typeof request.command === 'string' ? request.command : undefined
+  const tier =
+    request.tier === 'strict' ||
+    request.tier === 'standard' ||
+    request.tier === 'full'
+      ? request.tier
+      : undefined
+  if (!tool && !category && targets.length === 0 && !command) return null
+  return (
+    <section aria-label="操作预览" className="approval-operation">
+      {category && (
+        <p className="approval-operation-category">
+          {approvalCategoryLabel(category)} · {actionRiskLabel(action.risk)}
+        </p>
+      )}
+      {tool && (
+        <p className="approval-operation-tool">
+          工具 <code>{tool}</code>
+          {tier && <span> · {permissionTierLabel(tier)}档位</span>}
+          {request.tierMismatch === true && (
+            <span> · 档位读取异常，按严格处置</span>
+          )}
+        </p>
+      )}
+      {command && (
+        <pre className="approval-command">
+          <code>{command}</code>
+        </pre>
+      )}
+      {targets.length > 0 && (
+        <ul className="approval-targets">
+          {targets.map(target => (
+            <li key={target}>
+              <code>{target}</code>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
+function approvalCategoryLabel(category: string): string {
+  switch (category) {
+    case 'out-of-workspace-write':
+      return '工作区外写入'
+    case 'network-egress':
+      return '对外网络发送'
+    case 'destructive-command':
+      return '不可逆命令'
+    case 'control-plane-mutation':
+      return 'Pegas 控制面修改'
+    case 'workspace-write':
+      return '工作区内写入'
+    case 'read':
+      return '只读操作'
+    default:
+      return '无法静态判定'
+  }
+}
+
+function actionRiskLabel(risk: DurableAction['risk']): string {
+  switch (risk) {
+    case 'critical':
+      return '严重风险'
+    case 'high':
+      return '高风险'
+    case 'medium':
+      return '中风险'
+    default:
+      return '低风险'
+  }
 }
 
 function approvalFootnote(
@@ -1368,6 +1499,8 @@ function TaskDetail({
         profile={workerProfile}
         profileError={workerProfileError}
       />
+      <PermissionTierHistorySection api={api} channel={channel} />
+      <ApprovalRulesSection api={api} channel={channel} />
       {confirmingStop && (
         <section
           aria-labelledby="stop-confirmation-title"
@@ -2339,13 +2472,17 @@ function WorkerProfileSection({
   const [modelKey, setModelKey] = useState('')
   const [pool, setPool] = useState<'' | 'fast' | 'balanced' | 'deep'>('')
   const [effort, setEffort] = useState('')
+  const [permissionMode, setPermissionMode] = useState<
+    'inherit' | 'strict' | 'standard' | 'full'
+  >('inherit')
+  const [confirmingFullAccess, setConfirmingFullAccess] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
   const [saveNotice, setSaveNotice] = useState('')
   const [catalogLoading, setCatalogLoading] = useState(false)
   const current = response ?? profile
   const profileKey = current
-    ? `${current.profile.id}:${String(current.profile.revision)}:${current.profile.modelMode}:${current.profile.modelProvider ?? ''}:${current.profile.modelName ?? ''}:${current.profile.pool ?? ''}:${current.profile.effort ?? ''}`
+    ? `${current.profile.id}:${String(current.profile.revision)}:${current.profile.modelMode}:${current.profile.modelProvider ?? ''}:${current.profile.modelName ?? ''}:${current.profile.pool ?? ''}:${current.profile.effort ?? ''}:${current.profile.permissionMode ?? 'inherit'}`
     : ''
   useEffect(() => {
     setResponse(undefined)
@@ -2362,6 +2499,7 @@ function WorkerProfileSection({
       name = '',
       savedPool = '',
       savedEffort = '',
+      savedPermission = 'inherit',
     ] = profileKey.split(':')
     setModelMode(mode === 'override' ? 'override' : 'inherit')
     setModelKey(
@@ -2373,6 +2511,13 @@ function WorkerProfileSection({
         : '',
     )
     setEffort(savedEffort)
+    setPermissionMode(
+      savedPermission === 'strict' ||
+        savedPermission === 'standard' ||
+        savedPermission === 'full'
+        ? savedPermission
+        : 'inherit',
+    )
   }, [profileKey])
   const readOnly = channel.status === 'cancelled'
   if (!current && !profileError) return null
@@ -2405,10 +2550,18 @@ function WorkerProfileSection({
     if (!api || nextMode !== 'override' || catalog) return
     await loadCatalog()
   }
-  async function save() {
+  async function save(skipFullAccessConfirmation = false) {
     if (!api || !current || saving) return
     if (modelMode === 'override' && !selectedModel) {
       setSaveError('请选择一个目录中可用的执行模型。')
+      return
+    }
+    if (
+      permissionMode === 'full' &&
+      current.profile.permissionMode !== 'full' &&
+      !skipFullAccessConfirmation
+    ) {
+      setConfirmingFullAccess(true)
       return
     }
     setSaving(true)
@@ -2426,6 +2579,7 @@ function WorkerProfileSection({
           : {}),
         ...(modelMode === 'inherit' && pool ? { pool } : {}),
         ...(effort.trim() ? { effort: effort.trim() } : {}),
+        permissionMode,
       })
       setResponse(saved)
       setSaveNotice('执行设置已保存，对后续运行生效。')
@@ -2479,6 +2633,14 @@ function WorkerProfileSection({
               {current.effective.effort && (
                 <Meta label="推理档位" value={current.effective.effort} />
               )}
+              <Meta
+                label="权限档位"
+                value={`${permissionTierLabel(current.effective.permissionTier)} · ${
+                  current.effective.permissionSource === 'task'
+                    ? '这件事情的覆盖设置'
+                    : 'Pegas 全局设置'
+                }`}
+              />
             </dl>
           </div>
           {readOnly || !api ? (
@@ -2547,6 +2709,30 @@ function WorkerProfileSection({
                     )}
                 </select>
               </label>
+              <label className="field-label">
+                权限档位
+                <select
+                  disabled={saving}
+                  onChange={event =>
+                    setPermissionMode(
+                      event.target.value === 'strict' ||
+                        event.target.value === 'standard' ||
+                        event.target.value === 'full'
+                        ? event.target.value
+                        : 'inherit',
+                    )
+                  }
+                  value={permissionMode}
+                >
+                  <option value="inherit">跟随 Pegas 全局设置</option>
+                  <option value="standard">标准 · 区内放行，越界审批</option>
+                  <option value="strict">严格 · 只读，写与网络都审批</option>
+                  <option value="full">完全访问 · 显式风险披露</option>
+                </select>
+              </label>
+              <p className="drawer-footnote">
+                收紧对下一次工具调用立即生效；放宽只影响后续运行，不越过已排队运行的能力上限。
+              </p>
               {modelMode === 'override' && (
                 <div className="field-label">
                   <span>指定模型</span>
@@ -2602,8 +2788,236 @@ function WorkerProfileSection({
           )}
         </>
       )}
+      {confirmingFullAccess && (
+        <div
+          aria-labelledby="full-access-risk-title"
+          aria-modal="true"
+          className="stop-confirmation"
+          role="dialog"
+        >
+          <header>
+            <AlertTriangle size={18} />
+            <strong id="full-access-risk-title">确认完全访问风险</strong>
+          </header>
+          <p>
+            完全访问档位下，Pegas 不再拦截工作区之外的写入与命令副作用；
+            高风险动作仍会请求你的审批，控制面自修改仍被强制拦截。
+            请只在你信任这件事情的完整目标时启用。
+          </p>
+          <div className="stop-confirmation-actions">
+            <button
+              className="secondary-button"
+              onClick={() => setConfirmingFullAccess(false)}
+              type="button"
+            >
+              取消
+            </button>
+            <button
+              className="secondary-button is-danger"
+              onClick={() => {
+                setConfirmingFullAccess(false)
+                void save(true)
+              }}
+              type="button"
+            >
+              我已了解，启用完全访问
+            </button>
+          </div>
+        </div>
+      )}
     </section>
   )
+}
+
+function permissionTierLabel(tier?: 'strict' | 'standard' | 'full') {
+  if (tier === 'strict') return '严格'
+  if (tier === 'full') return '完全访问'
+  return '标准'
+}
+
+function permissionChangeTierLabel(
+  tier?: 'inherit' | 'strict' | 'standard' | 'full',
+) {
+  if (tier === 'inherit' || tier === undefined) return '跟随全局'
+  return permissionTierLabel(tier)
+}
+
+function PermissionTierHistorySection({
+  api,
+  channel,
+}: {
+  api?: PegasApi
+  channel: Extract<DrawerView, { kind: 'task' }>['channel']
+}) {
+  const [changes, setChanges] = useState<PermissionTierChange[]>()
+  const [loadError, setLoadError] = useState('')
+  useEffect(() => {
+    setChanges(undefined)
+    setLoadError('')
+    if (!api) return
+    let cancelled = false
+    api
+      .permissionTierChanges(channel.id)
+      .then(loaded => {
+        if (!cancelled) setChanges(loaded)
+      })
+      .catch((caught: unknown) => {
+        if (!cancelled)
+          setLoadError(
+            caught instanceof Error ? caught.message : '权限变更记录读取失败。',
+          )
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [api, channel.id])
+  if (!api || (changes?.length === 0 && !loadError)) return null
+  return (
+    <section className="detail-section">
+      <h3>权限变更记录</h3>
+      {loadError ? (
+        <p className="drawer-footnote" role="alert">
+          {loadError}
+        </p>
+      ) : !changes ? (
+        <p className="drawer-footnote">正在读取权限变更记录…</p>
+      ) : (
+        <ul className="permission-history-list">
+          {changes.map(change => (
+            <li className="permission-history-item" key={change.commandId}>
+              <strong>
+                {permissionChangeTierLabel(change.previousPermissionMode)} →{' '}
+                {permissionChangeTierLabel(change.permissionMode)} · v
+                {String(change.revision)}
+              </strong>
+              <small>{formatRelativeTime(change.createdAt)}</small>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
+function ApprovalRulesSection({
+  api,
+  channel,
+}: {
+  api?: PegasApi
+  channel: Extract<DrawerView, { kind: 'task' }>['channel']
+}) {
+  const [rules, setRules] = useState<ApprovalRule[]>()
+  const [loadError, setLoadError] = useState('')
+  const [revokingId, setRevokingId] = useState('')
+  const [revokeError, setRevokeError] = useState('')
+  useEffect(() => {
+    setRules(undefined)
+    setLoadError('')
+    setRevokeError('')
+    if (!api) return
+    let cancelled = false
+    api
+      .approvalRules(channel.id)
+      .then(loaded => {
+        if (!cancelled) setRules(loaded)
+      })
+      .catch((caught: unknown) => {
+        if (!cancelled)
+          setLoadError(
+            caught instanceof Error ? caught.message : '规则读取失败。',
+          )
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [api, channel.id])
+  if (!api) return null
+  async function revoke(rule: ApprovalRule) {
+    if (!api || revokingId) return
+    setRevokingId(rule.id)
+    setRevokeError('')
+    try {
+      const updated = await api.revokeApprovalRule(channel.id, rule.id)
+      setRules(current =>
+        current?.map(item => (item.id === updated.id ? updated : item)),
+      )
+    } catch (caught) {
+      setRevokeError(
+        caught instanceof Error ? caught.message : '撤销失败，请重试。',
+      )
+    } finally {
+      setRevokingId('')
+    }
+  }
+  return (
+    <section className="detail-section">
+      <h3>已批准规则</h3>
+      {loadError ? (
+        <p className="drawer-footnote" role="alert">
+          {loadError}
+        </p>
+      ) : !rules ? (
+        <p className="drawer-footnote">正在读取规则…</p>
+      ) : rules.length === 0 ? (
+        <p className="drawer-footnote">
+          还没有持久规则。批准审批时选择「本事情内同类不再询问」会在这里生成可撤销的规则。
+        </p>
+      ) : (
+        <ul className="approval-rule-list">
+          {rules.map(rule => (
+            <li className="approval-rule-item" key={rule.id}>
+              <div>
+                <strong>
+                  {rule.tool} · {approvalRuleCategoryLabel(rule.category)}
+                </strong>
+                <small>{rule.targets.join('、')}</small>
+                <small>
+                  {rule.status === 'active'
+                    ? `生效中 · ${formatRelativeTime(rule.createdAt)}批准`
+                    : `已撤销${rule.revokedAt ? ` · ${formatRelativeTime(rule.revokedAt)}` : ''}`}
+                </small>
+              </div>
+              {rule.status === 'active' && (
+                <button
+                  className="secondary-button"
+                  disabled={revokingId !== ''}
+                  onClick={() => void revoke(rule)}
+                  type="button"
+                >
+                  {revokingId === rule.id ? '撤销中…' : '撤销规则'}
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {revokeError && (
+        <p className="drawer-footnote" role="alert">
+          {revokeError}
+        </p>
+      )}
+    </section>
+  )
+}
+
+function approvalRuleCategoryLabel(category: string): string {
+  if (category === 'out-of-workspace-write') return '工作区外写入'
+  if (category === 'network-egress') return '对外网络发送'
+  return category
+}
+
+function approvalReviewLabel(
+  review: NonNullable<DurableAction['review']>,
+): string {
+  if (review.decision === 'allow') {
+    return '自动审阅已按你的原话授权放行本次操作。'
+  }
+  if (review.decision === 'deny') {
+    return review.reason
+      ? `自动审阅未放行：${review.reason}`
+      : '自动审阅未放行，需要你亲自决定。'
+  }
+  return '自动审阅未能给出结论，需要你亲自决定。'
 }
 
 function ExecutionProfileMeta({ run }: { run?: Run }) {

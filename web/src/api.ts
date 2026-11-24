@@ -1,5 +1,6 @@
 import type {
   Approval,
+  ApprovalRule,
   Automation,
   AutomationDraft,
   AutomationInvocation,
@@ -40,6 +41,7 @@ import type {
   TaskDelivery,
   WorkChannel,
   WorkerProfileResponse,
+  PermissionTierChange,
   WorkRuleDraft,
   WorkRuleRecord,
   RoutingRuleDraft,
@@ -569,6 +571,17 @@ export class PegasApi {
     )
   }
 
+  async permissionTierChanges(taskId: string): Promise<PermissionTierChange[]> {
+    const user = encodeURIComponent(this.#userId)
+    const response = await fetch(
+      `/v1/tasks/${encodeURIComponent(taskId)}/worker-profile/changes?userId=${user}`,
+      { headers: this.#headers(true) },
+    )
+    if (!response.ok) await throwResponse(response)
+    return ((await response.json()) as { changes: PermissionTierChange[] })
+      .changes
+  }
+
   async saveWorkerProfile(
     taskId: string,
     update: {
@@ -578,6 +591,7 @@ export class PegasApi {
       modelName?: string
       pool?: 'fast' | 'balanced' | 'deep'
       effort?: string
+      permissionMode?: 'inherit' | 'strict' | 'standard' | 'full'
     },
   ): Promise<WorkerProfileResponse> {
     const response = await fetch(
@@ -982,6 +996,35 @@ export class PegasApi {
     return ((await response.json()) as { approval: Approval }).approval
   }
 
+  async approvalRules(taskId: string): Promise<ApprovalRule[]> {
+    const params = new URLSearchParams({ userId: this.#userId })
+    const response = await fetch(
+      `/v1/tasks/${encodeURIComponent(taskId)}/approval-rules?${params.toString()}`,
+      { headers: this.#headers(true) },
+    )
+    if (!response.ok) await throwResponse(response)
+    return ((await response.json()) as { rules: ApprovalRule[] }).rules
+  }
+
+  async revokeApprovalRule(
+    taskId: string,
+    ruleId: string,
+  ): Promise<ApprovalRule> {
+    const response = await fetch(
+      `/v1/tasks/${encodeURIComponent(taskId)}/approval-rules/${encodeURIComponent(ruleId)}/revoke`,
+      {
+        method: 'POST',
+        headers: this.#headers(true),
+        body: JSON.stringify({
+          userId: this.#userId,
+          commandId: crypto.randomUUID(),
+        }),
+      },
+    )
+    if (!response.ok) await throwResponse(response)
+    return ((await response.json()) as { rule: ApprovalRule }).rule
+  }
+
   modelUsage(taskId?: string): Promise<ModelUsageReport> {
     const params = new URLSearchParams({ userId: this.#userId })
     if (taskId) params.set('taskId', taskId)
@@ -1013,6 +1056,12 @@ export class PegasApi {
         ...(settings.routingUncertainty === undefined
           ? {}
           : { routingUncertainty: settings.routingUncertainty }),
+        ...(settings.permissionTier === undefined
+          ? {}
+          : { permissionTier: settings.permissionTier }),
+        ...(settings.autoReviewEnabled === undefined
+          ? {}
+          : { autoReviewEnabled: settings.autoReviewEnabled }),
         ...(settings.executionPools === undefined
           ? {}
           : { executionPools: settings.executionPools }),

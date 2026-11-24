@@ -216,6 +216,23 @@ export function parseRuntimeSettingsUpdate(
     ...(value.executionPools === undefined
       ? {}
       : { executionPools: parseExecutionPools(value.executionPools) }),
+    ...(value.permissionTier === undefined
+      ? {}
+      : {
+          permissionTier: enumValue(value.permissionTier, 'permissionTier', [
+            'strict',
+            'standard',
+            'full',
+          ]),
+        }),
+    ...(value.autoReviewEnabled === undefined
+      ? {}
+      : {
+          autoReviewEnabled: booleanValue(
+            value.autoReviewEnabled,
+            'autoReviewEnabled',
+          ),
+        }),
   }
   const hasApiKey = provider.apiKey
     ? true
@@ -267,6 +284,13 @@ function enumValue<const T extends string>(
     throw new Error(`${name} must be one of: ${allowed.join(', ')}`)
   }
   return value as T
+}
+
+function booleanValue(value: unknown, name: string): boolean {
+  if (typeof value !== 'boolean') {
+    throw new Error(`${name} must be a boolean`)
+  }
+  return value
 }
 
 function positiveInteger(value: unknown, name: string): number {

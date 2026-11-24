@@ -147,6 +147,7 @@ describe('WORKER-001 profile contracts', () => {
       workerProfile: profile.id,
       workerProfileRevision: 1,
       workerProfileSource: 'global',
+      permissionTier: 'standard',
     })
 
     const overridden = effectiveWorkerProfile(

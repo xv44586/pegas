@@ -7,6 +7,8 @@ import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { createControlPlane } from '../src/control-plane/server.js'
+import { loadConfig } from '../src/core/config.js'
+import { runtimeSettingsDefaults } from '../src/settings/runtime-settings.js'
 import { DshCliExecutor } from '../src/executor/dsh-cli-executor.js'
 import type { ToolApprovalGrant } from '../src/executor/executor.js'
 import { PegasStore } from '../src/storage/sqlite-store.js'
@@ -124,8 +126,11 @@ describe('DSH approval bridge plugin', () => {
         () => Promise.resolve('unavailable'),
       )
       expect(outcome).toBe('rejected')
-      expect(events).toHaveLength(1)
-      expect(events[0]).toMatchObject({
+      const pendingEvents = events.filter(
+        event => event.type === 'approval_pending',
+      )
+      expect(pendingEvents).toHaveLength(1)
+      expect(pendingEvents[0]).toMatchObject({
         type: 'approval_pending',
         callId: 'call-42',
         tool: 'bash',
@@ -216,6 +221,7 @@ describe('DSH approval bridge plugin', () => {
         throw new Error('bridge did not register its hooks')
       }
       const exec = {
+        agent: {},
         callId: 'call-new',
         name: 'bash',
         arguments: { command: 'echo done' },
@@ -233,9 +239,19 @@ describe('DSH approval bridge plugin', () => {
         status: 'succeeded',
         result: { tool: 'bash', callId: 'call-new' },
       })
-      expect(events).toEqual([])
+      expect(events.filter(event => event.type === 'approval_pending')).toEqual(
+        [],
+      )
+      expect(events).toHaveLength(1)
+      expect(events[0]).toMatchObject({
+        type: 'policy_decision',
+        callId: 'call-new',
+        decision: 'allow',
+        actionId: requested.action.id,
+      })
 
       const differentExec = {
+        agent: {},
         callId: 'call-other',
         name: 'bash',
         arguments: { command: 'rm -rf /' },
@@ -246,8 +262,11 @@ describe('DSH approval bridge plugin', () => {
         () => Promise.resolve('unavailable'),
       )
       expect(secondOutcome).toBe('rejected')
-      expect(events).toHaveLength(1)
-      expect(events[0]).toMatchObject({ type: 'approval_pending' })
+      const pendingEvents = events.filter(
+        event => event.type === 'approval_pending',
+      )
+      expect(pendingEvents).toHaveLength(1)
+      expect(pendingEvents[0]).toMatchObject({ type: 'approval_pending' })
     } finally {
       restoreEnvironment(previous)
       await new Promise<void>(resolve => server.close(() => resolve()))
@@ -728,6 +747,9 @@ main().catch(error => {
 }
 
 function createClaimedRun(store: PegasStore, userId: string, workerId: string) {
+  if (!store.hasRuntimeSettings()) {
+    store.initializeRuntimeSettings(runtimeSettingsDefaults(loadConfig({})))
+  }
   const event = store.enqueueEvent({
     userId,
     type: 'user.message',
@@ -747,7 +769,18 @@ function createClaimedRun(store: PegasStore, userId: string, workerId: string) {
       reason: 'test',
     },
     'dsh-headless',
-    { executor: 'dsh-headless' },
+    task =>
+      store.resolveWorkerExecutionContext(task.id, userId, {
+        executor: 'dsh-headless',
+        protocol: 'dsh-headless-v1',
+        workspace: process.cwd(),
+        permissions: JSON.stringify({
+          mode: 'workspace-write',
+          approvalPolicy: 'ask',
+          additionalDirectories: [],
+          privacyMode: 'disabled',
+        }),
+      }),
   )
   store.completeEvent(event.id, `setup-${workerId}`)
   const claimed = store.claimNextRun(workerId)

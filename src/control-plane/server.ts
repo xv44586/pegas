@@ -21,6 +21,8 @@ import {
   parseApprovalDecisionDraft,
   type ApprovalStatus,
 } from '../approval/approval.js'
+import { parseApprovalRuleRevocation } from '../approval/approval-rule.js'
+import { parseApprovalReviewDraft } from '../approval/approval-review.js'
 import type {
   InboxEvent,
   NewInboxEvent,
@@ -423,6 +425,7 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
       if (
         !isRunCapabilityWrite(request) &&
         !isConversationStateRead(request) &&
+        !isRunPermissionRead(request) &&
         !isAuthorized(request, options.apiToken)
       ) {
         return sendJson(response, 401, { error: 'unauthorized' })
@@ -1078,6 +1081,47 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
       const runAutomationMatch = /^\/v1\/runs\/([^/]+)\/automations$/.exec(
         taskResourceUrl.pathname,
       )
+      const actionReviewMatch = /^\/v1\/actions\/([^/]+)\/review$/.exec(
+        taskResourceUrl.pathname,
+      )
+      if (actionReviewMatch && request.method === 'POST') {
+        const claimToken = runClaimToken(request)
+        if (!claimToken)
+          return sendJson(response, 401, { error: 'unauthorized' })
+        const actionId = decodeURIComponent(actionReviewMatch[1] ?? '')
+        const draft = parseApprovalReviewDraft(await readJson(request))
+        try {
+          const review = options.store.recordApprovalReview(
+            actionId,
+            claimToken,
+            draft,
+          )
+          return sendJson(response, 201, { review })
+        } catch (error) {
+          if (error instanceof RunClaimError)
+            return sendJson(response, 403, { error: 'run_claim_invalid' })
+          throw error
+        }
+      }
+      const runPermissionsMatch = /^\/v1\/runs\/([^/]+)\/permissions$/.exec(
+        taskResourceUrl.pathname,
+      )
+      if (runPermissionsMatch && request.method === 'GET') {
+        const claimToken = runClaimToken(request)
+        if (!claimToken)
+          return sendJson(response, 403, { error: 'run_claim_required' })
+        try {
+          const projection = options.store.runPermissionProjection(
+            decodeURIComponent(runPermissionsMatch[1] ?? ''),
+            claimToken,
+          )
+          return sendJson(response, 200, projection)
+        } catch (error) {
+          if (error instanceof RunClaimError)
+            return sendJson(response, 403, { error: 'run_claim_invalid' })
+          throw error
+        }
+      }
       const runMessageMatch = /^\/v1\/runs\/([^/]+)\/messages$/.exec(
         taskResourceUrl.pathname,
       )
@@ -1152,6 +1196,22 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
       const workerProfileMatch = /^\/v1\/tasks\/([^/]+)\/worker-profile$/.exec(
         taskResourceUrl.pathname,
       )
+      const workerProfileChangesMatch =
+        /^\/v1\/tasks\/([^/]+)\/worker-profile\/changes$/.exec(
+          taskResourceUrl.pathname,
+        )
+      if (workerProfileChangesMatch && request.method === 'GET') {
+        if (!options.apiToken || !isAuthorized(request, options.apiToken)) {
+          return sendJson(response, 401, { error: 'unauthorized' })
+        }
+        const taskId = decodeURIComponent(workerProfileChangesMatch[1] ?? '')
+        const userId = requiredQuery(taskResourceUrl, 'userId')
+        if (!options.store.findTask(taskId, userId))
+          return sendJson(response, 404, { error: 'not_found' })
+        return sendJson(response, 200, {
+          changes: options.store.listWorkerProfileChanges(taskId, userId),
+        })
+      }
       if (workerProfileMatch && request.method === 'GET') {
         const taskId = decodeURIComponent(workerProfileMatch[1] ?? '')
         const userId = requiredQuery(taskResourceUrl, 'userId')
@@ -1405,6 +1465,49 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         })
       }
 
+      const approvalRulesMatch = /^\/v1\/tasks\/([^/]+)\/approval-rules$/.exec(
+        taskResourceUrl.pathname,
+      )
+      if (approvalRulesMatch && request.method === 'GET') {
+        const taskId = decodeURIComponent(approvalRulesMatch[1] ?? '')
+        const userId = requiredQuery(taskResourceUrl, 'userId')
+        if (!options.store.findTask(taskId, userId))
+          return sendJson(response, 404, { error: 'not_found' })
+        return sendJson(response, 200, {
+          rules: options.store.listApprovalRules(taskId, userId),
+        })
+      }
+      const approvalRuleRevokeMatch =
+        /^\/v1\/tasks\/([^/]+)\/approval-rules\/([^/]+)\/revoke$/.exec(
+          taskResourceUrl.pathname,
+        )
+      if (approvalRuleRevokeMatch && request.method === 'POST') {
+        const taskId = decodeURIComponent(approvalRuleRevokeMatch[1] ?? '')
+        const ruleId = decodeURIComponent(approvalRuleRevokeMatch[2] ?? '')
+        const body = await readJson(request)
+        if (!isRecord(body)) throw new Error('Request body must be an object')
+        const userId = requiredString(body.userId, 'userId')
+        if (!options.store.findTask(taskId, userId))
+          return sendJson(response, 404, { error: 'not_found' })
+        try {
+          const rule = options.store.revokeApprovalRule(
+            taskId,
+            ruleId,
+            userId,
+            parseApprovalRuleRevocation(body),
+          )
+          return sendJson(response, 200, { rule })
+        } catch (error) {
+          if (
+            error instanceof Error &&
+            error.message === 'Approval rule does not exist'
+          ) {
+            return sendJson(response, 404, { error: 'not_found' })
+          }
+          throw error
+        }
+      }
+
       if (request.url?.startsWith('/v1/tasks') && request.method === 'GET') {
         const url = new URL(request.url, 'http://localhost')
         const userId = url.searchParams.get('userId') ?? undefined
@@ -1570,6 +1673,48 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         return sendJson(response, 200, {
           owed: options.store.listOwedDeliveries(userId),
           findings: options.store.listReconciliationFindings(),
+        })
+      }
+
+      if (
+        request.url?.startsWith('/v1/policy-audit') &&
+        request.method === 'GET'
+      ) {
+        if (!options.apiToken || !isAuthorized(request, options.apiToken)) {
+          return sendJson(response, 401, { error: 'unauthorized' })
+        }
+        const url = new URL(request.url, 'http://localhost')
+        const page = pageRequest(url)
+        const decision = optionalQuery(url, 'decision')
+        if (
+          decision !== undefined &&
+          decision !== 'allow' &&
+          decision !== 'ask' &&
+          decision !== 'deny'
+        )
+          throw new Error('decision must be allow, ask or deny')
+        const result = options.store.listPolicyCallAudit(
+          requiredQuery(url, 'userId'),
+          {
+            ...page,
+            ...(optionalQuery(url, 'taskId')
+              ? { taskId: requiredQuery(url, 'taskId') }
+              : {}),
+            ...(optionalQuery(url, 'runId')
+              ? { runId: requiredQuery(url, 'runId') }
+              : {}),
+            ...(decision ? { decision } : {}),
+            ...(optionalQuery(url, 'category')
+              ? { category: requiredQuery(url, 'category') }
+              : {}),
+            ...(optionalQuery(url, 'ruleId')
+              ? { ruleId: requiredQuery(url, 'ruleId') }
+              : {}),
+          },
+        )
+        return sendJson(response, 200, {
+          entries: result.items,
+          ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
         })
       }
 
@@ -2933,7 +3078,7 @@ function isRunCapabilityWrite(request: IncomingMessage): boolean {
     /^\/v1\/runs\/[^/]+\/automations\/[^/]+\/(pause|resume|cancel)$/.test(
       pathname,
     ) ||
-    /^\/v1\/actions\/[^/]+\/outcomes$/.test(pathname)
+    /^\/v1\/actions\/[^/]+\/(outcomes|review)$/.test(pathname)
   )
 }
 
@@ -2943,6 +3088,12 @@ function isConversationStateRead(request: IncomingMessage): boolean {
   return /^\/v1\/runs\/[^/]+\/conversation-state\/(tasks|memories)$/.test(
     pathname,
   )
+}
+
+function isRunPermissionRead(request: IncomingMessage): boolean {
+  if (request.method !== 'GET' || !request.url) return false
+  const pathname = new URL(request.url, 'http://localhost').pathname
+  return /^\/v1\/runs\/[^/]+\/permissions$/.test(pathname)
 }
 
 function runClaimToken(request: IncomingMessage): string | undefined {

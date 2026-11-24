@@ -97,6 +97,13 @@ fast/balanced/deep 三池各指向一个已配置的 provider/model，允许只�
 密钥/权限/模型不存在类 Provider 错误首次即停放 Task（awaiting_provider_condition）
 并通知用户，修正模型连接或池设置后再继续；限流与服务故障仍走既有重试链。
 
+全局默认权限档位（APPROVAL-001 P2）由 `permissionTier` 控制：`strict | standard | full`，
+默认 `standard`。保存省略该字段时保留现值。Web 设置页在「隐私」区提供选择器，
+切换到 `full` 需显式风险确认。事情级覆盖走 `PUT /v1/tasks/:id/worker-profile` 的
+`permissionMode` 字段（`inherit` 表示跟随全局）；生效语义与运行中热切换见
+`docs/approval-policy-gate.md` 与 `docs/approval-lifecycle.md`。存在非默认全局档位或
+事情覆盖时，Supervisor 拒绝回滚到不支持档位的旧 Release（schema v40 Guard）。
+
 ## 保存、失败与恢复
 
 - PUT 使用客户端读到的 `revision` 做乐观并发控制；revision 不一致返回冲突，避免旧

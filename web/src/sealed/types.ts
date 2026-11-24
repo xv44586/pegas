@@ -77,6 +77,7 @@ export type DrawerView =
       approval: Approval
       action: DurableAction
       message: OutboxMessage
+      channel?: WorkChannel
       decisionError?: string
     }
   | {
