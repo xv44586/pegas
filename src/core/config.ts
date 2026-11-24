@@ -32,6 +32,7 @@ export interface PegasConfig {
   databasePath: string
   eventPollMs: number
   schedulerPollMs: number
+  routingClarificationTtlMs: number
   executorMode: 'dsh' | 'echo'
   dshCommand: string
   dshProfile: string
@@ -151,6 +152,11 @@ export function loadConfig(
       environment.PEGAS_SCHEDULER_POLL_MS,
       500,
       'PEGAS_SCHEDULER_POLL_MS',
+    ),
+    routingClarificationTtlMs: parsePositiveInteger(
+      environment.PEGAS_ROUTING_CLARIFICATION_TTL_MS,
+      72 * 60 * 60 * 1000,
+      'PEGAS_ROUTING_CLARIFICATION_TTL_MS',
     ),
     executorMode: environment.PEGAS_EXECUTOR === 'echo' ? 'echo' : 'dsh',
     dshCommand: environment.PEGAS_DSH_COMMAND ?? 'dsh',

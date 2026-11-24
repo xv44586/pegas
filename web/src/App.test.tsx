@@ -7359,6 +7359,54 @@ describe('sealed Pegas UI', () => {
     )
   })
 
+  it('drops an expired routing clarification from todo and shows the honest expired fact', async () => {
+    const sourceMessage = snapshot.messages[0]
+    if (!sourceMessage) throw new Error('Expected an outbox message fixture')
+    const settledTodo = {
+      ...sourceMessage,
+      id: 'message-routing-settled',
+      taskId: undefined,
+      readAt: '2026-11-24T03:00:00.000Z',
+      payload: {
+        type: 'routing.clarification_required',
+        eventId: 'event-routing-expired',
+        input: '再补充一点',
+        question: '这条消息属于「调研 NAS」还是一个新事情？',
+        text: '这条消息属于「调研 NAS」还是一个新事情？',
+      },
+    }
+    const expiredFact = {
+      ...sourceMessage,
+      id: 'message-routing-expired-fact',
+      taskId: undefined,
+      payload: {
+        type: 'routing.clarification_expired',
+        eventId: 'event-routing-expired',
+        input: '再补充一点',
+        question: '这条消息属于「调研 NAS」还是一个新事情？',
+        expiredAt: '2026-11-24T03:00:00.000Z',
+        text: '归类澄清已过期：这条消息没有进入任何事情。如需处理，请重新发送。',
+      },
+    }
+    installSnapshotFetch({
+      ...snapshot,
+      messages: [settledTodo, expiredFact],
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /待你处理/,
+      }),
+    )
+    await screen.findByRole('button', { name: '全部 0' })
+    expect(screen.queryByRole('button', { name: /^去回答：/ })).toBeNull()
+    expect(
+      screen.queryByText(
+        '归类澄清已过期：这条消息没有进入任何事情。如需处理，请重新发送。',
+      ),
+    ).toBeNull()
+  })
+
   it('shows an inline clarification card in the conversation while waiting', async () => {
     const sourceMessage = snapshot.messages[0]
     if (!sourceMessage) throw new Error('Expected an outbox message fixture')

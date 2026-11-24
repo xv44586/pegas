@@ -285,6 +285,38 @@ describe('durable state rollback compatibility', () => {
       rmSync(directory, { recursive: true, force: true })
     }
   })
+
+  it('allows a pre-v48 rollback after clarification expiry settled because v48 is additive', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'pegas-rollback-expiry-'))
+    const path = join(directory, 'pegas.sqlite')
+    let current = new Date('2026-11-24T00:00:00.000Z')
+    const store = new PegasStore(path, {
+      clock: { now: () => new Date(current) },
+      routingClarificationTtlMs: 1000,
+    })
+    try {
+      const event = store.enqueueEvent({
+        userId: 'owner',
+        type: 'user.message',
+        source: 'web',
+        authenticatedActor: 'human',
+        payload: { text: '再补充一点' },
+      }).event
+      store.applyRoutingClarification(event, {
+        kind: 'clarify',
+        input: '再补充一点',
+        question: '这是新事情还是继续已有的事？',
+        reason: 'ambiguous',
+      })
+      expect(() => assertRollbackCompatible(path, 47)).not.toThrow()
+      current = new Date(current.getTime() + 2000)
+      expect(store.expireDueRoutingClarifications()).toHaveLength(1)
+      expect(() => assertRollbackCompatible(path, 47)).not.toThrow()
+    } finally {
+      store.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
 })
 
 function clarificationGoalDraft(

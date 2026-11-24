@@ -79,6 +79,21 @@ function messageFixture(overrides: Partial<OutboxMessage> = {}): OutboxMessage {
 }
 
 describe('CONV-006 deterministic projection derivation', () => {
+  it('projects an expired routing clarification as a visible work card without an anchor', () => {
+    expect(
+      deriveConversationProjection(
+        messageFixture({
+          payload: {
+            type: 'routing.clarification_expired',
+            eventId: 'event-expiry-1',
+            input: '再补充一点',
+            text: '归类澄清已过期：这条消息没有进入任何事情。如需处理，请重新发送。',
+          },
+        }),
+      ),
+    ).toEqual({ lane: 'work', weight: 'card' })
+  })
+
   it('maps conversation replies and proactive agent messages to say/inline', () => {
     expect(
       deriveConversationProjection(messageFixture(), {

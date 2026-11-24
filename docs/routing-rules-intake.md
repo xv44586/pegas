@@ -189,3 +189,11 @@ R3 的 `ask_first` 策略在归属歧义时产生 `routing.clarification_require
 - `web/src/sealed/types.test.ts`：expired 归 update 不进 todo、角标口径；`App.test.tsx`：过期事实卡文案与原文展示、todo 撤下。
 - `test/sqlite-store.test.ts` 迁移列表 +48；`test/rollback-compatibility.test.ts` 过期事实存在时允许回滚 47。
 - 门禁：`pnpm check` + `pnpm smoke` + `pnpm smoke:crash`（持久化链路）；真实实例实机验证一条真实澄清的到期路径（短 TTL 环境变量实例）。
+
+### R5 落地证据（2026-11-24）
+
+- 分支 `feat/ROUTE-005-clarification-expiry`（基线 intake `5fdf98d`）。schema **v48** 增量列 `outbox_messages.expires_at` + 部分索引（NULL=永不过期，仅归类澄清写入）；`PEGAS_ROUTING_CLARIFICATION_TTL_MS` 默认 72h（config 严格正整数，`.env.example` 已登记）；`PegasStore` 构造选项 `routingClarificationTtlMs`（worker/control-plane 入口接线）；`applyRoutingClarification` 事务内写入 expiresAt；`expireDueRoutingClarifications(limit)` 单事务幂等结算：原待办 `read_at=COALESCE`（保留首读时间）+ enqueue `routing.clarification_expired` 事实（dedupe `routing-clarification-expired:<eventId>`，携带 eventId/原输入/question/expiredAt，无 taskId），NOT EXISTS 防重放；Scheduler 每轮 poll 调用并记 `pegas_routing_clarifications_expired_total` 与日志。Web：已读归类澄清不再进 todo/角标（`isAttentionMessage`），expired 事实按 update 兼容降级不进待处理；conversation 投影把 expired 显式归 work/card；消息抽屉展示「原始消息」原文。`maximumSchema` 47→48。
+- 测试先红后绿：`test/routing-clarification-expiry.test.ts` 4 测试（TTL 解析/非法拒绝、expiresAt 写入与普通消息不受影响、到期恰好一次结算+事实合同+零 Task/Event、已读保留首读时间+批量上限）先红（4 失败）后绿；`test/conversation-projection.test.ts` +1（expired work/card 无 anchor）；`web/src/sealed/types.test.ts` +1（settled todo 撤下、expired update、角标 0）；`App.test.tsx` +1（待处理「全部 0」、无去回答按钮）；`test/rollback-compatibility.test.ts` +1（过期结算后允许回滚 47）；迁移列表 +48、上游 approval-rules 最大版本断言 47→48。
+- 门禁：`pnpm check` 129 文件 / 1319 测试全绿（statement 85.65% / branch 78.45% / function 89.9% / line 88.73%）、`pnpm smoke`（task 0063fbf0）、`pnpm smoke:crash`（三注入通过；首跑一次进程收尾非零退出复跑通过）、`pnpm review:ui --force`、`pnpm a11y:review` 0 违例、canary 按规则跳过。
+- 真实多进程验证：独立数据目录起真实 control-plane + scheduler（TTL=3000ms），seed 真实澄清待办 → HTTP 观察 expiresAt 写入 → 5s 后原待办 readAt 置位 + `routing.clarification_expired` 事实出现（原输入逐字保留）→ tasks=0（零 Task/Run 副作用）。脚本 `/tmp/route005-expiry-live.mjs`（本地，不入库）。
+- 剩余风险：TTL 为实例级运维配置，无每用户/每事情覆盖（按非目标登记）；过期事实无「重新发送」一键动作（用户手动重发，原文可见）。回滚：revert 即回 v47 行为，v48 列旧代码忽略；已产生的 expired 事实按未知类型走兼容降级（普通更新），原待办保持已读，无数据破坏。

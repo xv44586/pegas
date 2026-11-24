@@ -884,6 +884,14 @@ ALTER TABLE runtime_settings ADD COLUMN routing_uncertainty TEXT NOT NULL DEFAUL
 CHECK (routing_uncertainty IN ('new_task', 'ask_first', 'continue_recent'));
 `
 
+const migration48 = `
+-- ROUTE-005 R5: clarification todo auto-expiry. NULL means the message never
+-- expires; only routing clarification todos carry a deadline.
+ALTER TABLE outbox_messages ADD COLUMN expires_at TEXT;
+CREATE INDEX outbox_messages_by_expiry
+ON outbox_messages (expires_at) WHERE expires_at IS NOT NULL;
+`
+
 const migration39 = `
 -- DESIGN-006 phase 2: manual deletion of ended automations. The command
 -- ledger must survive the definition so frozen receipts stay replayable;
@@ -2680,6 +2688,7 @@ interface OutboxRow {
   updated_at: string | null
   sent_at: string | null
   read_at: string | null
+  expires_at: string | null
   coalesce_key: string | null
   coalesced_count: number
   merged_into_id: string | null
@@ -2917,12 +2926,23 @@ export class TaskActionBlockedError extends Error {
 export class PegasStore {
   readonly #database: DatabaseSync
   readonly #clock: Clock
+  readonly #routingClarificationTtlMs: number
   readonly #attachmentRoot: string | undefined
   #transactionDepth = 0
 
-  constructor(path: string, options: { clock?: Clock } = {}) {
+  constructor(
+    path: string,
+    options: { clock?: Clock; routingClarificationTtlMs?: number } = {},
+  ) {
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true })
     this.#clock = options.clock ?? systemClock
+    this.#routingClarificationTtlMs =
+      options.routingClarificationTtlMs ?? 72 * 60 * 60 * 1000
+    if (
+      !Number.isSafeInteger(this.#routingClarificationTtlMs) ||
+      this.#routingClarificationTtlMs <= 0
+    )
+      throw new Error('Routing clarification TTL must be a positive integer')
     this.#attachmentRoot =
       path === ':memory:' ? undefined : resolve(dirname(path), 'attachments')
     this.#database = new DatabaseSync(path)
@@ -2983,6 +3003,7 @@ export class PegasStore {
     this.#migrate(45, migration45)
     this.#migrate(46, migration46)
     this.#migrate(47, migration47)
+    this.#migrate(48, migration48)
   }
 
   #backfillWorkerIconIds(): void {
@@ -6895,8 +6916,81 @@ export class PegasStore {
           text: decision.question,
         },
       })
+      const expiresAt = new Date(
+        Date.parse(message.createdAt) + this.#routingClarificationTtlMs,
+      ).toISOString()
+      this.#database
+        .prepare(
+          `UPDATE outbox_messages SET expires_at = ?
+           WHERE id = ? AND expires_at IS NULL`,
+        )
+        .run(expiresAt, message.id)
       this.#database.exec('COMMIT')
-      return { message }
+      return { message: this.#outboxById(message.id) }
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  expireDueRoutingClarifications(
+    limit = 100,
+  ): { todo: OutboxMessage; fact: OutboxMessage }[] {
+    if (!Number.isSafeInteger(limit) || limit <= 0 || limit > 1000)
+      throw new Error('Expiry batch size must be between 1 and 1000')
+    const nowIso = this.#clock.now().toISOString()
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const rows = this.#database
+        .prepare(
+          `SELECT * FROM outbox_messages
+           WHERE expires_at IS NOT NULL AND expires_at <= ?
+             AND json_extract(payload_json, '$.type') =
+               'routing.clarification_required'
+             AND NOT EXISTS (
+               SELECT 1 FROM outbox_messages AS fact
+               WHERE fact.user_id = outbox_messages.user_id
+                 AND fact.dedupe_key =
+                   'routing-clarification-expired:' ||
+                   json_extract(outbox_messages.payload_json, '$.eventId')
+             )
+           ORDER BY expires_at ASC, rowid ASC LIMIT ?`,
+        )
+        .all(nowIso, limit) as unknown as OutboxRow[]
+      const settled: { todo: OutboxMessage; fact: OutboxMessage }[] = []
+      for (const row of rows) {
+        const payload = JSON.parse(row.payload_json) as {
+          eventId?: string
+          input?: string
+          question?: string
+        }
+        if (typeof payload.eventId !== 'string' || !payload.eventId)
+          throw new Error('Routing clarification is missing its eventId')
+        this.#database
+          .prepare(
+            `UPDATE outbox_messages
+             SET read_at = COALESCE(read_at, ?), updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(nowIso, nowIso, row.id)
+        const fact = this.enqueueOutbox({
+          userId: row.user_id,
+          channel: 'conversation',
+          dedupeKey: `routing-clarification-expired:${payload.eventId}`,
+          payload: {
+            type: 'routing.clarification_expired',
+            eventId: payload.eventId,
+            input: typeof payload.input === 'string' ? payload.input : '',
+            question:
+              typeof payload.question === 'string' ? payload.question : '',
+            expiredAt: nowIso,
+            text: '归类澄清已过期：这条消息没有进入任何事情。如需处理，请重新发送。',
+          },
+        })
+        settled.push({ todo: this.#outboxById(row.id), fact })
+      }
+      this.#database.exec('COMMIT')
+      return settled
     } catch (error) {
       this.#database.exec('ROLLBACK')
       throw error
@@ -15606,6 +15700,7 @@ function toOutboxMessage(row: OutboxRow): OutboxMessage {
     updatedAt: row.updated_at ?? row.created_at,
     ...(row.sent_at ? { sentAt: row.sent_at } : {}),
     ...(row.read_at ? { readAt: row.read_at } : {}),
+    ...(row.expires_at ? { expiresAt: row.expires_at } : {}),
     ...(row.coalesce_key ? { coalesceKey: row.coalesce_key } : {}),
     ...(row.coalesced_count > 0 ? { coalescedCount: row.coalesced_count } : {}),
     ...(row.merged_into_id ? { mergedIntoId: row.merged_into_id } : {}),
