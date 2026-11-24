@@ -1,0 +1,1 @@
+export { IconMagnifyingGlass } from './index'

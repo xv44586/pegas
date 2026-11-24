@@ -348,6 +348,18 @@
 - Enforcement：尚未晋升；修复归属 EXEC-005（本 PR 不改无关用例）。再次出现同类「复用旧成功提示」竞态时按同类计数；晋升时给连续保存断言加请求次数绑定的测试规约或 lint。
 - Owner / next action：EXEC-005 下次触碰该用例时改为绑定第二次 PUT 证据；已知 flaky 清单同 dsh SIGTERM 计时用例并列。
 
+### LESSON-20261124-03：真实子进程行为超时不能兼任进程启动就绪预算
+
+- Rule：真实子进程测试若要验证超时后的信号升级，行为超时必须为进程启动和首个协议事件留出独立余量；不得用亚秒级总超时同时断言子进程已经启动、协议事件已被消费和终止链路已完成。
+- Why：DSH SIGTERM→SIGKILL 回归把总超时设为 500ms。慢 runner 上 Node 子进程还没输出 session PID，父进程就先走超时终止，产品终止逻辑正确但 `childPid` 证据为空，导致门禁随机失败。
+- Feature：EXEC-003
+- Evidence：2026-11-22、2026-11-23、2026-11-24 三个独立日期的完整门禁记录均出现同一 `test/dsh-cli-executor.test.ts` 用例抖动；2026-11-24 在零相关 diff 下连续复现，主分支同提交又可通过。测试执行超时调整为 2s 后保留 PID、SIGTERM 忽略、30ms 宽限、SIGKILL 和 ESRCH 全链断言。
+- Seen：3（2026-11-22、2026-11-23、2026-11-24）
+- Severity：normal
+- Status：Promoted
+- Enforcement：`test/dsh-cli-executor.test.ts` 使用独立 `executionTimeoutMs` 启动余量，30ms 终止宽限仍单独约束信号升级；完整门禁继续运行真实子进程用例。
+- Owner / next action：EXEC-003 后续新增真实进程计时回归时复用同一分层预算，不以缩短总超时换取测试速度。
+
 <!--
 ### LESSON-YYYYMMDD-NN：简短标题
 

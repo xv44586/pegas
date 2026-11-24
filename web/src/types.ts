@@ -456,7 +456,7 @@ type ModelProviderId =
 
 type ModelProviderProtocol = 'openai-chat' | 'anthropic-messages'
 
-interface ModelProviderCapability {
+export interface ModelProviderCapability {
   id: ModelProviderId
   name: string
   category: 'vendor' | 'gateway' | 'local' | 'custom'
@@ -490,7 +490,7 @@ export interface SettingsResponse {
   rewrite?: RewriteSettings
 }
 
-interface RewriteSettings {
+export interface RewriteSettings {
   mode: 'router' | 'custom'
   protocol: 'openai-chat' | 'anthropic-messages'
   baseUrl: string
@@ -503,7 +503,7 @@ export interface RewriteSettingsDraft extends RewriteSettings {
   clearApiKey: boolean
 }
 
-interface SpeechSettings {
+export interface SpeechSettings {
   provider: 'disabled' | 'openai-compatible'
   baseUrl: string
   model: string

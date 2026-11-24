@@ -27,7 +27,7 @@ import type {
 export type AppPage =
   'conversation' | 'work' | 'attention' | 'automation' | 'memory' | 'settings'
 
-export type ThemeChoice = 'system' | 'light' | 'warm' | 'dark'
+export type ThemeChoice = 'system' | 'light' | 'dark'
 
 export type SettingsSection =
   | 'pegas'

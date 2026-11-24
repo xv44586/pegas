@@ -82,7 +82,6 @@ describe('sealed UI status color contrast', () => {
   const base = tokens(':root {')
   const themes: [string, Map<string, string>][] = [
     ['light', base],
-    ['warm', tokens(":root[data-theme='warm']")],
     ['dark', tokens(":root[data-theme='dark']")],
   ]
 

@@ -9,7 +9,6 @@ import {
   ChevronUp,
   CircleAlert,
   CircleQuestionMark,
-  Copy,
   FileText,
   Layers3,
   Link2,
@@ -46,6 +45,32 @@ import type {
 } from '../types'
 import { useVoiceDictation } from '../useVoiceDictation'
 import { PegasAgentIcon } from '../PegasAgentIcon'
+import {
+  Button,
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  FormField,
+  GlideMenu,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  StatusPill,
+  TextArea,
+  TextInput,
+} from '@bui/index'
+import {
+  CopyMessageButton,
+  FollowUpList,
+  MetaIconButton,
+  RowStatusPill,
+  RunTrace,
+  SayBody,
+  WorkEntryButton,
+  type FactTone,
+} from './ConversationBui'
 import { ModelPicker, modelSelectionKey } from './ModelPicker'
 import { PegasMascot } from './PegasMascot'
 import { EmptyCapability, PageToolbar } from './Shell'
@@ -609,6 +634,10 @@ export function ConversationPage({
               onJumpToMessage={jumpToMessage}
               onOpenAttention={onOpenAttention}
               onOpenTask={openTaskDetails}
+              onFollowUp={text => {
+                if (message.taskId) onSelectTask(message.taskId)
+                onDraftChange(text)
+              }}
               onToggleExpanded={() =>
                 setExpandedMessages(current => {
                   const next = new Set(current)
@@ -626,21 +655,15 @@ export function ConversationPage({
                   <span>「{message.cue.title}」</span>
                 </p>
               )}
-              <MarkdownMessage
-                content={
+              <SayBody
+                linkPreviewLoader={url => api.linkPreview(url)}
+                streaming={message.streaming}
+                text={
                   message.text.length > 520 && !expandedMessages.has(message.id)
                     ? `${message.text.slice(0, 520)}…`
                     : message.text
                 }
-                linkPreviewLoader={url => api.linkPreview(url)}
               />
-              {message.streaming && (
-                <span
-                  aria-label="正在输入"
-                  className="say-stream-caret"
-                  role="status"
-                />
-              )}
             </>
           )}
           {message.role === 'user' && message.attachment && (
@@ -652,7 +675,7 @@ export function ConversationPage({
           )}
           {message.text.length > 520 && message.lane === 'say' && (
             <button
-              className="inline-link"
+              className="mt-2 inline-flex items-center gap-[5px] font-medium text-accent-ink"
               onClick={() =>
                 setExpandedMessages(current => {
                   const next = new Set(current)
@@ -682,9 +705,8 @@ export function ConversationPage({
             />
           )}
           {workEntry && (
-            <button
-              aria-label={`${workEntry.label}：${workEntry.channel.title}`}
-              className="message-work-entry"
+            <WorkEntryButton
+              label={workEntry.label}
               onClick={() => {
                 if (
                   workEntry.label === '审查交付' &&
@@ -701,25 +723,14 @@ export function ConversationPage({
                 }
                 openTaskDetails(workEntry.channel.id)
               }}
-              title={workEntry.label}
-              type="button"
-            >
-              <Link2 size={14} />
-            </button>
+              taskTitle={workEntry.channel.title}
+            />
           )}
           <time dateTime={message.at}>{formatRelativeTime(message.at)}</time>
-          <button
-            aria-label={copiedMessageId === message.id ? '已复制' : '复制消息'}
-            className="message-action"
-            onClick={() => void copyMessage(message.id, message.text)}
-            type="button"
-          >
-            {copiedMessageId === message.id ? (
-              <Check size={14} />
-            ) : (
-              <Copy size={14} />
-            )}
-          </button>
+          <CopyMessageButton
+            copied={copiedMessageId === message.id}
+            onCopy={() => void copyMessage(message.id, message.text)}
+          />
         </div>
       </article>
     )
@@ -772,6 +783,7 @@ export function ConversationPage({
 
           {summaryChannel && summaryRun && (
             <RunStatusBar
+              api={api}
               channel={summaryChannel}
               messages={snapshot.messages}
               onOpen={() =>
@@ -791,18 +803,27 @@ export function ConversationPage({
       </div>
 
       {chatScroll.hasNewReplies && (
-        <button
+        <Button
           className="new-replies-button"
           onClick={chatScroll.jumpToBottom}
+          size="sm"
           type="button"
+          variant="secondary"
         >
           新回复 <ArrowUp size={14} className="is-flipped" />
-        </button>
+        </Button>
       )}
 
-      <div className="composer-wrap" ref={chatScroll.composerRef}>
+      <div
+        className="composer-wrap bui relative px-[42px] pt-3 pb-6 max-[820px]:px-3.5 max-[820px]:pt-2.5 max-[820px]:pb-3.5"
+        ref={chatScroll.composerRef}
+      >
         {trayChannels.length > 0 && (
-          <div aria-label="进行中的事情" className="task-tray" role="group">
+          <div
+            aria-label="进行中的事情"
+            className="task-tray mx-auto mb-2 flex max-w-[1040px] gap-2 overflow-x-auto pb-0.5 [scrollbar-width:thin]"
+            role="group"
+          >
             {trayChannels.map(channel => {
               const channelRun = latestRunForTask(snapshot.runs, channel.id)
               const selected = continuationChannel?.id === channel.id
@@ -810,7 +831,7 @@ export function ConversationPage({
               return (
                 <button
                   aria-pressed={selected}
-                  className="task-tray-item"
+                  className="task-tray-item inline-flex h-[34px] max-w-[260px] shrink-0 items-center gap-[7px] rounded-full bg-surface px-3 text-[13px] shadow-hairline transition-colors duration-150 hover:bg-inset aria-pressed:bg-accent-tint aria-pressed:text-accent-ink"
                   data-status={
                     waitingOnUser
                       ? 'attention'
@@ -832,8 +853,12 @@ export function ConversationPage({
                   type="button"
                 >
                   <i aria-hidden="true" />
-                  <span className="task-tray-title">{channel.title}</span>
-                  <small>{statusLabel(channel, channelRun)}</small>
+                  <span className="task-tray-title min-w-0 truncate">
+                    {channel.title}
+                  </span>
+                  <small className="shrink-0 text-[11px] text-ink-3">
+                    {statusLabel(channel, channelRun)}
+                  </small>
                 </button>
               )
             })}
@@ -842,38 +867,55 @@ export function ConversationPage({
         {confirmingStop && summaryChannel && (
           <div
             aria-labelledby="composer-stop-title"
-            className="stop-confirmation"
+            className="stop-confirmation mx-auto mt-3.5 mb-2.5 flex max-w-[1040px] items-center justify-between gap-3.5 rounded-card bg-red-tint p-4 shadow-hairline"
             role="alertdialog"
           >
             <div>
-              <strong id="composer-stop-title">确定停止这件事？</strong>
-              <p>
+              <strong className="text-red-text" id="composer-stop-title">
+                确定停止这件事？
+              </strong>
+              <p className="mt-1 text-[13px] leading-[1.55] text-ink-2">
                 停止后无法继续当前运行；历史记录会保留，你仍可重新发起事情。
               </p>
             </div>
-            <div className="stop-confirmation-actions">
-              <button onClick={() => setConfirmingStop(false)} type="button">
+            <div className="stop-confirmation-actions flex shrink-0 gap-2">
+              <Button
+                onClick={() => setConfirmingStop(false)}
+                size="sm"
+                type="button"
+                variant="secondary"
+              >
                 继续执行
-              </button>
-              <button
-                className="is-danger"
+              </Button>
+              <Button
                 disabled={stopping}
                 onClick={() => void stopSummary()}
+                size="sm"
                 type="button"
+                variant="danger"
               >
                 {stopping ? '正在停止…' : '确认停止'}
-              </button>
+              </Button>
             </div>
           </div>
         )}
         {queuedMessages.length > 0 && (
-          <ol aria-label="排队消息" className="composer-queue">
+          <ol
+            aria-label="排队消息"
+            className="composer-queue mx-auto mb-2 grid w-full max-w-[1040px] gap-1.5"
+          >
             {queuedMessages.map((item, index) => (
-              <li key={item.id}>
-                <span className="composer-queue-preview" title={item.text}>
+              <li
+                className="flex min-h-9 items-center gap-2 rounded-card bg-surface px-2 py-1 text-[13px] shadow-hairline"
+                key={item.id}
+              >
+                <span
+                  className="composer-queue-preview min-w-0 flex-1 truncate text-ink-2"
+                  title={item.text}
+                >
                   {item.text}
                 </span>
-                <button
+                <Button
                   aria-label={`编辑排队消息 ${String(index + 1)}`}
                   onClick={() => {
                     setQueuedMessages(current =>
@@ -881,86 +923,104 @@ export function ConversationPage({
                     )
                     onDraftChange(item.text)
                   }}
+                  size="xs"
                   type="button"
+                  variant="quiet"
                 >
                   编辑
-                </button>
-                <button
+                </Button>
+                <Button
                   aria-label={`删除排队消息 ${String(index + 1)}`}
+                  className="w-7 px-0"
                   onClick={() =>
                     setQueuedMessages(current =>
                       current.filter(entry => entry.id !== item.id),
                     )
                   }
+                  size="xs"
                   type="button"
+                  variant="quiet"
                 >
                   <Trash2 size={14} />
-                </button>
+                </Button>
               </li>
             ))}
           </ol>
         )}
         {error && (
-          <div className="composer-error" role="alert">
+          <div
+            className="composer-error mx-auto mb-2 max-w-[1040px] text-[12px] text-red-text"
+            role="alert"
+          >
             {error}
           </div>
         )}
         {dictation.error && (
-          <div className="composer-error" role="alert">
+          <div
+            className="composer-error mx-auto mb-2 max-w-[1040px] text-[12px] text-red-text"
+            role="alert"
+          >
             {dictation.error}
           </div>
         )}
         {attachment && (
-          <div className="composer-context" role="status">
+          <div
+            className="composer-context mx-auto mb-2 flex min-h-[38px] w-full max-w-[1040px] items-center justify-between gap-3 rounded-card bg-accent-tint px-3 py-1.5 text-[13px] text-ink-2"
+            role="status"
+          >
             <span>
               附件：<strong>{attachment.name}</strong> ·{' '}
               {formatFileSize(attachment.size)}
             </span>
-            <button
-              aria-label="移除附件"
+            <MetaIconButton
+              label="移除附件"
               onClick={() => setAttachment(undefined)}
-              type="button"
             >
               <X size={15} />
-            </button>
+            </MetaIconButton>
           </div>
         )}
         {continuationChannel && (
-          <div className="composer-context" role="status">
+          <div
+            className="composer-context mx-auto mb-2 flex min-h-[38px] w-full max-w-[1040px] items-center justify-between gap-3 rounded-card bg-accent-tint px-3 py-1.5 text-[13px] text-ink-2"
+            role="status"
+          >
             <span>
               继续事情：<strong>{continuationChannel.title}</strong>
             </span>
-            <button
-              aria-label="取消继续当前事情"
+            <MetaIconButton
+              label="取消继续当前事情"
               onClick={onClearContinuation}
-              type="button"
             >
               <X size={15} />
-            </button>
+            </MetaIconButton>
           </div>
         )}
         {sourceContextChannel && (
-          <div className="composer-context" role="status">
+          <div
+            className="composer-context mx-auto mb-2 flex min-h-[38px] w-full max-w-[1040px] items-center justify-between gap-3 rounded-card bg-accent-tint px-3 py-1.5 text-[13px] text-ink-2"
+            role="status"
+          >
             <span>
               新建相关事情，携带终态摘要：
               <strong>{sourceContextChannel.title}</strong>
             </span>
-            <button
-              aria-label="取消携带来源事情摘要"
+            <MetaIconButton
+              label="取消携带来源事情摘要"
               onClick={onClearSourceContext}
-              type="button"
             >
               <X size={15} />
-            </button>
+            </MetaIconButton>
           </div>
         )}
         <form
           aria-label="发送消息"
           className={[
             'composer',
+            'mx-auto grid max-w-[1040px] grid-rows-[auto_auto] bg-surface shadow-card transition-[border-radius,box-shadow,padding] duration-150 focus-within:shadow-raised pointer-coarse:pb-2',
             draft.includes('\n') || attachment || continuationChannel
-              ? 'is-multiline'
-              : 'is-single-line',
+              ? 'is-multiline rounded-[24px] px-3.5 py-2.5 pl-5 max-[820px]:rounded-[20px] max-[820px]:px-3 max-[820px]:py-2.5 max-[820px]:pl-4'
+              : 'is-single-line rounded-full py-1.5 pr-2 pl-5 max-[820px]:pl-4',
           ].join(' ')}
           onSubmit={event => {
             event.preventDefault()
@@ -971,6 +1031,11 @@ export function ConversationPage({
             给 Pegas 发消息
           </label>
           <textarea
+            className={`w-full min-w-0 resize-none overflow-y-auto border-0 bg-transparent py-[7px] text-[16px] leading-[1.55] caret-accent outline-none [field-sizing:content] [max-block-size:6lh] placeholder:text-ink-2 placeholder:opacity-55 ${
+              draft.includes('\n') || attachment || continuationChannel
+                ? 'min-h-[54px] pb-3 max-[820px]:min-h-[46px] max-[820px]:pt-[5px]'
+                : 'min-h-[38px] max-[820px]:min-h-[46px] max-[820px]:pt-[5px]'
+            }`}
             enterKeyHint="send"
             id="pegas-message"
             name="message"
@@ -996,8 +1061,11 @@ export function ConversationPage({
             rows={1}
             value={draft}
           />
-          <div className="composer-toolbar">
-            <div className="composer-tools" aria-label="输入工具">
+          <div className="composer-toolbar flex min-w-0 items-center justify-between gap-3">
+            <div
+              className="composer-tools flex items-center gap-1.5"
+              aria-label="输入工具"
+            >
               <input
                 aria-label="选择附件文件"
                 className="visually-hidden"
@@ -1009,60 +1077,68 @@ export function ConversationPage({
                 tabIndex={-1}
                 type="file"
               />
-              <button
+              <Button
                 aria-label="添加附件"
-                className="composer-add-button"
+                className="composer-add-button size-10 rounded-full p-0 text-ink-3 hover:bg-hover hover:text-ink pointer-coarse:size-11"
                 disabled={sending || dictationBusy}
                 onClick={() => attachmentInputRef.current?.click()}
+                size="sm"
                 title="添加附件（最大 25MB，随下一条消息发送）"
                 type="button"
+                variant="quiet"
               >
                 <Plus size={22} />
-              </button>
-              <button
+              </Button>
+              <Button
                 aria-label="说完直接发送"
                 aria-pressed={voiceDirectSend}
-                className={voiceDirectSend ? 'is-armed' : ''}
+                className="size-10 rounded-full p-0 text-ink-3 hover:bg-hover hover:text-ink aria-pressed:bg-accent-tint aria-pressed:text-accent-ink pointer-coarse:size-11"
                 disabled={dictationBusy}
                 onClick={() => setVoiceDirectSend(current => !current)}
+                size="sm"
                 title={
                   voiceDirectSend
                     ? '语音直发已开启：录音结束后直接发送'
                     : '开启后，录音结束会直接发送，不进入草稿'
                 }
                 type="button"
+                variant="quiet"
               >
                 <Send size={18} />
-              </button>
+              </Button>
             </div>
-            <div className="composer-actions">
+            <div className="composer-actions flex min-w-0 items-center gap-[7px]">
               {sending && (
-                <span className="composer-working">
+                <span className="composer-working mr-auto inline-flex items-center gap-1.5 text-[12px] text-ink-2">
                   <PegasMascot pose="waiting" size={30} />
                   正在整理…
                 </span>
               )}
               {canSteer && draft.trim() && (
-                <button
-                  className="composer-steer-button"
+                <Button
+                  className="composer-steer-button h-[34px] rounded-full bg-accent-tint px-3 text-[13px] font-medium text-accent-ink hover:bg-accent-tint hover:brightness-95"
                   disabled={sending || dictationBusy}
                   onClick={() => void steer()}
+                  size="xs"
                   title="不打断当前执行，把这条指示立即交给正在做的事情"
                   type="button"
+                  variant="quiet"
                 >
                   <Zap size={15} /> 插话
-                </button>
+                </Button>
               )}
               {canQueue && draft.trim() && (
-                <button
-                  className="composer-queue-button"
+                <Button
+                  className="composer-queue-button h-[34px] rounded-full bg-accent-tint px-3 text-[13px] font-medium text-accent-ink hover:bg-accent-tint hover:brightness-95"
                   disabled={sending || dictationBusy}
                   onClick={queueDraft}
+                  size="xs"
                   title="选中的事情完成后自动发送这条消息"
                   type="button"
+                  variant="quiet"
                 >
                   排队
-                </button>
+                </Button>
               )}
               <ModelPicker
                 ariaLabel="选择执行模型"
@@ -1093,13 +1169,11 @@ export function ConversationPage({
                 }
                 variant="composer"
               />
-              <button
+              <Button
                 aria-label={
                   dictation.state === 'recording' ? '停止录音' : '语音输入'
                 }
-                className={
-                  dictation.state === 'recording' ? 'is-recording' : ''
-                }
+                className={`size-10 rounded-full p-0 text-ink-3 hover:bg-hover hover:text-ink pointer-coarse:size-11 ${dictation.state === 'recording' ? 'is-recording bg-red-tint text-red-text hover:bg-red-tint hover:text-red-text' : ''}`}
                 onClick={() => {
                   if (dictation.state === 'recording') {
                     dictation.toggle()
@@ -1111,31 +1185,37 @@ export function ConversationPage({
                   }
                   dictation.toggle()
                 }}
+                size="sm"
                 title={voiceDirectSend ? '录音并直接发送' : '语音转文字'}
                 type="button"
+                variant="quiet"
               >
                 <Mic size={20} />
-              </button>
+              </Button>
               {summaryActive && summaryChannel?.canStop && !draft.trim() ? (
-                <button
+                <Button
                   aria-label="停止"
-                  className="send-button is-stop"
+                  className="send-button is-stop size-[42px] rounded-full bg-red p-0 text-white hover:bg-red hover:brightness-95 [&_svg]:fill-current pointer-coarse:size-11"
                   disabled={stopping}
                   onClick={() => setConfirmingStop(true)}
+                  size="sm"
                   title="停止当前执行"
                   type="button"
+                  variant="quiet"
                 >
                   <Square size={16} />
-                </button>
+                </Button>
               ) : (
-                <button
+                <Button
                   aria-label="发送"
-                  className="send-button"
+                  className="send-button size-[42px] rounded-full bg-ink p-0 text-canvas hover:bg-ink hover:text-canvas hover:opacity-90 disabled:bg-line-strong disabled:text-ink-2 disabled:opacity-100 pointer-coarse:size-11"
                   disabled={!draft.trim() || sending || dictationBusy}
+                  size="sm"
                   type="submit"
+                  variant="quiet"
                 >
                   <ArrowUp size={20} />
-                </button>
+                </Button>
               )}
             </div>
           </div>
@@ -1236,6 +1316,22 @@ function factCardHeading(message: FactCardMessage): {
   return { icon: Layers3, label: '工作进展' }
 }
 
+function factCardTone(message: FactCardMessage): FactTone {
+  if (message.lane === 'decide') return message.resolved ? 'neutral' : 'orange'
+  const type =
+    message.source?.payload &&
+    typeof message.source.payload === 'object' &&
+    typeof (message.source.payload as { type?: unknown }).type === 'string'
+      ? (message.source.payload as { type: string }).type
+      : undefined
+  if (type === 'run.failed' || type === 'action.failed') return 'red'
+  if (type === 'run.completed')
+    return message.source && hasActiveAutomationFact(message.source.payload)
+      ? 'accent'
+      : 'green'
+  return 'neutral'
+}
+
 function FactCard({
   message,
   snapshot,
@@ -1247,6 +1343,7 @@ function FactCard({
   onOpenTask,
   onAnswerClarification,
   onOpenAttention,
+  onFollowUp,
 }: {
   message: FactCardMessage
   snapshot: Snapshot
@@ -1258,9 +1355,10 @@ function FactCard({
   onOpenTask: (taskId: string | undefined) => void
   onAnswerClarification: (channel: Snapshot['channels'][number]) => void
   onOpenAttention: (message: OutboxMessage) => Promise<void>
+  onFollowUp: (text: string) => void
 }) {
   const heading = factCardHeading(message)
-  const Icon = heading.icon
+  const tone = factCardTone(message)
   const channel = message.taskId
     ? snapshot.channels.find(item => item.id === message.taskId)
     : undefined
@@ -1294,19 +1392,20 @@ function FactCard({
     <section
       aria-label={`${heading.label}：${channel?.title ?? summary.title}`}
       className={[
+        'bui',
         'fact-card',
         `is-${message.lane}`,
-        message.resolved ? 'is-resolved' : '',
+        'mt-3.5 grid w-full max-w-[560px] min-w-0 gap-2.5 rounded-card bg-surface p-3.5 shadow-card',
+        message.resolved ? 'opacity-70' : '',
       ]
         .filter(Boolean)
         .join(' ')}
     >
-      <header className="fact-card-header">
-        <Icon size={16} />
-        <strong>{heading.label}</strong>
+      <div className="fact-card-header flex min-w-0 flex-wrap items-center gap-2">
+        <StatusPill tone={tone}>{heading.label}</StatusPill>
         {channel && !hideTaskTitle && (
           <button
-            className="fact-card-task"
+            className="fact-card-task min-w-0 truncate text-[12px] text-ink-3 transition-colors duration-100 hover:text-ink hover:underline"
             onClick={() => onOpenTask(message.taskId)}
             type="button"
           >
@@ -1316,7 +1415,7 @@ function FactCard({
         {originVisible && originEventId && (
           <button
             aria-label="回到发起消息"
-            className="fact-card-origin"
+            className="fact-card-origin ml-auto flex size-6 items-center justify-center rounded-[6px] text-ink-3 transition-colors duration-100 hover:bg-hover-2 hover:text-ink"
             onClick={() => onJumpToMessage(originEventId)}
             title="回到发起消息"
             type="button"
@@ -1324,12 +1423,12 @@ function FactCard({
             <ArrowUpToLine size={14} />
           </button>
         )}
-      </header>
-      <div className="fact-card-body">
+      </div>
+      <div className="fact-card-body mt-2 grid min-w-0 justify-items-start gap-1 text-[13px] leading-[1.6] text-ink-2">
         <MarkdownMessage content={expanded ? message.text : collapsedBody} />
         {message.text.length > 520 && (
           <button
-            className="inline-link"
+            className="mt-2 inline-flex items-center gap-[5px] font-medium text-accent-ink"
             onClick={onToggleExpanded}
             type="button"
           >
@@ -1338,9 +1437,10 @@ function FactCard({
         )}
       </div>
       {message.lane === 'decide' && !message.resolved && (
-        <div className="fact-card-actions">
-          <button
-            className="primary-button"
+        <div className="fact-card-actions mt-2.5 flex gap-2">
+          <Button
+            size="sm"
+            variant="accent"
             onClick={() => {
               if (message.review && channel && message.source) {
                 actions.onOpenDrawer({
@@ -1374,12 +1474,24 @@ function FactCard({
               }
               onOpenTask(message.taskId)
             }}
-            type="button"
           >
             {decideLabel} <ArrowRight size={15} />
-          </button>
+          </Button>
         </div>
       )}
+      {message.lane === 'work' &&
+        tone === 'green' &&
+        channel?.status === 'completed' && (
+          <FollowUpList
+            items={[
+              '这件事还有哪些没做完？',
+              '把这次结果整理成一段摘要',
+              '结果里有哪些风险需要注意？',
+            ]}
+            label="下一步"
+            onPick={onFollowUp}
+          />
+        )}
     </section>
   )
 }
@@ -1392,47 +1504,21 @@ function escapeHtml(value: string): string {
     .replace(/"/gu, '&quot;')
 }
 
-const WAITING_PHRASES = [
-  '正在梳理思路',
-  '正在拆解步骤',
-  '正在核对已有信息',
-  '正在推进这件事',
-] as const
-
-const LONG_WAIT_PHRASES = [
-  '这件事比平时花的时间长一些',
-  '还在继续推进，可以先去忙别的',
-  '仍在处理中，有结果会第一时间回来',
-] as const
-
 function RunStatusBar({
   channel,
   run,
   messages,
+  api,
   onOpen,
 }: {
   channel: WorkChannel
   run: NonNullable<ReturnType<typeof latestRunForTask>>
   messages: readonly OutboxMessage[]
+  api: PegasApi
   onOpen: () => void
 }) {
   const active = run.status === 'running' || run.status === 'queued'
   const progressText = latestRunProgressText(messages, run.id)
-  const [phraseIndex, setPhraseIndex] = useState(0)
-  useEffect(() => {
-    if (!active || progressText) return
-    const started = Date.parse(run.createdAt)
-    const timer = window.setInterval(() => {
-      setPhraseIndex(current => current + 1)
-    }, 5000)
-    const elapsed = Date.now() - started
-    if (elapsed > 120_000) setPhraseIndex(current => current + 1)
-    return () => window.clearInterval(timer)
-  }, [active, progressText, run.createdAt])
-  const elapsedLong = Date.now() - Date.parse(run.createdAt) > 120_000
-  const waitingPhrase = elapsedLong
-    ? LONG_WAIT_PHRASES[phraseIndex % LONG_WAIT_PHRASES.length]
-    : WAITING_PHRASES[phraseIndex % WAITING_PHRASES.length]
   const duration = formatRunDuration(run)
   const headline = active
     ? statusLabel(channel, run)
@@ -1443,33 +1529,60 @@ function RunStatusBar({
         : run.status === 'cancelled'
           ? '已停止'
           : '等待中'
+  const tone: FactTone = active
+    ? 'accent'
+    : run.status === 'completed'
+      ? 'green'
+      : run.status === 'failed'
+        ? 'red'
+        : 'neutral'
   const detail = active
-    ? (progressText ?? waitingPhrase)
+    ? undefined
     : run.status === 'completed' && duration
       ? `工作了 ${duration}`
       : run.status === 'failed'
         ? (run.lastError ?? '可以重试或补充说明后继续')
         : `${(run.output ?? channel.goal).slice(0, 160)}${(run.output ?? channel.goal).length > 160 ? '…' : ''}`
+  const summary = `${headline} · ${channel.title}${
+    detail ? ` ${detail}` : progressText ? ` ${progressText}` : ''
+  }`
   return (
-    <button
-      className="run-status-bar"
+    <section
+      className="bui run-status-card mt-3.5 w-full rounded-card bg-surface p-3.5 shadow-card"
       data-active={active || undefined}
-      onClick={onOpen}
-      type="button"
     >
-      {run.status === 'running' ? (
-        <PegasMascot pose="working" size={30} />
-      ) : (
-        <i data-status={run.status} />
+      <button
+        aria-label={summary}
+        className="run-status-bar flex w-full items-center gap-2.5 text-left"
+        onClick={onOpen}
+        type="button"
+      >
+        {run.status === 'running' ? (
+          <PegasMascot pose="working" size={30} />
+        ) : (
+          <StatusPill tone={tone}>{headline}</StatusPill>
+        )}
+        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink">
+          {channel.title}
+        </span>
+        <ArrowRight
+          className="shrink-0 text-ink-3 transition-transform duration-150"
+          size={16}
+        />
+      </button>
+      {detail && (
+        <p className="mt-1.5 truncate text-[12.5px] text-ink-2">{detail}</p>
       )}
-      <span>
-        <strong className={active ? 'is-shimmer' : undefined}>
-          {headline} · {channel.title}
-        </strong>
-        <small>{detail}</small>
-      </span>
-      <ArrowRight size={18} />
-    </button>
+      {active && (
+        <RunTrace
+          active={active}
+          api={api}
+          onOpen={onOpen}
+          {...(progressText ? { progressText } : {})}
+          runId={run.id}
+        />
+      )}
+    </section>
   )
 }
 
@@ -1547,10 +1660,11 @@ export function WorkPage({
         hasPageSearch
         title="所有事情"
       >
-        <label className="page-search">
-          <Search size={17} />
+        <label className="page-search bui flex h-10 min-w-[280px] items-center gap-2 rounded-control bg-field px-3 shadow-hairline transition-shadow duration-150 focus-within:bg-surface focus-within:shadow-[0_0_0_1px_var(--accent)]">
+          <Search className="shrink-0 text-ink-3" size={16} />
           <input
             aria-label="搜索事情"
+            className="min-w-0 flex-1 bg-transparent text-[13px] text-ink outline-none placeholder:text-ink-3"
             onChange={event => setQuery(event.target.value)}
             placeholder="搜索事情或结果"
             type="search"
@@ -1558,8 +1672,12 @@ export function WorkPage({
           />
         </label>
       </PageHeader>
-      <div className="filter-row-wrap" ref={sortMenuRef}>
-        <div className="filter-row" role="group" aria-label="筛选">
+      <div className="filter-row-wrap relative" ref={sortMenuRef}>
+        <div
+          className="filter-row flex items-center gap-2 border-b border-line pb-4"
+          role="group"
+          aria-label="筛选"
+        >
           {(
             [
               ['all', '全部'],
@@ -1569,80 +1687,97 @@ export function WorkPage({
               ['archived', '已归档'],
             ] as const
           ).map(([id, label]) => (
-            <button
+            <Button
               aria-pressed={filter === id}
+              className="h-9 rounded-full px-4 text-[13px] aria-pressed:bg-accent-tint aria-pressed:text-accent-ink"
               key={id}
               onClick={() => setFilter(id)}
+              size="xs"
               type="button"
+              variant="secondary"
             >
               {label}
-            </button>
+            </Button>
           ))}
-          <button
+          <Button
             aria-controls={sortMenuId}
             aria-expanded={sortMenuOpen}
             aria-haspopup="menu"
             aria-label={`排序：${WORK_SORT_LABELS[sort]}`}
-            className="sort-button"
+            className="sort-button ml-auto h-9 rounded-full px-4 text-[13px]"
             onClick={() => setSortMenuOpen(current => !current)}
             ref={sortTriggerRef}
+            size="xs"
             type="button"
+            variant="secondary"
           >
             {WORK_SORT_LABELS[sort]} <ChevronDown size={15} />
-          </button>
+          </Button>
         </div>
         {sortMenuOpen && (
           <div
             aria-label="排序方式"
-            className="sort-menu"
+            className="sort-menu bui absolute right-0 top-[calc(100%+6px)] z-20 min-w-[160px] rounded-card bg-surface p-1 shadow-overlay"
             id={sortMenuId}
             role="menu"
+            style={{
+              animation: 'pop-in 150ms cubic-bezier(0.16,1,0.3,1) both',
+            }}
           >
-            {(
-              [
-                'updated',
-                'created',
-                'ended',
-              ] as const satisfies readonly ChannelSearchSort[]
-            ).map(option => (
-              <button
-                aria-checked={sort === option}
-                key={option}
-                onClick={() => {
-                  setSort(option)
-                  setSortMenuOpen(false)
-                  sortTriggerRef.current?.focus()
-                }}
-                role="menuitemradio"
-                type="button"
-              >
-                {WORK_SORT_LABELS[option]}
-                {sort === option && <Check size={15} />}
-              </button>
-            ))}
+            <GlideMenu className="flex flex-col">
+              {(
+                [
+                  'updated',
+                  'created',
+                  'ended',
+                ] as const satisfies readonly ChannelSearchSort[]
+              ).map(option => (
+                <button
+                  aria-checked={sort === option}
+                  className="relative z-10 flex min-h-[34px] items-center justify-between gap-2 rounded-control px-2.5 py-2 text-left text-[13px] text-ink aria-checked:text-accent-ink"
+                  data-menu-row
+                  key={option}
+                  onClick={() => {
+                    setSort(option)
+                    setSortMenuOpen(false)
+                    sortTriggerRef.current?.focus()
+                  }}
+                  role="menuitemradio"
+                  type="button"
+                >
+                  {WORK_SORT_LABELS[option]}
+                  {sort === option && <Check size={15} />}
+                </button>
+              ))}
+            </GlideMenu>
           </div>
         )}
       </div>
-      <section className="work-list" aria-label="事情列表">
+      <section className="work-list mb-10" aria-label="事情列表">
         {visible.length ? (
           visible.map(channel => {
             const run = latestRunForTask(snapshot.runs, channel.id)
             const state = statusLabel(channel, run)
             return (
               <button
+                className="grid w-full min-h-[78px] grid-cols-[38px_minmax(0,1fr)_auto] items-center gap-2.5 border-b border-line px-3 py-3 text-left transition-colors duration-100 hover:bg-hover min-[521px]:gap-4 min-[521px]:grid-cols-[42px_minmax(160px,1fr)_100px_80px] min-[1121px]:grid-cols-[42px_minmax(180px,1fr)_130px_90px]"
                 key={channel.id}
                 onClick={() =>
                   actions.onOpenDrawer({ kind: 'task', channel, run })
                 }
                 type="button"
               >
-                <span className="work-icon">
+                <span className="work-icon flex size-[38px] items-center justify-center">
                   <PegasAgentIcon iconId={channel.workerIconId} size={38} />
                 </span>
-                <span className="work-copy">
-                  <strong>{channel.title}</strong>
-                  <small>{channel.goal}</small>
-                  <small className="work-context">
+                <span className="work-copy grid min-w-0 gap-[5px]">
+                  <strong className="truncate text-[14px] font-medium text-ink">
+                    {channel.title}
+                  </strong>
+                  <small className="truncate text-[12px] text-ink-2">
+                    {channel.goal}
+                  </small>
+                  <small className="work-context truncate text-[11px] text-ink-3">
                     {run
                       ? [run.executor, run.executionContext?.model]
                           .filter(Boolean)
@@ -1650,8 +1785,10 @@ export function WorkPage({
                       : '尚未分配执行器'}
                   </small>
                 </span>
-                <time>{formatRelativeTime(channel.latestActivityAt)}</time>
-                <span className={`status-text status-${state}`}>{state}</span>
+                <time className="hidden text-[12px] text-ink-3 min-[521px]:block">
+                  {formatRelativeTime(channel.latestActivityAt)}
+                </time>
+                <RowStatusPill label={state} />
               </button>
             )
           })
@@ -1733,21 +1870,22 @@ function UserMessageStatus({
       <span className="message-status">
         <span
           aria-label="发送失败"
-          className="message-status-icon is-failed"
+          className="message-status-icon is-failed inline-flex h-[22px] w-5 items-center justify-center text-red-text"
           role="img"
           title="发送失败"
         >
           <CircleAlert size={14} />
         </span>
-        <button
-          className="message-action is-retry"
+        <Button
+          className="h-[22px] px-1.5 text-[12px]"
           disabled={retrying}
           onClick={onRetry}
-          type="button"
+          size="xs"
+          variant="quiet"
         >
           <RotateCw size={14} />
           {retrying ? '重试中…' : '重试'}
-        </button>
+        </Button>
       </span>
     )
   }
@@ -1757,14 +1895,17 @@ function UserMessageStatus({
       <span className="message-status">
         <span
           aria-label={label}
-          className={`message-status-icon${
+          className={`message-status-icon inline-flex h-[22px] w-5 items-center justify-center text-ink-3${
             message.status === 'processing' ? ' is-processing' : ''
           }`}
           role="img"
           title={label}
         >
           {message.status === 'processing' ? (
-            <LoaderCircle size={14} />
+            <LoaderCircle
+              size={14}
+              style={{ animation: 'spin 900ms linear infinite' }}
+            />
           ) : (
             <Check size={14} />
           )}
@@ -1778,15 +1919,15 @@ function UserMessageStatus({
     const fact = snapshot.messages.find(item => item.id === targetId)
     return (
       <span className="message-status">
-        <button
-          aria-label="查看工作详情"
+        <MetaIconButton
+          accent
           className="message-derived-trigger"
+          label="查看工作详情"
           onClick={() => onOpenTask(fact?.taskId)}
           title="查看工作详情"
-          type="button"
         >
           <Link2 size={14} />
-        </button>
+        </MetaIconButton>
       </span>
     )
   }
@@ -1824,21 +1965,22 @@ function UserMessageStatus({
         aria-expanded={menuOpen}
         aria-haspopup="menu"
         aria-label={`查看工作详情：${String(message.derivedIds.length)} 个事情`}
-        className="message-derived-trigger"
+        className="message-derived-trigger inline-flex h-[22px] items-center justify-center gap-[3px] rounded-[7px] px-1 text-accent-ink transition-colors duration-100 hover:bg-accent-tint"
         onClick={() => setMenuOpen(current => !current)}
         ref={triggerRef}
         title={`查看工作详情 · ${String(message.derivedIds.length)} 个事情`}
         type="button"
       >
         <Link2 size={14} />
-        <span className="message-derived-count">
+        <span className="message-derived-count text-[11px] font-medium leading-none">
           {message.derivedIds.length}
         </span>
       </button>
       {menuOpen && (
         <div
           aria-label="这条消息派生的事情"
-          className="message-derived-menu"
+          className="message-derived-menu bui absolute right-0 top-[calc(100%+6px)] z-20 flex min-w-[250px] flex-col rounded-card bg-surface p-1 shadow-overlay"
+          style={{ animation: 'pop-in 150ms cubic-bezier(0.16,1,0.3,1) both' }}
           id={menuId}
           ref={menuRef}
           role="menu"
@@ -1846,6 +1988,7 @@ function UserMessageStatus({
           {entries.map(entry => (
             <button
               key={entry.id}
+              className="flex items-center justify-between gap-2 rounded-control px-2.5 py-2 text-left text-[13px] text-ink transition-colors duration-100 hover:bg-hover-2"
               onClick={() => {
                 setMenuOpen(false)
                 onOpenTask(entry.taskId)
@@ -1853,13 +1996,11 @@ function UserMessageStatus({
               role="menuitem"
               type="button"
             >
-              <span className="derived-task-name">
+              <span className="derived-task-name inline-flex min-w-0 items-center gap-[7px]">
                 <FileText size={14} />
-                <span>{entry.title}</span>
+                <span className="truncate">{entry.title}</span>
               </span>
-              <span className={`status-text status-${entry.label}`}>
-                {entry.label}
-              </span>
+              <RowStatusPill label={entry.label} />
             </button>
           ))}
         </div>
@@ -1909,6 +2050,23 @@ function attentionTodoIcon(kind: AttentionActionKind): typeof Check {
   if (kind === 'answer') return CircleQuestionMark
   if (kind === 'review') return CheckCircle2
   return ShieldCheck
+}
+
+const attentionIconTones: Record<string, string> = {
+  result: 'bg-green-tint text-green-text',
+  failed: 'bg-red-tint text-red-text',
+  approval: 'bg-accent-tint text-accent-ink',
+  confirm: 'bg-orange-tint text-orange-text',
+  answer: 'bg-accent-tint text-accent-ink',
+  review: 'bg-green-tint text-green-text',
+  reconcile: 'bg-inset text-ink-2',
+}
+
+const attentionKindTones: Record<string, string> = {
+  confirm: 'text-orange-text',
+  answer: 'text-accent-ink',
+  review: 'text-green-text',
+  reconcile: 'text-ink-2',
 }
 
 function attentionDeliveryNote(message: OutboxMessage): string | undefined {
@@ -1998,19 +2156,23 @@ export function AttentionPage({
       <li key={message.id}>
         <article
           aria-labelledby={titleId}
-          className={message.readAt ? 'is-read' : 'is-unread'}
+          className={`grid min-h-[88px] grid-cols-[32px_minmax(0,1fr)] items-start gap-3 border-b border-line px-2.5 py-4 transition-colors duration-100 hover:bg-hover min-[521px]:grid-cols-[32px_minmax(0,1fr)_auto] ${message.readAt ? 'is-read' : 'is-unread'}`}
         >
-          <span className={`attention-icon is-${actionKind}`}>
+          <span
+            className={`attention-icon is-${actionKind} mt-0.5 flex size-8 items-center justify-center rounded-card ${attentionIconTones[actionKind] ?? 'bg-orange-tint text-orange-text'}`}
+          >
             <TodoIcon size={18} />
           </span>
-          <div className="attention-copy">
-            <div className="attention-heading">
-              <span className={`attention-kind is-${actionKind}`}>
+          <div className="attention-copy grid min-w-0 gap-1.5">
+            <div className="attention-heading flex min-w-0 items-baseline gap-2.5">
+              <span
+                className={`attention-kind is-${actionKind} shrink-0 text-[12px] font-medium leading-[1.4] ${attentionKindTones[actionKind] ?? 'text-orange-text'}`}
+              >
                 {attentionTodoLabel(actionKind)}
               </span>
-              <h2>
+              <h2 className="m-0 min-w-0 text-[14px] font-medium">
                 <button
-                  className="attention-title"
+                  className="attention-title line-clamp-2 min-h-0 cursor-pointer p-0 text-left text-[14px] font-medium leading-[1.45] text-ink [overflow-wrap:anywhere] transition-colors duration-100 hover:text-accent-ink"
                   id={titleId}
                   onClick={() => {
                     void onOpen(message)
@@ -2022,10 +2184,17 @@ export function AttentionPage({
               </h2>
             </div>
             {summary.preview && (
-              <p className="attention-preview">{summary.preview}</p>
+              <p className="attention-preview line-clamp-1 m-0 text-[13px] leading-normal text-ink-2 [overflow-wrap:anywhere]">
+                {summary.preview}
+              </p>
             )}
-            <div className="attention-meta">
-              <span className="attention-read-state">
+            <div className="attention-meta flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-[12px] leading-[1.4] text-ink-2">
+              <span
+                className={`attention-read-state inline-flex items-center gap-1.5 ${message.readAt ? '' : 'font-medium text-ink'}`}
+              >
+                {!message.readAt && (
+                  <span className="size-1.5 rounded-full bg-accent" />
+                )}
                 {message.readAt ? '已读' : '未读'}
               </span>
               <span>来自：{source}</span>
@@ -2033,21 +2202,25 @@ export function AttentionPage({
                 {formatRelativeTime(message.createdAt)}
               </time>
               {deliveryNote && (
-                <span className="attention-delivery-note">{deliveryNote}</span>
+                <span className="attention-delivery-note text-orange-text">
+                  {deliveryNote}
+                </span>
               )}
             </div>
           </div>
-          <button
+          <Button
             aria-label={`${action.label}：${summary.title}`}
-            className="attention-action"
+            className="attention-action col-start-2 h-9 justify-self-end rounded-control px-3 text-[13px] min-[521px]:col-start-3 min-[521px]:self-center"
             onClick={() => {
               void onOpen(message)
             }}
+            size="sm"
             type="button"
+            variant="secondary"
           >
             <Icon size={15} />
             {action.label}
-          </button>
+          </Button>
         </article>
       </li>
     )
@@ -2074,6 +2247,7 @@ export function AttentionPage({
         <article
           aria-labelledby={titleId}
           className={[
+            'grid min-h-[88px] grid-cols-[32px_minmax(0,1fr)] items-start gap-3 border-b border-line px-2.5 py-4 transition-colors duration-100 hover:bg-hover min-[521px]:grid-cols-[32px_minmax(0,1fr)_auto]',
             group.unreadCount > 0 ? 'is-unread' : 'is-read',
             isExpanded ? 'is-expanded' : '',
           ]
@@ -2081,16 +2255,16 @@ export function AttentionPage({
             .join(' ')}
         >
           <span
-            className={`attention-icon ${isFailed ? 'is-failed' : 'is-result'}`}
+            className={`attention-icon mt-0.5 flex size-8 items-center justify-center rounded-card ${isFailed ? 'is-failed bg-red-tint text-red-text' : 'is-result bg-green-tint text-green-text'}`}
           >
             {isFailed ? <CircleAlert size={18} /> : <CheckCircle2 size={18} />}
           </span>
-          <div className="attention-copy">
-            <div className="attention-heading">
-              <h2>
+          <div className="attention-copy grid min-w-0 gap-1.5">
+            <div className="attention-heading flex min-w-0 items-baseline gap-2.5">
+              <h2 className="m-0 min-w-0 text-[14px] font-medium">
                 <button
                   aria-expanded={isExpanded}
-                  className="attention-title"
+                  className="attention-title line-clamp-2 min-h-0 cursor-pointer p-0 text-left text-[14px] font-medium leading-[1.45] text-ink [overflow-wrap:anywhere] transition-colors duration-100 hover:text-accent-ink"
                   id={titleId}
                   onClick={() => toggleExpanded(group.key)}
                   type="button"
@@ -2099,9 +2273,9 @@ export function AttentionPage({
                 </button>
               </h2>
             </div>
-            <p className="attention-preview">
+            <p className="attention-preview line-clamp-1 m-0 text-[13px] leading-normal text-ink-2 [overflow-wrap:anywhere]">
               <button
-                className="attention-latest"
+                className="attention-latest block w-full cursor-pointer p-0 text-left text-[13px] leading-normal text-ink-2 transition-colors duration-100 hover:text-accent-ink hover:underline"
                 onClick={() => {
                   void onOpen(group.latest)
                 }}
@@ -2110,39 +2284,42 @@ export function AttentionPage({
                 最新：{latestSummary.title}
               </button>
             </p>
-            <div className="attention-meta">
+            <div className="attention-meta flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-[12px] leading-[1.4] text-ink-2">
               {group.taskId && <span>来自：{source}</span>}
               <time dateTime={group.latest.createdAt}>
                 {formatRelativeTime(group.latest.createdAt)}
               </time>
               {group.unreadCount === 0 && <span>已读</span>}
               {attentionDeliveryNote(group.latest) && (
-                <span className="attention-delivery-note">
+                <span className="attention-delivery-note text-orange-text">
                   {attentionDeliveryNote(group.latest)}
                 </span>
               )}
             </div>
             {isExpanded && (
-              <div className="attention-group-timeline">
-                <ul role="list">
+              <div className="attention-group-timeline mt-1.5 border-t border-line pt-1.5">
+                <ul className="m-0 list-none p-0" role="list">
                   {visibleTimeline.map(message => {
                     const summary = attentionSummary(message)
                     return (
                       <li key={message.id}>
                         <button
-                          className="attention-group-entry"
+                          className="attention-group-entry flex min-h-9 w-full cursor-pointer items-center gap-2.5 rounded-control px-2 py-1 text-left text-ink-2 transition-colors duration-100 hover:bg-inset hover:text-ink"
                           onClick={() => {
                             void onOpen(message)
                           }}
                           type="button"
                         >
                           <span
-                            className={`attention-group-entry-dot${message.readAt ? '' : ' is-unread'}`}
+                            className={`attention-group-entry-dot size-1.5 shrink-0 rounded-full ${message.readAt ? 'bg-line-strong' : 'is-unread bg-accent'}`}
                           />
-                          <span className="attention-group-entry-title">
+                          <span className="attention-group-entry-title line-clamp-1 min-w-0 flex-1 text-[13px] leading-normal [overflow-wrap:anywhere]">
                             {summary.title}
                           </span>
-                          <time dateTime={message.createdAt}>
+                          <time
+                            className="shrink-0 text-[12px] text-ink-2"
+                            dateTime={message.createdAt}
+                          >
                             {formatRelativeTime(message.createdAt)}
                           </time>
                         </button>
@@ -2151,45 +2328,53 @@ export function AttentionPage({
                   })}
                 </ul>
                 {(expandedAll || timeline.length > 3) && (
-                  <button
-                    className="attention-group-more"
+                  <Button
+                    className="attention-group-more mx-auto mt-1 flex h-8 px-3 text-[12px] text-accent-ink"
                     onClick={() => toggleShowAll(group.key)}
+                    size="xs"
                     type="button"
+                    variant="quiet"
                   >
                     {expandedAll
                       ? '收起更早通知'
                       : `查看全部 ${String(group.messages.length)} 条`}
-                  </button>
+                  </Button>
                 )}
               </div>
             )}
           </div>
-          <div className="attention-group-side">
-            <span
-              className={`attention-count${isFailed ? ' is-failed' : ''}${group.unreadCount > 0 ? ' is-unread' : ''}`}
+          <div className="attention-group-side col-start-2 flex flex-wrap items-center justify-end gap-2 min-[521px]:col-start-3 min-[521px]:flex-nowrap min-[521px]:self-center">
+            <StatusPill
+              className={`attention-count h-auto px-2.5 py-[3px] text-[12px] font-normal leading-[1.4] whitespace-nowrap${isFailed ? ' is-failed' : ''}${group.unreadCount > 0 ? ' is-unread font-medium text-ink' : ''}`}
+              dot={false}
+              tone={isFailed ? 'red' : 'neutral'}
             >
               {unreadLabel}
-            </span>
-            <button
+            </StatusPill>
+            <Button
               aria-label={`${isExpanded ? '收起' : '展开'}：${groupTitle}`}
               aria-expanded={isExpanded}
-              className="attention-toggle"
+              className="attention-toggle size-8 rounded-control p-0 text-ink-2"
               onClick={() => toggleExpanded(group.key)}
+              size="xs"
               type="button"
+              variant="quiet"
             >
               {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-            </button>
-            <button
+            </Button>
+            <Button
               aria-label={`${action.label}：${groupTitle}`}
-              className="attention-action"
+              className="attention-action h-9 rounded-control px-3 text-[13px]"
               onClick={() => {
                 void onOpen(group.latest)
               }}
+              size="sm"
               type="button"
+              variant="secondary"
             >
               <ActionIcon size={15} />
               {action.label}
-            </button>
+            </Button>
           </div>
         </article>
       </li>
@@ -2207,10 +2392,11 @@ export function AttentionPage({
         hasPageSearch
         title="待你处理"
       >
-        <label className="page-search">
-          <Search size={17} />
+        <label className="page-search bui flex h-10 min-w-[280px] items-center gap-2 rounded-control bg-field px-3 shadow-hairline transition-shadow duration-150 focus-within:bg-surface focus-within:shadow-[0_0_0_1px_var(--accent)]">
+          <Search className="shrink-0 text-ink-3" size={16} />
           <input
             aria-label="搜索待处理内容"
+            className="min-w-0 flex-1 bg-transparent text-[13px] text-ink outline-none placeholder:text-ink-3"
             onChange={event => {
               setQuery(event.target.value)
               setPage(1)
@@ -2222,7 +2408,7 @@ export function AttentionPage({
         </label>
       </PageHeader>
       <div
-        className="filter-row attention-filters"
+        className="filter-row attention-filters flex items-center gap-2 overflow-x-auto border-b border-line pb-4"
         role="group"
         aria-label="筛选"
       >
@@ -2234,8 +2420,9 @@ export function AttentionPage({
             ['activity', '事情动态'],
           ] as const
         ).map(([id, label]) => (
-          <button
+          <Button
             aria-pressed={filter === id}
+            className="h-9 shrink-0 rounded-full px-4 text-[13px] aria-pressed:bg-accent-tint aria-pressed:text-accent-ink"
             key={id}
             onClick={event => {
               setFilter(id)
@@ -2246,87 +2433,104 @@ export function AttentionPage({
                   inline: 'nearest',
                 })
             }}
+            size="xs"
             type="button"
+            variant="secondary"
           >
             {label} {counts[id]}
-          </button>
+          </Button>
         ))}
       </div>
-      <section className="attention-list" aria-label="待处理列表">
+      <section className="attention-list mb-10" aria-label="待处理列表">
         {hasVisible ? (
           <>
             {(filter === 'all' || filter === 'todo') &&
               visibleTodo.length > 0 && (
-                <div className="attention-section">
-                  <h3 className="attention-section-title">
+                <div className="attention-section mt-6 first:mt-0">
+                  <h3 className="attention-section-title mb-1 flex items-baseline gap-2.5 text-[14px] font-medium text-ink">
                     待你处理
-                    <small>需要你确认、回答、验收或核对</small>
+                    <small className="text-[12px] font-normal text-ink-3">
+                      需要你确认、回答、验收或核对
+                    </small>
                   </h3>
-                  <ul className="attention-items" role="list">
+                  <ul className="attention-items m-0 list-none p-0" role="list">
                     {visibleTodo.map(renderTodoRow)}
                   </ul>
                 </div>
               )}
             {(filter === 'all' || filter === 'failed') &&
               visibleFailed.length > 0 && (
-                <div className="attention-section">
-                  <h3 className="attention-section-title">
+                <div className="attention-section mt-6 first:mt-0">
+                  <h3 className="attention-section-title mb-1 flex items-baseline gap-2.5 text-[14px] font-medium text-ink">
                     失败
-                    <small>同一事情的失败已合并</small>
+                    <small className="text-[12px] font-normal text-ink-3">
+                      同一事情的失败已合并
+                    </small>
                   </h3>
-                  <ul className="attention-items" role="list">
+                  <ul className="attention-items m-0 list-none p-0" role="list">
                     {visibleFailed.map(renderGroupRow)}
                   </ul>
                 </div>
               )}
             {(filter === 'all' || filter === 'activity') &&
               visibleActivity.length > 0 && (
-                <div className="attention-section">
-                  <h3 className="attention-section-title">
+                <div className="attention-section mt-6 first:mt-0">
+                  <h3 className="attention-section-title mb-1 flex items-baseline gap-2.5 text-[14px] font-medium text-ink">
                     事情动态
-                    <small>同一事情的通知已合并，最新在上</small>
+                    <small className="text-[12px] font-normal text-ink-3">
+                      同一事情的通知已合并，最新在上
+                    </small>
                   </h3>
-                  <ul className="attention-items" role="list">
+                  <ul className="attention-items m-0 list-none p-0" role="list">
                     {activityPage.groups.map(renderGroupRow)}
                   </ul>
                   {activityPage.pageCount > 1 && (
                     <nav
                       aria-label="事情动态分页"
-                      className="pagination attention-pagination"
+                      className="pagination attention-pagination mt-0 flex items-center gap-2 border-t border-line pt-3"
                     >
-                      <span>
+                      <span className="flex-1 text-[11px] text-ink-2">
                         第 {activityPage.rangeStart}–{activityPage.rangeEnd}{' '}
                         件事情，共 {visibleActivity.length} 件
                       </span>
-                      <button
+                      <Button
+                        className="h-[30px] rounded-control px-3 text-[13px]"
                         disabled={activityPage.page <= 1}
                         onClick={() => setPage(activityPage.page - 1)}
+                        size="sm"
                         type="button"
+                        variant="secondary"
                       >
                         上一页
-                      </button>
+                      </Button>
                       {Array.from(
                         { length: activityPage.pageCount },
                         (_, index) => index + 1,
                       ).map(candidate => (
-                        <button
+                        <Button
                           aria-current={
                             candidate === activityPage.page ? 'page' : undefined
                           }
+                          className="h-[30px] min-w-[30px] rounded-control px-2 text-[13px] aria-[current=page]:text-accent-ink aria-[current=page]:shadow-[0_0_0_1px_var(--accent)]"
                           key={candidate}
                           onClick={() => setPage(candidate)}
+                          size="sm"
                           type="button"
+                          variant="secondary"
                         >
                           {candidate}
-                        </button>
+                        </Button>
                       ))}
-                      <button
+                      <Button
+                        className="h-[30px] rounded-control px-3 text-[13px]"
                         disabled={activityPage.page >= activityPage.pageCount}
                         onClick={() => setPage(activityPage.page + 1)}
+                        size="sm"
                         type="button"
+                        variant="secondary"
                       >
                         下一页
-                      </button>
+                      </Button>
                     </nav>
                   )}
                 </div>
@@ -2504,44 +2708,56 @@ export function AutomationPage({
         description="让 Pegas 在合适的时候自动开始"
         title="自动化"
       >
-        <button
-          className="primary-button page-header-action"
+        <Button
+          className="page-header-action h-9 px-4 text-[13px]"
           onClick={() => setForm({ mode: 'create' })}
+          size="sm"
           type="button"
+          variant="primary"
         >
           <Plus size={16} />
           新建自动化
-        </button>
+        </Button>
       </PageHeader>
-      <div className="metric-strip">
-        <span>
+      <div className="metric-strip mb-9 flex overflow-x-auto rounded-card border border-line p-4">
+        <span className="flex shrink-0 items-center gap-2 border-r border-line px-4 text-green-text first:pl-0 sm:px-8">
           <Check size={17} />
           已启用 <b>{activeCount}</b>
         </span>
-        <span>
+        <span className="flex shrink-0 items-center gap-2 border-r border-line px-4 text-orange-text sm:px-8">
           <PauseCircle size={17} />
           已暂停 <b>{pausedCount}</b>
         </span>
-        <span>
+        <span className="flex shrink-0 items-center gap-2 px-4 text-ink-2 sm:px-8">
           <CircleAlert size={17} />
           已结束 <b>{endedCount}</b>
         </span>
       </div>
       {error && (
-        <div className="page-error" role="alert">
+        <div
+          className="mb-4 flex items-center gap-2.5 rounded-card border border-red bg-red-tint px-3.5 py-2.5 text-[13px] text-red-text"
+          role="alert"
+        >
           {error}
-          <button className="inline-link" onClick={onReload} type="button">
+          <button
+            className="mt-0 inline-flex items-center gap-[5px] font-medium text-inherit"
+            onClick={onReload}
+            type="button"
+          >
             重试
           </button>
         </div>
       )}
       {actionError && (
-        <div className="page-error" role="alert">
+        <div
+          className="mb-4 flex items-center gap-2.5 rounded-card border border-red bg-red-tint px-3.5 py-2.5 text-[13px] text-red-text"
+          role="alert"
+        >
           {actionError}
         </div>
       )}
       {!automations && !error && (
-        <p className="page-loading">正在读取自动化…</p>
+        <p className="my-6 text-ink-2">正在读取自动化…</p>
       )}
       {automations?.length === 0 && !error && (
         <EmptyCapability
@@ -2551,8 +2767,8 @@ export function AutomationPage({
         />
       )}
       {automations && automations.length > 0 && (
-        <div className="automation-lists">
-          <section className="record-list" aria-label="自动化列表">
+        <div className="automation-lists mb-10 [&_.record-list]:mb-0">
+          <section className="record-list mb-10" aria-label="自动化列表">
             {sortLiveAutomations(
               hasLiveAutomations(automations)
                 ? automations.filter(item => !isEndedAutomation(item))
@@ -2591,19 +2807,24 @@ export function AutomationPage({
             ))}
           </section>
           {hasLiveAutomations(automations) && endedCount > 0 && (
-            <section className="automation-ended" aria-label="已结束的自动化">
-              <button
+            <section
+              className="automation-ended mt-3"
+              aria-label="已结束的自动化"
+            >
+              <Button
                 aria-expanded={showEnded}
-                className="quiet-button automation-ended-toggle"
+                className="automation-ended-toggle mb-1 ml-2.5 h-8 px-3 text-[13px] text-ink-2"
                 onClick={() => setShowEnded(current => !current)}
+                size="xs"
                 type="button"
+                variant="quiet"
               >
                 <ChevronDown
-                  className={showEnded ? 'is-open' : undefined}
+                  className={`transition-transform duration-150 ${showEnded ? 'rotate-180' : ''}`}
                   size={15}
                 />
                 已结束 {endedCount}
-              </button>
+              </Button>
               {showEnded && (
                 <div className="record-list">
                   {sortEndedAutomations(
@@ -2751,23 +2972,34 @@ function AutomationRow({
 }) {
   const promptRegionId = useId()
   return (
-    <article key={automation.id}>
-      <span className={`record-icon is-${automation.status}`}>
+    <article
+      key={automation.id}
+      className="grid grid-cols-[34px_minmax(0,1fr)] items-start gap-3.5 border-b border-line px-2.5 py-4 min-[821px]:grid-cols-[40px_minmax(0,1fr)_auto]"
+    >
+      <span
+        className={`record-icon is-${automation.status} flex size-[38px] items-center justify-center rounded-full ${
+          automation.status === 'active'
+            ? 'bg-accent-tint text-accent-ink'
+            : automation.status === 'paused'
+              ? 'bg-orange-tint text-orange-text'
+              : 'bg-inset text-ink-2'
+        }`}
+      >
         <Zap size={18} />
       </span>
-      <div className="record-copy">
-        <div className="record-title">
-          <strong>{automation.title}</strong>
-          <span
-            className={`status-text status-${automationStatusLabel(automation.status)}`}
-          >
-            {automationStatusLabel(automation.status)}
+      <div className="record-copy grid min-w-0 gap-[5px]">
+        <div className="record-title flex items-baseline justify-between gap-3">
+          <strong className="text-[14px] [overflow-wrap:anywhere]">
+            {automation.title}
+          </strong>
+          <span className="status-text shrink-0">
+            <RowStatusPill label={automationStatusLabel(automation.status)} />
           </span>
         </div>
-        <p className="automation-summary">
+        <p className="automation-summary line-clamp-1 m-0 text-[13px] text-ink-2 [overflow-wrap:anywhere]">
           {automationPromptSummary(automation.prompt)}
         </p>
-        <small className="record-meta">
+        <small className="record-meta text-[12px] text-ink-2 [overflow-wrap:anywhere]">
           {describeSchedule(automation)} ·{' '}
           {automation.target.kind === 'new_task'
             ? '每次创建新事情'
@@ -2789,127 +3021,155 @@ function AutomationRow({
             : ''}
         </small>
         {promptOpen && (
-          <pre className="automation-prompt" id={promptRegionId}>
+          <pre
+            className="automation-prompt mt-1 max-h-[320px] overflow-auto rounded-card bg-inset px-3.5 py-3 font-sans text-[13px] leading-[1.65] whitespace-pre-wrap text-ink-2 [overflow-wrap:anywhere]"
+            id={promptRegionId}
+          >
             {automation.prompt}
           </pre>
         )}
       </div>
-      <div className="record-actions">
-        <button
+      <div className="record-actions col-span-full flex flex-wrap items-center justify-start gap-2 min-[821px]:col-start-2 min-[821px]:justify-end">
+        <Button
           aria-controls={promptRegionId}
           aria-expanded={promptOpen}
-          className="quiet-button"
+          className="h-8 px-3 text-[13px] text-ink-2"
           onClick={onTogglePrompt}
+          size="xs"
           type="button"
+          variant="quiet"
         >
           {promptOpen ? '收起指令' : '查看指令'}
-        </button>
-        <button
+        </Button>
+        <Button
           aria-expanded={historyId === automation.id}
-          className="quiet-button"
+          className="h-8 px-3 text-[13px] text-ink-2"
           onClick={() => void onToggleHistory(automation)}
+          size="xs"
           type="button"
+          variant="quiet"
         >
           触发记录
-        </button>
+        </Button>
         {(automation.status === 'active' || automation.status === 'paused') && (
-          <button
-            className="secondary-button"
+          <Button
+            className="h-8 px-3.5 text-[13px]"
             disabled={busyId === automation.id}
             onClick={onEdit}
+            size="xs"
             type="button"
+            variant="secondary"
           >
             编辑
-          </button>
+          </Button>
         )}
         {automation.status === 'active' && (
-          <button
-            className="secondary-button"
+          <Button
+            className="h-8 px-3.5 text-[13px]"
             disabled={busyId === automation.id}
             onClick={() => void onRunStatus(automation, 'pause')}
+            size="xs"
             type="button"
+            variant="secondary"
           >
             暂停
-          </button>
+          </Button>
         )}
         {automation.status === 'paused' && (
-          <button
-            className="secondary-button"
+          <Button
+            className="h-8 px-3.5 text-[13px]"
             disabled={busyId === automation.id}
             onClick={() => void onRunStatus(automation, 'resume')}
+            size="xs"
             type="button"
+            variant="secondary"
           >
             恢复
-          </button>
+          </Button>
         )}
         {(automation.status === 'active' || automation.status === 'paused') &&
           (confirmCancelId === automation.id ? (
             <>
-              <button
-                className="danger-button"
+              <Button
+                className="h-8 px-3.5 text-[13px]"
                 disabled={busyId === automation.id}
                 onClick={() => void onRunStatus(automation, 'cancel')}
+                size="xs"
                 type="button"
+                variant="danger"
               >
                 确认结束
-              </button>
-              <button
-                className="quiet-button"
+              </Button>
+              <Button
+                className="h-8 px-3 text-[13px] text-ink-2"
                 onClick={onCancelConfirm}
+                size="xs"
                 type="button"
+                variant="quiet"
               >
                 保留
-              </button>
+              </Button>
             </>
           ) : (
-            <button
-              className="quiet-button"
+            <Button
+              className="h-8 px-3 text-[13px] text-ink-2"
               disabled={busyId === automation.id}
               onClick={onConfirmCancel}
+              size="xs"
               type="button"
+              variant="quiet"
             >
               结束
-            </button>
+            </Button>
           ))}
         {isEndedAutomation(automation) &&
           onDelete &&
           (confirmDeleteId === automation.id ? (
             <>
-              <button
-                className="danger-button"
+              <Button
+                className="h-8 px-3.5 text-[13px]"
                 disabled={busyId === automation.id}
                 onClick={() => void onDelete()}
+                size="xs"
                 type="button"
+                variant="danger"
               >
                 确认删除
-              </button>
-              <button
-                className="quiet-button"
+              </Button>
+              <Button
+                className="h-8 px-3 text-[13px] text-ink-2"
                 onClick={onCancelDelete}
+                size="xs"
                 type="button"
+                variant="quiet"
               >
                 保留
-              </button>
+              </Button>
             </>
           ) : (
-            <button
-              className="quiet-button"
+            <Button
+              className="h-8 px-3 text-[13px] text-ink-2"
               disabled={busyId === automation.id}
               onClick={onConfirmDelete}
+              size="xs"
               type="button"
+              variant="quiet"
             >
               删除
-            </button>
+            </Button>
           ))}
       </div>
       {historyId === automation.id && (
-        <div className="record-history">
+        <div className="record-history col-span-full rounded-card bg-inset px-3.5 py-2.5 text-ink-2 min-[821px]:col-start-2">
           {historyLoading && <small>正在读取触发记录…</small>}
           {historyError && (
-            <small className="record-history-error" role="alert">
+            <small
+              className="record-history-error flex items-center gap-2 text-red-text"
+              role="alert"
+            >
               {historyError}
               <button
-                className="inline-link"
+                className="mt-0 inline-flex items-center gap-[5px] font-medium text-accent-ink"
                 onClick={() => void onToggleHistory(automation)}
                 type="button"
               >
@@ -2922,17 +3182,25 @@ function AutomationRow({
             invocations &&
             (invocations.length ? (
               <>
-                <ul aria-label="触发记录">
+                <ul
+                  className="m-0 grid list-none gap-2 p-0"
+                  aria-label="触发记录"
+                >
                   {invocations.map(invocation => {
                     const invocationChannel = invocation.taskId
                       ? channels.find(item => item.id === invocation.taskId)
                       : undefined
                     return (
-                      <li key={invocation.id}>
+                      <li
+                        key={invocation.id}
+                        className="flex flex-wrap items-baseline gap-2.5 text-[13px]"
+                      >
                         <span
                           className={`invocation-status is-${invocation.status}`}
                         >
-                          {invocationStatusLabel(invocation.status)}
+                          <RowStatusPill
+                            label={invocationStatusLabel(invocation.status)}
+                          />
                         </span>
                         <span>
                           计划 {formatDateTime(invocation.scheduledFor)}
@@ -2941,18 +3209,18 @@ function AutomationRow({
                           <span>尝试 {invocation.attempts} 次</span>
                         )}
                         {invocation.summary && (
-                          <span className="invocation-summary">
+                          <span className="invocation-summary min-w-0 flex-[1_1_160px] truncate text-ink">
                             {invocation.summary}
                           </span>
                         )}
                         {invocation.lastError && (
-                          <span className="invocation-error">
+                          <span className="invocation-error text-red-text [overflow-wrap:anywhere]">
                             {invocation.lastError}
                           </span>
                         )}
                         {invocationChannel && onOpenChannel && (
                           <button
-                            className="inline-link"
+                            className="mt-0 inline-flex items-center gap-[5px] font-medium text-accent-ink"
                             onClick={() => onOpenChannel(invocationChannel)}
                             type="button"
                           >
@@ -2964,10 +3232,13 @@ function AutomationRow({
                   })}
                 </ul>
                 {historyMoreError && (
-                  <small className="record-history-error" role="alert">
+                  <small
+                    className="record-history-error mt-2 flex items-center gap-2 text-red-text"
+                    role="alert"
+                  >
                     {historyMoreError}
                     <button
-                      className="inline-link"
+                      className="mt-0 inline-flex items-center gap-[5px] font-medium text-accent-ink"
                       onClick={() => void onLoadMoreHistory(automation)}
                       type="button"
                     >
@@ -2976,15 +3247,17 @@ function AutomationRow({
                   </small>
                 )}
                 {historyCursor && (
-                  <div className="history-more">
-                    <button
-                      className="quiet-button"
+                  <div className="history-more mt-2.5 flex justify-center">
+                    <Button
+                      className="h-8 px-3 text-[13px] text-ink-2"
                       disabled={historyLoadingMore}
                       onClick={() => void onLoadMoreHistory(automation)}
+                      size="xs"
                       type="button"
+                      variant="quiet"
                     >
                       {historyLoadingMore ? '正在加载…' : '加载更多'}
-                    </button>
+                    </Button>
                   </div>
                 )}
               </>
@@ -3049,46 +3322,65 @@ export function MemoryPage({
         description="查看、修改或删除 Pegas 记住的内容"
         title="记忆"
       >
-        <button
-          className="primary-button page-header-action"
+        <Button
+          className="page-header-action h-9 px-4 text-[13px]"
           onClick={() => setForm({ mode: 'create' })}
+          size="sm"
           type="button"
+          variant="primary"
         >
           <Plus size={16} />
           添加记忆
-        </button>
+        </Button>
       </PageHeader>
-      <div className="filter-row" role="group" aria-label="筛选">
+      <div
+        className="filter-row flex items-center gap-2 overflow-x-auto border-b border-line pb-4"
+        role="group"
+        aria-label="筛选"
+      >
         {memoryScopes.map(scope => (
-          <button
+          <Button
             aria-pressed={filter === scope.id}
+            className="h-9 shrink-0 rounded-full px-4 text-[13px] aria-pressed:bg-accent-tint aria-pressed:text-accent-ink"
             key={scope.id}
             onClick={() => setFilter(scope.id)}
+            size="xs"
             type="button"
+            variant="secondary"
           >
             {scope.label}
-          </button>
+          </Button>
         ))}
       </div>
       {truncated && (
-        <p className="field-hint">
+        <p className="text-[12px] leading-[1.6] text-ink-2">
           仅显示最近的一部分记忆；完整列表以服务端为准。
         </p>
       )}
       {error && (
-        <div className="page-error" role="alert">
+        <div
+          className="mb-4 flex items-center gap-2.5 rounded-card border border-red bg-red-tint px-3.5 py-2.5 text-[13px] text-red-text"
+          role="alert"
+        >
           {error}
-          <button className="inline-link" onClick={onReload} type="button">
+          <button
+            className="mt-0 inline-flex items-center gap-[5px] font-medium text-inherit"
+            onClick={onReload}
+            type="button"
+          >
             重试
           </button>
         </div>
       )}
       {actionError && (
-        <div className="page-error" role="alert">
+        <div
+          className="mb-4 flex items-center gap-2.5 rounded-card border border-red bg-red-tint px-3.5 py-2.5 text-[13px] text-red-text"
+          role="alert"
+        >
           {actionError}
         </div>
       )}
-      {!memories && !error && <p className="page-loading">正在读取记忆…</p>}
+      {!memories && !error && <p className="my-6 text-ink-2">正在读取记忆…</p>}
       {memories && visible.length === 0 && !error && (
         <EmptyCapability
           icon={Layers3}
@@ -3101,15 +3393,20 @@ export function MemoryPage({
         />
       )}
       {memories && visible.length > 0 && (
-        <section className="record-list" aria-label="记忆列表">
+        <section className="record-list mb-10" aria-label="记忆列表">
           {visible.map(memory => (
-            <article key={memory.id}>
-              <span className="record-icon is-active">
+            <article
+              key={memory.id}
+              className="grid grid-cols-[34px_minmax(0,1fr)] items-start gap-3.5 border-b border-line px-2.5 py-4 min-[821px]:grid-cols-[40px_minmax(0,1fr)_auto]"
+            >
+              <span className="record-icon is-active flex size-[38px] items-center justify-center rounded-full bg-accent-tint text-accent-ink">
                 <Layers3 size={18} />
               </span>
-              <div className="record-copy">
-                <strong>{memory.content}</strong>
-                <small className="record-meta">
+              <div className="record-copy grid min-w-0 gap-[5px]">
+                <strong className="text-[14px] [overflow-wrap:anywhere]">
+                  {memory.content}
+                </strong>
+                <small className="record-meta text-[12px] text-ink-2 [overflow-wrap:anywhere]">
                   {memoryScopeLabel(memory.scope)}
                   {memory.taskId
                     ? ` · ${
@@ -3122,50 +3419,58 @@ export function MemoryPage({
                     ? '来源：用户确认'
                     : `来源：${memory.source.kind}`}
                 </small>
-                <small className="record-meta">
+                <small className="record-meta text-[12px] text-ink-2 [overflow-wrap:anywhere]">
                   更新于 {formatRelativeTime(memory.updatedAt)}
                   {memory.lastUsedAt
                     ? ` · 最近使用 ${formatRelativeTime(memory.lastUsedAt)}`
                     : ''}
                 </small>
               </div>
-              <div className="record-actions">
-                <button
-                  className="secondary-button"
+              <div className="record-actions col-span-full flex flex-wrap items-center justify-start gap-2 min-[821px]:col-start-2 min-[821px]:justify-end">
+                <Button
+                  className="h-8 px-3.5 text-[13px]"
                   disabled={busyId === memory.id}
                   onClick={() => setForm({ mode: 'edit', memory })}
+                  size="xs"
                   type="button"
+                  variant="secondary"
                 >
                   编辑
-                </button>
+                </Button>
                 {confirmDeleteId === memory.id ? (
                   <>
-                    <button
-                      className="danger-button"
+                    <Button
+                      className="h-8 px-3.5 text-[13px]"
                       disabled={busyId === memory.id}
                       onClick={() => void runDelete(memory)}
+                      size="xs"
                       type="button"
+                      variant="danger"
                     >
                       确认删除
-                    </button>
-                    <button
-                      className="quiet-button"
+                    </Button>
+                    <Button
+                      className="h-8 px-3 text-[13px] text-ink-2"
                       onClick={() => setConfirmDeleteId(undefined)}
+                      size="xs"
                       type="button"
+                      variant="quiet"
                     >
                       保留
-                    </button>
+                    </Button>
                   </>
                 ) : (
-                  <button
-                    className="quiet-button"
+                  <Button
+                    className="h-8 px-3 text-[13px] text-ink-2"
                     disabled={busyId === memory.id}
                     onClick={() => setConfirmDeleteId(memory.id)}
+                    size="xs"
                     type="button"
+                    variant="quiet"
                   >
                     <Trash2 size={15} />
                     删除
-                  </button>
+                  </Button>
                 )}
               </div>
             </article>
@@ -3285,18 +3590,6 @@ function AutomationForm({
   )
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
-  const dialogRef = useRef<HTMLElement>(null)
-  useEffect(() => {
-    dialogRef.current?.focus()
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        onCancel()
-      }
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [onCancel])
   async function submit() {
     if (saving) return
     if (!title.trim() || !prompt.trim()) {
@@ -3339,122 +3632,146 @@ function AutomationForm({
     }
   }
   return (
-    <div
-      className="modal-backdrop"
-      onMouseDown={event => event.target === event.currentTarget && onCancel()}
-    >
-      <section
+    <Dialog open onOpenChange={open => !open && onCancel()}>
+      <DialogContent
         aria-label={draft ? '编辑自动化' : '新建自动化'}
-        aria-modal="true"
-        className="command-dialog record-form"
-        ref={dialogRef}
-        role="dialog"
-        tabIndex={-1}
+        aria-describedby={undefined}
+        className="record-form flex max-h-[min(720px,86dvh)] w-[min(560px,calc(100vw-32px))] flex-col p-0"
       >
-        <header className="record-form-header">
-          <h2>{draft ? '编辑自动化' : '新建自动化'}</h2>
-          <button aria-label="关闭" onClick={onCancel} type="button">
-            <X size={18} />
-          </button>
+        <header className="record-form-header flex items-center justify-between border-b border-line px-4.5 py-3.5">
+          <DialogTitle>{draft ? '编辑自动化' : '新建自动化'}</DialogTitle>
         </header>
-        <div className="record-form-body">
+        <div className="record-form-body overflow-auto px-4.5 py-4">
           {error && (
-            <div className="page-error" role="alert">
+            <div
+              className="mb-4 flex items-center gap-2.5 rounded-card border border-red bg-red-tint px-3.5 py-2.5 text-[13px] text-red-text"
+              role="alert"
+            >
               {error}
             </div>
           )}
-          <label className="field-label">
-            名称
-            <input
+          <FormField className="my-3.5" label="名称">
+            <TextInput
               onChange={event => setTitle(event.target.value)}
               value={title}
             />
-          </label>
-          <label className="field-label">
-            意图
-            <textarea
+          </FormField>
+          <FormField className="my-3.5" label="意图">
+            <TextArea
               onChange={event => setPrompt(event.target.value)}
               rows={3}
               value={prompt}
             />
-          </label>
-          <label className="field-label">
-            触发方式
-            <select
-              onChange={event =>
-                setKind(event.target.value as 'interval' | 'once')
-              }
+          </FormField>
+          <FormField
+            className="my-3.5"
+            htmlFor="automation-kind"
+            label="触发方式"
+          >
+            <Select
+              onValueChange={value => setKind(value as 'interval' | 'once')}
               value={kind}
             >
-              <option value="interval">固定间隔</option>
-              <option value="once">一次性</option>
-            </select>
-          </label>
+              <SelectTrigger
+                className="h-9 w-full rounded-control"
+                id="automation-kind"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="interval">固定间隔</SelectItem>
+                <SelectItem value="once">一次性</SelectItem>
+              </SelectContent>
+            </Select>
+          </FormField>
           {kind === 'interval' ? (
-            <label className="field-label">
-              间隔（分钟）
-              <input
+            <FormField className="my-3.5" label="间隔（分钟）">
+              <TextInput
                 min={1}
                 onChange={event => setEveryMinutes(event.target.value)}
                 type="number"
                 value={everyMinutes}
               />
-            </label>
+            </FormField>
           ) : (
-            <label className="field-label">
-              执行时间
-              <input
+            <FormField className="my-3.5" label="执行时间">
+              <TextInput
                 onChange={event => setOnceAt(event.target.value)}
                 type="datetime-local"
                 value={onceAt}
               />
-            </label>
+            </FormField>
           )}
-          <label className="field-label">
-            目标
-            <select
-              onChange={event =>
-                setTargetKind(
-                  event.target.value as 'new_task' | 'existing_task',
-                )
+          <FormField
+            className="my-3.5"
+            htmlFor="automation-target"
+            label="目标"
+          >
+            <Select
+              onValueChange={value =>
+                setTargetKind(value as 'new_task' | 'existing_task')
               }
               value={targetKind}
             >
-              <option value="new_task">每次创建新事情</option>
-              <option value="existing_task">续接已有事情</option>
-            </select>
-          </label>
-          {targetKind === 'existing_task' && (
-            <label className="field-label">
-              事情
-              <select
-                onChange={event => setTargetTaskId(event.target.value)}
-                value={targetTaskId}
+              <SelectTrigger
+                className="h-9 w-full rounded-control"
+                id="automation-target"
               >
-                {channels.map(channel => (
-                  <option key={channel.id} value={channel.id}>
-                    {channel.title}
-                  </option>
-                ))}
-              </select>
-            </label>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="new_task">每次创建新事情</SelectItem>
+                <SelectItem value="existing_task">续接已有事情</SelectItem>
+              </SelectContent>
+            </Select>
+          </FormField>
+          {targetKind === 'existing_task' && (
+            <FormField
+              className="my-3.5"
+              htmlFor="automation-task"
+              label="事情"
+            >
+              <Select onValueChange={setTargetTaskId} value={targetTaskId}>
+                <SelectTrigger
+                  className="h-9 w-full rounded-control"
+                  id="automation-task"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {channels.map(channel => (
+                    <SelectItem key={channel.id} value={channel.id}>
+                      {channel.title}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormField>
           )}
         </div>
-        <footer className="record-form-footer">
-          <button className="quiet-button" onClick={onCancel} type="button">
+        <footer className="record-form-footer flex items-center justify-end gap-2 border-t border-line px-4.5 py-3">
+          <Button
+            className="h-9 px-4 text-[13px] text-ink-2"
+            onClick={onCancel}
+            size="sm"
+            type="button"
+            variant="quiet"
+          >
             取消
-          </button>
-          <button
-            className="primary-button"
+          </Button>
+          <Button
+            className="h-9 px-4 text-[13px]"
             disabled={saving}
             onClick={() => void submit()}
+            size="sm"
             type="button"
+            variant="primary"
           >
             {saving ? '保存中…' : '保存'}
-          </button>
+          </Button>
         </footer>
-      </section>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -3477,18 +3794,6 @@ function MemoryForm({
   const [content, setContent] = useState(draft?.content ?? '')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
-  const dialogRef = useRef<HTMLElement>(null)
-  useEffect(() => {
-    dialogRef.current?.focus()
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        onCancel()
-      }
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [onCancel])
   async function submit() {
     if (saving) return
     if (!content.trim()) {
@@ -3516,99 +3821,116 @@ function MemoryForm({
     }
   }
   return (
-    <div
-      className="modal-backdrop"
-      onMouseDown={event => event.target === event.currentTarget && onCancel()}
-    >
-      <section
+    <Dialog open onOpenChange={open => !open && onCancel()}>
+      <DialogContent
         aria-label={draft ? '编辑记忆' : '添加记忆'}
-        aria-modal="true"
-        className="command-dialog record-form"
-        ref={dialogRef}
-        role="dialog"
-        tabIndex={-1}
+        aria-describedby={undefined}
+        className="record-form flex max-h-[min(720px,86dvh)] w-[min(560px,calc(100vw-32px))] flex-col p-0"
       >
-        <header className="record-form-header">
-          <h2>{draft ? '编辑记忆' : '添加记忆'}</h2>
-          <button aria-label="关闭" onClick={onCancel} type="button">
-            <X size={18} />
-          </button>
+        <header className="record-form-header flex items-center justify-between border-b border-line px-4.5 py-3.5">
+          <DialogTitle>{draft ? '编辑记忆' : '添加记忆'}</DialogTitle>
         </header>
-        <div className="record-form-body">
+        <div className="record-form-body overflow-auto px-4.5 py-4">
           {error && (
-            <div className="page-error" role="alert">
+            <div
+              className="mb-4 flex items-center gap-2.5 rounded-card border border-red bg-red-tint px-3.5 py-2.5 text-[13px] text-red-text"
+              role="alert"
+            >
               {error}
             </div>
           )}
-          <label className="field-label">
-            内容
-            <textarea
+          <FormField className="my-3.5" label="内容">
+            <TextArea
               onChange={event => setContent(event.target.value)}
               rows={3}
               value={content}
             />
-          </label>
-          <label className="field-label">
-            类别
-            <select
-              onChange={event =>
-                setCategory(event.target.value as MemoryCategory)
-              }
+          </FormField>
+          <FormField className="my-3.5" htmlFor="memory-category" label="类别">
+            <Select
+              onValueChange={value => setCategory(value as MemoryCategory)}
               value={category}
             >
-              {memoryCategories.map(item => (
-                <option key={item.id} value={item.id}>
-                  {item.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="field-label">
-            作用范围
-            <select
-              onChange={event => setScope(event.target.value as MemoryScope)}
+              <SelectTrigger
+                className="h-9 w-full rounded-control"
+                id="memory-category"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {memoryCategories.map(item => (
+                  <SelectItem key={item.id} value={item.id}>
+                    {item.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FormField>
+          <FormField className="my-3.5" htmlFor="memory-scope" label="作用范围">
+            <Select
+              onValueChange={value => setScope(value as MemoryScope)}
               value={scope}
             >
-              <option value="global">全局</option>
-              <option value="worker">Worker</option>
-              <option value="channel">事情</option>
-            </select>
-          </label>
-          {scope !== 'global' && (
-            <label className="field-label">
-              事情
-              <select
-                onChange={event => setTaskId(event.target.value)}
-                value={taskId}
+              <SelectTrigger
+                className="h-9 w-full rounded-control"
+                id="memory-scope"
               >
-                {channels.map(channel => (
-                  <option key={channel.id} value={channel.id}>
-                    {channel.title}
-                  </option>
-                ))}
-              </select>
-            </label>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="global">全局</SelectItem>
+                <SelectItem value="worker">Worker</SelectItem>
+                <SelectItem value="channel">事情</SelectItem>
+              </SelectContent>
+            </Select>
+          </FormField>
+          {scope !== 'global' && (
+            <FormField className="my-3.5" htmlFor="memory-task" label="事情">
+              <Select onValueChange={setTaskId} value={taskId}>
+                <SelectTrigger
+                  className="h-9 w-full rounded-control"
+                  id="memory-task"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {channels.map(channel => (
+                    <SelectItem key={channel.id} value={channel.id}>
+                      {channel.title}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormField>
           )}
-          <p className="field-hint">
+          <p className="text-[12px] leading-[1.6] text-ink-2">
             {draft
               ? '来源保持服务端记录不变；修改会以新修订保存。'
               : '手动添加的记忆来源记为“用户确认”。'}
           </p>
         </div>
-        <footer className="record-form-footer">
-          <button className="quiet-button" onClick={onCancel} type="button">
+        <footer className="record-form-footer flex items-center justify-end gap-2 border-t border-line px-4.5 py-3">
+          <Button
+            className="h-9 px-4 text-[13px] text-ink-2"
+            onClick={onCancel}
+            size="sm"
+            type="button"
+            variant="quiet"
+          >
             取消
-          </button>
-          <button
-            className="primary-button"
+          </Button>
+          <Button
+            className="h-9 px-4 text-[13px]"
             disabled={saving}
             onClick={() => void submit()}
+            size="sm"
             type="button"
+            variant="primary"
           >
             {saving ? '保存中…' : '保存'}
-          </button>
+          </Button>
         </footer>
-      </section>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }

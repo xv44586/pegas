@@ -73,7 +73,7 @@ PUT  /v1/settings/behavior
 
 - 按事情/Worker 作用域的规则覆盖（MVP 仅全局）。
 - 归类规则、测试归类与「不确定时」策略（已登记 `ROUTE-005`，Intake 见 `docs/routing-rules-intake.md`）。
-- 默认语言/回复长度独立偏好控件（2026-11-24 修订：从「行为与规则」页删除锁定占位，见下方修订记录）；自主程度滑条保持锁定（风险阈值由服务端 Approval 强制）。
+- 默认语言/回复长度独立偏好控件（2026-11-24 修订：从「行为与规则」页删除锁定占位，见下方修订记录）；自主程度已于 2026-11-24 接线真实权限档位/自动审阅设置（见下方修订），假滑条删除；风险阈值仍由服务端 Approval 强制。
 - 规则是否被遵守的可观察证据（属执行证据体系后续）。
 
 这些缺口完成前，`RULES-001` 保持 `Partial`。
@@ -87,3 +87,11 @@ PUT  /v1/settings/behavior
 - **数据与权限边界**：纯前端展示收敛 + 文档，无 schema/API/注入链路变更。
 - **失败与恢复**：回滚 revert 即恢复占位展示，无数据影响。
 - **落地证据（2026-11-24）**：分支 `feat/RULES-001-behavior-cleanup`（基线 intake `e575b3a`）。`SettingsPage.tsx` 删除默认语言 select、回复长度 segmented 与对应提示句；「开始工作前」行与 Approval 声明、「自主程度」tab、「语音与输入」分类原样保留。测试先行：`App.test.tsx` 工作规则用例新增占位删除断言（默认语言/回复长度/旧提示不出现，开始工作前仍在）先红后绿。门禁：`pnpm check` 130 文件 / 1335 测试全绿、`pnpm smoke`（task 36187af8）、`pnpm review:ui --force`、`pnpm a11y:review` 0 违例。纯前端展示收敛，无 schema/API/注入链路变更；回滚 revert 即恢复占位，无数据影响。文档同步：docs/work-rules.md、docs/sealed-ui-rebuild.md §16、Feature Map RULES-001。
+
+## 修订：自主程度 tab 接线真实设置（2026-11-24，DESIGN-009 批次 6 追加）
+
+- **背景**：用户预览实测发现「自主程度」tab 仍是禁用假滑条（defaultValue=62），而自主程度的真实后端能力（APPROVAL-001 P2 权限档位 `permissionTier` + P5 自动审阅 `autoReviewEnabled`）早已落地并在「隐私」页可交互，两处信息不一致。
+- **用户结果**：「自主程度」tab 直接读写与「隐私」页同一份 `runtime_settings` 草稿——权限档位 BUI SegmentedControl（严格/标准/完全访问）+ 自动审阅 BUI Switch + 「前往隐私设置」入口；改动走底部「保存更改」（full 档同样触发既有风险确认）。删除假滑条与「自定义风险阈值尚未开放」占位文案，如实声明高风险/关键风险 Action 始终由服务端 Approval 强制。
+- **边界**：纯前端接线，无新增字段/API；「开始工作前」锁定行与行为/规则链路不动。
+- **验收**：App.test 新增 autonomy 用例（无 slider、档位切换与自动审阅经保存 PUT 投影 permissionTier/autoReviewEnabled）；check/smoke/review:ui/a11y 全绿。
+- **回滚**：revert 即恢复占位展示，无数据影响。

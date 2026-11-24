@@ -277,7 +277,7 @@ describe('DESIGN-003 chat page', () => {
     const bar = await screen.findByRole('button', {
       name: /进行中 · 整理季度数据/,
     })
-    expect(bar.textContent).toContain('正在核对数据来源')
+    expect(bar.getAttribute('aria-label')).toContain('正在核对数据来源')
     expect(
       bar.querySelector('img[data-pose="working"]')?.getAttribute('src'),
     ).toBe('/brand/pegas-flight.svg')
@@ -286,7 +286,7 @@ describe('DESIGN-003 chat page', () => {
         selector: '.message-content *',
       }),
     ).toBeNull()
-    expect(document.querySelector('.run-status-bar[data-active]')).toBeTruthy()
+    expect(document.querySelector('.run-status-card[data-active]')).toBeTruthy()
   })
 
   it.each(['queued', 'waiting', 'completed', 'failed', 'cancelled'] as const)(
@@ -359,7 +359,7 @@ describe('DESIGN-003 chat page', () => {
     const bar = await screen.findByRole('button', {
       name: /进行中 · 整理季度数据/,
     })
-    expect(bar.textContent).toContain('正在核对数据来源')
+    expect(bar.getAttribute('aria-label')).toContain('正在核对数据来源')
     expect(
       screen.queryByText('正在核对数据来源', {
         selector: '.message-content *',
@@ -479,7 +479,7 @@ describe('DESIGN-003 chat page', () => {
     installChatFetch(decideSnapshot)
     render(<App />)
     const decideCard = await screen.findByLabelText(/已处理：/)
-    expect(decideCard.classList.contains('is-resolved')).toBe(true)
+    expect(decideCard.classList.contains('opacity-70')).toBe(true)
     expect(decideCard.textContent).toContain('发布前需要确认影响范围')
     expect(
       within(decideCard).queryByRole('button', { name: /查看内容|去处理/ }),
@@ -546,7 +546,7 @@ describe('DESIGN-003 chat page', () => {
     expect(await screen.findByText('报表已完成')).toBeTruthy()
     expect(screen.queryByText('正在核对数据来源')).toBeNull()
     const bar = screen.getByRole('button', { name: /已完成 · 整理季度数据/ })
-    expect(bar.textContent).toContain('工作了')
+    expect(bar.getAttribute('aria-label')).toContain('工作了')
   })
 
   it('offers an explicit stop control with confirmation while work is running', async () => {
