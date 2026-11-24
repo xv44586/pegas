@@ -52,6 +52,7 @@ import type {
   ExecutionNode,
   MemoryRecord,
   ModelCatalogItem,
+  ModelProviderCapability,
   ModelProviderDraft,
   ModelUsageRecord,
   ModelUsageReport,
@@ -60,14 +61,77 @@ import type {
   RecoveryStatus,
   RuntimeSettings,
   RewriteSettingsDraft,
+  RewriteSettings,
   SettingsResponse,
   SpeechSettingsDraft,
+  SpeechSettings,
   WorkRuleRecord,
   RoutingRuleRecord,
   RoutingPreview,
 } from '../types'
 
 const RULES_PAGE_SIZE = 10
+
+function settingsEqual(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
+function sameSettings(
+  left: RuntimeSettings | undefined,
+  right: RuntimeSettings | undefined,
+): boolean {
+  if (!left || !right) return left === right
+  const normalize = (settings: RuntimeSettings) =>
+    Object.fromEntries(
+      Object.entries(settings).filter(
+        ([key, value]) =>
+          key !== 'revision' && key !== 'updatedAt' && value !== undefined,
+      ),
+    )
+  return settingsEqual(normalize(left), normalize(right))
+}
+
+function providerDraftDirty(
+  draft: ModelProviderDraft | undefined,
+  saved: ModelProviderCapability | undefined,
+): boolean {
+  if (!draft) return false
+  if (draft.clearApiKey || draft.apiKey !== '') return true
+  if (!saved) return true
+  return (
+    draft.name !== saved.name ||
+    draft.protocol !== saved.protocol ||
+    draft.baseUrl !== saved.baseUrl
+  )
+}
+
+function connectionDraftDirty(
+  draft: SpeechSettingsDraft | RewriteSettingsDraft | undefined,
+  saved: SpeechSettings | RewriteSettings | undefined,
+): boolean {
+  if (!draft) return false
+  if (draft.clearApiKey || draft.apiKey !== '') return true
+  const defaults = {
+    provider: 'disabled',
+    mode: 'router',
+    protocol: 'openai-chat',
+    baseUrl: '',
+    model: '',
+    hasApiKey: false,
+  }
+  const comparable = (entry: object) =>
+    Object.fromEntries(
+      Object.entries(entry).filter(
+        ([key]) => key !== 'apiKey' && key !== 'clearApiKey',
+      ),
+    )
+  const baseline = saved ?? defaults
+  const draftFields = comparable(draft)
+  const baselineFields = comparable(baseline)
+  return Object.keys(baselineFields).some(
+    key => draftFields[key] !== baselineFields[key],
+  )
+}
 
 function RulePagination({
   total,
@@ -277,6 +341,20 @@ export function SettingsPage({
   const [rewriteDraft, setRewriteDraft] = useState<RewriteSettingsDraft>()
   const [confirmingFullAccess, setConfirmingFullAccess] = useState(false)
   useEffect(() => setSection(initialSection), [initialSection])
+  useEffect(() => {
+    if (notice?.kind !== 'success') return
+    const timer = window.setTimeout(() => setNotice(undefined), 2400)
+    return () => window.clearTimeout(timer)
+  }, [notice])
+  const savedProvider = response?.capabilities.providers.find(
+    provider => provider.id === response.settings.modelProvider,
+  )
+  const dirty =
+    !sameSettings(draft, response?.settings) ||
+    providerDraftDirty(providerDraft, savedProvider) ||
+    connectionDraftDirty(speechDraft, response?.speech) ||
+    connectionDraftDirty(rewriteDraft, response?.rewrite)
+  const footerActive = dirty || saving || notice !== undefined
   useEffect(() => {
     setDraft(response?.settings)
     setNotice(undefined)
@@ -557,15 +635,16 @@ export function SettingsPage({
         </div>
         {draft &&
           providerDraft &&
+          footerActive &&
           ['pegas', 'models', 'router', 'voice', 'privacy'].includes(section) &&
           (section !== 'models' ||
             modelServiceProvider === draft.modelProvider) && (
-            <footer className="settings-footer relative z-[5] flex min-h-16 items-center gap-2.5 border-t border-line bg-surface px-7 py-2.5 max-[520px]:px-3.5">
+            <footer className="settings-footer relative z-[5] flex min-h-16 animate-[message-reveal_200ms_cubic-bezier(0.16,1,0.3,1)] items-center gap-2.5 border-t border-line bg-surface px-7 py-2.5 max-[520px]:px-3.5">
               <span
                 className={`flex-1 text-[12px] max-[520px]:min-w-0 max-[520px]:wrap-anywhere ${notice?.kind === 'error' ? 'text-red-text' : 'text-green-text'}`}
                 role={notice?.kind === 'error' ? 'alert' : 'status'}
               >
-                {notice?.message}
+                {notice?.message ?? '有未保存的更改'}
               </span>
               <Button
                 className="h-8 px-3.5 text-[13px]"

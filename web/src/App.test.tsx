@@ -982,6 +982,9 @@ describe('sealed Pegas UI', () => {
       }),
     )
 
+    expect(screen.queryByRole('button', { name: '保存更改' })).toBeNull()
+    fireEvent.click(await screen.findByRole('button', { name: /事情归类/ }))
+    fireEvent.click(screen.getByLabelText('启用即时应答'))
     const save = await screen.findByRole('button', { name: '保存更改' })
     const footer = save.closest('footer')
     expect(footer?.classList.contains('settings-footer')).toBe(true)
@@ -991,7 +994,6 @@ describe('sealed Pegas UI', () => {
     )
     expect(scrollRegion?.contains(footer ?? null)).toBe(false)
 
-    fireEvent.click(screen.getByRole('button', { name: /事情归类/ }))
     const routerProvider = screen.getByLabelText('归类模型服务')
     expect(routerProvider.getAttribute('role')).toBe('combobox')
     fireEvent.click(screen.getByRole('button', { name: /语音与输入/ }))
@@ -1015,9 +1017,17 @@ describe('sealed Pegas UI', () => {
         name: /设置/,
       }),
     )
-    const model = await screen.findByRole('button', { name: /，模型$/ })
+    await screen.findByRole('button', { name: /，模型$/ })
+    fireEvent.click(await screen.findByRole('button', { name: /事情归类/ }))
+    fireEvent.click(screen.getByLabelText('启用即时应答'))
     fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
-    expect(model.matches(':disabled')).toBe(true)
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole('button', { name: /，归类模型名称$/ })
+          .matches(':disabled'),
+      ).toBe(true),
+    )
     expect(screen.getByRole('button', { name: '保存中…' })).toHaveProperty(
       'disabled',
       true,
@@ -1030,6 +1040,8 @@ describe('sealed Pegas UI', () => {
     installFetch((path, init) => {
       if (path === '/v1/settings' && init?.method === 'PUT')
         return Response.json(settingsResponse)
+      if (path.startsWith('/v1/routing-rules?'))
+        return Response.json({ rules: [] })
       return undefined
     })
     render(<App />)
@@ -1039,14 +1051,17 @@ describe('sealed Pegas UI', () => {
       }),
     )
     fireEvent.click(await screen.findByRole('button', { name: /事情归类/ }))
+    expect(screen.queryByRole('button', { name: '保存更改' })).toBeNull()
+    fireEvent.click(screen.getByLabelText('启用即时应答'))
+    expect(screen.getByText('有未保存的更改')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
     await screen.findByText('更改已保存')
     fireEvent.click(screen.getByLabelText('启用即时应答'))
     expect(screen.queryByText('更改已保存')).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
-    await screen.findByText('更改已保存')
     fireEvent.click(screen.getByRole('button', { name: '取消' }))
-    expect(screen.queryByText('更改已保存')).toBeNull()
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: '保存更改' })).toBeNull(),
+    )
   })
 
   it('shows no idle spinner on the unconfigured pool fixed option', async () => {
@@ -1255,6 +1270,9 @@ describe('sealed Pegas UI', () => {
     expect(toggle.getAttribute('aria-checked')).toBe('true')
     fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
     await screen.findByText('更改已保存')
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: '保存更改' })).toBeNull(),
+    )
     expect(savedBody?.chatLaneEnabled).toBe(true)
     expect(
       screen.getByLabelText('启用即时应答').getAttribute('aria-checked'),
@@ -1414,20 +1432,24 @@ describe('sealed Pegas UI', () => {
   })
 
   it('announces revision-conflict save responses as errors', async () => {
-    installFetch((path, init) =>
-      path === '/v1/settings' && init?.method === 'PUT'
-        ? Response.json(
-            { message: '设置已在其他设备更新，请刷新后重试' },
-            { status: 409 },
-          )
-        : undefined,
-    )
+    installFetch((path, init) => {
+      if (path.startsWith('/v1/routing-rules?'))
+        return Response.json({ rules: [] })
+      if (path === '/v1/settings' && init?.method === 'PUT')
+        return Response.json(
+          { message: '设置已在其他设备更新，请刷新后重试' },
+          { status: 409 },
+        )
+      return undefined
+    })
     render(<App />)
     fireEvent.click(
       within(await screen.findByLabelText('主导航')).getByRole('button', {
         name: /设置/,
       }),
     )
+    fireEvent.click(await screen.findByRole('button', { name: /事情归类/ }))
+    fireEvent.click(screen.getByLabelText('启用即时应答'))
     fireEvent.click(await screen.findByRole('button', { name: '保存更改' }))
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toContain('设置已在其他设备更新，请刷新后重试')
