@@ -1,7 +1,15 @@
 # Pegas MVP 计划
 
-> 状态：服务端第一版完成（DONE_WITH_CONCERNS，剩余项为客户端与已声明非目标）
-> 更新日期：2026-11-21
+> 状态：服务端第一版完成；本期范围经用户裁剪为桌面端（用封板 Web 验证），手机端、Memory 优化与多渠道押后（DONE_WITH_CONCERNS）
+> 更新日期：2026-11-24
+
+## 本期范围裁剪（用户决策，2026-11-24）
+
+- **本期目标：桌面端 MVP**。以封板 Web（390px 移动端全功能已封板）作为测试与验证入口；macOS 桌面壳（DESKTOP-001）已 Usable，剩余为签名、公证、自动更新与原生通知等加固项。
+- **手机端 MVP 本期不做**：MOBILE-001（iOS 登录/UI/恢复入口）、APNs 与 Web Push（NOTIFY-002）、PWA 壳押后；主动通知本期以 Webhook 渠道为准。
+- **Memory 本期保持最基础形态**：手动创建/编辑/删除 + 按需加载（MEMORY-001 服务端与 Web CRUD 已闭环）；自动抽取与语义检索本期不优化。
+- **多渠道本期不做**：多渠道回复地址与投递偏好、第二消息渠道押后；单用户单 Webhook 投递为本期边界。
+- Remote Sandbox 执行节点维持 EXEC-004 已声明非目标；Recovery 破坏性操作（restart/rollback）维持只在服务端恢复平面执行的既定合同，Web 只读状态代理已接入。
 
 ## MVP 验证目标
 
@@ -35,20 +43,20 @@
 
 ## 第一条真实产品闭环
 
-- [x] Channel & Identity Gateway（统一事件入口、设备身份、单附件与跨端游标已实现；多渠道回复地址与投递偏好待补）；
+- [x] Channel & Identity Gateway（统一事件入口、设备身份、单附件与跨端游标已实现；多渠道回复地址与投递偏好按本期裁剪押后）；
 - [x] 单用户认证和移动端设备登录（服务端：实例 bearer token 全 API 鉴权 + userId 所有者隔离 + 事件 deviceId 身份与跨端游标（CONV-001）；手机经同一 HTTP API 认证接入，专用 iOS 登录会话管理属 MOBILE-001 后续）；
 - [x] 同一用户的 Router lease / fencing（事件 claim 续租 + 路由/控制/审批写入与写回的 claim fence，过期接管后旧 Worker 写入被拒绝）；
-- [x] 新建、补充、纠正和取消 Task 的完整路由（steer/cancel 控制意图、心跳中止与 session 后继已实现；Idea/Trigger 意图待补）；
-- [x] 从自由文本或语音形成带 revision 的 Goal Contract，只追问会改变结果、权限、成本或风险的关键未知项；Executor 提案 API 与 blocking 澄清停放已实现，Web 澄清卡片待接入；
+- [x] 新建、补充、纠正和取消 Task 的完整路由（steer/cancel 控制意图、心跳中止与 session 后继已实现；归类规则/不确定时三值策略/测试归类 dry-run/澄清待办自动过期已由 ROUTE-005 R1–R5 落地；Idea/Trigger 独立意图押后，新想法现经 create_task 覆盖）；
+- [x] 从自由文本或语音形成带 revision 的 Goal Contract，只追问会改变结果、权限、成本或风险的关键未知项；Executor 提案 API 与 blocking 澄清停放已实现，Web 澄清卡片已接入（DESIGN-002，见 `docs/sealed-ui-rebuild.md` §12）；
 - [x] Task 与 Run 完整状态迁移（schema v29 Run 状态触发器 + 全路径回归：成功/失败重试/lease 恢复/审批停放/steering/停止/完成续接，见 `docs/task-lifecycle.md`）；
 - [x] success criteria、EvidenceRef 与 Control Plane 完成门禁；
 - [x] 第一版 DSH headless Executor Adapter；
 - [x] Run 与 DSH session 映射及租约过期恢复；
 - [x] Outbox dispatcher 与一个真实投递渠道；
-- [x] Outbox Review Pack：按完成条件聚合结果 evidence、限制、风险、回滚和审计入口（服务端 `review.ready` 投影已含完整预览；Web 卡片渲染待 DESIGN-002 补齐）；
-- [x] 图片、视频、UI 和排版变化的最终视觉 evidence 预览（服务端：最终修订守卫、预览投影含 viewport/timecode/hash/hasContent、所有者内容 API `GET /v1/evidence/:id/content`；Web 画廊渲染待 DESIGN-002）；
+- [x] Outbox Review Pack：按完成条件聚合结果 evidence、限制、风险、回滚和审计入口（服务端 `review.ready` 投影含完整预览；Web 审查抽屉与对话页紧凑审查卡已接入，DESIGN-002）；
+- [x] 图片、视频、UI 和排版变化的最终视觉 evidence 预览（服务端：最终修订守卫、预览投影含 viewport/timecode/hash/hasContent、所有者内容 API `GET /v1/evidence/:id/content`；Web 证据画廊 bearer fetch→blob 缩略图与全屏预览已接入，DESIGN-002）；
 - [x] Activity/Task 只读视图；
-- [x] 结构化日志、指标和错误追踪（OBS-001：JSON 行日志 + /metrics Prometheus 指标 + 结构化错误记录与错误计数；外部聚合与告警待补）。
+- [x] 结构化日志、指标和错误追踪（OBS-001：JSON 行日志 + /metrics Prometheus 指标 + 结构化错误记录与错误计数；外部聚合与产品级告警待补）。
 
 ## 长期运行闭环
 
@@ -56,8 +64,8 @@
 - [x] 一次性与固定间隔 Schedule；
 - [x] Scheduler 事务性写入 Event Inbox；
 - [x] Approval 持久等待、释放 Worker 和事件恢复；
-- [x] Action idempotency 与未知副作用处理（已接入协议的 Executor；通用 DSH tool-call 代理待补）；
-- [x] Memory 来源、修正、删除和按需加载（服务端闭环；自动抽取与 Web 写操作待补）；
+- [x] Action idempotency 与未知副作用处理（协议 Executor 与通用 DSH tool-call 代理均已覆盖：`dsh-tool:<runId>:<callId>` 幂等键 + EXEC-003 五环自动对账，文件写指纹判定与模型辅助判定，证据不足一律留人工）；
+- [x] Memory 来源、修正、删除和按需加载（服务端与 Web CRUD 均闭环；自动抽取与语义检索按本期裁剪押后）；
 - [x] SQLite 备份、校验与恢复演练（在线备份、SHA-256/integrity 校验、空环境恢复续跑回归）；
 - [x] Worker、网络和数据库故障注入测试（Worker 三崩溃点真实进程注入 `pnpm smoke:crash`；网络/数据库故障由确定性 lease/DSH stream fault/备份恢复回归覆盖）；
 - [x] Outbox 的重试、合并、静默时段和未知投递处理（NOTIFY-005：指数退避重试、同 key pending 合并、按用户静默时段、unknown 停车与人工核对）。
@@ -65,7 +73,7 @@
 ## 自我修改闭环
 
 - [x] SelfChange Task 类型与风险策略（`targetResource: pegas_repository`，schema v25 不可变；发布走 high-risk Approval）；
-- [x] 隔离 worktree / sandbox 创建和清理（`self-change/<taskId>` worktree；自动清理策略待补）；
+- [x] 隔离 worktree / sandbox 创建和清理（`self-change/<taskId>` worktree；自动清理策略与构建产物自包含依赖待补，现发布以 APFS clonefile 重锚定手工处理，LESSON-20261122-04）；
 - [x] Pegas 生成修改后强制运行完整 CI（候选 worktree 内 `pnpm check`+`pnpm smoke`；远程 GitHub Actions 强制与签名待补）；
 - [x] 将 commit 构建成不可变 Release（exact commit 复制、只读冻结、目录 SHA-256 attestation）；
 - [x] Release manifest、产物校验值和 schema 兼容范围（staging 前重验 manifest/tree/commit/schema；artifact 签名待实现）；
@@ -75,15 +83,31 @@
 - [x] 发布后从持久 Task 恢复并向用户汇报（审批后继 Run 记录 Action outcome，Run 完成进入 Outbox；回滚后 Task 数据完好续跑）；
 - [x] 破坏性 migration 的单独审批（SELF-001：登记表 + manifest 强制声明；Supervisor staging/启动双重校验专用 `self_change.migration` critical Approval，切换前备份副本演练迁移；Executor 双重审批闭环）。
 
-## 手机长期使用闭环
+## 桌面端本期闭环（原「手机长期使用闭环」，2026-11-24 裁剪）
 
-- [ ] 响应式 Web/PWA 或第一种消息渠道；
-- [x] 可靠主动通知（Webhook；iOS APNs 待接入）；
-- [x] 对话、任务状态和审批跨设备一致（服务端权威状态 + 事件增量游标；移动端 UI 属 MOBILE-001）；
-- [x] Mac 执行节点注册、心跳和离线状态（EXEC-004：节点绑定 Run 离线明确等待，其他事情不阻塞；节点管理 UI 待补）；
-- [ ] Remote Sandbox 执行节点；
-- [ ] 独立 Recovery API 的移动端状态、重启和回滚界面；
+- [x] 响应式 Web（封板 Web 桌面 + 390px 移动端全功能，44px 触控目标，每次发布含桌面/移动实拍与几何断言门禁；PWA 壳与第二消息渠道按裁剪押后）；
+- [x] 可靠主动通知（Webhook；APNs 与 Web Push 按裁剪押后，NOTIFY-002）；
+- [x] 对话、任务状态和审批跨设备一致（服务端权威状态 + 事件增量游标；iOS UI 属 MOBILE-001，押后）；
+- [x] Mac 执行节点注册、心跳和离线状态（EXEC-004：节点绑定 Run 离线明确等待，其他事情不阻塞；只读节点列表已接入运行时抽屉与「能力与连接」设置，节点管理操作属非目标）；
 - [x] 主机级外部健康检查和离线告警（OBS-001：独立 Watchdog 进程探测 /healthz，连续失败阈值判定掉线，offline/recovered 各告警一次经 Webhook，掉线期间不重复刷屏；launchd/cron 托管与多主机部署属运维配置）。
+
+### 本期明确不做（押后项，重新启用时回到对应 Feature Intake）
+
+- [ ] MOBILE-001：iOS 登录会话、iOS UI 与恢复入口（Planned）；
+- [ ] APNs / Web Push 推送（NOTIFY-002）与 PWA 壳；
+- [ ] Remote Sandbox 执行节点（EXEC-004 已声明非目标）；
+- [ ] 独立 Recovery API 的移动端状态、重启和回滚界面（Web 只读恢复状态代理已接入；restart/rollback 维持只在服务端恢复平面执行的合同）；
+- [ ] Memory 自动抽取与语义检索（MEMORY-001）；
+- [ ] 多渠道回复地址与投递偏好（CHANNEL）。
+
+### 本期剩余待补（桌面端范围内）
+
+- Idea/Trigger 独立路由意图（ROUTE-001 下一缺口；新想法现经 create_task 覆盖，不阻塞本期）；
+- SELF-001 加固：artifact 签名、远程 GitHub Actions 强制、worktree 自动清理与构建产物自包含依赖；
+- OBS-001：外部日志聚合与产品级告警；
+- GOAL-001：validity 失效事件 Web 接入、截图语义验证与用户接受 capability；
+- CONV-001：多附件/事件、设备登录会话管理；
+- DESKTOP-001 加固：Developer ID 签名、公证、自动更新与原生通知。
 
 ## MVP 完成定义
 
