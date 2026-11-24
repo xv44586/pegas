@@ -405,6 +405,9 @@ a {
   max-width: 100%;
   user-select: none;
 }
+.pegas-mascot-motion {
+  display: inline-flex;
+}
 .conversation-welcome h2 {
   font-size: var(--text-display);
   letter-spacing: -0.03em;

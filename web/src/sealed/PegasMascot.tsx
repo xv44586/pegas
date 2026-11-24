@@ -1,14 +1,13 @@
-export type PegasMascotPose = 'idle' | 'waiting' | 'celebrate' | 'blocked'
+const poseAssets = {
+  idle: 'pegas-home.svg',
+  waiting: 'pegas-home.svg',
+  celebrate: 'pegas-home.svg',
+  blocked: 'pegas-home.svg',
+  working: 'pegas-flight.svg',
+  speaking: 'pegas-speaking.svg',
+} as const
 
-const poseAssets: Record<
-  PegasMascotPose,
-  { file: string; width: number; height: number }
-> = {
-  idle: { file: 'pegas-mascot.webp', width: 640, height: 449 },
-  waiting: { file: 'pegas-mascot-waiting.webp', width: 480, height: 445 },
-  celebrate: { file: 'pegas-mascot-celebrate.webp', width: 480, height: 443 },
-  blocked: { file: 'pegas-mascot-blocked.webp', width: 480, height: 437 },
-}
+export type PegasMascotPose = keyof typeof poseAssets
 
 interface PegasMascotProps {
   size?: number
@@ -27,9 +26,8 @@ export function PegasMascot({
   const accessibility = label
     ? ({ role: 'img', 'aria-label': label } as const)
     : ({ 'aria-hidden': true } as const)
-  const asset = poseAssets[pose]
 
-  return (
+  const image = (
     <img
       {...accessibility}
       alt=""
@@ -37,9 +35,22 @@ export function PegasMascot({
       data-pose={pose}
       decoding="async"
       draggable={false}
-      height={Math.round((size * asset.height) / asset.width)}
-      src={`/brand/${asset.file}`}
+      height={size}
+      src={`/brand/${poseAssets[pose]}`}
       width={size}
     />
   )
+
+  if (pose === 'working' || pose === 'speaking') {
+    return (
+      <picture className="pegas-mascot-motion">
+        <source
+          media="(prefers-reduced-motion: reduce)"
+          srcSet={`/brand/${poseAssets.idle}`}
+        />
+        {image}
+      </picture>
+    )
+  }
+  return image
 }

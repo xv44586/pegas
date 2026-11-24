@@ -279,12 +279,32 @@ describe('DESIGN-003 chat page', () => {
     })
     expect(bar.getAttribute('aria-label')).toContain('正在核对数据来源')
     expect(
+      bar.querySelector('img[data-pose="working"]')?.getAttribute('src'),
+    ).toBe('/brand/pegas-flight.svg')
+    expect(
       screen.queryByText('正在核对数据来源', {
         selector: '.message-content *',
       }),
     ).toBeNull()
     expect(document.querySelector('.run-status-card[data-active]')).toBeTruthy()
   })
+
+  it.each(['queued', 'waiting', 'completed', 'failed', 'cancelled'] as const)(
+    'keeps the %s run from showing the flight animation',
+    async status => {
+      installChatFetch({
+        ...baseSnapshot,
+        runs: [{ ...runningRun, status }],
+      })
+      render(<App />)
+      const bar = await waitFor(() => {
+        const element = document.querySelector('.run-status-bar')
+        expect(element).not.toBeNull()
+        return element
+      })
+      expect(bar?.querySelector('img[data-pose="working"]')).toBeNull()
+    },
+  )
 
   it('CONV-006: keeps server-marked silent facts out of the chat stream', async () => {
     const projected: Snapshot = {

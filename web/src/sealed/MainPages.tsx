@@ -1557,7 +1557,11 @@ function RunStatusBar({
         onClick={onOpen}
         type="button"
       >
-        <StatusPill tone={tone}>{headline}</StatusPill>
+        {run.status === 'running' ? (
+          <PegasMascot pose="working" size={30} />
+        ) : (
+          <StatusPill tone={tone}>{headline}</StatusPill>
+        )}
         <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink">
           {channel.title}
         </span>

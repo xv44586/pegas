@@ -55,7 +55,9 @@ describe('conversation welcome', () => {
   it('shows the Pegas mascot instead of a generic sparkle icon', () => {
     const { container } = renderWelcome()
     const welcome = container.querySelector('.conversation-welcome')
-    expect(welcome?.querySelector('img.pegas-mascot')).toBeTruthy()
+    expect(
+      welcome?.querySelector('img.pegas-mascot')?.getAttribute('src'),
+    ).toBe('/brand/pegas-home.svg')
     expect(welcome?.querySelector('svg')).toBeNull()
     expect(welcome?.textContent).toContain('今天想一起完成什么？')
   })
@@ -77,7 +79,9 @@ describe('conversation welcome', () => {
       expect(element).toBeTruthy()
       return element
     })
-    expect(working?.querySelector('img[data-pose="waiting"]')).toBeTruthy()
+    expect(
+      working?.querySelector('img[data-pose="waiting"]')?.getAttribute('src'),
+    ).toBe('/brand/pegas-home.svg')
     expect(working?.textContent).toContain('正在整理')
     release?.()
     await waitFor(() =>

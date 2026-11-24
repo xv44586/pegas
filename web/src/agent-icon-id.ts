@@ -1,5 +1,8 @@
 import type { WorkerIconId } from './types'
 
+// Brand artwork is served with an immutable cache policy.
+export const pegasBotIconUrl = '/brand/agent-bot.webp?v=2'
+
 const workerIconIds: readonly WorkerIconId[] = [
   'car',
   'camera',
