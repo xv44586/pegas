@@ -74,6 +74,14 @@ Run(running) + high-risk Action
 - **剩余风险**：token 文件被删除后旧 Web 会话需重新输入新 token（预期行为）；多实例共享同一 dataDir 时共用同一 bearer（与 SQLite 单写者模型一致）；token 不轮换（非目标）。
 - **回滚**：revert 即恢复旧行为（无 token 部署审批端点恒 401）；`dataDir/api-token` 文件保留不删除，旧代码忽略；无 schema 变更。
 
+### 实例 bearer 引导发布记录（2026-11-24）
+
+- **合并**：PR #86 合入 main（merge `60ed412`，PR check 3m57s success；main CI run 45365641094 success）。
+- **Candidate**：`main-60ed412-r1`（隔离 worktree exact commit 构建，compatibility 31–48；node_modules APFS clonefile 重锚定 1532 symlink 树内相对，manifest verify 通过）。Supervisor staging → stable，`/readyz` 报告新 Release；recovery restart 与主仓 ff + build + launchd kickstart 后 active 保持；previous=`main-3d36113-r1` 可回滚。
+- **引导生效**：运行实例自动生成 `data/api-token`（0600，44 字节）；API 实测 approvals 无凭证 401、带引导 token 200（含 pending 探针审批）、tasks 带 token 200。**行为变化如实记录**：recovery API（4318）此前无 token 开放，现与实例 bearer 同源要求认证——发布/恢复脚本需带 `Authorization: Bearer $(cat data/api-token)`。
+- **真实用户入口验证（LESSON-20261124-01 要求）**：真实浏览器打开运行实例 Web → 访问令牌门输入引导 token → 通过 → 待处理列表可见 → P8 探针审批卡完整渲染（对外网络发送·高风险、命令原文、发送内容预览 `{"live":"egress-probe-fact"}` 与文件逐字一致、状态等待决定）。审批决定留用户处置。
+- **回滚**：Supervisor rollback 到 previous 可用（需带 bearer）；无 schema 变更。
+
 Worker 只把当前 claim 的 Control Plane URL、Run/Task ID 和短期 claim token 注入当前 DSH 子进程；会先剥离父进程中可能残留的同名变量以及实例 bearer、恢复 token 和模型密钥。DSH 执行合同给出创建 Approval、等待恢复和记录 Action outcome 的协议。claim 轮换后，新 Run 只收到自己的 token；该 token 不进入 prompt、对话、Outbox 或持久化明文。macOS 桌面端每次内置服务启动会生成随机实例 bearer，由 Electron session 仅对可信本机 origin 自动附加；renderer 不读取或保存该 bearer。
 
 Run capability 的 HTTP 传输固定使用 loopback。`PEGAS_API_HOST` 为 `0.0.0.0` 或 `::` 时，Worker 分别通过 `127.0.0.1` 或 `::1` 访问同一服务；绑定具体非回环 IP 时 Worker 拒绝启动 capability 通道，避免明文 claim 穿过局域网。需要远程 Control Plane 的后续部署必须另建 HTTPS/mTLS 内部通道，不能复用本协议的明文 URL。
