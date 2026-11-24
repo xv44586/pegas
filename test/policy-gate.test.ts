@@ -508,6 +508,9 @@ describe('DSH approval bridge policy gate', () => {
           callId: 'call-outside',
           category: 'out-of-workspace-write',
           argumentsHash: stableHash(outsideWrite.arguments),
+          effect: {
+            contentHash: createHash('sha256').update('hello').digest('hex'),
+          },
         },
       })
       expect(store.listRuns(claimed.task.id).at(-1)).toMatchObject({
