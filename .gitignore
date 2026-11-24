@@ -27,6 +27,5 @@ data-preview/
 # Local browser and design review artifacts.
 .playwright-cli/
 output/
-.impeccable/hook.cache.json
-.impeccable/review/
+.impeccable/
 *.tsbuildinfo
