@@ -118,6 +118,7 @@ export interface ConversationProjection {
 
 export type Approval = ServerApproval
 export type DurableAction = ServerDurableAction
+export type ApprovalRule = ServerApprovalRule
 
 export interface Snapshot {
   events: InboxEvent[]
@@ -425,6 +426,8 @@ export interface RuntimeSettings {
   privacyMode: 'disabled' | 'mask'
   rewriteMode: 'disabled' | 'light'
   chatLaneEnabled?: boolean
+  permissionTier?: 'strict' | 'standard' | 'full'
+  autoReviewEnabled?: boolean
   executionPools?: Partial<
     Record<'fast' | 'balanced' | 'deep', { provider: string; model: string }>
   >
@@ -679,6 +682,7 @@ import type {
   Approval as ServerApproval,
   DurableAction as ServerDurableAction,
 } from '../../src/approval/approval'
+import type { ApprovalRule as ServerApprovalRule } from '../../src/approval/approval-rule'
 import type {
   GoalContract as ServerGoalContract,
   ReviewPack as ServerReviewPack,

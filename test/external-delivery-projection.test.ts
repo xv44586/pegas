@@ -285,6 +285,34 @@ describe('NOTIFY-004 external delivery projection', () => {
     expect(externalDeliveryPayload(payload)).toBe(payload)
     expect(externalDeliveryPayload('plain')).toBe('plain')
   })
+
+  it('adds an approval deep link and strips prompt duplication for approval.required', () => {
+    const projected = externalDeliveryPayload({
+      type: 'approval.required',
+      taskId: 't-1',
+      runId: 'r-1',
+      approvalId: 'approval-1',
+      actionId: 'action-1',
+      messageId: 'message-1',
+      risk: 'high',
+      summary: '批准工具 write 写入工作区之外',
+      impact: '工具 write 将写入工作区之外。',
+      prompt: { options: [{ id: 'approve' }] },
+    }) as Record<string, unknown>
+    expect(projected.deepLink).toBe('/?view=outbox&outbox=message-1')
+    expect(projected.prompt).toBeUndefined()
+    expect(projected.summary).toBe('批准工具 write 写入工作区之外')
+    expect(projected.approvalId).toBe('approval-1')
+  })
+
+  it('keeps approval payloads without a message id unchanged', () => {
+    const payload = {
+      type: 'approval.required',
+      approvalId: 'approval-2',
+      summary: 's',
+    }
+    expect(externalDeliveryPayload(payload)).toBe(payload)
+  })
 })
 
 describe('NOTIFY-004 dispatcher applies projection only to external channels', () => {

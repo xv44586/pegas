@@ -1,5 +1,8 @@
 import type {
+  Approval,
+  DurableAction,
   GoalContract,
+  OutboxMessage,
   Run,
   RunActivityEntry,
   TaskDelivery,
@@ -22,6 +25,8 @@ export type ReviewFixture =
   | 'task-todo-search'
   | 'task-run-artifacts'
   | 'task-output-archive'
+  | 'approval-write'
+  | 'approval-command'
   | 'preview-file'
   | 'preview-image'
   | 'preview-video'
@@ -935,6 +940,8 @@ function fixtureView(fixture: ReviewFixture): DrawerView {
   if (fixture === 'task-todo-search') return todoSearchView()
   if (fixture === 'task-run-artifacts') return runArtifactsView()
   if (fixture === 'task-output-archive') return outputArchiveView()
+  if (fixture === 'approval-write' || fixture === 'approval-command')
+    return approvalView(fixture)
   if (
     fixture === 'task-activity' ||
     fixture === 'task-activity-open' ||
@@ -965,6 +972,81 @@ function fixtureView(fixture: ReviewFixture): DrawerView {
   }
 }
 
+function approvalView(
+  fixture: 'approval-write' | 'approval-command',
+): DrawerView {
+  const write = fixture === 'approval-write'
+  const approval: Approval = {
+    id: `review-${fixture}`,
+    taskId: channel.id,
+    actionId: `review-action-${fixture}`,
+    requestRunId: 'review-running',
+    status: 'pending',
+    prompt: {
+      summary: write
+        ? '批准工具 write 写入工作区之外'
+        : '确认不可逆命令（bash）执行一次',
+      impact: write
+        ? '工具 write 将写入工作区之外（/srv/shared/plan.md）。'
+        : '命令包含不可逆删除（rm -rf /srv/data/archive）。',
+      recommendedOptionId: 'approve',
+      options: [
+        { id: 'approve', label: '批准执行一次', kind: 'approve' },
+        ...(write
+          ? [
+              {
+                id: 'approve_rule',
+                label: '本事情内同类不再询问',
+                kind: 'approve_rule' as const,
+                description:
+                  '仅覆盖 write 对相同目标（/srv/shared/plan.md）的同类操作；目标变化会重新审批，可在事情详情撤销。',
+              },
+            ]
+          : []),
+        { id: 'reject', label: '不执行', kind: 'reject' },
+      ],
+    },
+    createdAt: '2026-11-20T00:03:00.000Z',
+  }
+  const action: DurableAction = {
+    id: approval.actionId,
+    taskId: channel.id,
+    requestRunId: approval.requestRunId,
+    kind: write ? 'dsh.tool.write' : 'dsh.tool.bash',
+    risk: write ? 'high' : 'critical',
+    idempotencyKey: `dsh-tool:review:${fixture}`,
+    status: 'awaiting_approval',
+    request: {
+      tool: write ? 'write' : 'bash',
+      callId: 'call-review',
+      reason: approval.prompt.impact,
+      category: write ? 'out-of-workspace-write' : 'destructive-command',
+      targets: write ? ['/srv/shared/plan.md'] : ['/srv/data/archive'],
+      argumentsHash: 'f'.repeat(64),
+      ...(write ? {} : { command: 'rm -rf /srv/data/archive' }),
+      tier: 'standard',
+      tierGeneration: 'g'.repeat(32),
+      tierMismatch: false,
+    },
+    recoveryPoint: { step: 'before_tool_call', callId: 'call-review' },
+    createdAt: approval.createdAt,
+    updatedAt: approval.createdAt,
+  }
+  const message: OutboxMessage = {
+    id: `review-message-${fixture}`,
+    userId: channel.userId,
+    taskId: channel.id,
+    status: 'sent',
+    payload: {
+      type: 'approval.required',
+      approvalId: approval.id,
+      summary: approval.prompt.summary,
+    },
+    createdAt: approval.createdAt,
+  }
+  return { kind: 'approval', approval, action, message, channel }
+}
+
 export function UiReviewHarness({ fixture }: { fixture: ReviewFixture }) {
   return (
     <main className="review-harness">
@@ -972,6 +1054,7 @@ export function UiReviewHarness({ fixture }: { fixture: ReviewFixture }) {
         api={new PegasApi('review')}
         onChange={() => undefined}
         onClose={() => undefined}
+        onDecideApproval={() => Promise.resolve()}
         onRetry={() => Promise.resolve()}
         view={fixtureView(fixture)}
       />

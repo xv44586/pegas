@@ -72,7 +72,18 @@ function redactedEvidence(
  * receivers get an authenticated in-app reference instead.
  */
 export function externalDeliveryPayload(payload: unknown): unknown {
-  if (!isRecord(payload) || payload.type !== 'review.ready') return payload
+  if (!isRecord(payload)) return payload
+  if (payload.type === 'approval.required') {
+    if (typeof payload.messageId !== 'string' || payload.messageId === '')
+      return payload
+    const rest = { ...payload }
+    Reflect.deleteProperty(rest, 'prompt')
+    return {
+      ...rest,
+      deepLink: `/?view=outbox&outbox=${encodeURIComponent(payload.messageId)}`,
+    }
+  }
+  if (payload.type !== 'review.ready') return payload
   const review = payload.review
   if (!isRecord(review)) return payload
   const evidence = Array.isArray(review.evidence) ? review.evidence : []

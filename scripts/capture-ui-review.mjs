@@ -1,8 +1,10 @@
 import { execFileSync, spawn } from 'node:child_process'
 import {
   chmodSync,
+  existsSync,
   mkdtempSync,
   mkdirSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from 'node:fs'
@@ -43,7 +45,15 @@ if (
 ) {
   throw new Error('UI review output must stay under output/feature-review/')
 }
-rmSync(outputDirectory, { recursive: true, force: true })
+if (existsSync(outputDirectory)) {
+  for (const entry of readdirSync(outputDirectory, { withFileTypes: true })) {
+    if (/\.(?:png|jpe?g|webp|mp4|webm)$/iu.test(entry.name))
+      rmSync(resolve(outputDirectory, entry.name), {
+        recursive: true,
+        force: true,
+      })
+  }
+}
 mkdirSync(outputDirectory, { recursive: true })
 
 const dataDirectory = mkdtempSync(resolve(tmpdir(), 'pegas-ui-review-'))
@@ -960,6 +970,8 @@ try {
     'task-todo-search',
     'task-run-artifacts',
     'task-output-archive',
+    'approval-write',
+    'approval-command',
     'preview-file',
     'preview-image',
     'preview-video',
@@ -1090,6 +1102,19 @@ try {
       }
       await fixturePage.goto(`http://127.0.0.1:${String(port)}/`)
       await fixturePage.getByRole('button', { name: '关闭详情' }).waitFor()
+      if (fixture.startsWith('approval-')) {
+        await fixturePage.getByLabel('操作预览').waitFor()
+        await fixturePage
+          .getByRole('button', { name: '提交决定' })
+          .scrollIntoViewIfNeeded()
+        const overflow = await fixturePage.evaluate(
+          () =>
+            globalThis.document.documentElement.scrollWidth >
+            globalThis.document.documentElement.clientWidth,
+        )
+        if (overflow)
+          throw new Error(`${size}-${fixture}: horizontal overflow detected`)
+      }
       if (fixture.startsWith('task-activity')) {
         await fixturePage.getByText('工作流程记录', { exact: false }).click()
         if (fixture === 'task-activity-open') {

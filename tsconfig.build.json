@@ -14,6 +14,7 @@
     "test/**/*.ts",
     "src/desktop/**/*.ts",
     "src/executor/dsh-approval-bridge.mjs",
+    "src/executor/policy-gate.mjs",
     "src/executor/dsh-readonly-surface.mjs"
   ]
 }

@@ -51,6 +51,7 @@ export interface ExecutionContext {
   workerProfile?: string
   workerProfileRevision?: number
   workerProfileSource?: 'global' | 'task'
+  permissionTier?: 'strict' | 'standard' | 'full'
   authoritySourceRunId?: string
   executionPool?: 'fast' | 'balanced' | 'deep'
   requestedPool?: 'fast' | 'balanced' | 'deep'
