@@ -488,6 +488,7 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - 本期目标收敛为**桌面端 MVP**，以封板 Web（桌面 + 390px 移动端已封板）作为测试与验证入口；DESKTOP-001 已 Usable，签名/公证/自动更新/原生通知为剩余加固。
 - 明确押后（重新启用时回到对应 Feature Intake）：MOBILE-001 全部（iOS 登录/UI/恢复入口）、APNs 与 Web Push（NOTIFY-002）、PWA 壳、Memory 自动抽取与语义检索（MEMORY-001，本期保持手动 CRUD + 按需加载）、多渠道回复地址与投递偏好（CHANNEL）。
 - 据此刷新 `docs/mvp-plan.md`：已落地项如实勾选（Web 澄清卡/Review Pack 卡/证据画廊为 DESIGN-002 §12、DSH tool-call 幂等与对账为 APPROVAL-001/EXEC-003、Memory Web CRUD 与只读节点列表为 DESIGN-002、归类规则/测试归类为 ROUTE-005 R1–R5）；「手机长期使用闭环」改为「桌面端本期闭环」+ 押后清单 + 桌面端剩余待补（Idea/Trigger 意图、SELF-001 签名与 worktree 清理、OBS-001 聚合告警、GOAL-001 validity、CONV-001 多附件、DESKTOP-001 加固）。纯文档变更，无代码/schema 改动。
+- 验证：隔离 worktree `mvp-desktop-scope`（基线 `bcaea50`，frozen-lockfile）`pnpm check` 134 文件 / 1377 测试全绿（statement 85.57 / branch 78.40 / fn 89.93 / line 88.65）；PR #88（标题沿用 mvp-plan 收尾先例 GOAL-001 归属，CI 证据步骤要求标题含 Feature ID）。
 
 ### GOAL-001：目标形成与证据化交付（2026-11-21）
 
