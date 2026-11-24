@@ -1,5 +1,12 @@
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
@@ -524,6 +531,148 @@ describe('DSH approval bridge policy gate', () => {
         }),
       )
     } finally {
+      restoreEnvironment(previous)
+      await new Promise<void>(resolve => server.close(() => resolve()))
+      store.close()
+    }
+  })
+
+  it('records a derived final-byte fingerprint for a parked edit call', async () => {
+    const roots = gateRoots()
+    const store = new PegasStore(':memory:')
+    const claimed = createClaimedRun(store, 'owner', 'worker-edit-fp')
+    const server = createControlPlane({ store, apiToken: 'bridge-test' })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const baseUrl = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+    const previous = { ...process.env }
+    process.env.PEGAS_APPROVAL_BRIDGE = '1'
+    process.env.PEGAS_CONTROL_PLANE_URL = baseUrl
+    process.env.PEGAS_RUN_ID = claimed.run.id
+    process.env.PEGAS_RUN_CLAIM_TOKEN = claimed.claimToken
+    const editTarget = join(realpathSync(tmpdir()), 'pegas-delta-edit.md')
+    writeFileSync(editTarget, 'alpha\nbeta\n')
+    try {
+      const bridge = await loadBridge()
+      const harness = gateHarness()
+      bridge.apply(harness.ctx, {
+        emit: (event: unknown) =>
+          harness.events.push(event as Record<string, unknown>),
+        policy: bridgePolicy(roots),
+      })
+      const preExecute = harness.handlers.get('tools/pre-execute')
+      const approvalRequest = harness.handlers.get('approval/request')
+      if (!preExecute || !approvalRequest) {
+        throw new Error('bridge did not register its hooks')
+      }
+      const editCall = {
+        agent: {},
+        callId: 'call-edit-fp',
+        name: 'edit',
+        arguments: {
+          file_path: editTarget,
+          old_string: 'beta',
+          new_string: 'BETA',
+        },
+      }
+      const editGate = (await preExecute(editCall, () =>
+        Promise.resolve({ kind: 'allow' }),
+      )) as { kind: string; reason?: string }
+      expect(editGate.kind).toBe('ask')
+      await approvalRequest(
+        {
+          agent: {},
+          toolName: 'edit',
+          callId: 'call-edit-fp',
+          reason: editGate.reason,
+        },
+        () => Promise.resolve('unavailable'),
+      )
+      const editApproval = store.pageApprovals('owner', 10).items[0]
+      if (!editApproval) throw new Error('Expected edit Approval')
+      const editAction = store.getAction(editApproval.actionId, 'owner')
+      expect(editAction?.request.effect).toEqual({
+        contentHash: createHash('sha256').update('alpha\nBETA\n').digest('hex'),
+      })
+    } finally {
+      rmSync(editTarget, { force: true })
+      restoreEnvironment(previous)
+      await new Promise<void>(resolve => server.close(() => resolve()))
+      store.close()
+    }
+  })
+
+  it('records derived per-target final bytes for a parked apply_patch call', async () => {
+    const roots = gateRoots()
+    const store = new PegasStore(':memory:')
+    const claimed = createClaimedRun(store, 'owner', 'worker-patch-fp')
+    const server = createControlPlane({ store, apiToken: 'bridge-test' })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const baseUrl = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+    const previous = { ...process.env }
+    process.env.PEGAS_APPROVAL_BRIDGE = '1'
+    process.env.PEGAS_CONTROL_PLANE_URL = baseUrl
+    process.env.PEGAS_RUN_ID = claimed.run.id
+    process.env.PEGAS_RUN_CLAIM_TOKEN = claimed.claimToken
+    const patchTarget = join(realpathSync(tmpdir()), 'pegas-delta-patch.md')
+    writeFileSync(patchTarget, 'one\ntwo\n')
+    try {
+      const bridge = await loadBridge()
+      const harness = gateHarness()
+      bridge.apply(harness.ctx, {
+        emit: (event: unknown) =>
+          harness.events.push(event as Record<string, unknown>),
+        policy: bridgePolicy(roots),
+      })
+      const preExecute = harness.handlers.get('tools/pre-execute')
+      const approvalRequest = harness.handlers.get('approval/request')
+      if (!preExecute || !approvalRequest) {
+        throw new Error('bridge did not register its hooks')
+      }
+      const patchText = [
+        '*** Begin Patch',
+        `*** Update File: ${patchTarget}`,
+        '@@',
+        ' one',
+        '-two',
+        '+TWO',
+        '*** End Patch',
+      ].join('\n')
+      const patchCall = {
+        callId: 'call-patch-fp',
+        name: 'apply_patch',
+        arguments: { input: patchText },
+      }
+      const patchGate = (await preExecute(patchCall, () =>
+        Promise.resolve({ kind: 'allow' }),
+      )) as { kind: string; reason?: string }
+      expect(patchGate.kind).toBe('deny')
+      await approvalRequest(
+        {
+          agent: {},
+          toolName: 'apply_patch',
+          callId: 'call-patch-fp',
+          reason: patchGate.reason,
+        },
+        () => Promise.resolve('unavailable'),
+      )
+      const patchEvents = harness.events.filter(
+        event =>
+          event.type === 'approval_pending' && event.callId === 'call-patch-fp',
+      )
+      expect(patchEvents).toHaveLength(1)
+      const patchActionId = patchEvents[0]?.actionId
+      if (typeof patchActionId !== 'string')
+        throw new Error('Expected patch action id')
+      const patchAction = store.getAction(patchActionId, 'owner')
+      expect(patchAction?.request.effect).toEqual({
+        targets: {
+          [patchTarget]: createHash('sha256')
+            .update('one\nTWO\n')
+            .digest('hex'),
+        },
+      })
+    } finally {
+      rmSync(patchTarget, { force: true })
       restoreEnvironment(previous)
       await new Promise<void>(resolve => server.close(() => resolve()))
       store.close()

@@ -267,7 +267,8 @@ function classifyWriteTool(execution, context) {
  */
 function classifyApplyPatch(execution, context) {
   const arguments_ = record(execution.arguments)
-  const patch = arguments_?.patch
+  const patch =
+    typeof arguments_?.input === 'string' ? arguments_.input : arguments_?.patch
   if (typeof patch !== 'string') {
     return unknownDecision('apply_patch 缺少补丁内容，需要你确认。')
   }
