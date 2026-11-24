@@ -2,7 +2,7 @@
 
 > Feature：`ROUTE-005`
 >
-> 状态：Usable（R1–R4 已经 PR #69 合入 main 并经 Candidate `main-92dfc88-r1` 上线；R5 澄清待办自动过期开发中）
+> 状态：Usable（R1–R4 经 PR #69、R5 澄清到期经 PR #72 合入 main，现运行 Candidate `main-499a0ef-r1`）
 >
 > 登记日期：2026-11-23
 
@@ -197,3 +197,4 @@ R3 的 `ask_first` 策略在归属歧义时产生 `routing.clarification_require
 - 门禁：`pnpm check` 129 文件 / 1319 测试全绿（statement 85.65% / branch 78.45% / function 89.9% / line 88.73%）、`pnpm smoke`（task 0063fbf0）、`pnpm smoke:crash`（三注入通过；首跑一次进程收尾非零退出复跑通过）、`pnpm review:ui --force`、`pnpm a11y:review` 0 违例、canary 按规则跳过。
 - 真实多进程验证：独立数据目录起真实 control-plane + scheduler（TTL=3000ms），seed 真实澄清待办 → HTTP 观察 expiresAt 写入 → 5s 后原待办 readAt 置位 + `routing.clarification_expired` 事实出现（原输入逐字保留）→ tasks=0（零 Task/Run 副作用）。脚本 `/tmp/route005-expiry-live.mjs`（本地，不入库）。
 - 剩余风险：TTL 为实例级运维配置，无每用户/每事情覆盖（按非目标登记）；过期事实无「重新发送」一键动作（用户手动重发，原文可见）。回滚：revert 即回 v47 行为，v48 列旧代码忽略；已产生的 expired 事实按未知类型走兼容降级（普通更新），原待办保持已读，无数据破坏。
+- **R5 合并与上线（2026-11-24）**：PR #72 经 CI run 45331103941 success 合入 main（merge `499a0ef`，main CI run 45331695890 success；合并含上游 write 指纹 `d627312`，无 schema 冲突）。隔离发布 worktree `release-499a0ef` 完整门禁（129 文件 / 1320 测试）+ smoke:self-change + evidence `ready-for-review` 后构建 Candidate `main-499a0ef-r1`（schema 31–48），重锚定复核通过，Supervisor staging→stable，schema 47→48；主仓 ff + build:server + kickstart + 真实 restart；删除发布 worktree 后 `/readyz` 不变；integrity ok、日志无 error。active=`main-499a0ef-r1`、previous=`main-d627312-r1` 可回滚。详见 `docs/feature-map.md` ROUTE-005 专节 R5 发布记录。
