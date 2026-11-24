@@ -36,6 +36,10 @@ export interface RoutingRuleDeletion {
   deletedAt: string
 }
 
+export interface RoutingRuleContext {
+  rules: readonly { id: string; title: string; content: string }[]
+}
+
 export function parseRoutingRuleCreate(
   value: unknown,
 ): RoutingRuleCreateCommand {

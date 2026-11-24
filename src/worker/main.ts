@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 
 import { loadConfig } from '../core/config.js'
+import type { InboxEvent } from '../core/domain.js'
 import { ModelThinkingSummarizer } from '../activity/thinking-summary.js'
 import { ConversationExecutor } from '../executor/conversation-executor.js'
 import { DshCliExecutor } from '../executor/dsh-cli-executor.js'
@@ -136,7 +137,7 @@ const selfChangeExecutor = config.selfChangeEnabled
       recoveryBaseUrl: config.recoveryBaseUrl,
       ...(config.recoveryToken ? { recoveryToken: config.recoveryToken } : {}),
       editor: executor,
-      compatibility: { minimumSchema: 1, maximumSchema: 40 },
+      compatibility: { minimumSchema: 1, maximumSchema: 41 },
       reviewer: 'pegas-self-change-gate',
       controlPlaneBaseUrl,
     })
@@ -373,11 +374,15 @@ function required(value: string | undefined, name: string): string {
   return value
 }
 
-function createRouter(settings: RuntimeSettings): TaskRouter {
+function createRouter(
+  settings: RuntimeSettings,
+  event: InboxEvent,
+): TaskRouter {
   const baseRouter: TaskRouter =
     settings.routerMode === 'model'
       ? new ModelTaskRouter({
           provider: metered(createModelProvider(settings), 'router'),
+          routingRules: store.routingRuleContextForUser(event.userId),
         })
       : new RuleBasedTaskRouter()
   if (settings.rewriteMode === 'disabled') return baseRouter

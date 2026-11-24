@@ -255,6 +255,26 @@ describe('durable state rollback compatibility', () => {
       })
       expect(() => assertRollbackCompatible(path, 39)).not.toThrow()
       expect(() => assertRollbackCompatible(path, 40)).not.toThrow()
+      const event = store.enqueueEvent({
+        userId: 'owner',
+        type: 'user.message',
+        source: 'web',
+        authenticatedActor: 'human',
+        payload: { text: 'X 项目新想法' },
+      }).event
+      store.applyRoutingDecision(
+        event,
+        {
+          kind: 'create_task',
+          title: 'X 项目新想法',
+          goal: 'X 项目新想法',
+          input: 'X 项目新想法',
+          reason: 'matches rule',
+          matchedRuleId: 'rule-x',
+        },
+        'echo',
+      )
+      expect(() => assertRollbackCompatible(path, 40)).not.toThrow()
     } finally {
       store.close()
       rmSync(directory, { recursive: true, force: true })

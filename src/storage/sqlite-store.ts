@@ -127,6 +127,7 @@ import {
 import {
   routingRuleFingerprint,
   type RoutingRuleCreateCommand,
+  type RoutingRuleContext,
   type RoutingRuleDeleteCommand,
   type RoutingRuleDeletion,
   type RoutingRuleRecord,
@@ -852,6 +853,11 @@ CREATE TABLE routing_rule_commands (
 
 CREATE INDEX routing_rule_commands_by_rule
 ON routing_rule_commands (rule_id);
+`
+
+const migration41 = `
+ALTER TABLE routing_decisions ADD COLUMN matched_rule_id TEXT;
+ALTER TABLE routing_decisions ADD COLUMN decision_source TEXT;
 `
 
 const migration39 = `
@@ -2713,6 +2719,7 @@ export class PegasStore {
     this.#migrate(38, migration38)
     this.#migrate(39, migration39)
     this.#migrate(40, migration40)
+    this.#migrate(41, migration41)
   }
 
   #backfillWorkerIconIds(): void {
@@ -5074,6 +5081,29 @@ export class PegasStore {
       )
   }
 
+  routingRuleContextForUser(userId: string): RoutingRuleContext {
+    const rows = this.#database
+      .prepare(
+        `SELECT id, title, content FROM routing_rules
+         WHERE user_id = ? AND enabled = 1
+         ORDER BY rowid ASC`,
+      )
+      .all(userId) as unknown as {
+      id: string
+      title: string
+      content: string
+    }[]
+    const selected: { id: string; title: string; content: string }[] = []
+    let characters = 0
+    for (const row of rows) {
+      const size = Array.from(row.content).length + 200
+      if (selected.length > 0 && characters + size > 8_000) break
+      selected.push(row)
+      characters += size
+    }
+    return { rules: selected }
+  }
+
   getBehaviorPreferences(userId: string): {
     userId: string
     customInstructions: string
@@ -6014,10 +6044,19 @@ export class PegasStore {
       )
     this.#database
       .prepare(
-        `INSERT INTO routing_decisions (event_id, kind, task_id, reason, created_at)
-         VALUES (?, ?, ?, ?, ?)`,
+        `INSERT INTO routing_decisions
+          (event_id, kind, task_id, reason, created_at, matched_rule_id, decision_source)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(event.id, decision.kind, decision.taskId, decision.reason, now)
+      .run(
+        event.id,
+        decision.kind,
+        decision.taskId,
+        decision.reason,
+        now,
+        decision.matchedRuleId ?? null,
+        decision.matchedRuleId ? 'prompt' : 'deterministic',
+      )
   }
 
   listPendingRunSteering(
@@ -6368,10 +6407,19 @@ export class PegasStore {
             .run(event.id, task.id, now)
           this.#database
             .prepare(
-              `INSERT INTO routing_decisions (event_id, kind, task_id, reason, created_at)
-               VALUES (?, ?, ?, ?, ?)`,
+              `INSERT INTO routing_decisions
+                (event_id, kind, task_id, reason, created_at, matched_rule_id, decision_source)
+               VALUES (?, ?, ?, ?, ?, ?, ?)`,
             )
-            .run(event.id, decision.kind, task.id, decision.reason, now)
+            .run(
+              event.id,
+              decision.kind,
+              task.id,
+              decision.reason,
+              now,
+              decision.matchedRuleId ?? null,
+              decision.matchedRuleId ? 'prompt' : null,
+            )
           const redirectedTask = this.#taskById(task.id)
           const redirectedRun = this.#runById(activeRun.id)
           this.#database.exec('COMMIT')
@@ -6408,10 +6456,19 @@ export class PegasStore {
         .run(event.id, task.id, relation, now)
       this.#database
         .prepare(
-          `INSERT INTO routing_decisions (event_id, kind, task_id, reason, created_at)
-           VALUES (?, ?, ?, ?, ?)`,
+          `INSERT INTO routing_decisions
+            (event_id, kind, task_id, reason, created_at, matched_rule_id, decision_source)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
         )
-        .run(event.id, decision.kind, task.id, decision.reason, now)
+        .run(
+          event.id,
+          decision.kind,
+          task.id,
+          decision.reason,
+          now,
+          decision.matchedRuleId ?? null,
+          decision.matchedRuleId ? 'prompt' : null,
+        )
 
       const previous = this.#database
         .prepare(
@@ -6804,6 +6861,8 @@ export class PegasStore {
     taskId: string
     reason: string
     createdAt: string
+    matchedRuleId?: string
+    decisionSource?: 'prompt' | 'deterministic'
   }[] {
     const task = this.findTask(taskId, userId)
     if (!task) throw new Error('Task does not exist for user')
@@ -6820,6 +6879,8 @@ export class PegasStore {
       task_id: string
       reason: string
       created_at: string
+      matched_rule_id: string | null
+      decision_source: 'prompt' | 'deterministic' | null
     }[]
     return rows.map(row => ({
       eventId: row.event_id,
@@ -6827,6 +6888,8 @@ export class PegasStore {
       taskId: row.task_id,
       reason: row.reason,
       createdAt: row.created_at,
+      ...(row.matched_rule_id ? { matchedRuleId: row.matched_rule_id } : {}),
+      ...(row.decision_source ? { decisionSource: row.decision_source } : {}),
     }))
   }
 

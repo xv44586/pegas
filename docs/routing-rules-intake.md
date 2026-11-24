@@ -2,7 +2,7 @@
 
 > Feature：`ROUTE-005`
 >
-> 状态：Scaffold（R1 存储与 CRUD 已落地；R2–R4 未实现）
+> 状态：Scaffold（R1 存储与 CRUD、R2 规则消费与命中证据已落地；R3–R4 未实现）
 >
 > 登记日期：2026-11-23
 
@@ -113,6 +113,7 @@
 - `RuleBasedTaskRouter`（rules 模式）不消费用户规则（保持确定性语义），UI 在 rules 模式下如实说明规则仅作用于智能判断。
 - 硬边界回归：用户规则指向 cancelled/不存在任务、含控制意图措辞时不得改变确定性链路；模型畸形输出仍走既有规则兜底。
 - 测试：`test/router.test.ts` 扩展 + 新命中证据用例；真实归类模型实测「命中/未命中」两场景。
+- **落地证据（2026-11-24）**：分支 `feat/ROUTE-005-router-consumption`（基线 `bf72382`）。`RoutingDecision` 各 kind 增加可选 `matchedRuleId`；`routerDecisionSchema` 增加 `matchedRuleId` 字段，`modelDecision` 校验其必须属于本次注入的规则集合，非法只丢弃该字段不整条兜底；启用规则经 `<` 转义以 `<pegas_routing_rules>` 偏好块拼入 system prompt（声明非授权、不得选未列出任务/恢复已停止任务/表达控制意图），`routingRuleContextForUser` 按创建顺序装载、8000 字符预算（每条 +200 元数据开销）；无规则时 prompt 逐字节不变（回归断言）。schema v41 为 `routing_decisions` 增量两列 `matched_rule_id`/`decision_source`，三处决策落库点写入证据，`listChannelRoutingDecisions` 与 HTTP 时间线 routing 投影携带命中证据；`RuleBasedTaskRouter` 不消费用户规则，显式 taskId 确定性链路不受影响（回归断言）；self-change `maximumSchema` 40→41。测试：`test/routing-rule-consumption.test.ts` 6 测试；`test/routing-rules-live-integration.test.ts` 1 真实 magpie/qwen4-max 条件集成（规则命中 create_task 带 matchedRuleId、无关消息保守 create_task 无命中，6.1s 实测通过）；回滚兼容用例扩展 v41。门禁：`pnpm check` 115 文件/1204 测试全绿（statement 85.72% / line 88.92%）、`pnpm smoke`、`pnpm smoke:crash` 通过。剩余风险：真实模型遵守度仅两场景实测；Web 时间线尚未渲染命中证据（R4 一并解锁）。回滚：revert 即回 v40 行为，增量列旧代码忽略。
 
 ### R3 「不确定时」策略（含 ask_first 澄清待办）
 
