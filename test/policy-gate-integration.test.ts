@@ -117,6 +117,7 @@ describe.skipIf(!dshAvailable || !gatewayReachable)(
           modelConfiguration: configuration,
         })
         const activities: string[] = []
+        const auditDecisions: { callId: string; decision: string }[] = []
         const insideMarker = join(workspace, 'inside-ok.txt')
         const outsideMarker = join(outside, 'outside-no.txt')
         const result = await executor.execute({
@@ -131,6 +132,11 @@ describe.skipIf(!dshAvailable || !gatewayReachable)(
           actionCapability: { baseUrl, claimToken: claimed.claimToken },
           onProgress: progress => {
             if (progress.type === 'activity') activities.push(progress.label)
+            if (progress.type === 'policy_decision')
+              auditDecisions.push({
+                callId: progress.callId,
+                decision: progress.decision,
+              })
           },
         })
         expect(existsSync(insideMarker)).toBe(true)
@@ -139,6 +145,12 @@ describe.skipIf(!dshAvailable || !gatewayReachable)(
         expect(result.approvalPending).toBeDefined()
         expect(result.approvalPending?.tool).toBe('write')
         expect(activities.some(label => label.includes('安全检查通过'))).toBe(
+          true,
+        )
+        expect(auditDecisions.some(entry => entry.decision === 'allow')).toBe(
+          true,
+        )
+        expect(auditDecisions.some(entry => entry.decision === 'ask')).toBe(
           true,
         )
         const approval = store.pageApprovals('owner', 10).items[0]

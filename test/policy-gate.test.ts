@@ -739,7 +739,13 @@ describe('DSH approval bridge policy gate', () => {
         status: 'succeeded',
         result: { tool: 'write', callId: 'call-granted' },
       })
-      expect(harness.events).toEqual([])
+      expect(harness.events).toHaveLength(1)
+      expect(harness.events[0]).toMatchObject({
+        type: 'policy_decision',
+        callId: 'call-granted',
+        decision: 'allow',
+        actionId: requested.action.id,
+      })
 
       const variant = {
         agent: {},

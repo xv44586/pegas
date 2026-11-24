@@ -1006,6 +1006,40 @@ export async function executeClaimedRun(
           })
           return
         }
+        if (event.type === 'policy_decision') {
+          if (
+            event.decision === 'allow' ||
+            event.decision === 'ask' ||
+            event.decision === 'deny'
+          ) {
+            store.appendPolicyCallAudit(claimed.run.id, workerId, {
+              callId: event.callId,
+              tool: event.tool,
+              category: event.category,
+              risk: event.risk,
+              decision: event.decision,
+              reason: event.reason,
+              ...(event.tier !== undefined ? { tier: event.tier } : {}),
+              ...(event.generation !== undefined
+                ? { generation: event.generation }
+                : {}),
+              ...(event.mismatch !== undefined
+                ? { mismatch: event.mismatch }
+                : {}),
+              ...(event.ruleId !== undefined ? { ruleId: event.ruleId } : {}),
+              ...(event.reviewDecision !== undefined
+                ? { reviewDecision: event.reviewDecision }
+                : {}),
+              ...(event.actionId !== undefined
+                ? { actionId: event.actionId }
+                : {}),
+              ...(event.targets !== undefined
+                ? { targets: event.targets }
+                : {}),
+            })
+          }
+          return
+        }
         if (event.type === 'acknowledgement') {
           store.appendRunActivity(claimed.run.id, workerId, {
             kind: 'text',

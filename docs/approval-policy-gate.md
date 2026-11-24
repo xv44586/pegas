@@ -1,7 +1,7 @@
 # 权限档位与审批 Policy Gate（APPROVAL-001 第二阶段）
 
-> 状态：P1 Gate 覆盖面、P2 权限档位对象、P3 规则批准、P4 审批卡升级、P5 自动审阅已实现（见下方实现记录）
-> 更新日期：2026-11-23
+> 状态：P1 Gate 覆盖面、P2 权限档位对象、P3 规则批准、P4 审批卡升级、P5 自动审阅、P6 逐调用审计表已实现（见下方实现记录）
+> 更新日期：2026-11-24
 > 基线：`origin/main` `74c2f8c`（Intake 初稿基线 `4baab43`）
 > 外部调研：`research/approval-permissions-codex-cindy/NOTES.md`（本地，不入库；Codex CLI/webview、Cindy Apache-2.0 docs、DSH MIT 源码）
 
@@ -167,6 +167,15 @@
 - **证据**：`test/auto-review.test.ts` 9 项（设置默认/parse、投影只认 human+预算丢最旧+generation 指纹、机器 only 空原话、审阅记录幂等/冲突/claim 校验、回滚 Guard、HTTP review+projection、HTTP settings）+ `test/auto-review-bridge.test.ts` 7 项（allow 放行+路由断言+记录+outcome succeeded；机器输入不审阅直接 ask【对抗回归】；deny/malformed/prose 降级 ask+记录；开关关/critical 不审阅；无完整路由不审阅；reasoning 块容忍；终态 error finish 降级）+ `test/dsh-cli-executor.test.ts` +1（auto_review Activity）+ Web `App.test.tsx` +2（设置开关、审批卡审阅结论），先红后绿；`test/policy-gate-integration.test.ts` 新增真实 DSH 探针（magpie gateway + qwen4-max：human 原话明确授权写区外文件→审阅 allow→文件落盘→Action succeeded+review allow，不停放）。`pnpm check` 117 文件 / 1243 测试全绿（statement 85.66%、branch 78.58%、function 89.96%、line 88.78%），`pnpm smoke`、`pnpm smoke:crash` 通过。验收条件 6（机器输入不扩大授权）与 8 已满足。
 - **剩余风险**：每个符合条件的 ask 调用一次审阅模型调用（成本与时延，20s 超时降级）；审阅质量依赖模型对 REVIEW_POLICY 与严格 JSON 协议的遵守（形状不符 fail closed，但语义误判 allow 无法静态兜底——medium 授权判断本质是模型判断）；allow 无逐次人工确认，事后审计依赖审阅记录与 outcome；30000 字符预算丢弃最旧原话可能丢掉早期授权语境（omitted 已告知，保守方向是降级 ask）。
 - **回滚**：revert 本提交恢复「ask 一律人工审批」行为；v42 additive（一列+新表），旧代码忽略；Guard 在自动审阅开关开启时拒绝回滚到 <v42（先关开关再回滚），审阅记录保留不删除。
+
+## P6 实现记录：逐调用独立审计表（2026-11-24）
+
+- **用户结果**：每次 Policy Gate 判定（allow/ask/deny）落一行 append-only 独立审计记录，含调用与判定依据（工具、类别、risk、reason、目标列表）、生效档位与代次、规则引用（ruleId）、自动审阅结论（reviewDecision）与 Action 引用；规则命中与审阅放行这类「无审批卡的免确认通道」由此可跨 Run 按规则/类别/判定查询问责。Activity 进度流保留原白话展示，不承担审计存储。
+- **实现**：migration v43 append-only `policy_call_audit`（UNIQUE(run_id, call_id) 幂等重放、触发器禁改禁删、task 时间与 rule 两个索引）；`PegasStore.appendPolicyCallAudit`（仅当前 Run 的 worker 可写，INSERT…SELECT 绑定 task_id，冲突 DO NOTHING）+ `listPolicyCallAudit`（owner JOIN 隔离，taskId/runId/decision/category/ruleId 过滤 + 游标分页）；`GET /v1/policy-audit`（bearer + userId，过滤参数校验）；桥 `policy_decision` 事件补 targets/ruleId/reviewDecision/actionId/tier/generation/mismatch 字段，一次性 grant 命中也发 allow 事件（此前静默放行无记录）；`DshCliExecutor` 解析并转发结构化 `policy_decision` 进度事件（ExecutorProgressEvent 扩展），Worker 落库。
+- **与 Intake 的差异（如实记录）**：审计表记录「Gate 判定」而非「工具执行结果」；执行 outcome 仍由既有 Action outcome / Activity tool_result 承担，两者经 callId/actionId 关联。fake DSH 不加载桥 patch，桥→executor→store 全链路由真实 DSH 探针与桥单测分别覆盖。
+- **证据**：`test/policy-call-audit.test.ts` 6 项（append-only 行+provenance、重放去重、过滤+owner 隔离、触发器禁改禁删、HTTP bearer+过滤、回滚 Guard）先红后绿；`test/dsh-cli-executor.test.ts` +1（结构化转发含 provenance）；`test/dsh-approval-bridge.test.ts` grant 单测断言 allow 事件（原「零事件」合同更新为「恰好一条 allow 审计事件」）；`test/policy-gate-integration.test.ts` 真实探针补 allow+ask 结构化断言。
+- **剩余风险**：审计写入依赖 Worker 存活时收到事件；Worker 崩溃在事件与落库之间会丢该条判定（Run 恢复链保证工具副作用不重复，但审计行不补写）——crash 窗口的审计完整性属后续加固。
+- **回滚**：v43 additive（新表+索引+触发器），旧代码忽略；Guard 在存在 rule/review 放行审计行时拒绝回滚到 <v43（这些放行的问责记录只存在于新表）；revert 提交恢复「Activity 即记录」行为，审计数据保留不删除。
 
 ## UI 设计合同（P4 输入）
 

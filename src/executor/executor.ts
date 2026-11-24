@@ -52,6 +52,22 @@ export type ExecutorProgressEvent =
       result?: string
     }
   | { type: 'step'; phase: 'start' | 'end'; step?: number }
+  | {
+      type: 'policy_decision'
+      callId: string
+      tool: string
+      category: string
+      risk: string
+      decision: string
+      reason: string
+      tier?: string
+      generation?: string
+      mismatch?: boolean
+      ruleId?: string
+      reviewDecision?: 'allow' | 'deny' | 'failed'
+      actionId?: string
+      targets?: readonly string[]
+    }
 
 export interface ToolApprovalGrant {
   actionId: string

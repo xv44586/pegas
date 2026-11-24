@@ -1587,6 +1587,48 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         })
       }
 
+      if (
+        request.url?.startsWith('/v1/policy-audit') &&
+        request.method === 'GET'
+      ) {
+        if (!options.apiToken || !isAuthorized(request, options.apiToken)) {
+          return sendJson(response, 401, { error: 'unauthorized' })
+        }
+        const url = new URL(request.url, 'http://localhost')
+        const page = pageRequest(url)
+        const decision = optionalQuery(url, 'decision')
+        if (
+          decision !== undefined &&
+          decision !== 'allow' &&
+          decision !== 'ask' &&
+          decision !== 'deny'
+        )
+          throw new Error('decision must be allow, ask or deny')
+        const result = options.store.listPolicyCallAudit(
+          requiredQuery(url, 'userId'),
+          {
+            ...page,
+            ...(optionalQuery(url, 'taskId')
+              ? { taskId: requiredQuery(url, 'taskId') }
+              : {}),
+            ...(optionalQuery(url, 'runId')
+              ? { runId: requiredQuery(url, 'runId') }
+              : {}),
+            ...(decision ? { decision } : {}),
+            ...(optionalQuery(url, 'category')
+              ? { category: requiredQuery(url, 'category') }
+              : {}),
+            ...(optionalQuery(url, 'ruleId')
+              ? { ruleId: requiredQuery(url, 'ruleId') }
+              : {}),
+          },
+        )
+        return sendJson(response, 200, {
+          entries: result.items,
+          ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
+        })
+      }
+
       const stopChannelMatch = request.url?.match(
         /^\/v1\/channels\/([^/]+)\/stop$/,
       )
