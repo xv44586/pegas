@@ -78,6 +78,11 @@ import {
   parseWorkRuleUpdate,
 } from '../rules/rules.js'
 import {
+  parseRoutingRuleCreate,
+  parseRoutingRuleDelete,
+  parseRoutingRuleUpdate,
+} from '../rules/routing-rules.js'
+import {
   parseAutomationCreate,
   parseAutomationStatusCommand,
   parseAutomationUpdate,
@@ -119,6 +124,10 @@ import {
   OutboxResolutionConflictError,
   RunClaimError,
   RunMessageCommandConflictError,
+  RoutingRuleCommandConflictError,
+  RoutingRuleLimitError,
+  RoutingRuleNotFoundError,
+  RoutingRuleRevisionConflictError,
   SettingsRevisionConflictError,
   WorkerProfileReadOnlyError,
   WorkerProfileRevisionConflictError,
@@ -836,6 +845,59 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
           const deletion = options.store.deleteWorkRule(
             ruleId,
             parseWorkRuleDelete(await readJson(request)),
+          )
+          return sendJson(response, 200, { deletion })
+        }
+      }
+      if (
+        taskResourceUrl.pathname === '/v1/routing-rules' &&
+        request.method === 'GET'
+      ) {
+        const userId = requiredQuery(taskResourceUrl, 'userId')
+        const page = pageRequest(taskResourceUrl)
+        const result = options.store.listRoutingRules(
+          userId,
+          page.limit,
+          page.cursor,
+        )
+        return sendJson(response, 200, {
+          rules: result.items,
+          ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
+        })
+      }
+      if (
+        taskResourceUrl.pathname === '/v1/routing-rules' &&
+        request.method === 'POST'
+      ) {
+        const rule = options.store.createRoutingRule(
+          parseRoutingRuleCreate(await readJson(request)),
+        )
+        return sendJson(response, 201, { rule })
+      }
+      const routingRuleResourceMatch =
+        /^\/v1\/routing-rules\/([^/]+)(?:\/(delete))?$/.exec(
+          taskResourceUrl.pathname,
+        )
+      if (routingRuleResourceMatch) {
+        const ruleId = decodeURIComponent(routingRuleResourceMatch[1] ?? '')
+        const action = routingRuleResourceMatch[2]
+        if (!action && request.method === 'GET') {
+          const userId = requiredQuery(taskResourceUrl, 'userId')
+          const rule = options.store.findRoutingRule(ruleId, userId)
+          if (!rule) return sendJson(response, 404, { error: 'not_found' })
+          return sendJson(response, 200, { rule })
+        }
+        if (!action && request.method === 'PUT') {
+          const rule = options.store.updateRoutingRule(
+            ruleId,
+            parseRoutingRuleUpdate(await readJson(request)),
+          )
+          return sendJson(response, 200, { rule })
+        }
+        if (action === 'delete' && request.method === 'POST') {
+          const deletion = options.store.deleteRoutingRule(
+            ruleId,
+            parseRoutingRuleDelete(await readJson(request)),
           )
           return sendJson(response, 200, { deletion })
         }
@@ -2112,6 +2174,16 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         return sendJson(response, 404, { error: 'not_found' })
       if (error instanceof WorkRuleLimitError)
         return sendJson(response, 409, { error: 'rule_limit' })
+      if (error instanceof RoutingRuleCommandConflictError)
+        return sendJson(response, 409, {
+          error: 'routing_rule_command_conflict',
+        })
+      if (error instanceof RoutingRuleRevisionConflictError)
+        return sendJson(response, 409, { error: 'routing_rule_conflict' })
+      if (error instanceof RoutingRuleNotFoundError)
+        return sendJson(response, 404, { error: 'not_found' })
+      if (error instanceof RoutingRuleLimitError)
+        return sendJson(response, 409, { error: 'routing_rule_limit' })
       if (error instanceof BehaviorPreferencesConflictError)
         return sendJson(response, 409, { error: 'behavior_conflict' })
       if (error instanceof RunClaimError)

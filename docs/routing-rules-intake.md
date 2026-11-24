@@ -2,7 +2,7 @@
 
 > Feature：`ROUTE-005`
 >
-> 状态：Planned（仅 Intake 登记，尚无实现）
+> 状态：Scaffold（R1 存储与 CRUD 已落地；R2–R4 未实现）
 >
 > 登记日期：2026-11-23
 
@@ -103,6 +103,7 @@
 - HTTP：`GET/POST/PUT /v1/routing-rules`、`POST /v1/routing-rules/:id/delete`，bearer + owner 隔离 + commandId 幂等 + expectedRevision，404/409 语义与 `/v1/rules` 一致。
 - 测试先行：`test/routing-rules.test.ts`（契约/幂等/revision/owner 隔离/上限/HTTP/bearer）。
 - 完成判据：纯服务端闭环，Router 尚未消费规则；回滚 = revert，v40 增量表旧代码忽略。
+- **落地证据（2026-11-24）**：分支 `feat/ROUTE-005-routing-rules-store`（基线 `1cf8766`）。`src/rules/routing-rules.ts` 契约（title ≤120 / content ≤2000 / enabled，exactKeys 严格解析）；schema v40 增量两表 + `BEGIN IMMEDIATE` 冻结响应（create/update/delete 幂等重放、payload 变更 409、revision 乐观并发、owner 隔离 404、每用户 50 条上限删除释放、rowid DESC 游标分页）；HTTP `/v1/routing-rules` GET/POST/PUT + `/:id/delete`，错误码 `routing_rule_conflict`/`routing_rule_command_conflict`/`routing_rule_limit`/`not_found`，bearer 401；self-change `maximumSchema` 39→40。测试先行：`test/routing-rules.test.ts` 6 测试先红（5 失败）后绿；`test/rollback-compatibility.test.ts` +1（存在归类规则时允许回滚至 39，v40 纯增量）；`test/sqlite-store.test.ts` 迁移列表 +40。门禁：`pnpm check` 113 文件/1197 测试全绿（statement 85.7% / line 88.9%）、`pnpm smoke`、`pnpm smoke:crash` 通过。回滚：revert 即回到 v39 行为，旧代码忽略新表，无数据破坏。
 
 ### R2 规则消费与命中证据（Router 纵向闭环）
 

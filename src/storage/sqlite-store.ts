@@ -125,6 +125,14 @@ import {
   type WorkRuleUpdateCommand,
 } from '../rules/rules.js'
 import {
+  routingRuleFingerprint,
+  type RoutingRuleCreateCommand,
+  type RoutingRuleDeleteCommand,
+  type RoutingRuleDeletion,
+  type RoutingRuleRecord,
+  type RoutingRuleUpdateCommand,
+} from '../rules/routing-rules.js'
+import {
   modelProviderPreset,
   type ModelProviderId,
   type ModelProviderProtocol,
@@ -814,6 +822,36 @@ CREATE TABLE run_activity_output_pages (
   created_at TEXT NOT NULL,
   PRIMARY KEY (run_id, call_id)
 );
+`
+
+const migration40 = `
+CREATE TABLE routing_rules (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+  revision INTEGER NOT NULL CHECK (revision > 0),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX routing_rules_by_user_created
+ON routing_rules (user_id, created_at, id);
+
+CREATE TABLE routing_rule_commands (
+  user_id TEXT NOT NULL,
+  command_id TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  operation TEXT NOT NULL CHECK (operation IN ('create', 'update', 'delete')),
+  rule_id TEXT NOT NULL,
+  response_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, command_id)
+);
+
+CREATE INDEX routing_rule_commands_by_rule
+ON routing_rule_commands (rule_id);
 `
 
 const migration39 = `
@@ -2121,6 +2159,24 @@ interface WorkRuleCommandRow {
   response_json: string
 }
 
+interface RoutingRuleRow {
+  id: string
+  user_id: string
+  title: string
+  content: string
+  enabled: number
+  revision: number
+  created_at: string
+  updated_at: string
+}
+
+interface RoutingRuleCommandRow {
+  fingerprint: string
+  operation: 'create' | 'update' | 'delete'
+  rule_id: string
+  response_json: string
+}
+
 interface BehaviorPreferencesRow {
   user_id: string
   custom_instructions: string
@@ -2574,6 +2630,14 @@ export class WorkRuleNotFoundError extends Error {}
 
 export class WorkRuleLimitError extends Error {}
 
+export class RoutingRuleCommandConflictError extends Error {}
+
+export class RoutingRuleRevisionConflictError extends Error {}
+
+export class RoutingRuleNotFoundError extends Error {}
+
+export class RoutingRuleLimitError extends Error {}
+
 export class BehaviorPreferencesConflictError extends Error {}
 
 export class TaskActionBlockedError extends Error {
@@ -2648,6 +2712,7 @@ export class PegasStore {
     this.#migrate(37, migration37)
     this.#migrate(38, migration38)
     this.#migrate(39, migration39)
+    this.#migrate(40, migration40)
   }
 
   #backfillWorkerIconIds(): void {
@@ -4722,6 +4787,291 @@ export class PegasStore {
       this.#database.exec('ROLLBACK')
       throw error
     }
+  }
+
+  listRoutingRules(
+    userId: string,
+    limit = 50,
+    cursor?: string,
+  ): CursorPage<RoutingRuleRecord> {
+    if (!Number.isSafeInteger(limit) || limit <= 0 || limit > 200)
+      throw new Error('Routing rule limit must be between 1 and 200')
+    const cursorRow = cursor
+      ? (this.#database
+          .prepare(
+            'SELECT rowid FROM routing_rules WHERE id = ? AND user_id = ?',
+          )
+          .get(cursor, userId) as { rowid: number } | undefined)
+      : undefined
+    if (cursor && !cursorRow) throw new Error('Routing rule cursor is invalid')
+    const rows = this.#database
+      .prepare(
+        `SELECT * FROM routing_rules
+         WHERE user_id = ? AND (? IS NULL OR rowid < ?)
+         ORDER BY rowid DESC LIMIT ?`,
+      )
+      .all(
+        userId,
+        cursorRow?.rowid ?? null,
+        cursorRow?.rowid ?? null,
+        limit + 1,
+      ) as unknown as RoutingRuleRow[]
+    return cursorPage(rows, limit, toRoutingRuleRecord)
+  }
+
+  findRoutingRule(
+    ruleId: string,
+    userId: string,
+  ): RoutingRuleRecord | undefined {
+    const row = this.#database
+      .prepare('SELECT * FROM routing_rules WHERE id = ? AND user_id = ?')
+      .get(ruleId, userId) as unknown as RoutingRuleRow | undefined
+    return row ? toRoutingRuleRecord(row) : undefined
+  }
+
+  createRoutingRule(command: RoutingRuleCreateCommand): RoutingRuleRecord {
+    const nowIso = this.#clock.now().toISOString()
+    const fingerprint = routingRuleFingerprint({
+      operation: 'create',
+      rule: command.rule,
+    })
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const replay = this.#routingRuleCommandReplay(
+        command.userId,
+        command.commandId,
+        'create',
+        fingerprint,
+      )
+      if (replay) {
+        this.#database.exec('COMMIT')
+        return JSON.parse(replay.response_json) as RoutingRuleRecord
+      }
+      const count = this.#database
+        .prepare(
+          'SELECT COUNT(*) AS count FROM routing_rules WHERE user_id = ?',
+        )
+        .get(command.userId) as { count: number }
+      if (count.count >= 50) throw new RoutingRuleLimitError()
+      const id = randomUUID()
+      this.#database
+        .prepare(
+          `INSERT INTO routing_rules
+            (id, user_id, title, content, enabled, revision, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
+        )
+        .run(
+          id,
+          command.userId,
+          command.rule.title,
+          command.rule.content,
+          command.rule.enabled ? 1 : 0,
+          nowIso,
+          nowIso,
+        )
+      const rule = this.#routingRuleById(id)
+      this.#saveRoutingRuleCommand(
+        command.userId,
+        command.commandId,
+        'create',
+        fingerprint,
+        rule.id,
+        rule,
+        nowIso,
+      )
+      this.#database.exec('COMMIT')
+      return rule
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  updateRoutingRule(
+    ruleId: string,
+    command: RoutingRuleUpdateCommand,
+  ): RoutingRuleRecord {
+    const nowIso = this.#clock.now().toISOString()
+    const fingerprint = routingRuleFingerprint({
+      operation: 'update',
+      ruleId,
+      expectedRevision: command.expectedRevision,
+      rule: command.rule,
+    })
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const replay = this.#routingRuleCommandReplay(
+        command.userId,
+        command.commandId,
+        'update',
+        fingerprint,
+      )
+      if (replay) {
+        if (replay.rule_id !== ruleId)
+          throw new RoutingRuleCommandConflictError()
+        this.#database.exec('COMMIT')
+        return JSON.parse(replay.response_json) as RoutingRuleRecord
+      }
+      const current = this.#routingRuleByIdForUser(ruleId, command.userId)
+      if (current.revision !== command.expectedRevision)
+        throw new RoutingRuleRevisionConflictError()
+      const result = this.#database
+        .prepare(
+          `UPDATE routing_rules
+           SET title = ?, content = ?, enabled = ?, revision = revision + 1,
+               updated_at = ?
+           WHERE id = ? AND user_id = ? AND revision = ?`,
+        )
+        .run(
+          command.rule.title,
+          command.rule.content,
+          command.rule.enabled ? 1 : 0,
+          nowIso,
+          ruleId,
+          command.userId,
+          command.expectedRevision,
+        )
+      if (result.changes !== 1) throw new RoutingRuleRevisionConflictError()
+      const rule = this.#routingRuleById(ruleId)
+      this.#saveRoutingRuleCommand(
+        command.userId,
+        command.commandId,
+        'update',
+        fingerprint,
+        rule.id,
+        rule,
+        nowIso,
+      )
+      this.#database.exec('COMMIT')
+      return rule
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  deleteRoutingRule(
+    ruleId: string,
+    command: RoutingRuleDeleteCommand,
+  ): RoutingRuleDeletion {
+    const nowIso = this.#clock.now().toISOString()
+    const fingerprint = routingRuleFingerprint({
+      operation: 'delete',
+      ruleId,
+      expectedRevision: command.expectedRevision,
+    })
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const replay = this.#routingRuleCommandReplay(
+        command.userId,
+        command.commandId,
+        'delete',
+        fingerprint,
+      )
+      if (replay) {
+        if (replay.rule_id !== ruleId)
+          throw new RoutingRuleCommandConflictError()
+        this.#database.exec('COMMIT')
+        return JSON.parse(replay.response_json) as RoutingRuleDeletion
+      }
+      const current = this.#routingRuleByIdForUser(ruleId, command.userId)
+      if (current.revision !== command.expectedRevision)
+        throw new RoutingRuleRevisionConflictError()
+      const result = this.#database
+        .prepare('DELETE FROM routing_rules WHERE id = ? AND user_id = ?')
+        .run(ruleId, command.userId)
+      if (result.changes !== 1) throw new RoutingRuleNotFoundError()
+      const deletion: RoutingRuleDeletion = {
+        id: ruleId,
+        deleted: true,
+        deletedAt: nowIso,
+      }
+      this.#database
+        .prepare(
+          `UPDATE routing_rule_commands SET response_json = ?
+           WHERE rule_id = ? AND user_id = ? AND operation != 'delete'`,
+        )
+        .run(JSON.stringify(deletion), ruleId, command.userId)
+      this.#saveRoutingRuleCommand(
+        command.userId,
+        command.commandId,
+        'delete',
+        fingerprint,
+        ruleId,
+        deletion,
+        nowIso,
+      )
+      this.#database.exec('COMMIT')
+      return deletion
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  #routingRuleById(ruleId: string): RoutingRuleRecord {
+    const row = this.#database
+      .prepare('SELECT * FROM routing_rules WHERE id = ?')
+      .get(ruleId) as unknown as RoutingRuleRow | undefined
+    if (!row) throw new RoutingRuleNotFoundError()
+    return toRoutingRuleRecord(row)
+  }
+
+  #routingRuleByIdForUser(ruleId: string, userId: string): RoutingRuleRecord {
+    const row = this.#database
+      .prepare('SELECT * FROM routing_rules WHERE id = ? AND user_id = ?')
+      .get(ruleId, userId) as unknown as RoutingRuleRow | undefined
+    if (!row) throw new RoutingRuleNotFoundError()
+    return toRoutingRuleRecord(row)
+  }
+
+  #routingRuleCommandReplay(
+    userId: string,
+    commandId: string,
+    operation: RoutingRuleCommandRow['operation'],
+    fingerprint: string,
+  ): RoutingRuleCommandRow | undefined {
+    const row = this.#database
+      .prepare(
+        `SELECT fingerprint, operation, rule_id, response_json
+         FROM routing_rule_commands WHERE user_id = ? AND command_id = ?`,
+      )
+      .get(userId, commandId) as unknown as RoutingRuleCommandRow | undefined
+    if (!row) return undefined
+    if (row.operation !== operation || row.fingerprint !== fingerprint)
+      throw new RoutingRuleCommandConflictError()
+    if (operation !== 'delete') {
+      const response = JSON.parse(row.response_json) as { deleted?: boolean }
+      if (response.deleted === true) throw new RoutingRuleNotFoundError()
+    }
+    return row
+  }
+
+  #saveRoutingRuleCommand(
+    userId: string,
+    commandId: string,
+    operation: RoutingRuleCommandRow['operation'],
+    fingerprint: string,
+    ruleId: string,
+    response: RoutingRuleRecord | RoutingRuleDeletion,
+    createdAt: string,
+  ): void {
+    this.#database
+      .prepare(
+        `INSERT INTO routing_rule_commands
+          (user_id, command_id, fingerprint, operation, rule_id,
+           response_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        userId,
+        commandId,
+        fingerprint,
+        operation,
+        ruleId,
+        JSON.stringify(response),
+        createdAt,
+      )
   }
 
   getBehaviorPreferences(userId: string): {
@@ -13212,6 +13562,19 @@ function toMemoryRecord(row: MemoryRow): MemoryRecord {
 }
 
 function toWorkRuleRecord(row: WorkRuleRow): WorkRuleRecord {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    title: row.title,
+    content: row.content,
+    enabled: row.enabled === 1,
+    revision: row.revision,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
+function toRoutingRuleRecord(row: RoutingRuleRow): RoutingRuleRecord {
   return {
     id: row.id,
     userId: row.user_id,
