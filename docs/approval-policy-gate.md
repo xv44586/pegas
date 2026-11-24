@@ -1,6 +1,6 @@
 # 权限档位与审批 Policy Gate（APPROVAL-001 第二阶段）
 
-> 状态：P1 Gate 覆盖面、P2 权限档位对象、P3 规则批准、P4 审批卡升级、P5 自动审阅、P6 逐调用审计表、P7 档位审计 UI 已实现（见下方实现记录）
+> 状态：P1 Gate 覆盖面、P2 权限档位对象、P3 规则批准、P4 审批卡升级、P5 自动审阅、P6 逐调用审计表、P7 档位审计 UI 已实现（见下方实现记录）；P8 对外副作用逐次人工确认 Intake 已登记（见末节）
 > 更新日期：2026-11-24
 > 基线：`origin/main` `74c2f8c`（Intake 初稿基线 `4baab43`）
 > 外部调研：`research/approval-permissions-codex-cindy/NOTES.md`（本地，不入库；Codex CLI/webview、Cindy Apache-2.0 docs、DSH MIT 源码）
@@ -201,3 +201,55 @@
 - 规则管理：事情详情「已批准规则」列表（工具+范围摘要+创建时间+撤销）；空态说明规则来自批准时的选择。
 - 视觉遵循 DESIGN.md 封板合同：白底、400/500 字重、--text-* 阶梯、状态纯文字+图标辅助、一个区域一个主按钮；移动端 390px 全功能。
 - 落地情况：审批卡/档位选择器/规则管理已随 P2–P4 实现；差异（网络 host+方法未专门解析、档位审计列表 UI 未做）见各阶段实现记录。
+
+## P8 Intake：对外副作用逐次人工确认（2026-11-24）
+
+> 基线：`origin/main` `2b26bb0`；Feature `APPROVAL-001`；worktree `pegas-worktrees/approval-001-egress-confirmation`（branch `feat/APPROVAL-001-egress-confirmation`）。
+> 来源：`docs/engineering-todo.md`「OpenDuet 调研提炼候选」第三项（本地研究笔记 `research/openduet/notes.md`，MIT，未运行）；本节为 Pegas 自有验收条件，不复制第三方实现。
+
+### 背景（Intake 核实修正）
+
+- **规则永久放行 egress 今天不可达**：`policy-gate` 的 network-egress 判定 targets 恒为空（bash egress 分支与 strict 档 web 访问都是 `[]`），而 `createApproval` 的 `ruleEligible` 与 `matchApprovalRule` 都要求非空 targets——egress 审批卡从不提供 `approve_rule`，规则也从不命中。候选描述中「可被 approve_rule 永久放行」是**潜在**缺口：`ruleEligibleCategories` 含 `network-egress`，未来任何给 egress 填 targets 的改动都会静默打开持久放行。本阶段把「不可」固化为合同与回归，而不是修复一个已发生的放行。
+- **真实缺口一（自动审阅放行外发）**：`autoReviewEligible` 只看 ask+high，network-egress（high）进入自动审阅；模型 allow 即执行外发，无逐次人工确认。对外发送/发布是不可撤回的第三方可见副作用，与区外写（本机可核对/可恢复）语义不同。
+- **真实缺口二（发送内容不可见）**：egress 分类 reason 只含命令串；`curl --data @file` / `-T file` 等场景审批卡看不到实际发送的载荷，用户无法基于事实决定。
+
+### 用户结果
+
+- 任何被判定为对外发送（network-egress）的动作，每一次都经用户亲自确认；不存在规则豁免，也不进入自动审阅 allow 路径（自动审阅开关开着也一样）。
+- 审批卡展示服务端从真实工具参数解析的事实：命令原文 + 可确定性读取的发送载荷预览（如 `--data @file` 的文件内容）；读不到就明说读不到，不猜测、不静默。
+- 区外写的 `approve_rule` 行为不变。
+
+### 验收条件
+
+1. `approvalRuleTargets` 对 `network-egress` 抛错（合同回归，先红）；egress 审批卡 options 不含 `approve_rule`；即使投影中人为混入 egress 规则，`matchApprovalRule` 也不命中（防御回归）。
+2. `autoReviewEligible` 排除 network-egress：开关开 + 认证人类原话齐备时 egress 仍直接 ask，不调用审阅模型、不产生审阅记录（先红）；区外写审阅路径不回归。
+3. 服务端载荷预览：curl `-d/--data(-\w+)? @path`、`-F name=@path`、`-T/--upload-file path`、wget `--post-file=path` 等确定性形式，桥在停放前从**实际参数引用的文件**读取内容摘要（有界，超限截断并标注）写入 Action request；文件不存在/不可读/非确定性形式如实标注「未能读取发送内容」；预览来自文件事实而非模型自述。
+4. Web 审批卡渲染载荷预览区（等宽、可滚动、截断标注），390px 无横向溢出；无预览时不渲染空区。
+5. `pnpm check` + `pnpm smoke` 全绿；新增回归先红后绿；真实 DSH 探针覆盖「egress + 自动审阅开 → 仍停放人工」一条链路。
+6. Feature Map 与本文档同步实现记录、证据与剩余风险。
+
+### 非目标
+
+- 不做「对外」语义细分类（发消息 vs API 调用 vs 上传）：Pegas 当前 egress 判定即视为对外发送，一律逐次确认；宁可多问。
+- 不改 egress 的静态分类覆盖面（复杂 bash 绕过属已登记风险，硬边界仍是沙箱+guard）。
+- 不做收件人结构化解析（host/邮箱提取）：命令原文已含目标，不做非确定性猜测。
+- 不迁移存量数据：无 schema 变更（载荷预览走 Action request JSON additive 字段）；不新增审批决策种类（handled 属另一候选）。
+
+### 数据与权限边界
+
+- 载荷预览读取发生在 Executor 本机（与工具执行同一文件系统），只读、有界（单文件上限 4 KiB、总量上限 8 KiB，超限截断标注），随既有 Action request 持久化；不新增网络出口。
+- 预览可能含敏感内容：与命令原文同等待遇，走既有站内/外部投递脱敏投影（external 渠道 approval.required 去 prompt 的既有语义不变）。
+- 规则/审阅边界收紧只影响新判定，不改历史决定与审计行。
+
+### 失败与恢复
+
+- 载荷读取失败不阻塞审批（如实标注后照常停放）；读取超时/异常按「未能读取」处理，不静默放行。
+- 停放/恢复/幂等沿用既有 Approval 链路；本变更不改 Run 快照与 claim 合同。
+- 回滚：revert 提交即恢复旧行为（egress 可进审阅、无载荷预览）；无迁移、无数据删除、无回滚 Guard 需求（无新 schema、无新持久不变量）。
+
+### 实施顺序
+
+1. 合同回归先红：rule 拒绝 egress + 审阅排除 egress + 桥防御（测试）。
+2. 实现三处收紧（approval.ts / dsh-approval-bridge.mjs）转绿。
+3. 载荷预览：gate/桥确定性解析 + 有界读取 + request 字段 + Web 渲染（先红后绿）。
+4. 真实 DSH 探针 + 完整门禁 + 文档/Feature Map 同步。
