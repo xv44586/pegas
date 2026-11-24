@@ -2,7 +2,7 @@
 
 > Feature：BRAND-002
 >
-> 状态：Usable（独立提交与本地桌面包已验证）
+> 状态：Usable（已合并最新 BUI 基线并完成本地桌面包验证）
 >
 > 更新日期：2026-11-24
 
@@ -61,12 +61,18 @@ Pegas 使用确认版圆肚机器人作为自己的视觉身份。奶白机身�
   减少动态效果回退。
 - `test/brand-icons.test.ts` 覆盖桌面容器尺寸、浏览器图标和资源 manifest。
 - `web/src/sealed/PegasMascot.test.tsx` 与对话、审批测试覆盖显示和状态契约。
-- 完整 `pnpm check` 在 Node 22.22.2 下通过 135 个测试文件、1397 个测试。
-  覆盖率为语句 85.60%、分支 78.45%、函数 89.93%、行 88.69%。
+- 合并 DESIGN-009 BUI 基线后，执行中卡片保留 BUI 的状态结构和 RunTrace，
+  仅在真实 `running` 状态把状态胶囊替换为 30px 起飞机器人；定向 6 个测试文件、
+  59 个测试通过。
+- 完整 `pnpm check` 在 Node 24.22.1 下通过 140 个测试文件、1440 个测试。
+  覆盖率为语句 77.75%、分支 71.50%、函数 74.81%、行 80.94%。
 - `pnpm smoke` 验证 Task、Run、Outbox、webhook 和 Scheduler。
+  最新 BUI 合并态的 `pnpm review:ui -- --force` 通过桌面、暗色与 390px
+  几何检查；`pnpm a11y:review` 在 19 个界面场景均为 0 违例。
   Chrome 构建实测验证桌面与 390px 首页、30px 执行动效及运行时切换减少动态效果。
 - macOS arm64 打包产物的 ICNS 与三个 SVG 和仓库字节一致。
-  `pnpm smoke:desktop:packaged` 在 Node 22.22.2 通过，覆盖应用启动、
+  最新代码经 `pnpm package:mac` 重建后，`pnpm smoke:desktop:packaged` 在
+  Node 22.22.2 通过，覆盖应用启动、
   完成 Run、Dock 未读计数和服务故障退出回收。
 
 ## 下一缺口
