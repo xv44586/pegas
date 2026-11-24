@@ -59,6 +59,8 @@ process.stdout.write('- id: m1\\n  config:\\n    provider: fixture\\n    model: 
 )
 chmodSync(dshFixture, 0o755)
 const port = await availablePort()
+const apiToken = `a11y-review-${process.pid}`
+const authHeaders = { authorization: `Bearer ${apiToken}` }
 const modelGateway = createHttpServer((request, response) => {
   if (request.url?.endsWith('/models')) {
     response.writeHead(200, { 'content-type': 'application/json' })
@@ -97,6 +99,7 @@ const environment = {
   ...process.env,
   PEGAS_API_HOST: '127.0.0.1',
   PEGAS_API_PORT: String(port),
+  PEGAS_API_TOKEN: apiToken,
   PEGAS_DATA_DIR: dataDirectory,
   PEGAS_DSH_COMMAND: dshFixture,
   PEGAS_EVENT_POLL_MS: '25',
@@ -155,7 +158,7 @@ try {
   await waitUntilReady(port)
   await fetch(`http://127.0.0.1:${port}/v1/events`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...authHeaders },
     body: JSON.stringify({
       userId: 'owner',
       type: 'user.message',
@@ -167,13 +170,17 @@ try {
   const deadline = Date.now() + 20_000
   while (Date.now() < deadline) {
     const body = await (
-      await fetch(`http://127.0.0.1:${port}/v1/channels?userId=owner`)
+      await fetch(`http://127.0.0.1:${port}/v1/channels?userId=owner`, {
+        headers: authHeaders,
+      })
     ).json()
     if (body.channels?.length >= 1) break
     await wait(100)
   }
   const channelsBody = await (
-    await fetch(`http://127.0.0.1:${port}/v1/channels?userId=owner`)
+    await fetch(`http://127.0.0.1:${port}/v1/channels?userId=owner`, {
+      headers: authHeaders,
+    })
   ).json()
   const firstChannel = channelsBody.channels?.[0]
   if (!firstChannel) throw new Error('Unable to seed a11y attention')
@@ -203,7 +210,7 @@ try {
   ].entries()) {
     const response = await fetch(`http://127.0.0.1:${port}/v1/outbox`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...authHeaders },
       body: JSON.stringify({
         userId: 'owner',
         channel: 'conversation',
@@ -223,10 +230,14 @@ try {
       colorScheme: theme === 'dark' ? 'dark' : 'light',
       reducedMotion: 'reduce',
     })
-    await context.addInitScript(value => {
-      localStorage.setItem('pegas-setup-complete', 'true')
-      localStorage.setItem('pegas-theme', value)
-    }, theme)
+    await context.addInitScript(
+      value => {
+        localStorage.setItem('pegas-setup-complete', 'true')
+        localStorage.setItem('pegas-theme', value.theme)
+        sessionStorage.setItem('pegas-token', value.token)
+      },
+      { theme, token: apiToken },
+    )
     const page = await context.newPage()
     page.setDefaultTimeout(12_000)
     await page.goto(`http://127.0.0.1:${port}/`)
@@ -261,6 +272,9 @@ try {
     viewport: { width: 1440, height: 900 },
     reducedMotion: 'reduce',
   })
+  await onboarding.addInitScript(token => {
+    sessionStorage.setItem('pegas-token', token)
+  }, apiToken)
   const onboardingPage = await onboarding.newPage()
   onboardingPage.setDefaultTimeout(12_000)
   await onboardingPage.goto(`http://127.0.0.1:${port}/?setup=1`)
@@ -282,6 +296,9 @@ try {
     viewport: { width: 1440, height: 900 },
     reducedMotion: 'reduce',
   })
+  await unconfigured.addInitScript(token => {
+    sessionStorage.setItem('pegas-token', token)
+  }, apiToken)
   const unconfiguredPage = await unconfigured.newPage()
   unconfiguredPage.setDefaultTimeout(12_000)
   await unconfiguredPage.route('**/v1/settings/agent-models', route =>
@@ -327,10 +344,11 @@ try {
     forcedColors: 'active',
     reducedMotion: 'reduce',
   })
-  await forced.addInitScript(() => {
+  await forced.addInitScript(token => {
     localStorage.setItem('pegas-setup-complete', 'true')
     localStorage.setItem('pegas-theme', 'light')
-  })
+    sessionStorage.setItem('pegas-token', token)
+  }, apiToken)
   const forcedPage = await forced.newPage()
   await forcedPage.goto(`http://127.0.0.1:${port}/`)
   await forcedPage.getByRole('textbox', { name: '给 Pegas 发消息' }).waitFor()
@@ -367,10 +385,11 @@ try {
     reducedMotion: 'reduce',
     hasTouch: true,
   })
-  await mobile.addInitScript(() => {
+  await mobile.addInitScript(token => {
     localStorage.setItem('pegas-setup-complete', 'true')
     localStorage.setItem('pegas-theme', 'light')
-  })
+    sessionStorage.setItem('pegas-token', token)
+  }, apiToken)
   const mobilePage = await mobile.newPage()
   await mobilePage.goto(`http://127.0.0.1:${port}/`)
   await mobilePage.getByRole('textbox', { name: '给 Pegas 发消息' }).waitFor()

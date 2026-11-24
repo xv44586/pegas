@@ -163,6 +163,8 @@ process.stdin.on('end', async () => {
 )
 chmodSync(dshFixture, 0o755)
 const port = await availablePort()
+const apiToken = `ui-review-${process.pid}`
+const authHeaders = { authorization: `Bearer ${apiToken}` }
 const recoveryPort = await availablePort()
 const modelGateway = createHttpServer((request, response) => {
   if (request.url?.endsWith('/models')) {
@@ -202,6 +204,7 @@ const environment = {
   ...process.env,
   PEGAS_API_HOST: '127.0.0.1',
   PEGAS_API_PORT: String(port),
+  PEGAS_API_TOKEN: apiToken,
   PEGAS_DATA_DIR: dataDirectory,
   PEGAS_DSH_COMMAND: dshFixture,
   PEGAS_EVENT_POLL_MS: '25',
@@ -248,9 +251,10 @@ try {
     reducedMotion: 'reduce',
     deviceScaleFactor: 1,
   })
-  await desktop.addInitScript(() =>
-    localStorage.setItem('pegas-setup-complete', 'true'),
-  )
+  await desktop.addInitScript(token => {
+    localStorage.setItem('pegas-setup-complete', 'true')
+    sessionStorage.setItem('pegas-token', token)
+  }, apiToken)
   const page = await desktop.newPage()
   page.setDefaultTimeout(12_000)
   await page.goto(`http://127.0.0.1:${String(port)}/`)
@@ -632,6 +636,9 @@ try {
     reducedMotion: 'reduce',
     deviceScaleFactor: 1,
   })
+  await unconfigured.addInitScript(token => {
+    sessionStorage.setItem('pegas-token', token)
+  }, apiToken)
   const unconfiguredPage = await unconfigured.newPage()
   unconfiguredPage.setDefaultTimeout(12_000)
   await unconfiguredPage.route('**/v1/settings/agent-models', route =>
@@ -687,9 +694,10 @@ try {
     reducedMotion: 'reduce',
     deviceScaleFactor: 1,
   })
-  await dark.addInitScript(() =>
-    localStorage.setItem('pegas-setup-complete', 'true'),
-  )
+  await dark.addInitScript(token => {
+    localStorage.setItem('pegas-setup-complete', 'true')
+    sessionStorage.setItem('pegas-token', token)
+  }, apiToken)
   const darkPage = await dark.newPage()
   await darkPage.addInitScript(() =>
     localStorage.setItem('pegas-theme', 'dark'),
@@ -732,9 +740,10 @@ try {
       reducedMotion: 'reduce',
       deviceScaleFactor: 1,
     })
-    await themed.addInitScript(() =>
-      localStorage.setItem('pegas-setup-complete', 'true'),
-    )
+    await themed.addInitScript(token => {
+      localStorage.setItem('pegas-setup-complete', 'true')
+      sessionStorage.setItem('pegas-token', token)
+    }, apiToken)
     const themedPage = await themed.newPage()
     await themedPage.addInitScript(
       value => localStorage.setItem('pegas-theme', value),
@@ -770,9 +779,10 @@ try {
     deviceScaleFactor: 1,
     hasTouch: true,
   })
-  await mobile.addInitScript(() =>
-    localStorage.setItem('pegas-setup-complete', 'true'),
-  )
+  await mobile.addInitScript(token => {
+    localStorage.setItem('pegas-setup-complete', 'true')
+    sessionStorage.setItem('pegas-token', token)
+  }, apiToken)
   const mobilePage = await mobile.newPage()
   await mobilePage.goto(`http://127.0.0.1:${String(port)}/`)
   const mobileComposer = mobilePage.getByRole('textbox', {
@@ -989,9 +999,13 @@ try {
     })
     for (const fixture of reviewFixtures) {
       const fixturePage = await review.newPage()
-      await fixturePage.addInitScript(value => {
-        globalThis.__PEGAS_UI_REVIEW__ = value
-      }, fixture)
+      await fixturePage.addInitScript(
+        value => {
+          sessionStorage.setItem('pegas-token', value.token)
+          globalThis.__PEGAS_UI_REVIEW__ = value.fixture
+        },
+        { fixture, token: apiToken },
+      )
       if (fixture === 'task-output-archive') {
         await fixturePage.route('**/v1/runs/**', async route => {
           const url = route.request().url()
@@ -1322,7 +1336,7 @@ async function seedConversation(apiPort) {
       `http://127.0.0.1:${String(apiPort)}/v1/events`,
       {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', ...authHeaders },
         body: JSON.stringify({
           userId: 'owner',
           type: 'user.message',
@@ -1339,6 +1353,7 @@ async function seedConversation(apiPort) {
   while (Date.now() < deadline) {
     const response = await fetch(
       `http://127.0.0.1:${String(apiPort)}/v1/channels?userId=owner`,
+      { headers: authHeaders },
     )
     const body = await response.json()
     if (body.channels?.length >= 2) break
@@ -1348,7 +1363,7 @@ async function seedConversation(apiPort) {
     `http://127.0.0.1:${String(apiPort)}/v1/events`,
     {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...authHeaders },
       body: JSON.stringify({
         userId: 'owner',
         type: 'user.message',
@@ -1365,6 +1380,7 @@ async function seedConversation(apiPort) {
   while (Date.now() < trayDeadline) {
     const response = await fetch(
       `http://127.0.0.1:${String(apiPort)}/v1/channels?userId=owner`,
+      { headers: authHeaders },
     )
     const body = await response.json()
     const channel = body.channels?.find(
@@ -1381,7 +1397,7 @@ async function seedConversation(apiPort) {
     `http://127.0.0.1:${String(apiPort)}/v1/automations`,
     {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...authHeaders },
       body: JSON.stringify({
         userId: 'owner',
         commandId: 'feature-review-automation',
@@ -1400,7 +1416,7 @@ async function seedConversation(apiPort) {
     `http://127.0.0.1:${String(apiPort)}/v1/automations`,
     {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...authHeaders },
       body: JSON.stringify({
         userId: 'owner',
         commandId: 'feature-review-automation-counting',
@@ -1423,7 +1439,7 @@ async function seedConversation(apiPort) {
     `http://127.0.0.1:${String(apiPort)}/v1/automations/${countingAutomation.id}`,
     {
       method: 'PUT',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...authHeaders },
       body: JSON.stringify({
         userId: 'owner',
         commandId: 'feature-review-automation-counting-park',
@@ -1448,7 +1464,7 @@ async function seedConversation(apiPort) {
     `http://127.0.0.1:${String(apiPort)}/v1/automations/${countingAutomation.id}/cancel`,
     {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...authHeaders },
       body: JSON.stringify({
         userId: 'owner',
         commandId: 'feature-review-automation-counting-cancel',
@@ -1464,7 +1480,7 @@ async function seedConversation(apiPort) {
     `http://127.0.0.1:${String(apiPort)}/v1/automations`,
     {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...authHeaders },
       body: JSON.stringify({
         userId: 'owner',
         commandId: 'feature-review-automation-history',
@@ -1492,6 +1508,7 @@ async function seedConversation(apiPort) {
   while (Date.now() < historyDeadline) {
     const historyResponse = await fetch(
       `http://127.0.0.1:${String(apiPort)}/v1/automations/${historyAutomation.id}/invocations?userId=owner&limit=25`,
+      { headers: authHeaders },
     )
     countingHistory = await historyResponse.json()
     if (countingHistory.invocations.some(item => item.summary)) break
@@ -1505,7 +1522,7 @@ async function seedConversation(apiPort) {
     `http://127.0.0.1:${String(apiPort)}/v1/automations/${historyAutomation.id}/cancel`,
     {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...authHeaders },
       body: JSON.stringify({
         userId: 'owner',
         commandId: 'feature-review-automation-history-cancel',
@@ -1521,6 +1538,7 @@ async function seedConversation(apiPort) {
   // instead of creating duplicate channels.
   const bumpChannelsResponse = await fetch(
     `http://127.0.0.1:${String(apiPort)}/v1/channels?userId=owner`,
+    { headers: authHeaders },
   )
   const bumpChannelsBody = await bumpChannelsResponse.json()
   for (const [index, title] of [
@@ -1536,7 +1554,7 @@ async function seedConversation(apiPort) {
       `http://127.0.0.1:${String(apiPort)}/v1/events`,
       {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', ...authHeaders },
         body: JSON.stringify({
           userId: 'owner',
           type: 'user.message',
@@ -1553,6 +1571,7 @@ async function seedConversation(apiPort) {
     while (Date.now() < bumpDeadline) {
       const timelineResponse = await fetch(
         `http://127.0.0.1:${String(apiPort)}/v1/channels/${bumpChannel.taskId}/timeline?userId=owner`,
+        { headers: authHeaders },
       )
       const timelineBody = await timelineResponse.json()
       if (
@@ -1572,7 +1591,7 @@ async function seedConversation(apiPort) {
     `http://127.0.0.1:${String(apiPort)}/v1/memories`,
     {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...authHeaders },
       body: JSON.stringify({
         userId: 'owner',
         commandId: 'feature-review-memory',
@@ -1603,7 +1622,7 @@ async function seedConversation(apiPort) {
       `http://127.0.0.1:${String(apiPort)}/v1/rules`,
       {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', ...authHeaders },
         body: JSON.stringify({
           userId: 'owner',
           commandId: `feature-review-rule-${String(index)}`,
@@ -1618,7 +1637,7 @@ async function seedConversation(apiPort) {
     `http://127.0.0.1:${String(apiPort)}/v1/settings/behavior`,
     {
       method: 'PUT',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...authHeaders },
       body: JSON.stringify({
         userId: 'owner',
         expectedRevision: 0,
@@ -1631,6 +1650,7 @@ async function seedConversation(apiPort) {
     throw new Error('Unable to seed UI review behavior preferences')
   const channelsResponse = await fetch(
     `http://127.0.0.1:${String(apiPort)}/v1/channels?userId=owner`,
+    { headers: authHeaders },
   )
   const channelsBody = await channelsResponse.json()
   const firstChannel = channelsBody.channels?.find(
@@ -1690,7 +1710,7 @@ async function seedConversation(apiPort) {
       `http://127.0.0.1:${String(apiPort)}/v1/outbox`,
       {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', ...authHeaders },
         body: JSON.stringify({
           userId: 'owner',
           channel: 'conversation',

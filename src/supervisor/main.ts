@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
 import type { ReleaseRef } from '../core/domain.js'
+import { ensureInstanceBearer } from '../core/instance-token.js'
 import { createDatabaseBackup } from '../storage/backup.js'
 import {
   readCandidateManifest,
@@ -29,6 +30,10 @@ import { resolveSupervisorRuntimePaths } from './runtime-paths.js'
 const statePath = resolve(
   process.env.PEGAS_SUPERVISOR_STATE ?? './data/supervisor.json',
 )
+const { dataDir, databasePath } = resolveSupervisorRuntimePaths(
+  process.env.PEGAS_DATA_DIR,
+)
+ensureInstanceBearer({ dataDir, environment: process.env })
 const recoveryHost = process.env.PEGAS_RECOVERY_HOST ?? '127.0.0.1'
 const recoveryPort = positiveInteger(process.env.PEGAS_RECOVERY_PORT, 4318)
 const recoveryToken =
@@ -43,9 +48,6 @@ const stabilizationMs = positiveInteger(
 )
 const apiHost = process.env.PEGAS_API_HOST ?? '127.0.0.1'
 const apiPort = positiveInteger(process.env.PEGAS_API_PORT, 4317)
-const { dataDir, databasePath } = resolveSupervisorRuntimePaths(
-  process.env.PEGAS_DATA_DIR,
-)
 
 if (!isLoopback(recoveryHost) && !recoveryToken) {
   throw new Error(

@@ -43,6 +43,8 @@ mkdirSync(outputDirectory, { recursive: true })
 
 const dataDirectory = mkdtempSync(resolve(tmpdir(), 'pegas-canary-'))
 const port = await availablePort()
+const apiToken = `dependency-canary-${process.pid}`
+const authHeaders = { authorization: `Bearer ${apiToken}` }
 const recoveryPort = await availablePort()
 const deliveries = []
 const webhookServer = createHttpServer(async (request, response) => {
@@ -65,6 +67,7 @@ const environment = {
   ...process.env,
   PEGAS_API_HOST: '127.0.0.1',
   PEGAS_API_PORT: String(port),
+  PEGAS_API_TOKEN: apiToken,
   PEGAS_DATA_DIR: dataDirectory,
   PEGAS_EXECUTOR: 'echo',
   PEGAS_ROUTER: 'rules',
@@ -99,7 +102,7 @@ try {
     `http://127.0.0.1:${String(port)}/v1/outbox`,
     {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...authHeaders },
       body: JSON.stringify({
         userId: 'canary-user',
         channel: 'conversation',
@@ -206,6 +209,7 @@ async function waitForSentMessage(apiPort, messageId) {
   while (Date.now() < deadline) {
     const response = await fetch(
       `http://127.0.0.1:${String(apiPort)}/v1/outbox?userId=canary-user`,
+      { headers: authHeaders },
     )
     const body = await response.json()
     const persisted = body.messages?.find(item => item.id === messageId)

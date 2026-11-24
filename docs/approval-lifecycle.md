@@ -55,9 +55,9 @@ Run(running) + high-risk Action
 **验收条件**：
 
 1. 回归先红：无 env token 时临时 dataDir 引导后 `loadConfig().apiToken` 非空、文件 0600、二次调用稳定复用、显式 env 优先、损坏文件重建。
-2. 进程级：无 `PEGAS_API_TOKEN` 裸启动 control-plane，`/v1/approvals` 无凭证 401、带引导 token 200；`/v1/tasks` 无凭证仍 200（读端点语义不变）。
+2. 进程级：无 `PEGAS_API_TOKEN` 裸启动 control-plane，`/v1/approvals` 与 `/v1/tasks` 无凭证 401、带引导 token 200。Intake 核实修正：server 顶层本就有全局 bearer 守卫（无 token 时对非豁免请求放行），此前「tasks 200 vs approvals 401」的不一致来自该放行分支；引导后全 API 统一要求 bearer，回归锁定两个方向。
 3. Supervisor 无 token 启动时 recovery API 与子进程使用同一引导 token（代码路径 + smoke 覆盖）。
-4. `pnpm check` + `pnpm smoke` + `pnpm smoke:crash` 全绿；UI/a11y 采集脚本显式注入测试 token（不依赖引导），真实浏览器门通过。
+4. `pnpm check` + `pnpm smoke` + `pnpm smoke:crash` 全绿；UI/a11y 采集脚本显式注入测试 token 并经 sessionStorage 提供给 Web（不依赖引导），真实浏览器门通过。
 5. 运行实例修复后：真实浏览器输入引导 token 通过令牌门，P8 探针审批卡可见并可决定。
 
 **非目标**：不改任何守卫的 fail-closed 语义；不做 token 轮换/多用户 token；不把 token 写入日志、prompt、Outbox；不改 Web 令牌门交互。
@@ -65,6 +65,14 @@ Run(running) + high-risk Action
 **数据与权限边界**：token 文件位于 dataDir（与 model-credentials.key 同级同权限 0600），只含随机 bearer；不入库、不入 git（data/ 已忽略）。
 
 **失败与恢复**：文件不可写时启动失败并给出明确错误（不静默降级为无 token）；删除文件即下次启动重新生成（旧会话 token 失效属预期）；回滚 revert 即恢复旧行为，无 schema 变更。
+
+### 实例 bearer 引导实现记录（2026-11-24）
+
+- **实现**：`src/core/instance-token.ts` `ensureInstanceBearer`（env 显式 token 优先；`dataDir/api-token` 0600 持久化，`wx` 首建、EEXIST 读回胜者、空文件重建、非 0600 权限收紧、不可写抛错不降级）；`src/control-plane/main.ts` 与 `src/supervisor/main.ts` 在 `loadConfig()`/recoveryToken 读取前调用（Supervisor 子进程经 env 继承同一 token，recovery API 同源受益）；桌面既有随机 bearer 行为不变。守卫语义零改动。`.env.example` 说明留空自动生成与 Web 令牌门用法。
+- **采集脚本适配**：`capture-ui-review.mjs`、`a11y-review.mjs`、`capture-dependency-canary.mjs` 显式注入测试 `PEGAS_API_TOKEN`，seed fetch 带 bearer，全部浏览器 context（含 UI review fixture harness）经 sessionStorage 提供 token——不依赖引导文件，采集合同不变。`smoke*.mjs` 本就显式配置 token，零改动。
+- **证据（先红后绿）**：`test/instance-token.test.ts` 6 项——生成 0600 持久 bearer + loadConfig 贯通、重启复用、显式 env 优先不落盘、空文件重建 + 权限收紧、目录不可写抛错、真实裸进程回归（无 env token 启动 dist control-plane：approvals/tasks 无凭证 401、带引导 token 200）。`pnpm check` 134 文件 / 1378 测试全绿（statement 85.56% / line 88.65%；首轮 dsh SIGKILL 计时 flaky 隔离 32/32 复跑后全量绿）；`pnpm smoke`、`pnpm smoke:crash`、`pnpm smoke:desktop`、`pnpm review:ui --force`（首轮 fixture harness 因 App 在 unauthorized 时先于 harness 返回而超时，补 sessionStorage 注入后全量采集通过）、`pnpm a11y:review` 0 违例、`pnpm review:canary --force` 全部通过。
+- **剩余风险**：token 文件被删除后旧 Web 会话需重新输入新 token（预期行为）；多实例共享同一 dataDir 时共用同一 bearer（与 SQLite 单写者模型一致）；token 不轮换（非目标）。
+- **回滚**：revert 即恢复旧行为（无 token 部署审批端点恒 401）；`dataDir/api-token` 文件保留不删除，旧代码忽略；无 schema 变更。
 
 Worker 只把当前 claim 的 Control Plane URL、Run/Task ID 和短期 claim token 注入当前 DSH 子进程；会先剥离父进程中可能残留的同名变量以及实例 bearer、恢复 token 和模型密钥。DSH 执行合同给出创建 Approval、等待恢复和记录 Action outcome 的协议。claim 轮换后，新 Run 只收到自己的 token；该 token 不进入 prompt、对话、Outbox 或持久化明文。macOS 桌面端每次内置服务启动会生成随机实例 bearer，由 Electron session 仅对可信本机 origin 自动附加；renderer 不读取或保存该 bearer。
 
