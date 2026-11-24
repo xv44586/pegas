@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -303,6 +304,9 @@ describe('DSH bridge auto review', () => {
       expect(action.review).toMatchObject({
         decision: 'allow',
         risk: 'medium',
+      })
+      expect(action.request.effect).toEqual({
+        contentHash: createHash('sha256').update('hello').digest('hex'),
       })
       const postExecute = run.harness.handlers.get('tools/post-execute')
       if (!postExecute) throw new Error('post-execute hook missing')

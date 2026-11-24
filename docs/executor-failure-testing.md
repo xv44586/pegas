@@ -44,4 +44,4 @@ Clock 只改变进程内时间来源，不改变数据库格式。DSH 的权限�
 
 `src/observability/action-reconciliation.ts` 在对账进程内主动探测 `unknown` 文件写 Action 的外部事实：全部目标存在（有 `request.effect.contentHash` 时还要求 sha256 一致）→ 自动核对 `succeeded`；目标缺失或指纹不符 → 自动核对 `failed`（绝不判成功、绝不重试副作用）。edit/apply_patch 无指纹、非文件类或无 targets 的动作保持 `unknown` 留人工。结算复用 `reconcileAction` 同一 append-only 事务（身份 `system:auto-reconciliation`、commandId `auto-reconcile:<actionId>` 幂等，Outbox `action.reconciled` 带 `reconciledBy` 与自动核对文案），核对记录带 `automatic=1`（schema v44）；存在自动核对事实时 Rollback Guard 拒绝回滚到 schema < 44。`PEGAS_AUTO_RECONCILE=disabled` 可关闭。证据：`test/action-auto-reconciliation.test.ts` 7 个测试；语义详见 `docs/observability.md` 与 `docs/approval-lifecycle.md`。
 
-剩余缺口：桥尚未在创建 Action 时记录 write 的 `effect.contentHash`（当前真实链路 write 只有存在性判定，存在 ≠ 本次写入）；非文件类副作用（网络发布、消息发送等）无静态探测面，仍必须人工核对。
+指纹来源（2026-11-24 补齐）：审批桥在 pre-execute 捕获 `write` 的完整 content 参数计算 sha256,随 `request.effect.contentHash` 写入 Action（人工审批与自动审阅放行都带）,write 类 unknown Action 的自动对账升级为指纹判定（落盘字节 ≠ 预期内容也判失败）。剩余缺口：`edit`/`apply_patch` 只携带增量 delta,无法静态推导最终字节,仍是存在性判定或留人工;非文件类副作用（网络发布、消息发送等）无静态探测面,仍必须人工核对。

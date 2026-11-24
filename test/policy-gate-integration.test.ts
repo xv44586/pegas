@@ -161,6 +161,9 @@ describe.skipIf(!dshAvailable || !gatewayReachable)(
           risk: 'high',
           request: { category: 'out-of-workspace-write' },
         })
+        const effect = action?.request.effect as
+          { contentHash?: unknown } | undefined
+        expect(effect?.contentHash).toMatch(/^[0-9a-f]{64}$/)
       } finally {
         if (leaseHeartbeat) clearInterval(leaseHeartbeat)
         configuration.remove()
@@ -293,6 +296,9 @@ describe.skipIf(!dshAvailable || !gatewayReachable)(
           status: 'succeeded',
           review: { decision: 'allow' },
         })
+        const reviewedEffect = action?.request.effect as
+          { contentHash?: unknown } | undefined
+        expect(reviewedEffect?.contentHash).toMatch(/^[0-9a-f]{64}$/)
       } finally {
         if (leaseHeartbeat) clearInterval(leaseHeartbeat)
         configuration.remove()

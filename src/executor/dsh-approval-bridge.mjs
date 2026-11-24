@@ -8,7 +8,7 @@ import { canonicalRuleTarget, classifyToolCall } from './policy-gate.mjs'
 /** @typedef {{ eventId: string, text: string, createdAt: string }} MandateInstruction */
 /** @typedef {{ instructions: MandateInstruction[], omitted: boolean }} MandateProjection */
 /** @typedef {{ tier: import('./policy-gate.d.ts').PolicyTier, generation: string, mismatch: boolean, rules: ApprovalRule[], autoReviewEnabled: boolean, mandate: MandateProjection }} TierState */
-/** @typedef {{ tool: string, argumentsHash: string, command?: string, classification?: import('./policy-gate.d.ts').ToolCallClassification }} CapturedCall */
+/** @typedef {{ tool: string, argumentsHash: string, command?: string, effect?: { contentHash: string }, classification?: import('./policy-gate.d.ts').ToolCallClassification }} CapturedCall */
 /** @typedef {{ session?: { requestHeader?: () => { config?: { provider?: unknown, model?: unknown } } | undefined } }} ReviewAgent */
 /** @typedef {{ callId?: string | number, name: string, arguments?: unknown, agent?: ReviewAgent }} ToolExecution */
 /** @typedef {{ callId?: string | number, toolName: string, reason?: string, signal?: { aborted?: boolean } }} ApprovalRequest */
@@ -93,6 +93,7 @@ export function apply(ctx, config = {}) {
           typeof exec.arguments.command === 'string'
             ? { command: exec.arguments.command }
             : {}),
+          ...(writeContentEffect(exec) ?? {}),
           classification,
         })
         gateDecisions.set(callKey, classification)
@@ -769,6 +770,9 @@ async function createApproval(capability, input) {
       category: input.classification.category,
       targets: input.classification.targets,
       argumentsHash: input.captured?.argumentsHash ?? null,
+      ...(input.captured?.effect === undefined
+        ? {}
+        : { effect: input.captured.effect }),
       ...(input.captured?.command === undefined
         ? {}
         : { command: input.captured.command }),
@@ -892,6 +896,7 @@ async function createReviewedAction(
       category: classification.category,
       targets: classification.targets,
       argumentsHash: captured?.argumentsHash ?? null,
+      ...(captured?.effect === undefined ? {} : { effect: captured.effect }),
       ...(captured?.command === undefined ? {} : { command: captured.command }),
       tier: tierState.tier,
       tierGeneration: tierState.generation,
@@ -1283,6 +1288,33 @@ async function post(capability, path, payload) {
 /** @param {unknown} value */
 function stableHash(value) {
   return createHash('sha256').update(stableJson(value)).digest('hex')
+}
+
+/**
+ * EXEC-003: record the intended external effect of a full-content write so
+ * automatic reconciliation can verify the landed bytes, not just existence.
+ * Only the write tool declares its complete final content; edit/apply_patch
+ * carry deltas and stay on existence-or-human judgement.
+ *
+ * @param {ToolExecution} exec
+ * @returns {{ effect: { contentHash: string } } | undefined}
+ */
+function writeContentEffect(exec) {
+  if (exec.name !== 'write') return undefined
+  if (
+    typeof exec.arguments !== 'object' ||
+    exec.arguments === null ||
+    !('content' in exec.arguments) ||
+    typeof exec.arguments.content !== 'string'
+  )
+    return undefined
+  return {
+    effect: {
+      contentHash: createHash('sha256')
+        .update(exec.arguments.content)
+        .digest('hex'),
+    },
+  }
 }
 
 /**
