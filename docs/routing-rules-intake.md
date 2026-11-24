@@ -90,3 +90,46 @@
 - `docs/feature-map.md`：登记 ROUTE-005（Planned）；RULES-001 下一缺口中的归类部分指向 ROUTE-005。
 - `docs/work-rules.md`：非目标中的归类条目指向本文档。
 - 实现落地时同步更新 `docs/router-worker-design.md`（决策 4 的用户规则扩展）与 `docs/sealed-ui-rebuild.md`（占位解锁）。
+
+## 实现拆分计划（2026-11-24 登记，Eng review 后按此执行）
+
+全部阶段共用 Feature ID `ROUTE-005`，按依赖顺序各自一个隔离 worktree 与可独立审查的 commit 系列（对齐 PLAN-001 P0–P5 模式）；每阶段合入前在合并态复跑完整门禁。基线：main `99c2b4c`（schema v39）。
+
+### R1 归类规则存储与 CRUD（服务端闭环）
+
+- 分支建议 `feat/ROUTE-005-routing-rules-store`。
+- 新模块 `src/rules/routing-rules.ts`：契约照抄 `src/rules/rules.ts` 模式（exactKeys 严格解析、draft/record/command/fingerprint），字段建议 `title ≤120`、`content ≤2000`、`enabled`、每用户 ≤50 条（比工作规则更紧，规则要进归类 prompt）。
+- SQLite 增量迁移 v40：`routing_rules`、`routing_rule_commands` 两表，`BEGIN IMMEDIATE` + 冻结响应；`src/worker/main.ts` self-change `maximumSchema` 39→40；`test/sqlite-store.test.ts` 迁移列表 +40；`test/rollback-compatibility.test.ts` 增补 v40 增量回滚用例。
+- HTTP：`GET/POST/PUT /v1/routing-rules`、`POST /v1/routing-rules/:id/delete`，bearer + owner 隔离 + commandId 幂等 + expectedRevision，404/409 语义与 `/v1/rules` 一致。
+- 测试先行：`test/routing-rules.test.ts`（契约/幂等/revision/owner 隔离/上限/HTTP/bearer）。
+- 完成判据：纯服务端闭环，Router 尚未消费规则；回滚 = revert，v40 增量表旧代码忽略。
+
+### R2 规则消费与命中证据（Router 纵向闭环）
+
+- 分支建议 `feat/ROUTE-005-router-consumption`，依赖 R1。
+- `ModelTaskRouter` 增加可选 `routingRules` 输入：启用规则经 `<` 转义后以 `<pegas_routing_rules>` 数据块拼入 system prompt（声明为归属偏好、非授权、不得表达控制意图/执行指令），总预算建议 8000 字符截断；`routerDecisionSchema` 增加可选 `matchedRuleId`，服务端校验必须属于本次注入的规则集合，非法即丢弃该字段（不整条兜底）。
+- 命中证据：`routing_decisions` 增量列（随 R2 迁移 v41）记录 `matchedRuleId` 与来源（prompt/deterministic），投影进事情时间线路由决策展示；无规则时 prompt 与决策行为逐字节不变（回归断言）。
+- `RuleBasedTaskRouter`（rules 模式）不消费用户规则（保持确定性语义），UI 在 rules 模式下如实说明规则仅作用于智能判断。
+- 硬边界回归：用户规则指向 cancelled/不存在任务、含控制意图措辞时不得改变确定性链路；模型畸形输出仍走既有规则兜底。
+- 测试：`test/router.test.ts` 扩展 + 新命中证据用例；真实归类模型实测「命中/未命中」两场景。
+
+### R3 「不确定时」策略（含 ask_first 澄清待办）
+
+- 分支建议 `feat/ROUTE-005-uncertainty-policy`，依赖 R2（prompt 注入位）。
+- RuntimeSettings 增加 `routingUncertainty: 'new_task' | 'ask_first' | 'continue_recent'`（默认 `new_task`，省略保留 COALESCE 语义与 `chatLaneEnabled` 同款）。
+- `new_task`/`continue_recent` 只改 prompt 判据与措辞，不改候选授权边界；`ask_first` 新增 `RoutingDecision` kind `clarify`（携带问题与原输入），由 Control Plane 落为既有澄清/待处理链路（对齐 `goal.clarification_required` 的 Outbox/待处理投影，不新造通知体系），回答走既有 continuation 重新路由；Router 不发正文。
+- `RoutingDecision` 合同扩展需同步 `routerDecisionSchema`、store `#applyTaskRoutingDecision`、畸形兜底与 fencing 回归；控制意图优先级不变。
+- 测试：三值策略持久化/省略保留、clarify 决策→待办→回答续接闭环、崩溃 resume、真实模型 ask_first 场景。
+
+### R4 只读测试归类 API + Web 解锁
+
+- 分支建议 `feat/ROUTE-005-preview-and-ui`，依赖 R1–R3。
+- `POST /v1/routing/preview`：bearer + owner，输入一句话，复用 `listRoutingCandidates` 投影 + 当前生效 routerMode/规则/策略执行 dry-run，返回决策/理由/命中规则；零持久化副作用回归断言（Task/Run/Outbox/routing_decisions 均无新行）；模型调用计量 `component=router` 如实入账；超时/失败返回诚实错误不兜底成假决策。
+- Web `SettingsPage` 解锁三区：归类规则列表/添加/编辑/启停/删除（复用工作规则抽屉模式，409 自动重读）、不确定时 radio（读写 R3 设置）、测试归类输入+结果卡；rules 模式下规则区如实标注仅作用于智能判断。
+- 门禁：`App.test.tsx` 回归、`workspace-theme` 合同、`pnpm review:ui --force`、`pnpm a11y:review` 三主题 + 390px。
+
+### 集成与完成
+
+- R1–R4 依次经集成 worktree 合入 main，每步 CI 全绿 + 合并态 `pnpm check` + `pnpm smoke`（R2 起涉及路由决策持久化，必须含 `pnpm smoke:crash`）。
+- 全部合入后：Feature Map ROUTE-005 升级（按证据如实定 Partial/Usable）、`router-worker-design.md` 决策 4 扩展、`sealed-ui-rebuild.md` 占位解锁、经 Candidate + Supervisor 上线并实机验证三场景（规则命中/ask_first 澄清/测试归类）。
+- 风险登记：prompt 注入规则的真实模型遵守度需实测（与 RULES-001 同类缺口）；`clarify` kind 是决策合同首次扩展，回滚需确认 v41 增量列兼容；`ask_first` 若澄清链路契约不齐，R3 可先只落 `new_task`/`continue_recent` 并把 `ask_first` 单独拆出，不得为赶进度伪造待办。
