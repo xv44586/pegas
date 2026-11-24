@@ -73,7 +73,17 @@ PUT  /v1/settings/behavior
 
 - 按事情/Worker 作用域的规则覆盖（MVP 仅全局）。
 - 归类规则、测试归类与「不确定时」策略（已登记 `ROUTE-005`，Intake 见 `docs/routing-rules-intake.md`）。
-- 默认语言/回复长度偏好与自主程度滑条（保持锁定；风险阈值由服务端 Approval 强制）。
+- 默认语言/回复长度独立偏好控件（2026-11-24 修订：从「行为与规则」页删除锁定占位，见下方修订记录）；自主程度滑条保持锁定（风险阈值由服务端 Approval 强制）。
 - 规则是否被遵守的可观察证据（属执行证据体系后续）。
 
 这些缺口完成前，`RULES-001` 保持 `Partial`。
+
+## 修订：删除语言/长度锁定占位（2026-11-24 Intake）
+
+- **背景与定位问题**：「行为与规则」页的权威链路是 Executor 执行 prompt 注入（`<pegas_work_rules>`），管「事情怎么做」。「默认语言/回复长度」两个锁定占位来自封板 UI 对通用 chatbot 设置的照搬，预设「一问一答的回复风格」语义：回复长度对 Executor 无意义（交付物长度由 Goal/证据要求决定，全局长度约束会与 Mandate 冲突，executorPrompt 已声明冲突时以 Mandate 为准）；真正受长度影响的是 ROUTE-004 say 车道的日常问答，不属于本页。默认语言是跨交付/say 的输出偏好而非「回复」属性，且用户已可用自定义指令表达（如「用中文交付」），独立控件属重复能力。
+- **用户结果**：「行为与规则」页不再展示永远禁用的语言/长度占位与「尚未开放服务端设置」提示；页面收敛为信息横幅 + 「开始工作前：高风险动作始终确认」（Approval 硬边界如实展示，保留锁定）+ 工作规则 + 自定义指令。语言/长度偏好经自定义指令表达，页面无需新增说明（横幅已声明偏好注入语义）。
+- **验收条件**：`SettingsPage.tsx` 删除默认语言 select、回复长度 segmented 与对应 field-hint 中的语言/长度句子；「开始工作前」行与 Approval 声明原样保留；「自主程度」tab 不动；「语音与输入」分类不动（ASR/TTS 服务配置，定位正确）。新增/更新 Web 回归断言：行为与规则 tab 不出现「默认语言」「回复长度」，「开始工作前」仍在且禁用；既有工作规则/自定义指令回归不回归。文档同步：本文件、`docs/sealed-ui-rebuild.md` §行为与规则、Feature Map RULES-001 缺口清单。
+- **非目标**：不新增任何服务端偏好字段或 API；不做 say 车道长度偏好（如将来需要归 ROUTE-004/CONV 系列单独登记）；不动自主程度滑条与风险阈值语义；不改工作规则/自定义指令的存储与注入。
+- **数据与权限边界**：纯前端展示收敛 + 文档，无 schema/API/注入链路变更。
+- **失败与恢复**：回滚 revert 即恢复占位展示，无数据影响。
+- **落地证据（2026-11-24）**：分支 `feat/RULES-001-behavior-cleanup`（基线 intake `e575b3a`）。`SettingsPage.tsx` 删除默认语言 select、回复长度 segmented 与对应提示句；「开始工作前」行与 Approval 声明、「自主程度」tab、「语音与输入」分类原样保留。测试先行：`App.test.tsx` 工作规则用例新增占位删除断言（默认语言/回复长度/旧提示不出现，开始工作前仍在）先红后绿。门禁：`pnpm check` 130 文件 / 1335 测试全绿、`pnpm smoke`（task 36187af8）、`pnpm review:ui --force`、`pnpm a11y:review` 0 违例。纯前端展示收敛，无 schema/API/注入链路变更；回滚 revert 即恢复占位，无数据影响。文档同步：docs/work-rules.md、docs/sealed-ui-rebuild.md §16、Feature Map RULES-001。
