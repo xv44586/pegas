@@ -369,8 +369,8 @@
 - Seen：1（2026-11-25）
 - Severity：security
 - Status：Promoted
-- Enforcement：安全/数据泄漏类确认一次即晋升。`redactDerivedMemoryEvidence` 已改为复用 `DeterministicPrivacyMasker` 并叠加 AKIA/JWT/连接串/自然语言 secret 规则；对抗样本回归进入完整门禁。后续新增出网通道时按本规则复用 masker 并补对抗样本。
-- Owner / next action：MEMORY-001 剩余 P2-8（mask 模式下 memories 注入绕过 masking）单独 Intake 修复后，把「出网前 masking 单一权威路径」扩展为覆盖注入侧的自动化约束。
+- Enforcement：安全/数据泄漏类确认一次即晋升。`redactDerivedMemoryEvidence` 已改为复用 `DeterministicPrivacyMasker` 并叠加 AKIA/JWT/连接串/自然语言 secret 规则；对抗样本回归进入完整门禁。注入侧已覆盖：`PrivacyMaskingExecutor.execute` 对 memories 与 work rules 同样先 mask（`test/privacy-boundaries.test.ts` 回归）。后续新增出网通道时按本规则复用 masker 并补对抗样本。
+- Owner / next action：已关闭（2026-11-25 P2 第二轮）。后续新增注入字段时同步扩展 `PrivacyMaskingExecutor` 与 privacy-boundaries 回归。
 
 <!--
 ### LESSON-YYYYMMDD-NN：简短标题

@@ -3,7 +3,10 @@ import type { AddressInfo } from 'node:net'
 
 import { createControlPlane } from '../src/control-plane/server.js'
 import type { GoalContractDraft } from '../src/goal/goal-delivery.js'
-import { PegasStore } from '../src/storage/sqlite-store.js'
+import {
+  MemoryCommandConflictError,
+  PegasStore,
+} from '../src/storage/sqlite-store.js'
 
 describe('derived memory durable jobs', () => {
   it('atomically enqueues one idempotent retain job when a work Run completes', () => {
@@ -221,6 +224,81 @@ describe('derived memory durable jobs', () => {
       memoryType: 'world',
       attempts: 1,
     })
+    store.close()
+  })
+
+  it('suppresses a merged or reworded regeneration from the same source Run', () => {
+    const store = new PegasStore(':memory:', { derivedMemoryEnabled: true })
+    const claimed = createClaimedRun(store, 'owner', 'worker')
+    store.recordDerivedMemoryRecall(claimed.run.id, 'owner', [
+      {
+        id: 'original-fact',
+        text: 'Use npm for this repository.',
+        type: 'world',
+        tags: ['pegas:global'],
+        metadata: { run_id: claimed.run.id, source_kind: 'run_success' },
+      },
+    ])
+    store.tombstoneDerivedMemory('owner', 'original-fact', 'user deleted')
+    const originalCuration = store.claimNextDerivedMemoryCurationJob(
+      'memory-worker',
+      30_000,
+    )
+    if (!originalCuration) throw new Error('Expected curation job')
+    store.completeDerivedMemoryCurationJob(originalCuration.id, 'memory-worker')
+
+    const reworded = {
+      id: 'merged-new-id',
+      text: 'This repository is managed with npm and related tooling.',
+      type: 'world' as const,
+      tags: ['pegas:global'],
+      metadata: { run_id: claimed.run.id, source_kind: 'run_success' },
+    }
+    expect(store.isDerivedMemorySuppressed('owner', reworded)).toBe(true)
+    store.replaceDerivedMemoryCache('owner', [reworded])
+    expect(store.listDerivedMemories('owner')).toEqual([])
+    expect(
+      store.claimNextDerivedMemoryCurationJob('memory-worker', 30_000),
+    ).toMatchObject({ memoryId: 'merged-new-id' })
+
+    const unrelated = {
+      id: 'other-run-fact',
+      text: 'A different verified outcome.',
+      type: 'world' as const,
+      tags: ['pegas:global'],
+      metadata: { run_id: 'another-run' },
+    }
+    expect(store.isDerivedMemorySuppressed('owner', unrelated)).toBe(false)
+    store.close()
+  })
+
+  it('replays a concurrent correction command inside the write transaction', () => {
+    const store = new PegasStore(':memory:', { derivedMemoryEnabled: true })
+    const claimed = createClaimedRun(store, 'owner', 'worker')
+    store.recordDerivedMemoryRecall(claimed.run.id, 'owner', [
+      {
+        id: 'memory-concurrent',
+        text: 'Use npm.',
+        type: 'world',
+        tags: ['pegas:global'],
+        metadata: {},
+      },
+    ])
+    const first = store.correctDerivedMemory('owner', 'memory-concurrent', {
+      commandId: 'same-command',
+      correction: 'Use pnpm.',
+    })
+    const replay = store.correctDerivedMemory('owner', 'memory-concurrent', {
+      commandId: 'same-command',
+      correction: 'Use pnpm.',
+    })
+    expect(replay).toEqual(first)
+    expect(() =>
+      store.correctDerivedMemory('owner', 'memory-concurrent', {
+        commandId: 'same-command',
+        correction: 'Use cargo.',
+      }),
+    ).toThrow(MemoryCommandConflictError)
     store.close()
   })
 

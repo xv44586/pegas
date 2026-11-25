@@ -23,6 +23,7 @@ const baseEnvironment = {
   PEGAS_HINDSIGHT_RUNTIME_PREFIX: `pegas-memory-canary-${suffix}`,
   PEGAS_HINDSIGHT_DB_VOLUME: `pegas-memory-canary-pg-${suffix}`,
   PEGAS_HINDSIGHT_DB_PASSWORD: randomUUID(),
+  PEGAS_HINDSIGHT_API_KEY: randomUUID(),
   PEGAS_HINDSIGHT_BACKUP_DIR: join(temporaryRoot, 'backups'),
   PEGAS_HINDSIGHT_PORT: String(port),
   PEGAS_HINDSIGHT_IMAGE:
@@ -39,6 +40,7 @@ const baseEnvironment = {
     process.env.PEGAS_MEMORY_CANARY_LLM_MODEL ??
     'discovery-api/deepseek-v4.1-flash-1017',
 }
+const tenantApiKey = baseEnvironment.PEGAS_HINDSIGHT_API_KEY
 const marker = `PegasMemoryCanary${randomUUID().replaceAll('-', '')}`
 const owner = 'memory-canary-owner'
 const otherOwner = 'memory-canary-other-owner'
@@ -54,7 +56,8 @@ try {
       process.env.PEGAS_MEMORY_CANARY_PREVIOUS_HINDSIGHT_IMAGE ??
       HINDSIGHT_PREVIOUS_ARM64_IMAGE,
   })
-  let service = createService(port, hmacKey)
+  let service = createService(port, hmacKey, tenantApiKey)
+  await assertUnauthorized(port)
   const initialOperation = await service.submit({
     id: randomUUID(),
     userId: owner,
@@ -72,8 +75,34 @@ try {
   console.log('memory canary: upgrading the same database to Hindsight v1.2.3')
   await stopHindsight(baseEnvironment)
   await startHindsight(baseEnvironment)
-  service = createService(port, hmacKey)
+  service = createService(port, hmacKey, tenantApiKey)
   await assertRecall(service, owner, marker, true)
+
+  console.log('memory canary: verifying crash-window resubmission idempotency')
+  const replayJob = {
+    id: randomUUID(),
+    userId: owner,
+    taskId: 'canary-task',
+    runId: 'canary-run-replay',
+    kind: 'run_success',
+    documentId: `pegas:canary:replay:${marker}`,
+    content: `Verified outcome: ${marker}Replay stays a single operation.`,
+    workingDirectory: '/workspace/memory-canary',
+    attempts: 1,
+  }
+  const replayFirst = await service.submit(replayJob)
+  const replaySecond = await service.submit(replayJob)
+  if (replayFirst !== replaySecond)
+    throw new Error('Hindsight resubmission returned a different operation ID')
+  await waitForOperation(service, owner, replayFirst)
+  const replayListed = await service.list(owner)
+  const replayFacts = replayListed.filter(memory =>
+    memory.text.includes(`${marker}Replay`),
+  )
+  if (replayFacts.length !== 1)
+    throw new Error(
+      `Crash-window resubmission duplicated the retained fact: ${String(replayFacts.length)}`,
+    )
 
   console.log('memory canary: checking owner isolation and correction')
   const otherOperation = await service.submit({
@@ -147,7 +176,7 @@ try {
   })
   await waitForOperation(service, owner, afterBackupOperation)
   await restoreHindsight(archive, baseEnvironment)
-  service = createService(port, hmacKey)
+  service = createService(port, hmacKey, tenantApiKey)
   await assertRecall(service, owner, marker, true)
   await assertRecall(service, owner, afterBackupMarker, false)
 
@@ -161,6 +190,8 @@ try {
       backupRestore: true,
       ownerIsolation: true,
       correction: true,
+      apiAuthentication: true,
+      resubmissionIdempotency: true,
     }),
   )
 } finally {
@@ -172,14 +203,25 @@ try {
     rmSync(temporaryRoot, { recursive: true, force: true })
 }
 
-function createService(port, hmacKey) {
+function createService(port, hmacKey, apiKey) {
   return new PegasDerivedMemoryService(
     new HindsightProvider({
       baseUrl: `http://127.0.0.1:${String(port)}`,
+      apiKey,
       timeoutMs: 60_000,
     }),
     { hmacKey },
   )
+}
+
+async function assertUnauthorized(port) {
+  const response = await fetch(
+    `http://127.0.0.1:${String(port)}/v1/default/banks/pegas-canary-unauthorized/memories/list?limit=1&offset=0&state=valid`,
+  )
+  if (response.status !== 401)
+    throw new Error(
+      `Unauthenticated Hindsight request returned HTTP ${String(response.status)}, expected 401`,
+    )
 }
 
 async function waitForOperation(service, userId, operationId) {

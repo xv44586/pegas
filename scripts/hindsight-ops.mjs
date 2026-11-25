@@ -37,6 +37,10 @@ export function hindsightRuntimePlan(environment = process.env) {
     environment.PEGAS_HINDSIGHT_DB_PASSWORD,
     'PEGAS_HINDSIGHT_DB_PASSWORD',
   )
+  const tenantApiKey = required(
+    environment.PEGAS_HINDSIGHT_API_KEY,
+    'PEGAS_HINDSIGHT_API_KEY',
+  )
   const databaseName = environment.PEGAS_HINDSIGHT_DB_NAME ?? 'hindsight'
   const databaseUser = environment.PEGAS_HINDSIGHT_DB_USER ?? 'hindsight'
   const apiPort = positiveInteger(
@@ -61,6 +65,9 @@ export function hindsightRuntimePlan(environment = process.env) {
   }
   const hindsightEnvironment = {
     HINDSIGHT_API_DATABASE_URL: databaseUrl,
+    HINDSIGHT_API_TENANT_EXTENSION:
+      'hindsight_api.extensions.builtin.tenant:ApiKeyTenantExtension',
+    HINDSIGHT_API_TENANT_API_KEY: tenantApiKey,
     HINDSIGHT_API_LLM_PROVIDER:
       environment.PEGAS_HINDSIGHT_LLM_PROVIDER ?? 'openai',
     HINDSIGHT_API_LLM_BASE_URL: required(

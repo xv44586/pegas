@@ -107,6 +107,52 @@ describe('privacy egress boundaries', () => {
     expect(generateJson).not.toHaveBeenCalled()
   })
 
+  it('masks injected memories and work rules before they reach the Executor', async () => {
+    const password = 'local-only-{{SECRET_2j5t7l3t}}'
+    let observed: ExecutorInput | undefined
+    const executor: RunExecutor = {
+      name: 'stub-executor',
+      execute(input) {
+        observed = input
+        return Promise.resolve({ executorRef: 'ref', output: 'done' })
+      },
+    }
+    const wrapped = new PrivacyMaskingExecutor(
+      executor,
+      new DeterministicPrivacyMasker({ hmacKey }),
+    )
+
+    await wrapped.execute({
+      runId: 'run-1',
+      taskId: 'task-1',
+      prompt: 'continue the work',
+      workingDirectory: process.cwd(),
+      memories: [
+        {
+          id: 'memory-1',
+          scope: 'global',
+          category: 'fact',
+          content: `部署口令 password=${password}`,
+          source: { kind: 'user_confirmation' },
+        },
+      ],
+      workRules: {
+        rules: [
+          {
+            title: '连接约定',
+            content: `使用 password=${password} 连接`,
+          },
+        ],
+        customInstructions: `secret=${password}`,
+      },
+    })
+
+    expect(observed?.memories?.[0]?.content).not.toContain(password)
+    expect(observed?.workRules?.rules[0]?.content).not.toContain(password)
+    expect(observed?.workRules?.customInstructions).not.toContain(password)
+    expect(observed?.memories?.[0]?.id).toBe('memory-1')
+  })
+
   it('preserves Executor metadata and optional callbacks', async () => {
     let observed: ExecutorInput | undefined
     const executor: RunExecutor = {

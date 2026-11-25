@@ -139,6 +139,14 @@ export function loadConfig(
       'PEGAS_MEMORY_HMAC_KEY is required when PEGAS_MEMORY_PROVIDER=hindsight',
     )
   }
+  if (
+    memoryProvider === 'hindsight' &&
+    !environment.PEGAS_HINDSIGHT_API_KEY?.trim()
+  ) {
+    throw new Error(
+      'PEGAS_HINDSIGHT_API_KEY is required when PEGAS_MEMORY_PROVIDER=hindsight',
+    )
+  }
   if (speechProvider === 'openai-compatible' && !speechBaseUrl) {
     throw new Error(
       'PEGAS_SPEECH_BASE_URL is required when PEGAS_SPEECH_PROVIDER=openai-compatible',

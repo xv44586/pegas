@@ -2,11 +2,11 @@
 
 > Feature：`MEMORY-001`
 >
-> 状态：Partial
+> 状态：Usable
 >
 > 更新日期：2026-11-25
 
-本文记录已经落地的显式 Memory 合同和 Hindsight 派生记忆最小闭环。独立评审（2026-11-25）发现两项 P1 与多项 P2 后，本 Feature 从 `Usable` 降回 `Partial`。两项 P1（凭证遮盖绕过、waiting Run 假成功经验）、删除的远端持续对账和 operation 轮询预算已修复并有回归测试；剩余 P2/P3 缺口关闭并通过完整门禁后才能恢复 `Usable`。
+本文记录已经落地的显式 Memory 合同和 Hindsight 派生记忆最小闭环。独立评审（2026-11-25）曾发现两项 P1 与多项 P2，本 Feature 一度降回 `Partial`。两项 P1（凭证遮盖绕过、waiting Run 假成功经验）、删除远端持续对账、operation 轮询预算和全部 6 项 P2（归并防复活、崩溃重提交幂等真实证据、Provider 超时/畸形合同测试、mask 注入边界、并发纠正事务、Hindsight 鉴权）已修复并有回归证据，完整门禁通过后恢复 `Usable`。P3 与 hardening 项继续登记在 `docs/feature-map.md` 的 MEMORY-001 M1 小节。
 
 ## 用户结果
 
@@ -124,7 +124,7 @@ POST /v1/memories/:memoryId/delete
 - 显式记录保留完整编辑、revision 和作用域操作。
 - 派生记录展示有界摘要、来源 Task/Run、scope、生成时间和最近注入时间；支持查看、删除和 dedicated correction。纠正和删除都在后台执行，不创建 Approval 或用户待办。
 - 用户删除派生记录时，Pegas 先写 tombstone 并立即从列表默认视图和后续注入中排除，再异步调用 Provider 删除或 invalidate。
-- tombstone 保存稳定来源键和最小审计信息，不保留已删除正文。旧事件、重试和索引重建必须先检查 tombstone。
+- tombstone 保存稳定来源键和最小审计信息，不保留已删除正文。旧事件、重试和索引重建必须先检查 tombstone。除 ID 与内容哈希外，tombstone 还绑定来源 Run（schema v52 `source_run_id`）：Provider 归并或改写后以新 ID、新文本重建同源事实时，仍按来源 Run 压制并重新入队 invalidate。
 
 ## 验收条件
 
@@ -140,6 +140,7 @@ POST /v1/memories/:memoryId/delete
 ## 数据与权限边界
 
 - Control Plane 生成 Provider capability。Executor 和 Router 不持有 Hindsight 管理凭证，不能绕过 Pegas 直接写 bank。
+- 自托管 Hindsight HTTP 面启用内置 `ApiKeyTenantExtension` Bearer 鉴权。`PEGAS_HINDSIGHT_API_KEY` 在 `memory:up` 和 `PEGAS_MEMORY_PROVIDER=hindsight` 启动时必填，服务端与 Worker 使用同一值；未鉴权的 loopback API 不再存在，本机其他进程无法直接读写 bank。
 - Provider adapter 只接受已经绑定 owner 和来源的内部命令。任意客户端提交的 `bank_id`、owner tag 或 source metadata 都不能成为权威输入。
 - Memory 只能影响执行上下文，不能增加工具、权限、网络访问、workspace 写范围或 Approval 豁免。
 - Task 当前状态、deadline、等待问题、Artifact 完整性、Approval 和授权始终从权威领域对象读取，不能从 Hindsight 回忆。
@@ -153,8 +154,8 @@ POST /v1/memories/:memoryId/delete
 - 删除采用本地 tombstone 先行。远端删除失败时后台重试，本地列表和 prompt 继续保持删除状态。每分钟完整 bank 同步同时是对账点：Provider 备份恢复或索引重建让已压制记忆重新 valid 时，同步会重新入队 curation invalidate，远端收敛不依赖一次性 job。
 - Hindsight 关闭或不可用时，当前 schema v21 显式 Memory 的 CRUD、分层装载和 prompt 形状保持兼容。Provider 开关是回滚入口。
 - 新增数据库对象必须是纯增量。旧版本可以忽略 memory job、派生投影和 tombstone 表，不得覆盖或格式化现有显式 Memory。
-- `pnpm memory:up` 以 Docker `unless-stopped` 独立监督 Hindsight 和外部 pgvector/PostgreSQL，只绑定 loopback API；数据库使用命名 volume。`pnpm memory:backup` 生成一致性 zip，`pnpm memory:restore <archive> --confirm-restore` 先停 API、用一次性 admin 容器恢复，再重建服务。Provider 故障不会把 Pegas Worker 一起拉倒。
-- `pnpm smoke:memory` 使用唯一临时容器/网络/volume，验证 v1.2.2 → v1.2.3 同库升级、owner 隔离、retain/recall/invalidate、纠正和 backup→mutation→restore。脚本只清理自己创建的资源。
+- `pnpm memory:up` 以 Docker `unless-stopped` 独立监督 Hindsight 和外部 pgvector/PostgreSQL，只绑定 loopback API 并启用 API key 鉴权；数据库使用命名 volume。`pnpm memory:backup` 生成一致性 zip，`pnpm memory:restore <archive> --confirm-restore` 先停 API、用一次性 admin 容器恢复，再重建服务。Provider 故障不会把 Pegas Worker 一起拉倒。
+- `pnpm smoke:memory` 使用唯一临时容器/网络/volume，验证 v1.2.2 → v1.2.3 同库升级、owner 隔离、retain/recall/invalidate、纠正、无鉴权请求 401、同 operation_id 重提交幂等和 backup→mutation→restore。脚本只清理自己创建的资源。
 
 ## 非目标
 
@@ -175,13 +176,13 @@ POST /v1/memories/:memoryId/delete
 M1 派生层已经实现：
 
 - `src/memory/derived-memory.ts` 定义可替换 Provider、owner bank/workspace context 的 HMAC 映射、召回二次过滤和 dedicated correction；`src/memory/hindsight-provider.ts` 以直接 HTTP 接入 retain、operation status、recall、完整分页 list/get 和 invalidate，不把 SDK/MCP 或 Provider 凭证交给 Executor。
-- schema v49 新增 durable retain/curation job、本地召回投影、Run 注入证据和 tombstone；schema v50 增加内容哈希 tombstone、durable correction、完整 bank 同步健康状态与 `retrieved/filtered/injected` recall audit；schema v51 为 retain/correction job 增加独立轮询与错误预算列。Run 成功/失败只写有界 input/outcome evidence，出网前复用既有隐私 masker 并叠加常见凭证格式遮盖，不写思考过程与无界工具日志。
+- schema v49 新增 durable retain/curation job、本地召回投影、Run 注入证据和 tombstone；schema v50 增加内容哈希 tombstone、durable correction、完整 bank 同步健康状态与 `retrieved/filtered/injected` recall audit；schema v51 为 retain/correction job 增加独立轮询与错误预算列；schema v52 为 tombstone 增加来源 Run 压制。Run 成功/失败只写有界 input/outcome evidence，出网前复用既有隐私 masker 并叠加常见凭证格式遮盖，不写思考过程与无界工具日志。
 - 每个 work Run 在 Executor 前最多召回一次；显式 Memory 排在派生 Memory 前。Hindsight 超时、畸形响应或不可用时 fail-open，不阻断 Run；Router 和 conversation lane 均不读取 Hindsight。同步失败保留最后成功投影并暴露健康状态。
-- `GET /v1/derived-memories` 和记忆页展示定期同步的完整有效 bank。`POST /v1/derived-memories/:id/correct` 以 command ID 幂等 supersede；删除/纠正先落 ID + 内容哈希 tombstone、清正文并立即停止注入，再由后台作业收敛 Provider，不产生 Approval 或待办。
+- `GET /v1/derived-memories` 和记忆页展示定期同步的完整有效 bank。`POST /v1/derived-memories/:id/correct` 以 command ID 幂等 supersede，replay/fingerprint 检查在 `BEGIN IMMEDIATE` 写事务内完成，并发同 commandId 不会创建重复 job；删除/纠正先落 ID + 内容哈希 + 来源 Run tombstone、清正文并立即停止注入，再由后台作业收敛 Provider，不产生 Approval 或待办。
 - `scripts/hindsight-ops.mjs` 提供 loopback、`unless-stopped`、外部持久 PostgreSQL、备份和显式确认恢复；`scripts/smoke-memory.mjs` 是可重复的真实 Provider canary。默认 linux/arm64 基线固定到 Hindsight v1.2.3 manifest `sha256:4b903ed2cbf029d6d305030b0005002d61d6a3b1d9b85867fb459351dcaa671c`（multi-arch index `sha256:601cfdd1bd3f6053864c6458ee15259f065a01a3f83090b56a8ae57db67f8f38`，MIT）与 pgvector/pg18 manifest `sha256:38681dc6eaf55308e2a4c6de392d131652dcfac70e1263e35cd9b5ea3fe39782`；其他架构必须显式固定并重新跑 canary。
 
-自动化证据位于 `test/derived-memory.test.ts`、`test/derived-memory-store.test.ts`、`test/derived-memory-processor.test.ts`、`test/hindsight-runtime.test.ts` 与 `web/src/App.test.tsx`，覆盖 wire contract、完整分页、owner/context 隔离、预算与全阶段审计、原子入队、submit→poll 不重投、fail-open、ID 重建防复活、异步 curation、dedicated correction、完整同步与无需审批 UI。评审修复回归另覆盖：常见凭证格式（ghp_/github_pat_/AKIA/xoxb/JWT/连接串/自然语言 secret/私钥块）出网前遮盖、waiting goal Run 不产生成功经验且审查 failed 入队 failure、审查通过后才入队 verified success、Provider 恢复复活已删记忆时同步重新入队 curation、慢抽取轮询不消耗错误预算、永不终态的 operation 在 600 次轮询后停放。
+自动化证据位于 `test/derived-memory.test.ts`、`test/derived-memory-store.test.ts`、`test/derived-memory-processor.test.ts`、`test/hindsight-runtime.test.ts`、`test/privacy-boundaries.test.ts` 与 `web/src/App.test.tsx`，覆盖 wire contract、完整分页、owner/context 隔离、预算与全阶段审计、原子入队、submit→poll 不重投、fail-open、ID 重建防复活、异步 curation、dedicated correction、完整同步与无需审批 UI。评审修复回归另覆盖：常见凭证格式（ghp_/github_pat_/AKIA/xoxb/JWT/连接串/自然语言 secret/私钥块）出网前遮盖、waiting goal Run 不产生成功经验且审查 failed 入队 failure、审查通过后才入队 verified success、Provider 恢复复活已删记忆时同步重新入队 curation、慢抽取轮询不消耗错误预算、永不终态的 operation 在 600 次轮询后停放。P2 修复回归再覆盖：同来源 Run 的归并/改写重建被来源级 tombstone 压制、Provider 请求在合同超时被 abort、畸形 recall 条目丢弃与畸形单条读取拒绝、非法 operation status 与 HTTP 502 拒绝、超过 10k 条上限拒绝、mask 模式下 memories 与 work rules 注入同样先脱敏、并发同 commandId 纠正冲突稳定返回 `MemoryCommandConflictError`、hindsight 模式缺 API key 拒绝启动、运行时 plan 注入 tenant 鉴权扩展。真实 `pnpm smoke:memory` 增加无鉴权请求 401 断言与同 operation_id 崩溃重提交幂等段（重复 submit 返回同一 operation，事实不重复）。
 
 最终门禁和真实 canary 的精确测试数量、覆盖率及输出记录在 `docs/feature-map.md` 的 MEMORY-001 M1 小节。
 
-`MEMORY-001` 当前为 `Partial`。恢复 `Usable` 前必须关闭的评审缺口：内容哈希 tombstone 对 Provider 归并/改写重建的防复活承诺需要来源级压制或如实收窄文档；崩溃窗口重复 retain 的幂等需要真实 Provider 证据；Provider 超时/畸形响应合同测试尚未落地；mask 隐私模式下 memories 注入绕过 masking（M0 既有边界，需单独 Intake）；并发同 commandId 纠正的 replay 检查需移入事务；自托管 Hindsight HTTP 面无鉴权，本机 Executor shell 可绕过 Pegas 权威边界，需鉴权方案或明确登记边界缺口。其余 P3（CJK token 预算、recall query 组成与文档一致性、global 经验产生路径、Web sync 健康展示、404/409 契约、瞬时失败入队策略、HMAC key 长度校验、shutdown AbortSignal）逐项关闭。Hardening（非 arm64 镜像、加密 off-site backup、长期效果评测、>10k 游标）保持押后。
+`MEMORY-001` 当前为 `Usable`。独立评审的全部 P1 与 P2 已关闭并有自动化和真实 Provider 证据，完整门禁（`pnpm check`、`pnpm smoke`、`pnpm smoke:crash`、真实 `pnpm smoke:memory`）通过。剩余 P3（CJK token 预算、recall query 组成与文档一致性、global 经验产生路径、Web sync 健康展示、纠正重试误报、404/409 契约、瞬时失败入队策略、HMAC key 长度校验、shutdown AbortSignal、health-cmd 数组化）与 hardening（非 arm64 镜像、加密 off-site backup、长期效果评测、>10k 游标）继续登记在 Feature Map，逐项关闭。

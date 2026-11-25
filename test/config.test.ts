@@ -179,6 +179,14 @@ describe('loadConfig', () => {
       },
       'PEGAS_MEMORY_HMAC_KEY is required',
     ],
+    [
+      {
+        PEGAS_MEMORY_PROVIDER: 'hindsight',
+        PEGAS_HINDSIGHT_BASE_URL: 'http://127.0.0.1:8888',
+        PEGAS_MEMORY_HMAC_KEY: 'owner-isolation-key',
+      },
+      'PEGAS_HINDSIGHT_API_KEY is required',
+    ],
     [{ PEGAS_API_PORT: '0' }, 'PEGAS_API_PORT must be a positive integer'],
   ])('rejects unsafe or invalid settings', (environment, message) => {
     expect(() => loadConfig(environment)).toThrow(message)

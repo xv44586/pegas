@@ -243,6 +243,90 @@ describe('derived memory', () => {
     )
   })
 
+  it('aborts a stalled provider request at the contract timeout', async () => {
+    const request = vi.fn<typeof fetch>().mockImplementation(
+      (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            const reason: unknown = init.signal?.reason
+            reject(reason instanceof Error ? reason : new Error('aborted'))
+          })
+        }),
+    )
+    const provider = new HindsightProvider({
+      baseUrl: 'http://hindsight.local',
+      timeoutMs: 20,
+      fetch: request,
+    })
+
+    await expect(provider.list('bank')).rejects.toThrow(/timed out/)
+  })
+
+  it('drops malformed recall entries and rejects malformed single reads', async () => {
+    const request = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({
+        results: [
+          { id: 'ok', text: 'usable fact', fact_type: 'world', tags: [] },
+          { text: 'missing id' },
+          { id: 'no-text' },
+          { id: 'bad-type', text: 'fact', fact_type: 'directive' },
+          'not-an-object',
+        ],
+      }),
+    )
+    const provider = new HindsightProvider({
+      baseUrl: 'http://hindsight.local',
+      fetch: request,
+    })
+
+    await expect(
+      provider.recall('bank', { query: 'q', maxTokens: 100, tags: [] }),
+    ).resolves.toMatchObject([{ id: 'ok' }])
+
+    request.mockResolvedValue(jsonResponse({ unexpected: true }))
+    await expect(provider.get('bank', 'ok')).rejects.toThrow(/malformed/)
+  })
+
+  it('rejects an invalid operation status and a non-OK HTTP response', async () => {
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ status: 'almost-done' }))
+      .mockResolvedValueOnce(new Response('upstream exploded', { status: 502 }))
+    const provider = new HindsightProvider({
+      baseUrl: 'http://hindsight.local',
+      fetch: request,
+    })
+
+    await expect(provider.operationStatus('bank', 'op')).rejects.toThrow(
+      /invalid status/,
+    )
+    await expect(provider.operationStatus('bank', 'op')).rejects.toThrow(
+      /HTTP 502/,
+    )
+  })
+
+  it('refuses an unbounded bank listing beyond 10,000 records', async () => {
+    const page = jsonResponse({
+      items: Array.from({ length: 100 }, (_, index) => ({
+        id: `memory-${String(index)}`,
+        text: 'fact',
+        fact_type: 'world',
+        state: 'valid',
+        tags: [],
+      })),
+    })
+    const request = vi
+      .fn<typeof fetch>()
+      .mockImplementation(() => Promise.resolve(page.clone()))
+    const provider = new HindsightProvider({
+      baseUrl: 'http://hindsight.local',
+      fetch: request,
+    })
+
+    await expect(provider.list('bank')).rejects.toThrow(/10,000/)
+    expect(request).toHaveBeenCalledTimes(100)
+  })
+
   it('retains a user correction with stable provenance', async () => {
     const retain = vi
       .fn<

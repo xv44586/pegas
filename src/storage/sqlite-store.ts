@@ -1065,6 +1065,16 @@ ALTER TABLE derived_memory_correction_jobs ADD COLUMN poll_count INTEGER NOT NUL
 ALTER TABLE derived_memory_correction_jobs ADD COLUMN error_attempts INTEGER NOT NULL DEFAULT 0;
 `
 
+const migration52 = `
+-- MEMORY-001 review fixes: suppression also binds to the originating Run so a
+-- provider merge or rewording of a deleted fact cannot revive it under a new
+-- ID and different text.
+ALTER TABLE derived_memory_tombstones ADD COLUMN source_run_id TEXT;
+CREATE INDEX derived_memory_tombstones_by_run
+ON derived_memory_tombstones (user_id, source_run_id)
+WHERE source_run_id IS NOT NULL;
+`
+
 const migration39 = `
 -- DESIGN-006 phase 2: manual deletion of ended automations. The command
 -- ledger must survive the definition so frozen receipts stay replayable;
@@ -3237,6 +3247,7 @@ export class PegasStore {
     this.#migrate(49, migration49)
     this.#migrate(50, migration50)
     this.#migrate(51, migration51)
+    this.#migrate(52, migration52)
   }
 
   #backfillWorkerIconIds(): void {
@@ -5778,10 +5789,18 @@ export class PegasStore {
         .prepare(
           `SELECT 1 FROM derived_memory_tombstones
            WHERE user_id = ?
-             AND (memory_id = ? OR content_hash = ?)
+             AND (memory_id = ? OR content_hash = ?
+               OR (source_run_id IS NOT NULL AND source_run_id = ?))
            LIMIT 1`,
         )
-        .get(userId, memory.id, derivedMemoryContentHash(memory.text)),
+        .get(
+          userId,
+          memory.id,
+          derivedMemoryContentHash(memory.text),
+          typeof memory.metadata.run_id === 'string'
+            ? memory.metadata.run_id
+            : null,
+        ),
     )
   }
 
@@ -5795,20 +5814,32 @@ export class PegasStore {
     try {
       const memory = this.#database
         .prepare(
-          `SELECT text, memory_type FROM derived_memory_cache
+          `SELECT text, memory_type, metadata_json FROM derived_memory_cache
            WHERE user_id = ? AND memory_id = ?`,
         )
         .get(userId, memoryId) as
-        { text: string; memory_type: DerivedMemory['type'] } | undefined
+        | {
+            text: string
+            memory_type: DerivedMemory['type']
+            metadata_json: string
+          }
+        | undefined
+      const sourceRunId = memory
+        ? sourceRunIdFromMetadata(memory.metadata_json)
+        : null
       this.#database
         .prepare(
           `INSERT INTO derived_memory_tombstones
-            (user_id, memory_id, reason, created_at, content_hash)
-           VALUES (?, ?, ?, ?, ?)
+            (user_id, memory_id, reason, created_at, content_hash, source_run_id)
+           VALUES (?, ?, ?, ?, ?, ?)
            ON CONFLICT(user_id, memory_id) DO UPDATE SET
              content_hash = COALESCE(
                derived_memory_tombstones.content_hash,
                excluded.content_hash
+             ),
+             source_run_id = COALESCE(
+               derived_memory_tombstones.source_run_id,
+               excluded.source_run_id
              )`,
         )
         .run(
@@ -5817,6 +5848,7 @@ export class PegasStore {
           reason.slice(0, 500),
           now,
           memory ? derivedMemoryContentHash(memory.text) : null,
+          sourceRunId,
         )
       this.#database
         .prepare(
@@ -5861,48 +5893,59 @@ export class PegasStore {
     const fingerprint = createHash('sha256')
       .update(JSON.stringify({ memoryId, correction }))
       .digest('hex')
-    const replay = this.#database
-      .prepare(
-        `SELECT fingerprint, response_json
-         FROM derived_memory_correction_jobs
-         WHERE user_id = ? AND command_id = ?`,
-      )
-      .get(userId, input.commandId) as
-      { fingerprint: string; response_json: string } | undefined
-    if (replay) {
-      if (replay.fingerprint !== fingerprint)
-        throw new MemoryCommandConflictError()
-      return JSON.parse(replay.response_json) as {
-        memoryId: string
-        correctionJobId: string
-        status: 'pending'
-      }
-    }
-    const memory = this.#database
-      .prepare(
-        `SELECT * FROM derived_memory_cache
-         WHERE user_id = ? AND memory_id = ?`,
-      )
-      .get(userId, memoryId) as unknown as DerivedMemoryCacheRow | undefined
-    if (!memory) throw new MemoryTargetUnavailableError()
-    const jobId = randomUUID()
-    const response = {
-      memoryId,
-      correctionJobId: jobId,
-      status: 'pending' as const,
-    }
     const now = this.#clock.now().toISOString()
     this.#database.exec('BEGIN IMMEDIATE')
     try {
+      const replay = this.#database
+        .prepare(
+          `SELECT fingerprint, response_json
+           FROM derived_memory_correction_jobs
+           WHERE user_id = ? AND command_id = ?`,
+        )
+        .get(userId, input.commandId) as
+        { fingerprint: string; response_json: string } | undefined
+      if (replay) {
+        if (replay.fingerprint !== fingerprint)
+          throw new MemoryCommandConflictError()
+        this.#database.exec('COMMIT')
+        return JSON.parse(replay.response_json) as {
+          memoryId: string
+          correctionJobId: string
+          status: 'pending'
+        }
+      }
+      const memory = this.#database
+        .prepare(
+          `SELECT * FROM derived_memory_cache
+           WHERE user_id = ? AND memory_id = ?`,
+        )
+        .get(userId, memoryId) as unknown as DerivedMemoryCacheRow | undefined
+      if (!memory) throw new MemoryTargetUnavailableError()
+      const jobId = randomUUID()
+      const response = {
+        memoryId,
+        correctionJobId: jobId,
+        status: 'pending' as const,
+      }
       this.#database
         .prepare(
           `INSERT INTO derived_memory_tombstones
-            (user_id, memory_id, reason, created_at, content_hash)
-           VALUES (?, ?, 'Superseded by user correction', ?, ?)
+            (user_id, memory_id, reason, created_at, content_hash, source_run_id)
+           VALUES (?, ?, 'Superseded by user correction', ?, ?, ?)
            ON CONFLICT(user_id, memory_id) DO UPDATE SET
-             content_hash = excluded.content_hash`,
+             content_hash = excluded.content_hash,
+             source_run_id = COALESCE(
+               derived_memory_tombstones.source_run_id,
+               excluded.source_run_id
+             )`,
         )
-        .run(userId, memoryId, now, derivedMemoryContentHash(memory.text))
+        .run(
+          userId,
+          memoryId,
+          now,
+          derivedMemoryContentHash(memory.text),
+          sourceRunIdFromMetadata(memory.metadata_json),
+        )
       this.#database
         .prepare(
           `DELETE FROM derived_memory_cache
@@ -16048,6 +16091,23 @@ function toDerivedMemoryCorrectionJob(
 function derivedMemoryContentHash(value: string): string {
   const normalized = value.trim().replaceAll(/\s+/g, ' ').toLocaleLowerCase()
   return createHash('sha256').update(normalized).digest('hex')
+}
+
+function sourceRunIdFromMetadata(metadataJson: string): string | null {
+  try {
+    const metadata: unknown = JSON.parse(metadataJson)
+    if (
+      metadata &&
+      typeof metadata === 'object' &&
+      'run_id' in metadata &&
+      typeof metadata.run_id === 'string' &&
+      metadata.run_id.trim()
+    )
+      return metadata.run_id
+  } catch {
+    return null
+  }
+  return null
 }
 
 function derivedMemoryEvidence(
