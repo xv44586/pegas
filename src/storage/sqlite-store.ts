@@ -3323,6 +3323,22 @@ export class RoutingRuleLimitError extends Error {}
 
 export class BehaviorPreferencesConflictError extends Error {}
 
+function correctedRunInput(
+  originalInput: string,
+  directives: { text: string }[],
+): string {
+  const correction = directives.map(directive => directive.text).join('\n')
+  return JSON.stringify(
+    `${JSON.parse(originalInput) as string}\n\n[用户纠正] 用户在执行过程中发来了新的指示。请在已完成工作的基础上调整方向，不要重复已完成的副作用：\n${correction}`,
+  )
+}
+
+export class PendingRunSteeringError extends Error {
+  constructor() {
+    super('Run has pending steering directives')
+  }
+}
+
 export class TaskActionBlockedError extends Error {
   readonly taskId: string
   readonly actionStatus: string
@@ -8736,6 +8752,18 @@ export class PegasStore {
       )
   }
 
+  #assertNoPendingSteering(runId: string): void {
+    if (
+      this.#database
+        .prepare(
+          'SELECT 1 FROM runs WHERE id = ? AND steering_json IS NOT NULL',
+        )
+        .get(runId)
+    ) {
+      throw new PendingRunSteeringError()
+    }
+  }
+
   listPendingRunSteering(
     runId: string,
     workerId: string,
@@ -8795,9 +8823,6 @@ export class PegasStore {
         return successor
       }
       const now = this.#clock.now().toISOString()
-      const steeringText = directives
-        .map(directive => directive.text)
-        .join('\n')
       const successorId = randomUUID()
       this.#database
         .prepare(
@@ -8814,9 +8839,7 @@ export class PegasStore {
           row.executor,
           row.executor_ref ?? row.resume_from_ref,
           row.goal_revision,
-          JSON.stringify(
-            `${JSON.parse(row.input_json) as string}\n\n[用户纠正] 用户在执行过程中发来了新的指示。请在已完成工作的基础上调整方向，不要重复已完成的副作用：\n${steeringText}`,
-          ),
+          correctedRunInput(row.input_json, directives),
           row.execution_context_json,
           row.execution_contract_version,
           now,
@@ -12214,6 +12237,7 @@ export class PegasStore {
       const claim = this.#claimForCapability(runId, claimToken)
       const run = this.#runById(runId)
       if (run.status !== 'running') throw new Error('Run is not executing')
+      this.#assertNoPendingSteering(runId)
       const task = this.#taskById(run.taskId)
       if (task.status === 'completed' || task.status === 'cancelled') {
         throw new Error('Task is closed')
@@ -13522,15 +13546,7 @@ export class PegasStore {
       if (run.claimedBy !== workerId || run.status !== 'running') {
         throw new Error(`Worker ${workerId} does not own run ${runId}`)
       }
-      const pendingSteering = this.#database
-        .prepare('SELECT steering_json FROM runs WHERE id = ?')
-        .get(runId) as { steering_json: string | null }
-      if (pendingSteering.steering_json) {
-        // A user correction arrived while the Executor was finishing. Do not
-        // complete the Task on stale instructions; the Worker parks this
-        // attempt and a successor resumes the session with the correction.
-        throw new Error('Run has pending steering directives')
-      }
+      this.#assertNoPendingSteering(runId)
       const task = this.#taskById(run.taskId)
       const resumedAction = this.#database
         .prepare(
@@ -15418,6 +15434,9 @@ export class PegasStore {
 
   #createRetry(row: RunRow, now: string): Run {
     const id = randomUUID()
+    const directives = row.steering_json
+      ? (JSON.parse(row.steering_json) as { text: string }[])
+      : []
     const goalRevision = (
       this.#database
         .prepare(
@@ -15439,13 +15458,21 @@ export class PegasStore {
         row.executor_ref ?? row.resume_from_ref,
         row.id,
         goalRevision,
-        row.input_json,
+        directives.length
+          ? correctedRunInput(row.input_json, directives)
+          : row.input_json,
         row.execution_context_json ??
           JSON.stringify({ executor: row.executor }),
         row.execution_contract_version,
         now,
         now,
       )
+    if (directives.length) {
+      this.#appendSteeringMarker(row.id, directives, now)
+      this.#database
+        .prepare('UPDATE runs SET steering_json = NULL WHERE id = ?')
+        .run(row.id)
+    }
     return this.#runById(id)
   }
 

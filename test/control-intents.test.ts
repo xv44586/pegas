@@ -200,6 +200,42 @@ describe('ROUTE-001 durable control application', () => {
     store.close()
   })
 
+  it('rejects an approval request from instructions replaced by a correction', () => {
+    const store = new PegasStore(':memory:')
+    try {
+      const seeded = seedTask(store, '发布新版本')
+      const claimed = store.claimNextRun('worker-approval')
+      if (!claimed) throw new Error('Expected claimed Run')
+      store.applyControlIntent(humanEvent(store, '等等，先改发布说明'), {
+        kind: 'steer_task',
+        taskId: seeded.taskId,
+        input: '等等，先改发布说明',
+        reason: 'The owner changed the instructions.',
+      })
+      expect(() =>
+        store.requestApproval(claimed.run.id, claimed.claimToken, {
+          kind: 'publish.release',
+          risk: 'high',
+          idempotencyKey: 'publish-before-correction',
+          request: { release: 'v9' },
+          recoveryPoint: { step: 'before_publish' },
+          approval: {
+            summary: '发布 v9',
+            impact: '对外可见',
+            recommendedOptionId: 'approve',
+            options: [
+              { id: 'approve', label: '发布', kind: 'approve' },
+              { id: 'reject', label: '不发布', kind: 'reject' },
+            ],
+          },
+        }),
+      ).toThrow(/pending steering/)
+      expect(store.listRuns(seeded.taskId)[0]?.status).toBe('running')
+    } finally {
+      store.close()
+    }
+  })
+
   it('rejects steering without an active Run, across owners, and from machine input', () => {
     const store = new PegasStore(':memory:')
     const seeded = seedTask(store, '等待中的工作')
@@ -377,6 +413,118 @@ describe('ROUTE-001 durable control application', () => {
 })
 
 describe('ROUTE-001 worker steering loop', () => {
+  it.each(['lease expiry', 'manual retry'])(
+    'carries the recorded correction into the successor after %s',
+    recovery => {
+      let now = Date.parse('2026-11-25T00:00:00Z')
+      const store = new PegasStore(':memory:', {
+        clock: { now: () => new Date(now) },
+      })
+      try {
+        const seeded = seedTask(store, '整理近三个月的数据')
+        const claimed = store.claimNextRun('worker-first', 1_000)
+        if (!claimed) throw new Error('Expected claimed Run')
+        store.recordExecutorRef(claimed.run.id, 'worker-first', 'session-first')
+        const correction = humanEvent(store, '只保留经过验证的数据')
+        store.applyControlIntent(correction, {
+          kind: 'steer_task',
+          taskId: seeded.taskId,
+          input: '只保留经过验证的数据',
+          reason: 'The user narrows running work.',
+        })
+        if (recovery === 'lease expiry') {
+          now += 2_000
+        } else {
+          store.failRun(claimed.run.id, 'worker-first', 'transient failure')
+          store.retryRun(claimed.run.id, 'owner')
+        }
+
+        const successor = store.claimNextRun('worker-recovered')?.run
+        expect(successor).toMatchObject({
+          retryOfRunId: claimed.run.id,
+          resumeFromRef: 'session-first',
+        })
+        expect(successor?.input).toContain('只保留经过验证的数据')
+        expect(store.listRuns(seeded.taskId)).toHaveLength(2)
+      } finally {
+        store.close()
+      }
+    },
+  )
+
+  it('queues a correction when the executor fails before its next heartbeat', async () => {
+    const store = new PegasStore(':memory:')
+    try {
+      const seeded = seedTask(store, '生成周报')
+      const claimed = store.claimNextRun('worker-first')
+      if (!claimed) throw new Error('Expected claimed Run')
+      await executeClaimedRun(
+        store,
+        {
+          name: 'echo',
+          execute: () => {
+            store.applyControlIntent(humanEvent(store, '只保留关键指标'), {
+              kind: 'steer_task',
+              taskId: seeded.taskId,
+              input: '只保留关键指标',
+              reason: 'An explicit correction arrived.',
+            })
+            return Promise.reject(new Error('Previous execution failed'))
+          },
+        },
+        claimed,
+        'worker-first',
+        process.cwd(),
+        new AbortController().signal,
+        'http://127.0.0.1:4317',
+      )
+      const runs = store.listRuns(seeded.taskId)
+      expect(runs.map(run => run.status)).toEqual(['cancelled', 'queued'])
+      expect(runs[1]?.input).toContain('只保留关键指标')
+    } finally {
+      store.close()
+    }
+  })
+
+  it('handles a correction committed just before final write-back', async () => {
+    const store = new PegasStore(':memory:')
+    try {
+      const seeded = seedTask(store, '生成周报')
+      const claimed = store.claimNextRun('worker-race')
+      if (!claimed) throw new Error('Expected claimed Run')
+      store.recordExecutorRef(claimed.run.id, 'worker-race', 'session-race')
+      const completeRun = store.completeRun.bind(store)
+      vi.spyOn(store, 'completeRun').mockImplementationOnce((...args) => {
+        store.applyControlIntent(humanEvent(store, '补上上周的成本'), {
+          kind: 'steer_task',
+          taskId: seeded.taskId,
+          input: '补上上周的成本',
+          reason: 'A correction arrived before write-back.',
+        })
+        completeRun(...args)
+      })
+      await executeClaimedRun(
+        store,
+        {
+          name: 'echo',
+          execute: () =>
+            Promise.resolve({ executorRef: 'session-race', output: '旧周报' }),
+        },
+        claimed,
+        'worker-race',
+        process.cwd(),
+        new AbortController().signal,
+        'http://127.0.0.1:4317',
+      )
+      const runs = store.listRuns(seeded.taskId)
+      expect(runs.map(run => run.status)).toEqual(['cancelled', 'queued'])
+      expect(runs[1]?.input).toContain('补上上周的成本')
+      expect(store.findTask(seeded.taskId, 'owner')?.status).toBe('started')
+    } finally {
+      store.close()
+    }
+  })
+
   it('aborts the Executor on heartbeat steering and queues a corrected successor', async () => {
     vi.useFakeTimers()
     try {

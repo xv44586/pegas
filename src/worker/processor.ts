@@ -31,6 +31,7 @@ import {
 } from '../collaboration/source-context.js'
 import {
   EventClaimError,
+  PendingRunSteeringError,
   TaskActionBlockedError,
   type PegasStore,
 } from '../storage/sqlite-store.js'
@@ -1269,7 +1270,11 @@ export async function executeClaimedRun(
   } catch (error) {
     clearInterval(leaseHeartbeat)
     signal.removeEventListener('abort', abortRun)
-    if (steeringState.pending && store.ownsRun(claimed.run.id, workerId)) {
+    if (!store.ownsRun(claimed.run.id, workerId)) return
+    if (
+      steeringState.pending ||
+      store.listPendingRunSteering(claimed.run.id, workerId).length > 0
+    ) {
       store.supersedeRunForSteering(claimed.run.id, workerId)
       observeRun('steered')
       return
@@ -1277,7 +1282,6 @@ export async function executeClaimedRun(
     // A Worker Runtime is replaceable. Preserve its durable Run and lease so
     // another runtime can recover it through the existing lease-expiry path.
     if (signal.aborted) return
-    if (!store.ownsRun(claimed.run.id, workerId)) return
     const message = error instanceof Error ? error.message : String(error)
     store.failRun(claimed.run.id, workerId, message, {
       terminalProvider: isTerminalProviderError(message),
@@ -1323,7 +1327,14 @@ export async function executeClaimedRun(
     collectRootOutcomes,
     telemetry,
   )
-  store.completeRun(claimed.run.id, workerId, result)
+  try {
+    store.completeRun(claimed.run.id, workerId, result)
+  } catch (error) {
+    if (!(error instanceof PendingRunSteeringError)) throw error
+    store.supersedeRunForSteering(claimed.run.id, workerId)
+    observeRun('steered')
+    return
+  }
   observeRun('completed')
   if (result.approvalPending) return
   await summarizeRunThinking(store, claimed, thinkingSummarizer, telemetry)
