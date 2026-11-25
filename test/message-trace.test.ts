@@ -314,6 +314,53 @@ describe('OBS-001 review regressions', () => {
     }
   })
 
+  it('shows an independently retried clarification on its own message trace', async () => {
+    const store = new PegasStore(':memory:')
+    try {
+      const head = enqueue(store, '先核对第一张表')
+      const member = enqueue(store, '再核对第二张表')
+      const failingHandler = {
+        handle: () => Promise.reject(new Error('fixture route failure')),
+      }
+      for (let attempt = 0; attempt < 5; attempt += 1)
+        await processNextEvent(store, failingHandler, 'worker', undefined, {
+          collectWindowMs: 12,
+        })
+      expect(store.messageTrace(member.id, 'owner')?.rootEventId).toBe(head.id)
+      expect(store.retryEvent(member.id, 'owner').status).toBe('pending')
+      const question = '请问要核对第二张表的哪一列？'
+      const router = {
+        route: () =>
+          Promise.resolve({
+            kind: 'clarify' as const,
+            input: '再核对第二张表',
+            reason: '需要范围',
+            question,
+          }),
+      }
+      await processNextEvent(
+        store,
+        new RoutingEventHandler(router, 'echo'),
+        'worker',
+      )
+      expect(store.messageTrace(member.id, 'owner')).toMatchObject({
+        rootEventId: member.id,
+        events: [{ id: member.id, status: 'processed' }],
+        results: [
+          {
+            type: 'routing.clarification_required',
+            output: { text: question },
+          },
+        ],
+      })
+      expect(
+        store.messageTrace(head.id, 'owner')?.events.map(event => event.id),
+      ).toEqual([head.id])
+    } finally {
+      store.close()
+    }
+  })
+
   it('links queued updates and every running correction to the affected Run and its successor', async () => {
     const store = new PegasStore(':memory:')
     const handler = new RoutingEventHandler(new RuleBasedTaskRouter(), 'echo')
@@ -372,7 +419,13 @@ describe('OBS-001 review regressions', () => {
   it('redacts explicit authentication headers and localized credential values from persisted model call previews', async () => {
     const store = new PegasStore(':memory:')
     try {
+      const localizedFields = [
+        ['访问密钥', 'fixture-prefixed-key-value'],
+        ['登录密码', 'fixture-login-value'],
+        ['这是我的密码', 'fixture-sentence-value'],
+      ] as const
       const fields = [
+        ...localizedFields.map(([label, value]) => label + '：' + value),
         'Authorization: Basic sample-basic-value',
         'Cookie: sid=sample-cookie-value; csrf=sample-csrf-value',
         '密钥：sample-localized-key',
@@ -400,6 +453,7 @@ describe('OBS-001 review regressions', () => {
       )
       const trace = JSON.stringify(store.messageTrace(event.id, 'owner'))
       for (const value of [
+        ...localizedFields.map(([, value]) => value),
         'sample-basic-value',
         'sample-cookie-value',
         'sample-csrf-value',
@@ -444,7 +498,11 @@ describe('OBS-001 review regressions', () => {
           DROP TABLE message_trace_run_inputs;
           DELETE FROM schema_migrations WHERE version = 58;
         `)
-        const previous = 'Cookie: sid=legacy-fixture-value'
+        const previous = [
+          'Cookie: sid=legacy-fixture-value',
+          '访问密钥' + '：' + 'earlier-key-fixture',
+          '登录密码' + '：' + 'earlier-password-fixture',
+        ].join('\n')
         database
           .prepare(
             'INSERT INTO message_trace_router_calls (event_id, detail_json) VALUES (?, ?)',
@@ -478,8 +536,13 @@ describe('OBS-001 review regressions', () => {
         store.messageTrace(correction.id, 'owner')?.runs.map(run => run.id),
       ).toEqual([claim.run.id])
       const upgraded = store.messageTrace(original.id, 'owner')?.calls[0]
-      expect(upgraded?.input.text).toBe('Cookie: [已脱敏]')
-      expect(upgraded?.output?.text).toBe('Cookie: [已脱敏]')
+      const sanitized = [
+        'Cookie: [已脱敏]',
+        '访问密钥: [已脱敏]',
+        '登录密码: [已脱敏]',
+      ].join('\n')
+      expect(upgraded?.input.text).toBe(sanitized)
+      expect(upgraded?.output?.text).toBe(sanitized)
       const raw = new DatabaseSync(path, { readOnly: true })
       try {
         expect(

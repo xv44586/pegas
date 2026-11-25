@@ -9,7 +9,7 @@ const maskLimit = 32_768
 // header/assignment line, rather than trying to identify each credential.
 export function redactExplicitTraceCredentials(value: string): string {
   return value.replaceAll(
-    /(?<![\p{L}\p{N}_-])((?:proxy-)?authorization\b|(?:set-)?cookie\b|密钥|访问令牌|密码)[\t "'\\]*[:：=][^\r\n]*/giu,
+    /((?<![\p{L}\p{N}_-])(?:(?:proxy-)?authorization|(?:set-)?cookie)\b|密钥|访问令牌|密码)[\t "'\\]*[:：=][^\r\n]*/giu,
     '$1: [已脱敏]',
   )
 }

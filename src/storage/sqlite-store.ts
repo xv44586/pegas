@@ -10189,6 +10189,9 @@ export class PegasStore {
       .prepare(
         `SELECT CASE WHEN EXISTS (
          SELECT 1 FROM routing_decisions WHERE event_id = event.id
+       ) OR EXISTS (
+         SELECT 1 FROM outbox_messages WHERE user_id = event.user_id
+           AND dedupe_key = 'routing-clarification:' || event.id
        ) THEN event.id ELSE COALESCE(member.root_event_id, event.id) END AS root_id
        FROM inbox_events AS event
        LEFT JOIN message_trace_batch_members AS member ON member.event_id = event.id
@@ -10207,6 +10210,9 @@ export class PegasStore {
          (SELECT batch.event_id FROM message_trace_batch_members AS batch
           WHERE batch.root_event_id = ? AND NOT EXISTS (
             SELECT 1 FROM routing_decisions WHERE event_id = batch.event_id
+          ) AND NOT EXISTS (
+            SELECT 1 FROM outbox_messages WHERE user_id = event.user_id
+              AND dedupe_key = 'routing-clarification:' || batch.event_id
           )))
        ORDER BY event.created_at, event.rowid LIMIT 51`,
       )
