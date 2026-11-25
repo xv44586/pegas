@@ -338,6 +338,8 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 
 ### PLAN-001 P2：路由降本（2026-11-22）
 
+- **服务端复核（2026-11-25）**：短收集窗中的原消息共享审批阻塞的提交边界。任一领取失效则整批回滚，等待结算期间每条都保留为独立待处理输入。拒绝审批后恢复每条输入，原始顺序仍由 Inbox 领取。权威实现为 `processNextEvent`、`parkEventsForBlockedAction`，`test/routing-cost.test.ts` 回归先失败再通过。范围和无迁移回退见 [Router 与 Worker](router-worker-design.md)。
+
 ### ROUTE-004 + EXEC-005：即时应答车道（2026-11-22）
 
 - **用户结果**：日常提问/闲聊由 reply 决策进入 conversation 车道，在用户级滚动 session 上秒级应答，不产生重量级 Channel、不占用重任务执行预算；需要副作用的请求经 suggest_task 升级回完整 Task 门禁；chat 正文零确认（PLAN-001 决策 2 C'）。

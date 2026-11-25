@@ -774,11 +774,11 @@ export async function processNextEvent(
       return true
     }
     if (error instanceof TaskActionBlockedError) {
-      store.parkEventForBlockedAction(routedEvent.id, workerId, error.taskId)
-      for (const member of batch.events) {
-        if (member.id !== routedEvent.id)
-          store.completeEvent(member.id, workerId)
-      }
+      store.parkEventsForBlockedAction(
+        batch.events.map(member => member.id),
+        workerId,
+        error.taskId,
+      )
       telemetry?.metrics?.increment('pegas_events_processed_total', {
         outcome: 'parked',
       })
