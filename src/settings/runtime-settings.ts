@@ -151,7 +151,7 @@ export function parseRuntimeSettingsUpdate(
     'disabled',
     'light',
   ])
-  const modelName = requiredString(value.modelName, 'modelName', 160)
+  const modelName = requiredString(value.modelName, 'modelName', 240)
   const agentModelMode = enumValue(value.agentModelMode, 'agentModelMode', [
     'profile',
     'override',
@@ -170,28 +170,11 @@ export function parseRuntimeSettingsUpdate(
     provider => provider.id === modelProvider,
   )
   if (!selected) throw new Error(`Unknown provider: ${modelProvider}`)
-  const providerValue = isRecord(value.provider) ? value.provider : {}
-  const preset = modelProviderPreset(modelProvider)
-  if (!preset) throw new Error(`Unknown provider: ${modelProvider}`)
-  const custom = modelProvider === 'custom'
-  const apiKey = optionalString(providerValue.apiKey, 'provider.apiKey', 16_384)
-  const provider: ModelProviderConnectionUpdate = {
-    id: modelProvider,
-    name: custom
-      ? requiredString(providerValue.name, 'provider.name', 60)
-      : preset.name,
-    protocol: custom
-      ? enumValue(providerValue.protocol, 'provider.protocol', [
-          'openai-chat',
-          'anthropic-messages',
-        ])
-      : preset.protocol,
-    baseUrl: custom
-      ? normalizedUrl(providerValue.baseUrl, 'provider.baseUrl')
-      : selected.baseUrl,
-    ...(apiKey ? { apiKey } : {}),
-    clearApiKey: providerValue.clearApiKey === true,
-  }
+  const provider = parseModelProviderConnection(
+    modelProvider,
+    value.provider,
+    capabilities,
+  )
   const settings: RuntimeSettingsSelection = {
     routerMode,
     modelProvider,
@@ -238,7 +221,7 @@ export function parseRuntimeSettingsUpdate(
     ? true
     : provider.clearApiKey
       ? false
-      : selected.hasApiKey
+      : selected.hasApiKey && provider.baseUrl === selected.baseUrl
   const available =
     Boolean(provider.baseUrl) && (!selected.requiresApiKey || hasApiKey)
   assertRuntimeSettingsAvailable(
@@ -248,6 +231,43 @@ export function parseRuntimeSettingsUpdate(
     rewriteConnectionAvailable,
   )
   return { expectedRevision, settings, provider }
+}
+
+export function parseModelProviderConnection(
+  modelProvider: unknown,
+  value: unknown,
+  capabilities: SettingsCapabilities,
+): ModelProviderConnectionUpdate {
+  const selected = capabilities.providers.find(
+    provider => provider.id === modelProvider,
+  )
+  if (!selected) throw new Error('Unknown provider')
+  const providerValue = isRecord(value) ? value : {}
+  const preset = modelProviderPreset(selected.id)
+  if (!preset) throw new Error(`Unknown provider: ${selected.id}`)
+  const custom = modelProvider === 'custom'
+  const apiKey = optionalString(providerValue.apiKey, 'provider.apiKey', 16_384)
+  const baseUrl = normalizedUrl(
+    providerValue.baseUrl ?? selected.baseUrl,
+    'provider.baseUrl',
+  )
+  const provider: ModelProviderConnectionUpdate = {
+    id: selected.id,
+    name: custom
+      ? requiredString(providerValue.name, 'provider.name', 60)
+      : preset.name,
+    protocol: custom
+      ? enumValue(providerValue.protocol, 'provider.protocol', [
+          'openai-chat',
+          'anthropic-messages',
+        ])
+      : preset.protocol,
+    baseUrl,
+    ...(apiKey ? { apiKey } : {}),
+    clearApiKey:
+      providerValue.clearApiKey === true || baseUrl !== selected.baseUrl,
+  }
+  return provider
 }
 
 export function assertRuntimeSettingsAvailable(

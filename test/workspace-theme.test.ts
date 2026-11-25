@@ -163,7 +163,7 @@ describe('sealed UI layout contracts', () => {
       new URL('../web/src/sealed/Onboarding.tsx', import.meta.url),
       'utf8',
     )
-    expect(onboarding).toContain('<FormField label="默认模型">')
+    expect(onboarding).toContain('role="group" aria-label="默认模型"')
     expect(onboarding).not.toMatch(/<input[\s>]/)
     expect(sealedUi).not.toMatch(/\.setup-form input,/)
     const app = readFileSync(
@@ -210,7 +210,7 @@ describe('sealed UI layout contracts', () => {
       /<Onboarding[\s\S]*?onSaveConnection=\{saveOnboardingConnection\}/,
     )
     expect(app).toMatch(
-      /<Onboarding[\s\S]*?onTestConnection=\{[\s\S]*?api\.testModel\(/,
+      /<Onboarding[\s\S]*?onTestConnection=\{[\s\S]*?api\.discoverModels\(/,
     )
     expect(app).toMatch(
       /async function saveOnboardingConnection[\s\S]*?await saveSettings\(/,
@@ -219,11 +219,12 @@ describe('sealed UI layout contracts', () => {
       /async function saveSettings[\s\S]*?api\.saveSettings\([\s\S]*?loadConfiguration\(true\)/,
     )
     expect(onboarding).toContain(
-      '<FormField htmlFor="setup-provider" label="接入方式">',
+      '<FormField htmlFor="setup-provider" label="供应商">',
     )
     expect(onboarding).toContain('<FormField label="Base URL">')
     expect(onboarding).toContain('<FormField label="API Key">')
-    expect(onboarding).toContain('<FormField label="模型 ID">')
+    expect(onboarding).not.toContain('<FormField label="模型 ID">')
+    expect(onboarding).not.toContain('readOnly=')
     expect(sealedUi).not.toMatch(/\.setup-connection > label > input/)
     expect(sealedUi).not.toMatch(/\.setup-form input,/)
     expect(sealedUi).toMatch(

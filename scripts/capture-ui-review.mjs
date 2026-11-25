@@ -1312,14 +1312,15 @@ try {
   const connectionForm = unconfiguredPage.getByRole('form', {
     name: '模型连接配置',
   })
-  await connectionForm.getByLabel('接入方式').click()
+  await connectionForm.getByLabel('供应商').click()
   await unconfiguredPage
     .getByRole('option', { name: /自定义 · OpenAI 兼容/ })
     .click()
   await connectionForm
     .getByLabel('Base URL')
     .fill(`http://127.0.0.1:${String(modelGatewayPort)}/onboarding/v1`)
-  await connectionForm.getByLabel('模型 ID').fill('gateway/onboarding-probe')
+  if (await connectionForm.getByLabel('模型 ID').count())
+    throw new Error('Onboarding must discover models without a model ID')
   await capture(
     unconfiguredPage,
     'desktop-onboarding-connection.png',
@@ -1333,7 +1334,14 @@ try {
   )
   await connectionForm.getByLabel('API Key').fill('fixture-key')
   await connectionForm.getByRole('button', { name: '测试连接' }).click()
-  await unconfiguredPage.getByText(/连接正常 · \d+ ms/).waitFor()
+  await unconfiguredPage.getByText(/已获取 2 个模型/).waitFor()
+  await unconfiguredPage.getByRole('button', { name: /默认模型$/ }).click()
+  await unconfiguredPage
+    .getByRole('option', { name: /Onboarding Gateway Model/ })
+    .click()
+  await unconfiguredPage
+    .getByRole('dialog', { name: '选择模型' })
+    .waitFor({ state: 'hidden' })
   await unconfiguredPage.setViewportSize({ width: 1440, height: 900 })
   await capture(
     unconfiguredPage,
@@ -1351,7 +1359,7 @@ try {
         response.url().endsWith('/v1/settings/agent-models') &&
         response.request().method() === 'GET',
     ),
-    connectionForm.getByRole('button', { name: '保存连接' }).click(),
+    unconfiguredPage.getByRole('button', { name: '保存连接' }).click(),
   ])
   if (!connectionSave.ok())
     throw new Error(
@@ -1366,7 +1374,9 @@ try {
     throw new Error(
       `Refreshed execution catalog omitted the new gateway model (providers: ${[...new Set(refreshedModels.map(model => model.provider))].join(', ')})`,
     )
-  await unconfiguredPage.getByText('连接已保存', { exact: true }).waitFor()
+  await unconfiguredPage
+    .getByText('连接和默认模型已保存', { exact: true })
+    .waitFor()
   await connectionForm.waitFor({ state: 'detached' })
   await unconfiguredPage.getByRole('button', { name: /，默认模型$/ }).click()
   const savedConnectionPicker = unconfiguredPage.getByRole('dialog', {

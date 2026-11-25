@@ -100,6 +100,45 @@ describe('runtime settings validation', () => {
     expect(update.provider.baseUrl).toBe('http://127.0.0.1:45998/v1')
   })
 
+  it('honors an edited preset URL and never reuses a key from the old address', () => {
+    const capabilities = settingsCapabilities(loadConfig({}), [
+      {
+        id: 'openai',
+        name: 'OpenAI',
+        protocol: 'openai-chat',
+        baseUrl: 'https://api.openai.com/v1',
+        hasApiKey: true,
+      },
+    ])
+    const value = {
+      ...defaults,
+      expectedRevision: 1,
+      provider: {
+        baseUrl: 'https://proxy.example/v1/',
+        apiKey: 'new-key',
+      },
+    }
+    expect(
+      parseRuntimeSettingsUpdate(value, capabilities).provider,
+    ).toMatchObject({
+      id: 'openai',
+      baseUrl: 'https://proxy.example/v1',
+      apiKey: 'new-key',
+      clearApiKey: true,
+    })
+    expect(() =>
+      parseRuntimeSettingsUpdate(
+        {
+          ...value,
+          provider: {
+            baseUrl: 'https://proxy.example/v1',
+          },
+        },
+        capabilities,
+      ),
+    ).toThrow()
+  })
+
   it('accepts a complete selection when server capabilities are present', () => {
     const capabilities = {
       providers: [
