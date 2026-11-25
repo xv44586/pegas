@@ -8755,6 +8755,27 @@ export class PegasStore {
     return this.parkEventsForBlockedAction([eventId], workerId, taskId)
   }
 
+  /**
+   * APPROVAL-001: a failed Action whose failure is already a recorded
+   * outcome (nothing external happened) is a settled fact for input
+   * routing. It keeps blocking retries and new Approvals until a human
+   * reconciles it, but it must not park new user input forever.
+   */
+  #blockingActionForInput(taskId: string): { status: string } | undefined {
+    return this.#database
+      .prepare(
+        `SELECT status FROM actions
+         WHERE task_id = ? AND protocol_version = 1
+           AND status IN ('awaiting_approval','authorized','failed','unknown')
+           AND (status <> 'failed' OR NOT EXISTS (
+             SELECT 1 FROM action_outcomes
+             WHERE action_outcomes.action_id = actions.id
+               AND action_outcomes.status = 'failed'))
+         ORDER BY updated_at DESC, id DESC LIMIT 1`,
+      )
+      .get(taskId) as { status: string } | undefined
+  }
+
   parkEventsForBlockedAction(
     eventIds: readonly string[],
     workerId: string,
@@ -8763,14 +8784,7 @@ export class PegasStore {
     return this.#runInTransaction(() => {
       const now = this.#clock.now().toISOString()
       const task = this.#taskById(taskId)
-      const blockingAction = this.#database
-        .prepare(
-          `SELECT status FROM actions
-           WHERE task_id = ? AND protocol_version = 1
-             AND status IN ('awaiting_approval','authorized','failed','unknown')
-           ORDER BY updated_at DESC, id DESC LIMIT 1`,
-        )
-        .get(taskId) as { status: string } | undefined
+      const blockingAction = this.#blockingActionForInput(taskId)
       const transition =
         task.status === 'cancelled'
           ? {
@@ -8924,14 +8938,7 @@ export class PegasStore {
       throw new Error('Task was stopped by the user')
     if (task.status === 'completed')
       throw new Error('A completed Task must resume through continuation')
-    const blockingAction = this.#database
-      .prepare(
-        `SELECT status FROM actions
-         WHERE task_id = ? AND protocol_version = 1
-           AND status IN ('awaiting_approval','authorized','failed','unknown')
-         ORDER BY updated_at DESC, id DESC LIMIT 1`,
-      )
-      .get(task.id) as { status: string } | undefined
+    const blockingAction = this.#blockingActionForInput(task.id)
     if (blockingAction)
       throw new TaskActionBlockedError(task.id, blockingAction.status)
     const activeRun = this.#database
@@ -9536,14 +9543,7 @@ export class PegasStore {
         resolvedExecutionContext.workerProfile
           ? 2
           : 1
-      const blockingAction = this.#database
-        .prepare(
-          `SELECT status FROM actions
-           WHERE task_id = ? AND protocol_version = 1
-             AND status IN ('awaiting_approval','authorized','failed','unknown')
-           ORDER BY updated_at DESC, id DESC LIMIT 1`,
-        )
-        .get(task.id) as { status: string } | undefined
+      const blockingAction = this.#blockingActionForInput(task.id)
       if (decision.kind === 'continue_task' && blockingAction) {
         throw new TaskActionBlockedError(task.id, blockingAction.status)
       }
@@ -12946,16 +12946,23 @@ export class PegasStore {
         )
         .get(draft.idempotencyKey) as unknown as ActionRow | undefined
       if (existing) {
-        if (
-          !existing.request_claim_hash ||
-          !safeDigestEqual(suppliedClaimHash, existing.request_claim_hash)
-        ) {
+        const sameRequestRun =
+          existing.run_id === runId &&
+          Boolean(existing.request_claim_hash) &&
+          safeDigestEqual(suppliedClaimHash, existing.request_claim_hash ?? '')
+        // A resumed Run legitimately retries the same idempotent request
+        // while the approved Action is still unresolved (session replay can
+        // re-ask before the grant matches). The successor's live claim on the
+        // same Task replays the durable record instead of failing the Run.
+        let successorReplay = false
+        if (!sameRequestRun) {
+          this.#claimForCapability(runId, claimToken)
+          successorReplay = existing.task_id === this.#runById(runId).taskId
+        }
+        if (!sameRequestRun && !successorReplay) {
           throw new RunClaimError('Run claim capability is invalid')
         }
-        if (
-          existing.run_id !== runId ||
-          existing.request_fingerprint !== fingerprint
-        ) {
+        if (existing.request_fingerprint !== fingerprint) {
           throw new Error('Action idempotency key is already used')
         }
         const approval = this.#database
@@ -12963,7 +12970,12 @@ export class PegasStore {
           .get(existing.id) as unknown as ApprovalRow | undefined
         if (!approval) throw new Error('Approval record is missing')
         this.#database.exec('COMMIT')
-        return initialApprovalResponse(existing, approval)
+        return sameRequestRun
+          ? initialApprovalResponse(existing, approval)
+          : {
+              action: toDurableAction(existing),
+              approval: toApproval(approval, existing.run_id),
+            }
       }
 
       const claim = this.#claimForCapability(runId, claimToken)
@@ -13944,9 +13956,9 @@ export class PegasStore {
            WHERE id = ?`,
         )
         .run(draft.status, JSON.stringify(draft.result), now, actionId)
-      if (draft.status === 'succeeded') {
-        this.#wakeBlockedTaskEvents(action.taskId, now)
-      }
+      // A failed outcome is also a settled fact: nothing external happened,
+      // so parked follow-ups must wake instead of waiting forever.
+      this.#wakeBlockedTaskEvents(action.taskId, now)
       const updated = this.#actionById(actionId)
       this.#database.exec('COMMIT')
       return updated
@@ -14319,11 +14331,28 @@ export class PegasStore {
         ? toDurableAction(blockingActionRow)
         : undefined
       const actionStatus = blockingAction?.status
+      // A failed Action with a recorded failed outcome is settled: nothing
+      // external happened, so the Run's own answer can complete the Task.
+      // New Approvals and retries stay blocked until a human reconciles it.
+      const settledFailedAction =
+        actionStatus === 'failed' &&
+        Boolean(
+          this.#database
+            .prepare(
+              `SELECT 1 FROM action_outcomes
+               WHERE action_id = ? AND status = 'failed'`,
+            )
+            .get(blockingAction?.id ?? ''),
+        )
       const actionBlocksCompletion =
-        actionStatus === 'awaiting_approval' ||
-        actionStatus === 'authorized' ||
-        actionStatus === 'failed' ||
-        actionStatus === 'unknown'
+        !settledFailedAction &&
+        (actionStatus === 'awaiting_approval' ||
+          actionStatus === 'authorized' ||
+          actionStatus === 'failed' ||
+          actionStatus === 'unknown')
+      const completionActionStatus = settledFailedAction
+        ? undefined
+        : actionStatus
       const hasPendingWork = Boolean(
         this.#database
           .prepare(
@@ -14350,7 +14379,7 @@ export class PegasStore {
       const awaitingClarification =
         task.statusReason === 'awaiting_goal_clarification'
       const runStatus =
-        actionStatus === 'failed'
+        actionStatus === 'failed' && !settledFailedAction
           ? 'failed'
           : awaitingClarification
             ? 'cancelled'
@@ -14432,13 +14461,13 @@ export class PegasStore {
             : 'completed',
           awaitingClarification
             ? 'awaiting_goal_clarification'
-            : actionStatus === 'unknown'
+            : completionActionStatus === 'unknown'
               ? 'action_outcome_unknown'
-              : actionStatus === 'failed'
+              : completionActionStatus === 'failed'
                 ? 'action_failed'
-                : actionStatus === 'authorized'
+                : completionActionStatus === 'authorized'
                   ? 'action_outcome_pending'
-                  : actionStatus === 'awaiting_approval'
+                  : completionActionStatus === 'awaiting_approval'
                     ? 'awaiting_approval'
                     : requiresEvidence
                       ? 'awaiting_evidence'
@@ -14462,13 +14491,13 @@ export class PegasStore {
         channel: 'conversation',
         dedupeKey: awaitingClarification
           ? `goal-clarification-run-ended:${runId}`
-          : actionStatus === 'unknown'
+          : completionActionStatus === 'unknown'
             ? `action-outcome-unknown:${blockingAction?.id ?? runId}`
-            : actionStatus === 'failed'
+            : completionActionStatus === 'failed'
               ? `action-failed:${blockingAction?.id ?? runId}`
-              : actionStatus === 'authorized'
+              : completionActionStatus === 'authorized'
                 ? `action-outcome-pending:${blockingAction?.id ?? runId}`
-                : actionStatus === 'awaiting_approval'
+                : completionActionStatus === 'awaiting_approval'
                   ? `approval-pending:${blockingAction?.id ?? runId}`
                   : requiresEvidence
                     ? `goal-report-required:${runId}`
@@ -14476,13 +14505,13 @@ export class PegasStore {
         payload: {
           type: awaitingClarification
             ? 'goal.clarification_wait'
-            : actionStatus === 'unknown'
+            : completionActionStatus === 'unknown'
               ? 'action.outcome_unknown'
-              : actionStatus === 'failed'
+              : completionActionStatus === 'failed'
                 ? 'action.failed'
-                : actionStatus === 'authorized'
+                : completionActionStatus === 'authorized'
                   ? 'action.outcome_pending'
-                  : actionStatus === 'awaiting_approval'
+                  : completionActionStatus === 'awaiting_approval'
                     ? 'approval.pending'
                     : requiresEvidence
                       ? 'goal.report_required'
@@ -16165,6 +16194,10 @@ export class PegasStore {
              SELECT 1 FROM actions
              WHERE actions.task_id = ? AND actions.protocol_version = 1
                AND actions.status IN ('awaiting_approval','authorized','failed','unknown')
+               AND (actions.status <> 'failed' OR NOT EXISTS (
+                 SELECT 1 FROM action_outcomes
+                 WHERE action_outcomes.action_id = actions.id
+                   AND action_outcomes.status = 'failed'))
            )
          RETURNING id`,
       )

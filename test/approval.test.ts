@@ -649,6 +649,40 @@ describe('durable approval', () => {
     store.close()
   })
 
+  it('replays an identical Approval request while the authorized Action is still unresolved', () => {
+    const store = new PegasStore(':memory:')
+    const claimed = createClaimedRun(store, 'owner', 'worker-1', 'publish')
+    const first = store.requestApproval(
+      claimed.run.id,
+      claimed.claimToken,
+      approvalDraft(),
+    )
+    store.decideApproval(first.approval.id, 'owner', {
+      commandId: 'approve-before-replay',
+      optionId: 'approve',
+    })
+    const resumed = store.claimNextRun('worker-replay')
+    if (!resumed) throw new Error('Expected resumed Run')
+
+    expect(
+      store.requestApproval(
+        resumed.run.id,
+        resumed.claimToken,
+        approvalDraft(),
+      ),
+    ).toMatchObject({
+      action: { id: first.action.id, status: 'authorized' },
+      approval: { id: first.approval.id, status: 'approved' },
+    })
+
+    const differentDraft = approvalDraft()
+    differentDraft.idempotencyKey = 'publish-release-2'
+    expect(() =>
+      store.requestApproval(resumed.run.id, resumed.claimToken, differentDraft),
+    ).toThrow(/outcome must be recorded/)
+    store.close()
+  })
+
   it('preserves a recorded unknown outcome and does not retry after lease expiry', () => {
     let now = new Date('2026-11-20T00:00:00.000Z')
     const store = new PegasStore(':memory:', { clock: { now: () => now } })

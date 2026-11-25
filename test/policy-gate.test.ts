@@ -18,6 +18,8 @@ import { loadConfig } from '../src/core/config.js'
 import { runtimeSettingsDefaults } from '../src/settings/runtime-settings.js'
 import { classifyToolCall } from '../src/executor/policy-gate.mjs'
 import type { ToolCallClassification } from '../src/executor/policy-gate.mjs'
+import { historyTools } from '../src/executor/dsh-history-tools.mjs'
+import { conversationStateTools } from '../src/executor/dsh-readonly-surface.mjs'
 import { DshCliExecutor } from '../src/executor/dsh-cli-executor.js'
 import { PegasStore } from '../src/storage/sqlite-store.js'
 
@@ -64,6 +66,43 @@ function classify(
 }
 
 describe('policy gate classifier', () => {
+  it('allows Pegas read-only projection tools without approval', () => {
+    const roots = gateRoots()
+    for (const [tool, arguments_] of [
+      ['search_history', { query: 'pegas 语音输入', limit: 10 }],
+      ['read_history', { kind: 'run', id: 'run-1' }],
+      ['pegas_tasks', {}],
+      ['pegas_memories', {}],
+      ['working_directory', {}],
+    ] as const) {
+      const decision = classify(tool, arguments_, roots)
+      expect(decision, tool).toMatchObject({
+        category: 'read',
+        risk: 'low',
+        action: 'allow',
+      })
+    }
+  })
+
+  it('classifies every tool the Pegas surfaces register', () => {
+    const roots = gateRoots()
+    const capability = {
+      baseUrl: 'http://127.0.0.1:4317',
+      runId: 'run-surface',
+      claimToken: 'claim-surface',
+      privacyMode: 'disabled',
+    } as const
+    const registered = [
+      ...historyTools(capability),
+      ...conversationStateTools(capability),
+    ]
+    expect(registered.length).toBeGreaterThan(0)
+    for (const definition of registered) {
+      const decision = classify(definition.name, {}, roots)
+      expect(decision.category, definition.name).not.toBe('unknown')
+    }
+  })
+
   it('allows reads and in-workspace writes without approval', () => {
     const roots = gateRoots()
     for (const [tool, arguments_] of [

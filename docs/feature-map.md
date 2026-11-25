@@ -177,6 +177,16 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - **远程 CI 验证（2026-11-22）**：推送 `origin/main`（`363f72f`）后 GitHub Actions run 44995511060 success（check job 约 2m40s，Post Run 显示 actions/checkout@v7、actions/setup-node@v7、pnpm/action-setup@v6）；check-runs annotations 为空——「Node.js 20 is deprecated」弃用警告已消失。主分支合并后 `pnpm smoke` 与 CI workflow 回归 10 测试通过。
 - **发布验证（2026-11-22）**：包含本 Feature 的 main `b22fa90` 已经 SELF-001 Candidate 链路发布到运行中的实例（`main-b22fa90-r1`，见 SELF-001 生产发布记录）；本 Feature 的交付物是 CI 配置，随仓库 commit 进入 Release 身份，运行时行为不变，node24 效果以远程 CI 零 annotation 为准。
 
+### APPROVAL-001：只读工具分级与一次性授权结算修复（2026-11-25）
+
+- **用户结果**：Agent 调用 Pegas 自注册的只读工具（`search_history`、`read_history`、`pegas_tasks`、`pegas_memories`、`working_directory`）不再被误升级为人工审批；批准的一次性调用在恢复执行未按原参数重放时自动结算为失败并释放排队消息，后续输入不再永久停留在 `blocked_by_action`；审批 API 的持久 4xx 拒绝只拒绝单次调用，不再把整个 Run 判死。
+- **根因（运行实例证据，2026-11-25 桌面 `exec-007-488027fc-r1`）**：① `policy-gate.mjs` 的 `READ_TOOLS` 白名单漏掉 Pegas 面注册的只读工具，unknown→high→ask；② 会话恢复重放分配新 callId 且模型改写参数，一次性 grant（工具名+参数哈希）失配后既不消费也不重新发卡，Action 停在 authorized，两条用户消息被哨兵 lease 永久停放；③ 恢复 Run 内新审批请求因「上一个 authorized 未结算」被 400 拒绝，桥把该 400 当 `approval_bridge_error` 使 Run 整体失败、Action fence 成 unknown。
+- **范围与权威**：`src/executor/policy-gate.mjs`（READ_TOOLS 增补）、`src/executor/dsh-approval-bridge.mjs`（grant 失配/空闲结算 `recordGrantFailure`、`agent/status` idle 钩子、持久 4xx 分类 `approval_request_rejected`、parked/rejected callKey 去重）、`src/executor/dsh-cli-executor.ts`（rejected 事件不置 streamError）、`src/storage/sqlite-store.ts`（`#blockingActionForInput` 排除已记录 failed 结局的动作；failed 结局同事务唤醒停放事件；settled failed 不阻断 Run/Task 正常完成；successor Run 对同 Task 同指纹审批请求幂等回放真实状态）。
+- **自动化证据**：`test/policy-gate.test.ts` 新增 2（只读工具分级 + 注册面全覆盖合同，后者防再漏）；`test/dsh-approval-bridge.test.ts` 新增 2（未消费 grant 结算为 failed 并释放停放消息重新路由、持久 400 拒单次调用不杀 Run）；`test/approval.test.ts` 新增 1（authorized 未结算期间同指纹幂等回放）。全部先红后绿。`pnpm check` 150 文件 / 1585 测试全绿（statement 78.13 / branch 71.76 / function 74.96 / line 81.21，含 web），`pnpm smoke` 通过，真实 DSH `test/policy-gate-integration.test.ts` 5 测试通过（本机 dsh 0.2.2-rc.5 + 回环网关）。
+- **数据与权限边界**：无 schema 迁移。审批边界不放松：unknown/未记录结局的 failed 仍拦输入，人工确认 failed（reconciliation）仍拦新审批与重试；settled failed 只解除「输入停放」与「Run 完成」两处死锁。grant 结算走既有 `recordActionOutcome` append-only 合同，commandId 与真实执行共用 `dsh-tool-outcome:<actionId>` 幂等键。
+- **失败与恢复**：grant 结算失败仍发 `approval_bridge_error`（保留原行为）；parked 调用存续期间 idle 不结算 grant（防误杀等待审批的授权）；4xx 重试策略保留 408/429 重试。
+- **状态与下一缺口**：Partial 维持。运行实例中既有的 unknown Action（search_history 实际未执行）仍需人工核对一次以释放两条历史停放消息；本修复保证同类情况不再产生。回滚：revert 即回到旧白名单与旧停放语义，无数据迁移。
+
 ### TASK-002：事情状态与交付后的操作（2026-11-25）
 
 - **用户结果**：Chat、事情列表与详情统一展示服务端事情状态。排队、执行、等待与永久停止各有明确标签；当前可处理的审批、核对、澄清和可重试 Run 精确指向来源。历史 Run 留作诊断。

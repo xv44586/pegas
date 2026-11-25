@@ -86,6 +86,11 @@ interface DshApprovalBridgeErrorEvent {
   message: string
 }
 
+interface DshApprovalRequestRejectedEvent {
+  type: 'approval_request_rejected'
+  message: string
+}
+
 interface DshPolicyDecisionEvent {
   type: 'policy_decision'
   callId: string
@@ -507,6 +512,12 @@ export class DshCliExecutor implements RunExecutor {
         if (event.type === 'approval_bridge_error') {
           streamError = `Approval bridge failed to ${event.stage}: ${event.message}`
         }
+        if (event.type === 'approval_request_rejected') {
+          input.onProgress?.({
+            type: 'activity',
+            label: `审批请求被服务端拒绝，本次调用不执行：${event.message}`,
+          })
+        }
         if (event.type === 'error')
           streamError = event.message ?? 'Unknown DSH error'
       } catch (error) {
@@ -859,6 +870,7 @@ function parseDshEvent(
   | DshThinkingEvent
   | DshApprovalPendingEvent
   | DshApprovalBridgeErrorEvent
+  | DshApprovalRequestRejectedEvent
   | DshPolicyDecisionEvent
   | DshAutoReviewEvent
   | DshStatusEvent
@@ -941,6 +953,15 @@ function parseDshEvent(
     return {
       type: 'approval_bridge_error',
       stage: parsed.stage,
+      message: parsed.message,
+    }
+  }
+  if (
+    parsed.type === 'approval_request_rejected' &&
+    typeof parsed.message === 'string'
+  ) {
+    return {
+      type: 'approval_request_rejected',
       message: parsed.message,
     }
   }
