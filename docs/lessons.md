@@ -197,23 +197,27 @@
 - Why：第一次修复让用户可以从 165 个模型中选择，却仍只呈现前 50 个结果，其余结果不能按浏览路径到达；获取成功反馈又以大字号独立卡片占据设置页，且 Router 模型与 Agent 执行模型在同一分类重复出现，造成配置归属不清。分页重构后，搜索框沿用了已经失效的父级选择器而退回浏览器默认宽度；“Magpie 排第一”也没有阻止默认 Router 继续使用规则模式和小模型池。
 - Feature：SETTINGS-001
 - Evidence：用户在 2026-11-18 和 2026-11-19 提供的模型设置截图；`web/src/App.test.tsx` 的大列表分页、搜索复位、模型选择、信息架构和 404 反馈回归；`test/config.test.ts`、`test/initial-model.test.ts` 与 `test/runtime-settings.test.ts` 的默认 Router/Magpie/指定模型回归；`test/workspace-theme.test.ts` 的搜索宽度、分页与紧凑反馈布局合同；`scripts/capture-ui-review.mjs` 的默认三元组断言、搜索几何断言及桌面/390px 截图。
-- Seen：3（2026-11-18、2026-11-19、2026-11-23）
+- Seen：4（2026-11-18、2026-11-19、2026-11-23、2026-11-25）
 - Severity：normal
 - Status：Promoted（2026-11-23）
 - Enforcement：已晋升为自动化门禁——`test/workspace-theme.test.ts`「keeps every model-selection entry on the paginated shared catalog」断言所有模型选择入口共享 30/页分页、composer 不按 Provider 过滤目录、UI review 携带分页断言与隔离模型网关；`scripts/capture-ui-review.mjs` `assertPickerPagination` 在桌面与 390px 真实布局断言 34 模型目录 30+4 分页完整可达；`test/dsh-home.test.ts` 与 `test/connection-catalog.test.ts` 钉死服务端目录装配（全目录注入、选中模型首位、单连接失败回退）。既有目录完整可达、搜索复位、默认三元组、单一配置归属、紧凑反馈回归继续生效。
 - Owner / next action：2026-11-23 用户报告对话框选择器固定 1 个模型（第三个独立日期）：根因是服务端受管 DSH patch 每 Provider 只声明 1 个模型 + composer 按接入点过滤且无分页；已修复并晋升门禁。同日后续：用户指出设置页 6 处仍是原生 select/手填框，已抽取共享 `web/src/sealed/ModelPicker.tsx` 统一全部入口（分页/搜索/置顶特殊值/手填保底），门禁扩展为断言三个消费方引用共享组件与搜索框容器聚焦合同；「抽取通用异步选项目录组件」候选项完成。
 
+- 2026-11-25 新证据：首次设置要求预填模型 ID 测试但测试不返回目录，形成「连接正常、模型不可选」断路。`web/src/App.test.tsx` 新增无需模型 ID 发现目录、预设 URL 编辑、先选择后原子保存、空目录/参数变更/推理失败及冲突重试回归；`test/control-plane.test.ts` 验证 discovery 无 modelName、受认证只读与错误脱敏；UI review 验证发现后先选模型再保存。
+
 ### LESSON-20261123-01：保存路径不得静默重置已配置的连接地址
 
-- Rule：非 custom Provider 的设置保存/探测路径必须保留 capabilities 中已存连接或环境配置的 baseUrl，不得无条件回写 preset 默认地址；隔离 UI/集成夹具必须断言请求真的落在夹具网关上。
+- Rule：非 custom Provider 的设置保存/探测路径必须保留 capabilities 中已存连接或环境配置的 baseUrl，显式提交的新 baseUrl 必须生效，不得无条件回写 preset 默认地址或旧地址；隔离 UI/集成夹具必须断言请求真的落在夹具网关上。
 - Why：`parseRuntimeSettingsUpdate` 对非 custom Provider 一律 `baseUrl: preset.baseUrl`，把 `PEGAS_MODEL_BASE_URL` 初始化的连接在目录探测/测试/保存时静默改写到 preset 地址；UI review 的 34 模型隔离网关因此被绕过，目录探测打到真实 Magpie 网关返回 83 个真实模型，隔离性失效且可能误导用户覆盖连接配置。
 - Feature：SETTINGS-001
 - Evidence：2026-11-23 UI review 隔离夹具断言失败（已读取 83 个模型 ≠ 34）；`test/runtime-settings.test.ts`「keeps the configured preset connection address instead of resetting it」回归；`scripts/capture-ui-review.mjs` 目录 34 模型计数断言。
-- Seen：1（2026-11-23）
+- Seen：2（2026-11-23、2026-11-25）
 - Severity：normal
 - Status：Observed
 - Enforcement：尚未晋升；回归测试 + UI review 夹具计数断言已落地。
 - Owner / next action：后续出现同类问题时补充独立日期证据；候选检查其他写路径是否存在 preset 覆盖已存配置的同类模式。
+
+- 2026-11-25 新证据：首次设置预设 URL 只读，服务端忽略显式提交的预设地址；已用 `test/runtime-settings.test.ts` 与 `test/control-plane.test.ts` 固定新地址生效、换地址不发送旧 Key、原地址凭证不被只读探测修改。
 
 ### LESSON-20261118-03：密文末字符变更不能稳定代表字节篡改
 

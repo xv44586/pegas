@@ -24,6 +24,7 @@ import type {
   DshModelCatalog,
   DshModelCatalogItem,
   ModelProviderDraft,
+  ModelCatalogItem,
   RuntimeSettings,
   SettingsResponse,
 } from '../types'
@@ -36,6 +37,7 @@ export function Onboarding({
   onSelectModel,
   onSaveConnection,
   onTestConnection,
+  onTestModel,
   onReloadCatalog,
   onComplete,
   onContinueSettings,
@@ -50,6 +52,10 @@ export function Onboarding({
   ) => Promise<void>
   onTestConnection?: (
     modelProvider: RuntimeSettings['modelProvider'],
+    provider: ModelProviderDraft,
+  ) => Promise<ModelCatalogItem[]>
+  onTestModel?: (
+    modelProvider: RuntimeSettings['modelProvider'],
     modelName: string,
     provider: ModelProviderDraft,
   ) => Promise<{ ok: true; latencyMs: number }>
@@ -63,7 +69,6 @@ export function Onboarding({
     providerId?: string
     baseUrl?: string
     apiKey?: string
-    modelName?: string
     protocol?: ModelProviderDraft['protocol']
   }>({})
   const [connectionBusy, setConnectionBusy] = useState<'test' | 'save'>()
@@ -71,6 +76,13 @@ export function Onboarding({
     kind: 'success' | 'error'
     message: string
   }>()
+  const [discovered, setDiscovered] = useState<{
+    signature: string
+    models: DshModelCatalogItem[]
+  }>()
+  const [selectedDraftModel, setSelectedDraftModel] =
+    useState<DshModelCatalogItem>()
+  const [savedModel, setSavedModel] = useState<DshModelCatalogItem>()
   const dialogRef = useRef<HTMLElement>(null)
   const setupBodyRef = useRef<HTMLDivElement>(null)
   const primaryActionRef = useRef<HTMLButtonElement>(null)
@@ -133,7 +145,7 @@ export function Onboarding({
     },
     {
       title: '连接模型服务',
-      description: '模型连接与角色绑定分开管理；凭证只保存在服务端。',
+      description: '选择供应商，测试连接后选择默认模型。凭证只保存在服务端。',
       icon: Link2,
     },
     {
@@ -158,54 +170,80 @@ export function Onboarding({
     ? providers.find(candidate => candidate.id === connectionDraft.providerId)
     : routerProvider
   const showConnection =
-    editingConnection || !routerProvider?.available || models.length === 0
+    editingConnection ||
+    !routerProvider?.available ||
+    (!models.length && !savedModel)
   const baseUrl = connectionDraft.baseUrl ?? provider?.baseUrl ?? ''
-  const modelName =
-    connectionDraft.modelName ??
-    (provider?.id === routerProvider?.id && response?.settings.modelName
-      ? response.settings.modelName
-      : (provider?.defaultModel ?? ''))
   const apiKey = connectionDraft.apiKey ?? ''
   const reuseKey =
     provider?.hasApiKey &&
     baseUrl.trim().replace(/\/+$/, '') === provider.baseUrl.replace(/\/+$/, '')
 
+  const protocol = connectionDraft.protocol ?? provider?.protocol
+  const signature = JSON.stringify([
+    provider?.id,
+    protocol,
+    baseUrl,
+    apiKey,
+    reuseKey,
+  ])
+  const draftModels =
+    discovered?.signature === signature ? discovered.models : []
+  const draftModel = draftModels.find(
+    model => model.id === selectedDraftModel?.id,
+  )
+
   async function probeConnection(kind: 'test' | 'save') {
     if (connectionBusy || !provider || !onSaveConnection || !onTestConnection)
       return
-    if (provider.id !== 'custom' && baseUrl !== provider.baseUrl) {
-      setConnectionDraft({ providerId: provider.id })
+    if (kind === 'save' && (!draftModel || !onTestModel)) {
       setConnectionNotice({
         kind: 'error',
-        message: '服务地址已更新，请核对后重新输入 API Key。',
+        message: '请先测试连接并选择默认模型。',
       })
       return
     }
     const draft: ModelProviderDraft = {
       name: provider.name,
-      protocol: connectionDraft.protocol ?? provider.protocol,
+      protocol: protocol ?? provider.protocol,
       baseUrl: baseUrl.trim(),
       apiKey: apiKey.trim(),
       clearApiKey: provider.hasApiKey && !reuseKey && !apiKey.trim(),
     }
+    // Pin the credential destination before any response can refresh capabilities.
+    setConnectionDraft({ providerId: provider.id, baseUrl, apiKey, protocol })
+    setEditingConnection(true)
     setConnectionBusy(kind)
     setConnectionNotice(undefined)
     try {
-      const result = await onTestConnection(
-        provider.id,
-        modelName.trim(),
-        draft,
-      )
       if (kind === 'test') {
+        setDiscovered(undefined)
+        setSelectedDraftModel(undefined)
+        const result = await onTestConnection(provider.id, draft)
+        if (!result.length)
+          throw new Error(
+            '连接成功，但没有返回可用模型。请检查供应商、地址或 Key 权限后重试。',
+          )
+        setDiscovered({
+          signature,
+          models: result.map(model => ({ ...model, provider: provider.id })),
+        })
         setConnectionNotice({
           kind: 'success',
-          message: `连接正常 · ${String(result.latencyMs)} ms`,
+          message: `连接正常 · 已获取 ${String(result.length)} 个模型，请选择默认模型。`,
         })
-      } else {
-        await onSaveConnection(provider.id, modelName.trim(), draft)
+      } else if (draftModel && onTestModel) {
+        await onTestModel(provider.id, draftModel.id, draft)
+        await onSaveConnection(provider.id, draftModel.id, draft)
+        setSavedModel(draftModel)
         setConnectionDraft({})
+        setDiscovered(undefined)
+        setSelectedDraftModel(undefined)
         setEditingConnection(false)
-        setConnectionNotice({ kind: 'success', message: '连接已保存' })
+        setConnectionNotice({
+          kind: 'success',
+          message: '连接和默认模型已保存',
+        })
       }
     } catch (caught) {
       setConnectionNotice({
@@ -223,28 +261,34 @@ export function Onboarding({
     setConnectionDraft({
       providerId: provider?.id,
       baseUrl,
-      modelName,
       apiKey,
-      protocol: connectionDraft.protocol ?? provider?.protocol,
+      protocol,
       ...next,
     })
+    setDiscovered(undefined)
+    setSelectedDraftModel(undefined)
     setConnectionNotice(undefined)
   }
 
   const configuredProvider =
     response?.settings.agentModelMode === 'override'
       ? response.settings.agentModelProvider
-      : catalog?.defaultProvider
+      : (catalog?.defaultProvider ?? response?.settings.modelProvider)
   const configuredModelId =
     response?.settings.agentModelMode === 'override'
       ? response.settings.agentModelName
-      : catalog?.defaultModel
+      : (catalog?.defaultModel ?? response?.settings.modelName)
   const configuredModel = configuredModelId
     ? (models.find(
         model =>
           model.id === configuredModelId &&
           (!configuredProvider || model.provider === configuredProvider),
-      ) ?? models.find(model => model.id === configuredModelId))
+      ) ??
+      models.find(model => model.id === configuredModelId) ??
+      (savedModel?.id === configuredModelId &&
+      savedModel.provider === configuredProvider
+        ? savedModel
+        : undefined))
     : undefined
   return (
     <div className="onboarding-backdrop">
@@ -297,23 +341,26 @@ export function Onboarding({
                     method="post"
                     onSubmit={event => {
                       event.preventDefault()
-                      void probeConnection('save')
+                      void probeConnection('test')
                     }}
                   >
-                    {(!routerProvider?.available || !models.length) && (
-                      <p className="setup-connection-hint">
-                        {routerProvider?.available
-                          ? '当前没有可选模型。你可以配置连接或重新读取目录。'
-                          : '尚未配置模型连接。保存后即可选择默认模型。'}
-                      </p>
-                    )}
-                    <FormField htmlFor="setup-provider" label="接入方式">
+                    {!draftModels.length &&
+                      (!routerProvider?.available || !models.length) && (
+                        <p className="setup-connection-hint">
+                          {routerProvider?.available
+                            ? '请选择供应商并测试连接，获取可选模型。'
+                            : '尚未配置模型连接。请测试连接，再选择默认模型。'}
+                        </p>
+                      )}
+                    <FormField htmlFor="setup-provider" label="供应商">
                       <Select
                         disabled={Boolean(connectionBusy)}
                         name="modelProvider"
                         onValueChange={providerId => {
                           setEditingConnection(true)
                           setConnectionDraft({ providerId })
+                          setDiscovered(undefined)
+                          setSelectedDraftModel(undefined)
                           setConnectionNotice(undefined)
                         }}
                         value={provider.id}
@@ -340,7 +387,7 @@ export function Onboarding({
                         autoCapitalize="none"
                         autoComplete="off"
                         autoCorrect="off"
-                        className="h-10 w-full read-only:text-ink-2"
+                        className="h-10 w-full"
                         disabled={Boolean(connectionBusy)}
                         name="baseUrl"
                         onChange={event =>
@@ -349,7 +396,6 @@ export function Onboarding({
                           })
                         }
                         placeholder="https://gateway.example/v1"
-                        readOnly={provider.id !== 'custom'}
                         required
                         spellCheck={false}
                         type="url"
@@ -375,47 +421,15 @@ export function Onboarding({
                         value={apiKey}
                       />
                     </FormField>
-                    <FormField label="模型 ID">
-                      <TextInput
-                        autoCapitalize="none"
-                        autoComplete="off"
-                        autoCorrect="off"
-                        className="h-10 w-full"
-                        disabled={Boolean(connectionBusy)}
-                        name="modelName"
-                        onChange={event =>
-                          editConnection({
-                            modelName: event.target.value,
-                          })
-                        }
-                        placeholder="用于测试连接的模型 ID"
-                        required
-                        spellCheck={false}
-                        value={modelName}
-                      />
-                    </FormField>
                     <div className="setup-connection-actions">
-                      <Button
-                        className="h-9 px-4 text-[13px]"
-                        disabled={Boolean(connectionBusy)}
-                        onClick={event => {
-                          if (event.currentTarget.form?.reportValidity())
-                            void probeConnection('test')
-                        }}
-                        size="sm"
-                        type="button"
-                        variant="secondary"
-                      >
-                        {connectionBusy === 'test' ? '测试中…' : '测试连接'}
-                      </Button>
                       <Button
                         className="h-9 px-4 text-[13px]"
                         disabled={Boolean(connectionBusy)}
                         size="sm"
                         type="submit"
-                        variant="primary"
+                        variant="secondary"
                       >
-                        {connectionBusy === 'save' ? '保存中…' : '保存连接'}
+                        {connectionBusy === 'test' ? '测试中…' : '测试连接'}
                       </Button>
                     </div>
                   </form>
@@ -446,34 +460,69 @@ export function Onboarding({
                   {connectionNotice.message}
                 </p>
               )}
-              <FormField label="默认模型">
-                {onSelectModel ? (
-                  <ModelPicker
-                    ariaLabel="默认模型"
-                    boundaryRef={setupBodyRef}
-                    footer="选择立即保存到服务端；模型变更只作用于新建执行会话"
-                    models={models}
-                    onSelect={(_, model) => {
-                      if (model) return onSelectModel(model)
-                    }}
-                    placeholder={
-                      models.length
-                        ? (configuredModelId ?? '选择模型')
-                        : '服务端未提供可选模型'
-                    }
-                    value={
-                      configuredModel ? modelSelectionKey(configuredModel) : ''
-                    }
-                  />
-                ) : (
-                  <TextInput
-                    className="h-10 w-full"
-                    disabled
-                    value={configuredModelId ?? '服务端未提供'}
-                  />
-                )}
-              </FormField>
-              {!models.length && onReloadCatalog && (
+              <div className="grid gap-1.5" role="group" aria-label="默认模型">
+                <span className="text-[13px] font-medium text-ink">
+                  默认模型
+                </span>
+                <ModelPicker
+                  ariaLabel="默认模型"
+                  boundaryRef={setupBodyRef}
+                  disabled={Boolean(connectionBusy)}
+                  description={
+                    showConnection
+                      ? '当前连接返回的模型列表'
+                      : '已配置模型服务的完整目录'
+                  }
+                  footer={
+                    showConnection
+                      ? '选好后保存连接和默认模型；保存前将验证模型可用性'
+                      : '选择立即保存到服务端；模型变更只作用于新建执行会话'
+                  }
+                  models={
+                    showConnection
+                      ? draftModels
+                      : models.length
+                        ? models
+                        : savedModel
+                          ? [savedModel]
+                          : []
+                  }
+                  onSelect={(_, model) => {
+                    if (!model) return
+                    if (showConnection) setSelectedDraftModel(model)
+                    else return onSelectModel?.(model)
+                  }}
+                  placeholder={
+                    showConnection
+                      ? draftModels.length
+                        ? '选择默认模型'
+                        : '请先测试连接，获取模型列表'
+                      : (configuredModelId ?? '选择默认模型')
+                  }
+                  value={
+                    showConnection
+                      ? draftModel
+                        ? modelSelectionKey(draftModel)
+                        : ''
+                      : configuredModel
+                        ? modelSelectionKey(configuredModel)
+                        : ''
+                  }
+                />
+              </div>
+              {showConnection && draftModels.length > 0 && (
+                <Button
+                  className="justify-self-end"
+                  disabled={Boolean(connectionBusy)}
+                  onClick={() => void probeConnection('save')}
+                  size="sm"
+                  type="button"
+                  variant="primary"
+                >
+                  {connectionBusy === 'save' ? '保存中…' : '保存连接'}
+                </Button>
+              )}
+              {!showConnection && !models.length && onReloadCatalog && (
                 <Button
                   className="justify-self-start"
                   disabled={Boolean(connectionBusy)}
@@ -549,7 +598,10 @@ export function Onboarding({
           )}
           <Button
             className="h-9 px-4 text-[13px]"
-            disabled={Boolean(connectionBusy)}
+            disabled={
+              Boolean(connectionBusy) ||
+              (step === 1 && (showConnection || !configuredModel))
+            }
             onClick={() =>
               step === steps.length - 1
                 ? onComplete()
