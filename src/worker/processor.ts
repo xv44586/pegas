@@ -122,10 +122,8 @@ export class RoutingEventHandler implements EventHandler {
       store.applyApprovalDecision(event)
       return
     }
-    if (event.source === 'automation') {
-      this.#handleAutomationEvent(event, store)
-      return
-    }
+    if (event.source === 'automation')
+      return this.#handleAutomationEvent(event, store)
     if (event.source === 'collaboration') {
       await this.#handleCollaborationEvent(event, store)
       return
@@ -294,7 +292,10 @@ export class RoutingEventHandler implements EventHandler {
     )
   }
 
-  #handleAutomationEvent(event: InboxEvent, store: PegasStore): void {
+  #handleAutomationEvent(
+    event: InboxEvent,
+    store: PegasStore,
+  ): true | undefined {
     if (event.type !== 'automation.due') {
       throw new Error(`Unsupported automation event type: ${event.type}`)
     }
@@ -335,11 +336,7 @@ export class RoutingEventHandler implements EventHandler {
     if (targetKind !== 'existing_task')
       throw new Error('Automation target kind is invalid')
     const taskId = requiredPayloadString(target, 'taskId')
-    const task = store.findTask(taskId, event.userId)
-    if (!task || task.status === 'completed' || task.status === 'cancelled') {
-      throw new Error('Automation target Task is not open')
-    }
-    store.applyRoutingDecision(
+    return store.dispatchAutomationToTask(
       event,
       {
         kind: 'continue_task',
