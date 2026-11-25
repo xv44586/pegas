@@ -42,6 +42,8 @@ import type {
   DshModelCatalog,
   DshModelCatalogItem,
   ExecutionNode,
+  DerivedMemoryRecord,
+  DerivedMemorySyncState,
   MemoryRecord,
   ModelProviderDraft,
   NotificationPreferences,
@@ -83,6 +85,10 @@ export function App() {
   const [automations, setAutomations] = useState<Automation[]>()
   const [automationsError, setAutomationsError] = useState('')
   const [memories, setMemories] = useState<MemoryRecord[]>()
+  const [derivedMemories, setDerivedMemories] =
+    useState<DerivedMemoryRecord[]>()
+  const [derivedMemorySync, setDerivedMemorySync] =
+    useState<DerivedMemorySyncState | null>(null)
   const [memoriesError, setMemoriesError] = useState('')
   const [memoriesTruncated, setMemoriesTruncated] = useState(false)
   const [workRules, setWorkRules] = useState<WorkRuleRecord[]>()
@@ -203,8 +209,11 @@ export function App() {
         if (!cursor) break
         truncated = true
       }
+      const derived = await api.derivedMemories()
       if (requestId !== memoriesRequestRef.current) return
       setMemories(items)
+      setDerivedMemories(derived.memories)
+      setDerivedMemorySync(derived.sync)
       setMemoriesTruncated(truncated)
       setMemoriesError('')
     } catch (caught) {
@@ -1552,6 +1561,8 @@ export function App() {
             actions={actions}
             channels={data.snapshot.channels}
             error={memoriesError}
+            derivedMemories={derivedMemories}
+            derivedMemorySync={derivedMemorySync}
             memories={memories}
             onCreate={async draft => {
               await api.createMemory(draft)
@@ -1559,6 +1570,14 @@ export function App() {
             }}
             onDelete={async memory => {
               await api.deleteMemory(memory.id, memory.revision)
+              await loadMemories()
+            }}
+            onDeleteDerived={async memory => {
+              await api.deleteDerivedMemory(memory.id)
+              await loadMemories()
+            }}
+            onCorrectDerived={async (memory, correction) => {
+              await api.correctDerivedMemory(memory.id, correction)
               await loadMemories()
             }}
             onReload={() => void loadMemories()}

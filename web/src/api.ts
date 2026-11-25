@@ -16,6 +16,8 @@ import type {
   ChannelTimeline,
   DurableAction,
   DshModelCatalog,
+  DerivedMemoryRecord,
+  DerivedMemorySyncState,
   LinkPreview,
   MemoryDraft,
   MemoryRecord,
@@ -785,6 +787,52 @@ export class PegasApi {
           userId: this.#userId,
           commandId: crypto.randomUUID(),
           expectedRevision,
+        }),
+      },
+    )
+    if (!response.ok) await throwResponse(response)
+  }
+
+  async derivedMemories(): Promise<{
+    memories: DerivedMemoryRecord[]
+    sync: DerivedMemorySyncState | null
+  }> {
+    const params = new URLSearchParams({ userId: this.#userId })
+    const result = await this.#get<{
+      memories: DerivedMemoryRecord[]
+      sync?: DerivedMemorySyncState | null
+    }>(`/v1/derived-memories?${params.toString()}`)
+    return { memories: result.memories, sync: result.sync ?? null }
+  }
+
+  async deleteDerivedMemory(memoryId: string): Promise<void> {
+    const response = await fetch(
+      `/v1/derived-memories/${encodeURIComponent(memoryId)}/delete`,
+      {
+        method: 'POST',
+        headers: this.#headers(true),
+        body: JSON.stringify({
+          userId: this.#userId,
+          reason: 'Deleted from Pegas memory settings',
+        }),
+      },
+    )
+    if (!response.ok) await throwResponse(response)
+  }
+
+  async correctDerivedMemory(
+    memoryId: string,
+    correction: string,
+  ): Promise<void> {
+    const response = await fetch(
+      `/v1/derived-memories/${encodeURIComponent(memoryId)}/correct`,
+      {
+        method: 'POST',
+        headers: this.#headers(true),
+        body: JSON.stringify({
+          userId: this.#userId,
+          commandId: crypto.randomUUID(),
+          correction,
         }),
       },
     )

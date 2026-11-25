@@ -20,6 +20,22 @@ export class PrivacyMaskingExecutor implements RunExecutor {
 
   async execute(input: ExecutorInput): Promise<ExecutorResult> {
     const prompt = this.#masker.mask(input.prompt).text
+    const memories = input.memories?.map(memory => ({
+      ...memory,
+      content: this.#masker.mask(memory.content).text,
+    }))
+    const workRules = input.workRules
+      ? {
+          rules: input.workRules.rules.map(rule => ({
+            ...rule,
+            title: this.#masker.mask(rule.title).text,
+            content: this.#masker.mask(rule.content).text,
+          })),
+          customInstructions: this.#masker.mask(
+            input.workRules.customInstructions,
+          ).text,
+        }
+      : undefined
     const onProgress = input.onProgress
       ? (event: ExecutorProgressEvent) =>
           input.onProgress?.(this.#restoreProgress(event))
@@ -27,6 +43,8 @@ export class PrivacyMaskingExecutor implements RunExecutor {
     const result = await this.#executor.execute({
       ...input,
       prompt,
+      ...(memories ? { memories } : {}),
+      ...(workRules ? { workRules } : {}),
       ...(onProgress ? { onProgress } : {}),
     })
     return {

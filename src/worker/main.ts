@@ -22,6 +22,8 @@ import type {
   RunExecutor,
 } from '../executor/executor.js'
 import { loadModelCredentialVault } from '../model/model-credential-vault.js'
+import { PegasDerivedMemoryService } from '../memory/derived-memory.js'
+import { HindsightProvider } from '../memory/hindsight-provider.js'
 import { MeteredJsonModelProvider } from '../model/metered-provider.js'
 import {
   createConfiguredModelProvider,
@@ -59,6 +61,10 @@ import {
   executeClaimedRun,
   localControlPlaneBaseUrl,
   processNextEvent,
+  processNextDerivedMemoryJob,
+  processNextDerivedMemoryCurationJob,
+  processNextDerivedMemoryCorrectionJob,
+  synchronizeDerivedMemories,
   RoutingEventHandler,
   type RootToolOutcomeCollector,
   type SubagentTranscriptCollector,
@@ -100,7 +106,28 @@ const controlPlaneBaseUrl = localControlPlaneBaseUrl(
 )
 const store = new PegasStore(config.databasePath, {
   routingClarificationTtlMs: config.routingClarificationTtlMs,
+  derivedMemoryEnabled: config.memoryProvider === 'hindsight',
 })
+const lifecycle = { stopping: false }
+const shutdown = new AbortController()
+const derivedMemory =
+  config.memoryProvider === 'hindsight'
+    ? new PegasDerivedMemoryService(
+        new HindsightProvider({
+          baseUrl: required(
+            config.hindsightBaseUrl,
+            'PEGAS_HINDSIGHT_BASE_URL',
+          ),
+          ...(config.hindsightApiKey ? { apiKey: config.hindsightApiKey } : {}),
+          timeoutMs: config.hindsightTimeoutMs,
+          shutdownSignal: shutdown.signal,
+        }),
+        {
+          hmacKey: required(config.memoryHmacKey, 'PEGAS_MEMORY_HMAC_KEY'),
+          globalPreferences: userId => store.workRuleContextForUser(userId),
+        },
+      )
+    : undefined
 const modelCredentialVault = loadModelCredentialVault(
   config.modelCredentialKeyPath,
 )
@@ -140,7 +167,7 @@ const selfChangeExecutor = config.selfChangeEnabled
       recoveryBaseUrl: config.recoveryBaseUrl,
       ...(config.recoveryToken ? { recoveryToken: config.recoveryToken } : {}),
       editor: executor,
-      compatibility: { minimumSchema: 1, maximumSchema: 48 },
+      compatibility: { minimumSchema: 1, maximumSchema: 50 },
       reviewer: 'pegas-self-change-gate',
       controlPlaneBaseUrl,
     })
@@ -228,14 +255,15 @@ const eventHandler = new RoutingEventHandler(router, executor.name, task => {
     protocol: config.executorMode === 'echo' ? 'echo-v1' : 'dsh-headless-v1',
   })
 })
-const lifecycle = { stopping: false }
-const shutdown = new AbortController()
 const activeRuns = new Set<Promise<void>>()
 const activeChatRuns = new Set<Promise<void>>()
+let activeMemoryJob: Promise<boolean> | undefined
+let nextMemorySyncAt = 0
 
 const nodeCapabilities = [
   'dsh',
   ...(config.selfChangeEnabled ? ['self-change'] : []),
+  ...(derivedMemory ? ['hindsight-memory'] : []),
 ]
 store.registerExecutionNode({
   id: config.nodeId,
@@ -290,6 +318,48 @@ while (!lifecycle.stopping) {
     { collectWindowMs: config.routeCollectWindowMs },
   )
 
+  if (derivedMemory && !activeMemoryJob) {
+    const processing = (async () => {
+      const corrected = await processNextDerivedMemoryCorrectionJob(
+        store,
+        derivedMemory,
+        `${workerId}:memory`,
+        telemetry,
+      )
+      if (corrected) return true
+      const curated = await processNextDerivedMemoryCurationJob(
+        store,
+        derivedMemory,
+        `${workerId}:memory`,
+        telemetry,
+      )
+      if (curated) return true
+      const retained = await processNextDerivedMemoryJob(
+        store,
+        derivedMemory,
+        `${workerId}:memory`,
+        telemetry,
+      )
+      if (retained) return true
+      if (Date.now() < nextMemorySyncAt) return false
+      nextMemorySyncAt = Date.now() + config.memorySyncMs
+      await synchronizeDerivedMemories(store, derivedMemory, telemetry)
+      return false
+    })()
+      .catch((error: unknown) => {
+        logger.error('memory.job_persistence_failed', error, { workerId })
+        metrics.increment('pegas_errors_total', {
+          component: 'memory',
+          kind: 'job_persistence',
+        })
+        return false
+      })
+      .finally(() => {
+        if (activeMemoryJob === processing) activeMemoryJob = undefined
+      })
+    activeMemoryJob = processing
+  }
+
   // The signal callback may change stopping while a run is being awaited.
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
   while (!lifecycle.stopping && activeRuns.size < config.workerConcurrency) {
@@ -307,6 +377,7 @@ while (!lifecycle.stopping) {
       collectSubagents,
       createThinkingSummarizer,
       collectRootOutcomes,
+      derivedMemory,
     )
       .catch((error: unknown) => {
         logger.error('run.persistence_failed', error, {
@@ -363,7 +434,11 @@ while (!lifecycle.stopping) {
   if (!routed) await wait(config.eventPollMs)
 }
 
-await Promise.allSettled([...activeRuns, ...activeChatRuns])
+await Promise.allSettled([
+  ...activeRuns,
+  ...activeChatRuns,
+  ...(activeMemoryJob ? [activeMemoryJob] : []),
+])
 store.close()
 
 function requestStop(): void {

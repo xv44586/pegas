@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite'
 
 import { systemClock, type Clock } from '../core/clock.js'
 import { assignWorkerIconId, isWorkerIconId } from '../brand/agent-icon.js'
+import { DeterministicPrivacyMasker } from '../privacy/masker.js'
 import {
   projectWorkChannel,
   type ChannelSearchOptions,
@@ -75,6 +76,13 @@ import type {
   Task,
   ToolSemantic,
 } from '../core/domain.js'
+import type {
+  DerivedMemoryCurationJob,
+  DerivedMemoryCorrectionJob,
+  DerivedMemory,
+  DerivedMemoryJob,
+  DerivedMemoryRecallAudit,
+} from '../memory/derived-memory.js'
 import {
   buildToolSemantic,
   semanticSpillPaths,
@@ -890,6 +898,181 @@ const migration48 = `
 ALTER TABLE outbox_messages ADD COLUMN expires_at TEXT;
 CREATE INDEX outbox_messages_by_expiry
 ON outbox_messages (expires_at) WHERE expires_at IS NOT NULL;
+`
+
+const migration49 = `
+-- MEMORY-001 M1: durable, replaceable derived-memory handoff. Provider
+-- credentials and owner bank identifiers never enter these tables.
+CREATE TABLE derived_memory_jobs (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  task_id TEXT NOT NULL REFERENCES tasks(id),
+  run_id TEXT NOT NULL REFERENCES runs(id),
+  kind TEXT NOT NULL CHECK (kind IN ('run_success', 'run_failure')),
+  document_id TEXT NOT NULL,
+  content TEXT NOT NULL,
+  working_directory TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN (
+    'pending', 'processing', 'submitted', 'completed', 'failed'
+  )),
+  provider_operation_id TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  claimed_by TEXT,
+  lease_until TEXT,
+  next_attempt_at TEXT,
+  last_error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  completed_at TEXT,
+  UNIQUE (run_id, kind)
+);
+
+CREATE INDEX derived_memory_jobs_claim
+ON derived_memory_jobs (status, next_attempt_at, lease_until, created_at);
+
+CREATE TABLE derived_memory_cache (
+  user_id TEXT NOT NULL,
+  memory_id TEXT NOT NULL,
+  text TEXT NOT NULL,
+  memory_type TEXT NOT NULL CHECK (memory_type IN (
+    'world', 'experience', 'observation'
+  )),
+  score REAL,
+  tags_json TEXT NOT NULL,
+  metadata_json TEXT NOT NULL,
+  state TEXT CHECK (state IN ('valid', 'invalidated')),
+  first_seen_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, memory_id)
+);
+
+CREATE TABLE derived_memory_injections (
+  run_id TEXT NOT NULL REFERENCES runs(id),
+  user_id TEXT NOT NULL,
+  memory_id TEXT NOT NULL,
+  rank INTEGER NOT NULL CHECK (rank >= 0),
+  score REAL,
+  injected_at TEXT NOT NULL,
+  PRIMARY KEY (run_id, memory_id)
+);
+
+CREATE TABLE derived_memory_tombstones (
+  user_id TEXT NOT NULL,
+  memory_id TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, memory_id)
+);
+
+CREATE TABLE derived_memory_curation_jobs (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  memory_id TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN (
+    'pending', 'processing', 'completed', 'failed'
+  )),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  claimed_by TEXT,
+  lease_until TEXT,
+  next_attempt_at TEXT,
+  last_error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  completed_at TEXT,
+  UNIQUE (user_id, memory_id)
+);
+
+CREATE INDEX derived_memory_curation_jobs_claim
+ON derived_memory_curation_jobs
+  (status, next_attempt_at, lease_until, created_at);
+`
+
+const migration50 = `
+-- MEMORY-001 usable loop: semantic tombstones survive provider ID churn,
+-- corrections are durable, and a complete bank projection exposes sync health.
+ALTER TABLE derived_memory_tombstones ADD COLUMN content_hash TEXT;
+CREATE INDEX derived_memory_tombstones_by_content
+ON derived_memory_tombstones (user_id, content_hash)
+WHERE content_hash IS NOT NULL;
+
+ALTER TABLE derived_memory_curation_jobs ADD COLUMN memory_type TEXT
+CHECK (memory_type IN ('world', 'experience', 'observation'));
+
+CREATE TABLE derived_memory_correction_jobs (
+  id TEXT PRIMARY KEY,
+  command_id TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  memory_id TEXT NOT NULL,
+  memory_type TEXT NOT NULL CHECK (memory_type IN (
+    'world', 'experience', 'observation'
+  )),
+  replacement_text TEXT NOT NULL,
+  tags_json TEXT NOT NULL,
+  metadata_json TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN (
+    'pending', 'processing', 'submitted', 'completed', 'failed'
+  )),
+  provider_operation_id TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  claimed_by TEXT,
+  lease_until TEXT,
+  next_attempt_at TEXT,
+  last_error TEXT,
+  response_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  completed_at TEXT,
+  UNIQUE (user_id, command_id)
+);
+
+CREATE INDEX derived_memory_correction_jobs_claim
+ON derived_memory_correction_jobs
+  (status, next_attempt_at, lease_until, created_at);
+
+CREATE TABLE derived_memory_sync_state (
+  user_id TEXT PRIMARY KEY,
+  status TEXT NOT NULL CHECK (status IN ('healthy', 'failed')),
+  memory_count INTEGER NOT NULL DEFAULT 0 CHECK (memory_count >= 0),
+  last_synced_at TEXT,
+  last_error TEXT,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE derived_memory_recall_audit (
+  run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL,
+  memory_id TEXT NOT NULL,
+  stage TEXT NOT NULL CHECK (stage IN ('retrieved', 'filtered', 'injected')),
+  reason TEXT,
+  score REAL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (run_id, memory_id, stage)
+);
+
+CREATE INDEX derived_memory_recall_audit_by_user
+ON derived_memory_recall_audit (user_id, created_at DESC, run_id);
+`
+
+const migration51 = `
+-- MEMORY-001 review fixes: operation polling gets its own budget so slow
+-- provider extraction never consumes the error-retry allowance, and every
+-- error claim is counted explicitly instead of overloading attempts.
+ALTER TABLE derived_memory_jobs ADD COLUMN poll_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE derived_memory_jobs ADD COLUMN error_attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE derived_memory_correction_jobs ADD COLUMN poll_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE derived_memory_correction_jobs ADD COLUMN error_attempts INTEGER NOT NULL DEFAULT 0;
+`
+
+const migration52 = `
+-- MEMORY-001 review fixes: suppression also binds to the originating Run so a
+-- provider merge or rewording of a deleted fact cannot revive it under a new
+-- ID and different text.
+ALTER TABLE derived_memory_tombstones ADD COLUMN source_run_id TEXT;
+CREATE INDEX derived_memory_tombstones_by_run
+ON derived_memory_tombstones (user_id, source_run_id)
+WHERE source_run_id IS NOT NULL;
 `
 
 const migration39 = `
@@ -2369,6 +2552,57 @@ interface MemoryCommandRow {
   response_json: string
 }
 
+interface DerivedMemoryJobRow {
+  id: string
+  user_id: string
+  task_id: string
+  run_id: string
+  kind: DerivedMemoryJob['kind']
+  document_id: string
+  content: string
+  working_directory: string
+  status: 'pending' | 'submitted' | 'processing'
+  provider_operation_id: string | null
+  attempts: number
+  poll_count: number
+  error_attempts: number
+}
+
+interface DerivedMemoryCacheRow {
+  memory_id: string
+  text: string
+  memory_type: DerivedMemory['type']
+  score: number | null
+  tags_json: string
+  metadata_json: string
+  state: DerivedMemory['state'] | null
+}
+
+interface DerivedMemoryCurationJobRow {
+  id: string
+  user_id: string
+  memory_id: string
+  memory_type: DerivedMemory['type'] | null
+  reason: string
+  attempts: number
+}
+
+interface DerivedMemoryCorrectionJobRow {
+  id: string
+  command_id: string
+  user_id: string
+  memory_id: string
+  memory_type: DerivedMemory['type']
+  replacement_text: string
+  tags_json: string
+  metadata_json: string
+  status: 'pending' | 'submitted' | 'processing'
+  provider_operation_id: string | null
+  attempts: number
+  poll_count: number
+  error_attempts: number
+}
+
 interface WorkRuleRow {
   id: string
   user_id: string
@@ -2928,14 +3162,20 @@ export class PegasStore {
   readonly #clock: Clock
   readonly #routingClarificationTtlMs: number
   readonly #attachmentRoot: string | undefined
+  readonly #derivedMemoryEnabled: boolean
   #transactionDepth = 0
 
   constructor(
     path: string,
-    options: { clock?: Clock; routingClarificationTtlMs?: number } = {},
+    options: {
+      clock?: Clock
+      routingClarificationTtlMs?: number
+      derivedMemoryEnabled?: boolean
+    } = {},
   ) {
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true })
     this.#clock = options.clock ?? systemClock
+    this.#derivedMemoryEnabled = options.derivedMemoryEnabled === true
     this.#routingClarificationTtlMs =
       options.routingClarificationTtlMs ?? 72 * 60 * 60 * 1000
     if (
@@ -3004,6 +3244,10 @@ export class PegasStore {
     this.#migrate(46, migration46)
     this.#migrate(47, migration47)
     this.#migrate(48, migration48)
+    this.#migrate(49, migration49)
+    this.#migrate(50, migration50)
+    this.#migrate(51, migration51)
+    this.#migrate(52, migration52)
   }
 
   #backfillWorkerIconIds(): void {
@@ -4797,6 +5041,1024 @@ export class PegasStore {
   #assertAutomationWritable(automation: Automation): void {
     if (automation.status === 'cancelled' || automation.status === 'completed')
       throw new AutomationReadOnlyError()
+  }
+
+  /** Read-only diagnostics for retain/correction job retry state. */
+  derivedMemoryJobDiagnostics(jobId: string):
+    | {
+        status: string
+        lastError?: string
+        pollCount: number
+        errorAttempts: number
+      }
+    | undefined {
+    const row = this.#database
+      .prepare(
+        `SELECT status, last_error, poll_count, error_attempts
+         FROM derived_memory_jobs WHERE id = ?
+         UNION ALL
+         SELECT status, last_error, poll_count, error_attempts
+         FROM derived_memory_correction_jobs WHERE id = ?`,
+      )
+      .get(jobId, jobId) as
+      | {
+          status: string
+          last_error: string | null
+          poll_count: number
+          error_attempts: number
+        }
+      | undefined
+    return row
+      ? {
+          status: row.status,
+          ...(row.last_error ? { lastError: row.last_error } : {}),
+          pollCount: row.poll_count,
+          errorAttempts: row.error_attempts,
+        }
+      : undefined
+  }
+
+  claimNextDerivedMemoryJob(
+    workerId: string,
+    leaseMs: number,
+  ): DerivedMemoryJob | undefined {
+    const now = this.#clock.now()
+    const nowIso = now.toISOString()
+    const leaseUntil = new Date(now.getTime() + leaseMs).toISOString()
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const row = this.#database
+        .prepare(
+          `SELECT * FROM derived_memory_jobs
+           WHERE (
+             status IN ('pending','submitted')
+             OR (status = 'processing' AND lease_until <= ?)
+           )
+             AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+           ORDER BY created_at, id
+           LIMIT 1`,
+        )
+        .get(nowIso, nowIso) as unknown as DerivedMemoryJobRow | undefined
+      if (!row) {
+        this.#database.exec('COMMIT')
+        return undefined
+      }
+      const claimed = this.#database
+        .prepare(
+          `UPDATE derived_memory_jobs
+           SET status = 'processing', claimed_by = ?, lease_until = ?,
+               attempts = attempts + 1,
+               poll_count = poll_count + CASE WHEN ? = 'submitted' THEN 1 ELSE 0 END,
+               error_attempts = error_attempts + CASE WHEN ? = 'submitted' THEN 0 ELSE 1 END,
+               updated_at = ?
+           WHERE id = ? AND (
+             status IN ('pending','submitted')
+             OR (status = 'processing' AND lease_until <= ?)
+           )`,
+        )
+        .run(
+          workerId,
+          leaseUntil,
+          row.status,
+          row.status,
+          nowIso,
+          row.id,
+          nowIso,
+        )
+      if (claimed.changes !== 1) {
+        this.#database.exec('COMMIT')
+        return undefined
+      }
+      this.#database.exec('COMMIT')
+      return toDerivedMemoryJob({
+        ...row,
+        attempts: row.attempts + 1,
+        poll_count: row.poll_count + (row.status === 'submitted' ? 1 : 0),
+        error_attempts:
+          row.error_attempts + (row.status === 'submitted' ? 0 : 1),
+      })
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  claimNextDerivedMemoryCurationJob(
+    workerId: string,
+    leaseMs: number,
+  ): DerivedMemoryCurationJob | undefined {
+    const now = this.#clock.now()
+    const nowIso = now.toISOString()
+    const leaseUntil = new Date(now.getTime() + leaseMs).toISOString()
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const row = this.#database
+        .prepare(
+          `SELECT * FROM derived_memory_curation_jobs
+           WHERE (
+             status = 'pending'
+             OR (status = 'processing' AND lease_until <= ?)
+           ) AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+           ORDER BY created_at, id LIMIT 1`,
+        )
+        .get(nowIso, nowIso) as unknown as
+        DerivedMemoryCurationJobRow | undefined
+      if (!row) {
+        this.#database.exec('COMMIT')
+        return undefined
+      }
+      const claimed = this.#database
+        .prepare(
+          `UPDATE derived_memory_curation_jobs
+           SET status = 'processing', claimed_by = ?, lease_until = ?,
+               attempts = attempts + 1, updated_at = ?
+           WHERE id = ? AND (
+             status = 'pending'
+             OR (status = 'processing' AND lease_until <= ?)
+           )`,
+        )
+        .run(workerId, leaseUntil, nowIso, row.id, nowIso)
+      this.#database.exec('COMMIT')
+      return claimed.changes === 1
+        ? {
+            id: row.id,
+            userId: row.user_id,
+            memoryId: row.memory_id,
+            ...(row.memory_type ? { memoryType: row.memory_type } : {}),
+            reason: row.reason,
+            attempts: row.attempts + 1,
+          }
+        : undefined
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  completeDerivedMemoryCurationJob(jobId: string, workerId: string): void {
+    const now = this.#clock.now().toISOString()
+    const result = this.#database
+      .prepare(
+        `UPDATE derived_memory_curation_jobs
+         SET status = 'completed', claimed_by = NULL, lease_until = NULL,
+             next_attempt_at = NULL, last_error = NULL,
+             completed_at = ?, updated_at = ?
+         WHERE id = ? AND status = 'processing' AND claimed_by = ?`,
+      )
+      .run(now, now, jobId, workerId)
+    if (result.changes !== 1)
+      throw new Error(`Worker ${workerId} does not own curation job ${jobId}`)
+  }
+
+  retryDerivedMemoryCurationJob(
+    jobId: string,
+    workerId: string,
+    error: string,
+    retryAfterMs: number,
+  ): void {
+    const now = this.#clock.now()
+    const result = this.#database
+      .prepare(
+        `UPDATE derived_memory_curation_jobs
+         SET status = 'pending', claimed_by = NULL, lease_until = NULL,
+             next_attempt_at = ?, last_error = ?, updated_at = ?
+         WHERE id = ? AND status = 'processing' AND claimed_by = ?`,
+      )
+      .run(
+        new Date(now.getTime() + retryAfterMs).toISOString(),
+        error.slice(0, 2_000),
+        now.toISOString(),
+        jobId,
+        workerId,
+      )
+    if (result.changes !== 1)
+      throw new Error(`Worker ${workerId} does not own curation job ${jobId}`)
+  }
+
+  failDerivedMemoryCurationJob(
+    jobId: string,
+    workerId: string,
+    error: string,
+  ): void {
+    const result = this.#database
+      .prepare(
+        `UPDATE derived_memory_curation_jobs
+         SET status = 'failed', claimed_by = NULL, lease_until = NULL,
+             next_attempt_at = NULL, last_error = ?, updated_at = ?
+         WHERE id = ? AND status = 'processing' AND claimed_by = ?`,
+      )
+      .run(
+        error.slice(0, 2_000),
+        this.#clock.now().toISOString(),
+        jobId,
+        workerId,
+      )
+    if (result.changes !== 1)
+      throw new Error(`Worker ${workerId} does not own curation job ${jobId}`)
+  }
+
+  claimNextDerivedMemoryCorrectionJob(
+    workerId: string,
+    leaseMs: number,
+  ): DerivedMemoryCorrectionJob | undefined {
+    const now = this.#clock.now()
+    const nowIso = now.toISOString()
+    const leaseUntil = new Date(now.getTime() + leaseMs).toISOString()
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const row = this.#database
+        .prepare(
+          `SELECT * FROM derived_memory_correction_jobs
+           WHERE (
+             status IN ('pending','submitted')
+             OR (status = 'processing' AND lease_until <= ?)
+           ) AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+           ORDER BY created_at, id LIMIT 1`,
+        )
+        .get(nowIso, nowIso) as unknown as
+        DerivedMemoryCorrectionJobRow | undefined
+      if (!row) {
+        this.#database.exec('COMMIT')
+        return undefined
+      }
+      const claimed = this.#database
+        .prepare(
+          `UPDATE derived_memory_correction_jobs
+           SET status = 'processing', claimed_by = ?, lease_until = ?,
+               attempts = attempts + 1,
+               poll_count = poll_count + CASE WHEN ? = 'submitted' THEN 1 ELSE 0 END,
+               error_attempts = error_attempts + CASE WHEN ? = 'submitted' THEN 0 ELSE 1 END,
+               updated_at = ?
+           WHERE id = ? AND (
+             status IN ('pending','submitted')
+             OR (status = 'processing' AND lease_until <= ?)
+           )`,
+        )
+        .run(
+          workerId,
+          leaseUntil,
+          row.status,
+          row.status,
+          nowIso,
+          row.id,
+          nowIso,
+        )
+      this.#database.exec('COMMIT')
+      return claimed.changes === 1
+        ? toDerivedMemoryCorrectionJob({
+            ...row,
+            attempts: row.attempts + 1,
+            poll_count: row.poll_count + (row.status === 'submitted' ? 1 : 0),
+            error_attempts:
+              row.error_attempts + (row.status === 'submitted' ? 0 : 1),
+          })
+        : undefined
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  markDerivedMemoryCorrectionSubmitted(
+    jobId: string,
+    workerId: string,
+    providerOperationId: string,
+  ): void {
+    const result = this.#database
+      .prepare(
+        `UPDATE derived_memory_correction_jobs
+         SET status = 'submitted', provider_operation_id = ?,
+             claimed_by = NULL, lease_until = NULL, next_attempt_at = NULL,
+             last_error = NULL, updated_at = ?
+         WHERE id = ? AND status = 'processing' AND claimed_by = ?`,
+      )
+      .run(
+        providerOperationId,
+        this.#clock.now().toISOString(),
+        jobId,
+        workerId,
+      )
+    if (result.changes !== 1)
+      throw new Error(`Worker ${workerId} does not own correction job ${jobId}`)
+  }
+
+  completeDerivedMemoryCorrectionJob(jobId: string, workerId: string): void {
+    const now = this.#clock.now().toISOString()
+    const result = this.#database
+      .prepare(
+        `UPDATE derived_memory_correction_jobs
+         SET status = 'completed', replacement_text = '', claimed_by = NULL,
+             lease_until = NULL, next_attempt_at = NULL, last_error = NULL,
+             completed_at = ?, updated_at = ?
+         WHERE id = ? AND status = 'processing' AND claimed_by = ?`,
+      )
+      .run(now, now, jobId, workerId)
+    if (result.changes !== 1)
+      throw new Error(`Worker ${workerId} does not own correction job ${jobId}`)
+  }
+
+  retryDerivedMemoryCorrectionJob(
+    jobId: string,
+    workerId: string,
+    error: string,
+    retryAfterMs: number,
+    options: { clearError?: boolean } = {},
+  ): void {
+    const now = this.#clock.now()
+    const current = this.#database
+      .prepare(
+        `SELECT provider_operation_id FROM derived_memory_correction_jobs
+         WHERE id = ? AND status = 'processing' AND claimed_by = ?`,
+      )
+      .get(jobId, workerId) as
+      { provider_operation_id: string | null } | undefined
+    if (!current)
+      throw new Error(`Worker ${workerId} does not own correction job ${jobId}`)
+    const result = this.#database
+      .prepare(
+        `UPDATE derived_memory_correction_jobs
+         SET status = ?, claimed_by = NULL, lease_until = NULL,
+             next_attempt_at = ?, last_error = ?, updated_at = ?
+         WHERE id = ? AND status = 'processing' AND claimed_by = ?`,
+      )
+      .run(
+        current.provider_operation_id ? 'submitted' : 'pending',
+        new Date(now.getTime() + retryAfterMs).toISOString(),
+        options.clearError === true ? null : error.slice(0, 2_000),
+        now.toISOString(),
+        jobId,
+        workerId,
+      )
+    if (result.changes !== 1)
+      throw new Error(`Worker ${workerId} does not own correction job ${jobId}`)
+  }
+
+  failDerivedMemoryCorrectionJob(
+    jobId: string,
+    workerId: string,
+    error: string,
+  ): void {
+    const result = this.#database
+      .prepare(
+        `UPDATE derived_memory_correction_jobs
+         SET status = 'failed', claimed_by = NULL, lease_until = NULL,
+             next_attempt_at = NULL, last_error = ?, updated_at = ?
+         WHERE id = ? AND status = 'processing' AND claimed_by = ?`,
+      )
+      .run(
+        error.slice(0, 2_000),
+        this.#clock.now().toISOString(),
+        jobId,
+        workerId,
+      )
+    if (result.changes !== 1)
+      throw new Error(`Worker ${workerId} does not own correction job ${jobId}`)
+  }
+
+  markDerivedMemoryJobSubmitted(
+    jobId: string,
+    workerId: string,
+    providerOperationId: string,
+  ): void {
+    const result = this.#database
+      .prepare(
+        `UPDATE derived_memory_jobs
+         SET status = 'submitted', provider_operation_id = ?,
+             claimed_by = NULL, lease_until = NULL, next_attempt_at = NULL,
+             last_error = NULL, updated_at = ?
+         WHERE id = ? AND status = 'processing' AND claimed_by = ?`,
+      )
+      .run(
+        providerOperationId,
+        this.#clock.now().toISOString(),
+        jobId,
+        workerId,
+      )
+    if (result.changes !== 1)
+      throw new Error(`Worker ${workerId} does not own memory job ${jobId}`)
+  }
+
+  completeDerivedMemoryJob(jobId: string, workerId: string): void {
+    const now = this.#clock.now().toISOString()
+    const result = this.#database
+      .prepare(
+        `UPDATE derived_memory_jobs
+         SET status = 'completed', content = '', claimed_by = NULL,
+             lease_until = NULL, next_attempt_at = NULL, last_error = NULL,
+             completed_at = ?, updated_at = ?
+         WHERE id = ? AND status = 'processing' AND claimed_by = ?`,
+      )
+      .run(now, now, jobId, workerId)
+    if (result.changes !== 1)
+      throw new Error(`Worker ${workerId} does not own memory job ${jobId}`)
+  }
+
+  retryDerivedMemoryJob(
+    jobId: string,
+    workerId: string,
+    error: string,
+    retryAfterMs: number,
+    options: { clearError?: boolean } = {},
+  ): void {
+    const now = this.#clock.now()
+    const current = this.#database
+      .prepare(
+        `SELECT provider_operation_id FROM derived_memory_jobs
+         WHERE id = ? AND status = 'processing' AND claimed_by = ?`,
+      )
+      .get(jobId, workerId) as
+      { provider_operation_id: string | null } | undefined
+    if (!current)
+      throw new Error(`Worker ${workerId} does not own memory job ${jobId}`)
+    const result = this.#database
+      .prepare(
+        `UPDATE derived_memory_jobs
+         SET status = ?, claimed_by = NULL, lease_until = NULL,
+             next_attempt_at = ?, last_error = ?, updated_at = ?
+         WHERE id = ? AND status = 'processing' AND claimed_by = ?`,
+      )
+      .run(
+        current.provider_operation_id ? 'submitted' : 'pending',
+        new Date(now.getTime() + retryAfterMs).toISOString(),
+        options.clearError === true ? null : error.slice(0, 2_000),
+        now.toISOString(),
+        jobId,
+        workerId,
+      )
+    if (result.changes !== 1)
+      throw new Error(`Worker ${workerId} does not own memory job ${jobId}`)
+  }
+
+  failDerivedMemoryJob(jobId: string, workerId: string, error: string): void {
+    const result = this.#database
+      .prepare(
+        `UPDATE derived_memory_jobs
+         SET status = 'failed', claimed_by = NULL, lease_until = NULL,
+             next_attempt_at = NULL, last_error = ?, updated_at = ?
+         WHERE id = ? AND status = 'processing' AND claimed_by = ?`,
+      )
+      .run(
+        error.slice(0, 2_000),
+        this.#clock.now().toISOString(),
+        jobId,
+        workerId,
+      )
+    if (result.changes !== 1)
+      throw new Error(`Worker ${workerId} does not own memory job ${jobId}`)
+  }
+
+  recordDerivedMemoryRecall(
+    runId: string,
+    userId: string,
+    memories: readonly DerivedMemory[],
+    audit: readonly DerivedMemoryRecallAudit[] = [],
+  ): void {
+    const owned = this.#database
+      .prepare(
+        `SELECT 1 FROM runs JOIN tasks ON tasks.id = runs.task_id
+         WHERE runs.id = ? AND tasks.user_id = ?`,
+      )
+      .get(runId, userId)
+    if (!owned) throw new MemoryTargetUnavailableError()
+    const now = this.#clock.now().toISOString()
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const insertAudit = this.#database.prepare(
+        `INSERT INTO derived_memory_recall_audit
+          (run_id, user_id, memory_id, stage, reason, score, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(run_id, memory_id, stage) DO UPDATE SET
+           reason = excluded.reason, score = excluded.score,
+           created_at = excluded.created_at`,
+      )
+      for (const record of audit) {
+        insertAudit.run(
+          runId,
+          userId,
+          record.memoryId,
+          record.stage,
+          record.reason ?? null,
+          record.score ?? null,
+          now,
+        )
+      }
+      for (const [rank, memory] of memories.entries()) {
+        if (this.isDerivedMemorySuppressed(userId, memory)) continue
+        this.#database
+          .prepare(
+            `INSERT INTO derived_memory_cache
+              (user_id, memory_id, text, memory_type, score, tags_json,
+               metadata_json, state, first_seen_at, last_seen_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(user_id, memory_id) DO UPDATE SET
+               text = excluded.text, memory_type = excluded.memory_type,
+               score = excluded.score, tags_json = excluded.tags_json,
+               metadata_json = excluded.metadata_json, state = excluded.state,
+               last_seen_at = excluded.last_seen_at`,
+          )
+          .run(
+            userId,
+            memory.id,
+            memory.text,
+            memory.type,
+            memory.score ?? null,
+            JSON.stringify(memory.tags),
+            JSON.stringify(memory.metadata),
+            memory.state ?? null,
+            now,
+            now,
+          )
+        this.#database
+          .prepare(
+            `INSERT INTO derived_memory_injections
+              (run_id, user_id, memory_id, rank, score, injected_at)
+             VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT(run_id, memory_id) DO UPDATE SET
+               rank = excluded.rank, score = excluded.score,
+               injected_at = excluded.injected_at`,
+          )
+          .run(runId, userId, memory.id, rank, memory.score ?? null, now)
+        insertAudit.run(
+          runId,
+          userId,
+          memory.id,
+          'injected',
+          null,
+          memory.score ?? null,
+          now,
+        )
+      }
+      this.#database.exec('COMMIT')
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  listDerivedMemoryRecallAudit(
+    runId: string,
+    userId: string,
+  ): {
+    memoryId: string
+    stage: 'retrieved' | 'filtered' | 'injected'
+    reason?: string
+    score?: number
+  }[] {
+    const rows = this.#database
+      .prepare(
+        `SELECT memory_id, stage, reason, score
+         FROM derived_memory_recall_audit
+         WHERE run_id = ? AND user_id = ?
+         ORDER BY memory_id, CASE stage
+           WHEN 'retrieved' THEN 0 WHEN 'filtered' THEN 1 ELSE 2 END`,
+      )
+      .all(runId, userId) as {
+      memory_id: string
+      stage: 'retrieved' | 'filtered' | 'injected'
+      reason: string | null
+      score: number | null
+    }[]
+    return rows.map(row => ({
+      memoryId: row.memory_id,
+      stage: row.stage,
+      ...(row.reason === null ? {} : { reason: row.reason }),
+      ...(row.score === null ? {} : { score: row.score }),
+    }))
+  }
+
+  listDerivedMemories(userId: string): DerivedMemory[] {
+    const rows = this.#database
+      .prepare(
+        `SELECT cache.* FROM derived_memory_cache cache
+         LEFT JOIN derived_memory_tombstones tombstone
+           ON tombstone.user_id = cache.user_id
+          AND tombstone.memory_id = cache.memory_id
+         WHERE cache.user_id = ? AND tombstone.memory_id IS NULL
+           AND (cache.state IS NULL OR cache.state = 'valid')
+         ORDER BY cache.last_seen_at DESC, cache.memory_id`,
+      )
+      .all(userId) as unknown as DerivedMemoryCacheRow[]
+    return rows.map(row => ({
+      id: row.memory_id,
+      text: row.text,
+      type: row.memory_type,
+      ...(row.score === null ? {} : { score: row.score }),
+      tags: JSON.parse(row.tags_json) as string[],
+      metadata: JSON.parse(row.metadata_json) as Record<string, unknown>,
+      ...(row.state ? { state: row.state } : {}),
+    }))
+  }
+
+  listDerivedMemoryUsers(): string[] {
+    const rows = this.#database
+      .prepare(
+        `SELECT user_id FROM tasks
+         UNION SELECT user_id FROM derived_memory_cache
+         UNION SELECT user_id FROM derived_memory_jobs
+         UNION SELECT user_id FROM derived_memory_correction_jobs
+         ORDER BY user_id`,
+      )
+      .all() as { user_id: string }[]
+    return rows.map(row => row.user_id)
+  }
+
+  replaceDerivedMemoryCache(
+    userId: string,
+    memories: readonly DerivedMemory[],
+  ): void {
+    const now = this.#clock.now().toISOString()
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const retainedIds = new Set<string>()
+      for (const memory of memories) {
+        if (memory.state === 'invalidated') continue
+        if (this.isDerivedMemorySuppressed(userId, memory)) continue
+        retainedIds.add(memory.id)
+        this.#database
+          .prepare(
+            `INSERT INTO derived_memory_cache
+              (user_id, memory_id, text, memory_type, score, tags_json,
+               metadata_json, state, first_seen_at, last_seen_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(user_id, memory_id) DO UPDATE SET
+               text = excluded.text, memory_type = excluded.memory_type,
+               score = excluded.score, tags_json = excluded.tags_json,
+               metadata_json = excluded.metadata_json, state = excluded.state,
+               last_seen_at = excluded.last_seen_at`,
+          )
+          .run(
+            userId,
+            memory.id,
+            memory.text,
+            memory.type,
+            memory.score ?? null,
+            JSON.stringify(memory.tags),
+            JSON.stringify(memory.metadata),
+            memory.state ?? null,
+            now,
+            now,
+          )
+      }
+      const existing = this.#database
+        .prepare(`SELECT memory_id FROM derived_memory_cache WHERE user_id = ?`)
+        .all(userId) as { memory_id: string }[]
+      const remove = this.#database.prepare(
+        `DELETE FROM derived_memory_cache WHERE user_id = ? AND memory_id = ?`,
+      )
+      for (const row of existing) {
+        if (!retainedIds.has(row.memory_id)) remove.run(userId, row.memory_id)
+      }
+      this.#requeueSuppressedCuration(userId, memories, now)
+      this.#database
+        .prepare(
+          `INSERT INTO derived_memory_sync_state
+            (user_id, status, memory_count, last_synced_at, last_error, updated_at)
+           VALUES (?, 'healthy', ?, ?, NULL, ?)
+           ON CONFLICT(user_id) DO UPDATE SET
+             status = 'healthy', memory_count = excluded.memory_count,
+             last_synced_at = excluded.last_synced_at, last_error = NULL,
+             updated_at = excluded.updated_at`,
+        )
+        .run(userId, retainedIds.size, now, now)
+      this.#database.exec('COMMIT')
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  /**
+   * Provider backup restores can revive facts whose curation job already
+   * completed. A full listing that still contains a suppressed memory is the
+   * reconciliation point: requeue the invalidation instead of leaving deleted
+   * personal data valid in the remote bank forever.
+   */
+  #requeueSuppressedCuration(
+    userId: string,
+    memories: readonly DerivedMemory[],
+    now: string,
+  ): void {
+    for (const memory of memories) {
+      if (memory.state === 'invalidated') continue
+      if (!this.isDerivedMemorySuppressed(userId, memory)) continue
+      const revived = this.#database
+        .prepare(
+          `UPDATE derived_memory_curation_jobs
+           SET status = 'pending', memory_type = ?, attempts = 0,
+               claimed_by = NULL, lease_until = NULL, next_attempt_at = NULL,
+               last_error = NULL, completed_at = NULL, updated_at = ?
+           WHERE user_id = ? AND memory_id = ? AND status <> 'processing'`,
+        )
+        .run(memory.type, now, userId, memory.id)
+      if (revived.changes > 0) continue
+      this.#database
+        .prepare(
+          `INSERT INTO derived_memory_curation_jobs
+            (id, user_id, memory_id, memory_type, reason, status,
+             created_at, updated_at)
+           VALUES (?, ?, ?, ?, 'Suppressed memory is still valid at the provider',
+                   'pending', ?, ?)
+           ON CONFLICT(user_id, memory_id) DO NOTHING`,
+        )
+        .run(randomUUID(), userId, memory.id, memory.type, now, now)
+    }
+  }
+
+  failDerivedMemorySync(userId: string, error: string): void {
+    const now = this.#clock.now().toISOString()
+    this.#database
+      .prepare(
+        `INSERT INTO derived_memory_sync_state
+          (user_id, status, memory_count, last_synced_at, last_error, updated_at)
+         VALUES (?, 'failed', 0, NULL, ?, ?)
+         ON CONFLICT(user_id) DO UPDATE SET
+           status = 'failed', last_error = excluded.last_error,
+           updated_at = excluded.updated_at`,
+      )
+      .run(userId, error.slice(0, 2_000), now)
+  }
+
+  derivedMemorySyncState(userId: string):
+    | {
+        status: 'healthy' | 'failed'
+        memoryCount: number
+        lastSyncedAt?: string
+        lastError?: string
+      }
+    | undefined {
+    const row = this.#database
+      .prepare(
+        `SELECT status, memory_count, last_synced_at, last_error
+         FROM derived_memory_sync_state WHERE user_id = ?`,
+      )
+      .get(userId) as
+      | {
+          status: 'healthy' | 'failed'
+          memory_count: number
+          last_synced_at: string | null
+          last_error: string | null
+        }
+      | undefined
+    return row
+      ? {
+          status: row.status,
+          memoryCount: row.memory_count,
+          ...(row.last_synced_at ? { lastSyncedAt: row.last_synced_at } : {}),
+          ...(row.last_error ? { lastError: row.last_error } : {}),
+        }
+      : undefined
+  }
+
+  isDerivedMemoryTombstoned(userId: string, memoryId: string): boolean {
+    return Boolean(
+      this.#database
+        .prepare(
+          `SELECT 1 FROM derived_memory_tombstones
+           WHERE user_id = ? AND memory_id = ?`,
+        )
+        .get(userId, memoryId),
+    )
+  }
+
+  isDerivedMemorySuppressed(userId: string, memory: DerivedMemory): boolean {
+    return Boolean(
+      this.#database
+        .prepare(
+          `SELECT 1 FROM derived_memory_tombstones
+           WHERE user_id = ?
+             AND (memory_id = ? OR content_hash = ?
+               OR (source_run_id IS NOT NULL AND source_run_id = ?))
+           LIMIT 1`,
+        )
+        .get(
+          userId,
+          memory.id,
+          derivedMemoryContentHash(memory.text),
+          typeof memory.metadata.run_id === 'string'
+            ? memory.metadata.run_id
+            : null,
+        ),
+    )
+  }
+
+  tombstoneDerivedMemory(
+    userId: string,
+    memoryId: string,
+    reason: string,
+  ): void {
+    const now = this.#clock.now().toISOString()
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const memory = this.#database
+        .prepare(
+          `SELECT text, memory_type, metadata_json FROM derived_memory_cache
+           WHERE user_id = ? AND memory_id = ?`,
+        )
+        .get(userId, memoryId) as
+        | {
+            text: string
+            memory_type: DerivedMemory['type']
+            metadata_json: string
+          }
+        | undefined
+      const sourceRunId = memory
+        ? sourceRunIdFromMetadata(memory.metadata_json)
+        : null
+      this.#database
+        .prepare(
+          `INSERT INTO derived_memory_tombstones
+            (user_id, memory_id, reason, created_at, content_hash, source_run_id)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(user_id, memory_id) DO UPDATE SET
+             content_hash = COALESCE(
+               derived_memory_tombstones.content_hash,
+               excluded.content_hash
+             ),
+             source_run_id = COALESCE(
+               derived_memory_tombstones.source_run_id,
+               excluded.source_run_id
+             )`,
+        )
+        .run(
+          userId,
+          memoryId,
+          reason.slice(0, 500),
+          now,
+          memory ? derivedMemoryContentHash(memory.text) : null,
+          sourceRunId,
+        )
+      this.#database
+        .prepare(
+          `INSERT INTO derived_memory_curation_jobs
+            (id, user_id, memory_id, memory_type, reason, status,
+             created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)
+           ON CONFLICT(user_id, memory_id) DO NOTHING`,
+        )
+        .run(
+          randomUUID(),
+          userId,
+          memoryId,
+          memory?.memory_type ?? null,
+          reason.slice(0, 500),
+          now,
+          now,
+        )
+      this.#database
+        .prepare(
+          `DELETE FROM derived_memory_cache
+           WHERE user_id = ? AND memory_id = ?`,
+        )
+        .run(userId, memoryId)
+      this.#database.exec('COMMIT')
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  correctDerivedMemory(
+    userId: string,
+    memoryId: string,
+    input: { commandId: string; correction: string },
+  ): { memoryId: string; correctionJobId: string; status: 'pending' } {
+    const correction = input.correction.trim()
+    if (!input.commandId.trim()) throw new Error('commandId is required')
+    if (!correction) throw new Error('correction is required')
+    if (correction.length > 4_000)
+      throw new Error('correction must contain at most 4000 characters')
+    const fingerprint = createHash('sha256')
+      .update(JSON.stringify({ memoryId, correction }))
+      .digest('hex')
+    const now = this.#clock.now().toISOString()
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const replay = this.#database
+        .prepare(
+          `SELECT fingerprint, response_json
+           FROM derived_memory_correction_jobs
+           WHERE user_id = ? AND command_id = ?`,
+        )
+        .get(userId, input.commandId) as
+        { fingerprint: string; response_json: string } | undefined
+      if (replay) {
+        if (replay.fingerprint !== fingerprint)
+          throw new MemoryCommandConflictError()
+        this.#database.exec('COMMIT')
+        return JSON.parse(replay.response_json) as {
+          memoryId: string
+          correctionJobId: string
+          status: 'pending'
+        }
+      }
+      const memory = this.#database
+        .prepare(
+          `SELECT * FROM derived_memory_cache
+           WHERE user_id = ? AND memory_id = ?`,
+        )
+        .get(userId, memoryId) as unknown as DerivedMemoryCacheRow | undefined
+      if (!memory) throw new MemoryNotFoundError()
+      const jobId = randomUUID()
+      const response = {
+        memoryId,
+        correctionJobId: jobId,
+        status: 'pending' as const,
+      }
+      this.#database
+        .prepare(
+          `INSERT INTO derived_memory_tombstones
+            (user_id, memory_id, reason, created_at, content_hash, source_run_id)
+           VALUES (?, ?, 'Superseded by user correction', ?, ?, ?)
+           ON CONFLICT(user_id, memory_id) DO UPDATE SET
+             content_hash = excluded.content_hash,
+             source_run_id = COALESCE(
+               derived_memory_tombstones.source_run_id,
+               excluded.source_run_id
+             )`,
+        )
+        .run(
+          userId,
+          memoryId,
+          now,
+          derivedMemoryContentHash(memory.text),
+          sourceRunIdFromMetadata(memory.metadata_json),
+        )
+      this.#database
+        .prepare(
+          `DELETE FROM derived_memory_cache
+           WHERE user_id = ? AND memory_id = ?`,
+        )
+        .run(userId, memoryId)
+      this.#database
+        .prepare(
+          `INSERT INTO derived_memory_curation_jobs
+            (id, user_id, memory_id, memory_type, reason, status,
+             created_at, updated_at)
+           VALUES (?, ?, ?, ?, 'Superseded by a user correction', 'pending', ?, ?)
+           ON CONFLICT(user_id, memory_id) DO NOTHING`,
+        )
+        .run(randomUUID(), userId, memoryId, memory.memory_type, now, now)
+      this.#database
+        .prepare(
+          `INSERT INTO derived_memory_correction_jobs
+            (id, command_id, fingerprint, user_id, memory_id, memory_type,
+             replacement_text, tags_json, metadata_json, status,
+             response_json, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
+        )
+        .run(
+          jobId,
+          input.commandId,
+          fingerprint,
+          userId,
+          memoryId,
+          memory.memory_type,
+          correction,
+          memory.tags_json,
+          memory.metadata_json,
+          JSON.stringify(response),
+          now,
+          now,
+        )
+      this.#database.exec('COMMIT')
+      return response
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  #enqueueDerivedMemoryJob(
+    run: Run,
+    task: Task,
+    kind: DerivedMemoryJob['kind'],
+    outcome: string,
+    now: string,
+  ): void {
+    if (!this.#derivedMemoryEnabled || task.kind === 'conversation') return
+    const workingDirectory = run.executionContext.workspace
+    if (!workingDirectory) return
+    const content = derivedMemoryEvidence(run, task, kind, outcome)
+    this.#database
+      .prepare(
+        `INSERT INTO derived_memory_jobs
+          (id, user_id, task_id, run_id, kind, document_id, content,
+           working_directory, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+         ON CONFLICT(run_id, kind) DO NOTHING`,
+      )
+      .run(
+        randomUUID(),
+        task.userId,
+        task.id,
+        run.id,
+        kind,
+        `pegas:run:${run.id}`,
+        content,
+        workingDirectory,
+        now,
+        now,
+      )
   }
 
   #automationCommandReplay(
@@ -9571,6 +10833,13 @@ export class PegasStore {
           'Target Task completed before the context note was delivered.',
           now,
         )
+        this.#enqueueDerivedMemoryJob(
+          run,
+          task,
+          'run_success',
+          draft.summary,
+          now,
+        )
       } else if (draft.status === 'failed') {
         this.#database
           .prepare(
@@ -9578,6 +10847,13 @@ export class PegasStore {
              lease_until = NULL, last_error = ?, updated_at = ? WHERE id = ?`,
           )
           .run(draft.summary, now, runId)
+        this.#enqueueDerivedMemoryJob(
+          run,
+          task,
+          'run_failure',
+          draft.summary,
+          now,
+        )
         this.#database
           .prepare(
             `UPDATE tasks SET status = 'started', status_reason = 'last_run_failed',
@@ -11366,6 +12642,15 @@ export class PegasStore {
           now,
         )
       }
+      if (runStatus === 'completed') {
+        this.#enqueueDerivedMemoryJob(
+          run,
+          task,
+          'run_success',
+          result.output,
+          now,
+        )
+      }
       this.#database.exec('COMMIT')
     } catch (error) {
       this.#database.exec('ROLLBACK')
@@ -11582,6 +12867,12 @@ export class PegasStore {
                   }
                 : { type: 'run.failed', taskId: task.id, runId, error },
       })
+      // Infrastructure-shaped failures (provider outages, network errors,
+      // timeouts) say nothing reusable about the work itself. Keep them out
+      // of the experience bank so a transient blip cannot teach the Worker
+      // a false lesson; observed task failures still enqueue below.
+      if (!terminalProvider && !isInfrastructureFailureMessage(error))
+        this.#enqueueDerivedMemoryJob(run, task, 'run_failure', error, now)
       this.#database.exec('COMMIT')
     } catch (caught) {
       this.#database.exec('ROLLBACK')
@@ -14797,6 +16088,130 @@ function toMemoryRecord(row: MemoryRow): MemoryRecord {
     updatedAt: row.updated_at,
     ...(row.last_used_at ? { lastUsedAt: row.last_used_at } : {}),
   }
+}
+
+function toDerivedMemoryJob(row: DerivedMemoryJobRow): DerivedMemoryJob {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    taskId: row.task_id,
+    runId: row.run_id,
+    kind: row.kind,
+    documentId: row.document_id,
+    content: row.content,
+    workingDirectory: row.working_directory,
+    ...(row.provider_operation_id
+      ? { providerOperationId: row.provider_operation_id }
+      : {}),
+    attempts: row.attempts,
+    pollCount: row.poll_count,
+    errorAttempts: row.error_attempts,
+  }
+}
+
+function toDerivedMemoryCorrectionJob(
+  row: DerivedMemoryCorrectionJobRow,
+): DerivedMemoryCorrectionJob {
+  return {
+    id: row.id,
+    commandId: row.command_id,
+    userId: row.user_id,
+    memoryId: row.memory_id,
+    memoryType: row.memory_type,
+    replacementText: row.replacement_text,
+    tags: JSON.parse(row.tags_json) as string[],
+    metadata: JSON.parse(row.metadata_json) as Record<string, unknown>,
+    ...(row.provider_operation_id
+      ? { providerOperationId: row.provider_operation_id }
+      : {}),
+    attempts: row.attempts,
+    pollCount: row.poll_count,
+    errorAttempts: row.error_attempts,
+  }
+}
+
+function derivedMemoryContentHash(value: string): string {
+  const normalized = value.trim().replaceAll(/\s+/g, ' ').toLocaleLowerCase()
+  return createHash('sha256').update(normalized).digest('hex')
+}
+
+/**
+ * A failure caused by infrastructure carries no reusable lesson about the
+ * work itself. Provider credential/terminal errors are filtered separately
+ * via terminalProvider; this catches outages, network errors and timeouts.
+ */
+function isInfrastructureFailureMessage(message: string): boolean {
+  return (
+    /\b(fetch failed|ECONNREFUSED|ECONNRESET|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|EPIPE|socket hang up)\b/i.test(
+      message,
+    ) ||
+    /\b(timed? ?out|timeout)\b/i.test(message) ||
+    /Model provider returned 5\d\d\b/.test(message) ||
+    /\bHTTP 5\d\d\b/.test(message) ||
+    /\b(502|503|504)\b.*(bad gateway|service unavailable|gateway time)/i.test(
+      message,
+    )
+  )
+}
+
+function sourceRunIdFromMetadata(metadataJson: string): string | null {
+  try {
+    const metadata: unknown = JSON.parse(metadataJson)
+    if (
+      metadata &&
+      typeof metadata === 'object' &&
+      'run_id' in metadata &&
+      typeof metadata.run_id === 'string' &&
+      metadata.run_id.trim()
+    )
+      return metadata.run_id
+  } catch {
+    return null
+  }
+  return null
+}
+
+function derivedMemoryEvidence(
+  run: Run,
+  task: Task,
+  kind: DerivedMemoryJob['kind'],
+  outcome: string,
+): string {
+  const sections = [
+    `Task: ${task.title}`,
+    `Goal: ${task.goal}`,
+    `User request: ${run.input}`,
+    kind === 'run_success'
+      ? `Verified outcome: ${outcome}`
+      : `Observed failure: ${outcome}`,
+  ]
+  return redactDerivedMemoryEvidence(sections.join('\n')).slice(0, 12_000)
+}
+
+const derivedMemoryEvidenceMasker = new DeterministicPrivacyMasker({
+  hmacKey: 'pegas-derived-memory-evidence-redaction',
+})
+
+function redactDerivedMemoryEvidence(value: string): string {
+  const masked = derivedMemoryEvidenceMasker
+    .mask(value)
+    .text.replaceAll(/\bAKIA[0-9A-Z]{16}\b/g, '[REDACTED_CREDENTIAL]')
+    .replaceAll(
+      /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g,
+      '[REDACTED_CREDENTIAL]',
+    )
+    .replaceAll(
+      /\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@/gi,
+      '[REDACTED_CREDENTIAL]@',
+    )
+    .replaceAll(
+      /\b(?:api[_-]?key|token|password|secret)\s+(?:is\s+|=|:)\s*[^\s,;]{4,}/gi,
+      '[REDACTED_CREDENTIAL]',
+    )
+  return masked.replaceAll(
+    /\{\{[A-Z_]+_[A-Za-z0-9_-]{12,32}\}\}/g,
+    '[REDACTED_CREDENTIAL]',
+  )
 }
 
 function toWorkRuleRecord(row: WorkRuleRow): WorkRuleRecord {

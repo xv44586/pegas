@@ -35,6 +35,8 @@ import type {
   AutomationInvocation,
   ChannelSearchSort,
   DshModelCatalogItem,
+  DerivedMemoryRecord,
+  DerivedMemorySyncState,
   MemoryCategory,
   MemoryDraft,
   MemoryRecord,
@@ -3274,9 +3276,13 @@ export function MemoryPage({
   actions,
   channels,
   error,
+  derivedMemories,
+  derivedMemorySync,
   memories,
   onCreate,
   onDelete,
+  onDeleteDerived,
+  onCorrectDerived,
   onReload,
   onUpdate,
   truncated,
@@ -3284,9 +3290,16 @@ export function MemoryPage({
   actions: PageActions
   channels: WorkChannel[]
   error: string
+  derivedMemories?: DerivedMemoryRecord[]
+  derivedMemorySync?: DerivedMemorySyncState | null
   memories?: MemoryRecord[]
   onCreate: (draft: MemoryDraft) => Promise<void>
   onDelete: (memory: MemoryRecord) => Promise<void>
+  onDeleteDerived: (memory: DerivedMemoryRecord) => Promise<void>
+  onCorrectDerived: (
+    memory: DerivedMemoryRecord,
+    correction: string,
+  ) => Promise<void>
   onReload: () => void
   onUpdate: (memory: MemoryRecord, draft: MemoryDraft) => Promise<void>
   truncated: boolean
@@ -3297,15 +3310,33 @@ export function MemoryPage({
   >()
   const [busyId, setBusyId] = useState('')
   const [confirmDeleteId, setConfirmDeleteId] = useState<string>()
+  const [correctionMemory, setCorrectionMemory] =
+    useState<DerivedMemoryRecord>()
   const [actionError, setActionError] = useState('')
   const visible = (memories ?? []).filter(
     memory => filter === 'all' || memory.scope === filter,
   )
+  const visibleDerived =
+    filter === 'all' || filter === 'worker' ? (derivedMemories ?? []) : []
   async function runDelete(memory: MemoryRecord) {
     setBusyId(memory.id)
     setActionError('')
     try {
       await onDelete(memory)
+      setConfirmDeleteId(undefined)
+    } catch (caught) {
+      setActionError(
+        caught instanceof Error ? caught.message : '删除失败，请重试。',
+      )
+    } finally {
+      setBusyId('')
+    }
+  }
+  async function runDeleteDerived(memory: DerivedMemoryRecord) {
+    setBusyId(memory.id)
+    setActionError('')
+    try {
+      await onDeleteDerived(memory)
       setConfirmDeleteId(undefined)
     } catch (caught) {
       setActionError(
@@ -3380,18 +3411,36 @@ export function MemoryPage({
           {actionError}
         </div>
       )}
-      {!memories && !error && <p className="my-6 text-ink-2">正在读取记忆…</p>}
-      {memories && visible.length === 0 && !error && (
-        <EmptyCapability
-          icon={Layers3}
-          title={memories.length ? '该范围下还没有记忆' : '还没有记忆'}
-          description={
-            memories.length
-              ? '切换其他范围，或添加一条新的记忆。'
-              : '把偏好、事实或经验告诉 Pegas，它会带来源和作用范围保存。'
-          }
-        />
+      {derivedMemorySync?.status === 'failed' && (
+        <div
+          className="mb-4 flex items-center gap-2.5 rounded-card border border-line bg-surface px-3.5 py-2.5 text-[13px] text-ink-2"
+          role="status"
+        >
+          自动记忆同步暂时失败，当前展示的是最近一次成功同步的内容。后台会继续重试。
+        </div>
       )}
+      {(!memories || !derivedMemories) && !error && (
+        <p className="my-6 text-ink-2">正在读取记忆…</p>
+      )}
+      {memories &&
+        derivedMemories &&
+        visible.length === 0 &&
+        visibleDerived.length === 0 &&
+        !error && (
+          <EmptyCapability
+            icon={Layers3}
+            title={
+              memories.length || derivedMemories.length
+                ? '该范围下还没有记忆'
+                : '还没有记忆'
+            }
+            description={
+              memories.length || derivedMemories.length
+                ? '切换其他范围，或添加一条新的记忆。'
+                : 'Pegas 会在事情完成后自动沉淀经验；你也可以手动添加明确偏好。'
+            }
+          />
+        )}
       {memories && visible.length > 0 && (
         <section className="record-list mb-10" aria-label="记忆列表">
           {visible.map(memory => (
@@ -3477,6 +3526,68 @@ export function MemoryPage({
           ))}
         </section>
       )}
+      {derivedMemories && visibleDerived.length > 0 && (
+        <section className="record-list" aria-label="自动沉淀的记忆">
+          {visibleDerived.map(memory => (
+            <article key={`derived:${memory.id}`}>
+              <span className="record-icon is-active">
+                <Zap size={18} />
+              </span>
+              <div className="record-copy">
+                <strong>{memory.text}</strong>
+                <small className="record-meta">
+                  Worker · 自动沉淀 · {derivedMemoryTypeLabel(memory.type)}
+                </small>
+                <small className="record-meta">
+                  来源：Hindsight
+                  {typeof memory.metadata.task_id === 'string'
+                    ? ` · 事情 ${memory.metadata.task_id.slice(0, 8)}`
+                    : ''}
+                </small>
+              </div>
+              <div className="record-actions">
+                <button
+                  className="secondary-button"
+                  disabled={busyId === memory.id}
+                  onClick={() => setCorrectionMemory(memory)}
+                  type="button"
+                >
+                  纠正
+                </button>
+                {confirmDeleteId === memory.id ? (
+                  <>
+                    <button
+                      className="danger-button"
+                      disabled={busyId === memory.id}
+                      onClick={() => void runDeleteDerived(memory)}
+                      type="button"
+                    >
+                      确认删除
+                    </button>
+                    <button
+                      className="quiet-button"
+                      onClick={() => setConfirmDeleteId(undefined)}
+                      type="button"
+                    >
+                      保留
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    className="quiet-button"
+                    disabled={busyId === memory.id}
+                    onClick={() => setConfirmDeleteId(memory.id)}
+                    type="button"
+                  >
+                    <Trash2 size={15} />
+                    删除
+                  </button>
+                )}
+              </div>
+            </article>
+          ))}
+        </section>
+      )}
       {form && (
         <MemoryForm
           channels={channels}
@@ -3486,6 +3597,16 @@ export function MemoryPage({
             if (form.mode === 'edit') await onUpdate(form.memory, draft)
             else await onCreate(draft)
             setForm(undefined)
+          }}
+        />
+      )}
+      {correctionMemory && (
+        <DerivedMemoryCorrectionForm
+          memory={correctionMemory}
+          onCancel={() => setCorrectionMemory(undefined)}
+          onSubmit={async correction => {
+            await onCorrectDerived(correctionMemory, correction)
+            setCorrectionMemory(undefined)
           }}
         />
       )}
@@ -3515,6 +3636,110 @@ function memoryScopeLabel(scope: MemoryScope): string {
 
 function memoryCategoryLabel(category: MemoryCategory): string {
   return memoryCategories.find(item => item.id === category)?.label ?? category
+}
+
+function derivedMemoryTypeLabel(type: DerivedMemoryRecord['type']): string {
+  if (type === 'experience') return '经验'
+  if (type === 'observation') return '归纳'
+  return '事实'
+}
+
+function DerivedMemoryCorrectionForm({
+  memory,
+  onCancel,
+  onSubmit,
+}: {
+  memory: DerivedMemoryRecord
+  onCancel: () => void
+  onSubmit: (correction: string) => Promise<void>
+}) {
+  const [correction, setCorrection] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const dialogRef = useRef<HTMLElement>(null)
+  useEffect(() => {
+    dialogRef.current?.focus()
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onCancel()
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onCancel])
+  async function submit() {
+    if (saving) return
+    const next = correction.trim()
+    if (!next) {
+      setError('请写下正确内容。')
+      return
+    }
+    setSaving(true)
+    setError('')
+    try {
+      await onSubmit(next)
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '纠正失败，请重试。')
+    } finally {
+      setSaving(false)
+    }
+  }
+  return (
+    <div
+      className="modal-backdrop"
+      onMouseDown={event => event.target === event.currentTarget && onCancel()}
+    >
+      <section
+        aria-label="纠正自动记忆"
+        aria-modal="true"
+        className="command-dialog record-form"
+        ref={dialogRef}
+        role="dialog"
+        tabIndex={-1}
+      >
+        <header className="record-form-header">
+          <h2>纠正自动记忆</h2>
+          <button aria-label="关闭" onClick={onCancel} type="button">
+            <X size={18} />
+          </button>
+        </header>
+        <div className="record-form-body">
+          {error && (
+            <div className="page-error" role="alert">
+              {error}
+            </div>
+          )}
+          <p className="field-hint">原内容：{memory.text}</p>
+          <label className="field-label">
+            正确内容
+            <textarea
+              maxLength={4_000}
+              onChange={event => setCorrection(event.target.value)}
+              rows={3}
+              value={correction}
+            />
+          </label>
+          <p className="field-hint">
+            旧内容会立即停止注入；新内容由 Worker 在后台沉淀，不需要审批。
+          </p>
+        </div>
+        <footer className="record-form-footer">
+          <button className="quiet-button" onClick={onCancel} type="button">
+            取消
+          </button>
+          <button
+            className="primary-button"
+            disabled={saving}
+            onClick={() => void submit()}
+            type="button"
+          >
+            {saving ? '保存中…' : '保存纠正'}
+          </button>
+        </footer>
+      </section>
+    </div>
+  )
 }
 
 function automationStatusLabel(status: Automation['status']): string {

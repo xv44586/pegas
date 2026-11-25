@@ -858,6 +858,57 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         })
       }
       if (
+        taskResourceUrl.pathname === '/v1/derived-memories' &&
+        request.method === 'GET'
+      ) {
+        const userId = requiredQuery(taskResourceUrl, 'userId')
+        return sendJson(response, 200, {
+          memories: options.store.listDerivedMemories(userId),
+          sync: options.store.derivedMemorySyncState(userId) ?? null,
+        })
+      }
+      const derivedMemoryCorrectionMatch =
+        /^\/v1\/derived-memories\/([^/]+)\/correct$/.exec(
+          taskResourceUrl.pathname,
+        )
+      if (derivedMemoryCorrectionMatch && request.method === 'POST') {
+        const input = await readJson(request)
+        if (
+          !isRecord(input) ||
+          typeof input.userId !== 'string' ||
+          typeof input.commandId !== 'string' ||
+          typeof input.correction !== 'string'
+        )
+          throw new Error('userId, commandId and correction are required')
+        const memoryId = decodeURIComponent(
+          derivedMemoryCorrectionMatch[1] ?? '',
+        )
+        const correction = options.store.correctDerivedMemory(
+          input.userId,
+          memoryId,
+          { commandId: input.commandId, correction: input.correction },
+        )
+        return sendJson(response, 202, { correction })
+      }
+      const derivedMemoryDeleteMatch =
+        /^\/v1\/derived-memories\/([^/]+)\/delete$/.exec(
+          taskResourceUrl.pathname,
+        )
+      if (derivedMemoryDeleteMatch && request.method === 'POST') {
+        const input = await readJson(request)
+        if (!isRecord(input) || typeof input.userId !== 'string')
+          throw new Error('userId is required')
+        const memoryId = decodeURIComponent(derivedMemoryDeleteMatch[1] ?? '')
+        const reason =
+          typeof input.reason === 'string' && input.reason.trim()
+            ? input.reason.trim()
+            : 'Deleted by user'
+        options.store.tombstoneDerivedMemory(input.userId, memoryId, reason)
+        return sendJson(response, 200, {
+          deletion: { id: memoryId, deleted: true },
+        })
+      }
+      if (
         taskResourceUrl.pathname === '/v1/memories' &&
         request.method === 'POST'
       ) {

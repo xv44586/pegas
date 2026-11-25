@@ -12,6 +12,13 @@ import {
   type ThinkingSummarizer,
 } from '../activity/thinking-summary.js'
 import type { RunExecutor, ToolApprovalGrant } from '../executor/executor.js'
+import type {
+  DerivedMemoryBrowseService,
+  DerivedMemoryCorrectionService,
+  DerivedMemoryCurationService,
+  DerivedMemoryRecallService,
+  DerivedMemoryRetainService,
+} from '../memory/derived-memory.js'
 import type { Logger } from '../observability/logger.js'
 import type { MetricsRegistry } from '../observability/metrics.js'
 import type { TaskRouter } from '../router/router.js'
@@ -816,6 +823,7 @@ export async function executeClaimedRun(
   collectSubagents?: SubagentTranscriptCollector,
   thinkingSummarizer?: ThinkingSummarizerFactory,
   collectRootOutcomes?: RootToolOutcomeCollector,
+  derivedMemory?: DerivedMemoryRecallService,
 ): Promise<void> {
   const runStartedAt = performance.now()
   const observeRun = (outcome: string) => {
@@ -918,10 +926,73 @@ export async function executeClaimedRun(
   let result
   try {
     const inputEventId = store.resolveRunInputEventId(claimed.run.id)
-    const memories = store.memoryContextEntriesForTask(
+    const explicitMemories = store.memoryContextEntriesForTask(
       claimed.task.userId,
       claimed.task.id,
     )
+    let derivedMemories = [] as Awaited<
+      ReturnType<DerivedMemoryRecallService['recall']>
+    >['entries']
+    if (derivedMemory) {
+      try {
+        const recalled = await derivedMemory.recall({
+          userId: claimed.task.userId,
+          taskId: claimed.task.id,
+          runId: claimed.run.id,
+          query: [claimed.task.title, claimed.task.goal, claimed.run.input]
+            .filter(Boolean)
+            .join('\n'),
+          workingDirectory: runExecutionWorkspace(
+            claimed.run,
+            workingDirectory,
+          ),
+        })
+        const suppressed = recalled.memories.filter(memory =>
+          store.isDerivedMemorySuppressed(claimed.task.userId, memory),
+        )
+        const activeIds = new Set(
+          recalled.memories
+            .filter(memory => !suppressed.includes(memory))
+            .map(memory => memory.id),
+        )
+        const activeMemories = recalled.memories.filter(memory =>
+          activeIds.has(memory.id),
+        )
+        const activeEntries = recalled.entries.filter(memory =>
+          activeIds.has(memory.id),
+        )
+        store.recordDerivedMemoryRecall(
+          claimed.run.id,
+          claimed.task.userId,
+          activeMemories,
+          [
+            ...(recalled.audit ??
+              recalled.memories.map(memory => ({
+                memoryId: memory.id,
+                stage: 'retrieved' as const,
+                ...(memory.score === undefined ? {} : { score: memory.score }),
+              }))),
+            ...suppressed.map(memory => ({
+              memoryId: memory.id,
+              stage: 'filtered' as const,
+              reason: 'local_tombstone' as const,
+              ...(memory.score === undefined ? {} : { score: memory.score }),
+            })),
+          ],
+        )
+        derivedMemories = activeEntries
+      } catch (error) {
+        telemetry?.logger?.warn('memory.recall_failed_open', {
+          runId: claimed.run.id,
+          error: error instanceof Error ? error.message : String(error),
+        })
+        telemetry?.metrics?.increment('pegas_errors_total', {
+          component: 'memory',
+          kind: 'recall',
+        })
+      }
+    }
+    const memories = [...explicitMemories, ...derivedMemories]
     const workRules = store.workRuleContextForUser(claimed.task.userId)
     const toolApprovalGrant = resolveToolApprovalGrant(store, claimed)
     result = await executor.execute({
@@ -1188,6 +1259,217 @@ export async function executeClaimedRun(
       ],
     })
   }
+}
+
+const MAX_MEMORY_OPERATION_POLLS = 600
+
+export async function processNextDerivedMemoryJob(
+  store: PegasStore,
+  service: DerivedMemoryRetainService,
+  workerId: string,
+  telemetry?: { logger?: Logger; metrics?: MetricsRegistry },
+): Promise<boolean> {
+  const job = store.claimNextDerivedMemoryJob(workerId, 30_000)
+  if (!job) return false
+  try {
+    if (!job.providerOperationId) {
+      const operationId = await service.submit(job)
+      store.markDerivedMemoryJobSubmitted(job.id, workerId, operationId)
+      return true
+    }
+    if (job.pollCount > MAX_MEMORY_OPERATION_POLLS) {
+      store.failDerivedMemoryJob(
+        job.id,
+        workerId,
+        `Hindsight operation did not settle within ${String(MAX_MEMORY_OPERATION_POLLS)} polls`,
+      )
+      telemetry?.metrics?.increment('pegas_errors_total', {
+        component: 'memory',
+        kind: 'retain_poll_budget',
+      })
+      return true
+    }
+    const operation = await service.operationStatus(job)
+    if (operation.status === 'completed') {
+      store.completeDerivedMemoryJob(job.id, workerId)
+      return true
+    }
+    if (operation.status === 'failed' || operation.status === 'cancelled') {
+      store.failDerivedMemoryJob(
+        job.id,
+        workerId,
+        operation.error ?? `Hindsight operation ${operation.status}`,
+      )
+      telemetry?.metrics?.increment('pegas_errors_total', {
+        component: 'memory',
+        kind: 'retain_terminal',
+      })
+      return true
+    }
+    store.retryDerivedMemoryJob(job.id, workerId, operation.status, 1_000, {
+      clearError: true,
+    })
+    return true
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (job.errorAttempts >= 8)
+      store.failDerivedMemoryJob(job.id, workerId, message)
+    else {
+      const retryAfterMs = Math.min(60_000, 500 * 2 ** (job.errorAttempts - 1))
+      store.retryDerivedMemoryJob(job.id, workerId, message, retryAfterMs)
+    }
+    telemetry?.logger?.warn('memory.retain_retry', {
+      jobId: job.id,
+      attempts: job.errorAttempts,
+      error: message,
+    })
+    telemetry?.metrics?.increment('pegas_errors_total', {
+      component: 'memory',
+      kind: 'retain',
+    })
+    return true
+  }
+}
+
+export async function processNextDerivedMemoryCurationJob(
+  store: PegasStore,
+  service: DerivedMemoryCurationService,
+  workerId: string,
+  telemetry?: { logger?: Logger; metrics?: MetricsRegistry },
+): Promise<boolean> {
+  const job = store.claimNextDerivedMemoryCurationJob(workerId, 30_000)
+  if (!job) return false
+  try {
+    await service.invalidate(job)
+    store.completeDerivedMemoryCurationJob(job.id, workerId)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (job.attempts >= 8)
+      store.failDerivedMemoryCurationJob(job.id, workerId, message)
+    else {
+      const retryAfterMs = Math.min(60_000, 500 * 2 ** (job.attempts - 1))
+      store.retryDerivedMemoryCurationJob(
+        job.id,
+        workerId,
+        message,
+        retryAfterMs,
+      )
+    }
+    telemetry?.logger?.warn('memory.curation_retry', {
+      jobId: job.id,
+      attempts: job.attempts,
+      error: message,
+    })
+    telemetry?.metrics?.increment('pegas_errors_total', {
+      component: 'memory',
+      kind: 'curation',
+    })
+  }
+  return true
+}
+
+export async function processNextDerivedMemoryCorrectionJob(
+  store: PegasStore,
+  service: DerivedMemoryCorrectionService,
+  workerId: string,
+  telemetry?: { logger?: Logger; metrics?: MetricsRegistry },
+): Promise<boolean> {
+  const job = store.claimNextDerivedMemoryCorrectionJob(workerId, 30_000)
+  if (!job) return false
+  try {
+    if (!job.providerOperationId) {
+      const operationId = await service.submitCorrection(job)
+      store.markDerivedMemoryCorrectionSubmitted(job.id, workerId, operationId)
+      return true
+    }
+    if (job.pollCount > MAX_MEMORY_OPERATION_POLLS) {
+      store.failDerivedMemoryCorrectionJob(
+        job.id,
+        workerId,
+        `Hindsight correction did not settle within ${String(MAX_MEMORY_OPERATION_POLLS)} polls`,
+      )
+      telemetry?.metrics?.increment('pegas_errors_total', {
+        component: 'memory',
+        kind: 'correction_poll_budget',
+      })
+      return true
+    }
+    const operation = await service.correctionStatus(job)
+    if (operation.status === 'completed') {
+      store.completeDerivedMemoryCorrectionJob(job.id, workerId)
+      return true
+    }
+    if (operation.status === 'failed' || operation.status === 'cancelled') {
+      store.failDerivedMemoryCorrectionJob(
+        job.id,
+        workerId,
+        operation.error ?? `Hindsight operation ${operation.status}`,
+      )
+      telemetry?.metrics?.increment('pegas_errors_total', {
+        component: 'memory',
+        kind: 'correction_terminal',
+      })
+      return true
+    }
+    store.retryDerivedMemoryCorrectionJob(
+      job.id,
+      workerId,
+      operation.status,
+      1_000,
+      { clearError: true },
+    )
+    return true
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (job.errorAttempts >= 8)
+      store.failDerivedMemoryCorrectionJob(job.id, workerId, message)
+    else {
+      const retryAfterMs = Math.min(60_000, 500 * 2 ** (job.errorAttempts - 1))
+      store.retryDerivedMemoryCorrectionJob(
+        job.id,
+        workerId,
+        message,
+        retryAfterMs,
+      )
+    }
+    telemetry?.logger?.warn('memory.correction_retry', {
+      jobId: job.id,
+      attempts: job.errorAttempts,
+      error: message,
+    })
+    telemetry?.metrics?.increment('pegas_errors_total', {
+      component: 'memory',
+      kind: 'correction',
+    })
+    return true
+  }
+}
+
+export async function synchronizeDerivedMemories(
+  store: PegasStore,
+  service: DerivedMemoryBrowseService,
+  telemetry?: { logger?: Logger; metrics?: MetricsRegistry },
+): Promise<number> {
+  let synchronized = 0
+  for (const userId of store.listDerivedMemoryUsers()) {
+    try {
+      const memories = await service.list(userId)
+      store.replaceDerivedMemoryCache(userId, memories)
+      synchronized += 1
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      store.failDerivedMemorySync(userId, message)
+      telemetry?.logger?.warn('memory.sync_failed_open', {
+        userId,
+        error: message,
+      })
+      telemetry?.metrics?.increment('pegas_errors_total', {
+        component: 'memory',
+        kind: 'sync',
+      })
+    }
+  }
+  return synchronized
 }
 
 function collectSubagentTranscripts(
