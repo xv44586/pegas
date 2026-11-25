@@ -368,11 +368,12 @@
 - Why：DESKTOP-001 PR #91 首次 CI 中既有 EXEC-005 chat lane 开关用例失败（第二次保存后 `savedBody.chatLaneEnabled` 仍为 true）：本地隔离与整文件复跑全绿，CI 慢 runner 上第二次点击与 notice 清除之间存在可观察窗口；隔离复跑 CI 即绿，确认为测试断言竞态而非产品缺陷（保存按钮 `disabled={saving}` 语义正确）。
 - Feature：EXEC-005（用例归属）；DESKTOP-001（观察现场）
 - Evidence：PR #91 CI run 45401147747 首次 attempt 失败日志（App.test.tsx:1047）与同 run 隔离复跑 success；`web/src/sealed/SettingsPage.tsx` save() 的 `setSaving(true)`/`setNotice(undefined)` 同一同步块。
-- Seen：1（2026-11-24）
+- Seen：2（2026-11-24、2026-11-25）
 - Severity：normal
 - Status：Observed
 - Enforcement：尚未晋升；修复归属 EXEC-005（本 PR 不改无关用例）。再次出现同类「复用旧成功提示」竞态时按同类计数；晋升时给连续保存断言加请求次数绑定的测试规约或 lint。
 - Owner / next action：EXEC-005 下次触碰该用例时改为绑定第二次 PUT 证据；已知 flaky 清单同 dsh SIGTERM 计时用例并列。
+- 第二次观察（2026-11-25）：MEMORY-001 M3 合入 main 后首跑 CI run 45548014723 失败于 `web/src/App.test.tsx`「clears the saved notice when the draft is edited again or cancelled」（同类保存提示清除竞态，MEMORY-001 未触碰该用例）；同代码 PR head CI run 45545266063 与后续 main CI run 45548738121、45549354710 均 success。仍差一个独立日期即满足三次晋升条件；用例修复归属 EXEC-005。
 
 ### LESSON-20261124-03：真实子进程行为超时不能兼任进程启动就绪预算
 
