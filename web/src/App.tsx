@@ -1205,7 +1205,7 @@ export function App() {
     )
     const restored = await restoreAttentionDrawer(message, requestId)
     if (!restored) return
-    const board = attentionBoard(data.snapshot.messages)
+    const board = attentionBoard(data.snapshot.messages, data.snapshot.channels)
     const group = message.taskId
       ? [...board.failed, ...board.activity].find(
           candidate => candidate.taskId === message.taskId,
@@ -1425,7 +1425,10 @@ export function App() {
     return message
   }
 
-  const attentionTodoCount = attentionBoard(data.snapshot.messages).todo.length
+  const attentionTodoCount = attentionBoard(
+    data.snapshot.messages,
+    data.snapshot.channels,
+  ).todo.length
   const selectedAgentProvider =
     data.settings?.settings.agentModelMode === 'override'
       ? data.settings.settings.agentModelProvider
@@ -1505,6 +1508,7 @@ export function App() {
             speechEnabled={
               data.settings?.speech?.provider === 'openai-compatible'
             }
+            snapshotReady={snapshotLoaded}
             snapshot={data.snapshot}
           />
         )}

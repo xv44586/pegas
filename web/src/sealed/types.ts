@@ -457,14 +457,38 @@ function groupAttentionMessages(
   return result
 }
 
+export function isHistoricalWorkWait(
+  message: OutboxMessage,
+  channel: WorkChannel | undefined,
+): boolean {
+  if (!channel?.workflow) return false
+  const state = payloadType(message.payload)
+  const wait =
+    state === 'goal.clarification_required' ||
+    state === 'input.required' ||
+    state === 'input.requested' ||
+    state === 'run.waiting' ||
+    state === 'run.blocked' ||
+    state === 'goal.evidence_required' ||
+    state === 'goal.report_required'
+  return wait && channel.workflow.attentionMessageId !== message.id
+}
+
 export function attentionBoard(
   messages: readonly OutboxMessage[],
+  channels: readonly WorkChannel[] = [],
 ): AttentionBoard {
   const unresolved = unresolvedAttentionMessages(messages)
   const todo: OutboxMessage[] = []
   const failed: OutboxMessage[] = []
   const activity: OutboxMessage[] = []
+  const channelById = new Map(channels.map(channel => [channel.id, channel]))
   for (const message of unresolved) {
+    if (
+      message.taskId &&
+      isHistoricalWorkWait(message, channelById.get(message.taskId))
+    )
+      continue
     const section = attentionSection(message)
     if (section === 'todo') todo.push(message)
     else if (section === 'failed') failed.push(message)
@@ -845,6 +869,8 @@ const workflowLabels: Record<
 export function statusLabel(channel: WorkChannel, run?: Run): string {
   if (channel.workflow) return workflowLabels[channel.workflow.state]
   if (channel.status === 'cancelled') return '已归档'
+  if (run?.status === 'queued') return '进行中'
+  if (run?.status === 'cancelled') return '已归档'
   if (run) return runStatusLabel(run)
   return channel.status === 'completed' ? '已完成' : '等待中'
 }
@@ -856,11 +882,16 @@ export function runStatusLabel(run: Run): string {
     case 'waiting':
       return '等待中'
     case 'running':
-    case 'queued':
       return '进行中'
+    case 'queued':
+      return '排队中'
     case 'completed':
       return '已完成'
     case 'cancelled':
-      return '已归档'
+      return run.lastError === 'stopped_by_user'
+        ? '已停止'
+        : run.lastError?.startsWith('superseded')
+          ? '已替换'
+          : '已取消'
   }
 }

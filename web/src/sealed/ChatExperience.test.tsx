@@ -671,7 +671,7 @@ describe('DESIGN-003 chat page', () => {
 
   it('lets the user edit or delete a queued message before it sends', async () => {
     installChatFetch(baseSnapshot)
-    render(<App />)
+    const first = render(<App />)
     fireEvent.click(
       await screen.findByRole('button', { name: /整理季度数据.*进行中/ }),
     )
@@ -679,8 +679,16 @@ describe('DESIGN-003 chat page', () => {
       await screen.findByLabelText<HTMLTextAreaElement>('给 Pegas 发消息')
     fireEvent.change(composer, { target: { value: '第一条排队' } })
     fireEvent.click(await screen.findByRole('button', { name: '排队' }))
-    fireEvent.click(screen.getByRole('button', { name: '编辑排队消息 1' }))
-    expect(composer.value).toBe('第一条排队')
+    first.unmount()
+    render(<App />)
+    fireEvent.click(
+      await screen.findByRole('button', { name: '编辑排队消息 1' }),
+    )
+    expect(screen.getByLabelText('给 Pegas 发消息')).toHaveProperty(
+      'value',
+      '第一条排队',
+    )
+    expect(screen.getByText(/继续事情：/)).toBeTruthy()
     expect(screen.queryByLabelText('排队消息')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '排队' }))
     fireEvent.click(screen.getByRole('button', { name: '删除排队消息 1' }))

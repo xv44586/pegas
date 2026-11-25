@@ -100,6 +100,7 @@ import {
   formatRunDuration,
   hasActiveAutomationFact,
   isReconciliationMessage,
+  isHistoricalWorkWait,
   isResolvedDecisionMessage,
   isSilentConversationMessage,
   isStreamingSayMessage,
@@ -171,6 +172,7 @@ function PageHeader({
 export function ConversationPage({
   api,
   snapshot,
+  snapshotReady = true,
   actions,
   onSent,
   models,
@@ -189,6 +191,7 @@ export function ConversationPage({
 }: {
   api: PegasApi
   snapshot: Snapshot
+  snapshotReady?: boolean
   actions: PageActions
   onSent: () => Promise<void>
   models: DshModelCatalogItem[]
@@ -226,7 +229,7 @@ export function ConversationPage({
   const chatScroll = useChatScroll()
   const [copiedMessageId, setCopiedMessageId] = useState<string>()
   const [retryingMessageId, setRetryingMessageId] = useState<string>()
-  const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([])
+  const [queuedMessages, setQueuedMessages] = useState(readQueuedMessages)
   const [stopTarget, setStopTarget] = useState<WorkChannel>()
   const [stopping, setStopping] = useState(false)
   const previousPegasIdsRef = useRef<Set<string>>(new Set())
@@ -270,7 +273,9 @@ export function ConversationPage({
           review: reviewProjection(message),
           lane: conversationLane(message),
           anchor: conversationAnchor(message),
-          resolved: isResolvedDecisionMessage(message, snapshot.messages),
+          resolved:
+            isHistoricalWorkWait(message, channel) ||
+            isResolvedDecisionMessage(message, snapshot.messages),
           streaming: isStreamingSayMessage(message),
           source: message,
         }
@@ -453,7 +458,20 @@ export function ConversationPage({
   }
 
   useEffect(() => {
-    if (sending || dictationBusy) return
+    try {
+      if (queuedMessages.length)
+        sessionStorage.setItem(
+          queuedMessagesStorageKey,
+          JSON.stringify(queuedMessages),
+        )
+      else sessionStorage.removeItem(queuedMessagesStorageKey)
+    } catch {
+      // Storage restrictions limit queued drafts to the current page.
+    }
+  }, [queuedMessages])
+
+  useEffect(() => {
+    if (!snapshotReady || sending || dictationBusy) return
     const next = queuedMessages[0]
     if (!next || next.error) return
     const channel = snapshot.channels.find(item => item.id === next.channel.id)
@@ -464,10 +482,16 @@ export function ConversationPage({
         ),
       )
     }
-    if (!channel || channel.status === 'cancelled') {
+    if (
+      !channel ||
+      channel.status === 'cancelled' ||
+      (channel.status === 'completed' &&
+        channel.workflow &&
+        channel.workflow.state !== 'delivered')
+    ) {
       markFailure(
         channel
-          ? '原事情已停止，稿件已保留。'
+          ? '原事情已关闭，稿件已保留。'
           : '暂时读取不到原事情，稿件已保留。',
       )
       return
@@ -499,6 +523,7 @@ export function ConversationPage({
     queuedMessages,
     sending,
     dictationBusy,
+    snapshotReady,
     snapshot.channels,
     snapshot.runs,
     api,
@@ -994,84 +1019,87 @@ export function ConversationPage({
           </div>
         )}
         {queuedMessages.length > 0 && (
-          <ol
-            aria-label="排队消息"
-            className="composer-queue mx-auto mb-2 grid w-full max-w-[1040px] gap-1.5"
-          >
-            {queuedMessages.map((item, index) => (
-              <li
-                className="flex min-h-9 items-center gap-2 rounded-card bg-surface px-2 py-1 text-[13px] shadow-hairline"
-                key={item.id}
-              >
-                <span
-                  className="composer-queue-preview min-w-0 flex-1 truncate text-ink-2"
-                  title={item.text}
+          <div className="mx-auto mb-2 max-w-[1040px]">
+            <p className="mb-1 text-[12px] text-ink-2">本标签页待发</p>
+            <ol
+              aria-label="排队消息"
+              className="composer-queue mx-auto mb-2 grid w-full max-w-[1040px] gap-1.5"
+            >
+              {queuedMessages.map((item, index) => (
+                <li
+                  className="flex min-h-9 items-center gap-2 rounded-card bg-surface px-2 py-1 text-[13px] shadow-hairline"
+                  key={item.id}
                 >
-                  <strong className="mr-2">{item.channel.title}</strong>
-                  {item.text}
+                  <span
+                    className="composer-queue-preview min-w-0 flex-1 truncate text-ink-2"
+                    title={item.text}
+                  >
+                    <strong className="mr-2">{item.channel.title}</strong>
+                    {item.text}
+                    {item.error && (
+                      <small
+                        className="block whitespace-normal text-red-text"
+                        role="alert"
+                      >
+                        {item.error}
+                      </small>
+                    )}
+                  </span>
                   {item.error && (
-                    <small
-                      className="block whitespace-normal text-red-text"
-                      role="alert"
+                    <Button
+                      disabled={sending || dictationBusy}
+                      onClick={() =>
+                        setQueuedMessages(current =>
+                          current.map(entry =>
+                            entry.id === item.id
+                              ? { ...entry, error: undefined }
+                              : entry,
+                          ),
+                        )
+                      }
+                      size="xs"
+                      type="button"
+                      variant="quiet"
                     >
-                      {item.error}
-                    </small>
+                      重试发送
+                    </Button>
                   )}
-                </span>
-                {item.error && (
                   <Button
-                    disabled={sending || dictationBusy}
+                    aria-label={`编辑排队消息 ${String(index + 1)}`}
+                    disabled={Boolean(draft.trim()) || sending || dictationBusy}
+                    onClick={() => {
+                      setQueuedMessages(current =>
+                        current.filter(entry => entry.id !== item.id),
+                      )
+                      onTargetChange({ kind: 'task', channel: item.channel })
+                      onDraftChange(item.text)
+                      composerInputRef.current?.focus()
+                    }}
+                    size="xs"
+                    type="button"
+                    variant="quiet"
+                  >
+                    编辑
+                  </Button>
+                  <Button
+                    aria-label={`删除排队消息 ${String(index + 1)}`}
+                    className="w-7 px-0"
+                    disabled={sending}
                     onClick={() =>
                       setQueuedMessages(current =>
-                        current.map(entry =>
-                          entry.id === item.id
-                            ? { ...entry, error: undefined }
-                            : entry,
-                        ),
+                        current.filter(entry => entry.id !== item.id),
                       )
                     }
                     size="xs"
                     type="button"
                     variant="quiet"
                   >
-                    重试发送
+                    <Trash2 size={14} />
                   </Button>
-                )}
-                <Button
-                  aria-label={`编辑排队消息 ${String(index + 1)}`}
-                  disabled={Boolean(draft.trim()) || sending || dictationBusy}
-                  onClick={() => {
-                    setQueuedMessages(current =>
-                      current.filter(entry => entry.id !== item.id),
-                    )
-                    onTargetChange({ kind: 'task', channel: item.channel })
-                    onDraftChange(item.text)
-                    composerInputRef.current?.focus()
-                  }}
-                  size="xs"
-                  type="button"
-                  variant="quiet"
-                >
-                  编辑
-                </Button>
-                <Button
-                  aria-label={`删除排队消息 ${String(index + 1)}`}
-                  className="w-7 px-0"
-                  disabled={sending}
-                  onClick={() =>
-                    setQueuedMessages(current =>
-                      current.filter(entry => entry.id !== item.id),
-                    )
-                  }
-                  size="xs"
-                  type="button"
-                  variant="quiet"
-                >
-                  <Trash2 size={14} />
-                </Button>
-              </li>
-            ))}
-          </ol>
+                </li>
+              ))}
+            </ol>
+          </div>
         )}
         {error && (
           <div
@@ -1425,6 +1453,29 @@ interface QueuedMessage {
   text: string
   channel: WorkChannel
   error?: string
+}
+
+const queuedMessagesStorageKey = 'pegas-queued-messages'
+
+function readQueuedMessages(): QueuedMessage[] {
+  try {
+    const stored: unknown = JSON.parse(
+      sessionStorage.getItem(queuedMessagesStorageKey) ?? '[]',
+    )
+    if (!Array.isArray(stored)) return []
+    return (stored as unknown[]).filter((item): item is QueuedMessage => {
+      if (!item || typeof item !== 'object') return false
+      const value = item as Partial<QueuedMessage>
+      return (
+        typeof value.id === 'string' &&
+        typeof value.text === 'string' &&
+        typeof value.channel?.id === 'string' &&
+        typeof value.channel.title === 'string'
+      )
+    })
+  } catch {
+    return []
+  }
 }
 
 interface FactCardMessage {
@@ -2258,7 +2309,7 @@ export function AttentionPage({
   const [page, setPage] = useState(1)
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
   const [showAll, setShowAll] = useState<ReadonlySet<string>>(new Set())
-  const board = attentionBoard(snapshot.messages)
+  const board = attentionBoard(snapshot.messages, snapshot.channels)
   const normalizedQuery = query.trim().toLocaleLowerCase()
   function matchesQuery(message: OutboxMessage): boolean {
     if (!normalizedQuery) return true
