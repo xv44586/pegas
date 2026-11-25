@@ -233,14 +233,16 @@ describe('createDshModelConfiguration', () => {
     }
   })
 
-  it('omits key environment entries for connections without credentials', () => {
+  it('authenticates keyless routes at the DSH boundary without filling a required key', () => {
     const configuration = createDshModelConfiguration({
-      connections: [connection()],
+      connections: [connection(), connection({ id: 'openai', name: 'OpenAI' })],
       vault,
       agentModel: { provider: 'magpie', model: 'gateway/model-a' },
     })
     try {
-      expect(configuration.environment).toEqual({})
+      expect(configuration.environment).toEqual({
+        PEGAS_DSH_MODEL_KEY_MAGPIE: 'pegas-anonymous',
+      })
       const entries = JSON.parse(
         readFileSync(configuration.patchPath, 'utf8'),
       ) as { id: string; config: Record<string, unknown> }[]
@@ -248,10 +250,13 @@ describe('createDshModelConfiguration', () => {
         string,
         Record<string, unknown>
       >
-      expect(providers.magpie).not.toHaveProperty('apiKeyEnv')
       expect(providers.magpie).toMatchObject({
         api: 'openai-completions',
         baseURL: 'http://127.0.0.1:3425/v1',
+        apiKeyEnv: 'PEGAS_DSH_MODEL_KEY_MAGPIE',
+      })
+      expect(providers.openai).toMatchObject({
+        apiKeyEnv: 'PEGAS_DSH_MODEL_KEY_OPENAI',
       })
     } finally {
       configuration.remove()

@@ -335,6 +335,17 @@ describe('WORKER-002 terminal provider errors', () => {
     ).toBe(true)
     expect(isTerminalProviderError('Missing API key for OpenAI')).toBe(true)
     expect(
+      isTerminalProviderError(
+        'dsh: all_proxy names a SOCKS proxy, connecting directly\ndsh: PI_AI_ERROR: No API key for provider: magpie',
+      ),
+    ).toBe(true)
+    expect(
+      isTerminalProviderError('dsh: no credential for provider route "openai"'),
+    ).toBe(true)
+    expect(isTerminalProviderError('dsh: all_proxy names a SOCKS proxy')).toBe(
+      false,
+    )
+    expect(
       isTerminalProviderError('Model provider returned 429: rate limited'),
     ).toBe(false)
     expect(
@@ -344,7 +355,7 @@ describe('WORKER-002 terminal provider errors', () => {
     expect(isTerminalProviderError('fetch failed')).toBe(false)
   })
 
-  it('parks the Task on first terminal failure without a retry successor', async () => {
+  it('parks the Task on the first DSH credential failure without a retry successor', async () => {
     const store = new PegasStore(':memory:')
     initialize(store)
     const { task } = seedTask(store, '调用坏密钥的模型')
@@ -354,7 +365,7 @@ describe('WORKER-002 terminal provider errors', () => {
       name: 'echo-test',
       execute: () =>
         Promise.reject(
-          new Error('Model provider returned 401: invalid_api_key'),
+          new Error('dsh: PI_AI_ERROR: No API key for provider: magpie'),
         ),
     }
     await executeClaimedRun(

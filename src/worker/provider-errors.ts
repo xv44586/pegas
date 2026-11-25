@@ -12,7 +12,9 @@ export function isTerminalProviderError(message: string): boolean {
       message,
     ) ||
     /model.*(not found|does not exist|unknown model)/i.test(message) ||
-    /Missing API key for/i.test(message) ||
+    /Missing API key for|No API key for provider:|no credential for provider route/i.test(
+      message,
+    ) ||
     /invalid_api_key|authentication_error|permission_error|model_not_found/i.test(
       message,
     )
