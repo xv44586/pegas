@@ -48,5 +48,9 @@ export function sameExecutionContext(
     ...Object.keys(leftRecord),
     ...Object.keys(rightRecord),
   ])
-  return [...keys].every(key => leftRecord[key] === rightRecord[key])
+  // The global revision also changes for settings used only outside execution.
+  // The resolved model, workspace, permissions and profile still have to match.
+  return [...keys].every(
+    key => key === 'settingsRevision' || leftRecord[key] === rightRecord[key],
+  )
 }

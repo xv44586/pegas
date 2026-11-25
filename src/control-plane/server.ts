@@ -9,6 +9,7 @@ import {
 } from 'node:http'
 import { extname, resolve, sep } from 'node:path'
 
+import { replyReference } from '../conversation/projection.js'
 import { projectWorkChannel } from '../channel/work-channel.js'
 import { spillBodyForGap } from '../activity/tool-semantics.js'
 import { isWorkerIconId, type WorkerIconId } from '../brand/agent-icon.js'
@@ -732,36 +733,7 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
       if (request.url === '/v1/events' && request.method === 'POST') {
         const body = await readJson(request)
         const input = parseNewInboxEvent(body)
-        const taskId = explicitTaskId(input)
-        if (taskId) {
-          const task = options.store.findTask(taskId, input.userId)
-          if (!task) throw new Error(`Task ${taskId} does not exist for user`)
-          if (task.status === 'cancelled')
-            throw new Error('Task was stopped by the user')
-          if (explicitSteerIntent(input)) {
-            if (task.status !== 'started')
-              throw new Error(
-                'Steering requires a started task; queue the message instead',
-              )
-            const activeRun = options.store
-              .listRunsForUser(input.userId, taskId)
-              .some(run => run.status === 'queued' || run.status === 'running')
-            if (!activeRun)
-              throw new Error(
-                'Steering requires a queued or running Run; queue the message instead',
-              )
-          }
-        }
-        const sourceTaskId = sourceContextTaskId(input)
-        if (sourceTaskId) {
-          const source = options.store.findTask(sourceTaskId, input.userId)
-          if (!source)
-            throw new Error(`Task ${sourceTaskId} does not exist for user`)
-          if (source.status !== 'completed' && source.status !== 'cancelled')
-            throw new Error(
-              'sourceTaskId must reference a completed or cancelled Task',
-            )
-        }
+        validateMessageTarget(input, options.store)
         const result = options.store.enqueueEvent(input)
         return sendJson(response, result.inserted ? 202 : 200, result)
       }
@@ -2644,7 +2616,47 @@ function cachedAgentModelCatalog(
   }
 }
 
-function explicitTaskId(input: NewInboxEvent): string | undefined {
+function validateMessageTarget(
+  input: Pick<NewInboxEvent, 'type' | 'userId' | 'payload'>,
+  store: PegasStore,
+): void {
+  if (input.type !== 'user.message') return
+  const replyId = replyReference(input.payload)
+  if (replyId) store.conversationReply(replyId, input.userId)
+  const taskId = explicitTaskId(input)
+  if (taskId) {
+    const task = store.findTask(taskId, input.userId)
+    if (!task) throw new Error(`Task ${taskId} does not exist for user`)
+    if (task.status === 'cancelled')
+      throw new Error('Task was stopped by the user')
+    if (explicitSteerIntent(input)) {
+      if (task.status !== 'started')
+        throw new Error(
+          'Steering requires a started task; queue the message instead',
+        )
+      const activeRun = store
+        .listRunsForUser(input.userId, taskId)
+        .some(run => run.status === 'queued' || run.status === 'running')
+      if (!activeRun)
+        throw new Error(
+          'Steering requires a queued or running Run; queue the message instead',
+        )
+    }
+  }
+  const sourceTaskId = sourceContextTaskId(input)
+  if (sourceTaskId) {
+    const source = store.findTask(sourceTaskId, input.userId)
+    if (!source) throw new Error(`Task ${sourceTaskId} does not exist for user`)
+    if (source.status !== 'completed' && source.status !== 'cancelled')
+      throw new Error(
+        'sourceTaskId must reference a completed or cancelled Task',
+      )
+  }
+}
+
+function explicitTaskId(
+  input: Pick<NewInboxEvent, 'type' | 'payload'>,
+): string | undefined {
   if (
     input.type !== 'user.message' ||
     !input.payload ||
@@ -2656,7 +2668,9 @@ function explicitTaskId(input: NewInboxEvent): string | undefined {
   return typeof taskId === 'string' && taskId.trim() ? taskId : undefined
 }
 
-function sourceContextTaskId(input: NewInboxEvent): string | undefined {
+function sourceContextTaskId(
+  input: Pick<NewInboxEvent, 'type' | 'payload'>,
+): string | undefined {
   if (
     input.type !== 'user.message' ||
     !input.payload ||
@@ -2681,7 +2695,9 @@ function sourceContextTaskId(input: NewInboxEvent): string | undefined {
   return sourceTaskId
 }
 
-function explicitSteerIntent(input: NewInboxEvent): boolean {
+function explicitSteerIntent(
+  input: Pick<NewInboxEvent, 'type' | 'payload'>,
+): boolean {
   return (
     input.type === 'user.message' &&
     !!input.payload &&
@@ -2976,6 +2992,17 @@ async function acceptVoiceMessage(
   const source = optionalQuery(url, 'source') ?? 'web'
   const language = optionalQuery(url, 'language')
   const taskId = optionalQuery(url, 'taskId')
+  const sourceTaskId = optionalQuery(url, 'sourceTaskId')
+  const replyToMessageId = url.searchParams.get('replyToMessageId')
+  const target = {
+    ...(taskId ? { taskId } : {}),
+    ...(sourceTaskId ? { sourceTaskId } : {}),
+    ...(replyToMessageId === null ? {} : { replyToMessageId }),
+  }
+  validateMessageTarget(
+    { type: 'user.message', userId, payload: target },
+    options.store,
+  )
   const dedupeKey = headerValue(request, 'idempotency-key')?.trim()
   if (!dedupeKey) {
     return sendJson(response, 400, {
@@ -2997,7 +3024,7 @@ async function acceptVoiceMessage(
     payload: {
       text: transcript.text,
       inputMode: 'voice',
-      ...(taskId ? { taskId } : {}),
+      ...target,
       voice: {
         provider: provider.name,
         model: provider.model,

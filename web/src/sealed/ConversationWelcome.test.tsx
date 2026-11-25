@@ -33,14 +33,12 @@ function renderWelcome(options?: {
         onOpenDrawer: () => undefined,
       }}
       api={api}
-      continuationChannel={undefined}
       draft={options?.draft ?? ''}
       models={[]}
       onAnswerClarification={() => undefined}
       onOpenAttention={() => Promise.resolve()}
-      onSelectTask={() => undefined}
-      onClearContinuation={() => undefined}
-      onClearSourceContext={() => undefined}
+      onTargetChange={() => undefined}
+      onClearTarget={() => undefined}
       onConfigureVoice={() => undefined}
       onDraftChange={() => undefined}
       onSelectModel={() => Promise.resolve()}

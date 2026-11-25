@@ -16,6 +16,7 @@ import {
   Mic,
   PauseCircle,
   Plus,
+  Reply,
   RotateCw,
   Search,
   Send,
@@ -25,9 +26,18 @@ import {
   X,
   Zap,
 } from 'lucide-react'
-import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from 'react'
 
-import type { PegasApi } from '../api'
+import { quotableAgentReply } from '../../../src/conversation/projection'
+import type { PegasApi, MessageTarget } from '../api'
 import { MarkdownMessage } from '../MarkdownMessage'
 import type {
   Automation,
@@ -105,6 +115,7 @@ import {
   type AttentionGroup,
   type ConversationAnchor,
   type ConversationLane,
+  type ComposerTarget,
   type DrawerView,
   type TaskContextCue,
 } from './types'
@@ -168,11 +179,9 @@ export function ConversationPage({
   onSelectModel,
   onAnswerClarification,
   onOpenAttention,
-  onSelectTask,
-  continuationChannel,
-  sourceContextChannel,
-  onClearContinuation,
-  onClearSourceContext,
+  target,
+  onTargetChange,
+  onClearTarget,
   draft,
   onDraftChange,
   speechEnabled,
@@ -188,13 +197,11 @@ export function ConversationPage({
   onSelectModel: (model: DshModelCatalogItem) => Promise<void>
   onAnswerClarification: (channel: Snapshot['channels'][number]) => void
   onOpenAttention: (message: OutboxMessage) => Promise<void>
-  onSelectTask: (taskId: string) => void
-  continuationChannel?: Snapshot['channels'][number]
-  sourceContextChannel?: Snapshot['channels'][number]
-  onClearContinuation: () => void
-  onClearSourceContext: () => void
+  target?: ComposerTarget
+  onTargetChange: (target: ComposerTarget) => void
+  onClearTarget: (target: ComposerTarget | undefined) => void
   draft: string
-  onDraftChange: (draft: string) => void
+  onDraftChange: Dispatch<SetStateAction<string>>
   speechEnabled: boolean
   onConfigureVoice: () => void
 }) {
@@ -203,6 +210,16 @@ export function ConversationPage({
   const [attachment, setAttachment] = useState<File>()
   const [voiceDirectSend, setVoiceDirectSend] = useState(false)
   const attachmentInputRef = useRef<HTMLInputElement>(null)
+  const composerInputRef = useRef<HTMLTextAreaElement>(null)
+  const pendingSendRef = useRef<
+    | {
+        text: string
+        target?: ComposerTarget
+        dedupeKey: string
+      }
+    | undefined
+  >(undefined)
+  const voiceTargetRef = useRef<ComposerTarget | undefined>(undefined)
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(
     () => new Set(),
   )
@@ -293,21 +310,44 @@ export function ConversationPage({
       chatScroll.noteNewReply('Pegas 发来了新回复')
     }
   }, [messages, chatScroll])
+  const targetChannel =
+    target && target.kind !== 'reply'
+      ? (snapshot.channels.find(channel => channel.id === target.channel.id) ??
+        target.channel)
+      : undefined
+  const continuationChannel =
+    target?.kind === 'task' ? targetChannel : undefined
+  const sourceContextChannel =
+    target?.kind === 'source' ? targetChannel : undefined
+
+  async function attachToSentMessage(eventId: string) {
+    if (!attachment) return
+    try {
+      await api.uploadEventAttachment(eventId, attachment)
+    } catch (caught) {
+      setError(
+        `消息已发送，但附件上传失败：${caught instanceof Error ? caught.message : '请重试。'}`,
+      )
+    }
+    setAttachment(undefined)
+  }
+
   const dictation = useVoiceDictation({
     transcribe: async blob => {
       if (!voiceDirectSend) return api.transcribeVoice(blob)
-      const result = await api.sendVoiceMessage(blob, continuationChannel?.id)
-      if (attachment) {
-        await api.uploadEventAttachment(result.event.id, attachment)
-      }
-      setAttachment(undefined)
-      onClearContinuation()
+      const recordedTarget = voiceTargetRef.current
+      const result = await api.sendVoiceMessage(
+        blob,
+        messageTarget(recordedTarget),
+      )
+      await attachToSentMessage(result.event.id)
+      onClearTarget(recordedTarget)
       await onSent()
       return result.transcript
     },
     onTranscript: text => {
       if (voiceDirectSend) return
-      onDraftChange(`${draft}${draft ? ' ' : ''}${text}`)
+      onDraftChange(current => `${current}${current ? ' ' : ''}${text}`)
     },
   })
   const dictationBusy = dictation.state !== 'idle'
@@ -325,9 +365,6 @@ export function ConversationPage({
         ),
     [snapshot.channels],
   )
-  useEffect(() => {
-    if (continuationChannel?.status === 'cancelled') onClearContinuation()
-  }, [continuationChannel, onClearContinuation])
   const summaryChannel =
     snapshot.channels.find(item => item.id === continuationChannel?.id) ??
     trayChannels[0] ??
@@ -337,7 +374,10 @@ export function ConversationPage({
     : undefined
   const summaryActive =
     summaryRun?.status === 'running' || summaryRun?.status === 'queued'
-  const steerTarget = continuationChannel
+  const steerTarget =
+    continuationChannel?.status === 'cancelled'
+      ? undefined
+      : continuationChannel
   const steerRun = steerTarget
     ? latestRunForTask(snapshot.runs, steerTarget.id)
     : undefined
@@ -356,24 +396,21 @@ export function ConversationPage({
     setSending(true)
     setError('')
     try {
+      const last = pendingSendRef.current
+      const attempt =
+        last?.text === text && last.target === target
+          ? last
+          : { text, target, dedupeKey: crypto.randomUUID() }
+      pendingSendRef.current = attempt
       const event = await api.sendMessage(
         text,
-        sourceContextChannel ? undefined : continuationChannel?.id,
-        sourceContextChannel?.id,
+        messageTarget(target),
+        attempt.dedupeKey,
       )
-      if (attachment) {
-        try {
-          await api.uploadEventAttachment(event.id, attachment)
-        } catch (caught) {
-          setError(
-            `消息已发送，但附件上传失败：${caught instanceof Error ? caught.message : '请重试。'}`,
-          )
-        }
-      }
-      setAttachment(undefined)
-      onDraftChange('')
-      onClearContinuation()
-      onClearSourceContext()
+      pendingSendRef.current = undefined
+      await attachToSentMessage(event.id)
+      onDraftChange(current => (current === draft ? '' : current))
+      onClearTarget(target)
       await onSent()
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '发送失败，请重试。')
@@ -428,7 +465,7 @@ export function ConversationPage({
     void (async () => {
       setSending(true)
       try {
-        await api.sendMessage(next.text, channel.id)
+        await api.sendMessage(next.text, { taskId: channel.id })
         setQueuedMessages(current => current.slice(1))
         await onSent()
       } catch (caught) {
@@ -607,6 +644,19 @@ export function ConversationPage({
         : workEntryChannel && message.lane === 'work' && messageReview
           ? { channel: workEntryChannel, label: '审查交付' }
           : undefined
+    const quote =
+      message.source && workEntryChannel?.status !== 'cancelled'
+        ? quotableAgentReply(message.source)
+        : undefined
+    const selectQuote = quote
+      ? (text?: string) => {
+          if (sending || dictationBusy) return
+          onTargetChange({ kind: 'reply', id: message.id, text: quote.text })
+          if (text) onDraftChange(text)
+          setError('')
+          composerInputRef.current?.focus()
+        }
+      : undefined
     return (
       <article
         className={[
@@ -617,6 +667,7 @@ export function ConversationPage({
             : '',
           message.streaming ? 'is-streaming' : '',
           workEntry ? 'has-work-entry' : '',
+          selectQuote ? 'has-reply-action' : '',
           groupedNext ? 'grouped-next' : '',
           highlightedId === message.id ? 'is-anchor-highlight' : '',
         ]
@@ -636,10 +687,7 @@ export function ConversationPage({
               onJumpToMessage={jumpToMessage}
               onOpenAttention={onOpenAttention}
               onOpenTask={openTaskDetails}
-              onFollowUp={text => {
-                if (message.taskId) onSelectTask(message.taskId)
-                onDraftChange(text)
-              }}
+              onFollowUp={selectQuote}
               onToggleExpanded={() =>
                 setExpandedMessages(current => {
                   const next = new Set(current)
@@ -729,6 +777,11 @@ export function ConversationPage({
             />
           )}
           <time dateTime={message.at}>{formatRelativeTime(message.at)}</time>
+          {selectQuote && (
+            <MetaIconButton label="追问这条回复" onClick={() => selectQuote()}>
+              <Reply size={14} />
+            </MetaIconButton>
+          )}
           <CopyMessageButton
             copied={copiedMessageId === message.id}
             onCopy={() => void copyMessage(message.id, message.text)}
@@ -844,8 +897,8 @@ export function ConversationPage({
                   }
                   key={channel.id}
                   onClick={() => {
-                    if (selected) onClearContinuation()
-                    else onSelectTask(channel.id)
+                    if (selected) onClearTarget(target)
+                    else onTargetChange({ kind: 'task', channel })
                   }}
                   title={
                     selected
@@ -992,7 +1045,7 @@ export function ConversationPage({
             </span>
             <MetaIconButton
               label="取消继续当前事情"
-              onClick={onClearContinuation}
+              onClick={() => onClearTarget(target)}
             >
               <X size={15} />
             </MetaIconButton>
@@ -1009,7 +1062,28 @@ export function ConversationPage({
             </span>
             <MetaIconButton
               label="取消携带来源事情摘要"
-              onClick={onClearSourceContext}
+              onClick={() => onClearTarget(target)}
+            >
+              <X size={15} />
+            </MetaIconButton>
+          </div>
+        )}
+        {target?.kind === 'reply' && (
+          <div
+            className="composer-context mx-auto mb-2 flex min-h-[38px] w-full max-w-[1040px] items-center justify-between gap-3 rounded-card bg-accent-tint px-3 py-1.5 text-[13px] text-ink-2"
+            role="status"
+          >
+            <button
+              className="min-w-0 truncate text-left"
+              onClick={() => jumpToMessage(target.id)}
+              type="button"
+            >
+              <span>追问这条回复：</span>
+              <strong>{target.text.slice(0, 120)}</strong>
+            </button>
+            <MetaIconButton
+              label="取消引用回复"
+              onClick={() => onClearTarget(target)}
             >
               <X size={15} />
             </MetaIconButton>
@@ -1020,7 +1094,7 @@ export function ConversationPage({
           className={[
             'composer',
             'mx-auto grid max-w-[1040px] grid-rows-[auto_auto] bg-surface shadow-card transition-[border-radius,box-shadow,padding] duration-150 focus-within:shadow-raised pointer-coarse:pb-2',
-            draft.includes('\n') || attachment || continuationChannel
+            draft.includes('\n') || attachment || target
               ? 'is-multiline rounded-[24px] px-3.5 py-2.5 pl-5 max-[820px]:rounded-[20px] max-[820px]:px-3 max-[820px]:py-2.5 max-[820px]:pl-4'
               : 'is-single-line rounded-full py-1.5 pr-2 pl-5 max-[820px]:pl-4',
           ].join(' ')}
@@ -1034,7 +1108,7 @@ export function ConversationPage({
           </label>
           <textarea
             className={`w-full min-w-0 resize-none overflow-y-auto border-0 bg-transparent py-[7px] text-[16px] leading-[1.55] caret-accent outline-none [field-sizing:content] [max-block-size:6lh] placeholder:text-ink-2 placeholder:opacity-55 ${
-              draft.includes('\n') || attachment || continuationChannel
+              draft.includes('\n') || attachment || target
                 ? 'min-h-[54px] pb-3 max-[820px]:min-h-[46px] max-[820px]:pt-[5px]'
                 : 'min-h-[38px] max-[820px]:min-h-[46px] max-[820px]:pt-[5px]'
             }`}
@@ -1060,6 +1134,7 @@ export function ConversationPage({
                   : `正在听 · ${String(dictation.elapsedSeconds)} 秒`
                 : '和 Pegas 一起工作'
             }
+            ref={composerInputRef}
             rows={1}
             value={draft}
           />
@@ -1185,6 +1260,8 @@ export function ConversationPage({
                     onConfigureVoice()
                     return
                   }
+                  if (dictation.state === 'idle')
+                    voiceTargetRef.current = target
                   dictation.toggle()
                 }}
                 size="sm"
@@ -1357,7 +1434,7 @@ function FactCard({
   onOpenTask: (taskId: string | undefined) => void
   onAnswerClarification: (channel: Snapshot['channels'][number]) => void
   onOpenAttention: (message: OutboxMessage) => Promise<void>
-  onFollowUp: (text: string) => void
+  onFollowUp?: (text: string) => void
 }) {
   const heading = factCardHeading(message)
   const tone = factCardTone(message)
@@ -1483,6 +1560,7 @@ function FactCard({
       )}
       {message.lane === 'work' &&
         tone === 'green' &&
+        onFollowUp &&
         channel?.status === 'completed' && (
           <FollowUpList
             items={[
@@ -1496,6 +1574,16 @@ function FactCard({
         )}
     </section>
   )
+}
+
+function messageTarget(
+  target: ComposerTarget | undefined,
+): MessageTarget | undefined {
+  if (!target) return undefined
+  if (target.kind === 'reply') return { replyToMessageId: target.id }
+  return target.kind === 'task'
+    ? { taskId: target.channel.id }
+    : { sourceTaskId: target.channel.id }
 }
 
 function escapeHtml(value: string): string {

@@ -499,6 +499,11 @@ a {
 .message-row.has-work-entry .message-meta {
   opacity: 1;
 }
+@media (hover: none) {
+  .message-row.has-reply-action .message-meta {
+    opacity: 1;
+  }
+}
 .message-row.is-user[data-send-animating] .message-content {
   transform-origin: top left;
   will-change: transform, opacity;

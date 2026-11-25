@@ -28,6 +28,8 @@ import { sourceContextInput } from '../collaboration/source-context.js'
 import {
   withConversationProjection,
   type ConversationProjectionContext,
+  quotableAgentReply,
+  replyReference,
 } from '../conversation/projection.js'
 import type {
   ActionOutcomeDraft,
@@ -330,7 +332,7 @@ const maximumCollaborationsPerRoot = 32
 const maximumCollaborationDepth = 4
 const maximumPendingContextNotesPerTarget = 4
 const maximumActiveCollaborationsPerOwner = 64
-const currentInboxContractVersion = 2
+const currentInboxContractVersion = 3
 
 const migration20 = `
 CREATE TABLE automations (
@@ -8211,6 +8213,12 @@ export class PegasStore {
   enqueueEvent(input: NewInboxEvent): { event: InboxEvent; inserted: boolean } {
     const id = input.id ?? randomUUID()
     const createdAt = this.#clock.now().toISOString()
+    const requiredContractVersion =
+      input.type === 'user.message' && replyReference(input.payload)
+        ? 3
+        : input.source === 'collaboration'
+          ? 2
+          : 1
     const result = this.#database
       .prepare(
         `INSERT OR IGNORE INTO inbox_events
@@ -8227,7 +8235,7 @@ export class PegasStore {
         input.deviceId ?? null,
         input.dedupeKey ?? null,
         JSON.stringify(input.payload),
-        input.source === 'collaboration' ? 2 : 1,
+        requiredContractVersion,
         createdAt,
       )
 
@@ -8828,7 +8836,7 @@ export class PegasStore {
     executionContext: ExecutionContext | ((task: Task) => ExecutionContext) = {
       executor,
     },
-    options: { collaborationRelationId?: string } = {},
+    options: { collaborationRelationId?: string; replyRunId?: string } = {},
   ): { task: Task; run: Run } {
     if (decision.kind === 'steer_task' || decision.kind === 'cancel_task') {
       throw new Error('Control intents must use applyControlIntent')
@@ -8995,7 +9003,7 @@ export class PegasStore {
     >,
     executor: string,
     executionContext: ExecutionContext | ((task: Task) => ExecutionContext),
-    options: { collaborationRelationId?: string },
+    options: { collaborationRelationId?: string; replyRunId?: string },
   ): { task: Task; run: Run } {
     this.#database.exec('BEGIN IMMEDIATE')
     try {
@@ -9009,14 +9017,24 @@ export class PegasStore {
       const existingRun = this.#database
         .prepare('SELECT * FROM runs WHERE origin_event_id = ?')
         .get(event.id) as unknown as RunRow | undefined
+      const recorded =
+        existingRun || decision.kind === 'continue_task'
+          ? (this.#database
+              .prepare(
+                'SELECT kind, task_id FROM routing_decisions WHERE event_id = ?',
+              )
+              .get(event.id) as { kind: string; task_id: string } | undefined)
+          : undefined
+      if (
+        recorded &&
+        (recorded.kind !== decision.kind ||
+          (decision.kind === 'continue_task' &&
+            recorded.task_id !== decision.taskId))
+      ) {
+        throw new Error('Event already routed with a different decision')
+      }
       if (existingRun) {
         const existingTask = this.#taskById(existingRun.task_id)
-        const existingDecision = this.#database
-          .prepare('SELECT kind FROM routing_decisions WHERE event_id = ?')
-          .get(event.id) as { kind: string } | undefined
-        if (existingDecision && existingDecision.kind !== decision.kind) {
-          throw new Error('Event already routed with a different decision')
-        }
         if (collaboration) {
           if (collaboration.target_event_id === event.id) {
             this.#markCollaborationDispatchedInTransaction(
@@ -9028,6 +9046,21 @@ export class PegasStore {
         }
         this.#database.exec('COMMIT')
         return { task: existingTask, run: toRun(existingRun) }
+      }
+
+      if (recorded) {
+        // Continuation can have amended an existing Run instead of creating
+        // one with this event as its origin. The stored decision fences replay.
+        const task = this.#taskById(recorded.task_id)
+        if (task.userId !== event.userId)
+          throw new Error('Task belongs to another user')
+        const run = this.#database
+          .prepare(
+            'SELECT * FROM runs WHERE task_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1',
+          )
+          .get(task.id) as unknown as RunRow
+        this.#database.exec('COMMIT')
+        return { task, run: toRun(run) }
       }
 
       const now = this.#clock.now().toISOString()
@@ -9134,6 +9167,7 @@ export class PegasStore {
 
       if (
         decision.kind === 'continue_task' &&
+        task.kind !== 'conversation' &&
         !collaboration &&
         event.source !== 'automation'
       ) {
@@ -9256,9 +9290,14 @@ export class PegasStore {
         .prepare(
           `SELECT executor_ref, execution_context_json FROM runs
            WHERE task_id = ? AND executor_ref IS NOT NULL
+             AND (? IS NULL OR id = ?)
            ORDER BY updated_at DESC, rowid DESC LIMIT 1`,
         )
-        .get(task.id) as
+        .get(
+          task.id,
+          options.replyRunId ?? null,
+          options.replyRunId ?? null,
+        ) as
         | { executor_ref: string; execution_context_json: string | null }
         | undefined
       const compatible =
@@ -9686,6 +9725,27 @@ export class PegasStore {
           .prepare('SELECT * FROM tasks ORDER BY updated_at DESC')
           .all()
     return rows.map(row => toTask(row as unknown as TaskRow))
+  }
+
+  runRepliesToMessage(runId: string): boolean {
+    const eventId = this.resolveRunInputEventId(runId)
+    return (
+      eventId !== undefined &&
+      replyReference(this.#eventById(eventId).payload) !== undefined
+    )
+  }
+
+  conversationReply(
+    messageId: string,
+    userId: string,
+  ): { taskId: string; text: string; runId?: string } {
+    const reply = quotableAgentReply(this.#outboxForUser(messageId, userId))
+    if (!reply) throw new Error('This message is unavailable for follow-up')
+    const task = this.findTask(reply.taskId, userId)
+    if (!task) throw new OutboxNotFoundError('Outbox message not found')
+    if (task.status === 'cancelled')
+      throw new Error('Task was stopped by the user')
+    return reply
   }
 
   conversationSessionRef(userId: string): string | undefined {

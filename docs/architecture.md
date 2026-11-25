@@ -161,6 +161,10 @@ Router 默认使用模型进行归属判断，但结果必须写入结构化数�
 
 第一版提供两级策略：显式 `taskId` 始终按确定性路径续接；未指定 Task 的输入默认交给 Model Router，在受限候选集中判断 `create_task`、`continue_task`、`steer_task` 或 `cancel_task`。默认连接 Magpie 的指定 Router 模型；输出无法解析、引用越权或 Provider 不可用时自动退回确定性新建策略，不能阻塞 Durable Inbox。
 
+显式追问可提交 `taskId`（事情详情）或互斥的 `replyToMessageId`（Chat 中选中的 Agent 回复），文字和语音直发使用同一目标合同。控制面与 Worker 按 owner 检查引用，Worker 从持久 Outbox 派生 Task、回复原文及可用的源 Run，再走既有 `continue_task` 和 Mandate 检查。引用正文作为有上限的数据交给 Executor，回复中的文字不授予权限。目标不可用时显式失败。工作 Run 进行中沿用补充输入的队列或 steering 事务；只读对话的定向追问按 Task 串行执行，优先使用所引 Run 的兼容会话，缺少兼容引用时携带原文开新会话。普通 Chat 继续使用用户级滚动会话。
+
+带回复引用的 Inbox 事件要求合同 v3，数据库沿用已有 claim fence，v2 Worker 会保留这些事件待处理。回滚前停止接受新引用、处理完待处理 v3 事件及定向对话 Run 后，让 Web 与控制面同时切回旧版本；已经落库的历史和 Run 可继续读取，无 schema 迁移。
+
 路由分三层且职责不得合并（PLAN-001，设计合同见 `docs/router-worker-design.md`）：**渠道路由**（消息进哪个入口）保持确定性；**归属路由**（输入属于哪个 Task）即本节 Router；**模型/难度路由**（用哪个模型与推理档位执行）落 WorkerProfile 与执行池，绝不进入归属 Router。归属候选只包含开放任务（backlog/unstarted/started），摘要由服务端从权威事实推导并携带等待事实（pending Approval、Executor 澄清、未消费 steering）；completed 任务不进默认候选，其续接只走 TASK-002 的 Mandate 复核路径（ROUTE-003）。日常即时应答由 `reply` 决策分类到 `kind=conversation` 的轻量 Task，由只读工具面的常驻对话执行单元答复，正文零确认、零模板过渡；需要副作用或长工作时经结构化 `suggest_task` 升级回完整 Task 门禁（ROUTE-004/EXEC-005，`chatLaneEnabled` 可整体回退）。控制意图与显式引用永远优先于任何快路径，且不被收集窗口延迟。
 
 控制意图与归属判断共用同一条持久 Routing Decision 合同（`ROUTE-001`）。`steer_task` 只允许指向 `started` 状态的候选 Task：目标 Run 仍在排队时，纠正文字在同一事务内合并进 Run 输入；目标 Run 正在执行时，纠正作为持久 steering 指令挂在该 Run 上，Worker 心跳在同一事务中续租并检测到指令后中止当前 Executor，把旧 Run 停放为 `superseded_by_steering` 并创建复用同一 Executor session 的后继 Run。带未消费 steering 的 Run 不能提交完成，防止旧方向的执行结果静默覆盖用户纠正；等待审批等阻塞 Action 时 steering 与普通输入一样被停放，不绕过 Action Policy。`cancel_task` 复用用户停止的同一事务语义：human/stopped ended、取消未终结 Run 与 pending Approval、authorized Action 转 unknown 并要求人工核对、结算协作关系。两种控制意图都只接受已认证的人类 `user.message`，机器事件与协作 handback 不能铸造控制命令；同一事件的决策幂等重放，冲突决策拒绝。schema v24 为 Run 增加 steering 载荷与 `steering_of_run_id` 后继链，存在未消费 steering 时回滚到旧 Release 被 Guard 拒绝。

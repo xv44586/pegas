@@ -38,6 +38,8 @@ Task 与 Run 的合法状态与迁移由数据库和应用层双重约束：
 - cancelled 只表示用户明确停止，原 Task 永久不可恢复，也不能通过显式 `taskId`、重新授权或旧 Session 绕过；继续工作需要重新接单并创建带来源关系的新 Task。授权复核失败不改写为 cancelled，而是保持 completed 并把输入退回 Router/Eval。
 - Run、Worker Runtime 和 Executor Session 独立结束；旧 Session 只有通过兼容性检查才作为新 Run 的恢复引用。
 
+会话兼容检查以持久化的 Executor、模型、权限、工作区、节点、协议和执行档案为准。全局设置 revision 保留在新 Run 快照中以便审计，单独变化时不影响恢复引用。具体执行条件有变化时仍按不兼容处理。
+
 ```text
 completed + authorized user input
   → lock Task
