@@ -261,6 +261,97 @@ describe('PLAN-001 P2 collect window', () => {
     store.close()
   })
 
+  it('keeps every collected input pending until the blocking Approval is settled', async () => {
+    const store = new PegasStore(':memory:')
+    try {
+      store.initializeRuntimeSettings(runtimeSettingsDefaults(loadConfig({})))
+      const origin = store.enqueueEvent(humanEvent('准备发布说明')).event
+      const { task } = store.applyRoutingDecision(
+        origin,
+        {
+          kind: 'create_task',
+          title: '准备发布说明',
+          goal: '准备发布说明',
+          input: '准备发布说明',
+          reason: 'Test fixture',
+        },
+        'echo-test',
+      )
+      expect(store.claimNextEvent('router')?.id).toBe(origin.id)
+      store.completeEvent(origin.id, 'router')
+      const run = store.claimNextRun('worker')
+      if (!run) throw new Error('Expected Run')
+      const { approval } = store.requestApproval(run.run.id, run.claimToken, {
+        kind: 'publish.release',
+        risk: 'high',
+        idempotencyKey: 'waiting-approval',
+        request: { release: 'v9' },
+        recoveryPoint: { step: 'before_publish' },
+        approval: {
+          summary: '发布 v9',
+          impact: '对外可见',
+          recommendedOptionId: 'approve',
+          options: [
+            { id: 'approve', label: '发布', kind: 'approve' },
+            { id: 'reject', label: '不发布', kind: 'reject' },
+          ],
+        },
+      })
+      const notes = ['先写清新增内容', '再补上版本兼容说明']
+      const ids = notes.map(
+        text => store.enqueueEvent(humanEvent(text)).event.id,
+      )
+      const provider: JsonModelProvider = {
+        name: 'continuing',
+        generateJson: () =>
+          Promise.resolve({
+            kind: 'continue_task',
+            taskId: task.id,
+            reason: 'Same work',
+          }),
+      }
+      const handler = new RoutingEventHandler(
+        new ModelTaskRouter({ provider }),
+        'echo-test',
+      )
+      function noteEvents() {
+        return store.listEvents('owner').filter(event => ids.includes(event.id))
+      }
+      await processNextEvent(store, handler, 'router', undefined, {
+        collectWindowMs: 100,
+      })
+      expect(noteEvents().map(event => event.status)).toEqual([
+        'processing',
+        'processing',
+      ])
+      expect(
+        store
+          .listChannelEvents(task.id, 'owner')
+          .filter(event => ids.includes(event.id)),
+      ).toHaveLength(2)
+
+      store.decideApproval(approval.id, 'owner', {
+        commandId: 'decline-v9',
+        optionId: 'reject',
+      })
+      expect(noteEvents().map(event => event.status)).toEqual([
+        'pending',
+        'pending',
+      ])
+      await processNextEvent(store, handler, 'router', undefined, {
+        collectWindowMs: 100,
+      })
+      expect(noteEvents().map(event => event.status)).toEqual([
+        'processed',
+        'processed',
+      ])
+      for (const note of notes)
+        expect(store.listRuns(task.id).at(-1)?.input).toContain(note)
+    } finally {
+      store.close()
+    }
+  })
+
   it('never delays explicit references or stop commands', async () => {
     const store = new PegasStore(':memory:')
     store.initializeRuntimeSettings(runtimeSettingsDefaults(loadConfig({})))

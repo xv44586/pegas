@@ -8539,48 +8539,17 @@ export class PegasStore {
     workerId: string,
     taskId: string,
   ): 'parked' | 'released' | 'failed' {
-    this.#assertEventClaim(eventId, workerId)
-    const now = this.#clock.now().toISOString()
-    this.#database.exec('BEGIN IMMEDIATE')
-    try {
-      const event = this.#database
-        .prepare(
-          `SELECT user_id FROM inbox_events
-           WHERE id = ? AND status = 'processing' AND claimed_by = ?`,
-        )
-        .get(eventId, workerId) as { user_id: string } | undefined
-      if (!event)
-        throw new Error(`Worker ${workerId} does not own event ${eventId}`)
+    return this.parkEventsForBlockedAction([eventId], workerId, taskId)
+  }
+
+  parkEventsForBlockedAction(
+    eventIds: readonly string[],
+    workerId: string,
+    taskId: string,
+  ): 'parked' | 'released' | 'failed' {
+    return this.#runInTransaction(() => {
+      const now = this.#clock.now().toISOString()
       const task = this.#taskById(taskId)
-      if (task.userId !== event.user_id)
-        throw new Error('Task belongs to another user')
-      this.#database
-        .prepare(
-          `INSERT INTO task_events (event_id, task_id, relation, created_at)
-           VALUES (?, ?, 'blocked_action', ?)
-           ON CONFLICT(event_id) DO UPDATE SET
-             task_id = excluded.task_id,
-             relation = CASE
-               WHEN task_events.relation IN (
-                 'context_note','collaboration_returned','collaboration_failed'
-               ) THEN task_events.relation
-               ELSE excluded.relation
-             END,
-             created_at = excluded.created_at`,
-        )
-        .run(eventId, taskId, now)
-      if (task.status === 'cancelled') {
-        this.#database
-          .prepare(
-            `UPDATE inbox_events
-             SET status = 'failed', claimed_by = NULL, lease_until = NULL,
-                 last_error = 'blocked_task_stopped'
-             WHERE id = ? AND claimed_by = ?`,
-          )
-          .run(eventId, workerId)
-        this.#database.exec('COMMIT')
-        return 'failed'
-      }
       const blockingAction = this.#database
         .prepare(
           `SELECT status FROM actions
@@ -8589,32 +8558,68 @@ export class PegasStore {
            ORDER BY updated_at DESC, id DESC LIMIT 1`,
         )
         .get(taskId) as { status: string } | undefined
-      if (!blockingAction) {
-        this.#database
-          .prepare(
-            `UPDATE inbox_events
-             SET status = 'pending', claimed_by = NULL, lease_until = NULL,
-                 last_error = NULL
-             WHERE id = ? AND claimed_by = ?`,
+      const transition =
+        task.status === 'cancelled'
+          ? {
+              eventStatus: 'failed',
+              lease: null,
+              error: 'blocked_task_stopped',
+              outcome: 'failed' as const,
+            }
+          : blockingAction
+            ? {
+                eventStatus: 'processing',
+                lease: '9999-12-31T23:59:59.999Z',
+                error: `blocked_by_action:${blockingAction.status}`,
+                outcome: 'parked' as const,
+              }
+            : {
+                eventStatus: 'pending',
+                lease: null,
+                error: null,
+                outcome: 'released' as const,
+              }
+      const loadOwner = this.#database.prepare(
+        `SELECT user_id FROM inbox_events
+         WHERE id = ? AND status = 'processing' AND claimed_by = ?`,
+      )
+      const linkEvent = this.#database.prepare(
+        `INSERT INTO task_events (event_id, task_id, relation, created_at)
+         VALUES (?, ?, 'blocked_action', ?)
+         ON CONFLICT(event_id) DO UPDATE SET
+           task_id = excluded.task_id,
+           relation = CASE
+             WHEN task_events.relation IN (
+               'context_note','collaboration_returned','collaboration_failed'
+             ) THEN task_events.relation
+             ELSE excluded.relation
+           END,
+           created_at = excluded.created_at`,
+      )
+      const updateEvent = this.#database.prepare(
+        `UPDATE inbox_events
+         SET status = ?, claimed_by = NULL, lease_until = ?, last_error = ?
+         WHERE id = ?`,
+      )
+      for (const eventId of eventIds) {
+        const event = loadOwner.get(eventId, workerId) as
+          { user_id: string } | undefined
+        if (!event)
+          throw new EventClaimError(
+            `Worker ${workerId} does not own event ${eventId}`,
           )
-          .run(eventId, workerId)
-        this.#database.exec('COMMIT')
-        return 'released'
-      }
-      this.#database
-        .prepare(
-          `UPDATE inbox_events
-           SET status = 'processing', claimed_by = NULL,
-               lease_until = '9999-12-31T23:59:59.999Z', last_error = ?
-           WHERE id = ? AND claimed_by = ?`,
+        if (task.userId !== event.user_id)
+          throw new Error('Task belongs to another user')
+        linkEvent.run(eventId, taskId, now)
+        updateEvent.run(
+          transition.eventStatus,
+          transition.lease,
+          transition.error,
+          eventId,
         )
-        .run(`blocked_by_action:${blockingAction.status}`, eventId, workerId)
-      this.#database.exec('COMMIT')
-      return 'parked'
-    } catch (error) {
-      this.#database.exec('ROLLBACK')
-      throw error
-    }
+      }
+      return transition.outcome
+    })
   }
 
   createTaskFromEvent(event: InboxEvent, title: string): Task {
