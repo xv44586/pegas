@@ -519,6 +519,7 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - **状态**：Partial。启用 `requireAcceptance` 的目标形成「证据通过 → 待验收 → 接受或返工」的服务端流程。旧 Goal 默认自动完成，Review Pack 仍可审查。接受/退回由 owner 针对当前交付版本决定，重复命令返回同一结果。
 - **权威与证据**：`src/goal/goal-delivery.ts`、store 的交付事务、`POST /v1/review-packs/:id/decision`、Chat 与待办投影、Web 审查页。`test/goal-delivery.test.ts` 覆盖打开已读、接受、退回、越权与冲突；`web/src/App.test.tsx` 覆盖返工草稿和网络重放。
 - **集成验证**：基于 `origin/main fa05da7` 的 `pnpm check` 通过 145 个文件、1524 个测试。常规 smoke 通过，进程崩溃恢复 smoke 的 3 个注入点均只完成一次。桌面与 390px Chromium 验证只读结果解释、查看交付与接受独立、退回进入原事情及失败重试指向准确 Run。
+- **服务端复核（2026-11-25）**：正在等待证据的旧 Run 随续接原子停放；旧 Run 不得领取报告或绕过纠正生成最终交付；返工转派失败可重发原事件；人工验收通过后才产出成功记忆。见 `test/goal-delivery.test.ts` 的 5 条先失败再通过的回归。
 - **下一缺口**：更多证据的语义验证、跨设备验收和真实模型验收演练。回滚与兼容见 [Goal 合同](goal-contract-and-evidence.md)。
 
 ### GOAL-001：目标形成与证据化交付（2026-11-21）

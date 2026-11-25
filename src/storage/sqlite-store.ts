@@ -8497,12 +8497,41 @@ export class PegasStore {
         )
       if (nextStatus === 'failed') {
         this.#failTerminalCollaborationEvent(eventId, error)
+        this.#updateReviewReworkReason(
+          eventId,
+          'review_rework_queued',
+          'review_rework_failed',
+        )
       }
       this.#database.exec('COMMIT')
     } catch (failure) {
       this.#database.exec('ROLLBACK')
       throw failure
     }
+  }
+
+  #updateReviewReworkReason(
+    eventId: string,
+    from: 'review_rework_queued' | 'review_rework_failed',
+    to: 'review_rework_queued' | 'review_rework_failed',
+  ): boolean {
+    const result = this.#database
+      .prepare(
+        `UPDATE tasks SET status_reason = ?, updated_at = ?
+         WHERE status = 'started' AND status_reason = ? AND EXISTS (
+           SELECT 1 FROM inbox_events event
+           JOIN review_packs pack ON pack.id = json_extract(event.payload_json, '$.reviewPackId')
+           WHERE event.id = ? AND event.source = 'review' AND event.type = 'user.message'
+             AND event.user_id = tasks.user_id
+             AND pack.task_id = tasks.id
+             AND pack.run_id = (
+               SELECT id FROM runs WHERE task_id = tasks.id
+               ORDER BY created_at DESC, rowid DESC LIMIT 1
+             )
+         )`,
+      )
+      .run(to, this.#clock.now().toISOString(), from, eventId)
+    return result.changes === 1
   }
 
   parkEventForBlockedAction(
@@ -9395,6 +9424,16 @@ export class PegasStore {
           now,
           task.id,
         )
+
+      if (decision.kind === 'continue_task') {
+        this.#database
+          .prepare(
+            `UPDATE runs SET status = 'cancelled', claimed_by = NULL, lease_until = NULL,
+               claim_token_hash = NULL, last_error = ?, updated_at = ?
+             WHERE task_id = ? AND status = 'waiting' AND goal_revision IS NOT NULL`,
+          )
+          .run(`superseded_by:${runId}`, now, task.id)
+      }
 
       const run = this.#runById(runId)
       task = this.#taskById(task.id)
@@ -11607,6 +11646,7 @@ export class PegasStore {
       )
         throw new Error('Final Worker Report requires a running or waiting Run')
       if (draft.status !== 'started' && draft.status !== 'progress') {
+        this.#assertNoPendingSteering(runId)
         const unresolvedAction = this.#database
           .prepare(
             `SELECT status FROM actions
@@ -11861,13 +11901,6 @@ export class PegasStore {
         })
         if (!goal.requireAcceptance)
           this.#finishReviewedTask(task, runId, draft.summary, now, 'executor')
-        this.#enqueueDerivedMemoryJob(
-          run,
-          task,
-          'run_success',
-          draft.summary,
-          now,
-        )
       } else if (draft.status === 'failed') {
         this.#database
           .prepare(
@@ -12000,6 +12033,13 @@ export class PegasStore {
                  ended_json = ?, updated_at = ? WHERE id = ?`,
       )
       .run(JSON.stringify({ at: now, by, outcome: 'completed' }), now, task.id)
+    this.#enqueueDerivedMemoryJob(
+      this.#runById(runId),
+      task,
+      'run_success',
+      summary,
+      now,
+    )
     this.#settleInboundCollaborations(task.id, 'completed', summary, runId, now)
     this.#failUndeliveredContextNotes(
       task.id,
@@ -13310,6 +13350,9 @@ export class PegasStore {
            )) OR (status = 'running' AND lease_until <= ?)
              OR (status = 'waiting' AND lease_until <= ? AND task_id IN (
                SELECT id FROM tasks WHERE status_reason = 'awaiting_evidence'
+             ) AND id = (
+               SELECT latest.id FROM runs latest WHERE latest.task_id = runs.task_id
+               ORDER BY latest.created_at DESC, latest.rowid DESC LIMIT 1
              )))
            ORDER BY created_at ASC, rowid ASC LIMIT 1`,
         )
@@ -14117,6 +14160,18 @@ export class PegasStore {
       if (row.status !== 'failed') {
         this.#database.exec('COMMIT')
         return toInboxEvent(row)
+      }
+      if (
+        row.source === 'review' &&
+        !this.#updateReviewReworkReason(
+          eventId,
+          'review_rework_failed',
+          'review_rework_queued',
+        )
+      ) {
+        throw new ReviewDecisionConflictError(
+          'This rework can no longer be retried',
+        )
       }
       this.#database
         .prepare(

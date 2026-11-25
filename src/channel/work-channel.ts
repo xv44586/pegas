@@ -105,6 +105,8 @@ function workflowState(
   switch (task.statusReason) {
     case 'review_rework_queued':
       return { state: 'queued' }
+    case 'review_rework_failed':
+      return { state: 'failed' }
     case 'awaiting_goal_clarification':
     case 'awaiting_user_input':
       return { state: 'awaiting_input', attention: true }
