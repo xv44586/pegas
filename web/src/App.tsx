@@ -851,6 +851,9 @@ export function App() {
       .reviewGoal(view.channel.id, view.review.goalRevision)
       .then(goal => {
         if (!goal) return
+        const parent = drawerReturnRef.current
+        if (parent?.kind === 'review' && parent.message.id === view.message.id)
+          drawerReturnRef.current = { ...parent, goal }
         setDrawer(current =>
           current?.kind === 'review' && current.message.id === view.message.id
             ? { ...current, goal }

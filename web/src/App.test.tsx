@@ -8338,6 +8338,7 @@ describe('sealed Pegas UI', () => {
         '候选版本通过健康检查并留存截图',
       ),
     ).toBeTruthy()
+    expect(deliveryReads).toBe(1)
   })
 
   it('loads and saves quiet-hours notification preferences', async () => {
