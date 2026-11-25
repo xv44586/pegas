@@ -1205,6 +1205,22 @@ CREATE TABLE derived_memory_tombstone_sources (
 );
 `
 
+const migration55 = `
+-- MEMORY-001 M4: L0 project summary. A bounded deterministic digest of the
+-- project's most salient facts, injected once per work Run so a project
+-- with thousands of facts still opens with constant-size context. Rebuilt
+-- from the fact table (never raw transcripts); no model call.
+CREATE TABLE memory_project_summaries (
+  user_id TEXT NOT NULL,
+  project_key TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  text TEXT NOT NULL,
+  fact_count INTEGER NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, project_key)
+);
+`
+
 const migration39 = `
 -- DESIGN-006 phase 2: manual deletion of ended automations. The command
 -- ledger must survive the definition so frozen receipts stay replayable;
@@ -3408,6 +3424,7 @@ export class PegasStore {
     this.#migrate(52, migration52)
     this.#migrate(53, migration53)
     this.#migrate(54, migration54)
+    this.#migrate(55, migration55)
   }
 
   #backfillWorkerIconIds(): void {
@@ -6130,6 +6147,7 @@ export class PegasStore {
          UNION SELECT user_id FROM derived_memory_cache
          UNION SELECT user_id FROM derived_memory_jobs
          UNION SELECT user_id FROM derived_memory_correction_jobs
+         UNION SELECT user_id FROM local_derived_memories
          ORDER BY user_id`,
       )
       .all() as { user_id: string }[]
@@ -6620,6 +6638,149 @@ export class PegasStore {
       { canonical_key: string; display_name: string } | undefined
     return row
       ? { canonicalKey: row.canonical_key, displayName: row.display_name }
+      : undefined
+  }
+
+  /**
+   * MEMORY-001 M4 salience: record that injected local facts were actually
+   * used, so ranking can prefer proven facts and decay stale ones. Called
+   * from the same recall write path as the audit; explicit/Hindsight facts
+   * are unaffected.
+   */
+  recordLocalDerivedMemoryUse(
+    userId: string,
+    memoryIds: readonly string[],
+  ): void {
+    if (memoryIds.length === 0) return
+    const now = this.#clock.now().toISOString()
+    const update = this.#database.prepare(
+      `UPDATE local_derived_memories
+       SET use_count = use_count + 1, last_used_at = ?
+       WHERE user_id = ? AND memory_id = ? AND state = 'valid'`,
+    )
+    for (const memoryId of memoryIds) update.run(now, userId, memoryId)
+  }
+
+  /**
+   * M4 near-duplicate merge: when a newly distilled fact is lexically
+   * identical (normalized) to an existing valid fact in the same scope,
+   * keep the existing row and refresh its recency instead of inserting a
+   * second copy. Returns the surviving memory ID, or undefined when the
+   * candidate is novel.
+   */
+  mergeNearDuplicateLocalMemory(
+    userId: string,
+    candidate: DerivedMemory,
+    projectKey?: string,
+  ): string | undefined {
+    const normalized = normalizedFactText(candidate.text)
+    const rows = this.#database
+      .prepare(
+        `SELECT memory_id, text FROM local_derived_memories
+         WHERE user_id = ? AND state = 'valid'
+           AND ((project_key IS NULL AND ? IS NULL) OR project_key = ?)
+         ORDER BY updated_at DESC
+         LIMIT 200`,
+      )
+      .all(userId, projectKey ?? null, projectKey ?? null) as {
+      memory_id: string
+      text: string
+    }[]
+    const duplicate = rows.find(
+      row => normalizedFactText(row.text) === normalized,
+    )
+    if (!duplicate) return undefined
+    this.#database
+      .prepare(
+        `UPDATE local_derived_memories
+         SET updated_at = ?, use_count = use_count + 1
+         WHERE user_id = ? AND memory_id = ?`,
+      )
+      .run(this.#clock.now().toISOString(), userId, duplicate.memory_id)
+    return duplicate.memory_id
+  }
+
+  /**
+   * M4 L0 summary: rebuild the bounded project digest from the most salient
+   * valid facts (use_count first, then recency). Deterministic, no model
+   * call; the digest is at most 12 facts / 1600 characters.
+   */
+  refreshMemoryProjectSummary(userId: string, projectKey: string): void {
+    const project = this.#database
+      .prepare(
+        `SELECT display_name FROM memory_projects
+         WHERE user_id = ? AND canonical_key = ?`,
+      )
+      .get(userId, projectKey) as { display_name: string } | undefined
+    if (!project) return
+    const rows = this.#database
+      .prepare(
+        `SELECT text FROM local_derived_memories
+         WHERE user_id = ? AND project_key = ? AND state = 'valid'
+         ORDER BY use_count DESC, updated_at DESC, memory_id
+         LIMIT 12`,
+      )
+      .all(userId, projectKey) as { text: string }[]
+    const total = this.#database
+      .prepare(
+        `SELECT COUNT(*) AS total FROM local_derived_memories
+         WHERE user_id = ? AND project_key = ? AND state = 'valid'`,
+      )
+      .get(userId, projectKey) as { total: number }
+    const now = this.#clock.now().toISOString()
+    if (rows.length === 0) {
+      this.#database
+        .prepare(
+          `DELETE FROM memory_project_summaries
+           WHERE user_id = ? AND project_key = ?`,
+        )
+        .run(userId, projectKey)
+      return
+    }
+    const lines: string[] = []
+    let used = 0
+    for (const row of rows) {
+      const line = `- ${row.text.replaceAll(/\s+/g, ' ').slice(0, 160)}`
+      if (used + line.length > 1_600) break
+      lines.push(line)
+      used += line.length
+    }
+    this.#database
+      .prepare(
+        `INSERT INTO memory_project_summaries
+          (user_id, project_key, display_name, text, fact_count, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(user_id, project_key) DO UPDATE SET
+           display_name = excluded.display_name, text = excluded.text,
+           fact_count = excluded.fact_count, updated_at = excluded.updated_at`,
+      )
+      .run(
+        userId,
+        projectKey,
+        project.display_name,
+        lines.join('\n'),
+        total.total,
+        now,
+      )
+  }
+
+  memoryProjectSummary(
+    userId: string,
+    projectKey: string,
+  ): { displayName: string; text: string; factCount: number } | undefined {
+    const row = this.#database
+      .prepare(
+        `SELECT display_name, text, fact_count FROM memory_project_summaries
+         WHERE user_id = ? AND project_key = ?`,
+      )
+      .get(userId, projectKey) as
+      { display_name: string; text: string; fact_count: number } | undefined
+    return row
+      ? {
+          displayName: row.display_name,
+          text: row.text,
+          factCount: row.fact_count,
+        }
       : undefined
   }
 
@@ -16700,6 +16861,10 @@ function toDerivedMemoryCorrectionJob(
 function derivedMemoryContentHash(value: string): string {
   const normalized = value.trim().replaceAll(/\s+/g, ' ').toLocaleLowerCase()
   return createHash('sha256').update(normalized).digest('hex')
+}
+
+function normalizedFactText(value: string): string {
+  return value.trim().replaceAll(/\s+/g, ' ').toLocaleLowerCase()
 }
 
 /**

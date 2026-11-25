@@ -320,6 +320,13 @@ Local Provider 只替换 `DerivedMemoryProvider` 的实现。durable job、幂�
 
 同 owner + project + kind 的未提交 retain job 攒批：60s 窗口或 5 个 job 先到先触发，一次有界模型调用蒸馏整批（证据拼接 ≤12k 字符）。每个 job 保留独立 durable 行、重试预算与完成记录；批内传输失败逐成员指数退避（MODEL-001 通道内 429 退避仍生效），operation 终态一次收敛全部成员。无项目 job 保持 M2 即时路径。高事务量下模型调用数收敛为每项目每窗口一次。
 
-### 当前缺口（M4+）
+## M4：读侧预算与金字塔（2026-11-25）
 
-读侧相关性门与 L0 项目摘要、salience 生命周期、Executor 历史检索工具。真实模型蒸馏质量与限流 canary 未评测。
+- **相关性门**（`src/memory/relevance.ts`）：确定性词面重叠（ASCII 词 token + CJK 字符 bigram），零模型调用。local 档召回中不相关候选以 `low_relevance` 进入审计、不占注入预算；Hindsight 档行为不变（其 Provider 自带相关性评分）。
+- **L0 项目摘要**：schema v55 新增 `memory_project_summaries`。蒸馏/失效后从事实表确定性重建（use_count 优先、次新近，≤12 条 ≤1600 字符），每个 work Run 注入一条常数级摘要，千条事实的项目开局上下文不膨胀。
+- **salience**：注入即 `use_count+1`/`last_used_at`（`recordLocalDerivedMemoryUse`，与召回审计同路径）；近重合并——同 scope 规范化文本相同的候选刷新既有行而非新增（`mergeNearDuplicateLocalMemory`）。
+- **修复**：`listDerivedMemoryUsers` 补 local 表 union，纯 local 事实的 owner 也能被 bank 解析与同步发现。
+
+### 当前缺口（M5）
+
+Executor 历史检索工具（search_history/read_history）。真实模型蒸馏质量与限流 canary、长期召回命中率评测未做。

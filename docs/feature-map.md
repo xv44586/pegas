@@ -638,6 +638,13 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - **自动化证据**：`test/memory-project.test.ts` 8 用例（remote 规范化、worktree/clone 收敛、默认工作区无项目、worktree 召回命中、项目事实不进全局不跨项目、攒批一次调用共同 settle、批量删除全来源压制、批失败逐成员退避）。既有 M1/M2 测试不改语义通过。门禁：`pnpm check` 146 文件 / 1,519 测试全绿（statement 78.07% / line 81.22%）；`pnpm smoke`（task d2bed897）+ `pnpm smoke:crash`（三崩溃点）通过。
 - **剩余缺口**：读侧相关性门、L0 项目摘要、salience 生命周期、历史检索工具（M4+）；真实模型蒸馏质量与限流 canary 未评测。
 
+#### M4：读侧预算与金字塔（2026-11-25，Partial，基于 M3 分支）
+
+- **用户结果**：不相关任务零注入；千条事实的项目新 Run 开局注入仍常数级（L0 摘要 ≤1600 字符 + 预算内 L1 命中）；重复经验合并不膨胀。
+- **实现**：`src/memory/relevance.ts` 确定性词面相关性门（ASCII token + CJK bigram，`low_relevance` 审计）；schema v55 `memory_project_summaries`（蒸馏/失效后确定性重建，use_count 优先）；`recordLocalDerivedMemoryUse` 注入计数；`mergeNearDuplicateLocalMemory` 同 scope 近重合并；`listDerivedMemoryUsers` 补 local 表 union（修复纯 local owner 不可见）。
+- **自动化证据**：`test/memory-read-budget.test.ts` 5 用例（中英文相关性评分、不相关 low_relevance 零注入、1000 条事实常数级注入、近重合并跨 scope 不误合、use_count + L0 有界摘要）。门禁：`pnpm check` 147 文件 / 1,524 测试全绿（statement 78.12% / line 81.26%）；`pnpm smoke`（task 10c2f386）+ `pnpm smoke:crash`（三崩溃点）通过。
+- **剩余缺口**：历史检索工具（M5）；效果评测未做。
+
 ### SETTINGS-001：模型服务设置重构验收边界（2026-11-19）
 
 - **用户结果**：“模型服务”只管理 Provider 连接、凭证状态、连接测试与模型目录；Router 的模型绑定在“事情归类”中，Pegas/Worker 的执行模型只在“Pegas”页配置，三者不重复承担职责。
