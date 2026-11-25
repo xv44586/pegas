@@ -8354,7 +8354,8 @@ export class PegasStore {
     const result = this.#database
       .prepare(
         `UPDATE inbox_events SET lease_until = ?
-         WHERE id = ? AND status = 'processing' AND claimed_by = ?`,
+         WHERE id = ? AND status = 'processing' AND claimed_by = ?
+           AND COALESCE(last_error, '') NOT LIKE 'blocked_by_action:%'`,
       )
       .run(new Date(now.getTime() + leaseMs).toISOString(), eventId, workerId)
     if (result.changes !== 1) {
@@ -8380,7 +8381,10 @@ export class PegasStore {
 
   #assertEventClaim(eventId: string, workerId: string): void {
     const row = this.#database
-      .prepare(`SELECT status, claimed_by FROM inbox_events WHERE id = ?`)
+      .prepare(
+        `SELECT status, claimed_by FROM inbox_events
+         WHERE id = ? AND COALESCE(last_error, '') NOT LIKE 'blocked_by_action:%'`,
+      )
       .get(eventId) as { status: string; claimed_by: string | null } | undefined
     if (row?.status !== 'processing' || row.claimed_by !== workerId) {
       throw new EventClaimError(
@@ -8581,7 +8585,8 @@ export class PegasStore {
               }
       const loadOwner = this.#database.prepare(
         `SELECT user_id FROM inbox_events
-         WHERE id = ? AND status = 'processing' AND claimed_by = ?`,
+         WHERE id = ? AND status = 'processing' AND claimed_by = ?
+           AND COALESCE(last_error, '') NOT LIKE 'blocked_by_action:%'`,
       )
       const linkEvent = this.#database.prepare(
         `INSERT INTO task_events (event_id, task_id, relation, created_at)
@@ -8596,10 +8601,15 @@ export class PegasStore {
            END,
            created_at = excluded.created_at`,
       )
+      // Reserved contracts must retain their claim identity while processing.
+      // The parked marker and sentinel lease fence them until settlement.
       const updateEvent = this.#database.prepare(
         `UPDATE inbox_events
-         SET status = ?, claimed_by = NULL, lease_until = ?, last_error = ?
-         WHERE id = ?`,
+         SET status = $status,
+             claimed_by = CASE WHEN $status = 'processing' AND required_contract_version > 1
+               THEN claimed_by ELSE NULL END,
+             lease_until = $lease, last_error = $error
+         WHERE id = $id`,
       )
       for (const eventId of eventIds) {
         const event = loadOwner.get(eventId, workerId) as
@@ -8611,12 +8621,12 @@ export class PegasStore {
         if (task.userId !== event.user_id)
           throw new Error('Task belongs to another user')
         linkEvent.run(eventId, taskId, now)
-        updateEvent.run(
-          transition.eventStatus,
-          transition.lease,
-          transition.error,
-          eventId,
-        )
+        updateEvent.run({
+          status: transition.eventStatus,
+          lease: transition.lease,
+          error: transition.error,
+          id: eventId,
+        })
       }
       return transition.outcome
     })
@@ -14347,11 +14357,10 @@ export class PegasStore {
       }
       this.#database
         .prepare(
-          `UPDATE inbox_events SET status = 'failed', lease_until = NULL,
+          `UPDATE inbox_events SET status = 'failed', claimed_by = NULL, lease_until = NULL,
              last_error = 'blocked_task_stopped'
            WHERE id IN (
-             SELECT event_id FROM task_events
-             WHERE task_id = ? AND relation = 'blocked_action'
+             SELECT event_id FROM task_events WHERE task_id = ?
            ) AND status = 'processing' AND last_error LIKE 'blocked_by_action:%'`,
         )
         .run(taskId)
@@ -15463,14 +15472,13 @@ export class PegasStore {
   }
 
   #wakeBlockedTaskEvents(taskId: string, now: string): void {
-    this.#database
+    const released = this.#database
       .prepare(
         `UPDATE inbox_events
          SET status = 'pending', claimed_by = NULL, lease_until = NULL,
              last_error = NULL
          WHERE id IN (
-           SELECT event_id FROM task_events
-           WHERE task_id = ? AND relation = 'blocked_action'
+           SELECT event_id FROM task_events WHERE task_id = ?
          )
            AND status = 'processing'
            AND last_error LIKE 'blocked_by_action:%'
@@ -15478,18 +15486,14 @@ export class PegasStore {
              SELECT 1 FROM actions
              WHERE actions.task_id = ? AND actions.protocol_version = 1
                AND actions.status IN ('awaiting_approval','authorized','failed','unknown')
-           )`,
+           )
+         RETURNING id`,
       )
-      .run(taskId, taskId)
-    this.#database
-      .prepare(
-        `UPDATE task_events SET created_at = ?
-         WHERE task_id = ? AND relation = 'blocked_action'
-           AND event_id IN (
-             SELECT id FROM inbox_events WHERE status = 'pending'
-           )`,
-      )
-      .run(now, taskId)
+      .all(taskId, taskId) as { id: string }[]
+    const stamp = this.#database.prepare(
+      'UPDATE task_events SET created_at = ? WHERE event_id = ?',
+    )
+    for (const event of released) stamp.run(now, event.id)
   }
 
   #createRetry(row: RunRow, now: string): Run {
