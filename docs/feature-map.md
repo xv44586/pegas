@@ -645,6 +645,13 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - **自动化证据**：`test/memory-read-budget.test.ts` 5 用例（中英文相关性评分、不相关 low_relevance 零注入、1000 条事实常数级注入、近重合并跨 scope 不误合、use_count + L0 有界摘要）。门禁：`pnpm check` 147 文件 / 1,524 测试全绿（statement 78.12% / line 81.26%）；`pnpm smoke`（task 10c2f386）+ `pnpm smoke:crash`（三崩溃点）通过。
 - **剩余缺口**：历史检索工具（M5）；效果评测未做。
 
+#### M5：历史检索工具（2026-11-25，Partial，基于 M4 分支）
+
+- **用户结果**："上次那个表/文件放哪了"跨 Task（含已结束）可答；Executor 用 search_history 定位 + read_history 单条核实，无全文轰炸。
+- **实现**：store `searchHistoryForRun`（复用 channel_search FTS，snippet ≤96 字符、≤20 条、owner 隔离、排除 conversation）/`readHistoryForRun`（单条 ≤6000 字符截断标记）；控制面 `GET /v1/runs/:id/history/(search|read)` claim 头认证；`src/executor/dsh-history-tools.mjs` 插件仅 work Run 带 actionCapability 时经 patch 挂载，mask 模式先掩码，10s 超时 + 64KB 上限；执行合同 prompt 增加历史问题检索指引。无 schema 变更。
+- **自动化证据**：`test/history-tools.test.ts` 4 用例（closed task 检索+单读、owner 隔离/伪造 claim/参数边界、HTTP 200-403-404、插件 capability 校验）；`test/dsh-cli-executor.test.ts` +1（work Run 挂载/无 capability 不挂载/patch 清理）；`test/dsh-approval-bridge.test.ts` 断言更新（never 档无 bridge 但允许 history patch）。门禁：`pnpm check` 148 文件 / 1,529 测试全绿（statement 78.16% / line 81.29%）；`pnpm smoke`（task 8d90742f）+ `pnpm smoke:crash`（三崩溃点）通过。
+- **剩余缺口**：真实模型对工具的使用遵守度未评测；效果评测未做。
+
 ### SETTINGS-001：模型服务设置重构验收边界（2026-11-19）
 
 - **用户结果**：“模型服务”只管理 Provider 连接、凭证状态、连接测试与模型目录；Router 的模型绑定在“事情归类”中，Pegas/Worker 的执行模型只在“Pegas”页配置，三者不重复承担职责。

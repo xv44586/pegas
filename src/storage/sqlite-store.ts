@@ -11019,6 +11019,161 @@ export class PegasStore {
     }
   }
 
+  /**
+   * MEMORY-001 M5: bounded history search for the Executor read-only
+   * tools. Reuses the channel_search FTS surface (task titles/goals, user
+   * inputs, Run outputs, worker reports, artifact names, outbox text) but
+   * projects document-level hits with task title and time instead of whole
+   * transcripts. Owner isolation is enforced in SQL; conversation lanes
+   * are excluded. Results are untrusted data for the model, never
+   * instructions.
+   */
+  searchHistoryForRun(
+    runId: string,
+    claimToken: string,
+    query: string,
+    limit = 10,
+  ): {
+    results: {
+      taskId: string
+      taskTitle: string
+      sourceKind: string
+      sourceId: string
+      snippet: string
+      updatedAt: string
+    }[]
+  } {
+    this.#claimForCapability(runId, claimToken)
+    const run = this.#runById(runId)
+    const task = this.#taskById(run.taskId)
+    const trimmed = query.trim()
+    if (!trimmed || Array.from(trimmed).length > 200)
+      throw new Error('History query must be 1-200 characters')
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 20)
+      throw new Error('History limit must be between 1 and 20')
+    const rows =
+      Array.from(trimmed).length >= 3
+        ? (this.#database
+            .prepare(
+              `SELECT
+                 documents.task_id,
+                 tasks.title AS task_title,
+                 documents.source_kind,
+                 documents.source_id,
+                 snippet(channel_search, 0, '', '', '…', 24) AS snippet,
+                 documents.updated_at
+               FROM channel_search
+               INNER JOIN channel_search_documents documents
+                 ON documents.rowid = channel_search.rowid
+               INNER JOIN tasks ON tasks.id = documents.task_id
+               WHERE tasks.user_id = ? AND tasks.kind <> 'conversation'
+                 AND channel_search MATCH ?
+               ORDER BY bm25(channel_search), documents.updated_at DESC
+               LIMIT ?`,
+            )
+            .all(task.userId, ftsTrigramQuery(trimmed), limit) as unknown as {
+            task_id: string
+            task_title: string
+            source_kind: string
+            source_id: string
+            snippet: string
+            updated_at: string
+          }[])
+        : (this.#database
+            .prepare(
+              `SELECT
+                 documents.task_id,
+                 tasks.title AS task_title,
+                 documents.source_kind,
+                 documents.source_id,
+                 substr(
+                   documents.text,
+                   max(1, instr(lower(documents.text), lower(?)) - 32),
+                   96
+                 ) AS snippet,
+                 documents.updated_at
+               FROM channel_search_documents documents
+               INNER JOIN tasks ON tasks.id = documents.task_id
+               WHERE tasks.user_id = ? AND tasks.kind <> 'conversation'
+                 AND instr(lower(documents.text), lower(?)) > 0
+               ORDER BY documents.updated_at DESC
+               LIMIT ?`,
+            )
+            .all(trimmed, task.userId, trimmed, limit) as unknown as {
+            task_id: string
+            task_title: string
+            source_kind: string
+            source_id: string
+            snippet: string
+            updated_at: string
+          }[])
+    return {
+      results: rows.map(row => ({
+        taskId: row.task_id,
+        taskTitle: row.task_title,
+        sourceKind: row.source_kind,
+        sourceId: row.source_id,
+        snippet: row.snippet,
+        updatedAt: row.updated_at,
+      })),
+    }
+  }
+
+  /**
+   * M5: single bounded history document read. Only the exact source kinds
+   * the search surface indexes are readable; content is capped so one read
+   * can never flood the context. Cross-owner reads return not found.
+   */
+  readHistoryForRun(
+    runId: string,
+    claimToken: string,
+    sourceKind: string,
+    sourceId: string,
+  ): {
+    taskId: string
+    taskTitle: string
+    sourceKind: string
+    sourceId: string
+    text: string
+    updatedAt: string
+    truncated: boolean
+  } {
+    this.#claimForCapability(runId, claimToken)
+    const run = this.#runById(runId)
+    const task = this.#taskById(run.taskId)
+    const row = this.#database
+      .prepare(
+        `SELECT documents.task_id, tasks.title AS task_title,
+           documents.source_kind, documents.source_id,
+           documents.text, documents.updated_at
+         FROM channel_search_documents documents
+         INNER JOIN tasks ON tasks.id = documents.task_id
+         WHERE tasks.user_id = ? AND tasks.kind <> 'conversation'
+           AND documents.source_kind = ? AND documents.source_id = ?`,
+      )
+      .get(task.userId, sourceKind, sourceId) as
+      | {
+          task_id: string
+          task_title: string
+          source_kind: string
+          source_id: string
+          text: string
+          updated_at: string
+        }
+      | undefined
+    if (!row) throw new MemoryNotFoundError()
+    const maximumCharacters = 6_000
+    return {
+      taskId: row.task_id,
+      taskTitle: row.task_title,
+      sourceKind: row.source_kind,
+      sourceId: row.source_id,
+      text: row.text.slice(0, maximumCharacters),
+      updatedAt: row.updated_at,
+      truncated: row.text.length > maximumCharacters,
+    }
+  }
+
   createFollowUpFromRun(
     runId: string,
     claimToken: string,
