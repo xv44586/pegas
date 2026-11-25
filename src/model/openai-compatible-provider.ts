@@ -4,12 +4,19 @@ import type {
   JsonModelResult,
   ModelCallUsage,
 } from './provider.js'
+import {
+  ModelHttpError,
+  retryAfterMs,
+  withModelRetry,
+  type ModelRetryOptions,
+} from './retry.js'
 
 export interface OpenAiCompatibleProviderOptions {
   baseUrl: string
   model: string
   apiKey?: string
   timeoutMs?: number
+  retry?: ModelRetryOptions
 }
 
 export class OpenAiCompatibleProvider implements JsonModelProvider {
@@ -18,6 +25,7 @@ export class OpenAiCompatibleProvider implements JsonModelProvider {
   readonly #model: string
   readonly #apiKey?: string
   readonly #timeoutMs: number
+  readonly #retry: ModelRetryOptions
 
   constructor(options: OpenAiCompatibleProviderOptions) {
     this.#endpoint = new URL(
@@ -27,6 +35,7 @@ export class OpenAiCompatibleProvider implements JsonModelProvider {
     this.#model = options.model
     this.#apiKey = options.apiKey
     this.#timeoutMs = options.timeoutMs ?? 15_000
+    this.#retry = options.retry ?? {}
   }
 
   async generateJson(request: JsonModelRequest): Promise<unknown> {
@@ -36,45 +45,55 @@ export class OpenAiCompatibleProvider implements JsonModelProvider {
   async generateJsonWithUsage(
     request: JsonModelRequest,
   ): Promise<JsonModelResult> {
-    const timeoutSignal = AbortSignal.timeout(this.#timeoutMs)
-    const signal = request.signal
-      ? AbortSignal.any([request.signal, timeoutSignal])
-      : timeoutSignal
-    const response = await fetch(this.#endpoint, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        ...(this.#apiKey ? { authorization: `Bearer ${this.#apiKey}` } : {}),
+    return withModelRetry(
+      async () => {
+        const timeoutSignal = AbortSignal.timeout(this.#timeoutMs)
+        const signal = request.signal
+          ? AbortSignal.any([request.signal, timeoutSignal])
+          : timeoutSignal
+        const response = await fetch(this.#endpoint, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            ...(this.#apiKey
+              ? { authorization: `Bearer ${this.#apiKey}` }
+              : {}),
+          },
+          body: JSON.stringify({
+            model: this.#model,
+            messages: [
+              { role: 'system', content: request.system },
+              { role: 'user', content: request.input },
+            ],
+            response_format: { type: 'json_object' },
+            temperature: 0,
+          }),
+          signal,
+        })
+
+        if (!response.ok) {
+          const detail = (await response.text()).slice(0, 2048)
+          throw new ModelHttpError(
+            response.status,
+            detail,
+            retryAfterMs(response.headers.get('retry-after')),
+          )
+        }
+
+        const body: unknown = await response.json()
+        const content = extractContent(body)
+        try {
+          return {
+            value: JSON.parse(content) as unknown,
+            ...(extractUsage(body) ? { usage: extractUsage(body) } : {}),
+          }
+        } catch {
+          throw new Error('Model provider did not return valid JSON')
+        }
       },
-      body: JSON.stringify({
-        model: this.#model,
-        messages: [
-          { role: 'system', content: request.system },
-          { role: 'user', content: request.input },
-        ],
-        response_format: { type: 'json_object' },
-        temperature: 0,
-      }),
-      signal,
-    })
-
-    if (!response.ok) {
-      const detail = (await response.text()).slice(0, 2048)
-      throw new Error(
-        `Model provider returned ${String(response.status)}${detail ? `: ${detail}` : ''}`,
-      )
-    }
-
-    const body: unknown = await response.json()
-    const content = extractContent(body)
-    try {
-      return {
-        value: JSON.parse(content) as unknown,
-        ...(extractUsage(body) ? { usage: extractUsage(body) } : {}),
-      }
-    } catch {
-      throw new Error('Model provider did not return valid JSON')
-    }
+      request.signal,
+      this.#retry,
+    )
   }
 }
 

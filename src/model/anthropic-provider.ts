@@ -4,12 +4,19 @@ import type {
   JsonModelResult,
   ModelCallUsage,
 } from './provider.js'
+import {
+  ModelHttpError,
+  retryAfterMs,
+  withModelRetry,
+  type ModelRetryOptions,
+} from './retry.js'
 
 export interface AnthropicProviderOptions {
   baseUrl: string
   model: string
   apiKey?: string
   timeoutMs?: number
+  retry?: ModelRetryOptions
 }
 
 export class AnthropicProvider implements JsonModelProvider {
@@ -18,6 +25,7 @@ export class AnthropicProvider implements JsonModelProvider {
   readonly #model: string
   readonly #apiKey?: string
   readonly #timeoutMs: number
+  readonly #retry: ModelRetryOptions
 
   constructor(options: AnthropicProviderOptions) {
     this.#endpoint = new URL(
@@ -27,6 +35,7 @@ export class AnthropicProvider implements JsonModelProvider {
     this.#model = options.model
     this.#apiKey = options.apiKey
     this.#timeoutMs = options.timeoutMs ?? 15_000
+    this.#retry = options.retry ?? {}
   }
 
   async generateJson(request: JsonModelRequest): Promise<unknown> {
@@ -36,46 +45,54 @@ export class AnthropicProvider implements JsonModelProvider {
   async generateJsonWithUsage(
     request: JsonModelRequest,
   ): Promise<JsonModelResult> {
-    const timeoutSignal = AbortSignal.timeout(this.#timeoutMs)
-    const signal = request.signal
-      ? AbortSignal.any([request.signal, timeoutSignal])
-      : timeoutSignal
-    const response = await fetch(this.#endpoint, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        ...(this.#apiKey ? { 'x-api-key': this.#apiKey } : {}),
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: this.#model,
-        max_tokens: 2048,
-        temperature: 0,
-        system: request.system,
-        messages: [{ role: 'user', content: request.input }],
-        tools: [
-          {
-            name: 'return_json',
-            description: 'Return the structured JSON result.',
-            input_schema: request.schema ?? defaultObjectSchema,
+    return withModelRetry(
+      async () => {
+        const timeoutSignal = AbortSignal.timeout(this.#timeoutMs)
+        const signal = request.signal
+          ? AbortSignal.any([request.signal, timeoutSignal])
+          : timeoutSignal
+        const response = await fetch(this.#endpoint, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            ...(this.#apiKey ? { 'x-api-key': this.#apiKey } : {}),
+            'anthropic-version': '2023-06-01',
           },
-        ],
-        tool_choice: { type: 'tool', name: 'return_json' },
-      }),
-      signal,
-    })
-    if (!response.ok) {
-      const detail = (await response.text()).slice(0, 2048)
-      throw new Error(
-        `Model provider returned ${String(response.status)}${detail ? `: ${detail}` : ''}`,
-      )
-    }
-    const body: unknown = await response.json()
-    const usage = extractUsage(body)
-    return {
-      value: extractToolInput(body),
-      ...(usage ? { usage } : {}),
-    }
+          body: JSON.stringify({
+            model: this.#model,
+            max_tokens: 2048,
+            temperature: 0,
+            system: request.system,
+            messages: [{ role: 'user', content: request.input }],
+            tools: [
+              {
+                name: 'return_json',
+                description: 'Return the structured JSON result.',
+                input_schema: request.schema ?? defaultObjectSchema,
+              },
+            ],
+            tool_choice: { type: 'tool', name: 'return_json' },
+          }),
+          signal,
+        })
+        if (!response.ok) {
+          const detail = (await response.text()).slice(0, 2048)
+          throw new ModelHttpError(
+            response.status,
+            detail,
+            retryAfterMs(response.headers.get('retry-after')),
+          )
+        }
+        const body: unknown = await response.json()
+        const usage = extractUsage(body)
+        return {
+          value: extractToolInput(body),
+          ...(usage ? { usage } : {}),
+        }
+      },
+      request.signal,
+      this.#retry,
+    )
   }
 }
 
