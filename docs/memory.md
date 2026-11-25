@@ -340,7 +340,7 @@ Local Provider 只替换 `DerivedMemoryProvider` 的实现。durable job、幂�
 
 ### 运行实例发布记录（2026-11-25）
 
-M2–M5（PR #102–#105）合入 main 后经 Candidate `main-523e67d-r1` 上线，schema 52→55 纯增量，`PEGAS_MEMORY_PROVIDER=local` 已在 Supervisor plist 启用。发布当日的真实 work canary 遇上游模型配额 429：失败 Run 按设计未入经验库（基础设施形态失败排除），用户收到失败通知；local 蒸馏→召回闭环留待真实使用数据验证。使用期评测观测点：
+M2–M5（PR #102–#105）合入 main 后经 Candidate `main-523e67d-r1` 上线，schema 52→55 纯增量，`PEGAS_MEMORY_PROVIDER=local` 已在 Supervisor plist 启用。发布当日的真实确认消息 canary（conversation lane）遇上游模型配额 429：conversation lane 按设计不产生派生记忆 job，用户收到失败通知；work lane 的 local 蒸馏→召回闭环留待真实使用数据验证。使用期评测观测点：
 
 - `derived_memory_jobs`：入队、攒批（60s/5 job）、settle 与指数退避（`memory.retain_retry` 日志）。
 - `local_derived_memories`：事实数量、scope/project_key 分布、`use_count`（注入即计数）与近重合并。
