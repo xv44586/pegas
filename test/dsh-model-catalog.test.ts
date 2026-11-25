@@ -1,4 +1,11 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -41,6 +48,29 @@ process.stdout.write(\`- id: llm-pi-ai
       models: [
         { provider: 'magpie', id: 'model-a', name: 'Model A' },
         { provider: 'magpie', id: 'model-b', name: 'Model B' },
+      ],
+    })
+  })
+
+  it('loads a user-installed Node CLI with the minimal Finder PATH', async () => {
+    const command = fakeDsh(`
+process.stdout.write(JSON.stringify([
+  { id: 'agent-default-model', config: { provider: 'magpie', model: 'finder-model' } },
+  { id: 'llm-pi-ai', config: { providers: { magpie: { models: [{ id: 'finder-model' }] } } } },
+]))
+`)
+    const home = mkdtempSync(join(tmpdir(), 'pegas-finder-home-'))
+    temporaryDirectories.push(home)
+    mkdirSync(join(home, '.local', 'bin'), { recursive: true })
+    copyFileSync(command, join(home, '.local', 'bin', 'dsh'))
+    await expect(
+      loadDshModelCatalog({
+        environment: { HOME: home, PATH: '/usr/bin:/bin:/usr/sbin:/sbin' },
+      }),
+    ).resolves.toMatchObject({
+      defaultModel: 'finder-model',
+      models: [
+        { provider: 'magpie', id: 'finder-model', name: 'finder-model' },
       ],
     })
   })

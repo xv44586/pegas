@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 
 import type { ModelTokenUsage } from '../core/domain.js'
 import type { DshModelConfiguration } from './dsh-home.js'
+import { dshLaunch } from './dsh-launch.js'
 import type { ExecutorInput, ExecutorResult, RunExecutor } from './executor.js'
 import type { TextPrivacyMasker } from '../privacy/masker.js'
 
@@ -288,7 +289,8 @@ export class DshCliExecutor implements RunExecutor {
       ...(input.resumeSessionId ? ['--session-id', input.resumeSessionId] : []),
       '-',
     ]
-    const child = spawn(this.#command, arguments_, {
+    const launch = dshLaunch(this.#command, arguments_)
+    const child = spawn(launch.command, launch.args, {
       cwd: input.workingDirectory,
       env: {
         ...executorEnvironment(process.env),

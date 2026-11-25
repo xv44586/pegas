@@ -344,6 +344,16 @@ export function SettingsPage({
   const [modelServiceProvider, setModelServiceProvider] =
     useState<RuntimeSettings['modelProvider']>()
   const [providerDraft, setProviderDraft] = useState<ModelProviderDraft>()
+  const [providerCatalogs, setProviderCatalogs] = useState<
+    Record<
+      string,
+      {
+        generation: number
+        models: ModelCatalogItem[]
+      }
+    >
+  >({})
+  const [catalogGeneration, setCatalogGeneration] = useState(0)
   const [speechDraft, setSpeechDraft] = useState<SpeechSettingsDraft>()
   const [rewriteDraft, setRewriteDraft] = useState<RewriteSettingsDraft>()
   const [confirmingFullAccess, setConfirmingFullAccess] = useState(false)
@@ -364,6 +374,8 @@ export function SettingsPage({
   const footerActive = dirty || saving || notice !== undefined
   useEffect(() => {
     setDraft(response?.settings)
+    setProviderCatalogs({})
+    setCatalogGeneration(current => current + 1)
     setNotice(undefined)
     setModelServiceProvider(response?.settings.modelProvider)
     const provider = response?.capabilities.providers.find(
@@ -448,6 +460,8 @@ export function SettingsPage({
   }
 
   function editProviderDraft(next: ModelProviderDraft) {
+    setProviderCatalogs({})
+    setCatalogGeneration(current => current + 1)
     setNotice(undefined)
     setProviderDraft(next)
   }
@@ -538,6 +552,35 @@ export function SettingsPage({
                 )}
                 {section === 'models' && (
                   <ModelServices
+                    catalogFor={provider => {
+                      const cached = providerCatalogs[provider]
+                      const currentDraft =
+                        provider === draft.modelProvider
+                          ? providerDraft
+                          : undefined
+                      if (cached?.generation === catalogGeneration)
+                        return cached.models
+                      const saved = response.capabilities.providers.find(
+                        item => item.id === provider,
+                      )
+                      if (
+                        currentDraft &&
+                        providerDraftDirty(currentDraft, saved)
+                      )
+                        return []
+                      return (agentModels?.models ?? []).filter(
+                        model => model.provider === provider,
+                      )
+                    }}
+                    onCatalog={(provider, models) =>
+                      setProviderCatalogs(current => ({
+                        ...current,
+                        [provider]: {
+                          generation: catalogGeneration,
+                          models,
+                        },
+                      }))
+                    }
                     draft={draft}
                     onDiscoverModels={onDiscoverModels}
                     onOpenRouter={() => selectSection('router')}
@@ -667,7 +710,7 @@ export function SettingsPage({
                     provider => provider.id === response.settings.modelProvider,
                   )
                   if (savedProvider)
-                    setProviderDraft({
+                    editProviderDraft({
                       name: savedProvider.name,
                       protocol: savedProvider.protocol,
                       baseUrl: savedProvider.baseUrl,
@@ -1558,6 +1601,8 @@ function BehaviorSettings({
 }
 
 function ModelServices({
+  catalogFor,
+  onCatalog,
   response,
   draft,
   providerDraft,
@@ -1569,6 +1614,8 @@ function ModelServices({
   onOpenRouter,
   onOpenVoice,
 }: {
+  catalogFor: (provider: string) => ModelCatalogItem[]
+  onCatalog: (provider: string, models: ModelCatalogItem[]) => void
   response: SettingsResponse
   draft: RuntimeSettings
   providerDraft?: ModelProviderDraft
@@ -1582,7 +1629,6 @@ function ModelServices({
 }) {
   const providers = response.capabilities.providers
   const [query, setQuery] = useState('')
-  const [models, setModels] = useState<ModelCatalogItem[]>([])
   const [modelQuery, setModelQuery] = useState('')
   const [modelPage, setModelPage] = useState(0)
   const [busy, setBusy] = useState<'test' | 'discover'>()
@@ -1590,6 +1636,7 @@ function ModelServices({
   const providerRequestRef = useRef(0)
   const active =
     providers.find(provider => provider.id === selected) ?? providers[0]
+  const models = active ? catalogFor(active.id) : []
   const activeProviderDraft: ModelProviderDraft = {
     name: active?.name ?? '',
     protocol: active?.protocol ?? 'openai-chat',
@@ -1602,6 +1649,15 @@ function ModelServices({
       ? draft.modelName.trim()
       : (active?.defaultModel.trim() ?? '')
   const canProbe = Boolean(probeModel)
+  useEffect(() => {
+    providerRequestRef.current += 1
+    setBusy(undefined)
+    setStatus('')
+    setModelPage(0)
+    return () => {
+      providerRequestRef.current += 1
+    }
+  }, [selected, providerDraft, response])
   async function discover() {
     if (!active || !canProbe) return
     const requestId = providerRequestRef.current + 1
@@ -1617,7 +1673,7 @@ function ModelServices({
           : activeProviderDraft,
       )
       if (providerRequestRef.current !== requestId) return
-      setModels(result)
+      onCatalog(active.id, result)
       setModelPage(0)
       setStatus(`已读取 ${String(result.length)} 个模型`)
     } catch (caught) {
@@ -1713,7 +1769,6 @@ function ModelServices({
                 onClick={() => {
                   providerRequestRef.current += 1
                   setSelected(provider.id)
-                  setModels([])
                   setModelPage(0)
                   setModelQuery('')
                   setStatus('')
