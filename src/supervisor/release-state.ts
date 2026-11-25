@@ -313,6 +313,9 @@ function isReleaseRef(value: unknown): value is ReleaseRef {
       (isRecord(value.compatibility) &&
         Number.isSafeInteger(value.compatibility.minimumSchema) &&
         Number.isSafeInteger(value.compatibility.maximumSchema) &&
+        (value.compatibility.taskWorkflowVersion === undefined ||
+          (Number.isSafeInteger(value.compatibility.taskWorkflowVersion) &&
+            Number(value.compatibility.taskWorkflowVersion) >= 0)) &&
         Number(value.compatibility.minimumSchema) >= 0 &&
         Number(value.compatibility.minimumSchema) <=
           Number(value.compatibility.maximumSchema))) &&

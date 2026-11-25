@@ -176,6 +176,15 @@ describe('SELF-001 candidate builder', () => {
     })
     mkdirSync(join(worktree, 'node_modules'))
     writeFileSync(join(worktree, 'dist/change.txt'), 'candidate change\n')
+    for (const tree of ['src', 'dist']) {
+      const path = join(worktree, tree, 'supervisor')
+      mkdirSync(path, { recursive: true })
+      writeFileSync(
+        join(path, 'task-workflow-contract.json'),
+        JSON.stringify({ version: 1, maximumSchema: 56 }),
+      )
+    }
+
     execFileSync('git', ['add', '-A'], { cwd: worktree })
     execFileSync('git', ['commit', '-m', 'self change'], { cwd: worktree })
     const commit = execFileSync('git', ['rev-parse', 'HEAD'], {
@@ -200,6 +209,7 @@ describe('SELF-001 candidate builder', () => {
           },
         }),
     })
+    expect(built.manifest.compatibility.taskWorkflowVersion).toBe(1)
     expect(built.manifest.release.commit).toBe(commit)
     expect(built.manifest.verification.testedCommit).toBe(commit)
     expect(

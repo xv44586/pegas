@@ -650,6 +650,7 @@ export interface ReleaseRef {
   compatibility?: {
     minimumSchema: number
     maximumSchema: number
+    taskWorkflowVersion?: number
   }
 }
 

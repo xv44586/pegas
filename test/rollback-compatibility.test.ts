@@ -14,6 +14,147 @@ import {
 } from '../src/supervisor/rollback-compatibility.js'
 
 describe('durable state rollback compatibility', () => {
+  it('blocks same-schema rollback before and during human delivery review', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'pegas-workflow-rollback-'))
+    const path = join(directory, 'pegas.sqlite')
+    const store = new PegasStore(path)
+    try {
+      const claimed = createClaimedTask(
+        store,
+        'owner',
+        'Human acceptance',
+        'worker',
+      )
+      const goal = store.createGoalContract(
+        claimed.task.id,
+        'owner',
+        'manual-review',
+        {
+          basedOnEventIds: [claimed.task.originEventId],
+          desiredOutcome: 'Accept the result',
+          beneficiaries: [],
+          successCriteria: [],
+          nonGoals: [],
+          constraints: [],
+          contextSources: [],
+          assumptions: [],
+          unknowns: [],
+          prerequisites: [],
+          permissionBoundary: {},
+          reviewCheckpoints: [],
+          evidencePlan: [],
+          failureAndRecovery: 'Wait for assurance',
+          feedbackSignals: [],
+          requireAcceptance: true,
+        },
+      )
+      expect(() => assertRollbackCompatible(path, 56, 0)).toThrow(/workflow/i)
+      store.completeRun(claimed.run.id, 'worker', {
+        executorRef: 'fixture-session',
+        output: 'Result',
+      })
+      const { reviewPack } = store.submitWorkerReport(
+        claimed.run.id,
+        'owner',
+        'worker',
+        {
+          goalRevision: goal.revision,
+          reportSequence: 1,
+          status: 'ready',
+          evidenceRefIds: [],
+          summary: 'Result',
+          limitations: [],
+          remainingRisks: [],
+        },
+      )
+      if (!reviewPack) throw new Error('Expected pack')
+      expect(() => assertRollbackCompatible(path, 56, 0)).toThrow(/workflow/i)
+      expect(() => assertRollbackCompatible(path, 56, 1)).not.toThrow()
+      store.decideDelivery(reviewPack.id, 'owner', {
+        commandId: 'accept-for-rollback',
+        decision: 'accept',
+      })
+      expect(() => assertRollbackCompatible(path, 56, 0)).not.toThrow()
+    } finally {
+      store.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('guards pending references, queued explanations and durable source revocations', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'pegas-workflow-rollback-'))
+    const path = join(directory, 'pegas.sqlite')
+    const store = new PegasStore(path)
+    try {
+      store.initializeRuntimeSettings(runtimeSettingsDefaults(loadConfig({})))
+      const event = store.enqueueEvent({
+        userId: 'owner',
+        type: 'user.message',
+        source: 'web',
+        authenticatedActor: 'human',
+        payload: {
+          text: 'Explain',
+          replyToMessageId: 'stored-result',
+          intent: 'explain',
+        },
+      }).event
+      expect(() => assertRollbackCompatible(path, 56, 0)).toThrow(/workflow/i)
+      const input = store.claimNextEvent('router')
+      if (!input) throw new Error('Expected explanation input')
+      const { task } = store.applyRoutingDecision(
+        input,
+        {
+          kind: 'reply',
+          input: 'Explain',
+          reason: 'User requested read-only explanation',
+        },
+        'echo',
+        { executor: 'echo', protocol: 'conversation-v1' },
+      )
+      store.completeEvent(event.id, 'router')
+      expect(() => assertRollbackCompatible(path, 56, 0)).toThrow(/workflow/i)
+      store.stopTask(task.id, 'owner', 'stop-explanation')
+      expect(() => assertRollbackCompatible(path, 56, 0)).not.toThrow()
+
+      const claimed = createClaimedTask(
+        store,
+        'owner',
+        'Corrected work',
+        'worker',
+      )
+      const correction = store.enqueueEvent({
+        userId: 'owner',
+        type: 'user.message',
+        source: 'web',
+        authenticatedActor: 'human',
+        payload: { text: 'Use the newest figures' },
+      }).event
+      store.applyControlIntent(correction, {
+        kind: 'steer_task',
+        taskId: claimed.task.id,
+        input: 'Use the newest figures',
+        reason: 'Corrected',
+      })
+      expect(() => assertRollbackCompatible(path, 56, 0)).toThrow(/workflow/i)
+      store.stopTask(claimed.task.id, 'owner', 'stop-corrected-work')
+      expect(() => assertRollbackCompatible(path, 56, 0)).not.toThrow()
+
+      store.setTaskResumeSourcePolicy('owner', 'web', false, 0)
+      expect(() => assertRollbackCompatible(path, 56, 0)).toThrow(
+        /resume source/i,
+      )
+      expect(() => assertRollbackCompatible(path, 55, 1)).toThrow(
+        /resume source/i,
+      )
+      expect(() => assertRollbackCompatible(path, 56, 1)).not.toThrow()
+      store.setTaskResumeSourcePolicy('owner', 'web', true, 1)
+      expect(() => assertRollbackCompatible(path, 56, 0)).not.toThrow()
+    } finally {
+      store.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
   it('blocks a v17 rollback while collaboration is live and allows it after settlement', () => {
     const directory = mkdtempSync(join(tmpdir(), 'pegas-rollback-'))
     const path = join(directory, 'pegas.sqlite')
