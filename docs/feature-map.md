@@ -564,6 +564,7 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 
 ### SCHEDULE-001：对话式 Follow-up（2026-11-21）
 
+- **验收与关闭**：一次及周期调用在待验收、返工入队前保留到期时间，已领取调用原子释放而不消耗重试额度。接受或停止关闭对应计划及尚未派发的调用。自动化证据见 `test/goal-delivery.test.ts` 的三条生命周期回归。
 - **用户结果**：用户在对话里说“明天下午再问我是否发布”，实际 Executor 就能把这次一次性跟进持久化；到点 Pegas 把提示词送回同一事情继续，不依赖 Executor 进程存活，也不与周期 Schedule 混淆。
 - **验收条件**：`POST /v1/runs/:runId/follow-ups` 以当前 Run claim 鉴权（pre-auth 路由，无 claim 403、伪造 403）；请求体严格限定 commandId/prompt/at/title；落盘为 `once + existing_task(当前 Task)` Automation，owner 取自 Run，`at` 必须在未来，Task 已停止/完成拒绝；命令按 `follow-up:<runId>:<commandId>` 幂等重放冻结响应、冲突 409；到点经既有 fireDueAutomations → Inbox → Router 链路把 prompt 作为机器输入送回同一 Task，Invocation 终态 dispatched，once Automation 完成。DSH 执行合同公开该 API 与“只继续一次、不虚构周期能力”边界。
 - **非目标**：不新增领域对象或 schema；不支持周期 Follow-up、跨 Task 目标或 new_task；不做自然语言时间解析（Executor 负责给出 ISO 时间）；Web 自动化页展示沿用既有列表。

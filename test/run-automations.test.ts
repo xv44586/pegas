@@ -150,6 +150,55 @@ describe('SCHEDULE-001 executor recurring automations', () => {
     ).toBe('2026-11-24T06:00:00.000Z')
   })
 
+  it('acknowledges a one-off invocation already routed before its Task closed', async () => {
+    const clock = new MutableClock('2026-11-23T02:00:00.000Z')
+    const store = new PegasStore(':memory:', { clock })
+    cleanups.push(() => store.close())
+    const { task, claimed } = await seedClaimedRun(store, 'Make one follow-up')
+    const { automation } = store.createFollowUpFromRun(
+      claimed.run.id,
+      claimed.claimToken,
+      {
+        commandId: 'one-off',
+        prompt: 'Follow up once',
+        at: '2026-11-23T02:01:00.000Z',
+      },
+    )
+    clock.step(60_000)
+    const [fired] = store.fireDueAutomations()
+    if (!fired) throw new Error('Expected invocation')
+    const handler = new RoutingEventHandler(
+      new RuleBasedTaskRouter(),
+      'echo-test',
+    )
+    const input = store.claimNextEvent('router-before-exit', 1_000)
+    if (!input) throw new Error('Expected routing input')
+    await handler.handle(input, store)
+    store.completeRun(claimed.run.id, 'worker-1', {
+      executorRef: 'initial',
+      output: 'First output',
+    })
+    const successor = store.claimNextRun('follow-up-worker')
+    if (!successor) throw new Error('Expected prior routed follow-up')
+    store.completeRun(successor.run.id, 'follow-up-worker', {
+      executorRef: 'next',
+      output: 'Final output',
+    })
+    expect(store.findTask(task.id, 'owner')?.status).toBe('completed')
+    clock.step(1_100)
+    expect(await processNextEvent(store, handler, 'replacement')).toBe(true)
+    expect(
+      store.listAutomationInvocations(automation.id, 'owner').items[0],
+    ).toMatchObject({
+      id: fired.invocation.id,
+      status: 'dispatched',
+    })
+    expect(
+      store.listEvents('owner').find(event => event.id === input.id)?.status,
+    ).toBe('processed')
+    expect(store.listRuns(task.id)).toHaveLength(2)
+  })
+
   it('creates an interval automation frozen to the current Task and replays idempotently', async () => {
     const clock = new MutableClock('2026-11-23T02:00:00.000Z')
     const store = new PegasStore(':memory:', { clock })

@@ -169,6 +169,127 @@ describe('GOAL-001 delivery contracts', () => {
     },
   )
 
+  it.each(['accept', 'request_changes', 'stop'] as const)(
+    'holds scheduled follow-ups during review and settles them after %s',
+    async decision => {
+      let now = Date.parse('2026-11-25T00:00:00Z')
+      const store = new PegasStore(':memory:', {
+        clock: { now: () => new Date(now) },
+      })
+      try {
+        const seeded = seedRun(store)
+        expect(store.claimNextEvent('router')?.id).toBe(seeded.eventId)
+        store.completeEvent(seeded.eventId, 'router')
+        const claim = store.claimNextRun('worker')
+        if (!claim) throw new Error('Expected run')
+        const once = store.createFollowUpFromRun(
+          claim.run.id,
+          claim.claimToken,
+          {
+            commandId: 'once',
+            prompt: 'Check again',
+            at: new Date(now + 60_000).toISOString(),
+          },
+        ).automation
+        const interval = store.createRunAutomation(
+          claim.run.id,
+          claim.claimToken,
+          {
+            commandId: 'interval',
+            prompt: 'Check every minute',
+            everySeconds: 120,
+          },
+        ).automation
+        now += 60_000
+        const [fired] = store.fireDueAutomations()
+        if (!fired) throw new Error('Expected initial invocation')
+        const claimedTimer = store.claimNextEvent('timer-router')
+        expect(claimedTimer?.id).toBe(fired.invocation.eventId)
+        const goal = store.createGoalContract(
+          seeded.taskId,
+          'owner',
+          'review-with-timers',
+          {
+            ...goalDraft(seeded.eventId),
+            requireAcceptance: true,
+          },
+        )
+        store.completeRun(claim.run.id, 'worker', {
+          executorRef: 'session',
+          output: 'Verified output',
+        })
+        const evidence = store.createEvidenceRef(
+          claim.run.id,
+          'owner',
+          'proof',
+          observationEvidence(goal.revision, 'passed'),
+        )
+        const { reviewPack } = store.submitWorkerReport(
+          claim.run.id,
+          'owner',
+          'worker',
+          {
+            goalRevision: goal.revision,
+            reportSequence: 1,
+            status: 'ready',
+            evidenceRefIds: [evidence.id],
+            summary: 'Verified',
+            limitations: [],
+            remainingRisks: [],
+          },
+        )
+        if (!reviewPack || !claimedTimer)
+          throw new Error('Expected review and invocation')
+        now += 60_000
+        expect(store.fireDueAutomations()).toEqual([])
+        const handler = new RoutingEventHandler(
+          new RuleBasedTaskRouter(),
+          'test-executor',
+        )
+        await handler.handle(claimedTimer, store)
+        const invocation = () =>
+          store.listAutomationInvocations(once.id, 'owner').items[0]
+        expect(invocation()).toMatchObject({ status: 'pending', attempts: 0 })
+        expect(await processNextEvent(store, handler, 'router')).toBe(false)
+        if (decision === 'stop') {
+          store.stopTask(seeded.taskId, 'owner', 'stop-with-timers')
+        } else {
+          store.decideDelivery(reviewPack.id, 'owner', {
+            commandId: 'review-with-timers',
+            decision,
+            ...(decision === 'request_changes'
+              ? { note: 'Rework the draft.' }
+              : {}),
+          })
+        }
+        if (decision === 'request_changes') {
+          expect(store.fireDueAutomations()).toEqual([])
+          expect(await processNextEvent(store, handler, 'router')).toBe(true)
+          expect(store.listRuns(seeded.taskId).at(-1)?.input).toBe(
+            'Rework the draft.',
+          )
+          expect(
+            store.fireDueAutomations().map(item => item.automation.id),
+          ).toEqual([interval.id])
+          expect(await processNextEvent(store, handler, 'router')).toBe(true)
+          expect(invocation()?.status).toBe('dispatched')
+        } else {
+          expect(store.findAutomation(interval.id, 'owner')).toMatchObject({
+            status: 'cancelled',
+          })
+          expect(invocation()).toMatchObject({
+            status: 'failed',
+            lastError: 'automation_target_closed',
+          })
+          expect(store.fireDueAutomations()).toEqual([])
+          expect(await processNextEvent(store, handler, 'router')).toBe(false)
+        }
+      } finally {
+        store.close()
+      }
+    },
+  )
+
   it('retires a parked evidence report when new input starts another attempt', () => {
     let now = Date.parse('2026-11-25T00:00:00Z')
     const store = new PegasStore(':memory:', {

@@ -337,6 +337,14 @@ const maximumCollaborationDepth = 4
 const maximumPendingContextNotesPerTarget = 4
 const maximumActiveCollaborationsPerOwner = 64
 const currentInboxContractVersion = 4
+const automationReviewWaitReasons = [
+  'awaiting_delivery_acceptance',
+  'review_rework_queued',
+  'review_rework_failed',
+]
+const automationReviewWaitSql = automationReviewWaitReasons
+  .map(reason => `'${reason}'`)
+  .join(', ')
 
 const migration20 = `
 CREATE TABLE automations (
@@ -5060,6 +5068,82 @@ export class PegasStore {
     return row ? toAutomationInvocation(row) : undefined
   }
 
+  #closeTaskAutomations(taskId: string, userId: string, now: string): void {
+    this.#database
+      .prepare(
+        `UPDATE automations SET status = 'cancelled', next_fire_at = NULL,
+           revision = revision + 1, updated_at = ?
+         WHERE user_id = ? AND status IN ('active','paused')
+           AND json_extract(target_json, '$.kind') = 'existing_task'
+           AND json_extract(target_json, '$.taskId') = ?`,
+      )
+      .run(now, userId, taskId)
+    const abandoned = this.#database
+      .prepare(
+        `UPDATE inbox_events SET status = 'failed', claimed_by = NULL, lease_until = NULL,
+           processed_at = ?, last_error = 'automation_target_closed'
+         WHERE user_id = ? AND source = 'automation' AND type = 'automation.due'
+           AND status IN ('pending','processing')
+           AND json_extract(payload_json, '$.target.kind') = 'existing_task'
+           AND json_extract(payload_json, '$.target.taskId') = ?
+           AND NOT EXISTS (SELECT 1 FROM runs WHERE origin_event_id = inbox_events.id)
+         RETURNING id`,
+      )
+      .all(now, userId, taskId) as { id: string }[]
+    const closeInvocation = this.#database.prepare(
+      `UPDATE automation_invocations SET status = 'failed',
+         last_error = 'automation_target_closed', updated_at = ? WHERE event_id = ?`,
+    )
+    for (const input of abandoned) closeInvocation.run(now, input.id)
+  }
+
+  dispatchAutomationToTask(
+    event: InboxEvent,
+    decision: Extract<RoutingDecision, { kind: 'continue_task' }>,
+    executor: string,
+    context: (task: Task) => ExecutionContext,
+  ): true | undefined {
+    return this.#runInTransaction(() => {
+      this.#fenceRoutingWriteInTransaction(event)
+      const task = this.#taskById(decision.taskId)
+      if (task.userId !== event.userId)
+        throw new Error('Task belongs to another user')
+      // A Run committed before the Inbox acknowledgement. Honor that
+      // receipt even if the Task lifecycle advanced after the routing commit.
+      if (
+        this.#database
+          .prepare(
+            'SELECT 1 FROM runs WHERE origin_event_id = ? AND task_id = ?',
+          )
+          .get(event.id, task.id)
+      )
+        return undefined
+      if (task.status === 'completed' || task.status === 'cancelled') {
+        this.#closeTaskAutomations(
+          task.id,
+          task.userId,
+          this.#clock.now().toISOString(),
+        )
+        return true
+      }
+      if (
+        event.claimedBy &&
+        automationReviewWaitReasons.includes(task.statusReason ?? '')
+      ) {
+        this.releaseEventClaim(event.id, event.claimedBy)
+        this.#database
+          .prepare(
+            `UPDATE automation_invocations SET status = 'pending',
+               attempts = MAX(0, attempts - 1), updated_at = ? WHERE event_id = ?`,
+          )
+          .run(this.#clock.now().toISOString(), event.id)
+        return true
+      }
+      this.applyRoutingDecision(event, decision, executor, context)
+      return undefined
+    })
+  }
+
   fireDueAutomations(
     limit = 100,
   ): { automation: Automation; invocation: AutomationInvocation }[] {
@@ -5069,11 +5153,29 @@ export class PegasStore {
     const nowIso = now.toISOString()
     this.#database.exec('BEGIN IMMEDIATE')
     try {
+      const closed = this.#database
+        .prepare(
+          `SELECT DISTINCT tasks.id, tasks.user_id FROM tasks JOIN automations
+           ON automations.user_id = tasks.user_id
+           AND json_extract(automations.target_json, '$.kind') = 'existing_task'
+           AND json_extract(automations.target_json, '$.taskId') = tasks.id
+           WHERE tasks.status IN ('completed','cancelled') AND automations.status IN ('active','paused')`,
+        )
+        .all() as { id: string; user_id: string }[]
+      for (const task of closed)
+        this.#closeTaskAutomations(task.id, task.user_id, nowIso)
+
       const rows = this.#database
         .prepare(
           `SELECT * FROM automations
            WHERE status = 'active' AND next_fire_at IS NOT NULL
              AND next_fire_at <= ?
+             AND NOT EXISTS (
+               SELECT 1 FROM tasks WHERE tasks.user_id = automations.user_id
+                 AND json_extract(automations.target_json, '$.kind') = 'existing_task'
+                 AND tasks.id = json_extract(automations.target_json, '$.taskId')
+                 AND tasks.status_reason IN (${automationReviewWaitSql})
+             )
            ORDER BY next_fire_at ASC, rowid ASC LIMIT ?`,
         )
         .all(nowIso, limit) as unknown as AutomationRow[]
@@ -8297,6 +8399,15 @@ export class PegasStore {
            WHERE required_contract_version <= ? AND (
              status = 'pending'
              OR (status = 'processing' AND lease_until <= ?)
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM tasks WHERE inbox_events.source = 'automation'
+               AND inbox_events.type = 'automation.due'
+               AND tasks.user_id = inbox_events.user_id
+               AND json_extract(inbox_events.payload_json, '$.target.kind') = 'existing_task'
+               AND tasks.id = json_extract(inbox_events.payload_json, '$.target.taskId')
+               AND tasks.status_reason IN (${automationReviewWaitSql})
+               AND NOT EXISTS (SELECT 1 FROM runs WHERE origin_event_id = inbox_events.id)
            )
            ORDER BY created_at ASC
            LIMIT 1`,
@@ -12068,6 +12179,7 @@ export class PegasStore {
                  ended_json = ?, updated_at = ? WHERE id = ?`,
       )
       .run(JSON.stringify({ at: now, by, outcome: 'completed' }), now, task.id)
+    this.#closeTaskAutomations(task.id, task.userId, now)
     this.#enqueueDerivedMemoryJob(
       this.#runById(runId),
       task,
@@ -13853,6 +13965,7 @@ export class PegasStore {
         !hasPendingWork &&
         !hasActiveAutomation
       ) {
+        this.#closeTaskAutomations(task.id, task.userId, now)
         this.#settleInboundCollaborations(
           task.id,
           'completed',
@@ -14384,6 +14497,7 @@ export class PegasStore {
            ) AND status = 'processing' AND last_error LIKE 'blocked_by_action:%'`,
         )
         .run(taskId)
+      this.#closeTaskAutomations(task.id, task.userId, now)
       this.#settleInboundCollaborations(
         taskId,
         'cancelled',
