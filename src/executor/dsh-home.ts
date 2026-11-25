@@ -10,8 +10,12 @@ import { join } from 'node:path'
 
 import type { ModelCredentialVault } from '../model/model-credential-vault.js'
 import type { ModelCatalogItem } from '../model/model-catalog.js'
-import { modelProviderPresets } from '../model/provider-catalog.js'
+import { modelProviderPreset } from '../model/provider-catalog.js'
 import type { ModelProviderConnection } from '../settings/runtime-settings.js'
+
+// Pi AI requires a nonempty string even for gateways that allow anonymous
+// requests. This value is public and is only supplied for optional-key routes.
+const anonymousDshApiKey = 'pegas-anonymous'
 
 export interface DshAgentModel {
   provider: string
@@ -83,15 +87,17 @@ export function createDshModelConfiguration(options: {
   const providers: Record<string, unknown> = {}
   for (const connection of options.connections) {
     const keyEnvironment = modelKeyEnvironmentName(connection.id)
+    const preset = modelProviderPreset(connection.id)
     const apiKey = connection.apiKeyCiphertext
       ? options.vault.decrypt(connection.apiKeyCiphertext)
       : undefined
     if (apiKey) environment[keyEnvironment] = apiKey
+    else if (preset?.requiresApiKey === false)
+      environment[keyEnvironment] = anonymousDshApiKey
     const catalogModel =
       connection.id === options.agentModel.provider
         ? options.agentModel.model
-        : (modelProviderPresets.find(entry => entry.id === connection.id)
-            ?.defaultModel ?? options.agentModel.model)
+        : (preset?.defaultModel ?? options.agentModel.model)
     const isSelectedProvider = connection.id === options.agentModel.provider
     const discovered = options.modelCatalog?.[connection.id] ?? []
     const models: { id: string; name: string; input?: string[] }[] = []
@@ -121,7 +127,9 @@ export function createDshModelConfiguration(options: {
           ? 'anthropic-messages'
           : 'openai-completions',
       baseURL: connection.baseUrl,
-      ...(apiKey ? { apiKeyEnv: keyEnvironment } : {}),
+      // A missing required key must fail through this scoped reference.
+      // Omitting it would allow an unrelated ambient provider key.
+      apiKeyEnv: keyEnvironment,
       models,
     }
   }

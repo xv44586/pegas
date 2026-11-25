@@ -29,6 +29,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - run: pnpm smoke
+      - name: Verify DSH model authentication over loopback
+        run: npm exec --yes --package=@deepseek-ai/dsh@0.2.2-rc.5 -- pnpm smoke:dsh-auth
       - name: Detect UI changes
         id: changed
         if: github.event_name == 'pull_request'
@@ -69,6 +71,7 @@ jobs:
           --artifacts-dir output/feature-review/media
           --passed "pnpm check|format, lint, types, dead code, coverage and build passed"
           --passed "pnpm smoke|isolated end-to-end smoke passed"
+          --passed "pnpm smoke:dsh-auth|real DSH model authentication passed over loopback"
       - name: Add review evidence to the job summary
         if: always() && github.event_name == 'pull_request'
         shell: bash

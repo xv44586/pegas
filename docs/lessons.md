@@ -59,6 +59,18 @@
 
 ## Lessons
 
+### LESSON-20261125-08：凭证契约要在真实模型请求上验证
+
+- Rule：验收执行模型接入时，目录读取和 patch 形状只能作为前置检查。用真实 DSH 请求回环网关，验证无 Key、已有 Key 和缺少必需 Key 的分支，断言真正发出的请求或在出站前阻断。
+- Why：控制面可读取 Magpie 目录，DSH 的 Pi AI 客户端却会在模型请求前拒绝空 Key。前置 SOCKS 提示容易遮盖终止原因，旧回归只检查 `apiKeyEnv` 是否省略，也无法发现失败。
+- Feature：EXEC-007
+- Evidence：2026-11-22 的 Web 运行证据和 `1bee8f68` 记录同类失败。2026-11-25 在桌面实例复现，隔离 DSH 复现零请求并收到同一错误。新增回环测试覆盖成功出站和必需 Key 缺失的零请求分支。
+- Seen：2（2026-11-22、2026-11-25）
+- Severity：normal
+- Status：Candidate
+- Enforcement：`pnpm lint:dsh-auth` 遍历受支持供应商预设，CI 使用固定版本跑 `pnpm smoke:dsh-auth`。Worker 回归验证 DSH 凭证失败会停放，单独的 SOCKS 提示不归类为凭证失败。
+- Owner / next action：EXEC-007。升级 DSH 版本时同步核对真实请求门禁。
+
 ### LESSON-20261125-07：设置冲突重试时保持凭证绑定的目标
 
 - Rule：重新读取设置 revision 时，草稿凭证必须继续绑定用户编辑时看到的地址和协议。服务端控制的目标发生变化时，重新确认地址并输入凭证。
