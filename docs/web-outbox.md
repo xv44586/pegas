@@ -37,11 +37,13 @@
 - 不把普通 progress 复制到 Outbox，也不把外部投递回执当成用户阅读证据。
 - 不实现全文搜索或分页；消息规模增长后的游标与虚拟列表属于后续加固。
 
-## 与 GOAL-001 的后续边界
+## 交付审查
 
-当前 `NOTIFY-003` 只提供持久消息的 Attention 列表、详情、已读和来源 Channel 跳转，不包含 Goal Contract、EvidenceRef、Review Pack、媒体附件预览或完成证据门禁。这些能力属于 Planned 的 `GOAL-001`，不能从现有 Outbox 文本消息推断已经实现。
+对话结果卡和收件箱的「审查交付」打开同一份 Review Pack。抽屉显示完成标准、证据缩略图与预览、剩余风险、回滚说明和事情时间线入口。事情详情的「目标与交付」提供当前交付和历史修订。服务端标记交付待验收时，用户可在审查抽屉接受或填写修改要求。
 
-后续扩展遵守以下产品边界：
+Review Pack 按自身绑定的 Goal 修订补全文字。Web 先读当前交付，必要时按游标查找历史修订；修订缺失或读取失败时，保留该 Review Pack 的 criterion ID、判定和证据。验收资格与交付状态以服务端为准。
+
+交付审查遵守以下产品边界：
 
 - Outbox 是用户判断与验收的入口，Task 交付默认展示按 success criteria 组织的 Review Pack，而不是代码、工具调用和处理日志；
 - 图片、视频、UI 和排版变化直接预览绑定最终 Artifact revision 的截图、关键帧或页面渲染；其他 Task 展示与目标匹配的外部确认、测试、数据校验、指标或来源 evidence；
@@ -50,7 +52,7 @@
 - 产品已读、通知投递、用户接受和 evidence 有效性分别保存，任何一项都不能推断其他项；
 - evidence 预览继承用户、Task、Artifact 和敏感信息权限；服务端在 dispatch 时按接收者、渠道可信度和 sensitivity 生成渠道专属投影。站外渠道只提供脱敏摘要或认证短期引用，不嵌入无法在撤权后收回的 evidence 内容。
 
-权威产品与数据合同见 `docs/goal-contract-and-evidence.md`。GOAL-001 实现时需要在独立 Feature worktree 中扩展存储、API、Web 和自动化证据，并保持 `NOTIFY-003` 的已读/投递语义兼容。
+权威产品与数据合同见 `docs/goal-contract-and-evidence.md`。
 
 ## 失败与恢复
 
