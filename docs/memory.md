@@ -169,6 +169,98 @@ POST /v1/memories/:memoryId/delete
 - 跨 owner、团队或组织共享。
 - 在没有稳定领域对象时引入虚假的 Project scope。
 
+## 运行实例启用手册（运维）
+
+代码与 schema（v52）已随 Candidate `main-93d1d44-r1` 上线；运行实例当前 `PEGAS_MEMORY_PROVIDER=disabled`，显式 Memory 正常工作。启用派生记忆按以下步骤执行，全程不需要改代码或重新发布。
+
+### 0. 前置确认
+
+- Docker Desktop 正在运行，本机已有 `pegas-hindsight:1.2.3` 与 `pgvector/pgvector:pg18` 镜像（`docker images` 确认；缺失时 `memory:up` 会按 `.env` 固定的 manifest digest 拉取，非 arm64 机器必须显式覆盖镜像并重新跑 canary）。
+- Hindsight 抽取用的 LLM 网关可达。默认 `http://host.docker.internal:3425/v1`（本机 Magpie 网关），用 `curl -s http://127.0.0.1:3425/v1/models` 确认返回 200；不可达时先在 `.env` 改 `PEGAS_HINDSIGHT_LLM_BASE_URL` / `PEGAS_HINDSIGHT_LLM_MODEL`。
+- 生成三个密钥并保存好（丢失 HMAC key 会使既有 bank 映射失效）：
+
+```bash
+openssl rand -hex 32   # PEGAS_HINDSIGHT_API_KEY
+openssl rand -hex 32   # PEGAS_MEMORY_HMAC_KEY（至少 32 字符，启用后不要更换）
+openssl rand -hex 24   # PEGAS_HINDSIGHT_DB_PASSWORD
+```
+
+### 1. 配置主仓 `.env`
+
+在主仓 `/Users/ming/Project/pegas/.env`（不存在则从 `.env.example` 复制）设置：
+
+```bash
+PEGAS_HINDSIGHT_API_KEY=<上面生成的 API key>
+PEGAS_MEMORY_HMAC_KEY=<上面生成的 HMAC key>
+PEGAS_HINDSIGHT_DB_PASSWORD=<上面生成的 DB 密码>
+# 以下默认值通常不用改
+PEGAS_HINDSIGHT_BASE_URL=http://127.0.0.1:8888
+PEGAS_HINDSIGHT_LLM_BASE_URL=http://host.docker.internal:3425/v1
+PEGAS_HINDSIGHT_LLM_MODEL=discovery-api/deepseek-v4.1-flash-1017
+```
+
+`memory:up/down/backup/restore` 脚本自己读主仓 `.env`（`--env-file-if-exists`）。**Supervisor 拉起的 control-plane/worker 不读 `.env`**，它们只继承 launchd plist 里的环境变量，所以第 3 步必须同步 plist。
+
+### 2. 启动受监督的 Hindsight
+
+```bash
+cd /Users/ming/Project/pegas
+pnpm memory:up
+```
+
+脚本创建 loopback-only 的 Hindsight（127.0.0.1:8888，ApiKeyTenantExtension 鉴权）与持久 PostgreSQL volume，等待双容器 healthy 后返回。验证：
+
+```bash
+curl -s http://127.0.0.1:8888/health            # 期待 {"status":"healthy",...}
+curl -s -o /dev/null -w '%{http_code}\n' \
+  'http://127.0.0.1:8888/v1/default/banks/probe/memories/list?limit=1&offset=0&state=valid'
+# 期待 401（无鉴权被拒）；带 -H "authorization: Bearer $PEGAS_HINDSIGHT_API_KEY" 期待 200
+```
+
+首次启动含模型加载，最长等待 `PEGAS_HINDSIGHT_STARTUP_TIMEOUT_MS`（默认 10 分钟）。
+
+### 3. 给运行实例打开开关
+
+编辑 `~/Library/LaunchAgents/com.pegas.supervisor.plist`，在 `EnvironmentVariables` dict 中追加（值与 `.env` 完全一致）：
+
+```xml
+<key>PEGAS_MEMORY_PROVIDER</key>
+<string>hindsight</string>
+<key>PEGAS_HINDSIGHT_BASE_URL</key>
+<string>http://127.0.0.1:8888</string>
+<key>PEGAS_HINDSIGHT_API_KEY</key>
+<string><同 .env 的 API key></string>
+<key>PEGAS_MEMORY_HMAC_KEY</key>
+<string><同 .env 的 HMAC key></string>
+```
+
+重载 Supervisor（会短暂重启运行实例，恢复流程保证 Run 不丢）：
+
+```bash
+launchctl bootout gui/$(id -u)/com.pegas.supervisor
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.pegas.supervisor.plist
+```
+
+缺 API key、Base URL 或 HMAC key（或 HMAC key 短于 32 字符）时 control-plane/worker/scheduler 都会拒绝启动——这是有意的 fail-closed。当前 release 已处于 stable 阶段，Supervisor 只记录失败并反复重启同一 release，不会自动回滚到上一版本；`readyz` 会持续不可用，补齐 plist 再 bootout/bootstrap 即可恢复。
+
+### 4. 验证启用成功
+
+```bash
+curl -s http://127.0.0.1:4317/readyz                     # ready + 当前 releaseId
+TOKEN=$(cat /Users/ming/Project/pegas/data/api-token)
+curl -s "http://127.0.0.1:4317/v1/derived-memories?userId=owner" \
+  -H "authorization: Bearer $TOKEN"                      # {"memories":[...],"sync":...}
+```
+
+跑一个真实 work 事情到完成，然后确认闭环：`derived_memory_jobs` 出现 `run_success` 记录并进入 completed；约一分钟后（`PEGAS_MEMORY_SYNC_MS` 默认 60s）记忆页「自动沉淀」区出现带来源的派生记录；下一个相关 Run 的执行记录里能看到召回注入。Worker 节点 capability 会包含 `hindsight-memory`。
+
+### 5. 日常运维
+
+- 备份：`pnpm memory:backup`（一致性 zip，落 `data/hindsight-backups/`）。
+- 恢复：`pnpm memory:restore <archive> --confirm-restore`（先停 API，一次性 admin 容器恢复后重建；失败保留 volume 供重试）。
+- 停用：把 plist 的 `PEGAS_MEMORY_PROVIDER` 改回 `disabled` 并 bootout/bootstrap；`pnpm memory:down` 停容器（保留数据 volume）。显式 Memory 与既有派生投影不受影响，删除墓碑继续生效。
+- Hindsight 挂掉不影响 Run 执行与结算（fail-open）；记忆页显示同步失败提示条，容器由 Docker `unless-stopped` 自动拉起，恢复后每分钟同步自动对账。
+
 ## 当前证据与状态
 
 已经落地的显式层由 `test/memory.test.ts` 覆盖字段、作用域、来源、幂等、revision、删除清理、owner 隔离、分层装载、容量、HTTP 与 Executor 注入边界。`test/rollback-compatibility.test.ts` 覆盖 schema v21 活跃记忆的回滚保护。Web 已接入显式 Memory 的查看、创建、编辑和删除。
