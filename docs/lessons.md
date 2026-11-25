@@ -105,7 +105,7 @@
 - Severity：normal
 - Status：Observed
 - Enforcement：SETTINGS-001 页面回归覆盖保存前后两个目录状态。
-- Owner / next action：后续改变模型目录加载时保留同一会话的验收路径。
+- Owner / next action：后续改变模型目录加载时保留同一会话的验收路径。2026-11-25 同日补证（Seen 仍为 1）：供应商目录局部 state 随 tab 卸载丢失；新增 tab/Provider 往返、连接编辑/取消、迟到响应与失败保留回归。连接测试通过仍不代表执行目录可用，桌面 PATH 问题另记下条。
 
 ### LESSON-20261125-03：恢复回执必须尊重已经提交的归类
 
@@ -500,3 +500,15 @@
 - Enforcement：尚未晋升
 - Owner / next action：
 -->
+
+### LESSON-20261125-07：桌面目录与执行器必须验证真实启动环境
+
+- Rule：模型目录和实际 Executor 使用同一 DSH 启动解析；桌面验收包含 Finder 最小 PATH 下的 Node CLI 启动，不把终端中 `dsh` 可用当作 GUI 可用。
+- Why：供应商 HTTP 探测成功，但桌面子进程继承 `/usr/bin:/bin:/usr/sbin:/sbin`，无法启动用户安装的 DSH；只补 DSH 绝对路径仍可能卡在 `env node`。
+- Feature：SETTINGS-001
+- Evidence：桌面实例目录 API 503、同机终端目录 200；新增 `test/dsh-model-catalog.test.ts` 最小 PATH 回归先报 ENOENT 再通过。真实 Electron 最小 PATH canary 发现和返回均为 63 模型；`test/dsh-launch.test.ts` 实际运行 Node CLI 并校验命令优先级。
+- Seen：1（2026-11-25）
+- Severity：normal
+- Status：Observed
+- Enforcement：共享启动器回归加入 `pnpm check`，未扩张仓库强制标准。
+- Owner / next action：SETTINGS-001。供应商上游认证恢复后重跑真实模型门禁；后续打包验证继续覆盖 GUI 最小 PATH。
