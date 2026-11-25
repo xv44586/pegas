@@ -16,6 +16,7 @@ import {
   desktopRequestHeaders,
   desktopServiceEnvironment,
   desktopServiceRoot,
+  desktopSupervisorRoot,
   isLoopbackAppUrl,
   isTrustedAppUrl,
   terminateDesktopChildren,
@@ -168,6 +169,14 @@ function startSupervisorEntry(
     appPath: app.getAppPath(),
     resourcesPath: process.resourcesPath,
   })
+  // Hot-release boot: prefer the staged release recorded by the Supervisor
+  // state over the copy bundled in the app, so server fixes ship as
+  // immutable candidates without repackaging the desktop app.
+  const supervisorStatePath = join(dataDir, 'supervisor.json')
+  const serviceRoot = desktopSupervisorRoot({
+    fallbackRoot: applicationRoot,
+    statePath: supervisorStatePath,
+  })
   const environment = desktopServiceEnvironment({
     port,
     dataDir,
@@ -175,26 +184,22 @@ function startSupervisorEntry(
     testMode: process.env.PEGAS_DESKTOP_TEST === '1',
   })
   const entry = 'supervisor/main.js'
-  const child = spawn(
-    process.execPath,
-    [join(applicationRoot, 'dist', entry)],
-    {
-      cwd: applicationRoot,
-      detached: process.platform !== 'win32',
-      env: {
-        ...environment,
-        PEGAS_SUPERVISOR_STATE: join(dataDir, 'supervisor.json'),
-        PEGAS_RECOVERY_HOST: '127.0.0.1',
-        PEGAS_RECOVERY_PORT: String(recoveryPort),
-        PEGAS_DESKTOP_RESIDENCY_URL: `http://127.0.0.1:${String(residencyPort)}`,
-        PEGAS_RELEASE_ROOT: applicationRoot,
-        // App-lifecycle mode: the shell owns restarts. A business-process
-        // death must fail the window honestly, not silently resurrect.
-        PEGAS_SUPERVISOR_RESTART: 'disabled',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
+  const child = spawn(process.execPath, [join(serviceRoot, 'dist', entry)], {
+    cwd: serviceRoot,
+    detached: process.platform !== 'win32',
+    env: {
+      ...environment,
+      PEGAS_SUPERVISOR_STATE: supervisorStatePath,
+      PEGAS_RECOVERY_HOST: '127.0.0.1',
+      PEGAS_RECOVERY_PORT: String(recoveryPort),
+      PEGAS_DESKTOP_RESIDENCY_URL: `http://127.0.0.1:${String(residencyPort)}`,
+      PEGAS_RELEASE_ROOT: serviceRoot,
+      // App-lifecycle mode: the shell owns restarts. A business-process
+      // death must fail the window honestly, not silently resurrect.
+      PEGAS_SUPERVISOR_RESTART: 'disabled',
     },
-  )
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
   child.stdout.on('data', (chunk: Buffer) => process.stdout.write(chunk))
   child.stderr.on('data', (chunk: Buffer) => process.stderr.write(chunk))
   child.once('error', error => handleServiceFailure(entry, error.message))

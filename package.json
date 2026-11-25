@@ -38,6 +38,7 @@
     "smoke:dsh-auth": "tsx scripts/lint-dsh-auth.ts --live",
     "smoke:crash": "pnpm build && node scripts/smoke-crash-recovery.mjs",
     "smoke:self-change": "pnpm build && node scripts/smoke-self-change.mjs",
+    "release:hot": "node scripts/release-hot.mjs",
     "smoke:desktop": "pnpm build && node scripts/smoke-desktop.mjs",
     "smoke:desktop:packaged": "PEGAS_DESKTOP_EXECUTABLE=releases/desktop/mac-arm64/Pegas.app/Contents/MacOS/Pegas node scripts/smoke-desktop.mjs",
     "smoke:healthcheck": "pnpm build && node scripts/smoke-healthcheck.mjs",
