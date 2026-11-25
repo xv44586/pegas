@@ -923,6 +923,85 @@ describe('durable collaboration store', () => {
     store.close()
   })
 
+  it('releases a parked context note after the target approval is settled', async () => {
+    const store = new PegasStore(':memory:')
+    try {
+      const source = createClaimedTask(store, 'owner', 'Source', 'source')
+      const target = createClaimedTask(store, 'owner', 'Target', 'target')
+      const relation = store.createCollaboration(
+        source.run.id,
+        source.claimToken,
+        {
+          commandId: 'parked-context-note',
+          kind: 'context_note',
+          targetChannelId: target.task.id,
+          text: 'Use the previously verified account name.',
+          sourceRefs: [source.task.originEventId],
+        },
+      )
+      const requested = store.requestApproval(
+        target.run.id,
+        target.claimToken,
+        approvalDraft(),
+      )
+      const handler = new RoutingEventHandler(
+        new RuleBasedTaskRouter(),
+        'test-executor',
+      )
+      const input = () =>
+        store
+          .listEvents('owner')
+          .find(event => event.id === relation.targetEventId)
+      expect(
+        await processNextEvent(store, handler, 'router-context-note'),
+      ).toBe(true)
+      expect(input()).toMatchObject({
+        status: 'processing',
+        lastError: 'blocked_by_action:awaiting_approval',
+      })
+      expect(store.listCollaborations(source.task.id, 'owner')[0]?.status).toBe(
+        'pending',
+      )
+      if (!relation.targetEventId)
+        throw new Error('Expected context note input')
+      const eventId = relation.targetEventId
+      expect(() =>
+        store.renewEventLease(eventId, 'router-context-note'),
+      ).toThrow(/does not hold the claim/)
+      expect(() => store.completeEvent(eventId, 'router-context-note')).toThrow(
+        /does not hold the claim/,
+      )
+      store.decideApproval(requested.approval.id, 'owner', {
+        commandId: 'skip-approval-then-deliver',
+        optionId: 'reject',
+      })
+      expect(input()?.status).toBe('pending')
+      expect(
+        await processNextEvent(store, handler, 'router-context-note'),
+      ).toBe(true)
+      expect(input()?.status).toBe('processed')
+      expect(
+        store.listCollaborations(source.task.id, 'owner')[0],
+      ).toMatchObject({
+        id: relation.id,
+        status: 'completed',
+        targetTaskId: target.task.id,
+      })
+      const created = store
+        .listRuns(target.task.id)
+        .filter(run => run.originEventId === relation.targetEventId)
+      expect(created).toHaveLength(1)
+      expect(created[0]?.input).toContain(
+        'Use the previously verified account name.',
+      )
+      expect(store.findTask(target.task.id, 'owner')?.mandate).toEqual(
+        target.task.mandate,
+      )
+    } finally {
+      store.close()
+    }
+  })
+
   it('rolls back target Run creation when the durable relation cannot transition', () => {
     const store = new PegasStore(':memory:')
     const source = createClaimedTask(store, 'owner', 'Source', 'source')

@@ -551,6 +551,7 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 
 ### COLLAB-001：受控委派、交接与结果回送（2026-11-21）
 
+- **服务端复核（2026-11-25）**：带版本契约的协作输入可以等待目标 Action 结算。停放期间仍满足 Inbox 领取契约，不能由旧领取者续租或完成。结算按实际阻塞标记唤醒，包括保留原协作关系的输入。目标停止后结清已停放输入。见 `test/collaboration-store.test.ts` 的先失败再通过回归。
 - **用户结果**：实际 Worker 可以把一部分工作委派给新的事情、把责任交接出去、向已有事情发送带来源的上下文，或把不属于自己的输入退回 Pegas 重新归类。来源事情能看到关系和状态；委派目标完成或失败后，结果可靠回到来源事情，不要求来源 Worker 常驻等待。
 - **验收条件**：只有持有当前 Run 短期 claim 的 Worker 能提交新的结构化协作请求；鉴权先于 body 解析和 command lookup，命令只在来源 Run 内唯一，同一 command 重放返回创建时冻结的关系快照，不同 payload 复用 command 必须拒绝，历史 claim 不能读取后来结果或创建新命令。委派和交接在同一事务中创建 `ChannelRelation`、目标 Task 与目标 Inbox Event；委派把来源标记为 `waiting_on_dependency`，顶层交接以 `statusReason=handed_off` 和兼容的 `completed` outcome 结束来源并写责任交接 Outbox，嵌套交接则作为责任桥等待最终结果并逐层结算。目标 Task 有独立 WorkerProfile；委派/交接的首次协作 Run 使用来源 Run 快照作为模型、工作区、工具、权限、隐私与协议上界，context note 保留目标模型/profile 并取双方权限最小交集。Context note 只能投递到同一 owner 的开放 Task；handback 必须引用来源 Task 已认证的外部用户输入，retry Run 仍能解析该来源，并重新进入 Router 且不得铸造新授权；成功重新归类 origin/resumed 输入后恢复来源 Task 的软结束状态，普通 continuation 不丢失原责任。目标 Run 创建与关系切换同事务提交；目标 Task 结束或协作事件死信时，关系结算、来源事件、来源时间线和必要 Outbox 必须原子写入且可重试去重。owner 可以按 Channel 分页查询关系；不存在和跨 owner 使用相同 404。
 - **非目标**：本轮不允许 Worker 指定目标 Executor Session、远程 Worker 身份或跨用户目标；不实现模型自动挑选专业 Agent、任意 DAG 调度、共享可写 Memory、成本市场或多组织角色；不把自由文本中的“请创建 subagent”推断为协作请求；封板 Web 卡片接入作为后续独立 UI 变更。
