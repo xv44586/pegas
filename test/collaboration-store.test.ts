@@ -639,7 +639,7 @@ describe('durable collaboration store', () => {
       await processNextEvent(
         store,
         {
-          handle: () =>
+          handle: (): Promise<never> =>
             Promise.reject(new Error('source execution context unavailable')),
         },
         `return-dead-letter-${String(attempt)}`,
@@ -716,7 +716,8 @@ describe('durable collaboration store', () => {
         await processNextEvent(
           store,
           {
-            handle: () => Promise.reject(new Error(`${kind} delivery failed`)),
+            handle: (): Promise<never> =>
+              Promise.reject(new Error(`${kind} delivery failed`)),
           },
           `${kind}-dead-letter-${String(attempt)}`,
         )
