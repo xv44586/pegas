@@ -171,7 +171,7 @@ POST /v1/memories/:memoryId/delete
 
 ## 运行实例启用手册（运维）
 
-代码与 schema（v52）已随 Candidate `main-93d1d44-r1` 上线；运行实例当前 `PEGAS_MEMORY_PROVIDER=disabled`，显式 Memory 正常工作。启用派生记忆按以下步骤执行，全程不需要改代码或重新发布。
+运行实例现状（2026-11-25）：Candidate `main-523e67d-r1`（schema v55）已上线，`PEGAS_MEMORY_PROVIDER=local` 已启用，`data/memory.key` 自动生成并跨重启复用，派生记忆默认档生效中；发布记录见 Feature Map「M2–M5 合并与生产发布」。切回 `disabled` 只需改 plist 并 bootout/bootstrap。本手册以下步骤仅适用于切换 opt-in 的 Hindsight 高级档（M1 路径），local 默认档不需要任何外部服务或密钥配置。
 
 ### 0. 前置确认
 
@@ -337,3 +337,16 @@ Local Provider 只替换 `DerivedMemoryProvider` 的实现。durable job、幂�
 ### 当前缺口（评测）
 
 真实模型蒸馏质量与限流 canary、长期召回命中率/旧结论率/token 成本评测未做；完成前 MEMORY-001 不标 Hardened。
+
+### 运行实例发布记录（2026-11-25）
+
+M2–M5（PR #102–#105）合入 main 后经 Candidate `main-523e67d-r1` 上线，schema 52→55 纯增量，`PEGAS_MEMORY_PROVIDER=local` 已在 Supervisor plist 启用。发布当日的真实 work canary 遇上游模型配额 429：失败 Run 按设计未入经验库（基础设施形态失败排除），用户收到失败通知；local 蒸馏→召回闭环留待真实使用数据验证。使用期评测观测点：
+
+- `derived_memory_jobs`：入队、攒批（60s/5 job）、settle 与指数退避（`memory.retain_retry` 日志）。
+- `local_derived_memories`：事实数量、scope/project_key 分布、`use_count`（注入即计数）与近重合并。
+- `memory_project_summaries`：L0 摘要重建与字符预算（≤12 条 ≤1600 字符）。
+- `derived_memory_recall_audit`：`retrieved/filtered/injected`、`low_relevance`、`context_mismatch` 比例。
+- `memory_usage_records`：记忆沉淀的 token 计量（设置页用量「记忆沉淀」）。
+- worker 日志：`memory.recall_failed_open`（召回失败不阻塞 Run）。
+
+回滚：`POST /v1/recovery/rollback` 回 `main-93d1d44-r1`；存在有效 local 派生记忆时 v53 Guard 拒绝该回滚，需先全部失效。运行时切 `disabled` 不受 Guard 限制，显式 Memory 与既有投影保持。
