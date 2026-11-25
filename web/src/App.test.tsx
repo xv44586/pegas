@@ -3761,7 +3761,7 @@ describe('sealed Pegas UI', () => {
             name: '自定义',
             category: 'custom',
             protocol: 'openai-chat',
-            baseUrl: '',
+            baseUrl: 'https://gateway.example/v1',
             defaultModel: '',
             description: '',
             requiresApiKey: false,
@@ -3797,7 +3797,20 @@ describe('sealed Pegas UI', () => {
         if (saveAttempts === 1) {
           current = {
             ...current,
-            settings: { ...current.settings, revision: 2 },
+            settings: {
+              ...current.settings,
+              revision: 2,
+              modelProvider: 'custom',
+              modelName: 'changed-model',
+            },
+            capabilities: {
+              ...current.capabilities,
+              providers: current.capabilities.providers.map(provider =>
+                provider.id === 'custom'
+                  ? { ...provider, baseUrl: 'https://changed.example/v1' }
+                  : provider,
+              ),
+            },
           }
           return Response.json(
             { message: '设置已更新，请重试' },
@@ -3830,7 +3843,7 @@ describe('sealed Pegas UI', () => {
       }
       if (path === '/v1/settings') return Response.json(current)
       if (path === '/v1/settings/agent-models')
-        return current.settings.modelProvider !== 'custom'
+        return saveAttempts < 2
           ? Response.json(
               { error: 'agent_models_unavailable' },
               { status: 503 },
@@ -3855,9 +3868,10 @@ describe('sealed Pegas UI', () => {
     await screen.findByText('欢迎使用 Pegas')
     fireEvent.click(screen.getByRole('button', { name: /^继续$/ }))
     await chooseOption('接入方式', '自定义 · OpenAI 兼容')
-    fireEvent.change(screen.getByLabelText('Base URL'), {
-      target: { value: connection.provider.baseUrl },
-    })
+    expect(screen.getByLabelText('Base URL')).toHaveProperty(
+      'value',
+      connection.provider.baseUrl,
+    )
     const key = screen.getByLabelText('API Key')
     fireEvent.change(key, { target: { value: connection.provider.apiKey } })
     fireEvent.change(screen.getByLabelText('模型 ID'), {
@@ -3873,6 +3887,10 @@ describe('sealed Pegas UI', () => {
     fireEvent.click(screen.getByRole('button', { name: '保存连接' }))
     expect(await screen.findByText('设置已更新，请重试')).toBeTruthy()
     expect(key).toHaveProperty('value', connection.provider.apiKey)
+    expect(screen.getByLabelText('Base URL')).toHaveProperty(
+      'value',
+      connection.provider.baseUrl,
+    )
     fireEvent.click(screen.getByRole('button', { name: '保存连接' }))
     const trigger = await screen.findByRole('button', {
       name: /Custom model.*默认模型/,

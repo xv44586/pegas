@@ -64,6 +64,7 @@ export function Onboarding({
     baseUrl?: string
     apiKey?: string
     modelName?: string
+    protocol?: ModelProviderDraft['protocol']
   }>({})
   const [connectionBusy, setConnectionBusy] = useState<'test' | 'save'>()
   const [connectionNotice, setConnectionNotice] = useState<{
@@ -172,9 +173,17 @@ export function Onboarding({
   async function probeConnection(kind: 'test' | 'save') {
     if (connectionBusy || !provider || !onSaveConnection || !onTestConnection)
       return
+    if (provider.id !== 'custom' && baseUrl !== provider.baseUrl) {
+      setConnectionDraft({ providerId: provider.id })
+      setConnectionNotice({
+        kind: 'error',
+        message: '服务地址已更新，请核对后重新输入 API Key。',
+      })
+      return
+    }
     const draft: ModelProviderDraft = {
       name: provider.name,
-      protocol: provider.protocol,
+      protocol: connectionDraft.protocol ?? provider.protocol,
       baseUrl: baseUrl.trim(),
       apiKey: apiKey.trim(),
       clearApiKey: provider.hasApiKey && !reuseKey && !apiKey.trim(),
@@ -211,7 +220,14 @@ export function Onboarding({
 
   function editConnection(next: typeof connectionDraft) {
     setEditingConnection(true)
-    setConnectionDraft(next)
+    setConnectionDraft({
+      providerId: provider?.id,
+      baseUrl,
+      modelName,
+      apiKey,
+      protocol: connectionDraft.protocol ?? provider?.protocol,
+      ...next,
+    })
     setConnectionNotice(undefined)
   }
 
@@ -295,9 +311,11 @@ export function Onboarding({
                       <Select
                         disabled={Boolean(connectionBusy)}
                         name="modelProvider"
-                        onValueChange={providerId =>
-                          editConnection({ providerId })
-                        }
+                        onValueChange={providerId => {
+                          setEditingConnection(true)
+                          setConnectionDraft({ providerId })
+                          setConnectionNotice(undefined)
+                        }}
                         value={provider.id}
                       >
                         <SelectTrigger
@@ -327,7 +345,6 @@ export function Onboarding({
                         name="baseUrl"
                         onChange={event =>
                           editConnection({
-                            ...connectionDraft,
                             baseUrl: event.target.value,
                           })
                         }
@@ -347,7 +364,6 @@ export function Onboarding({
                         name="apiKey"
                         onChange={event =>
                           editConnection({
-                            ...connectionDraft,
                             apiKey: event.target.value,
                           })
                         }
@@ -369,7 +385,6 @@ export function Onboarding({
                         name="modelName"
                         onChange={event =>
                           editConnection({
-                            ...connectionDraft,
                             modelName: event.target.value,
                           })
                         }

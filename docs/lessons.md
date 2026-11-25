@@ -59,6 +59,18 @@
 
 ## Lessons
 
+### LESSON-20261125-07：设置冲突重试时保持凭证绑定的目标
+
+- Rule：重新读取设置 revision 时，草稿凭证必须继续绑定用户编辑时看到的地址和协议。服务端控制的目标发生变化时，重新确认地址并输入凭证。
+- Why：若表单只保存改动过的字段，冲突后的服务端地址可能替换草稿中的可见连接，同时保留用户刚输入的 Key。
+- Feature：SETTINGS-001
+- Evidence：`web/src/App.test.tsx` 模拟另一客户端在保存冲突期间修改自定义 Base URL。该回归先证实地址随 revision 被替换，再断言重试仍使用草稿原地址。
+- Seen：1（2026-11-25）
+- Severity：security
+- Status：Promoted
+- Enforcement：冲突重试回归纳入 `pnpm check`。
+- Owner / next action：SETTINGS-001。新增凭证表单时复用目标绑定语义。
+
 ### LESSON-20261125-06：连接保存要刷新同一会话的模型选择器
 
 - Rule：验收模型接入时，在初始执行目录为空或不可读的同一 Web 会话内完成保存，在 Pegas 执行模型选择器找到新连接的模型。
