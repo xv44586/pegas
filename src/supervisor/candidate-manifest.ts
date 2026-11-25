@@ -27,6 +27,7 @@ export interface CandidateManifest {
   compatibility: {
     minimumSchema: number
     maximumSchema: number
+    taskWorkflowVersion?: number
     destructiveMigrations?: number[]
   }
   verification: {
@@ -220,7 +221,9 @@ function isCompatibility(
     isRecord(value) &&
     nonnegativeInteger(value.minimumSchema) &&
     nonnegativeInteger(value.maximumSchema) &&
-    value.minimumSchema <= value.maximumSchema
+    value.minimumSchema <= value.maximumSchema &&
+    (value.taskWorkflowVersion === undefined ||
+      nonnegativeInteger(value.taskWorkflowVersion))
   ) {
     const minimum = value.minimumSchema
     const maximum = value.maximumSchema

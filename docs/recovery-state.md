@@ -49,5 +49,8 @@ Supervisor 的主状态损坏或写入中断时，Pegas 不会把未知状态误
 - 本 Feature 不提供通过 Recovery API 上传、编辑或选择任意 Release 的能力。
 - 本 Feature 不替代数据库、Release artifact 或用户数据备份。
 - `rollback_incompatible` 不会自动取消正在运行的协作或 Automation；应先让目标完成、停止相关事情、暂停/取消 Automation，或正常投递剩余事件，再重试回滚。
+
+Task 工作流兼容能力由构建产物中的 `dist/supervisor/task-workflow-contract.json` 声明，候选构建将其与隔离 checkout 核对，Supervisor 验证发布树后同 manifest 核对。历史 Release 缺少声明视为版本 0。停止业务子进程后，切换或回滚到不支持当前语义的 Release 会检查待验收 Goal、返工、指定回复与解释、未消费纠正和已撤权的恢复来源。关闭或消费活跃工作可重新回滚；仍撤权的来源需要保留支持该策略的 Release。恢复端点保留 `409 rollback_incompatible`。部署新版 Supervisor 才会执行此检查。
+
 - Recovery API 同一时刻只执行一个回滚转换；并发请求不会重复翻转 active/previous Release。
 - 回滚代码时，新的 envelope 仍可由本实现读取；旧版本只认识裸状态，因此降级前应从 Recovery API 确认 active Release，并由新版本写出或人工导出兼容状态。

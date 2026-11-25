@@ -494,6 +494,7 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 
 ### SELF-001：隔离自我修改、审批发布与自动回滚（2026-11-21）
 
+- **Task 工作流回退保护**：构建产物与 Candidate 声明记录独立的工作流版本。Supervisor 停下业务进程后检查待验收与返工、指定回复与解释、纠正和撤权，包含同 schema 的旧 Release。回归覆盖活动记录阻止、清空后允许与兼容 Release 继续通过。
 - **用户结果**：用户要求 Pegas 修改自身时，Pegas 在隔离 worktree 中完成修改并通过完整门禁，构建不可变 Candidate，经用户高风险审批后由独立 Supervisor 验证并接管服务；候选无法启动或观察期失败时自动回滚上一版本，Recovery API 全程在线，原 Task 从持久恢复点继续并向用户汇报。
 - **验收条件**：模型 Router 输出 `targetResource: pegas_repository` 并持久化到 Task（schema v25，写入后不可变）；只有已认证人类输入可创建该 Task。Worker 仅将此类 Run 分派给 `SelfChangeExecutor`：Phase 1 创建 `self-change/<taskId>` 隔离 worktree、要求 editor 提交精确 commit、在 worktree 内运行 `pnpm check`+`pnpm smoke`、把 dist/manifest/lockfile 复制为只读 Release 并生成目录 SHA-256 attestation、Review Report 与 Candidate Manifest（同一 commit），随后创建 `self_change.publish` 高风险 Action 等待审批。Phase 2（审批后继 Run）批准后经 Recovery API `POST /v1/recovery/candidates` staging（鉴权、绝对路径、manifest/tree/commit/schema 兼容校验、与 restart/rollback 互斥），等待 `/readyz` 报告新 `releaseId`，再以 claim capability 记录 Action outcome；拒绝则 Task 以 `user_rejected_release` 失败结束。
 - **非目标**：不做 artifact 签名与远程 CI 强制（本地 gate attestation 标注 `local-self-change-gate`）；不做 worktree 自动清理与并发 self-change Task 排队；不修改 Supervisor 授权策略。

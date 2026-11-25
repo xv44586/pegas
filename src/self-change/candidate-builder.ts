@@ -23,6 +23,7 @@ import {
   createReviewReport,
   writeReviewReport,
 } from '../quality/review-evidence.js'
+import { readTaskWorkflowContract } from '../supervisor/task-workflow-contract.js'
 import { destructiveMigrationVersions } from '../storage/migration-policy.js'
 
 const execFileAsync = promisify(execFile)
@@ -91,6 +92,16 @@ export async function buildSelfChangeCandidate(
   const gate = await (request.runGate ?? runRepositoryGate)(worktree)
   if (!gate.commands.length)
     throw new Error('Self-change gate must report executed commands')
+
+  const sourceContract = readTaskWorkflowContract(worktree, 'src')
+  const builtContract = readTaskWorkflowContract(worktree)
+  if (
+    sourceContract?.version !== builtContract?.version ||
+    sourceContract?.maximumSchema !== builtContract?.maximumSchema
+  )
+    throw new Error(
+      'Candidate Task workflow contract does not match the checkout',
+    )
 
   const outputRoot = resolve(request.outputRoot)
   mkdirSync(outputRoot, { recursive: true })
@@ -170,6 +181,9 @@ export async function buildSelfChangeCandidate(
       },
       compatibility: {
         ...request.compatibility,
+        ...(builtContract
+          ? { taskWorkflowVersion: builtContract.version }
+          : {}),
         // The registry is authoritative: a candidate cannot hide a
         // destructive migration by omitting it from its own declaration.
         destructiveMigrations: destructiveMigrationVersions.filter(
