@@ -391,6 +391,8 @@ describe('GOAL-001 owner-scoped evidence content API', () => {
       artifact.contentHash,
     )
     expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.headers.get('content-security-policy')).toBe('sandbox')
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff')
     const served = Buffer.from(await response.arrayBuffer())
     expect(served.equals(bytes)).toBe(true)
   })

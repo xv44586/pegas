@@ -31,7 +31,7 @@ App 生命周期模式下 Supervisor 以 `PEGAS_SUPERVISOR_RESTART=disabled` 运
   （与服务端同一派生函数），Agent 执行工作区永不落在应用 checkout 或任何仓库树
   内；从终端带出的同名环境变量会被覆盖，避免开发仓库的 AGENTS.md/docs 被 DSH
   误加载为 Agent 指令。
-- 内置服务每次启动生成随机实例 bearer；Electron session 仅向受信本机 origin 自动添加认证头。Renderer、URL、sessionStorage 和日志都不接触该 bearer。连接外部回环服务时则使用显式配置的 `PEGAS_API_TOKEN`。
+- 内置服务首次启动生成随机实例 bearer 并保存到数据目录下的 `api-token`（0600），后续启动复用，并通过环境变量传给 Supervisor 和子进程。Electron session 只向受信本机 origin 注入认证头，用户可直接进入。连接已有的回环 Control Plane 时可通过本机 Web 自动认证，也可通过显式 `PEGAS_API_TOKEN` 使用原生请求头注入。
 
 ## 运行与打包
 

@@ -337,6 +337,22 @@ const reviewProjectionFixture: ReviewProjection = {
   auditLink: `/v1/channels/${channel.id}/timeline`,
 }
 
+const evidenceContentPath = '/v1/evidence/evidence-1/content?userId=owner'
+const eventAttachmentPath = '/v1/events/event-1/attachments?userId=owner'
+const previewBlobUrl = 'blob:pegas-preview'
+
+function stubImagePreview() {
+  const createObjectURL = vi.fn<(blob: Blob) => string>(() => previewBlobUrl)
+  vi.stubGlobal(
+    'URL',
+    Object.assign(class extends URL {}, {
+      createObjectURL,
+      revokeObjectURL: vi.fn(),
+    }),
+  )
+  return createObjectURL
+}
+
 function installFetch(
   custom?: (
     path: string,
@@ -352,6 +368,12 @@ function installFetch(
           : input
     const overridden = custom?.(path, init)
     if (overridden) return Promise.resolve(overridden)
+    if (path === evidenceContentPath || path === eventAttachmentPath)
+      return Promise.resolve(
+        new Response('image fixture', {
+          headers: { 'content-type': 'image/png' },
+        }),
+      )
     if (path.startsWith('/v1/events?'))
       return Promise.resolve(Response.json({ events: snapshot.events }))
     if (path.startsWith('/v1/channels/search?')) {
@@ -4237,6 +4259,45 @@ describe('sealed Pegas UI', () => {
     },
   )
 
+  it.each([
+    ['web', 'text/html'],
+    ['image', 'image/svg+xml'],
+  ] as const)(
+    'downloads stored %s documents without an active preview',
+    async (preview, mimeType) => {
+      const createObjectURL = stubImagePreview()
+      installFetch(path =>
+        path === evidenceContentPath
+          ? new Response('document fixture', {
+              headers: { 'content-type': mimeType },
+            })
+          : undefined,
+      )
+      render(
+        <DetailDrawer
+          onChange={vi.fn()}
+          onClose={vi.fn()}
+          onRetry={vi.fn()}
+          view={{
+            kind: 'preview',
+            preview,
+            title: '已存证文档',
+            mimeType,
+            contentUrl: evidenceContentPath,
+          }}
+        />,
+      )
+      const download = await screen.findByRole('link', { name: '下载原始内容' })
+      expect(download.getAttribute('download')).toBe('已存证文档')
+      expect(download.hasAttribute('target')).toBe(false)
+      expect(download.getAttribute('href')).toBe(previewBlobUrl)
+      expect(screen.queryByAltText('已存证文档')).toBeNull()
+      expect(createObjectURL.mock.calls[0]?.[0].type).toBe(
+        'application/octet-stream',
+      )
+    },
+  )
+
   it('formats relative and invalid timestamps safely', () => {
     expect(formatRelativeTime('invalid')).toBe('刚刚')
     expect(typeof formatRelativeTime('2026-11-19T08:00:00.000Z')).toBe('string')
@@ -7759,7 +7820,8 @@ describe('sealed Pegas UI', () => {
   })
 
   it('shows goal, review pack criteria, and the evidence gallery in the task drawer', async () => {
-    installFetch(path =>
+    stubImagePreview()
+    const fetchMock = installFetch(path =>
       path.startsWith('/v1/tasks/task-1/delivery?')
         ? Response.json(deliveryFixture)
         : undefined,
@@ -7790,9 +7852,10 @@ describe('sealed Pegas UI', () => {
     expect(within(card).getByText('已通过')).toBeTruthy()
     fireEvent.click(card)
     const previewImage = await screen.findByAltText('候选版本健康检查截图')
-    expect(previewImage.getAttribute('src')).toBe(
-      '/v1/evidence/evidence-1/content?userId=owner',
-    )
+    expect(previewImage.getAttribute('src')).toBe(previewBlobUrl)
+    expect(fetchMock).toHaveBeenCalledWith(evidenceContentPath, {
+      headers: { 'x-pegas-local-web': '1' },
+    })
     fireEvent.click(screen.getByRole('button', { name: '返回交付审查' }))
     expect(await screen.findByText('目标与交付')).toBeTruthy()
     expect(screen.getByLabelText('证据画廊')).toBeTruthy()
@@ -7816,6 +7879,7 @@ describe('sealed Pegas UI', () => {
   })
 
   it('opens the review drawer from a review.ready attention message', async () => {
+    stubImagePreview()
     const sourceMessage = snapshot.messages[0]
     if (!sourceMessage) throw new Error('Expected an outbox message fixture')
     const reviewMessage = {
@@ -11639,6 +11703,7 @@ describe('sealed Pegas UI', () => {
   })
 
   it('opens an uploaded attachment preview from the task timeline', async () => {
+    stubImagePreview()
     const sourceEvent = snapshot.events[0]
     if (!sourceEvent) throw new Error('Expected an inbox event fixture')
     const eventWithAttachment = {
@@ -11654,7 +11719,7 @@ describe('sealed Pegas UI', () => {
         createdAt: '2026-11-21T00:00:00.000Z',
       },
     }
-    installSnapshotFetch({
+    const fetchMock = installSnapshotFetch({
       ...snapshot,
       events: [eventWithAttachment],
     })
@@ -11669,9 +11734,10 @@ describe('sealed Pegas UI', () => {
     })
     fireEvent.click(attachmentButton)
     const preview = await screen.findByAltText('架构草图.png')
-    expect(preview.getAttribute('src')).toBe(
-      '/v1/events/event-1/attachments?userId=owner',
-    )
+    expect(preview.getAttribute('src')).toBe(previewBlobUrl)
+    expect(fetchMock).toHaveBeenCalledWith(eventAttachmentPath, {
+      headers: { 'x-pegas-local-web': '1' },
+    })
     fireEvent.click(screen.getByRole('button', { name: '返回工作详情' }))
     expect(await screen.findByText('Channel 时间线')).toBeTruthy()
   })

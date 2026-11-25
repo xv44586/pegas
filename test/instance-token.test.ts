@@ -31,6 +31,19 @@ function dataDirectory(): string {
 }
 
 describe('instance bearer bootstrap', () => {
+  it('enables local Web access only for an automatic loopback listener', () => {
+    expect(loadConfig({}).allowLocalWebAccess).toBe(true)
+    expect(
+      loadConfig({ PEGAS_LOCAL_WEB_ACCESS: 'manual' }).allowLocalWebAccess,
+    ).toBe(false)
+    expect(
+      loadConfig({
+        PEGAS_API_HOST: '0.0.0.0',
+        PEGAS_API_TOKEN: 'configured-token',
+      }).allowLocalWebAccess,
+    ).toBe(false)
+  })
+
   it('generates a persistent 0600 bearer when no token is configured', () => {
     const dataDir = dataDirectory()
     const environment: NodeJS.ProcessEnv = { PEGAS_DATA_DIR: dataDir }
@@ -117,6 +130,7 @@ describe('instance bearer bootstrap', () => {
           env: {
             ...environment,
             PEGAS_API_HOST: '127.0.0.1',
+            PEGAS_LOCAL_WEB_ACCESS: 'auto',
             PEGAS_API_PORT: String(port),
             PEGAS_DATA_DIR: dataDir,
             PEGAS_EXECUTOR: 'echo',
@@ -166,6 +180,30 @@ describe('instance bearer bootstrap', () => {
           headers: { authorization: `Bearer ${token}` },
         })
         expect(tasksWithToken.status).toBe(200)
+        const browserHeaders = {
+          'sec-fetch-site': 'same-origin',
+          'sec-fetch-mode': 'cors',
+          'x-pegas-local-web': '1',
+        }
+        const approvalUrl = `${baseUrl}/v1/approvals?userId=owner&limit=1`
+        expect(
+          (await fetch(approvalUrl, { headers: browserHeaders })).status,
+        ).toBe(200)
+        expect(
+          (
+            await fetch(approvalUrl, {
+              headers: { ...browserHeaders, origin: 'http://localhost:4319' },
+            })
+          ).status,
+        ).toBe(401)
+        expect(
+          (await fetch(`${baseUrl}/metrics`, { headers: browserHeaders }))
+            .status,
+        ).toBe(401)
+        const proxied = await fetch(approvalUrl, {
+          headers: { ...browserHeaders, 'x-forwarded-for': '127.0.0.1' },
+        })
+        expect(proxied.status).toBe(401)
       } finally {
         child.kill('SIGTERM')
         await new Promise(resolveExit => child.once('exit', resolveExit))

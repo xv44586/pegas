@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, statSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 
@@ -15,16 +15,24 @@ mkdirSync(outputDirectory, { recursive: true })
 let application
 const serviceGroupPids = []
 try {
+  const environment = { ...process.env }
+  delete environment.PEGAS_API_TOKEN
+  delete environment.PEGAS_DESKTOP_SERVER_URL
   application = await electron.launch({
     ...(executablePath ? { executablePath } : { args: [repositoryRoot] }),
     env: {
-      ...process.env,
+      ...environment,
       PEGAS_DESKTOP_TEST: '1',
+      PEGAS_LOCAL_WEB_ACCESS: 'auto',
       PEGAS_DESKTOP_DATA_DIR: dataDirectory,
     },
     timeout: 30_000,
   })
   const window = await application.firstWindow({ timeout: 20_000 })
+  assert.equal(
+    statSync(resolve(dataDirectory, 'api-token')).mode & 0o777,
+    0o600,
+  )
   const consoleErrors = []
   window.on('console', message => {
     if (message.type() === 'error') consoleErrors.push(message.text())
@@ -60,6 +68,29 @@ try {
     throw error
   }
   assert.equal(await window.title(), '对话 · Pegas')
+  const localWebWindow = application.waitForEvent('window')
+  await application.evaluate(({ BrowserWindow }, url) => {
+    const web = new BrowserWindow({
+      show: false,
+      webPreferences: { partition: 'pegas-local-web-smoke', sandbox: true },
+    })
+    void web.loadURL(new URL('/', url).href)
+  }, window.url())
+  const localWeb = await localWebWindow
+  try {
+    const skipSetup = localWeb.getByRole('button', { name: '稍后设置' })
+    const composer = localWeb.getByRole('textbox', { name: '给 Pegas 发消息' })
+    await composer.or(skipSetup).first().waitFor()
+    if (await skipSetup.isVisible()) await skipSetup.click()
+    await composer.waitFor()
+    assert.equal(
+      await localWeb.evaluate(() => sessionStorage.getItem('pegas-token')),
+      null,
+    )
+    await waitForCompletedRun(localWeb, smokeMessage)
+  } finally {
+    await localWeb.close()
+  }
   const security = await application.evaluate(({ BrowserWindow }) => {
     const active = BrowserWindow.getAllWindows()[0]
     return active?.webContents.getLastWebPreferences()
@@ -193,7 +224,9 @@ async function waitForCompletedRun(window, expectedOutput) {
   const deadline = Date.now() + 30_000
   while (Date.now() < deadline) {
     const completed = await window.evaluate(async output => {
-      const response = await fetch('/v1/runs?userId=owner')
+      const response = await fetch('/v1/runs?userId=owner', {
+        headers: { 'x-pegas-local-web': '1' },
+      })
       if (!response.ok) return false
       const body = await response.json()
       return body.runs?.some(

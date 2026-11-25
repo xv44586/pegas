@@ -1,11 +1,10 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { randomBytes } from 'node:crypto'
-import { mkdir } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
 
 import { app, BrowserWindow, Notification, session, shell } from 'electron'
 
+import { ensureInstanceBearer } from '../core/instance-token.js'
 import { createDesktopAttentionMonitor } from './attention.js'
 import {
   createResidencyController,
@@ -69,13 +68,15 @@ async function startDesktop(): Promise<void> {
       throw new Error('PEGAS_DESKTOP_SERVER_URL must use a loopback HTTP URL')
     appUrl = externalUrl
   } else {
-    apiToken ??= randomBytes(32).toString('base64url')
     const port = await availableLoopbackPort()
     appUrl = `http://127.0.0.1:${String(port)}`
     const dataDir =
       process.env.PEGAS_DESKTOP_DATA_DIR ??
       join(app.getPath('userData'), 'data')
-    await mkdir(dataDir, { recursive: true })
+    apiToken = ensureInstanceBearer({
+      dataDir,
+      environment: { PEGAS_API_TOKEN: apiToken },
+    })
     const preferenceDirectory =
       process.env.PEGAS_DESKTOP_DATA_DIR ?? app.getPath('userData')
     residentMode = readResidencyPreference(preferenceDirectory).resident
@@ -102,7 +103,10 @@ function startAttentionMonitor(trustedUrl: string, apiToken?: string): void {
   const monitor = createDesktopAttentionMonitor({
     fetchSnapshot: async () => {
       const response = await fetch(`${origin}/v1/outbox?userId=owner`, {
-        headers: apiToken ? { Authorization: `Bearer ${apiToken}` } : {},
+        mode: 'same-origin',
+        headers: apiToken
+          ? { Authorization: `Bearer ${apiToken}` }
+          : { 'x-pegas-local-web': '1', 'sec-fetch-site': 'same-origin' },
         signal: AbortSignal.timeout(5_000),
       })
       if (!response.ok)
