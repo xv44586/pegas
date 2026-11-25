@@ -13359,6 +13359,13 @@ export class PegasStore {
         const replayed = this.#actionForReconciler(replay.action_id, userId)
         if (replayed?.id !== actionId)
           throw new ActionNotFoundError('Action not found')
+        // Replaying a command must converge its side effects too: rows
+        // reconciled by pre-fix code can still hold parked inputs on the
+        // sentinel lease, and the wake is a no-op when nothing is parked.
+        this.#wakeBlockedTaskEvents(
+          replayed.taskId,
+          this.#clock.now().toISOString(),
+        )
         this.#database.exec('COMMIT')
         return replayed
       }
@@ -13417,9 +13424,10 @@ export class PegasStore {
           now,
           actionId,
         )
-      if (draft.resolution === 'succeeded') {
-        this.#wakeBlockedTaskEvents(row.task_id, now)
-      }
+      // Either resolution is a settled fact. A confirmed failure must also
+      // wake parked follow-ups: new input routes into a fresh Run while
+      // retry/Goal revision stay fenced by the reconciliation record.
+      this.#wakeBlockedTaskEvents(row.task_id, now)
       const task = this.#taskById(row.task_id)
       if (task.status !== 'completed' && task.status !== 'cancelled') {
         const stillBlocked = this.#database

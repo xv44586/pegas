@@ -185,7 +185,8 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - **自动化证据**：`test/policy-gate.test.ts` 新增 2（只读工具分级 + 注册面全覆盖合同，后者防再漏）；`test/dsh-approval-bridge.test.ts` 新增 2（未消费 grant 结算为 failed 并释放停放消息重新路由、持久 400 拒单次调用不杀 Run）；`test/approval.test.ts` 新增 1（authorized 未结算期间同指纹幂等回放）。全部先红后绿。`pnpm check` 150 文件 / 1585 测试全绿（statement 78.13 / branch 71.76 / function 74.96 / line 81.21，含 web），`pnpm smoke` 通过，真实 DSH `test/policy-gate-integration.test.ts` 5 测试通过（本机 dsh 0.2.2-rc.5 + 回环网关）。
 - **数据与权限边界**：无 schema 迁移。审批边界不放松：unknown/未记录结局的 failed 仍拦输入，人工确认 failed（reconciliation）仍拦新审批与重试；settled failed 只解除「输入停放」与「Run 完成」两处死锁。grant 结算走既有 `recordActionOutcome` append-only 合同，commandId 与真实执行共用 `dsh-tool-outcome:<actionId>` 幂等键。
 - **失败与恢复**：grant 结算失败仍发 `approval_bridge_error`（保留原行为）；parked 调用存续期间 idle 不结算 grant（防误杀等待审批的授权）；4xx 重试策略保留 408/429 重试。
-- **状态与下一缺口**：Partial 维持。运行实例中既有的 unknown Action（search_history 实际未执行）仍需人工核对一次以释放两条历史停放消息；本修复保证同类情况不再产生。回滚：revert 即回到旧白名单与旧停放语义，无数据迁移。
+- **人工核对 failed 的停放唤醒补齐（2026-11-25，同日追加）**：上线后对运行实例 unknown Action `0f086ece` 提交 resolution=failed 人工核对时确认第四个缺口——`#reconcileAction` 只在 resolution=succeeded 时调用 `#wakeBlockedTaskEvents`，人工确认失败后两条历史停放消息仍停在哨兵 lease（`blocked_by_action:unknown`）。修复为两种 resolution 都唤醒停放输入（人工确认失败同样是已结算事实，新输入走新 Run；retry/Goal revision/协作仍由核对记录拦截）；同命令幂等回放路径同样收敛唤醒副作用，使旧代码写入的存量核对记录可以通过重放同一命令释放停放消息（无需改库）。回归 `test/action-reconciliation.test.ts` 新增「wakes a parked continuation after a failed reconciliation」与「replaying a failed reconciliation still wakes inputs parked by the pre-fix code」，均先红后绿。运行实例两条消息经该修复上线并重放核对命令后释放。
+- **状态与下一缺口**：Partial 维持。本修复保证同类情况不再产生。回滚：revert 即回到旧白名单与旧停放语义，无数据迁移。
 
 ### TASK-002：事情状态与交付后的操作（2026-11-25）
 
