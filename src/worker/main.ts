@@ -24,6 +24,9 @@ import type {
 import { loadModelCredentialVault } from '../model/model-credential-vault.js'
 import { PegasDerivedMemoryService } from '../memory/derived-memory.js'
 import { HindsightProvider } from '../memory/hindsight-provider.js'
+import { LocalDerivedMemoryProvider } from '../memory/local-provider.js'
+import { createLocalMemoryDistiller } from '../memory/local-distiller.js'
+import { loadMemoryKey } from '../memory/memory-key.js'
 import { MeteredJsonModelProvider } from '../model/metered-provider.js'
 import {
   createConfiguredModelProvider,
@@ -106,31 +109,70 @@ const controlPlaneBaseUrl = localControlPlaneBaseUrl(
 )
 const store = new PegasStore(config.databasePath, {
   routingClarificationTtlMs: config.routingClarificationTtlMs,
-  derivedMemoryEnabled: config.memoryProvider === 'hindsight',
+  derivedMemoryEnabled: config.memoryProvider !== 'disabled',
 })
 const lifecycle = { stopping: false }
 const shutdown = new AbortController()
-const derivedMemory =
-  config.memoryProvider === 'hindsight'
-    ? new PegasDerivedMemoryService(
-        new HindsightProvider({
-          baseUrl: required(
-            config.hindsightBaseUrl,
-            'PEGAS_HINDSIGHT_BASE_URL',
-          ),
-          ...(config.hindsightApiKey ? { apiKey: config.hindsightApiKey } : {}),
-          timeoutMs: config.hindsightTimeoutMs,
-          shutdownSignal: shutdown.signal,
-        }),
-        {
-          hmacKey: required(config.memoryHmacKey, 'PEGAS_MEMORY_HMAC_KEY'),
-          globalPreferences: userId => store.workRuleContextForUser(userId),
-        },
-      )
-    : undefined
 const modelCredentialVault = loadModelCredentialVault(
   config.modelCredentialKeyPath,
 )
+const derivedMemory = createDerivedMemoryService()
+
+function createDerivedMemoryService(): PegasDerivedMemoryService | undefined {
+  if (config.memoryProvider === 'disabled') return undefined
+  if (config.memoryProvider === 'hindsight') {
+    return new PegasDerivedMemoryService(
+      new HindsightProvider({
+        baseUrl: required(config.hindsightBaseUrl, 'PEGAS_HINDSIGHT_BASE_URL'),
+        ...(config.hindsightApiKey ? { apiKey: config.hindsightApiKey } : {}),
+        timeoutMs: config.hindsightTimeoutMs,
+        shutdownSignal: shutdown.signal,
+      }),
+      {
+        hmacKey: required(config.memoryHmacKey, 'PEGAS_MEMORY_HMAC_KEY'),
+        globalPreferences: userId => store.workRuleContextForUser(userId),
+      },
+    )
+  }
+  const hmacKey = loadMemoryKey(config.memoryKeyPath, config.memoryHmacKey)
+  return new PegasDerivedMemoryService(
+    new LocalDerivedMemoryProvider(store, {
+      hmacKey,
+      distill: createLocalMemoryDistiller(memoryDistillProvider()),
+    }),
+    {
+      hmacKey,
+      providerName: 'local',
+      globalPreferences: userId => store.workRuleContextForUser(userId),
+    },
+  )
+}
+
+/**
+ * One bounded distillation call per retain job through the configured
+ * control-plane model, metered as the `memory` component (USAGE-001 sibling
+ * ledger). MODEL-001 retry/backoff applies inside the provider.
+ */
+function memoryDistillProvider(): MeteredJsonModelProvider {
+  const lazy: JsonModelProvider = {
+    name: 'configured-memory',
+    generateJson: request =>
+      createModelProvider(store.getRuntimeSettings()).generateJson(request),
+    generateJsonWithUsage: async request => {
+      const provider = createModelProvider(store.getRuntimeSettings())
+      return provider.generateJsonWithUsage
+        ? provider.generateJsonWithUsage(request)
+        : { value: await provider.generateJson(request) }
+    },
+  }
+  return new MeteredJsonModelProvider(lazy, store, 'memory', () => {
+    const settings = store.getRuntimeSettings()
+    return {
+      userId: 'system:memory',
+      modelRef: `${settings.modelProvider}/${settings.modelName}`,
+    }
+  })
+}
 initializeConfiguredModelProvider(store, config, modelCredentialVault)
 const defaults = runtimeSettingsDefaults(config)
 if (!store.hasRuntimeSettings()) {
@@ -167,7 +209,7 @@ const selfChangeExecutor = config.selfChangeEnabled
       recoveryBaseUrl: config.recoveryBaseUrl,
       ...(config.recoveryToken ? { recoveryToken: config.recoveryToken } : {}),
       editor: executor,
-      compatibility: { minimumSchema: 1, maximumSchema: 50 },
+      compatibility: { minimumSchema: 1, maximumSchema: 53 },
       reviewer: 'pegas-self-change-gate',
       controlPlaneBaseUrl,
     })

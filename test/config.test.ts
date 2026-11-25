@@ -22,7 +22,7 @@ describe('loadConfig', () => {
       modelProvider: 'magpie',
       pushMode: 'disabled',
       privacyMode: 'disabled',
-      memoryProvider: 'disabled',
+      memoryProvider: 'local',
       rewriteMode: 'disabled',
       routerMode: 'model',
       schedulerPollMs: 500,
@@ -193,6 +193,13 @@ describe('loadConfig', () => {
         PEGAS_HINDSIGHT_BASE_URL: 'http://127.0.0.1:8888',
         PEGAS_MEMORY_HMAC_KEY: 'short-key',
         PEGAS_HINDSIGHT_API_KEY: 'hsk_test',
+      },
+      'PEGAS_MEMORY_HMAC_KEY must contain at least 32 characters',
+    ],
+    [
+      {
+        PEGAS_MEMORY_PROVIDER: 'local',
+        PEGAS_MEMORY_HMAC_KEY: 'short-key',
       },
       'PEGAS_MEMORY_HMAC_KEY must contain at least 32 characters',
     ],

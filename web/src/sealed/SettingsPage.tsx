@@ -3614,7 +3614,9 @@ function UsageSettings({
                           ? '路由'
                           : record.component === 'summary'
                             ? '思考摘要'
-                            : '改写'}
+                            : record.component === 'memory'
+                              ? '记忆沉淀'
+                              : '改写'}
                         {record.eventId ? ` · 事件 ${record.eventId}` : ''}
                       </small>
                     </span>

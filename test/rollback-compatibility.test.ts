@@ -102,6 +102,31 @@ describe('durable state rollback compatibility', () => {
     }
   })
 
+  it('blocks a v52 rollback while local derived Memory exists and allows it after invalidation', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'pegas-rollback-local-'))
+    const path = join(directory, 'pegas.sqlite')
+    const store = new PegasStore(path)
+    try {
+      store.insertLocalDerivedMemory('owner', {
+        id: 'local-fact',
+        text: 'The pnpm check gate must pass before merging.',
+        type: 'experience',
+        tags: ['pegas:global'],
+        metadata: {},
+        state: 'valid',
+      })
+      expect(() => assertRollbackCompatible(path, 52)).toThrow(
+        RollbackCompatibilityError,
+      )
+      expect(() => assertRollbackCompatible(path, 53)).not.toThrow()
+      store.invalidateLocalDerivedMemory('owner', 'local-fact', 'user deleted')
+      expect(() => assertRollbackCompatible(path, 52)).not.toThrow()
+    } finally {
+      store.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
   it('blocks a v21 rollback while a Task awaits Goal clarification', () => {
     const directory = mkdtempSync(join(tmpdir(), 'pegas-rollback-'))
     const path = join(directory, 'pegas.sqlite')

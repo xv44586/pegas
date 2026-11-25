@@ -60,7 +60,7 @@ export interface MemoryContextEntry {
   content: string
   source: MemorySource
   origin?: 'explicit' | 'derived'
-  provider?: 'hindsight'
+  provider?: 'hindsight' | 'local'
   relevance?: number
 }
 
