@@ -10,7 +10,12 @@ import {
   parseGoalContractDraft,
   parseWorkerReportDraft,
 } from '../src/goal/goal-delivery.js'
+import { RuleBasedTaskRouter } from '../src/router/router.js'
 import { PegasStore } from '../src/storage/sqlite-store.js'
+import {
+  processNextEvent,
+  RoutingEventHandler,
+} from '../src/worker/processor.js'
 
 const cleanups: (() => Promise<void>)[] = []
 
@@ -22,8 +27,8 @@ describe('GOAL-001 delivery contracts', () => {
   it.each(['accept', 'request_changes'] as const)(
     'holds verified delivery until the owner decides to %s',
     async choice => {
-      const store = new PegasStore(':memory:')
-      const seeded = seedRun(store)
+      const store = new PegasStore(':memory:', { derivedMemoryEnabled: true })
+      const seeded = seedRun(store, '/tmp/pegas-goal-fixture')
       const goal = store.createGoalContract(
         seeded.taskId,
         'owner',
@@ -82,6 +87,9 @@ describe('GOAL-001 delivery contracts', () => {
         'awaiting_delivery_acceptance',
       )
       expect(store.listRuns(seeded.taskId).at(-1)?.status).toBe('completed')
+      expect(
+        store.claimNextDerivedMemoryJob('memory-worker', 1_000),
+      ).toBeUndefined()
       const { port } = server.address() as AddressInfo
       const post = (
         userId: string,
@@ -126,11 +134,20 @@ describe('GOAL-001 delivery contracts', () => {
       ).toBe(choice)
       const task = store.findTask(seeded.taskId, 'owner')
       if (choice === 'accept') {
+        expect(
+          store.claimNextDerivedMemoryJob('memory-worker', 1_000),
+        ).toMatchObject({
+          kind: 'run_success',
+          runId: seeded.runId,
+        })
         expect(task).toMatchObject({
           status: 'completed',
           ended: { by: 'human' },
         })
       } else {
+        expect(
+          store.claimNextDerivedMemoryJob('memory-worker', 1_000),
+        ).toBeUndefined()
         expect(task).toMatchObject({
           status: 'started',
           statusReason: 'review_rework_queued',
@@ -151,6 +168,204 @@ describe('GOAL-001 delivery contracts', () => {
       ).toBe(pack.id)
     },
   )
+
+  it('retires a parked evidence report when new input starts another attempt', () => {
+    let now = Date.parse('2026-11-25T00:00:00Z')
+    const store = new PegasStore(':memory:', {
+      clock: { now: () => new Date(now) },
+    })
+    try {
+      const seeded = seedRun(store)
+      store.createGoalContract(
+        seeded.taskId,
+        'owner',
+        'goal-waiting',
+        goalDraft(seeded.eventId),
+      )
+      expect(store.claimNextRun('first-worker')?.run.id).toBe(seeded.runId)
+      store.completeRun(seeded.runId, 'first-worker', {
+        executorRef: 'first-session',
+        output: 'Preparatory result',
+      })
+      now += 10_000
+      const event = store.enqueueEvent({
+        userId: 'owner',
+        type: 'user.message',
+        source: 'web',
+        authenticatedActor: 'human',
+        payload: { text: 'Use the corrected dataset.', taskId: seeded.taskId },
+      }).event
+      const { run: next } = store.applyRoutingDecision(
+        event,
+        {
+          kind: 'continue_task',
+          taskId: seeded.taskId,
+          input: 'Use the corrected dataset.',
+          reason: 'The owner supplied corrected input.',
+        },
+        'test-executor',
+      )
+      expect(store.claimNextRun('next-worker')?.run.id).toBe(next.id)
+      store.completeRun(next.id, 'next-worker', {
+        executorRef: 'next-session',
+        output: 'Result with corrected dataset',
+      })
+      now += 21_000
+      expect(store.claimNextRun('recovery-worker')).toBeUndefined()
+      expect(store.listRuns(seeded.taskId)[0]).toMatchObject({
+        status: 'cancelled',
+        lastError: `superseded_by:${next.id}`,
+      })
+      expect(store.findTask(seeded.taskId, 'owner')?.statusReason).toBe(
+        'awaiting_evidence',
+      )
+    } finally {
+      store.close()
+    }
+  })
+
+  it('refuses a final report submitted after a user correction was recorded', () => {
+    const store = new PegasStore(':memory:')
+    try {
+      const seeded = seedRun(store)
+      const goal = store.createGoalContract(
+        seeded.taskId,
+        'owner',
+        'corrected-goal',
+        {
+          ...goalDraft(seeded.eventId),
+          requireAcceptance: true,
+        },
+      )
+      expect(store.claimNextRun('worker')?.run.id).toBe(seeded.runId)
+      const evidence = store.createEvidenceRef(
+        seeded.runId,
+        'owner',
+        'old-result',
+        observationEvidence(goal.revision, 'passed'),
+      )
+      const correction = store.enqueueEvent({
+        userId: 'owner',
+        type: 'user.message',
+        source: 'web',
+        authenticatedActor: 'human',
+        payload: { text: 'Change the denominator.' },
+      }).event
+      store.applyControlIntent(correction, {
+        kind: 'steer_task',
+        taskId: seeded.taskId,
+        input: 'Change the denominator.',
+        reason: 'The owner corrected the target during the run.',
+      })
+      expect(() =>
+        store.submitWorkerReport(seeded.runId, 'owner', 'worker', {
+          goalRevision: goal.revision,
+          reportSequence: 1,
+          status: 'ready',
+          evidenceRefIds: [evidence.id],
+          summary: 'Result before the correction',
+          limitations: [],
+          remainingRisks: [],
+        }),
+      ).toThrow('pending steering')
+      expect(store.listReviewPacks(seeded.taskId, 'owner')).toHaveLength(0)
+      const successor = store.supersedeRunForSteering(seeded.runId, 'worker')
+      expect(successor.input).toContain('Change the denominator.')
+    } finally {
+      store.close()
+    }
+  })
+
+  it('shows rework routing failure and retries the same durable input', async () => {
+    const store = new PegasStore(':memory:')
+    try {
+      const seeded = seedRun(store)
+      expect(store.claimNextEvent('router')?.id).toBe(seeded.eventId)
+      store.completeEvent(seeded.eventId, 'router')
+      const goal = store.createGoalContract(
+        seeded.taskId,
+        'owner',
+        'goal-rework-failure',
+        {
+          ...goalDraft(seeded.eventId),
+          requireAcceptance: true,
+        },
+      )
+      expect(store.claimNextRun('worker')?.run.id).toBe(seeded.runId)
+      store.completeRun(seeded.runId, 'worker', {
+        executorRef: 'session',
+        output: 'Draft result',
+      })
+      const evidence = store.createEvidenceRef(
+        seeded.runId,
+        'owner',
+        'rework-evidence',
+        observationEvidence(goal.revision, 'passed'),
+      )
+      const { reviewPack } = store.submitWorkerReport(
+        seeded.runId,
+        'owner',
+        'worker',
+        {
+          goalRevision: goal.revision,
+          reportSequence: 1,
+          status: 'ready',
+          evidenceRefIds: [evidence.id],
+          summary: 'Draft result',
+          limitations: [],
+          remainingRisks: [],
+        },
+      )
+      if (!reviewPack) throw new Error('Expected Review Pack')
+      const decided = store.decideDelivery(reviewPack.id, 'owner', {
+        commandId: 'rework',
+        decision: 'request_changes',
+        note: 'Include the comparison.',
+      })
+      if (!decided.nextEventId) throw new Error('Expected durable rework input')
+      const broken = new RoutingEventHandler(
+        new RuleBasedTaskRouter(),
+        'test-executor',
+        () => {
+          throw new Error('Execution context unavailable')
+        },
+      )
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        expect(await processNextEvent(store, broken, 'router')).toBe(true)
+      }
+      expect(
+        store
+          .listEvents('owner')
+          .find(event => event.id === decided.nextEventId),
+      ).toMatchObject({
+        status: 'failed',
+        lastError: 'Execution context unavailable',
+      })
+      const failed = store.findTask(seeded.taskId, 'owner')
+      if (!failed) throw new Error('Expected original Task')
+      expect(store.projectWorkChannel(failed).workflow.state).toBe('failed')
+      expect(store.retryEvent(decided.nextEventId, 'owner').status).toBe(
+        'pending',
+      )
+      const pending = store.findTask(seeded.taskId, 'owner')
+      if (!pending) throw new Error('Expected original Task')
+      expect(store.projectWorkChannel(pending).workflow.state).toBe('queued')
+      const recovered = new RoutingEventHandler(
+        new RuleBasedTaskRouter(),
+        'test-executor',
+      )
+      expect(await processNextEvent(store, recovered, 'router')).toBe(true)
+      const runs = store.listRuns(seeded.taskId)
+      expect(runs).toHaveLength(2)
+      expect(runs.at(-1)).toMatchObject({
+        status: 'queued',
+        originEventId: decided.nextEventId,
+        input: 'Include the comparison.',
+      })
+    } finally {
+      store.close()
+    }
+  })
 
   it('cancels a pending Approval when a newer Goal revision supersedes its Run', () => {
     const store = new PegasStore(':memory:')
@@ -1763,7 +1978,10 @@ describe('GOAL-001 delivery contracts', () => {
   })
 })
 
-function seedRun(store: PegasStore): {
+function seedRun(
+  store: PegasStore,
+  workspace?: string,
+): {
   eventId: string
   taskId: string
   runId: string
@@ -1785,6 +2003,7 @@ function seedRun(store: PegasStore): {
       reason: 'GOAL-001 test',
     },
     'test-executor',
+    { executor: 'test-executor', ...(workspace ? { workspace } : {}) },
   )
   return {
     eventId: event.id,
