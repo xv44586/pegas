@@ -325,18 +325,18 @@ try {
   await unconfiguredPage
     .getByRole('heading', { name: '连接模型服务', exact: true })
     .waitFor()
-  const connectionGroup = unconfiguredPage.getByRole('group', {
+  const connectionForm = unconfiguredPage.getByRole('form', {
     name: '模型连接配置',
   })
-  await connectionGroup.waitFor()
+  await connectionForm.waitFor()
   await audit(unconfiguredPage, 'onboarding-connection-setup')
-  await connectionGroup.getByLabel('API Key').fill('fixture-key')
-  await connectionGroup.getByRole('button', { name: '测试连接' }).click()
-  await connectionGroup.getByText(/连接正常 · \d+ ms/).waitFor()
+  await connectionForm.getByLabel('API Key').fill('fixture-key')
+  await connectionForm.getByRole('button', { name: '测试连接' }).click()
+  await unconfiguredPage.getByText(/连接正常 · \d+ ms/).waitFor()
   await audit(unconfiguredPage, 'onboarding-connection-tested')
   await unconfiguredPage.unroute('**/v1/settings/agent-models')
-  await connectionGroup.getByRole('button', { name: '保存连接' }).click()
-  await connectionGroup.waitFor({ state: 'detached' })
+  await connectionForm.getByRole('button', { name: '保存连接' }).click()
+  await connectionForm.waitFor({ state: 'detached' })
   await unconfiguredPage.getByRole('button', { name: /，默认模型$/ }).click()
   await unconfiguredPage.getByRole('dialog', { name: '选择模型' }).waitFor()
   await audit(unconfiguredPage, 'onboarding-connection-picker')

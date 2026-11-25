@@ -167,20 +167,41 @@ const apiToken = `ui-review-${process.pid}`
 const authHeaders = { authorization: `Bearer ${apiToken}` }
 const recoveryPort = await availablePort()
 const modelGateway = createHttpServer((request, response) => {
+  const onboarding = request.url?.startsWith('/onboarding/v1/')
+  if (
+    onboarding &&
+    !['Bearer fixture-key', 'Bearer updated-fixture-key'].includes(
+      request.headers.authorization,
+    )
+  ) {
+    response.writeHead(401).end()
+    return
+  }
   if (request.url?.endsWith('/models')) {
     response.writeHead(200, { 'content-type': 'application/json' })
     response.end(
       JSON.stringify({
-        data: Array.from({ length: 34 }, (_, index) => ({
-          id:
-            index === 0
-              ? 'deepseek-v4.1-flash'
-              : `fixture/model-${String(index + 1).padStart(2, '0')}`,
-          display_name:
-            index === 0
-              ? 'DeepSeek V4.1 Flash'
-              : `Fixture Model ${String(index + 1).padStart(2, '0')}`,
-        })),
+        data: onboarding
+          ? [
+              {
+                id: 'gateway/onboarding-probe',
+                display_name: 'Onboarding Probe Model',
+              },
+              {
+                id: 'gateway/onboarding-model',
+                display_name: 'Onboarding Gateway Model',
+              },
+            ]
+          : Array.from({ length: 34 }, (_, index) => ({
+              id:
+                index === 0
+                  ? 'deepseek-v4.1-flash'
+                  : `fixture/model-${String(index + 1).padStart(2, '0')}`,
+              display_name:
+                index === 0
+                  ? 'DeepSeek V4.1 Flash'
+                  : `Fixture Model ${String(index + 1).padStart(2, '0')}`,
+            })),
       }),
     )
     return
@@ -637,61 +658,6 @@ try {
       `desktop-onboarding-${slug}`,
     )
   }
-  const unconfigured = await browser.newContext({
-    viewport: { width: 1440, height: 900 },
-    reducedMotion: 'reduce',
-    deviceScaleFactor: 1,
-  })
-  await unconfigured.addInitScript(token => {
-    sessionStorage.setItem('pegas-token', token)
-  }, apiToken)
-  const unconfiguredPage = await unconfigured.newPage()
-  unconfiguredPage.setDefaultTimeout(12_000)
-  await unconfiguredPage.route('**/v1/settings/agent-models', route =>
-    route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        defaultProvider: 'magpie',
-        defaultModel: '',
-        models: [],
-      }),
-    }),
-  )
-  await unconfiguredPage.goto(`http://127.0.0.1:${String(port)}/?setup=1`)
-  await unconfiguredPage
-    .getByRole('heading', { name: '欢迎使用 Pegas', exact: true })
-    .waitFor()
-  await unconfiguredPage
-    .getByRole('button', { name: '继续', exact: true })
-    .click()
-  await unconfiguredPage
-    .getByRole('heading', { name: '连接模型服务', exact: true })
-    .waitFor()
-  const connectionGroup = unconfiguredPage.getByRole('group', {
-    name: '模型连接配置',
-  })
-  await connectionGroup.waitFor()
-  await capture(
-    unconfiguredPage,
-    'desktop-onboarding-connection.png',
-    'desktop-onboarding-connection',
-  )
-  await connectionGroup.getByLabel('API Key').fill('fixture-key')
-  await connectionGroup.getByRole('button', { name: '测试连接' }).click()
-  await connectionGroup.getByText(/连接正常 · \d+ ms/).waitFor()
-  await capture(
-    unconfiguredPage,
-    'desktop-onboarding-connection-tested.png',
-    'desktop-onboarding-connection-tested',
-  )
-  await unconfiguredPage.unroute('**/v1/settings/agent-models')
-  await connectionGroup.getByRole('button', { name: '保存连接' }).click()
-  await connectionGroup.waitFor({ state: 'detached' })
-  await unconfiguredPage.getByRole('button', { name: /，默认模型$/ }).click()
-  await assertPickerPagination(unconfiguredPage, 'onboarding connection picker')
-  await unconfigured.close()
-
   await desktop.close()
 
   const dark = await browser.newContext({
@@ -1322,6 +1288,112 @@ try {
     await review.close()
   }
 
+  const unconfigured = await browser.newContext({
+    viewport: { width: 1440, height: 900 },
+    reducedMotion: 'reduce',
+    deviceScaleFactor: 1,
+  })
+  await unconfigured.addInitScript(token => {
+    sessionStorage.setItem('pegas-token', token)
+  }, apiToken)
+  const unconfiguredPage = await unconfigured.newPage()
+  unconfiguredPage.setDefaultTimeout(12_000)
+  const emptyCatalog = route =>
+    route.fulfill({
+      json: { defaultProvider: '', defaultModel: '', models: [] },
+    })
+  await unconfiguredPage.route('**/v1/settings/agent-models', emptyCatalog, {
+    times: 1,
+  })
+  await unconfiguredPage.goto(`http://127.0.0.1:${String(port)}/?setup=1`)
+  await unconfiguredPage
+    .getByRole('button', { name: '继续', exact: true })
+    .click()
+  const connectionForm = unconfiguredPage.getByRole('form', {
+    name: '模型连接配置',
+  })
+  await connectionForm.getByLabel('接入方式').click()
+  await unconfiguredPage
+    .getByRole('option', { name: /自定义 · OpenAI 兼容/ })
+    .click()
+  await connectionForm
+    .getByLabel('Base URL')
+    .fill(`http://127.0.0.1:${String(modelGatewayPort)}/onboarding/v1`)
+  await connectionForm.getByLabel('模型 ID').fill('gateway/onboarding-probe')
+  await capture(
+    unconfiguredPage,
+    'desktop-onboarding-connection.png',
+    'desktop-onboarding-connection',
+  )
+  await unconfiguredPage.setViewportSize({ width: 390, height: 844 })
+  await capture(
+    unconfiguredPage,
+    'mobile-onboarding-connection.png',
+    'mobile-onboarding-connection',
+  )
+  await connectionForm.getByLabel('API Key').fill('fixture-key')
+  await connectionForm.getByRole('button', { name: '测试连接' }).click()
+  await unconfiguredPage.getByText(/连接正常 · \d+ ms/).waitFor()
+  await unconfiguredPage.setViewportSize({ width: 1440, height: 900 })
+  await capture(
+    unconfiguredPage,
+    'desktop-onboarding-connection-tested.png',
+    'desktop-onboarding-connection-tested',
+  )
+  await connectionForm.getByRole('button', { name: '保存连接' }).click()
+  await connectionForm.waitFor({ state: 'detached' })
+  await unconfiguredPage
+    .getByRole('button', { name: /Onboarding Probe Model.*默认模型/ })
+    .click()
+  const savedConnectionPicker = unconfiguredPage.getByRole('dialog', {
+    name: '选择模型',
+  })
+  await savedConnectionPicker.waitFor()
+  await capture(
+    unconfiguredPage,
+    'desktop-onboarding-connection-picker.png',
+    'desktop-onboarding-connection-picker',
+  )
+  await savedConnectionPicker
+    .getByRole('option', { name: /Onboarding Gateway Model/ })
+    .click()
+  await unconfiguredPage
+    .getByRole('button', { name: /Onboarding Gateway Model.*默认模型/ })
+    .waitFor()
+  for (let step = 0; step < 2; step += 1)
+    await unconfiguredPage
+      .getByRole('button', { name: '继续', exact: true })
+      .click()
+  await unconfiguredPage.getByRole('button', { name: '进入 Pegas' }).click()
+
+  await unconfiguredPage.route('**/v1/settings/agent-models', emptyCatalog, {
+    times: 1,
+  })
+  await unconfiguredPage.goto(
+    `http://127.0.0.1:${String(port)}/?view=settings&section=models`,
+  )
+  await unconfiguredPage
+    .getByLabel('API Key', { exact: true })
+    .fill('updated-fixture-key')
+  const [settingsSave] = await Promise.all([
+    unconfiguredPage.waitForResponse(
+      response =>
+        response.url().endsWith('/v1/settings') &&
+        response.request().method() === 'PUT',
+    ),
+    unconfiguredPage.getByRole('button', { name: '保存更改' }).click(),
+  ])
+  if (!settingsSave.ok())
+    throw new Error(`Model service save failed: ${await settingsSave.text()}`)
+  await unconfiguredPage
+    .getByLabel('设置分类')
+    .getByRole('button', { name: 'Pegas', exact: true })
+    .click()
+  await unconfiguredPage.getByRole('button', { name: '更换模型' }).click()
+  await unconfiguredPage
+    .getByRole('option', { name: /Onboarding Gateway Model/ })
+    .waitFor()
+  await unconfigured.close()
   console.log(`UI review captured in ${outputRelative}`)
 } finally {
   if (browser) await browser.close().catch(() => undefined)
@@ -1827,10 +1899,14 @@ async function assertGeometry(page, label) {
           `settings layers do not meet ${String(Math.round(scrollRect.bottom))}..${String(Math.round(footerRect.top))}`,
         )
     }
-    if (globalThis.document.querySelector('select'))
+    if (
+      globalThis.document.querySelector(
+        'select:not([aria-hidden="true"][tabindex="-1"])',
+      )
+    )
       out.push('native select remains after BUI migration')
     for (const trigger of globalThis.document.querySelectorAll(
-      '.settings-page [role="combobox"], .detail-drawer [role="combobox"]',
+      '.settings-page [role="combobox"], .detail-drawer [role="combobox"], .onboarding-dialog [role="combobox"]',
     )) {
       const rect = trigger.getBoundingClientRect()
       if (!rect.width || !rect.height) continue
