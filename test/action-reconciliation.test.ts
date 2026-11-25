@@ -176,6 +176,61 @@ describe('APPROVAL-001 human action reconciliation', () => {
     ).toThrow()
   })
 
+  it('wakes a parked continuation after a failed reconciliation', () => {
+    const store = new PegasStore(':memory:')
+    cleanups.push(() => store.close())
+    const blocked = createBlockedAction(store, 'unknown')
+    store.failRun(blocked.resumeRunId, 'worker-resumed', 'executor crashed')
+
+    // A follow-up message arrives while the Action is still unknown, so the
+    // worker parks it behind the sentinel lease.
+    const continuation = store.enqueueEvent({
+      userId: 'owner',
+      type: 'user.message',
+      source: 'test',
+      payload: { text: '换个方式继续' },
+    }).event
+    // Drain older pending events first; task creation left the origin event
+    // and approval notifications claimable ahead of the continuation.
+    for (let drained = store.claimNextEvent('event-drain'); drained;) {
+      if (drained.id === continuation.id) {
+        store.releaseEventClaim(drained.id, 'event-drain')
+        break
+      }
+      store.completeEvent(drained.id, 'event-drain')
+      drained = store.claimNextEvent('event-drain')
+    }
+    expect(store.claimNextEvent('event-worker')?.id).toBe(continuation.id)
+    expect(
+      store.parkEventsForBlockedAction(
+        [continuation.id],
+        'event-worker',
+        blocked.taskId,
+      ),
+    ).toBe('parked')
+    expect(
+      store.listEvents('owner').find(event => event.id === continuation.id),
+    ).toMatchObject({
+      status: 'processing',
+      lastError: 'blocked_by_action:unknown',
+    })
+
+    store.reconcileAction(blocked.actionId, 'owner', {
+      commandId: 'reconcile-failed-wake',
+      resolution: 'failed',
+      note: '审计确认该工具从未执行，没有任何外部副作用',
+    })
+
+    // A human-confirmed failure is a settled fact: the parked message must
+    // become claimable again instead of waiting on the sentinel lease.
+    const released = store
+      .listEvents('owner')
+      .find(event => event.id === continuation.id)
+    expect(released).toMatchObject({ status: 'pending' })
+    expect(released?.lastError).toBeUndefined()
+    expect(store.claimNextEvent('event-worker')?.id).toBe(continuation.id)
+  })
+
   it('allows retry after a succeeded reconciliation of a failed Run', () => {
     const store = new PegasStore(':memory:')
     cleanups.push(() => store.close())

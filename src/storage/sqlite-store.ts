@@ -13417,9 +13417,10 @@ export class PegasStore {
           now,
           actionId,
         )
-      if (draft.resolution === 'succeeded') {
-        this.#wakeBlockedTaskEvents(row.task_id, now)
-      }
+      // Either resolution is a settled fact. A confirmed failure must also
+      // wake parked follow-ups: new input routes into a fresh Run while
+      // retry/Goal revision stay fenced by the reconciliation record.
+      this.#wakeBlockedTaskEvents(row.task_id, now)
       const task = this.#taskById(row.task_id)
       if (task.status !== 'completed' && task.status !== 'cancelled') {
         const stillBlocked = this.#database
