@@ -10,6 +10,7 @@ import {
   CircleAlert,
   CircleQuestionMark,
   FileText,
+  GitBranch,
   Layers3,
   Link2,
   LoaderCircle,
@@ -121,6 +122,7 @@ import {
   type TaskContextCue,
 } from './types'
 import { useChatScroll } from './useChatScroll'
+import { useBrowserResultTrace } from './useBrowserResultTrace'
 
 interface PageActions {
   onSearch: () => void
@@ -297,6 +299,7 @@ export function ConversationPage({
         message.role === 'user' ? (derivedByOrigin.get(message.id) ?? []) : [],
     }))
   }, [snapshot.channels, snapshot.events, snapshot.messages])
+  useBrowserResultTrace(api, messages, chatScroll.contentRef)
   const messageBlocks = useMemo(
     () => groupMessageThreads<(typeof messages)[number]>(messages),
     [messages],
@@ -730,6 +733,7 @@ export function ConversationPage({
           .filter(Boolean)
           .join(' ')}
         data-message-id={message.id}
+        data-result-trace={message.role === 'pegas' ? message.id : undefined}
         key={message.id}
       >
         <div className="message-content">
@@ -833,6 +837,16 @@ export function ConversationPage({
               }}
               taskTitle={workEntry.channel.title}
             />
+          )}
+          {message.role === 'user' && (
+            <MetaIconButton
+              label="查看调用链"
+              onClick={() =>
+                actions.onOpenDrawer({ kind: 'trace', eventId: message.id })
+              }
+            >
+              <GitBranch aria-hidden="true" size={13} />
+            </MetaIconButton>
           )}
           <time dateTime={message.at}>{formatRelativeTime(message.at)}</time>
           {selectQuote && (
