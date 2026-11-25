@@ -1261,6 +1261,8 @@ export async function executeClaimedRun(
   }
 }
 
+const MAX_MEMORY_OPERATION_POLLS = 600
+
 export async function processNextDerivedMemoryJob(
   store: PegasStore,
   service: DerivedMemoryRetainService,
@@ -1273,6 +1275,18 @@ export async function processNextDerivedMemoryJob(
     if (!job.providerOperationId) {
       const operationId = await service.submit(job)
       store.markDerivedMemoryJobSubmitted(job.id, workerId, operationId)
+      return true
+    }
+    if (job.pollCount > MAX_MEMORY_OPERATION_POLLS) {
+      store.failDerivedMemoryJob(
+        job.id,
+        workerId,
+        `Hindsight operation did not settle within ${String(MAX_MEMORY_OPERATION_POLLS)} polls`,
+      )
+      telemetry?.metrics?.increment('pegas_errors_total', {
+        component: 'memory',
+        kind: 'retain_poll_budget',
+      })
       return true
     }
     const operation = await service.operationStatus(job)
@@ -1296,14 +1310,15 @@ export async function processNextDerivedMemoryJob(
     return true
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    if (job.attempts >= 8) store.failDerivedMemoryJob(job.id, workerId, message)
+    if (job.errorAttempts >= 8)
+      store.failDerivedMemoryJob(job.id, workerId, message)
     else {
-      const retryAfterMs = Math.min(60_000, 500 * 2 ** (job.attempts - 1))
+      const retryAfterMs = Math.min(60_000, 500 * 2 ** (job.errorAttempts - 1))
       store.retryDerivedMemoryJob(job.id, workerId, message, retryAfterMs)
     }
     telemetry?.logger?.warn('memory.retain_retry', {
       jobId: job.id,
-      attempts: job.attempts,
+      attempts: job.errorAttempts,
       error: message,
     })
     telemetry?.metrics?.increment('pegas_errors_total', {
@@ -1365,6 +1380,18 @@ export async function processNextDerivedMemoryCorrectionJob(
       store.markDerivedMemoryCorrectionSubmitted(job.id, workerId, operationId)
       return true
     }
+    if (job.pollCount > MAX_MEMORY_OPERATION_POLLS) {
+      store.failDerivedMemoryCorrectionJob(
+        job.id,
+        workerId,
+        `Hindsight correction did not settle within ${String(MAX_MEMORY_OPERATION_POLLS)} polls`,
+      )
+      telemetry?.metrics?.increment('pegas_errors_total', {
+        component: 'memory',
+        kind: 'correction_poll_budget',
+      })
+      return true
+    }
     const operation = await service.correctionStatus(job)
     if (operation.status === 'completed') {
       store.completeDerivedMemoryCorrectionJob(job.id, workerId)
@@ -1391,10 +1418,10 @@ export async function processNextDerivedMemoryCorrectionJob(
     return true
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    if (job.attempts >= 8)
+    if (job.errorAttempts >= 8)
       store.failDerivedMemoryCorrectionJob(job.id, workerId, message)
     else {
-      const retryAfterMs = Math.min(60_000, 500 * 2 ** (job.attempts - 1))
+      const retryAfterMs = Math.min(60_000, 500 * 2 ** (job.errorAttempts - 1))
       store.retryDerivedMemoryCorrectionJob(
         job.id,
         workerId,
@@ -1404,7 +1431,7 @@ export async function processNextDerivedMemoryCorrectionJob(
     }
     telemetry?.logger?.warn('memory.correction_retry', {
       jobId: job.id,
-      attempts: job.attempts,
+      attempts: job.errorAttempts,
       error: message,
     })
     telemetry?.metrics?.increment('pegas_errors_total', {

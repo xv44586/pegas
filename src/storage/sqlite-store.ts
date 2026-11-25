@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite'
 
 import { systemClock, type Clock } from '../core/clock.js'
 import { assignWorkerIconId, isWorkerIconId } from '../brand/agent-icon.js'
+import { DeterministicPrivacyMasker } from '../privacy/masker.js'
 import {
   projectWorkChannel,
   type ChannelSearchOptions,
@@ -1052,6 +1053,16 @@ CREATE TABLE derived_memory_recall_audit (
 
 CREATE INDEX derived_memory_recall_audit_by_user
 ON derived_memory_recall_audit (user_id, created_at DESC, run_id);
+`
+
+const migration51 = `
+-- MEMORY-001 review fixes: operation polling gets its own budget so slow
+-- provider extraction never consumes the error-retry allowance, and every
+-- error claim is counted explicitly instead of overloading attempts.
+ALTER TABLE derived_memory_jobs ADD COLUMN poll_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE derived_memory_jobs ADD COLUMN error_attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE derived_memory_correction_jobs ADD COLUMN poll_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE derived_memory_correction_jobs ADD COLUMN error_attempts INTEGER NOT NULL DEFAULT 0;
 `
 
 const migration39 = `
@@ -2540,8 +2551,11 @@ interface DerivedMemoryJobRow {
   document_id: string
   content: string
   working_directory: string
+  status: 'pending' | 'submitted' | 'processing'
   provider_operation_id: string | null
   attempts: number
+  poll_count: number
+  error_attempts: number
 }
 
 interface DerivedMemoryCacheRow {
@@ -2572,8 +2586,11 @@ interface DerivedMemoryCorrectionJobRow {
   replacement_text: string
   tags_json: string
   metadata_json: string
+  status: 'pending' | 'submitted' | 'processing'
   provider_operation_id: string | null
   attempts: number
+  poll_count: number
+  error_attempts: number
 }
 
 interface WorkRuleRow {
@@ -3219,6 +3236,7 @@ export class PegasStore {
     this.#migrate(48, migration48)
     this.#migrate(49, migration49)
     this.#migrate(50, migration50)
+    this.#migrate(51, migration51)
   }
 
   #backfillWorkerIconIds(): void {
@@ -5043,19 +5061,36 @@ export class PegasStore {
         .prepare(
           `UPDATE derived_memory_jobs
            SET status = 'processing', claimed_by = ?, lease_until = ?,
-               attempts = attempts + 1, updated_at = ?
+               attempts = attempts + 1,
+               poll_count = poll_count + CASE WHEN ? = 'submitted' THEN 1 ELSE 0 END,
+               error_attempts = error_attempts + CASE WHEN ? = 'submitted' THEN 0 ELSE 1 END,
+               updated_at = ?
            WHERE id = ? AND (
              status IN ('pending','submitted')
              OR (status = 'processing' AND lease_until <= ?)
            )`,
         )
-        .run(workerId, leaseUntil, nowIso, row.id, nowIso)
+        .run(
+          workerId,
+          leaseUntil,
+          row.status,
+          row.status,
+          nowIso,
+          row.id,
+          nowIso,
+        )
       if (claimed.changes !== 1) {
         this.#database.exec('COMMIT')
         return undefined
       }
       this.#database.exec('COMMIT')
-      return toDerivedMemoryJob({ ...row, attempts: row.attempts + 1 })
+      return toDerivedMemoryJob({
+        ...row,
+        attempts: row.attempts + 1,
+        poll_count: row.poll_count + (row.status === 'submitted' ? 1 : 0),
+        error_attempts:
+          row.error_attempts + (row.status === 'submitted' ? 0 : 1),
+      })
     } catch (error) {
       this.#database.exec('ROLLBACK')
       throw error
@@ -5204,18 +5239,32 @@ export class PegasStore {
         .prepare(
           `UPDATE derived_memory_correction_jobs
            SET status = 'processing', claimed_by = ?, lease_until = ?,
-               attempts = attempts + 1, updated_at = ?
+               attempts = attempts + 1,
+               poll_count = poll_count + CASE WHEN ? = 'submitted' THEN 1 ELSE 0 END,
+               error_attempts = error_attempts + CASE WHEN ? = 'submitted' THEN 0 ELSE 1 END,
+               updated_at = ?
            WHERE id = ? AND (
              status IN ('pending','submitted')
              OR (status = 'processing' AND lease_until <= ?)
            )`,
         )
-        .run(workerId, leaseUntil, nowIso, row.id, nowIso)
+        .run(
+          workerId,
+          leaseUntil,
+          row.status,
+          row.status,
+          nowIso,
+          row.id,
+          nowIso,
+        )
       this.#database.exec('COMMIT')
       return claimed.changes === 1
         ? toDerivedMemoryCorrectionJob({
             ...row,
             attempts: row.attempts + 1,
+            poll_count: row.poll_count + (row.status === 'submitted' ? 1 : 0),
+            error_attempts:
+              row.error_attempts + (row.status === 'submitted' ? 0 : 1),
           })
         : undefined
     } catch (error) {
@@ -5611,6 +5660,7 @@ export class PegasStore {
       for (const row of existing) {
         if (!retainedIds.has(row.memory_id)) remove.run(userId, row.memory_id)
       }
+      this.#requeueSuppressedCuration(userId, memories, now)
       this.#database
         .prepare(
           `INSERT INTO derived_memory_sync_state
@@ -5626,6 +5676,43 @@ export class PegasStore {
     } catch (error) {
       this.#database.exec('ROLLBACK')
       throw error
+    }
+  }
+
+  /**
+   * Provider backup restores can revive facts whose curation job already
+   * completed. A full listing that still contains a suppressed memory is the
+   * reconciliation point: requeue the invalidation instead of leaving deleted
+   * personal data valid in the remote bank forever.
+   */
+  #requeueSuppressedCuration(
+    userId: string,
+    memories: readonly DerivedMemory[],
+    now: string,
+  ): void {
+    for (const memory of memories) {
+      if (memory.state === 'invalidated') continue
+      if (!this.isDerivedMemorySuppressed(userId, memory)) continue
+      const revived = this.#database
+        .prepare(
+          `UPDATE derived_memory_curation_jobs
+           SET status = 'pending', memory_type = ?, attempts = 0,
+               claimed_by = NULL, lease_until = NULL, next_attempt_at = NULL,
+               last_error = NULL, completed_at = NULL, updated_at = ?
+           WHERE user_id = ? AND memory_id = ? AND status <> 'processing'`,
+        )
+        .run(memory.type, now, userId, memory.id)
+      if (revived.changes > 0) continue
+      this.#database
+        .prepare(
+          `INSERT INTO derived_memory_curation_jobs
+            (id, user_id, memory_id, memory_type, reason, status,
+             created_at, updated_at)
+           VALUES (?, ?, ?, ?, 'Suppressed memory is still valid at the provider',
+                   'pending', ?, ?)
+           ON CONFLICT(user_id, memory_id) DO NOTHING`,
+        )
+        .run(randomUUID(), userId, memory.id, memory.type, now, now)
     }
   }
 
@@ -10666,6 +10753,13 @@ export class PegasStore {
           'Target Task completed before the context note was delivered.',
           now,
         )
+        this.#enqueueDerivedMemoryJob(
+          run,
+          task,
+          'run_success',
+          draft.summary,
+          now,
+        )
       } else if (draft.status === 'failed') {
         this.#database
           .prepare(
@@ -10673,6 +10767,13 @@ export class PegasStore {
              lease_until = NULL, last_error = ?, updated_at = ? WHERE id = ?`,
           )
           .run(draft.summary, now, runId)
+        this.#enqueueDerivedMemoryJob(
+          run,
+          task,
+          'run_failure',
+          draft.summary,
+          now,
+        )
         this.#database
           .prepare(
             `UPDATE tasks SET status = 'started', status_reason = 'last_run_failed',
@@ -12461,7 +12562,7 @@ export class PegasStore {
           now,
         )
       }
-      if (!awaitingClarification && !actionBlocksCompletion) {
+      if (runStatus === 'completed') {
         this.#enqueueDerivedMemoryJob(
           run,
           task,
@@ -15918,6 +16019,8 @@ function toDerivedMemoryJob(row: DerivedMemoryJobRow): DerivedMemoryJob {
       ? { providerOperationId: row.provider_operation_id }
       : {}),
     attempts: row.attempts,
+    pollCount: row.poll_count,
+    errorAttempts: row.error_attempts,
   }
 }
 
@@ -15937,6 +16040,8 @@ function toDerivedMemoryCorrectionJob(
       ? { providerOperationId: row.provider_operation_id }
       : {}),
     attempts: row.attempts,
+    pollCount: row.poll_count,
+    errorAttempts: row.error_attempts,
   }
 }
 
@@ -15962,17 +16067,30 @@ function derivedMemoryEvidence(
   return redactDerivedMemoryEvidence(sections.join('\n')).slice(0, 12_000)
 }
 
+const derivedMemoryEvidenceMasker = new DeterministicPrivacyMasker({
+  hmacKey: 'pegas-derived-memory-evidence-redaction',
+})
+
 function redactDerivedMemoryEvidence(value: string): string {
-  return value
-    .replaceAll(/\bsk-[A-Za-z0-9_-]{8,}\b/g, '[REDACTED_CREDENTIAL]')
+  const masked = derivedMemoryEvidenceMasker
+    .mask(value)
+    .text.replaceAll(/\bAKIA[0-9A-Z]{16}\b/g, '[REDACTED_CREDENTIAL]')
     .replaceAll(
-      /\b(?:bearer|authorization)\s*[:=]?\s*[A-Za-z0-9._~+/-]{8,}\b/gi,
+      /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g,
       '[REDACTED_CREDENTIAL]',
     )
     .replaceAll(
-      /\b(?:api[_-]?key|token|password|secret)\s*[:=]\s*[^\s,;]{4,}/gi,
+      /\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@/gi,
+      '[REDACTED_CREDENTIAL]@',
+    )
+    .replaceAll(
+      /\b(?:api[_-]?key|token|password|secret)\s+(?:is\s+|=|:)\s*[^\s,;]{4,}/gi,
       '[REDACTED_CREDENTIAL]',
     )
+  return masked.replaceAll(
+    /\{\{[A-Z_]+_[A-Za-z0-9_-]{12,32}\}\}/g,
+    '[REDACTED_CREDENTIAL]',
+  )
 }
 
 function toWorkRuleRecord(row: WorkRuleRow): WorkRuleRecord {

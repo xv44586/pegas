@@ -88,6 +88,8 @@ export interface DerivedMemoryJob {
   workingDirectory: string
   providerOperationId?: string
   attempts: number
+  pollCount: number
+  errorAttempts: number
 }
 
 export interface DerivedMemoryRetainService {
@@ -122,6 +124,8 @@ export interface DerivedMemoryCorrectionJob {
   metadata: Record<string, unknown>
   providerOperationId?: string
   attempts: number
+  pollCount: number
+  errorAttempts: number
 }
 
 export interface DerivedMemoryCorrectionService {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { AddressInfo } from 'node:net'
 
 import { createControlPlane } from '../src/control-plane/server.js'
+import type { GoalContractDraft } from '../src/goal/goal-delivery.js'
 import { PegasStore } from '../src/storage/sqlite-store.js'
 
 describe('derived memory durable jobs', () => {
@@ -23,7 +24,7 @@ describe('derived memory durable jobs', () => {
       attempts: 1,
     })
     expect(job?.content).toContain('实现完成，验证通过')
-    expect(job?.content).not.toContain('sk-secret')
+    expect(job?.content).not.toContain('sk-proj-abc123def456ghi789jkl012')
     expect(
       store.claimNextDerivedMemoryJob('other-worker', 30_000),
     ).toBeUndefined()
@@ -52,6 +53,174 @@ describe('derived memory durable jobs', () => {
       'Observed failure: command exited with status 2',
     )
     expect(job?.content).not.toContain('Root cause')
+    store.close()
+  })
+
+  it('redacts common credential formats before evidence leaves Pegas', () => {
+    const store = new PegasStore(':memory:', { derivedMemoryEnabled: true })
+    const secrets = [
+      'ghp_' + 'A'.repeat(36),
+      'github_pat_' + 'B'.repeat(50),
+      'AKIA' + 'C'.repeat(16),
+      'xoxb-' + '123456789012-abcdef',
+      'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N',
+      'postgres://admin:pass@db.internal/app',
+      'password is Hunter2Hunter2',
+      '-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\n-----END RSA PRIVATE KEY-----',
+    ]
+    const claimed = createClaimedRun(store, 'owner', 'worker')
+    store.completeRun(claimed.run.id, 'worker', {
+      executorRef: 'session',
+      output: `deploy finished\n${secrets.join('\n')}`,
+    })
+    const job = store.claimNextDerivedMemoryJob('memory-worker', 30_000)
+    expect(job?.content).toContain('deploy finished')
+    expect(job?.content).toContain('[REDACTED_CREDENTIAL]')
+    for (const secret of secrets) {
+      expect(job?.content).not.toContain(secret)
+    }
+    expect(job?.content).not.toContain('superSecret123')
+    expect(job?.content).not.toContain('Hunter2Hunter2')
+    expect(job?.content).not.toContain('MIIEpAIBAAKCAQEA')
+    store.close()
+  })
+
+  it('does not retain a waiting goal Run as a verified success', () => {
+    const store = new PegasStore(':memory:', { derivedMemoryEnabled: true })
+    const seeded = createClaimedRun(store, 'owner', 'worker')
+    store.completeRun(seeded.run.id, 'worker', {
+      executorRef: 'session',
+      output: 'first result',
+    })
+    store.claimNextDerivedMemoryJob('memory-worker', 30_000)
+    const continued = continueMemoryTask(store, seeded.task.id)
+    const goal = store.createGoalContract(
+      seeded.task.id,
+      'owner',
+      'goal-waiting-memory',
+      memoryGoalDraft(continued.eventId),
+    )
+    const goalRun = store.claimNextRun('worker')
+    if (!goalRun) throw new Error('Expected goal Run')
+    store.completeRun(goalRun.run.id, 'worker', {
+      executorRef: 'session',
+      output: 'unverified draft output',
+    })
+    expect(store.listRuns(seeded.task.id).at(-1)).toMatchObject({
+      status: 'waiting',
+    })
+    expect(
+      store.claimNextDerivedMemoryJob('memory-worker', 30_000),
+    ).toBeUndefined()
+
+    const failed = store.submitWorkerReport(goalRun.run.id, 'owner', 'worker', {
+      goalRevision: goal.revision,
+      reportSequence: 0,
+      status: 'failed',
+      evidenceRefIds: [],
+      summary: 'verification failed: output missing',
+      limitations: [],
+      remainingRisks: [],
+    })
+    expect(failed.completed).toBe(false)
+    const failureJob = store.claimNextDerivedMemoryJob('memory-worker', 30_000)
+    expect(failureJob).toMatchObject({
+      runId: goalRun.run.id,
+      kind: 'run_failure',
+    })
+    expect(failureJob?.content).toContain(
+      'Observed failure: verification failed: output missing',
+    )
+    expect(failureJob?.content).not.toContain('Verified outcome')
+    store.close()
+  })
+
+  it('retains the verified goal outcome only after the review completes', () => {
+    const store = new PegasStore(':memory:', { derivedMemoryEnabled: true })
+    const seeded = createClaimedRun(store, 'owner', 'worker')
+    store.completeRun(seeded.run.id, 'worker', {
+      executorRef: 'session',
+      output: 'first result',
+    })
+    store.claimNextDerivedMemoryJob('memory-worker', 30_000)
+    const continued = continueMemoryTask(store, seeded.task.id)
+    const goal = store.createGoalContract(
+      seeded.task.id,
+      'owner',
+      'goal-verified-memory',
+      memoryGoalDraft(continued.eventId),
+    )
+    const goalRun = store.claimNextRun('worker')
+    if (!goalRun) throw new Error('Expected goal Run')
+    store.completeRun(goalRun.run.id, 'worker', {
+      executorRef: 'session',
+      output: 'verified draft output',
+    })
+    expect(
+      store.claimNextDerivedMemoryJob('memory-worker', 30_000),
+    ).toBeUndefined()
+    const evidence = store.createEvidenceRef(
+      goalRun.run.id,
+      'owner',
+      'goal-memory-evidence',
+      memoryObservationEvidence(goal.revision),
+    )
+    const result = store.submitWorkerReport(goalRun.run.id, 'owner', 'worker', {
+      goalRevision: goal.revision,
+      reportSequence: 0,
+      status: 'ready',
+      evidenceRefIds: [evidence.id],
+      summary: 'verified final outcome',
+      limitations: [],
+      remainingRisks: [],
+    })
+    expect(result.completed).toBe(true)
+    const successJob = store.claimNextDerivedMemoryJob('memory-worker', 30_000)
+    expect(successJob).toMatchObject({
+      runId: goalRun.run.id,
+      kind: 'run_success',
+    })
+    expect(successJob?.content).toContain(
+      'Verified outcome: verified final outcome',
+    )
+    store.close()
+  })
+
+  it('requeues provider invalidation when a restore revives a deleted memory', () => {
+    const store = new PegasStore(':memory:', { derivedMemoryEnabled: true })
+    const claimed = createClaimedRun(store, 'owner', 'worker')
+    const revived = {
+      id: 'memory-restored',
+      text: 'deleted personal fact',
+      type: 'world' as const,
+      tags: ['pegas:global'],
+      metadata: {},
+      state: 'valid' as const,
+    }
+    store.recordDerivedMemoryRecall(claimed.run.id, 'owner', [revived])
+    store.tombstoneDerivedMemory('owner', 'memory-restored', 'user deleted')
+    const curation = store.claimNextDerivedMemoryCurationJob(
+      'memory-worker',
+      30_000,
+    )
+    if (!curation) throw new Error('Expected curation job')
+    store.completeDerivedMemoryCurationJob(curation.id, 'memory-worker')
+    expect(
+      store.claimNextDerivedMemoryCurationJob('memory-worker', 30_000),
+    ).toBeUndefined()
+
+    store.replaceDerivedMemoryCache('owner', [revived])
+    expect(store.listDerivedMemories('owner')).toEqual([])
+    const requeued = store.claimNextDerivedMemoryCurationJob(
+      'memory-worker',
+      30_000,
+    )
+    expect(requeued).toMatchObject({
+      userId: 'owner',
+      memoryId: 'memory-restored',
+      memoryType: 'world',
+      attempts: 1,
+    })
     store.close()
   })
 
@@ -251,7 +420,7 @@ function createClaimedRun(store: PegasStore, userId: string, workerId: string) {
     source: 'web',
     authenticatedActor: 'human',
     payload: {
-      text: 'Implement memory without leaking sk-secret-123456789',
+      text: 'Implement memory without leaking sk-proj-abc123def456ghi789jkl012',
     },
   }).event
   const task = store.createTaskFromEvent(event, 'Memory integration')
@@ -260,7 +429,8 @@ function createClaimedRun(store: PegasStore, userId: string, workerId: string) {
     {
       kind: 'continue_task',
       taskId: task.id,
-      input: 'Implement memory without leaking sk-secret-123456789',
+      input:
+        'Implement memory without leaking sk-proj-abc123def456ghi789jkl012',
       reason: 'test',
     },
     'test-executor',
@@ -269,4 +439,102 @@ function createClaimedRun(store: PegasStore, userId: string, workerId: string) {
   const claimed = store.claimNextRun(workerId)
   if (!claimed) throw new Error('Expected claimed Run')
   return claimed
+}
+
+function continueMemoryTask(
+  store: PegasStore,
+  taskId: string,
+): { eventId: string; runId: string } {
+  const event = store.enqueueEvent({
+    userId: 'owner',
+    type: 'user.message',
+    source: 'web',
+    authenticatedActor: 'human',
+    payload: { text: 'Verify the final result', taskId },
+  }).event
+  const continued = store.applyRoutingDecision(
+    event,
+    {
+      kind: 'continue_task',
+      taskId,
+      input: 'Verify the final result',
+      reason: 'memory goal test',
+    },
+    'test-executor',
+    () => ({ executor: 'test-executor', workspace: '/workspace/project' }),
+  )
+  return { eventId: event.id, runId: continued.run.id }
+}
+
+function memoryGoalDraft(eventId: string): GoalContractDraft {
+  return {
+    basedOnEventIds: [eventId],
+    desiredOutcome: 'Deliver a verified result.',
+    beneficiaries: ['owner'],
+    successCriteria: [
+      {
+        criterionId: 'criterion-1',
+        observableStatement: 'The final result is available and verified.',
+        required: true,
+        evidencePlanRef: 'plan-1',
+      },
+    ],
+    nonGoals: [],
+    constraints: [],
+    contextSources: [
+      {
+        sourceRef: eventId,
+        freshness: 'current',
+        authority: 'user',
+        conflictPriority: 0,
+      },
+    ],
+    assumptions: [],
+    unknowns: [],
+    prerequisites: [],
+    permissionBoundary: { externalWrites: false },
+    reviewCheckpoints: ['final'],
+    evidencePlan: [
+      {
+        id: 'plan-1',
+        criterionId: 'criterion-1',
+        acceptedKinds: ['observation'],
+        acceptedTrustClasses: ['control-plane', 'independent', 'user'],
+        minimumCount: 1,
+        presentation: 'inline',
+      },
+    ],
+    failureAndRecovery: 'Keep the Task open and request valid evidence.',
+    feedbackSignals: ['user_acceptance'],
+  }
+}
+
+function memoryObservationEvidence(goalRevision: number) {
+  return {
+    goalRevision,
+    criterionId: 'criterion-1',
+    kind: 'observation' as const,
+    producerIdentity: 'worker',
+    captureMechanism: 'deterministic-check',
+    trustClass: 'control-plane' as const,
+    observationSnapshot: {
+      observedValue: { available: true },
+      sourceObjectId: 'result-1',
+      sourceVersion: 'v1',
+      issuerIdentity: 'control-plane',
+      observedAt: '2026-11-25T00:00:00.000Z',
+      snapshotHash: 'b'.repeat(64),
+    },
+    verification: {
+      method: 'deterministic-check',
+      verifierIdentity: 'pegas-control-plane-verifier',
+      verifierVersion: 'v1',
+      result: 'passed' as const,
+      verifiedAt: '2026-11-25T00:00:00.000Z',
+    },
+    environment: { target: 'test' },
+    presentation: { format: 'summary' as const },
+    sensitivity: 'private' as const,
+    limitations: [],
+  }
 }

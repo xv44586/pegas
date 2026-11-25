@@ -360,6 +360,18 @@
 - Enforcement：`test/dsh-cli-executor.test.ts` 使用独立 `executionTimeoutMs` 启动余量，30ms 终止宽限仍单独约束信号升级；完整门禁继续运行真实子进程用例。
 - Owner / next action：EXEC-003 后续新增真实进程计时回归时复用同一分层预算，不以缩短总超时换取测试速度。
 
+### LESSON-20261125-01：新出网通道必须复用既有隐私 masker，不得平行造弱正则
+
+- Rule：任何把 Run 输入/输出发送到外部 Provider 的新通道（memory retain、召回注入、总结、评测等），出网前必须复用 `src/privacy/masker.ts` 的 `DeterministicPrivacyMasker`（mask 后不 restore）作为权威遮盖路径，再用对抗样本回归验证；不得为新通道手写窄正则替代既有规则集。
+- Why：MEMORY-001 M1 的 retain 证据用 3 条窄正则遮盖，独立评审用真实样本证明 ghp_/github_pat_/AKIA/xoxb/JWT/连接串/自然语言 secret/私钥块全部漏过；且 output 经 `PrivacyMaskingExecutor.restore()` 已还原真实秘密后才落库进 retain，秘密原文会发往 Hindsight 及其外部 LLM。仓库已有完整 masker（含 PRIVATE_KEY/API_KEY/PASSWORD 规则）却未复用。
+- Feature：MEMORY-001
+- Evidence：2026-11-25 独立 subagent 审查 P1-1（node 直接执行遮盖函数验证 8 类样本 PASSED THROUGH）；修复后 `test/derived-memory-store.test.ts` 增加同批对抗样本回归，全部遮盖为 `[REDACTED_CREDENTIAL]`。
+- Seen：1（2026-11-25）
+- Severity：security
+- Status：Promoted
+- Enforcement：安全/数据泄漏类确认一次即晋升。`redactDerivedMemoryEvidence` 已改为复用 `DeterministicPrivacyMasker` 并叠加 AKIA/JWT/连接串/自然语言 secret 规则；对抗样本回归进入完整门禁。后续新增出网通道时按本规则复用 masker 并补对抗样本。
+- Owner / next action：MEMORY-001 剩余 P2-8（mask 模式下 memories 注入绕过 masking）单独 Intake 修复后，把「出网前 masking 单一权威路径」扩展为覆盖注入侧的自动化约束。
+
 <!--
 ### LESSON-YYYYMMDD-NN：简短标题
 

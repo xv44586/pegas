@@ -269,6 +269,8 @@ describe('derived memory', () => {
         tags: ['pegas:global'],
         metadata: {},
         attempts: 1,
+        pollCount: 0,
+        errorAttempts: 1,
       }),
     ).resolves.toBe('operation')
 

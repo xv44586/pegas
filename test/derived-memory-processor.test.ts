@@ -179,6 +179,73 @@ describe('derived memory Run integration', () => {
     store.close()
   })
 
+  it('keeps polling a slow operation without consuming the error budget', async () => {
+    const clock = new StepClock()
+    const store = new PegasStore(':memory:', {
+      derivedMemoryEnabled: true,
+      clock,
+    })
+    const claimed = createClaimedRun(store)
+    store.completeRun(claimed.run.id, 'worker', {
+      executorRef: 'session',
+      output: 'done',
+    })
+    const operationStatus = vi.fn().mockResolvedValue({ status: 'processing' })
+    const retain: DerivedMemoryRetainService = {
+      submit: vi.fn().mockResolvedValue('operation-1'),
+      operationStatus,
+    }
+    await processNextDerivedMemoryJob(store, retain, 'memory-worker')
+    for (let poll = 0; poll < 12; poll += 1) {
+      await expect(
+        processNextDerivedMemoryJob(store, retain, 'memory-worker'),
+      ).resolves.toBe(true)
+    }
+    expect(operationStatus).toHaveBeenCalledTimes(12)
+
+    operationStatus.mockRejectedValueOnce(new Error('transient network blip'))
+    await expect(
+      processNextDerivedMemoryJob(store, retain, 'memory-worker'),
+    ).resolves.toBe(true)
+    operationStatus.mockResolvedValue({ status: 'completed' })
+    await expect(
+      processNextDerivedMemoryJob(store, retain, 'memory-worker'),
+    ).resolves.toBe(true)
+    await expect(
+      processNextDerivedMemoryJob(store, retain, 'memory-worker'),
+    ).resolves.toBe(false)
+    store.close()
+  })
+
+  it('parks an operation that never settles instead of hot-looping', async () => {
+    const clock = new StepClock()
+    const store = new PegasStore(':memory:', {
+      derivedMemoryEnabled: true,
+      clock,
+    })
+    const claimed = createClaimedRun(store)
+    store.completeRun(claimed.run.id, 'worker', {
+      executorRef: 'session',
+      output: 'done',
+    })
+    const operationStatus = vi.fn().mockResolvedValue({ status: 'processing' })
+    const retain: DerivedMemoryRetainService = {
+      submit: vi.fn().mockResolvedValue('operation-1'),
+      operationStatus,
+    }
+    await processNextDerivedMemoryJob(store, retain, 'memory-worker')
+    for (let poll = 0; poll < 601; poll += 1) {
+      await expect(
+        processNextDerivedMemoryJob(store, retain, 'memory-worker'),
+      ).resolves.toBe(true)
+    }
+    expect(operationStatus).toHaveBeenCalledTimes(600)
+    expect(
+      store.claimNextDerivedMemoryJob('memory-worker', 30_000),
+    ).toBeUndefined()
+    store.close()
+  })
+
   it('submits and polls a durable user correction exactly once', async () => {
     const store = new PegasStore(':memory:', { derivedMemoryEnabled: true })
     const claimed = createClaimedRun(store)
@@ -287,5 +354,15 @@ class CapturingExecutor implements RunExecutor {
   execute(input: ExecutorInput): Promise<ExecutorResult> {
     this.input = input
     return Promise.resolve({ executorRef: 'session', output: 'done' })
+  }
+}
+
+class StepClock {
+  #value = new Date('2026-11-25T00:00:00.000Z')
+
+  now(): Date {
+    const current = new Date(this.#value)
+    this.#value = new Date(this.#value.getTime() + 2_000)
+    return current
   }
 }
