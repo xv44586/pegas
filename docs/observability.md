@@ -76,3 +76,13 @@
 `test/observability.test.ts` 8 个测试：日志 JSON 形状/child 字段/级别过滤与默认、counter/histogram Prometheus 渲染与空注册表、`/metrics` 鉴权与请求计数/延迟/错误计数、动态路由归一化低基数、事件与 Run 结果计数、Run 失败错误记录（含用户文本排除断言）、Outbox unknown/sent 投递计数。
 
 `test/external-healthcheck.test.ts` 7 个测试：阈值触发/latch/恢复/再次掉线的告警边沿与 probe/alert 指标、连接失败与超时判定、告警传输失败保持 latch、目标/阈值 fail-closed 校验、配置解析默认与非法拒绝、Webhook 告警载荷/idempotency-key/bearer 与非 2xx 拒绝。
+
+## 从 Web 输入到浏览器结果的调用链
+
+基线为 `41063c9`。从一条 Web 对话输入或事情详情打开同一服务端调用链。验收覆盖入队、归类输入与结构化结果、规则兜底、关联 Run 和重试、执行活动、审批、结果投影，以及浏览器首次渲染与进入视口的回执。旧记录仍可查询既有事实，缺失阶段明确标记。
+
+通用运行日志仍按原合同。新增链路采集只保存有限字段和经脱敏的有界摘要，复用既有工具输出、审批、投影和身份校验。客户端回执仅是观测事实，不参与任务、权限、投递或读状态。接收失败可以重试，重复回执幂等。生产替换、外部日志服务、模型私有推理和供应商内部链路不在范围。新增表和索引是增量迁移，旧代码可忽略。
+
+- `GET /v1/events/:id/trace?userId=` 以输入事件为入口，用现有 Inbox、Routing Decision、Run、Action、Policy Audit 和 Outbox 还原链路。响应禁止缓存。路由候选只保存 ID，模型输出只取结构化字段，预览每字段最多 2,000 字符。过长文本只显示长度。工具详情走已有 owner 授权档案和输出分页。
+- `POST /v1/observability/browser-receipts` 校验事件或结果归属。发送用时按浏览器单调时钟计算，结果阶段记录服务端收到首次回执的时间。浏览器从 DOM 提交报告渲染，前台标签中与视口相交时报告进入视口。初次载入的历史结果保留原采集状态。回执不影响已读和交付状态。
+- 本地验证运行 `pnpm check`、`pnpm smoke` 和构建后的 `node scripts/smoke-message-trace.mjs`。schema v54 为纯增量，回滚至兼容的 v53 发布可保留这些表和索引。

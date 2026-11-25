@@ -53,6 +53,7 @@ type RunStatus =
 export interface Run {
   id: string
   taskId: string
+  originEventId?: string
   retryOfRunId?: string
   executor: string
   executorRef?: string

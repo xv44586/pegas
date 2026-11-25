@@ -844,11 +844,15 @@ export function App() {
   }
   function changeDrawer(view: DrawerView) {
     if (
-      drawer?.kind === 'preview' &&
-      drawer.backLabel &&
-      view.kind === 'preview' &&
-      view.contentUrl === drawer.contentUrl &&
-      drawerReturnRef.current
+      drawerReturnRef.current &&
+      ((drawer?.kind === 'preview' &&
+        drawer.backLabel &&
+        view.kind === 'preview' &&
+        view.contentUrl === drawer.contentUrl) ||
+        (drawer?.kind === 'trace' &&
+          drawer.backLabel &&
+          view.kind === 'trace' &&
+          view.eventId === drawer.eventId))
     ) {
       const parent = drawerReturnRef.current
       drawerReturnRef.current = undefined

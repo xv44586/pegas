@@ -1,4 +1,8 @@
 import type {
+  BrowserTraceReceipt,
+  MessageTrace,
+} from '../../src/observability/message-trace'
+import type {
   Approval,
   ApprovalRule,
   Automation,
@@ -70,6 +74,8 @@ export class ApiError extends Error {
 export class PegasApi {
   readonly #userId: string
   #token: string
+  readonly #traceReceipts = new Set<string>()
+  #initialTraceResults: Set<string> | undefined
 
   constructor(userId: string, token = '') {
     this.#userId = userId
@@ -78,6 +84,100 @@ export class PegasApi {
 
   setToken(token: string): void {
     this.#token = token
+  }
+
+  messageTrace(eventId: string): Promise<MessageTrace> {
+    const user = encodeURIComponent(this.#userId)
+    return this.#get<MessageTrace>(
+      `/v1/events/${encodeURIComponent(eventId)}/trace?userId=${user}`,
+    )
+  }
+
+  async recordTraceReceipts(
+    receipts: readonly BrowserTraceReceipt[],
+  ): Promise<void> {
+    const pending = new Map<string, BrowserTraceReceipt>()
+    for (const receipt of receipts) {
+      const id =
+        receipt.phase === 'accepted' ? receipt.eventId : receipt.messageId
+      const key = `${receipt.phase}:${id}`
+      if (this.#traceReceipts.has(key)) continue
+      pending.set(key, receipt)
+      this.#traceReceipts.add(key)
+    }
+    if (!pending.size) return
+    const entries = [...pending]
+    for (let index = 0; index < entries.length; index += 30) {
+      const batch = entries.slice(index, index + 30)
+      try {
+        const response = await fetch('/v1/observability/browser-receipts', {
+          method: 'POST',
+          headers: this.#headers(true),
+          body: JSON.stringify({
+            userId: this.#userId,
+            receipts: batch.map(([, receipt]) => receipt),
+          }),
+          keepalive: true,
+        })
+        if (!response.ok) throw new Error('Browser receipts unavailable')
+        const result = (await response.json()) as { recorded: boolean[] }
+        batch.forEach(([key], offset) => {
+          if (!result.recorded[offset]) this.#traceReceipts.delete(key)
+        })
+      } catch {
+        for (const [key] of batch) this.#traceReceipts.delete(key)
+      }
+    }
+    if (this.#traceReceipts.size > 2_000) {
+      for (const key of this.#traceReceipts) {
+        this.#traceReceipts.delete(key)
+        if (this.#traceReceipts.size <= 1_500) break
+      }
+    }
+  }
+
+  tracksResult(messageId: string): boolean {
+    return this.#initialTraceResults?.has(messageId) === false
+  }
+
+  #observeFetchedResults(result: { messages: OutboxMessage[] }): {
+    messages: OutboxMessage[]
+  } {
+    const messages = result.messages.filter(
+      message => message.projection?.weight !== 'silent',
+    )
+    this.#initialTraceResults ??= new Set(
+      messages
+        .filter(
+          message =>
+            !(
+              typeof message.payload === 'object' &&
+              message.payload !== null &&
+              'streaming' in message.payload &&
+              message.payload.streaming === true
+            ),
+        )
+        .map(message => message.id),
+    )
+    void this.recordTraceReceipts(
+      messages
+        .filter(message => this.tracksResult(message.id))
+        .map(message => ({ phase: 'fetched', messageId: message.id })),
+    )
+    return result
+  }
+
+  #recordTraceAcceptance(eventId: string, startedAt: number): void {
+    void this.recordTraceReceipts([
+      {
+        phase: 'accepted',
+        eventId,
+        durationMs: Math.min(
+          Math.round(performance.now() - startedAt),
+          300_000,
+        ),
+      },
+    ])
   }
 
   async linkPreview(url: string): Promise<LinkPreview> {
@@ -152,7 +252,9 @@ export class PegasApi {
         channelId
           ? Promise.resolve(undefined)
           : this.#get<{ runs: Run[] }>(`/v1/runs?userId=${user}`),
-        this.#get<{ messages: OutboxMessage[] }>(`/v1/outbox?userId=${user}`),
+        this.#get<{ messages: OutboxMessage[] }>(
+          `/v1/outbox?userId=${user}`,
+        ).then(result => this.#observeFetchedResults(result)),
         channelId
           ? this.#get<unknown>(
               `/v1/channels/${encodeURIComponent(channelId)}/timeline?userId=${user}&limit=200`,
@@ -234,6 +336,7 @@ export class PegasApi {
     taskId?: string,
     sourceTaskId?: string,
   ): Promise<InboxEvent> {
+    const startedAt = performance.now()
     const response = await fetch('/v1/events', {
       method: 'POST',
       headers: this.#headers(true),
@@ -251,10 +354,12 @@ export class PegasApi {
     })
     if (!response.ok) await throwResponse(response)
     const body = (await response.json()) as { event: InboxEvent }
+    this.#recordTraceAcceptance(body.event.id, startedAt)
     return body.event
   }
 
   async sendSteerMessage(text: string, taskId: string): Promise<InboxEvent> {
+    const startedAt = performance.now()
     const response = await fetch('/v1/events', {
       method: 'POST',
       headers: this.#headers(true),
@@ -268,6 +373,7 @@ export class PegasApi {
     })
     if (!response.ok) await throwResponse(response)
     const body = (await response.json()) as { event: InboxEvent }
+    this.#recordTraceAcceptance(body.event.id, startedAt)
     return body.event
   }
 

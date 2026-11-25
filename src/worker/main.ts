@@ -508,6 +508,11 @@ function createRouter(
           provider: metered(createModelProvider(settings), 'router'),
           routingRules: store.routingRuleContextForUser(event.userId),
           uncertainty: settings.routingUncertainty ?? 'new_task',
+          observeCall: (eventId, call) =>
+            store.recordMessageTraceRouterCall(eventId, {
+              ...call,
+              model: `${settings.modelProvider}/${settings.modelName}`,
+            }),
         })
       : new RuleBasedTaskRouter()
   if (settings.rewriteMode === 'disabled') return baseRouter
@@ -525,7 +530,9 @@ function createRouter(
       : createModelProvider(settings)
   return new RewritingTaskRouter(
     baseRouter,
-    new ModelInputRewriter(metered(rewriteProvider, 'rewrite')),
+    new ModelInputRewriter(metered(rewriteProvider, 'rewrite'), call =>
+      store.recordMessageTraceRouterCall(event.id, call),
+    ),
   )
 }
 

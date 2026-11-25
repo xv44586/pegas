@@ -45,6 +45,7 @@ import type {
 } from '../types'
 import { PegasMascot } from './PegasMascot'
 import { ActivityTimeline, type ActivityDataAccess } from './ActivityTimeline'
+import { MessageTraceDetail } from './MessageTraceDetail'
 import { isDelegationEntry } from './activityModel'
 import {
   Button,
@@ -129,6 +130,8 @@ export function DetailDrawer({
   onCloseRef.current = onClose
   useEffect(() => {
     closeRef.current?.focus()
+  }, [view.kind])
+  useEffect(() => {
     const containFocus = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault()
@@ -136,12 +139,15 @@ export function DetailDrawer({
         return
       }
       if (event.key !== 'Tab') return
-      const focusable = drawerRef.current?.querySelectorAll<HTMLElement>(
-        'a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+      const firstLevel = drawerRef.current?.querySelectorAll<HTMLElement>(
+        'a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), summary, [tabindex]:not([tabindex="-1"])',
       )
-      if (!focusable?.length) return
+      const focusable = Array.from(firstLevel ?? []).filter(
+        element => !element.closest('details:not([open]) > :not(summary)'),
+      )
+      if (!focusable.length) return
       const first = focusable[0]
-      const last = focusable[focusable.length - 1]
+      const last = focusable.at(-1)
       if (event.shiftKey && document.activeElement === first) {
         event.preventDefault()
         last?.focus()
@@ -165,7 +171,9 @@ export function DetailDrawer({
             ? '工作详情'
             : view.kind === 'message'
               ? '消息详情'
-              : '详情'
+              : view.kind === 'trace'
+                ? '调用链'
+                : '详情'
         }
         className="detail-drawer"
         ref={drawerRef}
@@ -230,6 +238,14 @@ export function DetailDrawer({
             usage={view.usage}
             workerProfile={view.workerProfile}
             workerProfileError={view.workerProfileError}
+          />
+        )}
+        {view.kind === 'trace' && (
+          <MessageTraceDetail
+            api={api}
+            eventId={view.eventId}
+            key={view.eventId}
+            onBack={view.backLabel ? () => onChange(view) : undefined}
           />
         )}
         {view.kind === 'message' && (
@@ -372,6 +388,7 @@ function runProgressFromPayload(
 function drawerTitle(view: DrawerView): string {
   if (view.kind === 'task') return view.channel.title
   if (view.kind === 'message') return 'Pegas 消息'
+  if (view.kind === 'trace') return '调用链'
   if (view.kind === 'approval') return view.approval.prompt.summary
   if (view.kind === 'reconciliation') return '核对动作的真实结果'
   if (view.kind === 'review') return '按完成标准审查交付'
@@ -1419,6 +1436,11 @@ function TaskDetail({
           </li>
           {runHistory.length ? (
             runHistory.map((historyRun, index) => {
+              const traceEvent = timeline?.events.find(
+                event =>
+                  event.id === historyRun.originEventId &&
+                  event.type === 'user.message',
+              )
               const historyState = runStatusLabel(historyRun)
               const progress = progressByRun.get(historyRun.id)
               const runUsage = usageByRun.get(historyRun.id)
@@ -1444,6 +1466,21 @@ function TaskDetail({
                       {runUsage?.durationMs !== undefined &&
                         ` · 用时 ${formatDurationMs(runUsage.durationMs)}`}
                     </small>
+                    {traceEvent && onOpenView && (
+                      <button
+                        className="mt-1 block w-fit text-[12px] text-accent-ink underline"
+                        onClick={() =>
+                          onOpenView({
+                            kind: 'trace',
+                            eventId: traceEvent.id,
+                            backLabel: '返回事情详情',
+                          })
+                        }
+                        type="button"
+                      >
+                        查看调用链
+                      </button>
+                    )}
                     {runHistory.length > 1 && historyRun.lastError && (
                       <small>{historyRun.lastError}</small>
                     )}

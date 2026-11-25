@@ -5,6 +5,8 @@ import type {
   Task,
 } from '../core/domain.js'
 import type { JsonModelProvider } from '../model/provider.js'
+import type { RouterTraceCall } from '../observability/message-trace.js'
+import { traceFields, tracePreview } from '../observability/trace-preview.js'
 import type { RoutingRuleContext } from '../rules/routing-rules.js'
 import type { RoutingUncertainty } from '../settings/runtime-settings-selection.js'
 
@@ -104,6 +106,7 @@ export interface ModelTaskRouterOptions {
   maximumCandidateTasks?: number
   routingRules?: RoutingRuleContext
   uncertainty?: RoutingUncertainty
+  observeCall?: (eventId: string, call: Omit<RouterTraceCall, 'at'>) => void
 }
 
 /**
@@ -117,6 +120,7 @@ export class ModelTaskRouter implements TaskRouter {
   readonly #maximumCandidateTasks: number
   readonly #routingRules: RoutingRuleContext
   readonly #uncertainty: RoutingUncertainty
+  readonly #observeCall: ModelTaskRouterOptions['observeCall']
 
   constructor(options: ModelTaskRouterOptions) {
     this.#provider = options.provider
@@ -124,6 +128,7 @@ export class ModelTaskRouter implements TaskRouter {
     this.#maximumCandidateTasks = options.maximumCandidateTasks ?? 20
     this.#routingRules = options.routingRules ?? { rules: [] }
     this.#uncertainty = options.uncertainty ?? 'new_task'
+    this.#observeCall = options.observeCall
   }
 
   async route(
@@ -155,8 +160,11 @@ export class ModelTaskRouter implements TaskRouter {
       )
       .slice(0, this.#maximumCandidateTasks)
 
+    const started = performance.now()
+    let answer: unknown
+    let outcome: RouterTraceCall['outcome'] = 'provider_error'
     try {
-      const answer = await this.#provider.generateJson({
+      answer = await this.#provider.generateJson({
         system:
           routerSystemPrompt +
           uncertaintyPrompt(this.#uncertainty) +
@@ -176,6 +184,7 @@ export class ModelTaskRouter implements TaskRouter {
         }),
         schema: routerDecisionSchema,
       })
+      outcome = 'invalid_response'
       const decision = modelDecision(
         answer,
         payload.text,
@@ -183,11 +192,44 @@ export class ModelTaskRouter implements TaskRouter {
         this.#routingRules,
         this.#uncertainty,
       )
+      outcome = 'ok'
       return sourceContext && decision.kind === 'create_task'
         ? { ...decision, sourceContext }
         : decision
     } catch {
-      return this.#fallback.route(event, candidates, context)
+      return await this.#fallback.route(event, candidates, context)
+    } finally {
+      if (this.#observeCall) {
+        try {
+          const fields = traceFields(answer)
+          const output = Object.fromEntries(
+            [
+              'kind',
+              'taskId',
+              'title',
+              'goal',
+              'reason',
+              'question',
+              'matchedRuleId',
+            ]
+              .filter(key => typeof fields[key] === 'string')
+              .map(key => [key, tracePreview(fields[key])]),
+          )
+          this.#observeCall(event.id, {
+            component: 'router',
+            model: this.#provider.name,
+            durationMs: Math.round(performance.now() - started),
+            outcome,
+            input: tracePreview(payload.text),
+            candidates: open.map(candidate => candidate.task.id),
+            ...(Object.keys(output).length
+              ? { output: tracePreview(JSON.stringify(output)) }
+              : {}),
+          })
+        } catch {
+          // Optional diagnostics must never affect the routing result.
+        }
+      }
     }
   }
 }
