@@ -53,10 +53,11 @@ export interface PegasConfig {
   modelApiKey?: string
   modelName: string
   modelCredentialKeyPath: string
+  memoryKeyPath: string
   modelTimeoutMs: number
   privacyMode: 'disabled' | 'mask'
   privacyHmacKey?: string
-  memoryProvider: 'disabled' | 'hindsight'
+  memoryProvider: 'disabled' | 'hindsight' | 'local'
   hindsightBaseUrl?: string
   hindsightApiKey?: string
   memoryHmacKey?: string
@@ -94,7 +95,7 @@ export function loadConfig(
   const modelName = environment.PEGAS_MODEL_NAME
   const privacyMode = environment.PEGAS_PRIVACY_MODE ?? 'disabled'
   const privacyHmacKey = environment.PEGAS_PRIVACY_HMAC_KEY
-  const memoryProvider = environment.PEGAS_MEMORY_PROVIDER ?? 'disabled'
+  const memoryProvider = environment.PEGAS_MEMORY_PROVIDER ?? 'local'
   const hindsightBaseUrl = environment.PEGAS_HINDSIGHT_BASE_URL
   const memoryHmacKey = environment.PEGAS_MEMORY_HMAC_KEY
   const rewriteMode = environment.PEGAS_REWRITE_MODE ?? 'disabled'
@@ -124,9 +125,13 @@ export function loadConfig(
       `Unsupported PEGAS_PRIVACY_MODE: ${privacyMode}. Expected disabled or mask`,
     )
   }
-  if (memoryProvider !== 'disabled' && memoryProvider !== 'hindsight') {
+  if (
+    memoryProvider !== 'disabled' &&
+    memoryProvider !== 'hindsight' &&
+    memoryProvider !== 'local'
+  ) {
     throw new Error(
-      `Unsupported PEGAS_MEMORY_PROVIDER: ${memoryProvider}. Expected disabled or hindsight`,
+      `Unsupported PEGAS_MEMORY_PROVIDER: ${memoryProvider}. Expected disabled, hindsight or local`,
     )
   }
   if (memoryProvider === 'hindsight' && !hindsightBaseUrl) {
@@ -140,12 +145,12 @@ export function loadConfig(
     )
   }
   if (
-    memoryProvider === 'hindsight' &&
+    memoryProvider !== 'disabled' &&
     memoryHmacKey &&
     memoryHmacKey.trim().length < 32
   ) {
     throw new Error(
-      'PEGAS_MEMORY_HMAC_KEY must contain at least 32 characters when PEGAS_MEMORY_PROVIDER=hindsight',
+      'PEGAS_MEMORY_HMAC_KEY must contain at least 32 characters when derived memory is enabled',
     )
   }
   if (
@@ -253,6 +258,7 @@ export function loadConfig(
         ? defaultMagpieRouterModel
         : (modelProviderPreset(modelProvider)?.defaultModel ?? '')),
     modelCredentialKeyPath: resolve(dataDir, 'model-credentials.key'),
+    memoryKeyPath: resolve(dataDir, 'memory.key'),
     modelTimeoutMs: parsePositiveInteger(
       environment.PEGAS_MODEL_TIMEOUT_MS,
       90_000,

@@ -278,3 +278,32 @@ M1 派生层已经实现：
 最终门禁和真实 canary 的精确测试数量、覆盖率及输出记录在 `docs/feature-map.md` 的 MEMORY-001 M1 小节。
 
 `MEMORY-001` 当前为 `Usable`。独立评审的全部 P1、P2 与 P3 已关闭并有自动化和真实 Provider 证据，完整门禁（`pnpm check`、`pnpm smoke`、`pnpm smoke:crash`、真实 `pnpm smoke:memory`）通过。剩余 hardening（非 arm64 镜像、加密 off-site backup、长期效果评测、>10k 游标）继续登记在 Feature Map。
+
+## Local Provider M2（默认档，2026-11-25）
+
+`PEGAS_MEMORY_PROVIDER` 默认 `local`：派生记忆在 Pegas 进程内完成，零外部服务、零新运行时依赖。Hindsight 合同（上文 M1）不变，作为 opt-in 高级档保留；`disabled` 仍只关闭派生层。
+
+### 与 M1 共用的权威边界
+
+Local Provider 只替换 `DerivedMemoryProvider` 的实现。durable job、幂等键、tombstone（ID + 内容哈希 + 来源 Run）、召回二次过滤与审计、注入预算、无审批的删除/纠正 UI 全部沿用 M1。`tombstoneDerivedMemory` 同时从 local 表提取正文与来源，删除后同证据换 ID 重放不会复活。
+
+### 写入
+
+- Run settle 同事务入队（M1 既有路径），异步 job 领取后一次有界模型调用蒸馏：`src/memory/local-distiller.ts` 经既有控制面模型通道（含 MODEL-001 429/5xx 退避），计量落 `memory_usage_records`（USAGE-001 sibling ledger，设置页显示「记忆沉淀」）。
+- novelty gate：证据不足 80 字符直接完成、零模型调用。模型输出畸形降级为无产出；传输失败走 job 指数退避，超限停放可观察。
+- 候选经应用层校验：每条 ≤2000 字符、每 job ≤8 条、scope 只允许 global/context，写入前逐条查 tombstone 压制。
+- operation 幂等：同 operationId 重放返回首次结果，不重复蒸馏。
+
+### 存储与召回
+
+- schema v53 纯增量：`local_derived_memories`（owner 隔离、state、使用计数预留）、trigram FTS5 镜像（可重建派生索引）、`local_derived_memory_operations`、`memory_usage_records`。
+- recall 走 FTS5 bm25 排序；tag/context 过滤保留在 `PegasDerivedMemoryService`，跨 workspace 候选以 `context_mismatch` 进入审计。注入条目 `provider: 'local'`。
+- HMAC 密钥：显式 `PEGAS_MEMORY_HMAC_KEY` 优先；否则自动生成 `dataDir/memory.key`（0600）并跨重启复用。local 模式密钥不外发。
+
+### 回滚
+
+存在有效 local 派生记忆时，回滚到 <v53 的 Release 被 Guard 拒绝；全部失效后放行。Provider 开关本身是运行时回滚入口：`disabled` 回显式层，`hindsight` 回 M1 路径。
+
+### 当前缺口（M2 后续步骤）
+
+合并窗口（同项目多 job 攒批一次调用）、读侧相关性门与 L0 项目摘要、project 作用域与身份解析链、Executor 历史检索工具。真实模型蒸馏质量与限流 canary 未评测。

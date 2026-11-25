@@ -160,6 +160,7 @@ export class PegasDerivedMemoryService
   readonly #globalPreferences: (
     userId: string,
   ) => DerivedMemoryGlobalPreferences
+  readonly #providerName: 'hindsight' | 'local'
 
   constructor(
     provider: DerivedMemoryProvider,
@@ -168,12 +169,14 @@ export class PegasDerivedMemoryService
       maximumResults?: number
       maximumTokens?: number
       globalPreferences?: (userId: string) => DerivedMemoryGlobalPreferences
+      providerName?: 'hindsight' | 'local'
     },
   ) {
     if (options.hmacKey.trim().length < 32)
       throw new Error('Memory HMAC key must contain at least 32 characters')
     this.#provider = provider
     this.#hmacKey = options.hmacKey
+    this.#providerName = options.providerName ?? 'hindsight'
     this.#maximumResults = options.maximumResults ?? 10
     this.#maximumTokens = options.maximumTokens ?? 1_600
     this.#globalPreferences =
@@ -260,7 +263,7 @@ export class PegasDerivedMemoryService
         content: memory.text.slice(0, 4_000),
         source: sourceFor(memory),
         origin: 'derived' as const,
-        provider: 'hindsight' as const,
+        provider: this.#providerName,
         ...(memory.score === undefined ? {} : { relevance: memory.score }),
       })),
     }

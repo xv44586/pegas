@@ -13,6 +13,7 @@ const approvalRuleSchemaVersion = 41
 const approvalReviewSchemaVersion = 42
 const policyCallAuditSchemaVersion = 43
 const autoReconciliationSchemaVersion = 44
+const localDerivedMemorySchemaVersion = 53
 
 export class RollbackCompatibilityError extends Error {}
 
@@ -87,6 +88,21 @@ export function assertRollbackCompatible(
       if (liveMemory) {
         throw new RollbackCompatibilityError(
           'Rollback is unsafe while user Memory records exist',
+        )
+      }
+    }
+    if (
+      currentVersion >= localDerivedMemorySchemaVersion &&
+      targetMaximumSchema < localDerivedMemorySchemaVersion
+    ) {
+      const liveLocalMemory = database
+        .prepare(
+          `SELECT 1 FROM local_derived_memories WHERE state = 'valid' LIMIT 1`,
+        )
+        .get()
+      if (liveLocalMemory) {
+        throw new RollbackCompatibilityError(
+          'Rollback is unsafe while local derived Memory records exist',
         )
       }
     }

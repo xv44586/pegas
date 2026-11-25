@@ -471,7 +471,7 @@ export interface RunSubagentReport {
 export interface RouterUsageRecord {
   callId: string
   userId: string
-  component: 'router' | 'rewrite' | 'summary'
+  component: 'router' | 'rewrite' | 'summary' | 'memory'
   eventId?: string
   modelRef: string
   usage?: {

@@ -1075,6 +1075,91 @@ ON derived_memory_tombstones (user_id, source_run_id)
 WHERE source_run_id IS NOT NULL;
 `
 
+const migration53 = `
+-- MEMORY-001 M2: in-process local derived memory provider. Facts distilled
+-- from Run evidence live here; the shared M1 tombstones stay authoritative.
+-- The FTS mirror is a derived index and can be rebuilt from the source table.
+CREATE TABLE local_derived_memories (
+  user_id TEXT NOT NULL,
+  memory_id TEXT NOT NULL,
+  text TEXT NOT NULL,
+  memory_type TEXT NOT NULL CHECK (memory_type IN (
+    'world', 'experience', 'observation'
+  )),
+  tags_json TEXT NOT NULL,
+  metadata_json TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'valid' CHECK (state IN ('valid', 'invalidated')),
+  invalidation_reason TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  last_used_at TEXT,
+  use_count INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, memory_id)
+);
+CREATE INDEX local_derived_memories_recent
+ON local_derived_memories (user_id, updated_at DESC);
+
+CREATE TABLE local_derived_memory_operations (
+  user_id TEXT NOT NULL,
+  operation_id TEXT NOT NULL,
+  written_count INTEGER NOT NULL,
+  completed_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, operation_id)
+);
+
+CREATE VIRTUAL TABLE local_derived_memory_search USING fts5(
+  text,
+  content = 'local_derived_memories',
+  content_rowid = 'rowid',
+  tokenize = 'trigram'
+);
+CREATE TRIGGER local_derived_memories_after_insert
+AFTER INSERT ON local_derived_memories
+BEGIN
+  INSERT INTO local_derived_memory_search (rowid, text)
+  VALUES (NEW.rowid, NEW.text);
+END;
+CREATE TRIGGER local_derived_memories_after_delete
+AFTER DELETE ON local_derived_memories
+BEGIN
+  INSERT INTO local_derived_memory_search (local_derived_memory_search, rowid, text)
+  VALUES ('delete', OLD.rowid, OLD.text);
+END;
+CREATE TRIGGER local_derived_memories_after_update
+AFTER UPDATE OF text ON local_derived_memories
+BEGIN
+  INSERT INTO local_derived_memory_search (local_derived_memory_search, rowid, text)
+  VALUES ('delete', OLD.rowid, OLD.text);
+  INSERT INTO local_derived_memory_search (rowid, text)
+  VALUES (NEW.rowid, NEW.text);
+END;
+
+-- USAGE-001: memory distillation is a fourth metered control-plane component.
+-- Like summary (migration37), it lands in an additive sibling ledger because
+-- the router/rewrite CHECK cannot be extended in place; reads union all three.
+CREATE TABLE memory_usage_records (
+  call_id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  component TEXT NOT NULL CHECK (component IN ('memory')),
+  event_id TEXT,
+  model_ref TEXT NOT NULL,
+  completeness TEXT NOT NULL CHECK (completeness IN ('complete', 'unavailable')),
+  token_source TEXT CHECK (token_source IN ('provider_reported')),
+  input_tokens INTEGER CHECK (input_tokens >= 0),
+  output_tokens INTEGER CHECK (output_tokens >= 0),
+  total_tokens INTEGER CHECK (total_tokens >= 0),
+  cache_read_tokens INTEGER CHECK (cache_read_tokens >= 0),
+  cache_write_tokens INTEGER CHECK (cache_write_tokens >= 0),
+  reasoning_tokens INTEGER CHECK (reasoning_tokens >= 0),
+  duration_ms INTEGER NOT NULL CHECK (duration_ms >= 0),
+  latency_source TEXT NOT NULL CHECK (latency_source IN ('pegas_observed')),
+  outcome TEXT NOT NULL CHECK (outcome IN ('ok', 'error')),
+  observed_at TEXT NOT NULL
+);
+CREATE INDEX memory_usage_records_by_user
+ON memory_usage_records (user_id, observed_at DESC);
+`
+
 const migration39 = `
 -- DESIGN-006 phase 2: manual deletion of ended automations. The command
 -- ledger must survive the definition so frozen receipts stay replayable;
@@ -2578,6 +2663,26 @@ interface DerivedMemoryCacheRow {
   state: DerivedMemory['state'] | null
 }
 
+interface LocalDerivedMemoryRow {
+  memory_id: string
+  text: string
+  memory_type: DerivedMemory['type']
+  tags_json: string
+  metadata_json: string
+  state: 'valid' | 'invalidated'
+}
+
+function toLocalDerivedMemory(row: LocalDerivedMemoryRow): DerivedMemory {
+  return {
+    id: row.memory_id,
+    text: row.text,
+    type: row.memory_type,
+    tags: JSON.parse(row.tags_json) as string[],
+    metadata: JSON.parse(row.metadata_json) as Record<string, unknown>,
+    state: row.state,
+  }
+}
+
 interface DerivedMemoryCurationJobRow {
   id: string
   user_id: string
@@ -2974,7 +3079,7 @@ interface ModelUsageRow {
 interface RouterUsageRow {
   call_id: string
   user_id: string
-  component: 'router' | 'rewrite' | 'summary'
+  component: 'router' | 'rewrite' | 'summary' | 'memory'
   event_id: string | null
   model_ref: string
   completeness: 'complete' | 'unavailable'
@@ -3248,6 +3353,7 @@ export class PegasStore {
     this.#migrate(50, migration50)
     this.#migrate(51, migration51)
     this.#migrate(52, migration52)
+    this.#migrate(53, migration53)
   }
 
   #backfillWorkerIconIds(): void {
@@ -5627,6 +5733,10 @@ export class PegasStore {
   }
 
   listDerivedMemories(userId: string): DerivedMemory[] {
+    return this.#listDerivedMemoryCache(userId)
+  }
+
+  #listDerivedMemoryCache(userId: string): DerivedMemory[] {
     const rows = this.#database
       .prepare(
         `SELECT cache.* FROM derived_memory_cache cache
@@ -5647,6 +5757,135 @@ export class PegasStore {
       metadata: JSON.parse(row.metadata_json) as Record<string, unknown>,
       ...(row.state ? { state: row.state } : {}),
     }))
+  }
+
+  // MEMORY-001 M2: local derived memory provider storage. The shared M1
+  // tombstones remain the deletion authority; these rows are provider-owned
+  // facts and the FTS mirror is a rebuildable derived index.
+
+  insertLocalDerivedMemory(userId: string, memory: DerivedMemory): void {
+    const now = this.#clock.now().toISOString()
+    this.#database
+      .prepare(
+        `INSERT INTO local_derived_memories
+          (user_id, memory_id, text, memory_type, tags_json, metadata_json,
+           state, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'valid', ?, ?)`,
+      )
+      .run(
+        userId,
+        memory.id,
+        memory.text,
+        memory.type,
+        JSON.stringify(memory.tags),
+        JSON.stringify(memory.metadata),
+        now,
+        now,
+      )
+  }
+
+  localDerivedMemoryById(
+    userId: string,
+    memoryId: string,
+  ): DerivedMemory | undefined {
+    const row = this.#database
+      .prepare(
+        `SELECT * FROM local_derived_memories
+         WHERE user_id = ? AND memory_id = ? AND state = 'valid'`,
+      )
+      .get(userId, memoryId) as unknown as LocalDerivedMemoryRow | undefined
+    return row ? toLocalDerivedMemory(row) : undefined
+  }
+
+  listLocalDerivedMemories(userId: string): DerivedMemory[] {
+    const rows = this.#database
+      .prepare(
+        `SELECT * FROM local_derived_memories
+         WHERE user_id = ? AND state = 'valid'
+         ORDER BY updated_at DESC, memory_id`,
+      )
+      .all(userId) as unknown as LocalDerivedMemoryRow[]
+    return rows.map(row => toLocalDerivedMemory(row))
+  }
+
+  searchLocalDerivedMemories(
+    userId: string,
+    options: { query: string; limit: number },
+  ): DerivedMemory[] {
+    const query = options.query.trim()
+    const rows =
+      Array.from(query).length >= 3
+        ? (this.#database
+            .prepare(
+              `SELECT memory.* FROM local_derived_memories memory
+               JOIN local_derived_memory_search search
+                 ON search.rowid = memory.rowid
+               WHERE memory.user_id = ? AND memory.state = 'valid'
+                 AND local_derived_memory_search MATCH ?
+               ORDER BY bm25(local_derived_memory_search), memory.updated_at DESC
+               LIMIT ?`,
+            )
+            .all(
+              userId,
+              ftsTrigramQuery(query),
+              options.limit,
+            ) as unknown as LocalDerivedMemoryRow[])
+        : (this.#database
+            .prepare(
+              `SELECT * FROM local_derived_memories
+               WHERE user_id = ? AND state = 'valid'
+               ORDER BY updated_at DESC, memory_id
+               LIMIT ?`,
+            )
+            .all(userId, options.limit) as unknown as LocalDerivedMemoryRow[])
+    return rows.map(row => toLocalDerivedMemory(row))
+  }
+
+  invalidateLocalDerivedMemory(
+    userId: string,
+    memoryId: string,
+    reason: string,
+  ): void {
+    this.#database
+      .prepare(
+        `UPDATE local_derived_memories
+         SET state = 'invalidated', invalidation_reason = ?, updated_at = ?
+         WHERE user_id = ? AND memory_id = ?`,
+      )
+      .run(
+        reason.slice(0, 500),
+        this.#clock.now().toISOString(),
+        userId,
+        memoryId,
+      )
+  }
+
+  localMemoryOperation(
+    userId: string,
+    operationId: string,
+  ): string | undefined {
+    const row = this.#database
+      .prepare(
+        `SELECT operation_id FROM local_derived_memory_operations
+         WHERE user_id = ? AND operation_id = ?`,
+      )
+      .get(userId, operationId) as { operation_id: string } | undefined
+    return row?.operation_id
+  }
+
+  completeLocalMemoryOperation(
+    userId: string,
+    operationId: string,
+    writtenCount: number,
+  ): void {
+    this.#database
+      .prepare(
+        `INSERT INTO local_derived_memory_operations
+          (user_id, operation_id, written_count, completed_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(user_id, operation_id) DO NOTHING`,
+      )
+      .run(userId, operationId, writtenCount, this.#clock.now().toISOString())
   }
 
   listDerivedMemoryUsers(): string[] {
@@ -5849,7 +6088,7 @@ export class PegasStore {
     const now = this.#clock.now().toISOString()
     this.#database.exec('BEGIN IMMEDIATE')
     try {
-      const memory = this.#database
+      let memory = this.#database
         .prepare(
           `SELECT text, memory_type, metadata_json FROM derived_memory_cache
            WHERE user_id = ? AND memory_id = ?`,
@@ -5861,6 +6100,15 @@ export class PegasStore {
             metadata_json: string
           }
         | undefined
+      // MEMORY-001 M2: local-provider facts live in their own table; the
+      // tombstone must still bind content hash and source Run so re-retain
+      // of the same evidence cannot revive a deleted fact under a new ID.
+      memory ??= this.#database
+        .prepare(
+          `SELECT text, memory_type, metadata_json FROM local_derived_memories
+           WHERE user_id = ? AND memory_id = ?`,
+        )
+        .get(userId, memoryId) as typeof memory
       const sourceRunId = memory
         ? sourceRunIdFromMetadata(memory.metadata_json)
         : null
@@ -12700,7 +12948,9 @@ export class PegasStore {
     const table =
       record.component === 'summary'
         ? 'summary_usage_records'
-        : 'router_usage_records'
+        : record.component === 'memory'
+          ? 'memory_usage_records'
+          : 'router_usage_records'
     this.#database
       .prepare(
         `INSERT INTO ${table}
@@ -12739,10 +12989,12 @@ export class PegasStore {
            SELECT * FROM router_usage_records WHERE user_id = ?
            UNION ALL
            SELECT * FROM summary_usage_records WHERE user_id = ?
+           UNION ALL
+           SELECT * FROM memory_usage_records WHERE user_id = ?
          )
          ORDER BY observed_at DESC, call_id DESC`,
       )
-      .all(userId, userId) as unknown as RouterUsageRow[]
+      .all(userId, userId, userId) as unknown as RouterUsageRow[]
     const records = rows.map(toRouterUsageRecord)
     return { summary: summarizeRouterUsage(records), records }
   }
