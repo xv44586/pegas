@@ -6,7 +6,9 @@ import { PegasStore } from '../storage/sqlite-store.js'
 const config = loadConfig()
 const logger = createLogger({ service: 'scheduler' })
 const metrics = new MetricsRegistry()
-const store = new PegasStore(config.databasePath)
+const store = new PegasStore(config.databasePath, {
+  defaultWorkspaceRoot: config.workspaceRoot,
+})
 const lifecycle = { stopping: false }
 
 logger.info('service.started', {

@@ -13,6 +13,8 @@ export interface DerivedMemory {
   tags: string[]
   metadata: Record<string, unknown>
   state?: 'valid' | 'invalidated'
+  /** M3: canonical project key for local-provider facts; absent = global-only. */
+  projectKey?: string
 }
 
 export interface DerivedMemoryRetainInput {
@@ -22,12 +24,16 @@ export interface DerivedMemoryRetainInput {
   context: string
   tags: string[]
   metadata: Record<string, unknown>
+  /** M3: canonical project key resolved by the shared identity chain. */
+  projectKey?: string
 }
 
 export interface DerivedMemoryRecallInput {
   query: string
   maxTokens: number
   tags: string[]
+  /** M3: restrict local candidates to this project plus project-less facts. */
+  projectKey?: string
 }
 
 export interface DerivedMemoryProvider {
@@ -54,6 +60,8 @@ export interface DerivedMemoryRecallRequest {
   runId: string
   query: string
   workingDirectory: string
+  /** M3: canonical project key from the shared identity chain, if any. */
+  projectKey?: string
 }
 
 export interface DerivedMemoryGlobalPreferences {
@@ -91,6 +99,14 @@ export interface DerivedMemoryJob {
   documentId: string
   content: string
   workingDirectory: string
+  /**
+   * M3: implicit project this Run belongs to, resolved at settle time by
+   * the shared identity chain. Jobs sharing owner + project + kind are
+   * distilled together in one bounded model call.
+   */
+  projectKey?: string
+  /** M3: every contributing Run of a coalesced batch (anchor included). */
+  sourceRunIds?: string[]
   providerOperationId?: string
   attempts: number
   pollCount: number
@@ -202,7 +218,15 @@ export class PegasDerivedMemoryService
     audit: DerivedMemoryRecallAudit[]
   }> {
     const contextKey = this.contextKey(request.workingDirectory)
-    const allowedTags = ['pegas:global', `pegas:context:${contextKey}`]
+    const allowedTags = [
+      'pegas:global',
+      `pegas:context:${contextKey}`,
+      ...(request.projectKey
+        ? [
+            `pegas:project:${opaqueKey('project', request.projectKey, this.#hmacKey)}`,
+          ]
+        : []),
+    ]
     const query = [
       request.query,
       ...globalPreferenceTexts(this.#globalPreferences(request.userId)),
@@ -213,6 +237,7 @@ export class PegasDerivedMemoryService
       query: query.slice(0, 8_000),
       maxTokens: this.#maximumTokens,
       tags: allowedTags,
+      ...(request.projectKey ? { projectKey: request.projectKey } : {}),
     })
     const audit: DerivedMemoryRecallAudit[] = memories.map(memory => ({
       memoryId: memory.id,
@@ -271,6 +296,12 @@ export class PegasDerivedMemoryService
 
   submit(job: DerivedMemoryJob): Promise<string> {
     const contextKey = this.contextKey(job.workingDirectory)
+    // M3: a project-scoped fact routes by canonical project key, so recall
+    // from a linked worktree or fresh clone (different raw path, same
+    // project) must accept the project tag instead of the path-bound one.
+    const scopeTag = job.projectKey
+      ? `pegas:project:${opaqueKey('project', job.projectKey, this.#hmacKey)}`
+      : `pegas:context:${contextKey}`
     const preferences =
       job.kind === 'run_success'
         ? globalPreferenceTexts(this.#globalPreferences(job.userId))
@@ -285,16 +316,18 @@ export class PegasDerivedMemoryService
               .join('\n')}`.slice(0, 12_000)
           : job.content,
       context: `Pegas ${job.kind === 'run_success' ? 'successful' : 'failed'} work Run`,
-      tags: [
-        `pegas:context:${contextKey}`,
-        ...(job.kind === 'run_success' ? ['pegas:global'] : []),
-      ],
+      tags: [scopeTag, ...(job.kind === 'run_success' ? ['pegas:global'] : [])],
+      ...(job.projectKey ? { projectKey: job.projectKey } : {}),
       metadata: {
         source: 'pegas',
         source_kind: job.kind,
         task_id: job.taskId,
         run_id: job.runId,
         context_key: contextKey,
+        ...(job.projectKey ? { project_key: job.projectKey } : {}),
+        ...(job.sourceRunIds && job.sourceRunIds.length > 1
+          ? { source_run_ids: job.sourceRunIds }
+          : {}),
       },
     })
   }
@@ -371,7 +404,7 @@ function globalPreferenceTexts(
 }
 
 export function opaqueKey(
-  namespace: 'owner' | 'workspace',
+  namespace: 'owner' | 'workspace' | 'project',
   value: string,
   key: string,
 ): string {

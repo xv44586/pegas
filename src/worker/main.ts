@@ -110,6 +110,7 @@ const controlPlaneBaseUrl = localControlPlaneBaseUrl(
 const store = new PegasStore(config.databasePath, {
   routingClarificationTtlMs: config.routingClarificationTtlMs,
   derivedMemoryEnabled: config.memoryProvider !== 'disabled',
+  defaultWorkspaceRoot: config.workspaceRoot,
 })
 const lifecycle = { stopping: false }
 const shutdown = new AbortController()
@@ -209,7 +210,7 @@ const selfChangeExecutor = config.selfChangeEnabled
       recoveryBaseUrl: config.recoveryBaseUrl,
       ...(config.recoveryToken ? { recoveryToken: config.recoveryToken } : {}),
       editor: executor,
-      compatibility: { minimumSchema: 1, maximumSchema: 53 },
+      compatibility: { minimumSchema: 1, maximumSchema: 54 },
       reviewer: 'pegas-self-change-gate',
       controlPlaneBaseUrl,
     })
