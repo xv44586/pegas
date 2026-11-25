@@ -524,6 +524,7 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         !isRunCapabilityWrite(request) &&
         !isConversationStateRead(request) &&
         !isRunPermissionRead(request) &&
+        !isRunHistoryRead(request) &&
         !isAuthorized(request, options.apiToken)
       ) {
         return sendJson(response, 401, { error: 'unauthorized' })
@@ -2351,6 +2352,57 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
             throw error
           }
         }
+        const historySearchMatch =
+          /^\/v1\/runs\/([^/]+)\/history\/search$/.exec(url.pathname)
+        if (historySearchMatch) {
+          const claimToken = runClaimToken(request)
+          if (!claimToken)
+            return sendJson(response, 403, { error: 'run_claim_required' })
+          try {
+            const query = url.searchParams.get('q') ?? ''
+            const limit = Number(url.searchParams.get('limit') ?? '10')
+            return sendJson(
+              response,
+              200,
+              options.store.searchHistoryForRun(
+                decodeURIComponent(historySearchMatch[1] ?? ''),
+                claimToken,
+                query,
+                limit,
+              ),
+            )
+          } catch (error) {
+            if (error instanceof RunClaimError)
+              return sendJson(response, 403, { error: 'run_claim_invalid' })
+            throw error
+          }
+        }
+        const historyReadMatch = /^\/v1\/runs\/([^/]+)\/history\/read$/.exec(
+          url.pathname,
+        )
+        if (historyReadMatch) {
+          const claimToken = runClaimToken(request)
+          if (!claimToken)
+            return sendJson(response, 403, { error: 'run_claim_required' })
+          try {
+            return sendJson(
+              response,
+              200,
+              options.store.readHistoryForRun(
+                decodeURIComponent(historyReadMatch[1] ?? ''),
+                claimToken,
+                url.searchParams.get('kind') ?? '',
+                url.searchParams.get('id') ?? '',
+              ),
+            )
+          } catch (error) {
+            if (error instanceof RunClaimError)
+              return sendJson(response, 403, { error: 'run_claim_invalid' })
+            if (error instanceof MemoryNotFoundError)
+              return sendJson(response, 404, { error: 'not_found' })
+            throw error
+          }
+        }
         const userId = url.searchParams.get('userId')
         if (!userId) throw new Error('userId is required')
         const taskId = url.searchParams.get('taskId') ?? undefined
@@ -3272,6 +3324,12 @@ function isConversationStateRead(request: IncomingMessage): boolean {
   return /^\/v1\/runs\/[^/]+\/conversation-state\/(tasks|memories)$/.test(
     pathname,
   )
+}
+
+function isRunHistoryRead(request: IncomingMessage): boolean {
+  if (request.method !== 'GET' || !request.url) return false
+  const pathname = new URL(request.url, 'http://localhost').pathname
+  return /^\/v1\/runs\/[^/]+\/history\/(search|read)$/.test(pathname)
 }
 
 function isRunPermissionRead(request: IncomingMessage): boolean {

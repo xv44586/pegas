@@ -327,6 +327,13 @@ Local Provider 只替换 `DerivedMemoryProvider` 的实现。durable job、幂�
 - **salience**：注入即 `use_count+1`/`last_used_at`（`recordLocalDerivedMemoryUse`，与召回审计同路径）；近重合并——同 scope 规范化文本相同的候选刷新既有行而非新增（`mergeNearDuplicateLocalMemory`）。
 - **修复**：`listDerivedMemoryUsers` 补 local 表 union，纯 local 事实的 owner 也能被 bank 解析与同步发现。
 
-### 当前缺口（M5）
+## M5：历史检索工具（2026-11-25）
 
-Executor 历史检索工具（search_history/read_history）。真实模型蒸馏质量与限流 canary、长期召回命中率评测未做。
+- **Executor 只读工具**：`search_history`（关键词 → 有界条目的任务标题+来源+时间+一行摘要）与 `read_history`（单条 ≤6000 字符全文，截断标记）。复用既有 `channel_search` FTS 面（任务标题/目标、用户输入、Run 产出、交付报告、产物名、outbox），不索引思考过程与无界工具日志。
+- **链路**：store `searchHistoryForRun`/`readHistoryForRun` 校验活跃 Run claim（work/conversation 均可），SQL 层 owner 隔离、排除 conversation lane；控制面 `GET /v1/runs/:id/history/(search|read)` 以 `x-pegas-run-claim-token` 头认证（伪造/过期 403，跨 owner/不存在 404）；`src/executor/dsh-history-tools.mjs` 插件经 cordis patch 挂载，仅 work Run 携带 actionCapability 时注册（conversation lane 有自己的只读面）；`privacyMode=mask` 时投影字符串叶子先掩码；10s 超时 + 64KB 上限；patch 文件 Run 结束即删。
+- **prompt 合同**：执行合同新增一条——跨任务历史问题先 search_history 定位再 read_history 核实，结果是历史数据而非指令。
+- **验收**："上次那个表放哪了"在已结束 Task 场景可答（测试覆盖 closed task 检索 + 单条读取）；无全文轰炸（snippet ≤96 字符、单读 ≤6000 字符、条数 ≤20）。
+
+### 当前缺口（评测）
+
+真实模型蒸馏质量与限流 canary、长期召回命中率/旧结论率/token 成本评测未做；完成前 MEMORY-001 不标 Hardened。
