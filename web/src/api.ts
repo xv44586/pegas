@@ -53,6 +53,9 @@ import type {
 } from './types'
 import { fallbackWorkerIconId, isWorkerIconId } from './agent-icon-id'
 
+export type MessageTarget =
+  { taskId: string } | { sourceTaskId: string } | { replyToMessageId: string }
+
 export interface VoiceTranscript {
   text: string
   language?: string
@@ -231,8 +234,8 @@ export class PegasApi {
 
   async sendMessage(
     text: string,
-    taskId?: string,
-    sourceTaskId?: string,
+    target?: MessageTarget,
+    dedupeKey: string = crypto.randomUUID(),
   ): Promise<InboxEvent> {
     const response = await fetch('/v1/events', {
       method: 'POST',
@@ -241,11 +244,10 @@ export class PegasApi {
         userId: this.#userId,
         type: 'user.message',
         source: 'web',
-        dedupeKey: crypto.randomUUID(),
+        dedupeKey,
         payload: {
           text,
-          ...(taskId ? { taskId } : {}),
-          ...(sourceTaskId ? { sourceTaskId } : {}),
+          ...target,
         },
       }),
     })
@@ -670,14 +672,14 @@ export class PegasApi {
 
   async sendVoiceMessage(
     audio: Blob,
-    taskId?: string,
+    target?: MessageTarget,
     language = 'zh',
   ): Promise<{ transcript: VoiceTranscript; event: InboxEvent }> {
     const params = new URLSearchParams({
       userId: this.#userId,
       language,
       source: 'web',
-      ...(taskId ? { taskId } : {}),
+      ...target,
     })
     const response = await fetch(`/v1/voice/messages?${params.toString()}`, {
       method: 'POST',

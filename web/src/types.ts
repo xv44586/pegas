@@ -99,6 +99,7 @@ export interface OutboxMessage {
   id: string
   userId: string
   taskId?: string
+  channel?: string
   payload: unknown
   status: 'pending' | 'sending' | 'sent' | 'failed' | 'unknown'
   createdAt: string

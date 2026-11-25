@@ -11589,7 +11589,7 @@ describe('sealed Pegas UI', () => {
     expect(await screen.findByText('Channel 时间线')).toBeTruthy()
   })
 
-  it('sends recorded voice directly as a message in direct-send mode', async () => {
+  it.each([null, 'voice-reply'])('sends voice (%s)', async replyId => {
     class FakeMediaRecorder {
       static isTypeSupported() {
         return false
@@ -11618,7 +11618,27 @@ describe('sealed Pegas UI', () => {
       },
     })
     let voicePath = ''
-    const fetchMock = installFetch((path, init) => {
+    const voiceSnapshot = replyId
+      ? {
+          ...snapshot,
+          messages: [
+            {
+              id: replyId,
+              userId: 'owner',
+              taskId: channel.id,
+              channel: 'conversation',
+              payload: {
+                type: 'agent.message',
+                text: '可引用的语音追问来源',
+              },
+              status: 'sent' as const,
+              createdAt: '2026-11-21T00:00:00.000Z',
+              projection: { lane: 'say' as const, weight: 'inline' as const },
+            },
+          ],
+        }
+      : snapshot
+    const fetchMock = installSnapshotFetch(voiceSnapshot, (path, init) => {
       if (path.startsWith('/v1/voice/messages?') && init?.method === 'POST') {
         voicePath = path
         return Response.json(
@@ -11642,6 +11662,10 @@ describe('sealed Pegas UI', () => {
     })
     render(<App />)
     await screen.findByLabelText('给 Pegas 发消息')
+    if (replyId)
+      fireEvent.click(
+        await screen.findByRole('button', { name: '追问这条回复' }),
+      )
     const toggle = screen.getByRole('button', { name: '说完直接发送' })
     expect(toggle.getAttribute('aria-pressed')).toBe('false')
     fireEvent.click(toggle)
@@ -11654,6 +11678,9 @@ describe('sealed Pegas UI', () => {
     await waitFor(() => expect(voicePath).toContain('/v1/voice/messages?'))
     expect(voicePath).toContain('source=web')
     expect(voicePath).toContain('language=zh')
+    expect(
+      new URLSearchParams(voicePath.split('?')[1]).get('replyToMessageId'),
+    ).toBe(replyId ?? null)
     expect(
       fetchMock.mock.calls.some(
         ([path, init]) =>

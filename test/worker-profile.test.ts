@@ -217,6 +217,73 @@ describe('WORKER-001 profile contracts', () => {
     store.close()
   })
 
+  it('resumes a completed work session after a routing-only settings save', () => {
+    const store = new PegasStore(':memory:')
+    try {
+      const initialized = store.initializeRuntimeSettings(settings)
+      const context = (task: { id: string; userId: string }) =>
+        store.resolveWorkerExecutionContext(task.id, task.userId, {
+          executor: 'dsh-headless',
+          workspace: '/workspace',
+          protocol: 'dsh-headless-v1',
+        })
+      const original = store.enqueueEvent({
+        userId: 'owner',
+        type: 'user.message',
+        source: 'web',
+        authenticatedActor: 'human',
+        payload: { text: 'Review the project' },
+      }).event
+      const { task, run } = store.applyRoutingDecision(
+        original,
+        {
+          kind: 'create_task',
+          title: 'Review',
+          goal: 'Review the project',
+          input: 'Review the project',
+          reason: 'test',
+        },
+        'dsh-headless',
+        context,
+      )
+      expect(store.claimNextRun('worker-1')?.run.id).toBe(run.id)
+      store.completeRun(run.id, 'worker-1', {
+        executorRef: 'original-work-session',
+        output: 'Draft findings',
+      })
+
+      const saved = store.updateRuntimeSettings(initialized.revision, {
+        ...initialized,
+        routingUncertainty: 'ask_first',
+      })
+      const followUp = store.enqueueEvent({
+        userId: 'owner',
+        type: 'user.message',
+        source: 'web',
+        authenticatedActor: 'human',
+        payload: { taskId: task.id, text: 'Why the first finding?' },
+      }).event
+      const next = store.applyRoutingDecision(
+        followUp,
+        {
+          kind: 'continue_task',
+          taskId: task.id,
+          input: 'Why the first finding?',
+          reason: 'explicit follow-up',
+        },
+        'dsh-headless',
+        context,
+      )
+      expect(next.run).toMatchObject({
+        taskId: task.id,
+        resumeFromRef: 'original-work-session',
+        executionContext: { settingsRevision: saved.revision },
+      })
+    } finally {
+      store.close()
+    }
+  })
+
   it('snapshots the effective profile per Run and rolls over incompatible sessions', () => {
     const store = new PegasStore(':memory:')
     store.initializeRuntimeSettings(settings)

@@ -728,6 +728,72 @@ describe('DESIGN-003 chat page', () => {
     expect(screen.queryByText(/继续事情：/)).toBeNull()
   })
 
+  it('quotes the selected agent reply even when another task was selected', async () => {
+    const reply = (id: string, text: string): OutboxMessage => ({
+      ...baseMessage,
+      id,
+      taskId: 'hidden-conversation',
+      payload: { type: 'agent.message', text },
+      projection: { lane: 'say', weight: 'inline' },
+    })
+    let failedOnce = false
+    const fetchMock = installChatFetch(
+      {
+        ...baseSnapshot,
+        messages: [
+          reply('earlier-reply', '第一份回答，只涉及预算'),
+          reply('later-reply', '第二份回答，只涉及时间'),
+        ],
+      },
+      (path, init) => {
+        if (path !== '/v1/events' || init?.method !== 'POST' || failedOnce)
+          return undefined
+        failedOnce = true
+        return Response.json({ message: '暂时无法提交追问' }, { status: 503 })
+      },
+    )
+    render(<App />)
+    const tray = await screen.findByRole('group', { name: '进行中的事情' })
+    fireEvent.click(within(tray).getByRole('button', { name: /整理季度数据/ }))
+    const earlierReply = (
+      await screen.findByText('第一份回答，只涉及预算')
+    ).closest('article')
+    if (!earlierReply) throw new Error('Expected the agent reply article')
+    fireEvent.click(
+      within(earlierReply).getByRole('button', { name: '追问这条回复' }),
+    )
+
+    const composer = screen.getByLabelText('给 Pegas 发消息')
+    expect(document.activeElement).toBe(composer)
+    expect(screen.getByText('追问这条回复：')).toBeTruthy()
+    fireEvent.change(composer, { target: { value: '再展开这一点' } })
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    expect(await screen.findByText('暂时无法提交追问')).toBeTruthy()
+    expect(screen.getByText('追问这条回复：')).toBeTruthy()
+    expect(composer).toHaveProperty('value', '再展开这一点')
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    await waitFor(() => {
+      const posts = fetchMock.mock.calls.filter(
+        ([path, init]) => path === '/v1/events' && init?.method === 'POST',
+      )
+      expect(posts).toHaveLength(2)
+      const messages = posts.map(([, init]) => {
+        if (typeof init?.body !== 'string')
+          throw new Error('Expected a JSON message')
+        return JSON.parse(init.body) as { payload: unknown; dedupeKey: string }
+      })
+      for (const message of messages) {
+        expect(message.payload).toEqual({
+          text: '再展开这一点',
+          replyToMessageId: 'earlier-reply',
+        })
+      }
+      expect(messages[0]?.dedupeKey).toBeTruthy()
+      expect(messages[1]?.dedupeKey).toBe(messages[0]?.dedupeKey)
+    })
+    await waitFor(() => expect(screen.queryByText('追问这条回复：')).toBeNull())
+  })
+
   it('CONV-007: input follows the selected task even when another is more active', async () => {
     const idleSelected: WorkChannel = {
       ...channel,

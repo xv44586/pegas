@@ -72,6 +72,51 @@ function payloadType(payload: unknown): string | undefined {
   return typeof payload.type === 'string' ? payload.type : undefined
 }
 
+/** The same eligibility and excerpt source are used by the composer and server. */
+export function quotableAgentReply(
+  message: Pick<OutboxMessage, 'taskId' | 'payload' | 'status' | 'projection'> &
+    Partial<Pick<OutboxMessage, 'channel'>>,
+): { taskId: string; text: string; runId?: string } | undefined {
+  const { taskId, payload } = message
+  if (
+    !taskId ||
+    (message.channel !== undefined && message.channel !== 'conversation') ||
+    message.status === 'merged' ||
+    message.projection?.weight === 'silent' ||
+    !isRecord(payload) ||
+    payload.streaming === true ||
+    !['agent.message', 'run.completed', 'review.ready'].includes(
+      payloadType(payload) ?? '',
+    ) ||
+    typeof payload.text !== 'string' ||
+    !payload.text.trim()
+  )
+    return undefined
+  return {
+    taskId,
+    text: payload.text.trim(),
+    ...(typeof payload.runId === 'string' ? { runId: payload.runId } : {}),
+  }
+}
+
+export function replyReference(payload: unknown): string | undefined {
+  if (!isRecord(payload) || !('replyToMessageId' in payload)) return undefined
+  if (
+    typeof payload.replyToMessageId !== 'string' ||
+    !payload.replyToMessageId.trim()
+  )
+    throw new Error('replyToMessageId must be a non-empty string')
+  if (
+    payload.taskId !== undefined ||
+    payload.sourceTaskId !== undefined ||
+    payload.intent !== undefined
+  )
+    throw new Error(
+      'A reply reference cannot be combined with another message target or intent',
+    )
+  return payload.replyToMessageId
+}
+
 function payloadTaskId(payload: unknown): string | undefined {
   if (!isRecord(payload)) return undefined
   return typeof payload.taskId === 'string' && payload.taskId.trim()

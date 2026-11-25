@@ -24,6 +24,10 @@ import type {
   RoutingRuleRecord,
 } from '../types'
 
+export type ComposerTarget =
+  | { kind: 'task' | 'source'; channel: WorkChannel }
+  | { kind: 'reply'; id: string; text: string }
+
 export type AppPage =
   'conversation' | 'work' | 'attention' | 'automation' | 'memory' | 'settings'
 

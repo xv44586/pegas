@@ -31,6 +31,7 @@ import {
   taskAutomationActive,
   type AppData,
   type AppPage,
+  type ComposerTarget,
   type DrawerView,
   type SettingsSection,
   type ThemeChoice,
@@ -54,6 +55,7 @@ import type {
   RuntimeSettings,
   RewriteSettingsDraft,
   SpeechSettingsDraft,
+  WorkChannel,
   WorkRuleRecord,
   RoutingRuleRecord,
 } from './types'
@@ -75,8 +77,7 @@ export function App() {
   const [agentModels, setAgentModels] = useState<DshModelCatalog>()
   const [page, setPage] = useState<AppPage>(() => pageFromLocation())
   const [drawer, setDrawer] = useState<DrawerView>()
-  const [continuationTaskId, setContinuationTaskId] = useState<string>()
-  const [sourceContextTaskId, setSourceContextTaskId] = useState<string>()
+  const [composerTarget, setComposerTarget] = useState<ComposerTarget>()
   const [composerDraft, setComposerDraft] = useState('')
   const [settingsSection, setSettingsSection] = useState<SettingsSection>(() =>
     settingsSectionFromLocation(),
@@ -1393,9 +1394,8 @@ export function App() {
     isDark,
     onOpenDrawer: openDrawer,
   }
-  function continueChannel(channelId: string) {
-    setContinuationTaskId(channelId)
-    setSourceContextTaskId(undefined)
+  function continueChannel(channel: WorkChannel) {
+    setComposerTarget({ kind: 'task', channel })
     const url = new URL(window.location.href)
     url.searchParams.delete('channel')
     url.searchParams.delete('task')
@@ -1420,9 +1420,6 @@ export function App() {
       ? data.settings.settings.agentModelName
       : agentModels?.defaultModel
   const availableAgentModels = agentModels?.models ?? []
-  const continuationChannel = continuationTaskId
-    ? data.snapshot.channels.find(channel => channel.id === continuationTaskId)
-    : undefined
   const resolvedDrawer = drawer ? enrichDrawer(drawer) : undefined
 
   return (
@@ -1467,25 +1464,18 @@ export function App() {
           <ConversationPage
             actions={actions}
             api={api}
-            continuationChannel={continuationChannel}
-            sourceContextChannel={
-              sourceContextTaskId
-                ? data.snapshot.channels.find(
-                    channel => channel.id === sourceContextTaskId,
-                  )
-                : undefined
-            }
+            target={composerTarget}
             draft={composerDraft}
             modelProvider={selectedAgentProvider}
             models={availableAgentModels}
-            onAnswerClarification={channel => continueChannel(channel.id)}
+            onAnswerClarification={continueChannel}
             onOpenAttention={openAttentionMessage}
-            onSelectTask={taskId => {
-              setContinuationTaskId(taskId)
-              setSourceContextTaskId(undefined)
-            }}
-            onClearContinuation={() => setContinuationTaskId(undefined)}
-            onClearSourceContext={() => setSourceContextTaskId(undefined)}
+            onTargetChange={setComposerTarget}
+            onClearTarget={expected =>
+              setComposerTarget(current =>
+                current === expected ? undefined : current,
+              )
+            }
             onConfigureVoice={() => {
               setSettingsSection('voice')
               navigate('settings', 'voice')
@@ -1744,10 +1734,9 @@ export function App() {
           onOpenView={openNestedDrawer}
           onLoadRunActivity={openRunWorkflow}
           onLoadRunSubagents={openSubagentTranscript}
-          onContinue={channel => continueChannel(channel.id)}
+          onContinue={continueChannel}
           onAnswerRouting={() => {
-            setContinuationTaskId(undefined)
-            setSourceContextTaskId(undefined)
+            setComposerTarget(undefined)
             setDrawer(undefined)
             navigate('conversation')
             window.setTimeout(() =>
@@ -1757,8 +1746,7 @@ export function App() {
             )
           }}
           onCreateRelated={channel => {
-            setSourceContextTaskId(channel.id)
-            setContinuationTaskId(undefined)
+            setComposerTarget({ kind: 'source', channel })
             setDrawer(undefined)
             navigate('conversation')
           }}
