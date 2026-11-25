@@ -926,6 +926,42 @@ describe('sealed Pegas UI', () => {
     )
   })
 
+  it('refreshes the Pegas execution model list after saving a model service', async () => {
+    window.history.replaceState({}, '', '/?view=settings&section=models')
+    let saved = false
+    const model = { provider: 'magpie', id: 'gateway/new', name: 'New model' }
+    installFetch((path, init) => {
+      if (path === '/v1/settings/agent-models')
+        return Response.json({
+          defaultProvider: saved ? model.provider : '',
+          defaultModel: saved ? model.id : '',
+          models: saved ? [model] : [],
+        })
+      if (path === '/v1/settings' && init?.method === 'PUT') {
+        saved = true
+        return Response.json({
+          ...settingsResponse,
+          settings: { ...settingsResponse.settings, revision: 2 },
+        })
+      }
+      return undefined
+    })
+    render(<App />)
+    const key = await screen.findByLabelText('API Key')
+    fireEvent.change(key, { target: { value: 'fixture-key' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
+    await screen.findByText('更改已保存')
+    fireEvent.click(
+      within(screen.getByLabelText('设置分类')).getByRole('button', {
+        name: /^Pegas$/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '更换模型' }))
+    expect(
+      await screen.findByRole('option', { name: /New model/ }),
+    ).toBeTruthy()
+  })
+
   it('edits speech settings and runs a real rewrite test', async () => {
     const fetchMock = installFetch((path, init) => {
       if (path === '/v1/settings/rewrite/test' && init?.method === 'POST')
@@ -3699,6 +3735,171 @@ describe('sealed Pegas UI', () => {
     fireEvent.click(screen.getByRole('button', { name: /^继续$/ }))
     fireEvent.click(screen.getByRole('button', { name: /进入 Pegas/ }))
     expect(localStorage.getItem('pegas-setup-complete')).toBe('true')
+  })
+
+  it('opens custom connection setup even when the preset claims to be available', async () => {
+    localStorage.removeItem('pegas-setup-complete')
+    const model = {
+      provider: 'custom',
+      id: 'gateway/first',
+      name: 'Custom model',
+    }
+    const initial: SettingsResponse = {
+      ...settingsResponse,
+      settings: {
+        ...settingsResponse.settings,
+        agentModelMode: 'profile',
+        agentModelProvider: '',
+        agentModelName: '',
+      },
+      capabilities: {
+        ...settingsResponse.capabilities,
+        providers: [
+          ...settingsResponse.capabilities.providers,
+          {
+            id: 'custom',
+            name: '自定义',
+            category: 'custom',
+            protocol: 'openai-chat',
+            baseUrl: 'https://gateway.example/v1',
+            defaultModel: '',
+            description: '',
+            requiresApiKey: false,
+            hasApiKey: false,
+            available: false,
+          },
+        ],
+      },
+    }
+    let current = initial
+    let testAttempts = 0
+    let saveAttempts = 0
+    const connection = {
+      modelProvider: 'custom',
+      modelName: model.id,
+      provider: {
+        name: '自定义',
+        protocol: 'openai-chat',
+        baseUrl: 'https://gateway.example/v1',
+        apiKey: 'fixture-key',
+        clearApiKey: false,
+      },
+    }
+    const fetchMock = installFetch((path, init) => {
+      if (path === '/v1/settings' && init?.method === 'PUT') {
+        if (typeof init.body !== 'string')
+          throw new Error('Expected a JSON body')
+        expect(JSON.parse(init.body)).toMatchObject({
+          ...connection,
+          expectedRevision: current.settings.revision,
+        })
+        saveAttempts += 1
+        if (saveAttempts === 1) {
+          current = {
+            ...current,
+            settings: {
+              ...current.settings,
+              revision: 2,
+              modelProvider: 'custom',
+              modelName: 'changed-model',
+            },
+            capabilities: {
+              ...current.capabilities,
+              providers: current.capabilities.providers.map(provider =>
+                provider.id === 'custom'
+                  ? { ...provider, baseUrl: 'https://changed.example/v1' }
+                  : provider,
+              ),
+            },
+          }
+          return Response.json(
+            { message: '设置已更新，请重试' },
+            { status: 409 },
+          )
+        }
+        current = {
+          ...current,
+          settings: {
+            ...current.settings,
+            revision: 3,
+            modelProvider: 'custom',
+            modelName: model.id,
+          },
+          capabilities: {
+            ...current.capabilities,
+            providers: current.capabilities.providers.map(provider =>
+              provider.id === 'custom'
+                ? {
+                    ...provider,
+                    baseUrl: connection.provider.baseUrl,
+                    hasApiKey: true,
+                    available: true,
+                  }
+                : provider,
+            ),
+          },
+        }
+        return Response.json(current)
+      }
+      if (path === '/v1/settings') return Response.json(current)
+      if (path === '/v1/settings/agent-models')
+        return saveAttempts < 2
+          ? Response.json(
+              { error: 'agent_models_unavailable' },
+              { status: 503 },
+            )
+          : Response.json({
+              defaultProvider: model.provider,
+              defaultModel: model.id,
+              models: [model],
+            })
+      if (path === '/v1/settings/models/test') {
+        if (typeof init?.body !== 'string')
+          throw new Error('Expected a JSON body')
+        expect(JSON.parse(init.body)).toMatchObject(connection)
+        testAttempts += 1
+        return testAttempts === 1
+          ? Response.json({ message: '请检查 API Key' }, { status: 400 })
+          : Response.json({ ok: true, latencyMs: 42 })
+      }
+      return undefined
+    })
+    render(<App />)
+    await screen.findByText('欢迎使用 Pegas')
+    fireEvent.click(screen.getByRole('button', { name: /^继续$/ }))
+    await chooseOption('接入方式', '自定义 · OpenAI 兼容')
+    expect(screen.getByLabelText('Base URL')).toHaveProperty(
+      'value',
+      connection.provider.baseUrl,
+    )
+    const key = screen.getByLabelText('API Key')
+    fireEvent.change(key, { target: { value: connection.provider.apiKey } })
+    fireEvent.change(screen.getByLabelText('模型 ID'), {
+      target: { value: model.id },
+    })
+    fireEvent.submit(screen.getByRole('form', { name: '模型连接配置' }))
+    expect(await screen.findByText('请检查 API Key')).toBeTruthy()
+    expect(key).toHaveProperty('value', connection.provider.apiKey)
+    expect(
+      fetchMock.mock.calls.some(([, init]) => init?.method === 'PUT'),
+    ).toBe(false)
+
+    fireEvent.click(screen.getByRole('button', { name: '保存连接' }))
+    expect(await screen.findByText('设置已更新，请重试')).toBeTruthy()
+    expect(key).toHaveProperty('value', connection.provider.apiKey)
+    expect(screen.getByLabelText('Base URL')).toHaveProperty(
+      'value',
+      connection.provider.baseUrl,
+    )
+    fireEvent.click(screen.getByRole('button', { name: '保存连接' }))
+    const trigger = await screen.findByRole('button', {
+      name: /Custom model.*默认模型/,
+    })
+    fireEvent.click(trigger)
+    expect(
+      await screen.findByRole('option', { name: /Custom model/ }),
+    ).toBeTruthy()
+    expect(screen.queryByLabelText('API Key')).toBeNull()
   })
 
   it('lets first-run setup configure the model connection before picking a model', async () => {

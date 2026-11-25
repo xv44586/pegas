@@ -59,6 +59,30 @@
 
 ## Lessons
 
+### LESSON-20261125-07：设置冲突重试时保持凭证绑定的目标
+
+- Rule：重新读取设置 revision 时，草稿凭证必须继续绑定用户编辑时看到的地址和协议。服务端控制的目标发生变化时，重新确认地址并输入凭证。
+- Why：若表单只保存改动过的字段，冲突后的服务端地址可能替换草稿中的可见连接，同时保留用户刚输入的 Key。
+- Feature：SETTINGS-001
+- Evidence：`web/src/App.test.tsx` 模拟另一客户端在保存冲突期间修改自定义 Base URL。该回归先证实地址随 revision 被替换，再断言重试仍使用草稿原地址。
+- Seen：1（2026-11-25）
+- Severity：security
+- Status：Promoted
+- Enforcement：冲突重试回归纳入 `pnpm check`。
+- Owner / next action：SETTINGS-001。新增凭证表单时复用目标绑定语义。
+
+### LESSON-20261125-06：连接保存要刷新同一会话的模型选择器
+
+- Rule：验收模型接入时，在初始执行目录为空或不可读的同一 Web 会话内完成保存，在 Pegas 执行模型选择器找到新连接的模型。
+- Why：连接测试与目录读取是不同请求。普通设置保存只替换设置响应，使执行模型选择器继续展示页面启动时的空目录。
+- Feature：SETTINGS-001
+- Evidence：2026-11-25 模型服务探测成功后，Pegas 执行模型目录仍为空。`web/src/App.test.tsx` 的保存后刷新用例在旧代码失败，`scripts/capture-ui-review.mjs` 覆盖隔离网关和同一页面会话的保存流程。
+- Seen：1（2026-11-25）
+- Severity：normal
+- Status：Observed
+- Enforcement：SETTINGS-001 页面回归覆盖保存前后两个目录状态。
+- Owner / next action：后续改变模型目录加载时保留同一会话的验收路径。
+
 ### LESSON-20261125-03：恢复回执必须尊重已经提交的归类
 
 - Rule：批量归类的结果与全部 Inbox 回执同事务提交。跨事务恢复时，先检查输入是否已经生成 Run，再评估当前事情能否接受新输入。

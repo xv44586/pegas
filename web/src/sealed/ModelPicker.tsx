@@ -1,6 +1,13 @@
 import { Button } from '@bui/index'
 import { Check, ChevronDown, RotateCw, Search } from 'lucide-react'
-import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from 'react'
 
 import type { DshModelCatalogItem } from '../types'
 
@@ -51,6 +58,7 @@ export function ModelPicker({
   disabled = false,
   variant = 'field',
   openRequest = 0,
+  boundaryRef,
 }: {
   ariaLabel: string
   models: DshModelCatalogItem[]
@@ -65,6 +73,7 @@ export function ModelPicker({
   disabled?: boolean
   variant?: 'field' | 'composer'
   openRequest?: number
+  boundaryRef?: RefObject<HTMLElement | null>
 }) {
   const pickerId = useId()
   const pickerTitleId = useId()
@@ -149,12 +158,16 @@ export function ModelPicker({
   function openPicker() {
     const rect = triggerRef.current?.getBoundingClientRect()
     if (rect) {
-      const spaceBelow = window.innerHeight - rect.bottom
-      const spaceAbove = rect.top
+      const boundary = boundaryRef?.current?.getBoundingClientRect()
+      const spaceBelow =
+        Math.min(boundary?.bottom ?? window.innerHeight, window.innerHeight) -
+        rect.bottom
+      const spaceAbove = rect.top - Math.max(boundary?.top ?? 0, 0)
       const openUp = spaceBelow < 360 && spaceAbove > spaceBelow
+      const availableHeight = (openUp ? spaceAbove : spaceBelow) - 16
       setPlacement(openUp ? 'up' : 'down')
       setMaxPanelHeight(
-        Math.max(220, Math.min(520, (openUp ? spaceAbove : spaceBelow) - 16)),
+        Math.max(boundary ? 0 : 220, Math.min(520, availableHeight)),
       )
     }
     setOpen(true)

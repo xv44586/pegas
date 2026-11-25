@@ -164,7 +164,6 @@ describe('sealed UI layout contracts', () => {
       'utf8',
     )
     expect(onboarding).toContain('<FormField label="默认模型">')
-    expect(onboarding).toContain('<FormField label="模型服务">')
     expect(onboarding).not.toMatch(/<input[\s>]/)
     expect(sealedUi).not.toMatch(/\.setup-form input,/)
     const app = readFileSync(
@@ -205,22 +204,26 @@ describe('sealed UI layout contracts', () => {
     expect(onboarding).toContain('测试连接')
     expect(onboarding).toContain('保存连接')
     expect(onboarding).toContain('type="password"')
-    expect(onboarding).toContain('connectionConfigured')
+    expect(onboarding).toContain('更改模型连接')
+    expect(onboarding).toContain('重新读取模型目录')
     expect(app).toMatch(
       /<Onboarding[\s\S]*?onSaveConnection=\{saveOnboardingConnection\}/,
     )
     expect(app).toMatch(
-      /<Onboarding[\s\S]*?onTestConnection=\{testOnboardingConnection\}/,
+      /<Onboarding[\s\S]*?onTestConnection=\{[\s\S]*?api\.testModel\(/,
     )
     expect(app).toMatch(
-      /async function saveOnboardingConnection[\s\S]*?api\.saveSettings\([\s\S]*?loadConfiguration\(true\)/,
+      /async function saveOnboardingConnection[\s\S]*?await saveSettings\(/,
     )
     expect(app).toMatch(
-      /async function testOnboardingConnection[\s\S]*?api\.testModel\(/,
+      /async function saveSettings[\s\S]*?api\.saveSettings\([\s\S]*?loadConfiguration\(true\)/,
     )
-    expect(onboarding).toContain('<FormField label="服务地址">')
+    expect(onboarding).toContain(
+      '<FormField htmlFor="setup-provider" label="接入方式">',
+    )
+    expect(onboarding).toContain('<FormField label="Base URL">')
     expect(onboarding).toContain('<FormField label="API Key">')
-    expect(onboarding).toContain('<FormField label="探测模型">')
+    expect(onboarding).toContain('<FormField label="模型 ID">')
     expect(sealedUi).not.toMatch(/\.setup-connection > label > input/)
     expect(sealedUi).not.toMatch(/\.setup-form input,/)
     expect(sealedUi).toMatch(
@@ -229,6 +232,7 @@ describe('sealed UI layout contracts', () => {
     expect(sealedUi).toMatch(/\.setup-body\s*\{[^}]*overflow-y:\s*auto;/)
     expect(uiReviewScript).toContain('escapes viewport vertically')
     expect(uiReviewScript).toContain('desktop-onboarding-connection')
+    expect(uiReviewScript).toContain('mobile-onboarding-connection')
     const a11yScript = readFileSync(
       new URL('../scripts/a11y-review.mjs', import.meta.url),
       'utf8',
