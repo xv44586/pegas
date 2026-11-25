@@ -1,7 +1,7 @@
 import type { AddressInfo } from 'node:net'
 import { createServer } from 'node:http'
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { loadConfig } from '../src/core/config.js'
 import type { InboxEvent, RoutingCandidate } from '../src/core/domain.js'
@@ -12,7 +12,7 @@ import type { JsonModelProvider } from '../src/model/provider.js'
 import { prefilterDecision } from '../src/router/prefilter.js'
 import { ModelTaskRouter } from '../src/router/router.js'
 import { runtimeSettingsDefaults } from '../src/settings/runtime-settings.js'
-import { PegasStore } from '../src/storage/sqlite-store.js'
+import { EventClaimError, PegasStore } from '../src/storage/sqlite-store.js'
 import {
   processNextEvent,
   RoutingEventHandler,
@@ -260,6 +260,68 @@ describe('PLAN-001 P2 collect window', () => {
     )
     store.close()
   })
+
+  it.each(['lost claim before commit', 'interruption after routing'] as const)(
+    'keeps routing and every batch receipt atomic on %s',
+    async interruption => {
+      const store = new PegasStore(':memory:')
+      try {
+        store.initializeRuntimeSettings(runtimeSettingsDefaults(loadConfig({})))
+        const first = store.enqueueEvent(humanEvent('整理会议纪要')).event
+        const second = store.enqueueEvent(humanEvent('包含排期')).event
+        if (interruption === 'interruption after routing') {
+          vi.spyOn(store, 'completeEvent').mockImplementationOnce(() => {
+            throw new EventClaimError('Interrupted before receipt')
+          })
+        }
+        const provider: JsonModelProvider = {
+          name: 'batch-interruption',
+          generateJson: () => {
+            if (interruption === 'lost claim before commit')
+              store.releaseEventClaim(second.id, 'router')
+            return Promise.resolve({
+              kind: 'create_task',
+              title: '整理纪要',
+              goal: '整理纪要',
+              reason: 'test',
+            })
+          },
+        }
+        await processNextEvent(
+          store,
+          new RoutingEventHandler(
+            new ModelTaskRouter({ provider }),
+            'echo-test',
+          ),
+          'router',
+          undefined,
+          { collectWindowMs: 100 },
+        )
+        const events = store.listEvents('owner')
+        if (interruption === 'lost claim before commit') {
+          expect(store.listTasks('owner')).toHaveLength(0)
+          expect(events.find(event => event.id === first.id)?.status).toBe(
+            'processing',
+          )
+          expect(events.find(event => event.id === second.id)?.status).toBe(
+            'pending',
+          )
+        } else {
+          expect(events.every(event => event.status === 'processed')).toBe(true)
+          const [task] = store.listTasks('owner')
+          expect(task).toBeDefined()
+          if (!task) throw new Error('Expected routed task')
+          expect(store.listRuns(task.id)).toHaveLength(1)
+          expect(
+            store.listChannelEvents(task.id, 'owner').map(event => event.id),
+          ).toEqual(expect.arrayContaining([first.id, second.id]))
+          expect(store.claimNextEvent('replacement')).toBeUndefined()
+        }
+      } finally {
+        store.close()
+      }
+    },
+  )
 
   it('keeps every collected input pending until the blocking Approval is settled', async () => {
     const store = new PegasStore(':memory:')

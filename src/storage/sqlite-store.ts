@@ -8934,27 +8934,21 @@ export class PegasStore {
     event: InboxEvent,
     decision: Extract<RoutingDecision, { kind: 'steer_task' | 'cancel_task' }>,
   ): { task: Task } {
-    this.#database.exec('BEGIN IMMEDIATE')
-    try {
+    return this.#runInTransaction(() => {
       if (event.source === 'collaboration') {
         throw new Error('Control intents require direct user routing')
       }
       this.#fenceRoutingWriteInTransaction(event)
       const task = this.#applyControlIntentInTransaction(event, decision)
-      this.#database.exec('COMMIT')
       return { task }
-    } catch (error) {
-      this.#database.exec('ROLLBACK')
-      throw error
-    }
+    })
   }
 
   applyRoutingClarification(
     event: InboxEvent,
     decision: Extract<RoutingDecision, { kind: 'clarify' }>,
   ): { message: OutboxMessage } {
-    this.#database.exec('BEGIN IMMEDIATE')
-    try {
+    return this.#runInTransaction(() => {
       if (event.source === 'collaboration') {
         throw new Error('Routing clarification requires direct user routing')
       }
@@ -8968,7 +8962,6 @@ export class PegasStore {
         { id: string } | undefined
       if (existing) {
         const message = this.#outboxById(existing.id)
-        this.#database.exec('COMMIT')
         return { message }
       }
       const message = this.enqueueOutbox({
@@ -8993,12 +8986,8 @@ export class PegasStore {
            WHERE id = ? AND expires_at IS NULL`,
         )
         .run(expiresAt, message.id)
-      this.#database.exec('COMMIT')
       return { message: this.#outboxById(message.id) }
-    } catch (error) {
-      this.#database.exec('ROLLBACK')
-      throw error
-    }
+    })
   }
 
   expireDueRoutingClarifications(
@@ -9065,6 +9054,45 @@ export class PegasStore {
     }
   }
 
+  commitRoutingBatch(
+    head: InboxEvent,
+    ids: readonly string[],
+    applyDecision: () => void,
+  ): void {
+    const workerId = head.claimedBy
+    if (!workerId || ids[0] !== head.id)
+      throw new EventClaimError('Routing batch must include its claimed head')
+    this.#runInTransaction(() => {
+      const owner = this.#database.prepare(
+        'SELECT user_id FROM inbox_events WHERE id = ?',
+      )
+      for (const id of ids) {
+        this.#assertEventClaim(id, workerId)
+        if (owner.get(id)?.user_id !== head.userId)
+          throw new EventClaimError('Routing batch inputs must share an owner')
+      }
+      applyDecision()
+      const decision = this.#database
+        .prepare('SELECT task_id FROM routing_decisions WHERE event_id = ?')
+        .get(head.id) as { task_id: string } | undefined
+      const now = this.#clock.now().toISOString()
+      if (decision) {
+        const link = this.#database.prepare(
+          `INSERT INTO task_events (event_id, task_id, relation, created_at)
+           VALUES (?, ?, 'batch_member', ?)
+           ON CONFLICT(event_id) DO UPDATE SET task_id = excluded.task_id,
+             relation = excluded.relation, created_at = excluded.created_at`,
+        )
+        for (const id of ids.slice(1)) link.run(id, decision.task_id, now)
+      }
+      const acknowledge = this.#database.prepare(
+        `UPDATE inbox_events SET status = 'processed', processed_at = ?,
+           claimed_by = NULL, lease_until = NULL, last_error = NULL WHERE id = ?`,
+      )
+      for (const id of ids) acknowledge.run(now, id)
+    })
+  }
+
   #fenceRoutingWriteInTransaction(event: InboxEvent): void {
     if (event.claimedBy === undefined) return
     this.#assertEventClaim(event.id, event.claimedBy)
@@ -9080,8 +9108,7 @@ export class PegasStore {
     executionContext: ExecutionContext | ((task: Task) => ExecutionContext),
     options: { collaborationRelationId?: string; replyRunId?: string },
   ): { task: Task; run: Run } {
-    this.#database.exec('BEGIN IMMEDIATE')
-    try {
+    return this.#runInTransaction(() => {
       this.#fenceRoutingWriteInTransaction(event)
       const collaboration = options.collaborationRelationId
         ? this.#collaborationForDispatch(options.collaborationRelationId, event)
@@ -9119,7 +9146,6 @@ export class PegasStore {
             )
           }
         }
-        this.#database.exec('COMMIT')
         return { task: existingTask, run: toRun(existingRun) }
       }
 
@@ -9134,7 +9160,6 @@ export class PegasStore {
             'SELECT * FROM runs WHERE task_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1',
           )
           .get(task.id) as unknown as RunRow
-        this.#database.exec('COMMIT')
         return { task, run: toRun(run) }
       }
 
@@ -9318,7 +9343,6 @@ export class PegasStore {
             )
           const redirectedTask = this.#taskById(task.id)
           const redirectedRun = this.#runById(activeRun.id)
-          this.#database.exec('COMMIT')
           return { task: redirectedTask, run: redirectedRun }
         }
       }
@@ -9461,12 +9485,8 @@ export class PegasStore {
           )
         }
       }
-      this.#database.exec('COMMIT')
       return { task, run }
-    } catch (error) {
-      this.#database.exec('ROLLBACK')
-      throw error
-    }
+    })
   }
 
   listRuns(taskId?: string): Run[] {

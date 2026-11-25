@@ -40,7 +40,11 @@ import { runExecutionWorkspace } from './run-execution-snapshot.js'
 import { isTerminalProviderError } from './provider-errors.js'
 
 export interface EventHandler {
-  handle(event: InboxEvent, store: PegasStore): Promise<void>
+  handle(
+    event: InboxEvent,
+    store: PegasStore,
+    batchIds?: readonly string[],
+  ): Promise<void> | Promise<true | undefined>
 }
 
 /**
@@ -109,7 +113,11 @@ export class RoutingEventHandler implements EventHandler {
     this.#executionContext = executionContext
   }
 
-  async handle(event: InboxEvent, store: PegasStore): Promise<void> {
+  async handle(
+    event: InboxEvent,
+    store: PegasStore,
+    batchIds?: readonly string[],
+  ): Promise<true | undefined> {
     if (event.type === 'approval.decided') {
       store.applyApprovalDecision(event)
       return
@@ -160,104 +168,112 @@ export class RoutingEventHandler implements EventHandler {
             store.hasRuntimeSettings() &&
             store.getRuntimeSettings().chatLaneEnabled === true,
         }) ?? (await this.#router.route(event, candidates, routingContext)))
-    if (!decision) return
-    const sourceReference = sourceTaskReference(event)
-    if (sourceReference && decision.kind !== 'create_task') {
-      const sourceContext = routingContext.resolveSourceContext(sourceReference)
-      if (!sourceContext) {
-        throw new Error(
-          `Source task ${sourceReference} has no terminal facts to hand off`,
-        )
-      }
-      const text = userMessageText(event)
-      store.applyRoutingDecision(
-        event,
-        {
-          kind: 'create_task',
-          title: text.replaceAll(/\s+/g, ' ').slice(0, 120),
-          goal: text,
-          input: text,
-          reason:
-            'The message explicitly references an ended source Task; a related Task is required.',
-          sourceContext,
-        },
-        this.#executorName,
-        task => this.#executionContext(task),
-      )
-      return
-    }
-    if (decision.kind === 'steer_task' || decision.kind === 'cancel_task') {
-      store.applyControlIntent(event, decision)
-      return
-    }
-    if (decision.kind === 'clarify') {
-      store.applyRoutingClarification(event, decision)
-      return
-    }
-    if (
-      decision.kind === 'reply' &&
-      !explaining &&
-      !store.getRuntimeSettings().chatLaneEnabled
-    ) {
-      store.applyRoutingDecision(
-        event,
-        {
-          kind: 'create_task',
-          title: decision.input.trim().replaceAll(/\s+/g, ' ').slice(0, 120),
-          goal: decision.input,
-          input: decision.input,
-          reason: `Chat lane disabled; reply fell back to a Task. ${decision.reason}`,
-        },
-        this.#executorName,
-        task => this.#executionContext(task),
-      )
-      return
-    }
-    if (decision.kind === 'reply') {
-      const settings = store.getRuntimeSettings()
-      store.applyRoutingDecision(event, decision, this.#executorName, {
-        executor: this.#executorName,
-        protocol: 'conversation-v1',
-        permissions: JSON.stringify({
-          mode: 'read-only',
-          approvalPolicy: 'never',
-          additionalDirectories: [],
-          privacyMode: settings.privacyMode,
-        }),
-      })
-      return
-    }
-    const options = { replyRunId: reply?.runId }
-    if (decision.kind === 'continue_task') {
-      const target = store.findTask(decision.taskId, event.userId)
-      if (target?.kind === 'conversation') {
-        const settings = store.getRuntimeSettings()
+    const applyDecision = () => {
+      if (!decision) return
+      const sourceReference = sourceTaskReference(event)
+      if (sourceReference && decision.kind !== 'create_task') {
+        const sourceContext =
+          routingContext.resolveSourceContext(sourceReference)
+        if (!sourceContext) {
+          throw new Error(
+            `Source task ${sourceReference} has no terminal facts to hand off`,
+          )
+        }
+        const text = userMessageText(event)
         store.applyRoutingDecision(
           event,
-          decision,
-          this.#executorName,
           {
-            executor: this.#executorName,
-            protocol: 'conversation-v1',
-            permissions: JSON.stringify({
-              mode: 'read-only',
-              approvalPolicy: 'never',
-              additionalDirectories: [],
-              privacyMode: settings.privacyMode,
-            }),
+            kind: 'create_task',
+            title: text.replaceAll(/\s+/g, ' ').slice(0, 120),
+            goal: text,
+            input: text,
+            reason:
+              'The message explicitly references an ended source Task; a related Task is required.',
+            sourceContext,
           },
-          options,
+          this.#executorName,
+          task => this.#executionContext(task),
         )
         return
       }
+      if (decision.kind === 'steer_task' || decision.kind === 'cancel_task') {
+        store.applyControlIntent(event, decision)
+        return
+      }
+      if (decision.kind === 'clarify') {
+        store.applyRoutingClarification(event, decision)
+        return
+      }
+      if (
+        decision.kind === 'reply' &&
+        !explaining &&
+        !store.getRuntimeSettings().chatLaneEnabled
+      ) {
+        store.applyRoutingDecision(
+          event,
+          {
+            kind: 'create_task',
+            title: decision.input.trim().replaceAll(/\s+/g, ' ').slice(0, 120),
+            goal: decision.input,
+            input: decision.input,
+            reason: `Chat lane disabled; reply fell back to a Task. ${decision.reason}`,
+          },
+          this.#executorName,
+          task => this.#executionContext(task),
+        )
+        return
+      }
+      if (decision.kind === 'reply') {
+        const settings = store.getRuntimeSettings()
+        store.applyRoutingDecision(event, decision, this.#executorName, {
+          executor: this.#executorName,
+          protocol: 'conversation-v1',
+          permissions: JSON.stringify({
+            mode: 'read-only',
+            approvalPolicy: 'never',
+            additionalDirectories: [],
+            privacyMode: settings.privacyMode,
+          }),
+        })
+        return
+      }
+      const options = { replyRunId: reply?.runId }
+      if (decision.kind === 'continue_task') {
+        const target = store.findTask(decision.taskId, event.userId)
+        if (target?.kind === 'conversation') {
+          const settings = store.getRuntimeSettings()
+          store.applyRoutingDecision(
+            event,
+            decision,
+            this.#executorName,
+            {
+              executor: this.#executorName,
+              protocol: 'conversation-v1',
+              permissions: JSON.stringify({
+                mode: 'read-only',
+                approvalPolicy: 'never',
+                additionalDirectories: [],
+                privacyMode: settings.privacyMode,
+              }),
+            },
+            options,
+          )
+          return
+        }
+      }
+      store.applyRoutingDecision(
+        event,
+        decision,
+        this.#executorName,
+        task => this.#executionContext(task),
+        options,
+      )
     }
-    store.applyRoutingDecision(
-      event,
-      decision,
-      this.#executorName,
-      task => this.#executionContext(task),
-      options,
-    )
+    if (batchIds) {
+      store.commitRoutingBatch(event, batchIds, applyDecision)
+      return true
+    }
+    applyDecision()
   }
 
   #handleConversationSuggestion(event: InboxEvent, store: PegasStore): void {
@@ -757,8 +773,14 @@ export async function processNextEvent(
   leaseHeartbeat.unref()
 
   try {
-    await handler.handle(routedEvent, store)
-    for (const member of batch.events) store.completeEvent(member.id, workerId)
+    const batchIds = batch.merged
+      ? batch.events.map(member => member.id)
+      : undefined
+    const committed = await handler.handle(routedEvent, store, batchIds)
+    if (committed !== true) {
+      for (const member of batch.events)
+        store.completeEvent(member.id, workerId)
+    }
     telemetry?.metrics?.increment('pegas_events_processed_total', {
       outcome: 'processed',
     })
