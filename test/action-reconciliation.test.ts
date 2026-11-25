@@ -1,5 +1,10 @@
 import type { AddressInfo } from 'node:net'
 
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { parseActionReconciliationDraft } from '../src/approval/approval.js'
@@ -228,6 +233,74 @@ describe('APPROVAL-001 human action reconciliation', () => {
       .find(event => event.id === continuation.id)
     expect(released).toMatchObject({ status: 'pending' })
     expect(released?.lastError).toBeUndefined()
+    expect(store.claimNextEvent('event-worker')?.id).toBe(continuation.id)
+  })
+
+  it('replaying a failed reconciliation still wakes inputs parked by the pre-fix code', () => {
+    const path = join(
+      mkdtempSync(join(tmpdir(), 'pegas-reconcile-wake-')),
+      'pegas.sqlite',
+    )
+    const store = new PegasStore(path)
+    cleanups.push(() => store.close())
+    const blocked = createBlockedAction(store, 'unknown')
+    store.failRun(blocked.resumeRunId, 'worker-resumed', 'executor crashed')
+
+    const continuation = store.enqueueEvent({
+      userId: 'owner',
+      type: 'user.message',
+      source: 'test',
+      payload: { text: '换个方式继续' },
+    }).event
+    for (let drained = store.claimNextEvent('event-drain'); drained;) {
+      if (drained.id === continuation.id) {
+        store.releaseEventClaim(drained.id, 'event-drain')
+        break
+      }
+      store.completeEvent(drained.id, 'event-drain')
+      drained = store.claimNextEvent('event-drain')
+    }
+    expect(store.claimNextEvent('event-worker')?.id).toBe(continuation.id)
+    expect(
+      store.parkEventsForBlockedAction(
+        [continuation.id],
+        'event-worker',
+        blocked.taskId,
+      ),
+    ).toBe('parked')
+
+    const draft = {
+      commandId: 'reconcile-failed-replay-wake',
+      resolution: 'failed' as const,
+      note: '审计确认该工具从未执行，没有任何外部副作用',
+    }
+    store.reconcileAction(blocked.actionId, 'owner', draft)
+    expect(store.claimNextEvent('event-worker')?.id).toBe(continuation.id)
+    store.releaseEventClaim(continuation.id, 'event-worker')
+
+    // Simulate rows written by the pre-fix code: the reconciliation record
+    // exists but the wake side effect never ran, so restore the sentinel
+    // parking exactly as the live incident left it.
+    const legacy = new DatabaseSync(path)
+    try {
+      legacy
+        .prepare(
+          `UPDATE inbox_events SET status = 'processing',
+             claimed_by = 'event-worker',
+             lease_until = '9999-12-31T23:59:59.999Z',
+             last_error = 'blocked_by_action:unknown'
+           WHERE id = ?`,
+        )
+        .run(continuation.id)
+    } finally {
+      legacy.close()
+    }
+
+    // Replaying the identical command must converge the wake side effect.
+    store.reconcileAction(blocked.actionId, 'owner', draft)
+    expect(
+      store.listEvents('owner').find(event => event.id === continuation.id),
+    ).toMatchObject({ status: 'pending' })
     expect(store.claimNextEvent('event-worker')?.id).toBe(continuation.id)
   })
 
