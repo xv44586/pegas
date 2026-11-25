@@ -85,7 +85,7 @@
 
 - `GET /v1/events/:id/trace?userId=` 以输入事件为入口，用现有 Inbox、Routing Decision、Run、Action、Policy Audit 和 Outbox 还原链路。响应禁止缓存。路由候选只保存 ID，模型输出只取结构化字段，预览每字段最多 2,000 字符。过长文本只显示长度。工具详情走已有 owner 授权档案和输出分页。
 - `POST /v1/observability/browser-receipts` 校验事件或结果归属。发送用时按浏览器单调时钟计算，结果阶段记录服务端收到首次回执的时间。浏览器从 DOM 提交报告渲染，前台标签中与视口相交时报告进入视口。初次载入的历史结果保留原采集状态。回执不影响已读和交付状态。
-- 本地验证运行 `pnpm check`、`pnpm smoke` 和构建后的 `node scripts/smoke-message-trace.mjs`。schema v57–v58 保留增量表和索引。回滚到兼容旧版本时保留新增表，v58 对旧模型摘要完成的脱敏继续生效。
+- 本地验证运行 `pnpm check`、`pnpm smoke` 和构建后的 `node scripts/smoke-message-trace.mjs`。schema v57–v58 保留增量表和索引。回滚目标为上一版（支持 schema v56、Task workflow v1）。Supervisor 仍会执行回滚兼容性检查，数据库保留 v57–v58 的增量表和索引，v58 对旧模型摘要完成的脱敏继续生效。
 
 ### 审核修复验收
 
