@@ -43,7 +43,8 @@ function createTask(store: PegasStore, userId = 'owner') {
   const event = store.enqueueEvent({
     userId,
     type: 'user.message',
-    source: 'test',
+    source: 'web',
+    authenticatedActor: 'human',
     payload: { text: '整理资料' },
   }).event
   const claimed = store.claimNextEvent('setup-permission')
@@ -86,8 +87,12 @@ function createRoutedRun(
   const event = store.enqueueEvent({
     userId,
     type: 'user.message',
-    source: 'test',
-    payload: { text: '再整理一次' },
+    source: 'web',
+    authenticatedActor: 'human',
+    payload: {
+      text: '再整理一次',
+      ...(decision.kind === 'continue_task' ? { taskId: decision.taskId } : {}),
+    },
   }).event
   const claimed = store.claimNextEvent('setup-permission-run')
   if (!claimed) throw new Error('Expected event claim')

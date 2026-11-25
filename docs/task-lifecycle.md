@@ -72,6 +72,12 @@ Mandate 在接单时创建且内容不可变。executor 完成不撤销它；用
 
 `policyVersion` 由接单规则、accept mode 和各 Source Policy 生成；模型、并发数、暂停状态等执行设置不改变 Mandate。复核按原 basis 判断 Source 是否仍监听、sender/bot 是否仍允许、admission cell 是否仍提供不低于原来的 strength，以及 inferred Mandate 的 auto mode 和 matched rules 是否仍有效。
 
+### 当前来源授权
+
+schema v56 增加按 owner 与来源保存的恢复策略。Web 和 Mobile 默认为已授权的人工入口，可在两端之间继续同一事情。续接尚未归类的输入时，事务内重新校验原始接单事件、人类身份、sender、owner、两端策略和明确的 Task 或回复引用。来源撤权后，仍未归类的输入以可重试失败保留，原事情维持结束；调整授权后可重发原输入。来源或身份无法证实的历史及机器输入可以通过新建相关事情继续。已提交的 Run 沿用既有执行和审批边界。
+
+`GET /v1/task-resume-sources/{web|mobile}?userId=...` 读取策略及 revision，`PUT` 同地址接收 `{userId, enabled, expectedRevision}`，沿用实例认证。默认 revision 为 0，更新按 revision 比较，并支持同一更新的响应重放。旧版本会忽略新表，撤权期间不得切回不支持该策略的版本。
+
 ## 验证与剩余缺口
 
 自动化覆盖旧 v4 数据库八种状态升级、早期 Task-only v5 与 Provider 迁移兼容、schema v10 的 Mandate/ended/执行快照回填、错误记录保留、迁移重复启动、重试链与输入/session 保留、重复请求幂等、越权/终态/非最新 Run 拒绝、同 Task 执行串行化、租约过期旧 Worker fencing，以及 Web 重试失败后恢复与历史展示。`TASK-002` 新增 completed 恢复、同 Event 幂等、执行上下文不兼容时换 Session、连续输入不提前结束 Channel、重复停止不改写 ended、停止后旧 Worker 结果拒绝、Worker Runtime 退出后保留 Run、停止后 API 拒绝和 Web 永久停止确认/只读回归。完整门禁为 `pnpm check` 与 `pnpm smoke`。

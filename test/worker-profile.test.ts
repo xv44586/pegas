@@ -291,6 +291,7 @@ describe('WORKER-001 profile contracts', () => {
       userId: 'owner',
       type: 'user.message',
       source: 'web',
+      authenticatedActor: 'human',
       payload: { text: 'Start the task' },
     }).event
     const claimedEvent = store.claimNextEvent('router-1')
@@ -342,6 +343,7 @@ describe('WORKER-001 profile contracts', () => {
       userId: 'owner',
       type: 'user.message',
       source: 'web',
+      authenticatedActor: 'human',
       payload: { taskId: first.task.id, text: 'Continue' },
     }).event
     const claimedContinuation = store.claimNextEvent('router-2')
@@ -381,6 +383,7 @@ describe('WORKER-001 profile contracts', () => {
       userId: 'owner',
       type: 'user.message',
       source: 'web',
+      authenticatedActor: 'human',
       payload: { taskId: first.task.id, text: 'Continue again' },
     }).event
     const claimedCompatible = store.claimNextEvent('router-3')
