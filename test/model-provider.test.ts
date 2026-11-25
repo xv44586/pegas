@@ -118,3 +118,178 @@ describe('AnthropicProvider', () => {
     })
   })
 })
+
+interface RecordedAttempt {
+  at: number
+}
+
+async function startFlakyServer(
+  responses: {
+    status: number
+    retryAfter?: string
+    body?: string
+  }[],
+): Promise<{ baseUrl: string; attempts: RecordedAttempt[] }> {
+  const attempts: RecordedAttempt[] = []
+  const server = createServer((request, response) => {
+    request.resume()
+    const index = Math.min(attempts.length, responses.length - 1)
+    attempts.push({ at: Date.now() })
+    const next = responses[index] ?? { status: 500 }
+    const headers: Record<string, string> = {
+      'content-type': 'application/json',
+    }
+    if (next.retryAfter !== undefined) headers['retry-after'] = next.retryAfter
+    response.writeHead(next.status, headers)
+    response.end(
+      next.body ??
+        JSON.stringify({
+          choices: [{ message: { content: '{"kind":"create_task"}' } }],
+        }),
+    )
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  cleanups.push(
+    () => new Promise<void>(resolve => server.close(() => resolve())),
+  )
+  const { port } = server.address() as AddressInfo
+  return { baseUrl: `http://127.0.0.1:${String(port)}/v1`, attempts }
+}
+
+const instantSleep = () => Promise.resolve()
+const noJitter = { random: () => 1, sleep: instantSleep }
+
+describe('model rate-limit retry (MODEL-001)', () => {
+  it('retries a 429 and succeeds on the next attempt', async () => {
+    const { baseUrl, attempts } = await startFlakyServer([
+      { status: 429, body: 'slow down' },
+      { status: 200 },
+    ])
+    const provider = new OpenAiCompatibleProvider({
+      baseUrl,
+      model: 'router-model',
+      retry: noJitter,
+    })
+    await expect(
+      provider.generateJson({ system: 'Route it', input: 'A new idea' }),
+    ).resolves.toEqual({ kind: 'create_task' })
+    expect(attempts).toHaveLength(2)
+  })
+
+  it('honors Retry-After seconds as the minimum backoff', async () => {
+    const { baseUrl, attempts } = await startFlakyServer([
+      { status: 429, retryAfter: '2' },
+      { status: 200 },
+    ])
+    const delays: number[] = []
+    const provider = new OpenAiCompatibleProvider({
+      baseUrl,
+      model: 'router-model',
+      retry: {
+        random: () => 1,
+        sleep: ms => {
+          delays.push(ms)
+          return Promise.resolve()
+        },
+      },
+    })
+    await provider.generateJson({ system: 's', input: 'i' })
+    expect(attempts).toHaveLength(2)
+    expect(delays).toEqual([2000])
+  })
+
+  it('fails with the last status after the retry budget is exhausted', async () => {
+    const { baseUrl, attempts } = await startFlakyServer([{ status: 429 }])
+    const provider = new OpenAiCompatibleProvider({
+      baseUrl,
+      model: 'router-model',
+      retry: { ...noJitter, maxAttempts: 3 },
+    })
+    await expect(
+      provider.generateJson({ system: 's', input: 'i' }),
+    ).rejects.toThrow('Model provider returned 429')
+    expect(attempts).toHaveLength(3)
+  })
+
+  it('retries transient 5xx failures', async () => {
+    const { baseUrl, attempts } = await startFlakyServer([
+      { status: 503 },
+      { status: 200 },
+    ])
+    const provider = new OpenAiCompatibleProvider({
+      baseUrl,
+      model: 'router-model',
+      retry: noJitter,
+    })
+    await expect(
+      provider.generateJson({ system: 's', input: 'i' }),
+    ).resolves.toEqual({ kind: 'create_task' })
+    expect(attempts).toHaveLength(2)
+  })
+
+  it('does not retry non-rate-limit client errors', async () => {
+    const { baseUrl, attempts } = await startFlakyServer([
+      { status: 401, body: 'bad key' },
+    ])
+    const provider = new OpenAiCompatibleProvider({
+      baseUrl,
+      model: 'router-model',
+      retry: noJitter,
+    })
+    await expect(
+      provider.generateJson({ system: 's', input: 'i' }),
+    ).rejects.toThrow('Model provider returned 401')
+    expect(attempts).toHaveLength(1)
+  })
+
+  it('stops retrying when the caller cancels during backoff', async () => {
+    const { baseUrl, attempts } = await startFlakyServer([{ status: 429 }])
+    const controller = new AbortController()
+    const provider = new OpenAiCompatibleProvider({
+      baseUrl,
+      model: 'router-model',
+      retry: {
+        random: () => 1,
+        sleep: () => {
+          controller.abort(new Error('caller cancelled'))
+          return Promise.resolve()
+        },
+      },
+    })
+    await expect(
+      provider.generateJson({
+        system: 's',
+        input: 'i',
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow('caller cancelled')
+    expect(attempts).toHaveLength(1)
+  })
+
+  it('retries Anthropic 429 responses with the same policy', async () => {
+    const { baseUrl, attempts } = await startFlakyServer([
+      { status: 429 },
+      {
+        status: 200,
+        body: JSON.stringify({
+          content: [
+            {
+              type: 'tool_use',
+              name: 'return_json',
+              input: { kind: 'create_task' },
+            },
+          ],
+        }),
+      },
+    ])
+    const provider = new AnthropicProvider({
+      baseUrl,
+      model: 'claude-test',
+      retry: noJitter,
+    })
+    await expect(
+      provider.generateJson({ system: 's', input: 'i' }),
+    ).resolves.toEqual({ kind: 'create_task' })
+    expect(attempts).toHaveLength(2)
+  })
+})
