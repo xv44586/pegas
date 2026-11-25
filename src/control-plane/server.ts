@@ -45,6 +45,8 @@ import {
   parseArtifactDraft,
   parseEvidenceClaimDraft,
   parseGoalContractDraft,
+  parseReviewDecision,
+  ReviewDecisionConflictError,
   parseWorkerReportDraft,
 } from '../goal/goal-delivery.js'
 import { verifyVisualEvidence } from '../goal/trusted-verifier.js'
@@ -1511,6 +1513,29 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
           evidence: evidence.items,
           ...(evidence.nextCursor ? { nextCursor: evidence.nextCursor } : {}),
         })
+      }
+
+      const deliveryDecisionMatch =
+        /^\/v1\/review-packs\/([^/]+)\/decision$/.exec(taskResourceUrl.pathname)
+      if (deliveryDecisionMatch && request.method === 'POST') {
+        const body = await readJson(request)
+        if (!isRecord(body)) throw new Error('Request body must be an object')
+        try {
+          return sendJson(response, 200, {
+            decision: options.store.decideDelivery(
+              decodeURIComponent(deliveryDecisionMatch[1] ?? ''),
+              requiredString(body.userId, 'userId'),
+              parseReviewDecision(body),
+            ),
+          })
+        } catch (error) {
+          if (error instanceof ReviewDecisionConflictError)
+            return sendJson(response, 409, {
+              error: 'delivery_decision_conflict',
+              message: error.message,
+            })
+          throw error
+        }
       }
 
       const taskReviewMatch = /^\/v1\/tasks\/([^/]+)\/review-packs$/.exec(
@@ -2989,6 +3014,8 @@ async function acceptVoiceMessage(
   const url = new URL(request.url ?? '', 'http://localhost')
   const userId = requiredQuery(url, 'userId')
   const source = optionalQuery(url, 'source') ?? 'web'
+  if (source === 'review')
+    throw new Error('The review event source is reserved')
   const language = optionalQuery(url, 'language')
   const taskId = optionalQuery(url, 'taskId')
   const sourceTaskId = optionalQuery(url, 'sourceTaskId')
@@ -3497,6 +3524,8 @@ function parseNewInboxEvent(value: unknown): NewInboxEvent {
     source === 'approval' ||
     type.startsWith('collaboration.') ||
     source === 'collaboration' ||
+    type.startsWith('goal.review.') ||
+    source === 'review' ||
     type.startsWith('automation.') ||
     source === 'automation'
   ) {

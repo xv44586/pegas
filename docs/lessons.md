@@ -222,6 +222,7 @@
 - Feature：CHANNEL-002、ROUTE-001
 - Evidence：用户报告所有 Channel 显示与 Pegas 相同历史；服务端两个同用户 Channel、一个其他用户 Channel 的所有权/负向隔离回归；Web 从全局对话切换到 Channel 后立即移除相邻 Channel 内容的回归；真实 Candidate 在主对话展示两个 Channel、进入其中一个后只保留对应输入和结果的浏览器断言与截图。
 - 2026-11-25 证据：两个 Chat 回复共享同一 Task 时，Task ID 无法标识引用目标。Web 精确回复 ID 回归与服务端 owner、原文、原会话和重放测试覆盖该路径。
+- 同日补充：事情任务状态与所选 Run 的诊断分开投影，交付审查的命令绑定准确 Review Pack，验收与已读独立。
 - Seen：2（2026-11-19、2026-11-25）
 - Severity：normal
 - Status：Observed

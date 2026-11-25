@@ -91,7 +91,7 @@ function workflowState(
 ): { state: WorkState; attention?: boolean } {
   if (task.status === 'cancelled')
     return { state: 'stopped', attention: Boolean(facts.reconciliation) }
-  if (task.statusReason === 'awaiting_user_review')
+  if (task.statusReason === 'awaiting_delivery_acceptance')
     return { state: 'awaiting_review' }
   if (task.status === 'completed') {
     if (task.statusReason === 'handed_off') return { state: 'handed_off' }
@@ -103,6 +103,8 @@ function workflowState(
   if (facts.pendingApproval)
     return { state: 'awaiting_approval', attention: true }
   switch (task.statusReason) {
+    case 'review_rework_queued':
+      return { state: 'queued' }
     case 'awaiting_goal_clarification':
     case 'awaiting_user_input':
       return { state: 'awaiting_input', attention: true }

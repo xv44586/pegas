@@ -19,6 +19,139 @@ afterEach(async () => {
 })
 
 describe('GOAL-001 delivery contracts', () => {
+  it.each(['accept', 'request_changes'] as const)(
+    'holds verified delivery until the owner decides to %s',
+    async choice => {
+      const store = new PegasStore(':memory:')
+      const seeded = seedRun(store)
+      const goal = store.createGoalContract(
+        seeded.taskId,
+        'owner',
+        'goal-human-review',
+        {
+          ...goalDraft(seeded.eventId),
+          requireAcceptance: true,
+        },
+      )
+      const claim = store.claimNextRun('worker')
+      if (!claim) throw new Error('Expected a claimed Run')
+      store.completeRun(claim.run.id, 'worker', {
+        executorRef: 'goal-session',
+        output: 'Results ready',
+      })
+      const evidence = store.createEvidenceRef(
+        claim.run.id,
+        'owner',
+        'review-evidence',
+        observationEvidence(goal.revision, 'passed'),
+      )
+      const report = store.submitWorkerReport(claim.run.id, 'owner', 'worker', {
+        goalRevision: goal.revision,
+        reportSequence: 1,
+        status: 'ready',
+        evidenceRefIds: [evidence.id],
+        summary: 'Ready for the owner to check.',
+        limitations: [],
+        remainingRisks: [],
+      })
+      const pack = report.reviewPack
+      if (!pack) throw new Error('Expected a review pack')
+      const server = createControlPlane({ store })
+      await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+      cleanups.push(
+        () => new Promise<void>(resolve => server.close(() => resolve())),
+        () => Promise.resolve(store.close()),
+      )
+      expect(store.findTask(seeded.taskId, 'owner')).toMatchObject({
+        status: 'started',
+        statusReason: 'awaiting_delivery_acceptance',
+      })
+      const review = store
+        .listOutbox('owner', seeded.taskId)
+        .find(
+          message =>
+            (message.payload as { type?: string; reviewPackId?: string })
+              .type === 'review.ready' &&
+            (message.payload as { reviewPackId?: string }).reviewPackId ===
+              pack.id,
+        )
+      if (!review) throw new Error('Expected a review decision card')
+      expect(review.projection?.lane).toBe('decide')
+      store.markOutboxRead(review.id, 'owner')
+      expect(store.findTask(seeded.taskId, 'owner')?.statusReason).toBe(
+        'awaiting_delivery_acceptance',
+      )
+      expect(store.listRuns(seeded.taskId).at(-1)?.status).toBe('completed')
+      const { port } = server.address() as AddressInfo
+      const post = (
+        userId: string,
+        decision: string,
+        commandId = 'review-command',
+      ) =>
+        fetch(
+          `http://127.0.0.1:${String(port)}/v1/review-packs/${pack.id}/decision`,
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              userId,
+              commandId,
+              decision,
+              ...(decision === 'request_changes'
+                ? { note: 'Please clarify the denominator.' }
+                : {}),
+            }),
+          },
+        )
+      expect((await post('another', choice)).status).not.toBe(200)
+      const first = await post('owner', choice)
+      expect(first.status).toBe(200)
+      const saved: unknown = await first.json()
+      const replay = await post('owner', choice)
+      expect(replay.status).toBe(200)
+      expect(await replay.json()).toEqual(saved)
+      expect(
+        (
+          await post(
+            'owner',
+            choice === 'accept' ? 'request_changes' : 'accept',
+            'conflict',
+          )
+        ).status,
+      ).toBe(409)
+      expect(
+        store
+          .listOutbox('owner', seeded.taskId)
+          .find(message => message.id === review.id)?.deliveryDecision,
+      ).toBe(choice)
+      const task = store.findTask(seeded.taskId, 'owner')
+      if (choice === 'accept') {
+        expect(task).toMatchObject({
+          status: 'completed',
+          ended: { by: 'human' },
+        })
+      } else {
+        expect(task).toMatchObject({
+          status: 'started',
+          statusReason: 'review_rework_queued',
+        })
+        const rework = store
+          .listEvents('owner')
+          .filter(
+            event => event.type === 'user.message' && event.source === 'review',
+          )
+        expect(rework).toHaveLength(1)
+        expect(rework[0]?.payload).toMatchObject({
+          taskId: seeded.taskId,
+          text: 'Please clarify the denominator.',
+        })
+      }
+      expect(
+        store.currentReviewPack(seeded.taskId, 'owner', goal.revision)?.id,
+      ).toBe(pack.id)
+    },
+  )
+
   it('cancels a pending Approval when a newer Goal revision supersedes its Run', () => {
     const store = new PegasStore(':memory:')
     const seeded = seedRun(store)

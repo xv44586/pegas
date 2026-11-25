@@ -689,10 +689,12 @@ export function ConversationPage({
     const messageReview = message.role === 'pegas' ? message.review : undefined
     const workEntry =
       workEntryChannel &&
-      (message.lane === 'say' || (message.lane === 'work' && !messageReview))
-        ? { channel: workEntryChannel, label: '查看工作详情' }
-        : workEntryChannel && message.lane === 'work' && messageReview
-          ? { channel: workEntryChannel, label: '审查交付' }
+      messageReview &&
+      (message.lane === 'work' || message.resolved)
+        ? { channel: workEntryChannel, label: '审查交付' }
+        : workEntryChannel &&
+            (message.lane === 'say' || message.lane === 'work')
+          ? { channel: workEntryChannel, label: '查看工作详情' }
           : undefined
     const quote =
       message.source && workEntryChannel?.status !== 'cancelled'
