@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import type { AddressInfo } from 'node:net'
 import { describe, expect, it } from 'vitest'
 import { createControlPlane } from '../src/control-plane/server.js'
@@ -231,6 +235,224 @@ describe('OBS-001 message trace', () => {
     } finally {
       await new Promise<void>(resolve => server.close(() => resolve()))
       store.close()
+    }
+  })
+})
+
+describe('OBS-001 review regressions', () => {
+  it('anchors a single retry to its own Run after a failed two-message batch', async () => {
+    const store = new PegasStore(':memory:')
+    try {
+      const first = enqueue(store, '先核对第一张表')
+      const second = enqueue(store, '再核对第二张表')
+      const failingHandler = {
+        handle: () => Promise.reject(new Error('fixture route failure')),
+      }
+      for (let attempt = 0; attempt < 5; attempt += 1)
+        await processNextEvent(store, failingHandler, 'worker', undefined, {
+          collectWindowMs: 12,
+        })
+      expect(store.messageTrace(second.id, 'owner')?.rootEventId).toBe(first.id)
+      expect(store.retryEvent(second.id, 'owner').status).toBe('pending')
+      await processNextEvent(
+        store,
+        new RoutingEventHandler(new RuleBasedTaskRouter(), 'echo'),
+        'worker',
+      )
+      const run = store.listRunsForUser('owner')[0]
+      expect(run?.originEventId).toBe(second.id)
+      expect(store.messageTrace(second.id, 'owner')).toMatchObject({
+        rootEventId: second.id,
+        decision: { kind: 'create_task' },
+        runs: [{ id: run?.id }],
+      })
+      expect(
+        store.messageTrace(first.id, 'owner')?.events.map(event => event.id),
+      ).toEqual([first.id])
+    } finally {
+      store.close()
+    }
+  })
+
+  it('links queued updates and every running correction to the affected Run and its successor', async () => {
+    const store = new PegasStore(':memory:')
+    const handler = new RoutingEventHandler(new RuleBasedTaskRouter(), 'echo')
+    try {
+      const original = enqueue(store, '整理季度数据')
+      await processNextEvent(store, handler, 'worker')
+      const originalRun = store.listRunsForUser('owner')[0]
+      if (!originalRun) throw new Error('Missing original Run')
+      const update = (text: string, intent?: 'steer') =>
+        store.enqueueEvent({
+          userId: 'owner',
+          type: 'user.message',
+          source: 'web',
+          authenticatedActor: 'human',
+          payload: {
+            text,
+            taskId: originalRun.taskId,
+            ...(intent ? { intent } : {}),
+          },
+        }).event
+
+      const queuedContinuation = update('范围补充：只看已结账数据')
+      await processNextEvent(store, handler, 'worker')
+      const queuedSteer = update('改用季度口径', 'steer')
+      await processNextEvent(store, handler, 'worker')
+      const claimed = store.claimNextRun('worker')
+      expect(claimed?.run.input).toContain('改用季度口径')
+      expect(claimed?.run.input).toContain('只看已结账数据')
+      for (const event of [queuedContinuation, queuedSteer])
+        expect(
+          store.messageTrace(event.id, 'owner')?.runs.map(run => run.id),
+        ).toEqual([originalRun.id])
+
+      const firstSteer = update('加入分区域汇总', 'steer')
+      await processNextEvent(store, handler, 'worker')
+      const secondSteer = update('增加总计', 'steer')
+      await processNextEvent(store, handler, 'worker')
+      const successor = store.supersedeRunForSteering(originalRun.id, 'worker')
+      expect(successor.input).toContain('加入分区域汇总')
+      expect(successor.input).toContain('增加总计')
+      for (const event of [
+        original,
+        queuedContinuation,
+        queuedSteer,
+        firstSteer,
+        secondSteer,
+      ])
+        expect(
+          store.messageTrace(event.id, 'owner')?.runs.map(run => run.id),
+        ).toEqual([originalRun.id, successor.id])
+    } finally {
+      store.close()
+    }
+  })
+
+  it('redacts explicit authentication headers and localized credential values from persisted model call previews', async () => {
+    const store = new PegasStore(':memory:')
+    try {
+      const fields = [
+        'Authorization: Basic sample-basic-value',
+        'Cookie: sid=sample-cookie-value; csrf=sample-csrf-value',
+        '密钥：sample-localized-key',
+      ]
+      const prompt = fields.join('\n')
+      const event = enqueue(store, prompt)
+      const router = new ModelTaskRouter({
+        provider: {
+          name: 'fixture',
+          generateJson: () =>
+            Promise.resolve({
+              kind: 'create_task',
+              title: '验证',
+              goal: '验证',
+              reason: prompt,
+            }),
+        },
+        observeCall: (eventId, call) =>
+          store.recordMessageTraceRouterCall(eventId, call),
+      })
+      await processNextEvent(
+        store,
+        new RoutingEventHandler(router, 'echo'),
+        'worker',
+      )
+      const trace = JSON.stringify(store.messageTrace(event.id, 'owner'))
+      for (const value of [
+        'sample-basic-value',
+        'sample-cookie-value',
+        'sample-csrf-value',
+        'sample-localized-key',
+      ])
+        expect(trace).not.toContain(value)
+      expect(trace).toContain('[已脱敏]')
+    } finally {
+      store.close()
+    }
+  })
+
+  it('upgrades v54 diagnostics by scrubbing stored previews and recovering known steering edges', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'pegas-trace-upgrade-'))
+    const path = join(directory, 'pegas.sqlite')
+    let store: PegasStore | undefined
+    try {
+      store = new PegasStore(path)
+      const handler = new RoutingEventHandler(new RuleBasedTaskRouter(), 'echo')
+      const original = enqueue(store, '整理历史记录')
+      await processNextEvent(store, handler, 'worker')
+      const claim = store.claimNextRun('worker')
+      if (!claim) throw new Error('Missing original Run')
+      const correction = store.enqueueEvent({
+        userId: 'owner',
+        type: 'user.message',
+        source: 'web',
+        authenticatedActor: 'human',
+        payload: {
+          text: '只整理上个月',
+          taskId: claim.run.taskId,
+          intent: 'steer',
+        },
+      }).event
+      await processNextEvent(store, handler, 'worker')
+      store.close()
+      store = undefined
+
+      const database = new DatabaseSync(path)
+      try {
+        database.exec(`
+          DROP TABLE message_trace_run_inputs;
+          DELETE FROM schema_migrations WHERE version = 55;
+        `)
+        const previous = 'Cookie: sid=legacy-fixture-value'
+        database
+          .prepare(
+            'INSERT INTO message_trace_router_calls (event_id, detail_json) VALUES (?, ?)',
+          )
+          .run(
+            original.id,
+            JSON.stringify({
+              component: 'router',
+              model: 'fixture',
+              durationMs: 1,
+              at: original.createdAt,
+              outcome: 'ok',
+              input: {
+                text: previous,
+                characters: previous.length,
+                truncated: false,
+              },
+              output: {
+                text: previous,
+                characters: previous.length,
+                truncated: false,
+              },
+            }),
+          )
+      } finally {
+        database.close()
+      }
+
+      store = new PegasStore(path)
+      expect(
+        store.messageTrace(correction.id, 'owner')?.runs.map(run => run.id),
+      ).toEqual([claim.run.id])
+      const upgraded = store.messageTrace(original.id, 'owner')?.calls[0]
+      expect(upgraded?.input.text).toBe('Cookie: [已脱敏]')
+      expect(upgraded?.output?.text).toBe('Cookie: [已脱敏]')
+      const raw = new DatabaseSync(path, { readOnly: true })
+      try {
+        expect(
+          raw
+            .prepare('SELECT detail_json FROM message_trace_router_calls')
+            .get(),
+        ).toMatchObject({ detail_json: JSON.stringify(upgraded) })
+      } finally {
+        raw.close()
+      }
+    } finally {
+      store?.close()
+      rmSync(directory, { recursive: true, force: true })
     }
   })
 })

@@ -393,9 +393,11 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 ### OBS-001：对话调用链（2026-11-25）
 
 - **用户结果**：原始对话消息和事情 Run 都可打开调用链，按阶段检查入队、输入改写、归类决定与兜底、Run 启动/重试、工具输出、审批与核对、对话投影与浏览器回执。
-- **权威实现**：`src/storage/sqlite-store.ts` 的 owner-scoped 事实投影及 schema v54 增量表，`src/control-plane/server.ts` 的读取和回执端点，`src/router/router.ts`、`src/worker/processor.ts` 的采集点，`web/src/sealed/MessageTraceDetail.tsx` 与 `web/src/sealed/useBrowserResultTrace.ts`。复用 ActivityTimeline 和工具输出档案。
+- **权威实现**：`src/storage/sqlite-store.ts` 的 owner-scoped 事实投影及 schema v54–v55 增量表，`src/control-plane/server.ts` 的读取和回执端点，`src/router/router.ts`、`src/worker/processor.ts` 的采集点，`web/src/sealed/MessageTraceDetail.tsx` 与 `web/src/sealed/useBrowserResultTrace.ts`。复用 ActivityTimeline 和工具输出档案。
 - **证据入口**：`test/message-trace.test.ts` 验证合批/重试、HTTP 鉴权和 owner 隔离、归类回退、回执幂等、策略与工具结果、脱敏。`node scripts/smoke-message-trace.mjs` 用真实浏览器、隔离 Control Plane 和确定性 Executor 验证正常工具下钻及结果刷新延迟。
 - **边界与下一缺口**：模型调用记录只含允许的有界脱敏摘要，浏览器回执不结算领域状态。老数据显示既有事实与已采集阶段。供应商内部请求、隐藏提示词和模型私有推理保持原边界，后续可在行为评测中使用调用链定位失败阶段。
+
+- **审核修复（2026-11-25）**：有效领取刷新合批归属，显式和隐式插话与受影响 Run 原子关联，复用 successor/重试/审批恢复边；v55 回填可证明的旧边并清理显式凭证摘要。增加失败合批重试、多插话、v54 升级、敏感摘要和 2,001 条结果重复回执的回归。历史上未持久记录的排队纠正保留既有事实。
 
 ### NOTIFY-005：Outbox 投递策略（2026-11-21）
 

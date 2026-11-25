@@ -372,6 +372,18 @@
 - Enforcement：安全/数据泄漏类确认一次即晋升。`redactDerivedMemoryEvidence` 已改为复用 `DeterministicPrivacyMasker` 并叠加 AKIA/JWT/连接串/自然语言 secret 规则；对抗样本回归进入完整门禁。注入侧已覆盖：`PrivacyMaskingExecutor.execute` 对 memories 与 work rules 同样先 mask（`test/privacy-boundaries.test.ts` 回归）。后续新增出网通道时按本规则复用 masker 并补对抗样本。
 - Owner / next action：已关闭（2026-11-25 P2 第二轮）。后续新增注入字段时同步扩展 `PrivacyMaskingExecutor` 与 privacy-boundaries 回归。
 
+### LESSON-20261125-02：诊断摘要必须遮盖显式凭证载体
+
+- Rule：把用户文本或模型响应持久化为诊断预览时，复用既有隐私 masker，并在写入前遮盖 Authorization、Cookie 和本地化凭证字段。升级时同步处理旧诊断摘要。
+- Why：OBS-001 的独立审核发现 Basic Auth、Cookie 和中文密钥值会进入持久化模型摘要。
+- Feature：OBS-001
+- Evidence：`test/message-trace.test.ts` 覆盖真实归类入库后的摘要及 v54 到 v55 的持久化清理。
+- Seen：1（2026-11-25）
+- Severity：security
+- Status：Promoted
+- Enforcement：凭证样本和旧库升级回归纳入 `pnpm check`。
+- Owner / next action：OBS-001。新增诊断字段时沿用受限预览与测试。
+
 <!--
 ### LESSON-YYYYMMDD-NN：简短标题
 

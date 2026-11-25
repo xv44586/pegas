@@ -74,6 +74,8 @@ export class ApiError extends Error {
 export class PegasApi {
   readonly #userId: string
   #token: string
+  // A result stays in every snapshot for this browser session. Forgetting an
+  // acknowledged phase turns it back into a new receipt at the next poll.
   readonly #traceReceipts = new Set<string>()
   #initialTraceResults: Set<string> | undefined
 
@@ -126,12 +128,6 @@ export class PegasApi {
         })
       } catch {
         for (const [key] of batch) this.#traceReceipts.delete(key)
-      }
-    }
-    if (this.#traceReceipts.size > 2_000) {
-      for (const key of this.#traceReceipts) {
-        this.#traceReceipts.delete(key)
-        if (this.#traceReceipts.size <= 1_500) break
       }
     }
   }

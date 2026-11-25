@@ -81,7 +81,11 @@ import type {
   MessageTrace,
   RouterTraceCall,
 } from '../observability/message-trace.js'
-import { traceFields, tracePreview } from '../observability/trace-preview.js'
+import {
+  redactExplicitTraceCredentials,
+  traceFields,
+  tracePreview,
+} from '../observability/trace-preview.js'
 import type {
   DerivedMemoryCurationJob,
   DerivedMemoryCorrectionJob,
@@ -1205,6 +1209,30 @@ CREATE INDEX message_trace_outbox_by_run
 ON outbox_messages (user_id, json_extract(payload_json, '$.runId'));
 CREATE INDEX message_trace_outbox_by_event
 ON outbox_messages (user_id, json_extract(payload_json, '$.eventId'));
+`
+
+const migration55 = `
+CREATE TABLE message_trace_run_inputs (
+  event_id TEXT PRIMARY KEY REFERENCES inbox_events(id),
+  run_id TEXT NOT NULL REFERENCES runs(id)
+);
+
+-- Recover only relations still present in durable steering facts.
+INSERT OR IGNORE INTO message_trace_run_inputs (event_id, run_id)
+SELECT event.id, run.id FROM runs AS run
+JOIN tasks AS task ON task.id = run.task_id
+JOIN json_each(run.steering_json) AS directive ON directive.type = 'object'
+JOIN inbox_events AS event
+  ON event.id = json_extract(directive.value, '$.eventId') AND event.user_id = task.user_id
+WHERE event.type = 'user.message';
+
+INSERT OR IGNORE INTO message_trace_run_inputs (event_id, run_id)
+SELECT event.id, parent.id FROM runs AS successor
+JOIN runs AS parent ON parent.id = successor.steering_of_run_id
+JOIN tasks AS task ON task.id = parent.task_id
+JOIN inbox_events AS event
+  ON event.id = successor.origin_event_id AND event.user_id = task.user_id
+WHERE event.type = 'user.message';
 `
 
 const migration39 = `
@@ -3402,6 +3430,7 @@ export class PegasStore {
     this.#migrate(52, migration52)
     this.#migrate(53, migration53)
     this.#migrate(54, migration54)
+    this.#migrate(55, migration55, () => this.#redactLegacyMessageTraceCalls())
   }
 
   #backfillWorkerIconIds(): void {
@@ -3475,7 +3504,7 @@ export class PegasStore {
     }
   }
 
-  #migrate(version: number, sql: string): void {
+  #migrate(version: number, sql: string, updateData?: () => void): void {
     this.#database.exec('BEGIN IMMEDIATE')
     try {
       const applied = this.#database
@@ -3486,6 +3515,7 @@ export class PegasStore {
         return
       }
       this.#database.exec(sql)
+      updateData?.()
       this.#database
         .prepare(
           'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
@@ -8256,6 +8286,7 @@ export class PegasStore {
         )
         .run(JSON.stringify(directives), now, activeRun.id)
     }
+    this.#recordMessageTraceRunInput(event.id, activeRun.id)
     this.#recordControlDecisionInTransaction(event, decision, now)
     return this.#taskById(task.id)
   }
@@ -8750,6 +8781,7 @@ export class PegasStore {
               )
               .run(JSON.stringify(directives), now, activeRun.id)
           }
+          this.#recordMessageTraceRunInput(event.id, activeRun.id)
           this.#database
             .prepare(
               `INSERT INTO task_events (event_id, task_id, relation, created_at)
@@ -9210,17 +9242,54 @@ export class PegasStore {
   recordMessageTraceBatch(
     rootEventId: string,
     eventIds: readonly string[],
+    workerId: string,
   ): void {
     this.#database
       .prepare(
         `INSERT INTO message_trace_batch_members (event_id, root_event_id)
        SELECT member.id, root.id FROM inbox_events AS root
        JOIN inbox_events AS member ON member.user_id = root.user_id
-       WHERE root.id = ? AND member.id IN (SELECT value FROM json_each(?))
-         AND member.id != root.id
-       ON CONFLICT (event_id) DO NOTHING`,
+       WHERE root.id = ? AND root.status = 'processing' AND root.claimed_by = ?
+         AND member.status = 'processing' AND member.claimed_by = root.claimed_by
+         AND member.id IN (SELECT value FROM json_each(?))
+       ON CONFLICT (event_id) DO UPDATE SET root_event_id = excluded.root_event_id
+       WHERE message_trace_batch_members.root_event_id != excluded.root_event_id`,
       )
-      .run(rootEventId, JSON.stringify(eventIds))
+      .run(rootEventId, workerId, JSON.stringify(eventIds))
+  }
+
+  #recordMessageTraceRunInput(eventId: string, runId: string): void {
+    this.#database
+      .prepare(
+        `INSERT INTO message_trace_run_inputs (event_id, run_id)
+       VALUES (?, ?) ON CONFLICT (event_id) DO NOTHING`,
+      )
+      .run(eventId, runId)
+  }
+
+  #redactLegacyMessageTraceCalls(): void {
+    const page = this.#database.prepare(
+      `SELECT id, detail_json FROM message_trace_router_calls
+       WHERE id > ? ORDER BY id LIMIT 100`,
+    )
+    const update = this.#database.prepare(
+      'UPDATE message_trace_router_calls SET detail_json = ? WHERE id = ?',
+    )
+    let lastId = 0
+    for (;;) {
+      const rows = page.all(lastId) as { id: number; detail_json: string }[]
+      for (const { id, detail_json } of rows) {
+        const call = JSON.parse(detail_json) as RouterTraceCall
+        for (const preview of [call.input, call.output]) {
+          if (preview?.text !== undefined)
+            preview.text = redactExplicitTraceCredentials(preview.text)
+        }
+        const redacted = JSON.stringify(call)
+        if (redacted !== detail_json) update.run(redacted, id)
+        lastId = id
+      }
+      if (rows.length < 100) return
+    }
   }
 
   recordMessageTraceRouterCall(
@@ -9295,7 +9364,9 @@ export class PegasStore {
   messageTrace(eventId: string, userId: string): MessageTrace | undefined {
     const source = this.#database
       .prepare(
-        `SELECT COALESCE(member.root_event_id, event.id) AS root_id
+        `SELECT CASE WHEN EXISTS (
+         SELECT 1 FROM routing_decisions WHERE event_id = event.id
+       ) THEN event.id ELSE COALESCE(member.root_event_id, event.id) END AS root_id
        FROM inbox_events AS event
        LEFT JOIN message_trace_batch_members AS member ON member.event_id = event.id
        WHERE event.id = ? AND event.user_id = ? AND event.type = 'user.message'`,
@@ -9350,7 +9421,11 @@ export class PegasStore {
         `WITH RECURSIVE related(id) AS (
          SELECT id FROM runs WHERE origin_event_id = ?
          UNION
+         SELECT run_id FROM message_trace_run_inputs WHERE event_id = ?
+         UNION
          SELECT run.id FROM related JOIN runs AS run ON run.retry_of_run_id = related.id
+         UNION
+         SELECT run.id FROM related JOIN runs AS run ON run.steering_of_run_id = related.id
          UNION
          SELECT action.resume_run_id FROM related JOIN actions AS action ON action.run_id = related.id
          WHERE action.resume_run_id IS NOT NULL
@@ -9359,7 +9434,7 @@ export class PegasStore {
        JOIN tasks ON tasks.id = run.task_id AND tasks.user_id = ?
        ORDER BY run.created_at, run.rowid LIMIT 51`,
       )
-      .all(root, userId) as unknown as RunRow[]
+      .all(root, root, userId) as unknown as RunRow[]
     const runs = runRows
       .slice(0, 50)
       .map(toRun)

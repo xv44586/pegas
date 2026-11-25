@@ -675,11 +675,12 @@ export async function processNextEvent(
     options.collectWindowMs ?? 0,
   )
   const routedEvent = batch.merged ?? event
-  if (batch.merged) {
+  if (event.type === 'user.message') {
     try {
       store.recordMessageTraceBatch(
         event.id,
         batch.events.map(member => member.id),
+        workerId,
       )
     } catch {
       telemetry?.logger?.warn('event.trace_batch_unavailable', {
