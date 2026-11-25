@@ -2,6 +2,7 @@ import { createHmac } from 'node:crypto'
 import { resolve } from 'node:path'
 
 import type { MemoryCategory, MemoryContextEntry } from './memory.js'
+import { passesRelevanceGate } from './relevance.js'
 
 export type DerivedMemoryType = 'world' | 'experience' | 'observation'
 
@@ -79,6 +80,8 @@ export interface DerivedMemoryRecallAudit {
     | 'budget'
     | 'empty'
     | 'local_tombstone'
+    | 'low_relevance'
+    | 'superseded'
   score?: number
 }
 
@@ -250,6 +253,11 @@ export class PegasDerivedMemoryService
       if (memory.state === 'invalidated') reason = 'invalidated'
       else if (!memory.tags.some(tag => allowedTags.includes(tag)))
         reason = 'context_mismatch'
+      else if (
+        this.#providerName === 'local' &&
+        !passesRelevanceGate(request.query, memory.text)
+      )
+        reason = 'low_relevance'
       else if (candidates.length >= this.#maximumResults)
         reason = 'result_limit'
       if (reason) {

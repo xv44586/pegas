@@ -984,7 +984,42 @@ export async function executeClaimedRun(
             })),
           ],
         )
-        derivedMemories = activeEntries
+        // M4 salience: injected local facts count as used, feeding the
+        // ranking and the L0 digest on the next refresh.
+        store.recordLocalDerivedMemoryUse(
+          claimed.task.userId,
+          activeEntries
+            .filter(entry => entry.provider === 'local')
+            .map(entry => entry.id),
+        )
+        // M4 L0: one bounded project digest per work Run, ahead of the
+        // individually recalled facts. Constant-size even for projects
+        // with thousands of facts.
+        const summary = project
+          ? store.memoryProjectSummary(
+              claimed.task.userId,
+              project.canonicalKey,
+            )
+          : undefined
+        const summaryEntry =
+          summary && project
+            ? {
+                id: `project-summary:${project.canonicalKey}`,
+                scope: 'worker' as const,
+                taskId: claimed.task.id,
+                category: 'fact' as const,
+                content: `项目「${summary.displayName}」已沉淀 ${String(summary.factCount)} 条经验，要点：\n${summary.text}`,
+                source: {
+                  kind: 'artifact' as const,
+                  id: 'pegas:project-summary',
+                },
+                origin: 'derived' as const,
+                provider: 'local' as const,
+              }
+            : undefined
+        derivedMemories = summaryEntry
+          ? [summaryEntry, ...activeEntries]
+          : activeEntries
       } catch (error) {
         telemetry?.logger?.warn('memory.recall_failed_open', {
           runId: claimed.run.id,

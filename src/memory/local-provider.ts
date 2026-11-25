@@ -131,10 +131,19 @@ export class LocalDerivedMemoryProvider implements DerivedMemoryProvider {
         ...(projectKey ? { projectKey } : {}),
       }
       if (this.#store.isDerivedMemorySuppressed(userId, memory)) continue
+      // M4: a lexically identical fact in the same scope refreshes the
+      // existing row instead of accumulating duplicates.
+      if (
+        this.#store.mergeNearDuplicateLocalMemory(userId, memory, projectKey)
+      ) {
+        continue
+      }
       this.#store.insertLocalDerivedMemory(userId, memory, projectKey)
       written += 1
     }
     this.#store.completeLocalMemoryOperation(userId, input.operationId, written)
+    if (input.projectKey)
+      this.#store.refreshMemoryProjectSummary(userId, input.projectKey)
     return input.operationId
   }
 
@@ -200,7 +209,10 @@ export class LocalDerivedMemoryProvider implements DerivedMemoryProvider {
   invalidate(bankId: string, memoryId: string, reason: string): Promise<void> {
     const userId = this.#ownerForBank(bankId)
     if (userId) {
+      const memory = this.#store.localDerivedMemoryById(userId, memoryId)
       this.#store.invalidateLocalDerivedMemory(userId, memoryId, reason)
+      if (memory?.projectKey)
+        this.#store.refreshMemoryProjectSummary(userId, memory.projectKey)
     }
     return Promise.resolve()
   }
