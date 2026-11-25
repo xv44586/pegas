@@ -14,6 +14,7 @@ export class HindsightProvider implements DerivedMemoryProvider {
   readonly #timeoutMs: number
   readonly #fetch: Fetch
   readonly #minimumScore: number
+  readonly #shutdownSignal: AbortSignal | undefined
 
   constructor(options: {
     baseUrl: string
@@ -21,6 +22,7 @@ export class HindsightProvider implements DerivedMemoryProvider {
     timeoutMs?: number
     minimumScore?: number
     fetch?: Fetch
+    shutdownSignal?: AbortSignal
   }) {
     const baseUrl = options.baseUrl.trim().replace(/\/+$/, '')
     if (!/^https?:\/\//.test(baseUrl))
@@ -30,6 +32,7 @@ export class HindsightProvider implements DerivedMemoryProvider {
     this.#timeoutMs = options.timeoutMs ?? 5_000
     this.#fetch = options.fetch ?? fetch
     this.#minimumScore = options.minimumScore ?? 0.2
+    this.#shutdownSignal = options.shutdownSignal
   }
 
   async retain(
@@ -159,12 +162,21 @@ export class HindsightProvider implements DerivedMemoryProvider {
   }
 
   async #json(path: string, init: RequestInit = {}): Promise<unknown> {
+    if (this.#shutdownSignal?.aborted)
+      throw new Error('Hindsight request cancelled during shutdown')
     const controller = new AbortController()
     const timeout = setTimeout(
       () => controller.abort(new Error('Hindsight request timed out')),
       this.#timeoutMs,
     )
     timeout.unref()
+    const abortForShutdown = () =>
+      controller.abort(new Error('Hindsight request cancelled during shutdown'))
+    if (this.#shutdownSignal?.aborted) abortForShutdown()
+    else
+      this.#shutdownSignal?.addEventListener('abort', abortForShutdown, {
+        once: true,
+      })
     try {
       const headers = new Headers(init.headers)
       headers.set('accept', 'application/json')
@@ -184,6 +196,7 @@ export class HindsightProvider implements DerivedMemoryProvider {
       return await response.json()
     } finally {
       clearTimeout(timeout)
+      this.#shutdownSignal?.removeEventListener('abort', abortForShutdown)
     }
   }
 }

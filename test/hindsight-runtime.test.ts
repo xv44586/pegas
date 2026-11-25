@@ -51,6 +51,43 @@ describe('Hindsight supervised runtime', () => {
     expect(plan.hindsightArgs.join(' ')).not.toContain('tenant-api-secret')
   })
 
+  it('supervises both containers with injection-safe health checks', () => {
+    const plan = hindsightRuntimePlan({
+      PEGAS_HINDSIGHT_DB_PASSWORD: 'database-secret',
+      PEGAS_HINDSIGHT_API_KEY: 'tenant-api-secret',
+      PEGAS_HINDSIGHT_LLM_BASE_URL: 'http://host.docker.internal:3425/v1',
+      PEGAS_HINDSIGHT_LLM_MODEL: 'discovery-api/deepseek-v4.1-flash-1017',
+    })
+    const databaseHealthIndex = plan.databaseArgs.indexOf('--health-cmd')
+    expect(databaseHealthIndex).toBeGreaterThan(-1)
+    const databaseHealth = plan.databaseArgs[databaseHealthIndex + 1] ?? ''
+    expect(databaseHealth).toBe(
+      "'pg_isready' '-U' 'hindsight' '-d' 'hindsight'",
+    )
+    const apiHealthIndex = plan.hindsightArgs.indexOf('--health-cmd')
+    expect(apiHealthIndex).toBeGreaterThan(-1)
+    const apiHealth = plan.hindsightArgs[apiHealthIndex + 1] ?? ''
+    expect(apiHealth).toContain('/app/api/.venv/bin/python3')
+    expect(apiHealth).toContain('http://127.0.0.1:8888/health')
+    expect(plan.hindsightArgs).toEqual(
+      expect.arrayContaining(['--health-start-period', '30s']),
+    )
+  })
+
+  it('quotes health check identifiers so they cannot inject shell syntax', () => {
+    const plan = hindsightRuntimePlan({
+      PEGAS_HINDSIGHT_DB_PASSWORD: 'database-secret',
+      PEGAS_HINDSIGHT_API_KEY: 'tenant-api-secret',
+      PEGAS_HINDSIGHT_DB_USER: "hindsight; rm -rf /; echo '",
+      PEGAS_HINDSIGHT_LLM_BASE_URL: 'http://host.docker.internal:3425/v1',
+      PEGAS_HINDSIGHT_LLM_MODEL: 'discovery-api/deepseek-v4.1-flash-1017',
+    })
+    const databaseHealth =
+      plan.databaseArgs[plan.databaseArgs.indexOf('--health-cmd') + 1] ?? ''
+    expect(databaseHealth).toContain("'hindsight; rm -rf /; echo '\\'''")
+    expect(databaseHealth.startsWith("'pg_isready'")).toBe(true)
+  })
+
   it('refuses to start an unauthenticated Hindsight API', () => {
     expect(() =>
       hindsightRuntimePlan({

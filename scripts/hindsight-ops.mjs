@@ -104,7 +104,12 @@ export function hindsightRuntimePlan(environment = process.env) {
     '--mount',
     `type=volume,source=${volume},target=/var/lib/postgresql/18/docker`,
     '--health-cmd',
-    `pg_isready -U ${databaseUser} -d ${databaseName}`,
+    // The Docker CLI always wraps --health-cmd in CMD-SHELL, so a JSON array
+    // would be executed as a literal shell word. Quote each argument instead
+    // so user-supplied identifiers can never inject shell syntax.
+    ['pg_isready', '-U', databaseUser, '-d', databaseName]
+      .map(shellQuote)
+      .join(' '),
     '--health-interval',
     '2s',
     '--health-timeout',
@@ -129,6 +134,22 @@ export function hindsightRuntimePlan(environment = process.env) {
     ...Object.keys(hindsightEnvironment).flatMap(key => ['--env', key]),
     '--mount',
     `type=bind,source=${backupDirectory},target=/backups`,
+    '--health-cmd',
+    [
+      '/app/api/.venv/bin/python3',
+      '-c',
+      "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8888/health', timeout=3)",
+    ]
+      .map(shellQuote)
+      .join(' '),
+    '--health-interval',
+    '10s',
+    '--health-timeout',
+    '5s',
+    '--health-retries',
+    '6',
+    '--health-start-period',
+    '30s',
     hindsightImage,
   ]
   return {
@@ -342,6 +363,14 @@ function runDocker(args, options = {}) {
         rejectRun(new Error(`docker ${args[0] ?? ''} exited ${String(code)}`))
     })
   })
+}
+
+/**
+ * POSIX single-quote escaping for CMD-SHELL health check arguments.
+ * @param {unknown} value
+ */
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", `'\\''`)}'`
 }
 
 /**

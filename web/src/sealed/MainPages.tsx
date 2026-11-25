@@ -36,6 +36,7 @@ import type {
   ChannelSearchSort,
   DshModelCatalogItem,
   DerivedMemoryRecord,
+  DerivedMemorySyncState,
   MemoryCategory,
   MemoryDraft,
   MemoryRecord,
@@ -3276,6 +3277,7 @@ export function MemoryPage({
   channels,
   error,
   derivedMemories,
+  derivedMemorySync,
   memories,
   onCreate,
   onDelete,
@@ -3289,6 +3291,7 @@ export function MemoryPage({
   channels: WorkChannel[]
   error: string
   derivedMemories?: DerivedMemoryRecord[]
+  derivedMemorySync?: DerivedMemorySyncState | null
   memories?: MemoryRecord[]
   onCreate: (draft: MemoryDraft) => Promise<void>
   onDelete: (memory: MemoryRecord) => Promise<void>
@@ -3406,6 +3409,14 @@ export function MemoryPage({
           role="alert"
         >
           {actionError}
+        </div>
+      )}
+      {derivedMemorySync?.status === 'failed' && (
+        <div
+          className="mb-4 flex items-center gap-2.5 rounded-card border border-line bg-surface px-3.5 py-2.5 text-[13px] text-ink-2"
+          role="status"
+        >
+          自动记忆同步暂时失败，当前展示的是最近一次成功同步的内容。后台会继续重试。
         </div>
       )}
       {(!memories || !derivedMemories) && !error && (

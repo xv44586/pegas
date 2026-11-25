@@ -217,6 +217,51 @@ describe('derived memory Run integration', () => {
     store.close()
   })
 
+  it('clears a stale retry error once the operation settles normally', async () => {
+    const clock = new StepClock()
+    const store = new PegasStore(':memory:', {
+      derivedMemoryEnabled: true,
+      clock,
+    })
+    const claimed = createClaimedRun(store)
+    store.completeRun(claimed.run.id, 'worker', {
+      executorRef: 'session',
+      output: 'done',
+    })
+    const operationStatus = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('transient network blip'))
+      .mockResolvedValue({ status: 'processing' })
+    const retain: DerivedMemoryRetainService = {
+      submit: vi.fn().mockResolvedValue('operation-1'),
+      operationStatus,
+    }
+    await processNextDerivedMemoryJob(store, retain, 'memory-worker')
+    const submitted = store.claimNextDerivedMemoryJob('memory-worker', 30_000)
+    if (!submitted) throw new Error('Expected submitted job')
+    store.markDerivedMemoryJobSubmitted(
+      submitted.id,
+      'memory-worker',
+      'operation-1',
+    )
+    // First poll fails and records a real error.
+    await expect(
+      processNextDerivedMemoryJob(store, retain, 'memory-worker'),
+    ).resolves.toBe(true)
+    expect(
+      store.derivedMemoryJobDiagnostics(submitted.id)?.lastError,
+    ).toContain('transient network blip')
+    // The next healthy pending poll must clear the stale error instead of
+    // surfacing "processing" as a failure forever.
+    await expect(
+      processNextDerivedMemoryJob(store, retain, 'memory-worker'),
+    ).resolves.toBe(true)
+    expect(
+      store.derivedMemoryJobDiagnostics(submitted.id)?.lastError,
+    ).toBeUndefined()
+    store.close()
+  })
+
   it('parks an operation that never settles instead of hot-looping', async () => {
     const clock = new StepClock()
     const store = new PegasStore(':memory:', {
@@ -282,6 +327,52 @@ describe('derived memory Run integration', () => {
     ).resolves.toBe(false)
     expect(submitCorrection).toHaveBeenCalledTimes(1)
     expect(correctionStatus).toHaveBeenCalledTimes(1)
+    store.close()
+  })
+
+  it('clears a stale correction retry error on the next healthy poll', async () => {
+    const clock = new StepClock()
+    const store = new PegasStore(':memory:', {
+      derivedMemoryEnabled: true,
+      clock,
+    })
+    const claimed = createClaimedRun(store)
+    store.recordDerivedMemoryRecall(claimed.run.id, 'owner', [
+      {
+        id: 'memory-1',
+        text: 'Use npm.',
+        type: 'world',
+        tags: ['pegas:global'],
+        metadata: {},
+      },
+    ])
+    const correction = store.correctDerivedMemory('owner', 'memory-1', {
+      commandId: 'correction-command',
+      correction: 'Use pnpm.',
+    })
+    const correctionStatus = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('transient network blip'))
+      .mockResolvedValue({ status: 'processing' })
+    const service: DerivedMemoryCorrectionService = {
+      submitCorrection: vi.fn().mockResolvedValue('operation-1'),
+      correctionStatus,
+    }
+    await expect(
+      processNextDerivedMemoryCorrectionJob(store, service, 'memory-worker'),
+    ).resolves.toBe(true)
+    await expect(
+      processNextDerivedMemoryCorrectionJob(store, service, 'memory-worker'),
+    ).resolves.toBe(true)
+    expect(
+      store.derivedMemoryJobDiagnostics(correction.correctionJobId)?.lastError,
+    ).toContain('transient network blip')
+    await expect(
+      processNextDerivedMemoryCorrectionJob(store, service, 'memory-worker'),
+    ).resolves.toBe(true)
+    expect(
+      store.derivedMemoryJobDiagnostics(correction.correctionJobId)?.lastError,
+    ).toBeUndefined()
     store.close()
   })
 

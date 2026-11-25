@@ -676,6 +676,13 @@ export interface DerivedMemoryRecord {
   state?: 'valid' | 'invalidated'
 }
 
+export interface DerivedMemorySyncState {
+  status: 'healthy' | 'failed'
+  memoryCount: number
+  lastSyncedAt?: string
+  lastError?: string
+}
+
 export interface WorkRuleDraft {
   title: string
   content: string

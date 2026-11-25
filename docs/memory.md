@@ -59,7 +59,7 @@ POST /v1/memories/:memoryId/delete
 - 创建携带 `userId`、`commandId` 和完整 `memory`。同 command 同 payload 重放返回冻结响应，不同 payload 返回 `409 memory_command_conflict`。
 - 更新携带 `expectedRevision`，过期返回 `409 memory_conflict`。
 - 删除携带 `expectedRevision`，永久移除记忆行并清除历史 command 冻结响应中的正文，只保留删除凭据用于幂等重放。
-- 不存在和跨 owner 一律 `404 not_found`。作用域 Task 或来源对象不可用时返回 `409 memory_target_unavailable` 或 `memory_source_unavailable`。
+- 不存在和跨 owner 一律 `404 not_found`（派生记忆纠正入口同样适用）。作用域 Task 或来源对象不可用时返回 `409 memory_target_unavailable` 或 `memory_source_unavailable`。
 - 每 owner 最多 500 条活跃显式记忆，删除后释放配额。
 
 ### 装载与信任边界
@@ -94,7 +94,7 @@ POST /v1/memories/:memoryId/delete
 第一版只从三类可追溯事件生成 durable job：
 
 1. **Run success**：只在 Run 真正进入 `completed` 终态时入队——普通 Run 直接完成，或 goal-contract Run 的 Worker Report 通过全部必需证据审查。处于 `waiting`（待证据/待审批/待澄清）的 Run 不产生成功经验；后续审查判 failed 时入队对应 `run_failure`。保存已验证结果、关键决策和确实有效的方法。
-2. **Run failure**：只保存证据已经支持的失败原因和恢复方式。模型猜测、瞬时错误和未核实归因不能成为稳定经验。
+2. **Run failure**：只保存证据已经支持的失败原因和恢复方式。模型猜测和未核实归因不能成为稳定经验。基础设施形态的失败（provider 凭证/权限终态错误、网络不可达、超时、上游 5xx）在入队处直接排除，不会把一次瞬时故障固化成可复用教训；观察到的任务级失败（如命令退出码、断言失败）仍正常入队。
 3. **用户明确纠正**：记忆页提交 dedicated correction command；Pegas 在同一事务内落旧内容 tombstone、移除投影并创建 durable supersede job。Router 不参与判断。用户主动要求保存一个新事实时继续使用显式 Memory 创建入口。
 
 默认后台自动处理，不要求用户逐条批准。弱单次推断只保留在事件历史，不直接形成稳定规则。只有显式规则互相冲突并阻塞当前任务、敏感内容无法安全保存，或 scope 歧义会显著影响后续行为时才询问用户。
@@ -103,17 +103,17 @@ POST /v1/memories/:memoryId/delete
 
 ### Bank、来源和幂等映射
 
-- 每个 owner 使用独立 Hindsight bank：`pegas-owner-<opaque-owner-hmac>`。HMAC 使用独立服务端密钥派生，不把原始 owner ID 发送给 Provider。
+- 每个 owner 使用独立 Hindsight bank：`pegas-owner-<opaque-owner-hmac>`。HMAC 使用独立服务端密钥派生（至少 32 字符，config 与 service 双层校验），不把原始 owner ID 发送给 Provider。更换密钥会使既有 bank 映射失效，需按恢复流程重建。
 - Run 派生记录带 `task_id`、`run_id`、`source_kind` 和 HMAC 后的 `context_key`；纠正记录带 `correction_of`。用户界面只展示必要来源，不暴露内部 bank ID。
-- 全局经验标记 `scope:global`。局部经验使用服务端从 execution snapshot 得到的规范化、HMAC 后 `execution-context` key。第一版明确以规范化 workspace 根路径作为输入，不发送原始路径。不同 worktree 保持不同 context，跨 worktree 聚合押后到稳定 Project/Repository 领域对象建立以后。context key 缺失时不能把局部经验降级为全局。
+- 全局经验标记 `pegas:global` tag：已验证的 Run success 同时携带 global 与 execution-context tag，并附该 owner 当前启用的工作规则作为上下文；Run failure 只保留 execution-context tag，失败教训不自动升级为全局。局部经验使用服务端从 execution snapshot 得到的规范化、HMAC 后 `execution-context` key。第一版明确以规范化 workspace 根路径作为输入，不发送原始路径。不同 worktree 保持不同 context，跨 worktree 聚合押后到稳定 Project/Repository 领域对象建立以后。context key 缺失时不能把局部经验降级为全局。
 - `document_id` 使用稳定的 `pegas:run:<runId>` 或 `pegas:correction:<jobId>`。Run/kind 唯一约束和 correction command fingerprint 在首次事务后固定 job/operation ID；相同事件或命令重放不能生成重复记录。
 
 ### 受控召回
 
 - 每个 work Run 在实际 Executor prompt 构造前至多自动召回一次。conversation/chat lane 和 Router 不接 Hindsight。
-- query 由 Pegas 服务端根据 Task 标题、当前用户输入、Worker 配置、规范化 execution context 和最近失败/等待原因构造。不能让 Provider 自行读取整个 Task 数据库。
+- query 由 Pegas 服务端根据 Task 标题、Task goal、当前 Run 输入、该 owner 启用的工作规则与自定义指令拼接构造（上限 8,000 字符）；execution context 以 HMAC 后的 tag 过滤而非进入 query 文本。不能让 Provider 自行读取整个 Task 数据库。
 - 只查询当前 owner bank。允许 `scope:global` 和当前 execution-context，局部 context 不匹配的结果必须丢弃。
-- Hindsight 返回最多 8–12 条候选。Pegas 合并显式 Memory、去重并裁剪后，派生记忆注入预算为 1,200–2,000 tokens。显式 Memory 优先，派生记录不足时不填充无关内容。
+- Pegas 本地最多选择 10 条候选（默认预算 1,600 tokens）。token 估算对 ASCII 按约 4 字符/token、对 CJK 等非 ASCII 字符按 1 字符/token 计数，中文内容不再被低估四倍；每条另计 50 tokens 元数据开销。显式 Memory 优先，派生记录不足时不填充无关内容。
 - 记录“检索到、过滤掉、注入”三个阶段的 ID 和原因，不能把“已检索”误报为“实际使用”。首版不要求模型逐条引用，但必须为后续效果评估保留注入证据。
 - 派生内容与显式 Memory 一样是不可信数据，不能授予权限、恢复 cancelled Task、表达 Approval、扩大 Mandate 或覆盖真实工具状态。
 
@@ -154,7 +154,7 @@ POST /v1/memories/:memoryId/delete
 - 删除采用本地 tombstone 先行。远端删除失败时后台重试，本地列表和 prompt 继续保持删除状态。每分钟完整 bank 同步同时是对账点：Provider 备份恢复或索引重建让已压制记忆重新 valid 时，同步会重新入队 curation invalidate，远端收敛不依赖一次性 job。
 - Hindsight 关闭或不可用时，当前 schema v21 显式 Memory 的 CRUD、分层装载和 prompt 形状保持兼容。Provider 开关是回滚入口。
 - 新增数据库对象必须是纯增量。旧版本可以忽略 memory job、派生投影和 tombstone 表，不得覆盖或格式化现有显式 Memory。
-- `pnpm memory:up` 以 Docker `unless-stopped` 独立监督 Hindsight 和外部 pgvector/PostgreSQL，只绑定 loopback API 并启用 API key 鉴权；数据库使用命名 volume。`pnpm memory:backup` 生成一致性 zip，`pnpm memory:restore <archive> --confirm-restore` 先停 API、用一次性 admin 容器恢复，再重建服务。Provider 故障不会把 Pegas Worker 一起拉倒。
+- `pnpm memory:up` 以 Docker `unless-stopped` 独立监督 Hindsight 和外部 pgvector/PostgreSQL，只绑定 loopback API 并启用 API key 鉴权；数据库使用命名 volume。两个容器都配置健康检查：PostgreSQL 用 `pg_isready`，Hindsight 用容器内 Python 探测 `/health`，含 30s 启动宽限；Docker CLI 的 --health-cmd 只支持 CMD-SHELL，因此每个参数做 POSIX 单引号转义，用户提供的标识符不能注入 shell 语法。Worker 关停时通过 AbortSignal 取消进行中与后续的 Provider HTTP 请求，不让退出等待网络超时。`pnpm memory:backup` 生成一致性 zip，`pnpm memory:restore <archive> --confirm-restore` 先停 API、用一次性 admin 容器恢复，再重建服务。Provider 故障不会把 Pegas Worker 一起拉倒。
 - `pnpm smoke:memory` 使用唯一临时容器/网络/volume，验证 v1.2.2 → v1.2.3 同库升级、owner 隔离、retain/recall/invalidate、纠正、无鉴权请求 401、同 operation_id 重提交幂等和 backup→mutation→restore。脚本只清理自己创建的资源。
 
 ## 非目标
@@ -178,11 +178,11 @@ M1 派生层已经实现：
 - `src/memory/derived-memory.ts` 定义可替换 Provider、owner bank/workspace context 的 HMAC 映射、召回二次过滤和 dedicated correction；`src/memory/hindsight-provider.ts` 以直接 HTTP 接入 retain、operation status、recall、完整分页 list/get 和 invalidate，不把 SDK/MCP 或 Provider 凭证交给 Executor。
 - schema v49 新增 durable retain/curation job、本地召回投影、Run 注入证据和 tombstone；schema v50 增加内容哈希 tombstone、durable correction、完整 bank 同步健康状态与 `retrieved/filtered/injected` recall audit；schema v51 为 retain/correction job 增加独立轮询与错误预算列；schema v52 为 tombstone 增加来源 Run 压制。Run 成功/失败只写有界 input/outcome evidence，出网前复用既有隐私 masker 并叠加常见凭证格式遮盖，不写思考过程与无界工具日志。
 - 每个 work Run 在 Executor 前最多召回一次；显式 Memory 排在派生 Memory 前。Hindsight 超时、畸形响应或不可用时 fail-open，不阻断 Run；Router 和 conversation lane 均不读取 Hindsight。同步失败保留最后成功投影并暴露健康状态。
-- `GET /v1/derived-memories` 和记忆页展示定期同步的完整有效 bank。`POST /v1/derived-memories/:id/correct` 以 command ID 幂等 supersede，replay/fingerprint 检查在 `BEGIN IMMEDIATE` 写事务内完成，并发同 commandId 不会创建重复 job；删除/纠正先落 ID + 内容哈希 + 来源 Run tombstone、清正文并立即停止注入，再由后台作业收敛 Provider，不产生 Approval 或待办。
+- `GET /v1/derived-memories` 和记忆页展示定期同步的完整有效 bank 与 sync 健康状态；同步失败时记忆页显示提示条并保留最近一次成功投影，不暴露内部错误细节。`POST /v1/derived-memories/:id/correct` 以 command ID 幂等 supersede，replay/fingerprint 检查在 `BEGIN IMMEDIATE` 写事务内完成，并发同 commandId 不会创建重复 job；目标不存在或跨 owner 返回 `404 not_found`，同 commandId 异内容返回 `409 memory_command_conflict`。删除/纠正先落 ID + 内容哈希 + 来源 Run tombstone、清正文并立即停止注入，再由后台作业收敛 Provider，不产生 Approval 或待办。
 - `scripts/hindsight-ops.mjs` 提供 loopback、`unless-stopped`、外部持久 PostgreSQL、备份和显式确认恢复；`scripts/smoke-memory.mjs` 是可重复的真实 Provider canary。默认 linux/arm64 基线固定到 Hindsight v1.2.3 manifest `sha256:4b903ed2cbf029d6d305030b0005002d61d6a3b1d9b85867fb459351dcaa671c`（multi-arch index `sha256:601cfdd1bd3f6053864c6458ee15259f065a01a3f83090b56a8ae57db67f8f38`，MIT）与 pgvector/pg18 manifest `sha256:38681dc6eaf55308e2a4c6de392d131652dcfac70e1263e35cd9b5ea3fe39782`；其他架构必须显式固定并重新跑 canary。
 
-自动化证据位于 `test/derived-memory.test.ts`、`test/derived-memory-store.test.ts`、`test/derived-memory-processor.test.ts`、`test/hindsight-runtime.test.ts`、`test/privacy-boundaries.test.ts` 与 `web/src/App.test.tsx`，覆盖 wire contract、完整分页、owner/context 隔离、预算与全阶段审计、原子入队、submit→poll 不重投、fail-open、ID 重建防复活、异步 curation、dedicated correction、完整同步与无需审批 UI。评审修复回归另覆盖：常见凭证格式（ghp_/github_pat_/AKIA/xoxb/JWT/连接串/自然语言 secret/私钥块）出网前遮盖、waiting goal Run 不产生成功经验且审查 failed 入队 failure、审查通过后才入队 verified success、Provider 恢复复活已删记忆时同步重新入队 curation、慢抽取轮询不消耗错误预算、永不终态的 operation 在 600 次轮询后停放。P2 修复回归再覆盖：同来源 Run 的归并/改写重建被来源级 tombstone 压制、Provider 请求在合同超时被 abort、畸形 recall 条目丢弃与畸形单条读取拒绝、非法 operation status 与 HTTP 502 拒绝、超过 10k 条上限拒绝、mask 模式下 memories 与 work rules 注入同样先脱敏、并发同 commandId 纠正冲突稳定返回 `MemoryCommandConflictError`、hindsight 模式缺 API key 拒绝启动、运行时 plan 注入 tenant 鉴权扩展。真实 `pnpm smoke:memory` 增加无鉴权请求 401 断言与同 operation_id 崩溃重提交幂等段（重复 submit 返回同一 operation，事实不重复）。
+自动化证据位于 `test/derived-memory.test.ts`、`test/derived-memory-store.test.ts`、`test/derived-memory-processor.test.ts`、`test/hindsight-runtime.test.ts`、`test/privacy-boundaries.test.ts` 与 `web/src/App.test.tsx`，覆盖 wire contract、完整分页、owner/context 隔离、预算与全阶段审计、原子入队、submit→poll 不重投、fail-open、ID 重建防复活、异步 curation、dedicated correction、完整同步与无需审批 UI。评审修复回归另覆盖：常见凭证格式（ghp_/github_pat_/AKIA/xoxb/JWT/连接串/自然语言 secret/私钥块）出网前遮盖、waiting goal Run 不产生成功经验且审查 failed 入队 failure、审查通过后才入队 verified success、Provider 恢复复活已删记忆时同步重新入队 curation、慢抽取轮询不消耗错误预算、永不终态的 operation 在 600 次轮询后停放。P2 修复回归再覆盖：同来源 Run 的归并/改写重建被来源级 tombstone 压制、Provider 请求在合同超时被 abort、畸形 recall 条目丢弃与畸形单条读取拒绝、非法 operation status 与 HTTP 502 拒绝、超过 10k 条上限拒绝、mask 模式下 memories 与 work rules 注入同样先脱敏、并发同 commandId 纠正冲突稳定返回 `MemoryCommandConflictError`、hindsight 模式缺 API key 拒绝启动、运行时 plan 注入 tenant 鉴权扩展。P3 修复回归再覆盖：CJK 字符按整 token 计入注入预算、recall query 携带工作规则与自定义指令、verified success 双 tag 且 failure 保持局部、基础设施失败不入经验库、纠正目标缺失返回 404、健康轮询清除陈旧 retry 错误（retain 与 correction 两侧）、HMAC key 短于 32 字符在 config 与 service 双层拒绝、shutdown 信号取消进行中与后续 Provider 请求、双容器健康检查与 shell 注入转义、Web sync 失败提示条。真实 `pnpm smoke:memory` 增加无鉴权请求 401 断言与同 operation_id 崩溃重提交幂等段（重复 submit 返回同一 operation，事实不重复）。
 
 最终门禁和真实 canary 的精确测试数量、覆盖率及输出记录在 `docs/feature-map.md` 的 MEMORY-001 M1 小节。
 
-`MEMORY-001` 当前为 `Usable`。独立评审的全部 P1 与 P2 已关闭并有自动化和真实 Provider 证据，完整门禁（`pnpm check`、`pnpm smoke`、`pnpm smoke:crash`、真实 `pnpm smoke:memory`）通过。剩余 P3（CJK token 预算、recall query 组成与文档一致性、global 经验产生路径、Web sync 健康展示、纠正重试误报、404/409 契约、瞬时失败入队策略、HMAC key 长度校验、shutdown AbortSignal、health-cmd 数组化）与 hardening（非 arm64 镜像、加密 off-site backup、长期效果评测、>10k 游标）继续登记在 Feature Map，逐项关闭。
+`MEMORY-001` 当前为 `Usable`。独立评审的全部 P1、P2 与 P3 已关闭并有自动化和真实 Provider 证据，完整门禁（`pnpm check`、`pnpm smoke`、`pnpm smoke:crash`、真实 `pnpm smoke:memory`）通过。剩余 hardening（非 arm64 镜像、加密 off-site backup、长期效果评测、>10k 游标）继续登记在 Feature Map。

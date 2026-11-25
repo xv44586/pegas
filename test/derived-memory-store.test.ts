@@ -5,6 +5,7 @@ import { createControlPlane } from '../src/control-plane/server.js'
 import type { GoalContractDraft } from '../src/goal/goal-delivery.js'
 import {
   MemoryCommandConflictError,
+  MemoryNotFoundError,
   PegasStore,
 } from '../src/storage/sqlite-store.js'
 
@@ -56,6 +57,42 @@ describe('derived memory durable jobs', () => {
       'Observed failure: command exited with status 2',
     )
     expect(job?.content).not.toContain('Root cause')
+    store.close()
+  })
+
+  it('keeps infrastructure-shaped failures out of the experience bank', () => {
+    const store = new PegasStore(':memory:', { derivedMemoryEnabled: true })
+    const infrastructureErrors = [
+      'fetch failed',
+      'connect ECONNREFUSED 127.0.0.1:3425',
+      'Model provider returned 503: service unavailable',
+      'Hindsight request timed out',
+      'socket hang up',
+    ]
+    for (const error of infrastructureErrors) {
+      const claimed = createClaimedRun(store, 'owner', 'worker')
+      store.failRun(claimed.run.id, 'worker', error)
+      expect(
+        store.claimNextDerivedMemoryJob('memory-worker', 30_000),
+      ).toBeUndefined()
+    }
+    const observed = createClaimedRun(store, 'owner', 'worker')
+    store.failRun(observed.run.id, 'worker', 'assertion failed: expected 3')
+    expect(
+      store.claimNextDerivedMemoryJob('memory-worker', 30_000),
+    ).toMatchObject({ kind: 'run_failure', runId: observed.run.id })
+    store.close()
+  })
+
+  it('reports a missing derived correction target as not found', () => {
+    const store = new PegasStore(':memory:', { derivedMemoryEnabled: true })
+    createClaimedRun(store, 'owner', 'worker')
+    expect(() =>
+      store.correctDerivedMemory('owner', 'missing-memory', {
+        commandId: 'command-missing',
+        correction: 'Use pnpm.',
+      }),
+    ).toThrow(MemoryNotFoundError)
     store.close()
   })
 
@@ -486,6 +523,20 @@ describe('derived memory durable jobs', () => {
     expect(
       store.pageApprovals('owner', 10, undefined, 'pending').items,
     ).toEqual([])
+    const missing = await fetch(
+      `${base}/v1/derived-memories/does-not-exist/correct`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          userId: 'owner',
+          commandId: 'missing-command',
+          correction: 'Use pnpm.',
+        }),
+      },
+    )
+    expect(missing.status).toBe(404)
+    expect(await missing.json()).toMatchObject({ error: 'not_found' })
     await new Promise<void>(resolve => server.close(() => resolve()))
     store.close()
   })

@@ -1306,7 +1306,9 @@ export async function processNextDerivedMemoryJob(
       })
       return true
     }
-    store.retryDerivedMemoryJob(job.id, workerId, operation.status, 1_000)
+    store.retryDerivedMemoryJob(job.id, workerId, operation.status, 1_000, {
+      clearError: true,
+    })
     return true
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
@@ -1414,6 +1416,7 @@ export async function processNextDerivedMemoryCorrectionJob(
       workerId,
       operation.status,
       1_000,
+      { clearError: true },
     )
     return true
   } catch (error) {

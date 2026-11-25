@@ -108,6 +108,8 @@ const store = new PegasStore(config.databasePath, {
   routingClarificationTtlMs: config.routingClarificationTtlMs,
   derivedMemoryEnabled: config.memoryProvider === 'hindsight',
 })
+const lifecycle = { stopping: false }
+const shutdown = new AbortController()
 const derivedMemory =
   config.memoryProvider === 'hindsight'
     ? new PegasDerivedMemoryService(
@@ -118,9 +120,11 @@ const derivedMemory =
           ),
           ...(config.hindsightApiKey ? { apiKey: config.hindsightApiKey } : {}),
           timeoutMs: config.hindsightTimeoutMs,
+          shutdownSignal: shutdown.signal,
         }),
         {
           hmacKey: required(config.memoryHmacKey, 'PEGAS_MEMORY_HMAC_KEY'),
+          globalPreferences: userId => store.workRuleContextForUser(userId),
         },
       )
     : undefined
@@ -251,8 +255,6 @@ const eventHandler = new RoutingEventHandler(router, executor.name, task => {
     protocol: config.executorMode === 'echo' ? 'echo-v1' : 'dsh-headless-v1',
   })
 })
-const lifecycle = { stopping: false }
-const shutdown = new AbortController()
 const activeRuns = new Set<Promise<void>>()
 const activeChatRuns = new Set<Promise<void>>()
 let activeMemoryJob: Promise<boolean> | undefined

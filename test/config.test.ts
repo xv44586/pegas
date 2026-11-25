@@ -39,14 +39,14 @@ describe('loadConfig', () => {
         PEGAS_MEMORY_PROVIDER: 'hindsight',
         PEGAS_HINDSIGHT_BASE_URL: 'http://127.0.0.1:8888',
         PEGAS_HINDSIGHT_API_KEY: 'hsk_test',
-        PEGAS_MEMORY_HMAC_KEY: 'owner-isolation-key',
+        PEGAS_MEMORY_HMAC_KEY: 'pegas-test-hmac-key-0123456789abcdef',
         PEGAS_HINDSIGHT_TIMEOUT_MS: '2500',
       }),
     ).toMatchObject({
       memoryProvider: 'hindsight',
       hindsightBaseUrl: 'http://127.0.0.1:8888',
       hindsightApiKey: 'hsk_test',
-      memoryHmacKey: 'owner-isolation-key',
+      memoryHmacKey: 'pegas-test-hmac-key-0123456789abcdef',
       hindsightTimeoutMs: 2500,
     })
   })
@@ -183,9 +183,18 @@ describe('loadConfig', () => {
       {
         PEGAS_MEMORY_PROVIDER: 'hindsight',
         PEGAS_HINDSIGHT_BASE_URL: 'http://127.0.0.1:8888',
-        PEGAS_MEMORY_HMAC_KEY: 'owner-isolation-key',
+        PEGAS_MEMORY_HMAC_KEY: 'pegas-test-hmac-key-0123456789abcdef',
       },
       'PEGAS_HINDSIGHT_API_KEY is required',
+    ],
+    [
+      {
+        PEGAS_MEMORY_PROVIDER: 'hindsight',
+        PEGAS_HINDSIGHT_BASE_URL: 'http://127.0.0.1:8888',
+        PEGAS_MEMORY_HMAC_KEY: 'short-key',
+        PEGAS_HINDSIGHT_API_KEY: 'hsk_test',
+      },
+      'PEGAS_MEMORY_HMAC_KEY must contain at least 32 characters',
     ],
     [{ PEGAS_API_PORT: '0' }, 'PEGAS_API_PORT must be a positive integer'],
   ])('rejects unsafe or invalid settings', (environment, message) => {

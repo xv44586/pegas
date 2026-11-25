@@ -7,13 +7,34 @@ import {
 } from '../src/memory/derived-memory.js'
 import { HindsightProvider } from '../src/memory/hindsight-provider.js'
 
+const TEST_HMAC_KEY = 'pegas-'.padEnd(40, 'x')
+
 describe('derived memory', () => {
   it('derives stable opaque owner and workspace keys without exposing inputs', () => {
-    const first = opaqueKey('owner', 'user@example.com', 'secret-key')
-    expect(first).toBe(opaqueKey('owner', 'user@example.com', 'secret-key'))
+    const key = 'stable-owner-mapping-key-0123456789abcdef'
+    const first = opaqueKey('owner', 'user@example.com', key)
+    expect(first).toBe(opaqueKey('owner', 'user@example.com', key))
     expect(first).not.toContain('user@example.com')
-    expect(first).not.toBe(opaqueKey('owner', 'other', 'secret-key'))
-    expect(first).not.toBe(opaqueKey('owner', 'user@example.com', 'other-key'))
+    expect(first).not.toBe(opaqueKey('owner', 'other', key))
+    expect(first).not.toBe(
+      opaqueKey(
+        'owner',
+        'user@example.com',
+        'another-mapping-key-0123456789abcdef',
+      ),
+    )
+  })
+
+  it('rejects HMAC keys shorter than 32 characters', () => {
+    expect(() => opaqueKey('owner', 'owner', 'short-key')).toThrow(
+      /at least 32 characters/,
+    )
+    expect(
+      () =>
+        new PegasDerivedMemoryService(providerStub(), {
+          hmacKey: 'short-key',
+        }),
+    ).toThrow(/at least 32 characters/)
   })
 
   it('enforces owner and execution-context isolation after provider recall', async () => {
@@ -44,7 +65,7 @@ describe('derived memory', () => {
     ])
     provider.recall = recall
     const service = new PegasDerivedMemoryService(provider, {
-      hmacKey: 'test-key',
+      hmacKey: TEST_HMAC_KEY,
     })
     const memories = await service.recall({
       userId: 'owner',
@@ -172,7 +193,7 @@ describe('derived memory', () => {
       })),
     )
     const service = new PegasDerivedMemoryService(provider, {
-      hmacKey: 'budget-key',
+      hmacKey: TEST_HMAC_KEY,
       maximumTokens: 100,
     })
 
@@ -194,6 +215,119 @@ describe('derived memory', () => {
     expect(
       result.audit.filter(record => record.reason === 'budget'),
     ).toHaveLength(2)
+  })
+
+  it('counts CJK characters as full tokens in the injection budget', async () => {
+    const provider = providerStub()
+    provider.recall = vi.fn().mockResolvedValue([
+      {
+        id: 'cjk-1',
+        text: '记'.repeat(120),
+        type: 'world',
+        tags: ['pegas:global'],
+        metadata: {},
+      },
+      {
+        id: 'cjk-2',
+        text: '忆'.repeat(120),
+        type: 'world',
+        tags: ['pegas:global'],
+        metadata: {},
+      },
+    ])
+    const service = new PegasDerivedMemoryService(provider, {
+      hmacKey: TEST_HMAC_KEY,
+      maximumTokens: 160,
+    })
+
+    const result = await service.recall({
+      userId: 'owner',
+      taskId: 'task-1',
+      runId: 'run-1',
+      query: 'continue',
+      workingDirectory: '/workspace',
+    })
+
+    expect(result.entries).toHaveLength(1)
+    expect(result.entries[0]?.content).toHaveLength(110)
+    expect(
+      result.audit.filter(record => record.reason === 'budget'),
+    ).toHaveLength(1)
+  })
+
+  it('includes active work rules and custom instructions in the recall query', async () => {
+    const provider = providerStub()
+    const recall = vi.fn().mockResolvedValue([])
+    provider.recall = recall
+    const service = new PegasDerivedMemoryService(provider, {
+      hmacKey: TEST_HMAC_KEY,
+      globalPreferences: userId => {
+        expect(userId).toBe('owner')
+        return {
+          rules: [{ title: '包管理', content: '统一使用 pnpm' }],
+          customInstructions: '回复保持简体中文',
+        }
+      },
+    })
+
+    await service.recall({
+      userId: 'owner',
+      taskId: 'task-1',
+      runId: 'run-1',
+      query: '继续实现',
+      workingDirectory: '/workspace/project',
+    })
+
+    const [, input] = recall.mock.calls[0] as [string, { query: string }]
+    expect(input.query).toContain('继续实现')
+    expect(input.query).toContain('包管理: 统一使用 pnpm')
+    expect(input.query).toContain('回复保持简体中文')
+  })
+
+  it('promotes verified success to the global scope and keeps failures local', async () => {
+    const provider = providerStub()
+    const retain = vi.fn().mockResolvedValue('operation')
+    provider.retain = retain
+    const service = new PegasDerivedMemoryService(provider, {
+      hmacKey: TEST_HMAC_KEY,
+      globalPreferences: () => ({
+        rules: [{ title: '包管理', content: '统一使用 pnpm' }],
+        customInstructions: '',
+      }),
+    })
+    const job = {
+      id: 'job-1',
+      userId: 'owner',
+      taskId: 'task-1',
+      runId: 'run-1',
+      kind: 'run_success' as const,
+      documentId: 'pegas:run:run-1',
+      content: 'Verified outcome: tests passed',
+      workingDirectory: '/workspace/project',
+      attempts: 1,
+      pollCount: 0,
+      errorAttempts: 0,
+    }
+
+    await service.submit(job)
+    await service.submit({ ...job, id: 'job-2', kind: 'run_failure' })
+
+    const [, successInput] = retain.mock.calls[0] as [
+      string,
+      { tags: string[]; content: string },
+    ]
+    expect(successInput.tags).toContain('pegas:global')
+    expect(successInput.tags).toContain(
+      `pegas:context:${service.contextKey('/workspace/project')}`,
+    )
+    expect(successInput.content).toContain('Active work rules:')
+    expect(successInput.content).toContain('包管理: 统一使用 pnpm')
+    const [, failureInput] = retain.mock.calls[1] as [
+      string,
+      { tags: string[]; content: string },
+    ]
+    expect(failureInput.tags).not.toContain('pegas:global')
+    expect(failureInput.content).not.toContain('Active work rules:')
   })
 
   it('paginates the complete valid bank when browsing derived memories', async () => {
@@ -260,6 +394,43 @@ describe('derived memory', () => {
     })
 
     await expect(provider.list('bank')).rejects.toThrow(/timed out/)
+  })
+
+  it('cancels an in-flight provider request when the worker shuts down', async () => {
+    const request = vi.fn<typeof fetch>().mockImplementation(
+      (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            const reason: unknown = init.signal?.reason
+            reject(reason instanceof Error ? reason : new Error('aborted'))
+          })
+        }),
+    )
+    const shutdown = new AbortController()
+    const provider = new HindsightProvider({
+      baseUrl: 'http://hindsight.local',
+      timeoutMs: 60_000,
+      fetch: request,
+      shutdownSignal: shutdown.signal,
+    })
+
+    const pending = provider.list('bank')
+    shutdown.abort()
+    await expect(pending).rejects.toThrow(/shutdown/)
+  })
+
+  it('rejects provider calls issued after shutdown already completed', async () => {
+    const request = vi.fn<typeof fetch>()
+    const shutdown = new AbortController()
+    shutdown.abort()
+    const provider = new HindsightProvider({
+      baseUrl: 'http://hindsight.local',
+      fetch: request,
+      shutdownSignal: shutdown.signal,
+    })
+
+    await expect(provider.list('bank')).rejects.toThrow(/shutdown/)
+    expect(request).not.toHaveBeenCalled()
   })
 
   it('drops malformed recall entries and rejects malformed single reads', async () => {
@@ -339,7 +510,7 @@ describe('derived memory', () => {
       .mockName('retain')
     const provider = { ...providerStub(), retain }
     const service = new PegasDerivedMemoryService(provider, {
-      hmacKey: 'correction-key',
+      hmacKey: TEST_HMAC_KEY,
     })
 
     await expect(

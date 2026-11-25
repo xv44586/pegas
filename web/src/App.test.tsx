@@ -7259,6 +7259,43 @@ describe('sealed Pegas UI', () => {
     expect(await screen.findByText('还没有记忆')).toBeTruthy()
   })
 
+  it('surfaces a failed derived memory sync while keeping the last projection', async () => {
+    installSnapshotFetch(snapshot, path => {
+      if (path.startsWith('/v1/memories?'))
+        return Response.json({ memories: [] })
+      if (path.startsWith('/v1/derived-memories?'))
+        return Response.json({
+          memories: [
+            {
+              id: 'derived-stale',
+              text: '这个项目使用 pnpm。',
+              type: 'world',
+              tags: ['pegas:global'],
+              metadata: {},
+            },
+          ],
+          sync: {
+            status: 'failed',
+            memoryCount: 1,
+            lastSyncedAt: '2026-11-25T00:00:00.000Z',
+            lastError: 'Hindsight HTTP 503',
+          },
+        })
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: '记忆',
+      }),
+    )
+    expect(await screen.findByText('这个项目使用 pnpm。')).toBeTruthy()
+    expect(screen.getByText(/自动记忆同步暂时失败/).textContent).toContain(
+      '最近一次成功同步',
+    )
+    expect(screen.queryByText('Hindsight HTTP 503')).toBeNull()
+  })
+
   it('corrects automatically derived memory without creating approval work', async () => {
     let correction: unknown
     let derived = [

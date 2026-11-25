@@ -43,6 +43,7 @@ import type {
   DshModelCatalogItem,
   ExecutionNode,
   DerivedMemoryRecord,
+  DerivedMemorySyncState,
   MemoryRecord,
   ModelProviderDraft,
   NotificationPreferences,
@@ -86,6 +87,8 @@ export function App() {
   const [memories, setMemories] = useState<MemoryRecord[]>()
   const [derivedMemories, setDerivedMemories] =
     useState<DerivedMemoryRecord[]>()
+  const [derivedMemorySync, setDerivedMemorySync] =
+    useState<DerivedMemorySyncState | null>(null)
   const [memoriesError, setMemoriesError] = useState('')
   const [memoriesTruncated, setMemoriesTruncated] = useState(false)
   const [workRules, setWorkRules] = useState<WorkRuleRecord[]>()
@@ -209,7 +212,8 @@ export function App() {
       const derived = await api.derivedMemories()
       if (requestId !== memoriesRequestRef.current) return
       setMemories(items)
-      setDerivedMemories(derived)
+      setDerivedMemories(derived.memories)
+      setDerivedMemorySync(derived.sync)
       setMemoriesTruncated(truncated)
       setMemoriesError('')
     } catch (caught) {
@@ -1558,6 +1562,7 @@ export function App() {
             channels={data.snapshot.channels}
             error={memoriesError}
             derivedMemories={derivedMemories}
+            derivedMemorySync={derivedMemorySync}
             memories={memories}
             onCreate={async draft => {
               await api.createMemory(draft)

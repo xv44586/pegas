@@ -141,6 +141,15 @@ export function loadConfig(
   }
   if (
     memoryProvider === 'hindsight' &&
+    memoryHmacKey &&
+    memoryHmacKey.trim().length < 32
+  ) {
+    throw new Error(
+      'PEGAS_MEMORY_HMAC_KEY must contain at least 32 characters when PEGAS_MEMORY_PROVIDER=hindsight',
+    )
+  }
+  if (
+    memoryProvider === 'hindsight' &&
     !environment.PEGAS_HINDSIGHT_API_KEY?.trim()
   ) {
     throw new Error(

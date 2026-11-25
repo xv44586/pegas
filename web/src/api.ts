@@ -17,6 +17,7 @@ import type {
   DurableAction,
   DshModelCatalog,
   DerivedMemoryRecord,
+  DerivedMemorySyncState,
   LinkPreview,
   MemoryDraft,
   MemoryRecord,
@@ -792,12 +793,16 @@ export class PegasApi {
     if (!response.ok) await throwResponse(response)
   }
 
-  async derivedMemories(): Promise<DerivedMemoryRecord[]> {
+  async derivedMemories(): Promise<{
+    memories: DerivedMemoryRecord[]
+    sync: DerivedMemorySyncState | null
+  }> {
     const params = new URLSearchParams({ userId: this.#userId })
-    const result = await this.#get<{ memories: DerivedMemoryRecord[] }>(
-      `/v1/derived-memories?${params.toString()}`,
-    )
-    return result.memories
+    const result = await this.#get<{
+      memories: DerivedMemoryRecord[]
+      sync?: DerivedMemorySyncState | null
+    }>(`/v1/derived-memories?${params.toString()}`)
+    return { memories: result.memories, sync: result.sync ?? null }
   }
 
   async deleteDerivedMemory(memoryId: string): Promise<void> {

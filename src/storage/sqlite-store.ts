@@ -5043,6 +5043,41 @@ export class PegasStore {
       throw new AutomationReadOnlyError()
   }
 
+  /** Read-only diagnostics for retain/correction job retry state. */
+  derivedMemoryJobDiagnostics(jobId: string):
+    | {
+        status: string
+        lastError?: string
+        pollCount: number
+        errorAttempts: number
+      }
+    | undefined {
+    const row = this.#database
+      .prepare(
+        `SELECT status, last_error, poll_count, error_attempts
+         FROM derived_memory_jobs WHERE id = ?
+         UNION ALL
+         SELECT status, last_error, poll_count, error_attempts
+         FROM derived_memory_correction_jobs WHERE id = ?`,
+      )
+      .get(jobId, jobId) as
+      | {
+          status: string
+          last_error: string | null
+          poll_count: number
+          error_attempts: number
+        }
+      | undefined
+    return row
+      ? {
+          status: row.status,
+          ...(row.last_error ? { lastError: row.last_error } : {}),
+          pollCount: row.poll_count,
+          errorAttempts: row.error_attempts,
+        }
+      : undefined
+  }
+
   claimNextDerivedMemoryJob(
     workerId: string,
     leaseMs: number,
@@ -5327,6 +5362,7 @@ export class PegasStore {
     workerId: string,
     error: string,
     retryAfterMs: number,
+    options: { clearError?: boolean } = {},
   ): void {
     const now = this.#clock.now()
     const current = this.#database
@@ -5348,7 +5384,7 @@ export class PegasStore {
       .run(
         current.provider_operation_id ? 'submitted' : 'pending',
         new Date(now.getTime() + retryAfterMs).toISOString(),
-        error.slice(0, 2_000),
+        options.clearError === true ? null : error.slice(0, 2_000),
         now.toISOString(),
         jobId,
         workerId,
@@ -5422,6 +5458,7 @@ export class PegasStore {
     workerId: string,
     error: string,
     retryAfterMs: number,
+    options: { clearError?: boolean } = {},
   ): void {
     const now = this.#clock.now()
     const current = this.#database
@@ -5443,7 +5480,7 @@ export class PegasStore {
       .run(
         current.provider_operation_id ? 'submitted' : 'pending',
         new Date(now.getTime() + retryAfterMs).toISOString(),
-        error.slice(0, 2_000),
+        options.clearError === true ? null : error.slice(0, 2_000),
         now.toISOString(),
         jobId,
         workerId,
@@ -5920,7 +5957,7 @@ export class PegasStore {
            WHERE user_id = ? AND memory_id = ?`,
         )
         .get(userId, memoryId) as unknown as DerivedMemoryCacheRow | undefined
-      if (!memory) throw new MemoryTargetUnavailableError()
+      if (!memory) throw new MemoryNotFoundError()
       const jobId = randomUUID()
       const response = {
         memoryId,
@@ -12830,7 +12867,12 @@ export class PegasStore {
                   }
                 : { type: 'run.failed', taskId: task.id, runId, error },
       })
-      this.#enqueueDerivedMemoryJob(run, task, 'run_failure', error, now)
+      // Infrastructure-shaped failures (provider outages, network errors,
+      // timeouts) say nothing reusable about the work itself. Keep them out
+      // of the experience bank so a transient blip cannot teach the Worker
+      // a false lesson; observed task failures still enqueue below.
+      if (!terminalProvider && !isInfrastructureFailureMessage(error))
+        this.#enqueueDerivedMemoryJob(run, task, 'run_failure', error, now)
       this.#database.exec('COMMIT')
     } catch (caught) {
       this.#database.exec('ROLLBACK')
@@ -16091,6 +16133,25 @@ function toDerivedMemoryCorrectionJob(
 function derivedMemoryContentHash(value: string): string {
   const normalized = value.trim().replaceAll(/\s+/g, ' ').toLocaleLowerCase()
   return createHash('sha256').update(normalized).digest('hex')
+}
+
+/**
+ * A failure caused by infrastructure carries no reusable lesson about the
+ * work itself. Provider credential/terminal errors are filtered separately
+ * via terminalProvider; this catches outages, network errors and timeouts.
+ */
+function isInfrastructureFailureMessage(message: string): boolean {
+  return (
+    /\b(fetch failed|ECONNREFUSED|ECONNRESET|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|EPIPE|socket hang up)\b/i.test(
+      message,
+    ) ||
+    /\b(timed? ?out|timeout)\b/i.test(message) ||
+    /Model provider returned 5\d\d\b/.test(message) ||
+    /\bHTTP 5\d\d\b/.test(message) ||
+    /\b(502|503|504)\b.*(bad gateway|service unavailable|gateway time)/i.test(
+      message,
+    )
+  )
 }
 
 function sourceRunIdFromMetadata(metadataJson: string): string | null {
