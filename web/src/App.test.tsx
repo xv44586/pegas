@@ -7932,6 +7932,77 @@ describe('sealed Pegas UI', () => {
     expect(await screen.findByText('Channel 时间线')).toBeTruthy()
   })
 
+  it.each(['later page', 'unavailable'] as const)(
+    'keeps an older Review Pack bound to its own Goal when the historical revision is %s',
+    async history => {
+      const sourceMessage = snapshot.messages[0]
+      if (!sourceMessage) throw new Error('Expected an outbox message fixture')
+      const reviewMessage = {
+        ...sourceMessage,
+        id: 'message-review-historical',
+        payload: {
+          type: 'review.ready',
+          requiresAcceptance: true,
+          taskId: channel.id,
+          text: '候选版本已交付，请审查。',
+          review: reviewProjectionFixture,
+        },
+      }
+      const currentGoal = {
+        ...goalFixture,
+        revision: goalFixture.revision + 1,
+        successCriteria: goalFixture.successCriteria.map(criterion => ({
+          ...criterion,
+          observableStatement: '新版标准需要验证移动端界面',
+        })),
+      }
+      const historyCursor = 'next+page='
+      const historyRequests: (string | null)[] = []
+      installSnapshotFetch({ ...snapshot, messages: [reviewMessage] }, path => {
+        if (path.startsWith('/v1/tasks/task-1/delivery?'))
+          return Response.json({ ...deliveryFixture, goal: currentGoal })
+        if (!path.startsWith('/v1/tasks/task-1/goals?')) return undefined
+        const cursor = new URL(path, 'http://localhost').searchParams.get(
+          'cursor',
+        )
+        historyRequests.push(cursor)
+        if (cursor === historyCursor)
+          return Response.json({
+            contracts: [goalFixture],
+            current: currentGoal,
+          })
+        return history === 'unavailable'
+          ? Response.json({ message: '目标历史不可用' }, { status: 500 })
+          : Response.json({
+              contracts: [currentGoal],
+              current: currentGoal,
+              nextCursor: historyCursor,
+            })
+      })
+      render(<App />)
+      fireEvent.click(
+        within(await screen.findByLabelText('主导航')).getByRole('button', {
+          name: /待你处理/,
+        }),
+      )
+      fireEvent.click(screen.getByRole('button', { name: /^审查交付：/ }))
+      const criteria = within(await screen.findByLabelText('完成标准'))
+      if (history === 'later page') {
+        expect(
+          await criteria.findByText('候选版本通过健康检查并留存截图'),
+        ).toBeTruthy()
+        expect(historyRequests).toEqual([null, historyCursor])
+      } else {
+        await waitFor(() => expect(historyRequests).toEqual([null]))
+        expect(await criteria.findByText('criterion-verify')).toBeTruthy()
+      }
+      await waitFor(() =>
+        expect(criteria.queryByText('新版标准需要验证移动端界面')).toBeNull(),
+      )
+      expect(criteria.getByText('已满足')).toBeTruthy()
+    },
+  )
+
   it('opens clarification questions and continues the task from the drawer', async () => {
     const sourceMessage = snapshot.messages[0]
     if (!sourceMessage) throw new Error('Expected an outbox message fixture')
@@ -8210,12 +8281,64 @@ describe('sealed Pegas UI', () => {
         anchor: { taskId: channel.id, eventId: 'event-1' },
       },
     }
-    installSnapshotFetch({ ...snapshot, messages: [reviewMessage] })
+    installSnapshotFetch({ ...snapshot, messages: [reviewMessage] }, path =>
+      path.startsWith('/v1/tasks/task-1/delivery?')
+        ? Response.json(deliveryFixture)
+        : undefined,
+    )
     render(<App />)
     const card = await screen.findByLabelText(/交付可审查：/)
     expect(card.textContent).toContain('候选版本已交付，请审查。')
     fireEvent.click(screen.getByRole('button', { name: /审查交付/ }))
     expect(await screen.findByText('按完成标准审查交付')).toBeTruthy()
+    expect(
+      await within(screen.getByLabelText('完成标准')).findByText(
+        '候选版本通过健康检查并留存截图',
+      ),
+    ).toBeTruthy()
+  })
+
+  it('loads Review Pack criteria after returning from an early evidence preview', async () => {
+    const sourceMessage = snapshot.messages[0]
+    if (!sourceMessage) throw new Error('Expected an outbox message fixture')
+    const reviewMessage = {
+      ...sourceMessage,
+      id: 'message-review-preview-during-load',
+      payload: {
+        type: 'review.ready',
+        taskId: channel.id,
+        text: '候选版本已交付，请审查。',
+        review: reviewProjectionFixture,
+      },
+      projection: { lane: 'work' as const, weight: 'card' as const },
+    }
+    const firstDelivery = Promise.withResolvers<Response>()
+    let deliveryReads = 0
+    installSnapshotFetch({ ...snapshot, messages: [reviewMessage] }, path => {
+      if (!path.startsWith('/v1/tasks/task-1/delivery?')) return undefined
+      deliveryReads += 1
+      return deliveryReads === 1
+        ? firstDelivery.promise
+        : Response.json(deliveryFixture)
+    })
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: /审查交付/ }))
+    const gallery = await screen.findByLabelText('证据画廊')
+    expect(deliveryReads).toBe(1)
+    fireEvent.click(
+      within(gallery).getByRole('button', { name: /候选版本健康检查截图/ }),
+    )
+    await act(async () => {
+      firstDelivery.resolve(Response.json(deliveryFixture))
+      await firstDelivery.promise
+    })
+    fireEvent.click(screen.getByRole('button', { name: '返回交付审查' }))
+    expect(
+      await within(screen.getByLabelText('完成标准')).findByText(
+        '候选版本通过健康检查并留存截图',
+      ),
+    ).toBeTruthy()
+    expect(deliveryReads).toBe(1)
   })
 
   it('loads and saves quiet-hours notification preferences', async () => {

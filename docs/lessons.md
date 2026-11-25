@@ -411,6 +411,18 @@
 - Enforcement：凭证样本和旧库升级回归纳入 `pnpm check`。
 - Owner / next action：OBS-001。新增诊断字段时沿用受限预览与测试。
 
+### LESSON-20261125-05：历史交付的标准必须按目标修订读取
+
+- Rule：组合持久交付和目标描述时，用交付绑定的 taskId 与 goalRevision 定位权威版本。修订缺失时保留历史交付自带的事实。
+- Why：同一 criterion ID 可以在新 Goal 下变更描述。Web 用当前 Goal 给旧 Review Pack 补文案时，会把旧证据和判定显示成针对新标准。
+- Feature：NOTIFY-004
+- Evidence：`web/src/App.test.tsx` 的历史 Review Pack 回归测试复用 criterion ID，覆盖跨页修订与历史读取失败。对话卡片回归验证其抽屉也会加载标准原文。
+- Seen：1（2026-11-25）
+- Severity：normal
+- Status：Observed
+- Enforcement：Web 回归纳入 `pnpm check`。
+- Owner / next action：NOTIFY-004。新增历史交付入口时沿用同一读取路径。
+
 <!--
 ### LESSON-YYYYMMDD-NN：简短标题
 

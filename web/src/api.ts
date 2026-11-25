@@ -764,11 +764,37 @@ export class PegasApi {
 
   async goalContracts(
     taskId: string,
-  ): Promise<{ contracts: GoalContract[]; current?: GoalContract }> {
-    const user = encodeURIComponent(this.#userId)
-    return this.#get<{ contracts: GoalContract[]; current?: GoalContract }>(
-      `/v1/tasks/${encodeURIComponent(taskId)}/goals?userId=${user}&limit=50`,
+    cursor?: string,
+  ): Promise<{
+    contracts: GoalContract[]
+    current?: GoalContract
+    nextCursor?: string
+  }> {
+    const query = new URLSearchParams({ userId: this.#userId, limit: '50' })
+    if (cursor) query.set('cursor', cursor)
+    return this.#get(
+      `/v1/tasks/${encodeURIComponent(taskId)}/goals?${query.toString()}`,
     )
+  }
+
+  async reviewGoal(
+    taskId: string,
+    revision: number,
+  ): Promise<GoalContract | undefined> {
+    if (!Number.isSafeInteger(revision) || revision < 1) return undefined
+    const delivery = await this.taskDelivery(taskId).catch(() => undefined)
+    if (delivery?.goal?.revision === revision) return delivery.goal
+
+    let cursor: string | undefined
+    do {
+      const page = await this.goalContracts(taskId, cursor)
+      const goal = page.contracts.find(
+        contract => contract.revision === revision,
+      )
+      if (goal) return goal
+      cursor = page.nextCursor
+    } while (cursor)
+    return undefined
   }
 
   async reviewPacks(

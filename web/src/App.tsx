@@ -686,6 +686,7 @@ export function App() {
     if (options.rememberTrigger !== false) rememberFocus()
     setDrawer(enrichDrawer(view))
     if (view.kind === 'runtime') loadRuntimeNodes()
+    if (view.kind === 'review' && !view.goal) loadReviewGoal(view)
     if (view.kind === 'task') {
       if (options.updateLocation !== false) {
         const url = new URL(window.location.href)
@@ -847,13 +848,15 @@ export function App() {
   }
   function loadReviewGoal(view: Extract<DrawerView, { kind: 'review' }>) {
     void api
-      .taskDelivery(view.channel.id)
-      .then(delivery => {
+      .reviewGoal(view.channel.id, view.review.goalRevision)
+      .then(goal => {
+        if (!goal) return
+        const parent = drawerReturnRef.current
+        if (parent?.kind === 'review' && parent.message.id === view.message.id)
+          drawerReturnRef.current = { ...parent, goal }
         setDrawer(current =>
-          current?.kind === 'review' &&
-          current.message.id === view.message.id &&
-          delivery.goal
-            ? { ...current, goal: delivery.goal }
+          current?.kind === 'review' && current.message.id === view.message.id
+            ? { ...current, goal }
             : current,
         )
       })
@@ -875,6 +878,7 @@ export function App() {
       drawerReturnRef.current = undefined
       setDrawer(parent)
       if (parent.kind === 'task') void loadTaskDrawer(parent.channel.id)
+      if (parent.kind === 'review' && !parent.goal) loadReviewGoal(parent)
       return
     }
     setDrawer(view)
