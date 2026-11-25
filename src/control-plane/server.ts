@@ -10,6 +10,7 @@ import {
 import { extname, resolve, sep } from 'node:path'
 
 import { replyReference } from '../conversation/projection.js'
+import { isTaskResumeSource } from '../task/task-lifecycle.js'
 import { spillBodyForGap } from '../activity/tool-semantics.js'
 import { isWorkerIconId, type WorkerIconId } from '../brand/agent-icon.js'
 import { parseWorkerCollaborationRequest } from '../collaboration/collaboration.js'
@@ -144,6 +145,7 @@ import {
   WorkRuleLimitError,
   WorkRuleNotFoundError,
   WorkRuleRevisionConflictError,
+  TaskResumePolicyConflictError,
   type PegasStore,
 } from '../storage/sqlite-store.js'
 import {
@@ -1426,6 +1428,43 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
               error: 'worker_profile_read_only',
             })
           }
+          throw error
+        }
+      }
+      const taskResumeSourceMatch = /^\/v1\/task-resume-sources\/([^/]+)$/.exec(
+        taskResourceUrl.pathname,
+      )
+      if (
+        taskResumeSourceMatch &&
+        (request.method === 'GET' || request.method === 'PUT')
+      ) {
+        const source = taskResumeSourceMatch[1] ?? ''
+        if (!isTaskResumeSource(source))
+          return sendJson(response, 404, { error: 'not_found' })
+        if (request.method === 'GET')
+          return sendJson(response, 200, {
+            policy: options.store.taskResumeSourcePolicy(
+              requiredQuery(taskResourceUrl, 'userId'),
+              source,
+            ),
+          })
+        const body = await readJson(request)
+        if (!isRecord(body) || typeof body.enabled !== 'boolean')
+          throw new Error('enabled must be a boolean')
+        try {
+          return sendJson(response, 200, {
+            policy: options.store.setTaskResumeSourcePolicy(
+              requiredString(body.userId, 'userId'),
+              source,
+              body.enabled,
+              nonnegativeInteger(body.expectedRevision, 'expectedRevision'),
+            ),
+          })
+        } catch (error) {
+          if (error instanceof TaskResumePolicyConflictError)
+            return sendJson(response, 409, {
+              error: 'resume_source_policy_conflict',
+            })
           throw error
         }
       }

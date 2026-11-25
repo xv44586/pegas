@@ -1,11 +1,18 @@
 import { mkdtempSync, rmSync } from 'node:fs'
+import type { AddressInfo } from 'node:net'
 import { DatabaseSync } from 'node:sqlite'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
+import { createControlPlane } from '../src/control-plane/server.js'
 import type { Clock } from '../src/core/clock.js'
+import { RuleBasedTaskRouter } from '../src/router/router.js'
+import {
+  processNextEvent,
+  RoutingEventHandler,
+} from '../src/worker/processor.js'
 import type { ActionRequestDraft } from '../src/approval/approval.js'
 import { PegasStore } from '../src/storage/sqlite-store.js'
 
@@ -288,6 +295,95 @@ describe('TASK-001 Task/Run state machine', () => {
     // Stopping twice is idempotent and never rewrites the ended record.
     expect(store.stopTask(taskId, 'owner', 'stop-2').status).toBe('cancelled')
     store.close()
+  })
+
+  it('rejects a same-owner request from a source without human resume authority', async () => {
+    const store = new PegasStore(':memory:')
+    try {
+      const { taskId, runId } = seedTask(store, 'Owner task')
+      store.claimNextRun('worker')
+      store.completeRun(runId, 'worker', { executorRef: 's', output: 'done' })
+      const event = store.enqueueEvent({
+        userId: 'owner',
+        type: 'user.message',
+        source: 'scanner',
+        authenticatedActor: 'human',
+        payload: { text: 'Earlier work', taskId },
+      }).event
+      const handler = new RoutingEventHandler(
+        new RuleBasedTaskRouter(),
+        'echo-test',
+      )
+      expect(await processNextEvent(store, handler, 'router')).toBe(true)
+      expect(
+        store.listEvents('owner').find(input => input.id === event.id),
+      ).toMatchObject({
+        status: 'failed',
+        attempts: 1,
+      })
+      expect(store.findTask(taskId, 'owner')?.status).toBe('completed')
+      expect(store.listRuns(taskId)).toHaveLength(1)
+    } finally {
+      store.close()
+    }
+  })
+
+  it('revalidates queued mobile input against the current policy for its web mandate', async () => {
+    const store = new PegasStore(':memory:')
+    const server = createControlPlane({ store, apiToken: 'fixture-token' })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    try {
+      const { taskId, runId } = seedTask(store, 'Task accepted on Web')
+      store.claimNextRun('worker')
+      store.completeRun(runId, 'worker', { executorRef: 's', output: 'done' })
+      const event = store.enqueueEvent({
+        userId: 'owner',
+        type: 'user.message',
+        source: 'mobile',
+        authenticatedActor: 'human',
+        payload: { text: 'Continue using the same context', taskId },
+      }).event
+      const { port } = server.address() as AddressInfo
+      const url = `http://127.0.0.1:${String(port)}/v1/task-resume-sources/web`
+      const write = (
+        enabled: boolean,
+        expectedRevision: number,
+        token = 'fixture-token',
+      ) =>
+        fetch(url, {
+          method: 'PUT',
+          headers: {
+            'content-type': 'application/json',
+            authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ userId: 'owner', enabled, expectedRevision }),
+        })
+      expect((await write(false, 0, 'invalid')).status).toBe(401)
+      expect((await write(false, 0)).status).toBe(200)
+      expect((await write(false, 0)).status).toBe(200)
+      expect((await write(true, 0)).status).toBe(409)
+      const handler = new RoutingEventHandler(
+        new RuleBasedTaskRouter(),
+        'echo-test',
+      )
+      expect(await processNextEvent(store, handler, 'router')).toBe(true)
+      expect(
+        store.listEvents('owner').find(input => input.id === event.id),
+      ).toMatchObject({ status: 'failed', attempts: 1 })
+      expect(store.findTask(taskId, 'owner')?.status).toBe('completed')
+      expect(store.listRuns(taskId)).toHaveLength(1)
+      expect((await write(true, 1)).status).toBe(200)
+      store.retryEvent(event.id, 'owner')
+      expect(await processNextEvent(store, handler, 'router')).toBe(true)
+      expect(store.listRuns(taskId).at(-1)).toMatchObject({
+        status: 'queued',
+        originEventId: event.id,
+        resumeFromRef: 's',
+      })
+    } finally {
+      await new Promise<void>(resolve => server.close(() => resolve()))
+      store.close()
+    }
   })
 
   it('resumes a completed Task only through a mandate revalidated input', () => {

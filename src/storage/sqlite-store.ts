@@ -125,7 +125,10 @@ import {
 } from '../goal/goal-delivery.js'
 import {
   createMandate,
+  isTaskResumeSource,
   revalidateMandate,
+  type TaskResumeSource,
+  type TaskResumeSourcePolicy,
   sameExecutionContext,
 } from '../task/task-lifecycle.js'
 import type {
@@ -1100,6 +1103,16 @@ ALTER TABLE derived_memory_tombstones ADD COLUMN source_run_id TEXT;
 CREATE INDEX derived_memory_tombstones_by_run
 ON derived_memory_tombstones (user_id, source_run_id)
 WHERE source_run_id IS NOT NULL;
+`
+
+const migration56 = `
+CREATE TABLE task_resume_source_policies (
+  user_id TEXT NOT NULL,
+  source TEXT NOT NULL CHECK (source IN ('web', 'mobile')),
+  enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+  revision INTEGER NOT NULL CHECK (revision >= 1),
+  PRIMARY KEY (user_id, source)
+);
 `
 
 const migration53 = `
@@ -3341,6 +3354,14 @@ function correctedRunInput(
   )
 }
 
+export class TaskResumePolicyConflictError extends Error {}
+
+export class TaskResumeDeniedError extends Error {
+  constructor() {
+    super('当前来源无权续接原事情。恢复来源授权后可重试，或新建相关事情。')
+  }
+}
+
 export class PendingRunSteeringError extends Error {
   constructor() {
     super('Run has pending steering directives')
@@ -3455,6 +3476,7 @@ export class PegasStore {
     this.#migrate(53, migration53)
     this.#migrate(54, migration54)
     this.#migrate(55, migration55)
+    this.#migrate(56, migration56)
   }
 
   #backfillWorkerIconIds(): void {
@@ -9209,6 +9231,76 @@ export class PegasStore {
     this.#assertEventClaim(event.id, event.claimedBy)
   }
 
+  taskResumeSourcePolicy(
+    userId: string,
+    source: TaskResumeSource,
+  ): TaskResumeSourcePolicy {
+    const row = this.#database
+      .prepare(
+        'SELECT enabled, revision FROM task_resume_source_policies WHERE user_id = ? AND source = ?',
+      )
+      .get(userId, source) as { enabled: number; revision: number } | undefined
+    return {
+      source,
+      enabled: row ? row.enabled === 1 : true,
+      revision: row?.revision ?? 0,
+    }
+  }
+
+  setTaskResumeSourcePolicy(
+    userId: string,
+    source: TaskResumeSource,
+    enabled: boolean,
+    expectedRevision: number,
+  ): TaskResumeSourcePolicy {
+    return this.#runInTransaction(() => {
+      const current = this.taskResumeSourcePolicy(userId, source)
+      if (
+        current.revision === expectedRevision + 1 &&
+        current.enabled === enabled
+      )
+        return current
+      if (current.revision !== expectedRevision)
+        throw new TaskResumePolicyConflictError('Resume source policy changed')
+      this.#database
+        .prepare(
+          `INSERT INTO task_resume_source_policies (user_id, source, enabled, revision)
+           VALUES (?, ?, ?, ?) ON CONFLICT(user_id, source) DO UPDATE SET
+             enabled = excluded.enabled, revision = excluded.revision`,
+        )
+        .run(userId, source, enabled ? 1 : 0, expectedRevision + 1)
+      return { source, enabled, revision: expectedRevision + 1 }
+    })
+  }
+
+  #assertTaskResumeAuthorized(task: Task, event: InboxEvent): void {
+    const origin = this.#eventById(task.originEventId)
+    if (
+      !revalidateMandate(task.mandate, origin, event) ||
+      !isTaskResumeSource(origin.source) ||
+      !isTaskResumeSource(event.source) ||
+      !this.taskResumeSourcePolicy(task.userId, origin.source).enabled ||
+      !this.taskResumeSourcePolicy(task.userId, event.source).enabled
+    ) {
+      throw new TaskResumeDeniedError()
+    }
+    const payload = event.payload
+    if (
+      payload &&
+      typeof payload === 'object' &&
+      'taskId' in payload &&
+      payload.taskId === task.id
+    )
+      return
+    const reference = replyReference(payload)
+    if (
+      reference?.mode === 'continue' &&
+      this.conversationReply(reference, event.userId).taskId === task.id
+    )
+      return
+    throw new TaskResumeDeniedError()
+  }
+
   #applyTaskRoutingDecision(
     event: InboxEvent,
     decision: Extract<
@@ -9336,11 +9428,8 @@ export class PegasStore {
           throw new Error(
             'This delivery is awaiting your decision. Accept it or request changes in its review.',
           )
-        if (
-          task.status === 'completed' &&
-          !revalidateMandate(task.mandate, event)
-        )
-          throw new Error('Task mandate no longer authorizes resume')
+        if (task.status === 'completed')
+          this.#assertTaskResumeAuthorized(task, event)
       }
       if (
         collaboration?.target_event_id === event.id &&

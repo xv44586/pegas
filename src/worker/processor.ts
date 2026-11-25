@@ -33,6 +33,7 @@ import {
   EventClaimError,
   PendingRunSteeringError,
   TaskActionBlockedError,
+  TaskResumeDeniedError,
   type PegasStore,
 } from '../storage/sqlite-store.js'
 import { decodeLegacyExecutionPermissions } from '../core/execution-permissions.js'
@@ -805,7 +806,12 @@ export async function processNextEvent(
     }
     const message = error instanceof Error ? error.message : String(error)
     for (const member of batch.events)
-      store.failEvent(member.id, workerId, message)
+      store.failEvent(
+        member.id,
+        workerId,
+        message,
+        error instanceof TaskResumeDeniedError ? 1 : undefined,
+      )
     telemetry?.logger?.error('event.processing_failed', error, {
       eventId: event.id,
       workerId,
