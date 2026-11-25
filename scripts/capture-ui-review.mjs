@@ -1340,11 +1340,35 @@ try {
     'desktop-onboarding-connection-tested.png',
     'desktop-onboarding-connection-tested',
   )
-  await connectionForm.getByRole('button', { name: '保存连接' }).click()
+  const [connectionSave, refreshedCatalog] = await Promise.all([
+    unconfiguredPage.waitForResponse(
+      response =>
+        response.url().endsWith('/v1/settings') &&
+        response.request().method() === 'PUT',
+    ),
+    unconfiguredPage.waitForResponse(
+      response =>
+        response.url().endsWith('/v1/settings/agent-models') &&
+        response.request().method() === 'GET',
+    ),
+    connectionForm.getByRole('button', { name: '保存连接' }).click(),
+  ])
+  if (!connectionSave.ok())
+    throw new Error(
+      `Onboarding connection save failed: ${await connectionSave.text()}`,
+    )
+  if (!refreshedCatalog.ok())
+    throw new Error(
+      `Onboarding model catalog refresh failed: ${refreshedCatalog.status()}`,
+    )
+  const refreshedModels = (await refreshedCatalog.json()).models
+  if (!refreshedModels.some(model => model.id === 'gateway/onboarding-model'))
+    throw new Error(
+      `Refreshed execution catalog omitted the new gateway model (providers: ${[...new Set(refreshedModels.map(model => model.provider))].join(', ')})`,
+    )
+  await unconfiguredPage.getByText('连接已保存', { exact: true }).waitFor()
   await connectionForm.waitFor({ state: 'detached' })
-  await unconfiguredPage
-    .getByRole('button', { name: /Onboarding Probe Model.*默认模型/ })
-    .click()
+  await unconfiguredPage.getByRole('button', { name: /，默认模型$/ }).click()
   const savedConnectionPicker = unconfiguredPage.getByRole('dialog', {
     name: '选择模型',
   })
