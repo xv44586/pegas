@@ -84,6 +84,16 @@ import type {
   ToolSemantic,
 } from '../core/domain.js'
 import type {
+  BrowserTraceReceipt,
+  MessageTrace,
+  RouterTraceCall,
+} from '../observability/message-trace.js'
+import {
+  redactExplicitTraceCredentials,
+  traceFields,
+  tracePreview,
+} from '../observability/trace-preview.js'
+import type {
   DerivedMemoryCurationJob,
   DerivedMemoryCorrectionJob,
   DerivedMemory,
@@ -1246,6 +1256,69 @@ CREATE TABLE memory_project_summaries (
   updated_at TEXT NOT NULL,
   PRIMARY KEY (user_id, project_key)
 );
+`
+
+const migration57 = `
+CREATE TABLE message_trace_batch_members (
+  event_id TEXT PRIMARY KEY REFERENCES inbox_events(id),
+  root_event_id TEXT NOT NULL REFERENCES inbox_events(id)
+);
+CREATE INDEX message_trace_by_batch_root
+ON message_trace_batch_members (root_event_id);
+
+CREATE TABLE message_trace_router_calls (
+  id INTEGER PRIMARY KEY,
+  event_id TEXT NOT NULL REFERENCES inbox_events(id),
+  detail_json TEXT NOT NULL
+);
+CREATE INDEX message_trace_calls_by_event
+ON message_trace_router_calls (event_id, id);
+
+CREATE TABLE message_trace_browser_receipts (
+  subject_id TEXT NOT NULL,
+  phase TEXT NOT NULL CHECK (phase IN ('accepted','fetched','rendered','settled','visible')),
+  received_at TEXT NOT NULL,
+  duration_ms INTEGER,
+  PRIMARY KEY (subject_id, phase)
+);
+
+CREATE TABLE message_trace_run_starts (
+  run_id TEXT NOT NULL REFERENCES runs(id),
+  attempt INTEGER NOT NULL,
+  phase TEXT NOT NULL CHECK (phase IN ('execute','report')),
+  started_at TEXT NOT NULL,
+  PRIMARY KEY (run_id, attempt, phase)
+);
+
+CREATE INDEX message_trace_actions_by_run ON actions (run_id);
+CREATE INDEX message_trace_outbox_by_run
+ON outbox_messages (user_id, json_extract(payload_json, '$.runId'));
+CREATE INDEX message_trace_outbox_by_event
+ON outbox_messages (user_id, json_extract(payload_json, '$.eventId'));
+`
+
+const migration58 = `
+CREATE TABLE message_trace_run_inputs (
+  event_id TEXT PRIMARY KEY REFERENCES inbox_events(id),
+  run_id TEXT NOT NULL REFERENCES runs(id)
+);
+
+-- Recover only relations still present in durable steering facts.
+INSERT OR IGNORE INTO message_trace_run_inputs (event_id, run_id)
+SELECT event.id, run.id FROM runs AS run
+JOIN tasks AS task ON task.id = run.task_id
+JOIN json_each(run.steering_json) AS directive ON directive.type = 'object'
+JOIN inbox_events AS event
+  ON event.id = json_extract(directive.value, '$.eventId') AND event.user_id = task.user_id
+WHERE event.type = 'user.message';
+
+INSERT OR IGNORE INTO message_trace_run_inputs (event_id, run_id)
+SELECT event.id, parent.id FROM runs AS successor
+JOIN runs AS parent ON parent.id = successor.steering_of_run_id
+JOIN tasks AS task ON task.id = parent.task_id
+JOIN inbox_events AS event
+  ON event.id = successor.origin_event_id AND event.user_id = task.user_id
+WHERE event.type = 'user.message';
 `
 
 const migration39 = `
@@ -3477,6 +3550,8 @@ export class PegasStore {
     this.#migrate(54, migration54)
     this.#migrate(55, migration55)
     this.#migrate(56, migration56)
+    this.#migrate(57, migration57)
+    this.#migrate(58, migration58, () => this.#redactLegacyMessageTraceCalls())
   }
 
   #backfillWorkerIconIds(): void {
@@ -3550,7 +3625,7 @@ export class PegasStore {
     }
   }
 
-  #migrate(version: number, sql: string): void {
+  #migrate(version: number, sql: string, updateData?: () => void): void {
     this.#database.exec('BEGIN IMMEDIATE')
     try {
       const applied = this.#database
@@ -3561,6 +3636,7 @@ export class PegasStore {
         return
       }
       this.#database.exec(sql)
+      updateData?.()
       this.#database
         .prepare(
           'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
@@ -8892,6 +8968,7 @@ export class PegasStore {
         )
         .run(JSON.stringify(directives), now, activeRun.id)
     }
+    this.#recordMessageTraceRunInput(event.id, activeRun.id)
     this.#recordControlDecisionInTransaction(event, decision, now)
     return this.#taskById(task.id)
   }
@@ -9204,6 +9281,7 @@ export class PegasStore {
         if (owner.get(id)?.user_id !== head.userId)
           throw new EventClaimError('Routing batch inputs must share an owner')
       }
+      this.recordMessageTraceBatch(head.id, ids, workerId)
       applyDecision()
       const decision = this.#database
         .prepare('SELECT task_id FROM routing_decisions WHERE event_id = ?')
@@ -9516,6 +9594,7 @@ export class PegasStore {
               )
               .run(JSON.stringify(directives), now, activeRun.id)
           }
+          this.#recordMessageTraceRunInput(event.id, activeRun.id)
           this.#database
             .prepare(
               `INSERT INTO task_events (event_id, task_id, relation, created_at)
@@ -9980,6 +10059,383 @@ export class PegasStore {
     return {
       events: pageRows.map(row => this.#withEventAttachment(toInboxEvent(row))),
       ...(nextCursor ? { nextCursor } : {}),
+    }
+  }
+
+  recordMessageTraceBatch(
+    rootEventId: string,
+    eventIds: readonly string[],
+    workerId: string,
+  ): void {
+    this.#database
+      .prepare(
+        `INSERT INTO message_trace_batch_members (event_id, root_event_id)
+       SELECT member.id, root.id FROM inbox_events AS root
+       JOIN inbox_events AS member ON member.user_id = root.user_id
+       WHERE root.id = ? AND root.status = 'processing' AND root.claimed_by = ?
+         AND member.status = 'processing' AND member.claimed_by = root.claimed_by
+         AND member.id IN (SELECT value FROM json_each(?))
+       ON CONFLICT (event_id) DO UPDATE SET root_event_id = excluded.root_event_id
+       WHERE message_trace_batch_members.root_event_id != excluded.root_event_id`,
+      )
+      .run(rootEventId, workerId, JSON.stringify(eventIds))
+  }
+
+  #recordMessageTraceRunInput(eventId: string, runId: string): void {
+    this.#database
+      .prepare(
+        `INSERT INTO message_trace_run_inputs (event_id, run_id)
+       VALUES (?, ?) ON CONFLICT (event_id) DO NOTHING`,
+      )
+      .run(eventId, runId)
+  }
+
+  #redactLegacyMessageTraceCalls(): void {
+    const page = this.#database.prepare(
+      `SELECT id, detail_json FROM message_trace_router_calls
+       WHERE id > ? ORDER BY id LIMIT 100`,
+    )
+    const update = this.#database.prepare(
+      'UPDATE message_trace_router_calls SET detail_json = ? WHERE id = ?',
+    )
+    let lastId = 0
+    for (;;) {
+      const rows = page.all(lastId) as { id: number; detail_json: string }[]
+      for (const { id, detail_json } of rows) {
+        const call = JSON.parse(detail_json) as RouterTraceCall
+        for (const preview of [call.input, call.output]) {
+          if (preview?.text !== undefined)
+            preview.text = redactExplicitTraceCredentials(preview.text)
+        }
+        const redacted = JSON.stringify(call)
+        if (redacted !== detail_json) update.run(redacted, id)
+        lastId = id
+      }
+      if (rows.length < 100) return
+    }
+  }
+
+  recordMessageTraceRouterCall(
+    eventId: string,
+    call: Omit<RouterTraceCall, 'at'>,
+  ): void {
+    this.#database
+      .prepare(
+        `INSERT INTO message_trace_router_calls (event_id, detail_json)
+       VALUES (?, ?)`,
+      )
+      .run(
+        eventId,
+        JSON.stringify({ ...call, at: this.#clock.now().toISOString() }),
+      )
+  }
+
+  recordMessageTraceRunStart(claimed: ClaimedRun): void {
+    this.#database
+      .prepare(
+        `INSERT INTO message_trace_run_starts (run_id, attempt, phase, started_at)
+       VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+      )
+      .run(
+        claimed.run.id,
+        claimed.run.attempts,
+        claimed.phase,
+        this.#clock.now().toISOString(),
+      )
+  }
+
+  recordMessageTraceReceipt(
+    userId: string,
+    receipt: BrowserTraceReceipt,
+  ): boolean {
+    const subjectId =
+      receipt.phase === 'accepted' ? receipt.eventId : receipt.messageId
+    if (receipt.phase === 'accepted') {
+      const event = this.#database
+        .prepare(
+          "SELECT id FROM inbox_events WHERE id = ? AND user_id = ? AND source = 'web' AND type = 'user.message'",
+        )
+        .get(subjectId, userId)
+      if (!event) return false
+    } else {
+      const row = this.#database
+        .prepare('SELECT * FROM outbox_messages WHERE id = ? AND user_id = ?')
+        .get(subjectId, userId) as unknown as OutboxRow | undefined
+      if (!row) return false
+      const message = this.#projectOutboxMessage(toOutboxMessage(row))
+      if (message.projection?.weight === 'silent') return false
+      if (
+        receipt.phase === 'settled' &&
+        traceFields(message.payload).streaming === true
+      )
+        return false
+    }
+    this.#database
+      .prepare(
+        `INSERT INTO message_trace_browser_receipts (subject_id, phase, received_at, duration_ms)
+       VALUES (?, ?, ?, ?) ON CONFLICT (subject_id, phase) DO NOTHING`,
+      )
+      .run(
+        subjectId,
+        receipt.phase,
+        this.#clock.now().toISOString(),
+        receipt.phase === 'accepted' ? receipt.durationMs : null,
+      )
+    return true
+  }
+
+  messageTrace(eventId: string, userId: string): MessageTrace | undefined {
+    const source = this.#database
+      .prepare(
+        `SELECT CASE WHEN EXISTS (
+         SELECT 1 FROM routing_decisions WHERE event_id = event.id
+       ) OR EXISTS (
+         SELECT 1 FROM outbox_messages WHERE user_id = event.user_id
+           AND dedupe_key = 'routing-clarification:' || event.id
+       ) THEN event.id ELSE COALESCE(member.root_event_id, event.id) END AS root_id
+       FROM inbox_events AS event
+       LEFT JOIN message_trace_batch_members AS member ON member.event_id = event.id
+       WHERE event.id = ? AND event.user_id = ? AND event.type = 'user.message'`,
+      )
+      .get(eventId, userId) as { root_id: string } | undefined
+    if (!source) return undefined
+    const root = source.root_id
+    const eventRows = this.#database
+      .prepare(
+        `SELECT event.*, receipt.duration_ms AS submit_ms
+       FROM inbox_events AS event
+       LEFT JOIN message_trace_browser_receipts AS receipt
+         ON receipt.subject_id = event.id AND receipt.phase = 'accepted'
+       WHERE event.user_id = ? AND (event.id = ? OR event.id = ? OR event.id IN
+         (SELECT batch.event_id FROM message_trace_batch_members AS batch
+          WHERE batch.root_event_id = ? AND NOT EXISTS (
+            SELECT 1 FROM routing_decisions WHERE event_id = batch.event_id
+          ) AND NOT EXISTS (
+            SELECT 1 FROM outbox_messages WHERE user_id = event.user_id
+              AND dedupe_key = 'routing-clarification:' || batch.event_id
+          )))
+       ORDER BY event.created_at, event.rowid LIMIT 51`,
+      )
+      .all(userId, root, eventId, root) as unknown as (InboxRow & {
+      submit_ms: number | null
+    })[]
+    const events = eventRows.slice(0, 50).map(row => ({
+      id: row.id,
+      at: row.created_at,
+      status: row.status,
+      ...(row.processed_at ? { processedAt: row.processed_at } : {}),
+      ...(row.submit_ms !== null ? { submitMs: row.submit_ms } : {}),
+      ...traceTextField(
+        'input',
+        traceFields(JSON.parse(row.payload_json)).text,
+      ),
+      ...traceTextField('error', row.last_error),
+    }))
+    const decisionRow = this.#database
+      .prepare('SELECT * FROM routing_decisions WHERE event_id = ?')
+      .get(root) as
+      | {
+          kind: string
+          task_id: string | null
+          reason: string
+          created_at: string
+          decision_source: string | null
+          matched_rule_id: string | null
+        }
+      | undefined
+    const callRows = this.#database
+      .prepare(
+        'SELECT detail_json FROM message_trace_router_calls WHERE event_id = ? ORDER BY id LIMIT 51',
+      )
+      .all(root) as { detail_json: string }[]
+    const runRows = this.#database
+      .prepare(
+        `WITH RECURSIVE related(id) AS (
+         SELECT id FROM runs WHERE origin_event_id = ?
+         UNION
+         SELECT run_id FROM message_trace_run_inputs WHERE event_id = ?
+         UNION
+         SELECT run.id FROM related JOIN runs AS run ON run.retry_of_run_id = related.id
+         UNION
+         SELECT run.id FROM related JOIN runs AS run ON run.steering_of_run_id = related.id
+         UNION
+         SELECT action.resume_run_id FROM related JOIN actions AS action ON action.run_id = related.id
+         WHERE action.resume_run_id IS NOT NULL
+       )
+       SELECT run.* FROM related JOIN runs AS run ON run.id = related.id
+       JOIN tasks ON tasks.id = run.task_id AND tasks.user_id = ?
+       ORDER BY run.created_at, run.rowid LIMIT 51`,
+      )
+      .all(root, root, userId) as unknown as RunRow[]
+    const runs = runRows
+      .slice(0, 50)
+      .map(toRun)
+      .map(run => ({
+        id: run.id,
+        taskId: run.taskId,
+        status: run.status,
+        executor: run.executor,
+        input: tracePreview(run.input),
+        ...(run.executionContext.model
+          ? { model: run.executionContext.model }
+          : {}),
+        ...traceTextField('output', run.output),
+        ...traceTextField('error', run.lastError),
+        at: run.createdAt,
+        updatedAt: run.updatedAt,
+        attempts: run.attempts,
+        starts: this.#database
+          .prepare(
+            `SELECT attempt, phase, started_at AS at FROM message_trace_run_starts
+         WHERE run_id = ? ORDER BY started_at, attempt LIMIT 50`,
+          )
+          .all(run.id) as MessageTrace['runs'][number]['starts'],
+        ...(run.retryOfRunId ? { retryOf: run.retryOfRunId } : {}),
+        ...(run.steeringOfRunId ? { resumedFrom: run.steeringOfRunId } : {}),
+      }))
+    const runIds = JSON.stringify(runs.map(run => run.id))
+    const actionRows = this.#database
+      .prepare(
+        `SELECT action.id, action.run_id, action.kind, action.status, action.created_at,
+              action.updated_at, approval.id AS approval_id, approval.status AS approval_status,
+              approval.resolved_at, reconciliation.created_at AS reconciled_at,
+              reconciliation.resolution, reconciliation.note
+       FROM actions AS action LEFT JOIN approvals AS approval ON approval.action_id = action.id
+       LEFT JOIN action_reconciliations AS reconciliation ON reconciliation.action_id = action.id
+       WHERE action.run_id IN (SELECT value FROM json_each(?))
+       ORDER BY action.created_at, action.id LIMIT 51`,
+      )
+      .all(runIds) as {
+      id: string
+      run_id: string
+      kind: string
+      status: string
+      created_at: string
+      updated_at: string
+      approval_id: string | null
+      approval_status: string | null
+      resolved_at: string | null
+      reconciled_at: string | null
+      resolution: string | null
+      note: string | null
+    }[]
+    const policyRows = this.#database
+      .prepare(
+        `SELECT run_id, call_id, tool, category, decision, reason, created_at
+       FROM policy_call_audit WHERE run_id IN (SELECT value FROM json_each(?))
+       ORDER BY created_at, id LIMIT 101`,
+      )
+      .all(runIds) as {
+      run_id: string
+      call_id: string
+      tool: string
+      category: string
+      decision: string
+      reason: string
+      created_at: string
+    }[]
+    const resultRows = this.#database
+      .prepare(
+        `SELECT DISTINCT message.* FROM outbox_messages AS message
+       WHERE message.user_id = ? AND (
+         json_extract(message.payload_json, '$.runId') IN (SELECT value FROM json_each(?))
+         OR json_extract(message.payload_json, '$.eventId') = ?
+       ) ORDER BY message.created_at, message.id LIMIT 201`,
+      )
+      .all(userId, runIds, root) as unknown as OutboxRow[]
+    return {
+      rootEventId: root,
+      events,
+      ...(decisionRow
+        ? {
+            decision: {
+              kind: decisionRow.kind,
+              at: decisionRow.created_at,
+              ...(decisionRow.task_id ? { taskId: decisionRow.task_id } : {}),
+              ...traceTextField('reason', decisionRow.reason),
+              ...(decisionRow.decision_source
+                ? { source: decisionRow.decision_source }
+                : {}),
+              ...(decisionRow.matched_rule_id
+                ? { ruleId: decisionRow.matched_rule_id }
+                : {}),
+            },
+          }
+        : {}),
+      calls: callRows
+        .slice(0, 50)
+        .map(row => JSON.parse(row.detail_json) as RouterTraceCall),
+      runs,
+      actions: actionRows.slice(0, 50).map(row => ({
+        id: row.id,
+        runId: row.run_id,
+        tool: row.kind,
+        status: row.status,
+        at: row.created_at,
+        updatedAt: row.updated_at,
+        ...(row.approval_id && row.approval_status
+          ? {
+              approval: {
+                id: row.approval_id,
+                status: row.approval_status,
+                ...(row.resolved_at ? { resolvedAt: row.resolved_at } : {}),
+              },
+            }
+          : {}),
+        ...(row.reconciled_at && row.resolution
+          ? {
+              reconciliation: {
+                at: row.reconciled_at,
+                status: row.resolution,
+                ...traceTextField('note', row.note),
+              },
+            }
+          : {}),
+      })),
+      policy: policyRows.slice(0, 100).map(row => ({
+        runId: row.run_id,
+        callId: row.call_id,
+        tool: row.tool,
+        category: row.category,
+        decision: row.decision,
+        at: row.created_at,
+        ...traceTextField('reason', row.reason),
+      })),
+      results: resultRows.slice(0, 200).flatMap(row => {
+        const message = this.#projectOutboxMessage(toOutboxMessage(row))
+        if (message.projection?.weight === 'silent') return []
+        const payload = traceFields(message.payload)
+        const receipts = this.#database
+          .prepare(
+            'SELECT phase, received_at FROM message_trace_browser_receipts WHERE subject_id = ?',
+          )
+          .all(row.id) as { phase: string; received_at: string }[]
+        const at = (phase: string) =>
+          receipts.find(receipt => receipt.phase === phase)?.received_at
+        return [
+          {
+            id: message.id,
+            lane: message.projection?.lane ?? 'work',
+            at: message.createdAt,
+            updatedAt: message.updatedAt,
+            ...(typeof payload.runId === 'string'
+              ? { runId: payload.runId }
+              : {}),
+            ...(typeof payload.type === 'string' ? { type: payload.type } : {}),
+            ...traceTextField('output', payload.text),
+            ...optionalTraceTime('fetchedAt', at('fetched')),
+            ...optionalTraceTime('renderedAt', at('rendered')),
+            ...optionalTraceTime('settledAt', at('settled')),
+            ...optionalTraceTime('visibleAt', at('visible')),
+          },
+        ]
+      }),
+      truncated:
+        [eventRows, callRows, runRows, actionRows].some(
+          rows => rows.length > 50,
+        ) ||
+        resultRows.length > 200 ||
+        policyRows.length > 100,
     }
   }
 
@@ -17754,6 +18210,20 @@ function toRoutingRuleRecord(row: RoutingRuleRow): RoutingRuleRecord {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
+}
+
+function traceTextField<K extends string>(key: K, value: unknown) {
+  const preview = tracePreview(value)
+  return (preview ? { [key]: preview } : {}) as Partial<
+    Record<K, NonNullable<ReturnType<typeof tracePreview>>>
+  >
+}
+
+function optionalTraceTime<K extends string>(
+  key: K,
+  value: string | undefined,
+) {
+  return (value ? { [key]: value } : {}) as Partial<Record<K, string>>
 }
 
 function toInboxEvent(row: InboxRow): InboxEvent {

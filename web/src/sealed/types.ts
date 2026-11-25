@@ -76,6 +76,7 @@ export type DrawerView =
     }
   | { kind: 'runtime'; run?: Run; nodes?: ExecutionNode[]; nodesError?: string }
   | { kind: 'message'; message: OutboxMessage }
+  | { kind: 'trace'; eventId: string; backLabel?: string }
   | {
       kind: 'approval'
       approval: Approval

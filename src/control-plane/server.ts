@@ -741,6 +741,44 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         return sendJson(response, result.inserted ? 202 : 200, result)
       }
 
+      const traceUrl = new URL(request.url ?? '/', 'http://localhost')
+      const traceMatch = /^\/v1\/events\/([^/]+)\/trace$/.exec(
+        traceUrl.pathname,
+      )
+      if (traceMatch && request.method === 'GET') {
+        const trace = options.store.messageTrace(
+          decodeURIComponent(traceMatch[1] ?? ''),
+          requiredQuery(traceUrl, 'userId'),
+        )
+        response.setHeader('cache-control', 'no-store')
+        return trace
+          ? sendJson(response, 200, trace)
+          : sendJson(response, 404, { error: 'not_found' })
+      }
+      if (
+        traceUrl.pathname === '/v1/observability/browser-receipts' &&
+        request.method === 'POST'
+      ) {
+        const body = JSON.parse(
+          (await readBytes(request, 16_384)).toString('utf8'),
+        ) as unknown
+        if (
+          !isRecord(body) ||
+          !Array.isArray(body.receipts) ||
+          body.receipts.length > 30
+        )
+          throw new Error('Invalid browser receipts')
+        const userId = requiredString(body.userId, 'userId')
+        const receipts = (body.receipts as unknown[]).map(
+          parseBrowserTraceReceipt,
+        )
+        return sendJson(response, 200, {
+          recorded: receipts.map(receipt =>
+            options.store.recordMessageTraceReceipt(userId, receipt),
+          ),
+        })
+      }
+
       const eventsGetUrl = new URL(request.url ?? '/', 'http://localhost')
       if (eventsGetUrl.pathname === '/v1/events' && request.method === 'GET') {
         const url = eventsGetUrl
@@ -3438,6 +3476,38 @@ function runClaimToken(request: IncomingMessage): string | undefined {
   const trimmed = actual?.trim()
   if (!trimmed) return undefined
   return trimmed
+}
+
+function parseBrowserTraceReceipt(
+  input: unknown,
+): import('../observability/message-trace.js').BrowserTraceReceipt {
+  if (isRecord(input)) {
+    if (
+      input.phase === 'accepted' &&
+      typeof input.durationMs === 'number' &&
+      Number.isSafeInteger(input.durationMs) &&
+      input.durationMs >= 0 &&
+      input.durationMs <= 300_000
+    ) {
+      return {
+        phase: input.phase,
+        eventId: requiredString(input.eventId, 'eventId'),
+        durationMs: input.durationMs,
+      }
+    }
+    if (
+      input.phase === 'fetched' ||
+      input.phase === 'rendered' ||
+      input.phase === 'settled' ||
+      input.phase === 'visible'
+    ) {
+      return {
+        phase: input.phase,
+        messageId: requiredString(input.messageId, 'messageId'),
+      }
+    }
+  }
+  throw new Error('Invalid browser receipt')
 }
 
 async function readJson(request: IncomingMessage): Promise<unknown> {

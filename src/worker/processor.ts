@@ -512,6 +512,7 @@ async function executeConversationRun(
   telemetry?: { logger?: Logger; metrics?: MetricsRegistry },
 ): Promise<void> {
   const runStartedAt = performance.now()
+
   const leaseHeartbeat = setInterval(() => {
     try {
       store.renewRunLease(claimed.run.id, workerId)
@@ -793,6 +794,19 @@ export async function processNextEvent(
       })
       return true
     }
+    if (event.type === 'user.message') {
+      try {
+        store.recordMessageTraceBatch(
+          event.id,
+          batch.events.map(member => member.id),
+          workerId,
+        )
+      } catch {
+        telemetry?.logger?.warn('event.trace_batch_unavailable', {
+          eventId: event.id,
+        })
+      }
+    }
     if (error instanceof TaskActionBlockedError) {
       store.parkEventsForBlockedAction(
         batch.events.map(member => member.id),
@@ -921,6 +935,13 @@ export async function executeClaimedRun(
   derivedMemory?: DerivedMemoryRecallService,
 ): Promise<void> {
   const runStartedAt = performance.now()
+  try {
+    store.recordMessageTraceRunStart(claimed)
+  } catch {
+    telemetry?.logger?.warn('run.trace_start_unavailable', {
+      runId: claimed.run.id,
+    })
+  }
   const observeRun = (outcome: string) => {
     telemetry?.metrics?.increment('pegas_runs_total', { outcome })
     telemetry?.metrics?.observe(
