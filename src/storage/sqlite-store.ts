@@ -8988,7 +8988,11 @@ export class PegasStore {
     this.#database
       .prepare(
         `INSERT INTO task_events (event_id, task_id, relation, created_at)
-         VALUES (?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(event_id) DO UPDATE SET
+           task_id = excluded.task_id,
+           relation = excluded.relation,
+           created_at = excluded.created_at`,
       )
       .run(
         event.id,
