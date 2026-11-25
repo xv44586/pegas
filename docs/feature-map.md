@@ -184,6 +184,7 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - **自动化证据**：`test/control-plane.test.ts`、`test/task-run-state-machine.test.ts`、`test/chat-lane.test.ts`、`web/src/App.test.tsx`、`web/src/sealed/ChatExperience.test.tsx`。
 - **服务端审查**：复核从入站与归类到执行、审批、协作、交付和回退的业务路径。按 ROUTE-001、GOAL-001、PLAN-001 和 COLLAB-001 独立提交；集成验证基于 `origin/main fa05da7`，`pnpm check` 通过 145 个文件 / 1534 个测试，常规 smoke 和 3 个崩溃恢复注入点通过。见 [服务端业务审查与剩余验收](task-workflow.md#服务端业务审查2026-11-25)。
 - **状态与下一缺口**：Partial。跨设备待发稿仍是后续工作。解释使用 Inbox 合同 v4、无 schema 迁移；回滚前处理完待解释事件及其 Run，再一起切换 Web、控制面和 Worker。
+- **四项缺口集成复核**：`pnpm check` 通过 145 个文件 / 1544 个测试，常规 smoke、崩溃恢复、Supervisor 发布与回退验证通过。见 [缺口修复与验收](task-workflow.md#缺口修复与验收)。
 - **恢复权限**：schema v56 记录 Web/Mobile 恢复策略。权威为原接单事实和续接事务，拒绝保留原 Inbox 可重试输入。回归覆盖同 owner 非受支持来源、跨来源续接、原来源撤权和回放。
 
 ### TASK-001：Task/Run 完整状态迁移（2026-11-21）
