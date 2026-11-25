@@ -315,6 +315,80 @@ describe('ROUTE-001 durable control application', () => {
     store.close()
   })
 
+  it('replays parked steering after the blocking Action settles', () => {
+    const store = new PegasStore(':memory:')
+    const seeded = seedTask(store, '调研语音输入方案')
+    const claimed = store.claimNextRun('worker-replay-steer')
+    if (!claimed) throw new Error('Expected claimed Run')
+    const requested = store.requestApproval(
+      claimed.run.id,
+      claimed.claimToken,
+      {
+        kind: 'publish.release',
+        risk: 'high',
+        idempotencyKey: 'steer-replay-release',
+        request: { release: 'v10' },
+        recoveryPoint: { step: 'before_publish' },
+        approval: {
+          summary: '发布 v10',
+          impact: '对外可见',
+          recommendedOptionId: 'approve',
+          options: [
+            { id: 'approve', label: '发布', kind: 'approve' },
+            { id: 'reject', label: '不发布', kind: 'reject' },
+          ],
+        },
+      },
+    )
+    const correction = humanEvent(store, '最好是体积较小，local-first的方案')
+    const decision = {
+      kind: 'steer_task' as const,
+      taskId: seeded.taskId,
+      input: '最好是体积较小，local-first的方案',
+      reason: 'The user narrows the research scope.',
+    }
+    expect(() => store.applyControlIntent(correction, decision)).toThrow(
+      TaskActionBlockedError,
+    )
+
+    // The worker parks the message behind the blocking Action, exactly as
+    // the live incident did before the Action settled.
+    for (let drained = store.claimNextEvent('event-steer-drain'); drained;) {
+      if (drained.id === correction.id) {
+        store.releaseEventClaim(drained.id, 'event-steer-drain')
+        break
+      }
+      store.completeEvent(drained.id, 'event-steer-drain')
+      drained = store.claimNextEvent('event-steer-drain')
+    }
+    expect(store.claimNextEvent('event-steer-worker')?.id).toBe(correction.id)
+    expect(
+      store.parkEventsForBlockedAction(
+        [correction.id],
+        'event-steer-worker',
+        seeded.taskId,
+      ),
+    ).toBe('parked')
+
+    // The Action settles (rejection keeps the same wake path) and the
+    // parked steering becomes claimable again.
+    store.decideApproval(requested.approval.id, 'owner', {
+      commandId: 'steer-replay-reject',
+      optionId: 'reject',
+    })
+    expect(
+      store.listEvents('owner').find(event => event.id === correction.id),
+    ).toMatchObject({ status: 'pending' })
+
+    // Replaying the parked steering must not crash on the leftover
+    // blocked_action link in task_events.
+    expect(() => store.applyControlIntent(correction, decision)).not.toThrow()
+    expect(
+      store.listChannelRoutingDecisions(seeded.taskId, 'owner').at(-1),
+    ).toMatchObject({ eventId: correction.id, kind: 'steer_task' })
+    store.close()
+  })
+
   it('cancel_task stops the Task with the full human-stop semantics', () => {
     const store = new PegasStore(':memory:')
     const seeded = seedTask(store, '不再需要的工作')
