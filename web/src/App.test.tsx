@@ -30,6 +30,7 @@ import type {
   TaskArtifact,
   TaskDelivery,
   WorkChannel,
+  OutboxMessage,
 } from './types'
 
 const channel: WorkChannel = {
@@ -3930,6 +3931,36 @@ describe('sealed Pegas UI', () => {
     expect(screen.getByRole('button', { name: '重试' })).toBeTruthy()
   })
 
+  it('uses the current workflow action when inspecting an older failed run', () => {
+    const openAttention = vi.fn(() => Promise.resolve())
+    render(
+      <DetailDrawer
+        onChange={vi.fn()}
+        onClose={vi.fn()}
+        onWorkflowMessage={openAttention}
+        onContinue={vi.fn()}
+        onRetry={vi.fn()}
+        view={{
+          kind: 'task',
+          channel: {
+            ...channel,
+            workflow: {
+              state: 'awaiting_approval',
+              attentionMessageId: 'current-approval',
+            },
+          },
+          run: { ...run, status: 'failed', lastError: '旧 Run 的失败诊断' },
+        }}
+      />,
+    )
+    expect(screen.getByText('待审批')).toBeTruthy()
+    expect(screen.getByText('旧 Run 的失败诊断')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '重试' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '继续追问' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '查看审批' }))
+    expect(openAttention).toHaveBeenCalledWith('current-approval')
+  })
+
   it('presents the detail drawer as a modal and traps keyboard focus', () => {
     render(
       <DetailDrawer
@@ -6466,6 +6497,7 @@ describe('sealed Pegas UI', () => {
           id: 'review-ready',
           payload: {
             type: 'review.ready',
+            requiresAcceptance: true,
             title: '官网改版交付待验收',
             text: 'Review Pack 已生成。',
           },
@@ -7791,6 +7823,7 @@ describe('sealed Pegas UI', () => {
       id: 'message-review',
       payload: {
         type: 'review.ready',
+        requiresAcceptance: true,
         taskId: channel.id,
         text: '候选版本已交付，请审查。',
         review: reviewProjectionFixture,
@@ -8031,14 +8064,68 @@ describe('sealed Pegas UI', () => {
         questions: ['发布窗口是哪个时间段？'],
         text: '发布窗口是哪个时间段？',
       },
+      projection: { lane: 'decide' as const, weight: 'card' as const },
     }
     installSnapshotFetch({
       ...snapshot,
+      channels: [{ ...channel, workflow: { state: 'running' } }],
       messages: [clarificationMessage],
     })
     render(<App />)
     await screen.findByLabelText('给 Pegas 发消息')
+    expect(await screen.findByLabelText(/已处理：/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: /去回答/ })).toBeNull()
+  })
+
+  it('keeps a delivery awaiting review after reading and retries the same decision', async () => {
+    const task = {
+      ...channel,
+      workflow: {
+        state: 'awaiting_review' as const,
+        resultMessageId: 'awaiting-acceptance',
+      },
+    }
+    const base = snapshot.messages[0]
+    if (!base) throw new Error('Expected an outbox fixture')
+    const message: OutboxMessage = {
+      ...base,
+      id: 'awaiting-acceptance',
+      payload: {
+        type: 'review.ready',
+        reviewPackId: reviewPackFixture.id,
+        requiresAcceptance: true,
+        text: '请验收这份交付',
+        review: { ...reviewProjectionFixture, finalOutcome: 'completed' },
+      },
+      projection: { lane: 'decide', weight: 'card' },
+    }
+    const decide = vi
+      .fn(() => Promise.resolve())
+      .mockRejectedValueOnce(new Error('连接中断，请重试'))
+    render(
+      <DetailDrawer
+        onChange={vi.fn()}
+        onClose={vi.fn()}
+        onRetry={vi.fn()}
+        onDecideDelivery={decide}
+        view={{
+          kind: 'review',
+          channel: task,
+          message,
+          review: { ...reviewProjectionFixture, finalOutcome: 'completed' },
+        }}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: '退回修改' }))
+    const note = screen.getByRole('textbox', { name: '修改要求' })
+    expect(document.activeElement).toBe(note)
+    fireEvent.change(note, { target: { value: '解释分母并修正表格' } })
+    fireEvent.click(screen.getByRole('button', { name: '提交修改要求' }))
+    expect(await screen.findByText('连接中断，请重试')).toBeTruthy()
+    expect(note).toHaveProperty('value', '解释分母并修正表格')
+    fireEvent.click(screen.getByRole('button', { name: '提交修改要求' }))
+    expect(await screen.findByText('已退回修改')).toBeTruthy()
+    expect(decide.mock.calls[0]).toEqual(decide.mock.calls[1])
   })
 
   it('shows a compact review card in the conversation for review.ready', async () => {
@@ -11589,7 +11676,7 @@ describe('sealed Pegas UI', () => {
     expect(await screen.findByText('Channel 时间线')).toBeTruthy()
   })
 
-  it('sends recorded voice directly as a message in direct-send mode', async () => {
+  it.each([null, 'voice-reply'])('sends voice (%s)', async replyId => {
     class FakeMediaRecorder {
       static isTypeSupported() {
         return false
@@ -11618,7 +11705,27 @@ describe('sealed Pegas UI', () => {
       },
     })
     let voicePath = ''
-    const fetchMock = installFetch((path, init) => {
+    const voiceSnapshot = replyId
+      ? {
+          ...snapshot,
+          messages: [
+            {
+              id: replyId,
+              userId: 'owner',
+              taskId: channel.id,
+              channel: 'conversation',
+              payload: {
+                type: 'agent.message',
+                text: '可引用的语音追问来源',
+              },
+              status: 'sent' as const,
+              createdAt: '2026-11-21T00:00:00.000Z',
+              projection: { lane: 'say' as const, weight: 'inline' as const },
+            },
+          ],
+        }
+      : snapshot
+    const fetchMock = installSnapshotFetch(voiceSnapshot, (path, init) => {
       if (path.startsWith('/v1/voice/messages?') && init?.method === 'POST') {
         voicePath = path
         return Response.json(
@@ -11642,6 +11749,10 @@ describe('sealed Pegas UI', () => {
     })
     render(<App />)
     await screen.findByLabelText('给 Pegas 发消息')
+    if (replyId)
+      fireEvent.click(
+        await screen.findByRole('button', { name: '追问这条回复' }),
+      )
     const toggle = screen.getByRole('button', { name: '说完直接发送' })
     expect(toggle.getAttribute('aria-pressed')).toBe('false')
     fireEvent.click(toggle)
@@ -11654,6 +11765,9 @@ describe('sealed Pegas UI', () => {
     await waitFor(() => expect(voicePath).toContain('/v1/voice/messages?'))
     expect(voicePath).toContain('source=web')
     expect(voicePath).toContain('language=zh')
+    expect(
+      new URLSearchParams(voicePath.split('?')[1]).get('replyToMessageId'),
+    ).toBe(replyId ?? null)
     expect(
       fetchMock.mock.calls.some(
         ([path, init]) =>

@@ -433,13 +433,14 @@ describe('PegasStore', () => {
 
   it('resumes completed work under its mandate and permanently rejects stopped work', () => {
     const store = new PegasStore(':memory:')
-    const event = (id: string, text: string) =>
+    const event = (id: string, text: string, taskId?: string) =>
       store.enqueueEvent({
         id,
         userId: 'owner',
         source: 'web',
+        authenticatedActor: 'human',
         type: 'user.message',
-        payload: { text },
+        payload: { text, ...(taskId ? { taskId } : {}) },
       }).event
     const initial = store.applyRoutingDecision(
       event('event-initial', 'Build it'),
@@ -470,7 +471,7 @@ describe('PegasStore', () => {
     })
 
     const resumed = store.applyRoutingDecision(
-      event('event-resume', 'Add recovery'),
+      event('event-resume', 'Add recovery', initial.task.id),
       {
         kind: 'continue_task',
         taskId: initial.task.id,
@@ -692,13 +693,14 @@ describe('PegasStore', () => {
 
   it('starts a fresh executor session when the execution context changed', () => {
     const store = new PegasStore(':memory:')
-    const nextEvent = (id: string) =>
+    const nextEvent = (id: string, taskId?: string) =>
       store.enqueueEvent({
         id,
         userId: 'owner',
         source: 'web',
+        authenticatedActor: 'human',
         type: 'user.message',
-        payload: { text: id },
+        payload: { text: id, ...(taskId ? { taskId } : {}) },
       }).event
     const initial = store.applyRoutingDecision(
       nextEvent('one'),
@@ -718,7 +720,7 @@ describe('PegasStore', () => {
       output: 'done',
     })
     const continuation = store.applyRoutingDecision(
-      nextEvent('two'),
+      nextEvent('two', initial.task.id),
       {
         kind: 'continue_task',
         taskId: initial.task.id,
@@ -926,7 +928,7 @@ describe('PegasStore', () => {
           1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
           21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37,
           38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54,
-          55,
+          55, 56, 57, 58,
         ])
         expect(
           db

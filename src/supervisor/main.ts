@@ -21,9 +21,11 @@ import { pendingDestructiveMigrations } from '../storage/migration-policy.js'
 import { ReleaseStateStore } from './release-state.js'
 import {
   assertRollbackCompatible,
+  RollbackCompatibilityError,
   RollbackUnavailableError,
 } from './rollback-compatibility.js'
 import { LifecycleTransitionBarrier } from './lifecycle-transition.js'
+import { readTaskWorkflowContract } from './task-workflow-contract.js'
 import { performRollbackTransition } from './rollback-transition.js'
 import { resolveSupervisorRuntimePaths } from './runtime-paths.js'
 import { acquireSupervisorInstanceLock } from './instance-lock.js'
@@ -102,6 +104,15 @@ const recoveryServer = createRecoveryServer({
         input.reviewReportPath,
       )
       verifyCandidateReleaseTree(manifest.release.root, input.artifactPath)
+      const workflowVersion =
+        readTaskWorkflowContract(manifest.release.root)?.version ?? 0
+      if (
+        manifest.compatibility.taskWorkflowVersion !== undefined &&
+        manifest.compatibility.taskWorkflowVersion !== workflowVersion
+      )
+        throw new Error(
+          'Candidate Task workflow contract does not match its manifest',
+        )
       const current = state.read()
       const currentMaximum = current.active.compatibility?.maximumSchema
       if (
@@ -135,7 +146,22 @@ const recoveryServer = createRecoveryServer({
       }
       lifecycle.restartRequested = true
       await stopChildren()
-      state.stage(manifest, input.artifactPath, input.reviewReportPath)
+      assertRollbackCompatible(
+        databasePath,
+        manifest.compatibility.maximumSchema,
+        workflowVersion,
+      )
+      state.stage(
+        {
+          ...manifest,
+          compatibility: {
+            ...manifest.compatibility,
+            taskWorkflowVersion: workflowVersion,
+          },
+        },
+        input.artifactPath,
+        input.reviewReportPath,
+      )
     }),
   onRollback: reason =>
     lifecycleTransitions.begin(() =>
@@ -404,9 +430,19 @@ function assertRollbackAllowed(): void {
     throw new RollbackUnavailableError(
       'No previous release is available for rollback',
     )
+  const target = readTaskWorkflowContract(current.previous.root)
+  const declared = current.previous.compatibility
+  if (
+    declared?.taskWorkflowVersion !== undefined &&
+    declared.taskWorkflowVersion !== (target?.version ?? 0)
+  )
+    throw new RollbackCompatibilityError(
+      'Previous release Task workflow contract changed',
+    )
   assertRollbackCompatible(
     databasePath,
-    current.previous.compatibility?.maximumSchema ?? 17,
+    declared?.maximumSchema ?? target?.maximumSchema ?? 17,
+    target?.version ?? 0,
   )
 }
 

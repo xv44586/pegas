@@ -7,6 +7,7 @@ import type { MemoryContextEntry } from '../memory/memory.js'
 import type { WorkRuleContext } from '../rules/rules.js'
 
 export interface ExecutorInput {
+  explainOnly?: boolean
   runId: string
   taskId: string
   inputEventId?: string

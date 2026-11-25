@@ -256,6 +256,20 @@ Outbox 的产品已读、外部投递状态、用户是否接受结果、evidenc
 - Evidence Artifact 损坏、撤权或过期时追加 validity event，不改写历史 EvidenceRef 和完成时的 Review Pack 快照。Control Plane 生成新的 Review Pack revision，为受影响 criterion 更新 `currentValidity`，并按 Policy 决定重开 Task、请求重新验证或仅发出 attention；重新捕获产生新 EvidenceRef，不原地替换历史。
 - 完成流水线使用语义幂等键和唯一约束：Report 以 `(taskId, runId, reportSequence)`，evidence capture 以 `(taskId, goalRevision, criterionId, sourceArtifactRevisionOrSnapshotHash, captureKind)`，Review Pack 以 `(taskId, goalRevision, basisEventSetHash)`，OutboxItem 以 `(reviewPackId, channel, recipientProjection)` 去重。调用方丢失响应后必须查询或返回同一记录，不能生成新的完成链。
 
+## 用户验收与返工
+
+启用 `requireAcceptance` 的 Goal 在证据通过后完成 Run 并持久化 Review Pack，事情保持待验收。未启用字段及旧 Goal 沿用自动完成。接受结束事情，退回必须提供说明并持久发起一次原事情的继续输入。两类决定均绑定 owner、交付 ID 与当前 Goal revision，并可按原命令重放。
+
+验收覆盖已读与用户决定独立、旧交付或其他 owner 拒绝、退回只产生一次继续输入、旧交付保留可查。解释交付使用只读会话。回滚前应结清待验收事情并排空返工输入，历史记录无需迁移。
+
+### 服务端状态与恢复
+
+- 继续输入创建后继 Run 时，在同一事务淘汰旧的证据等待 Run。恢复领取再次核对 Run 仍是当前尝试，旧报告和证据保留供审计。正在等待未结 Action 的输入沿用审批与对账门禁。
+- 生成最终报告前在结算事务内复核当前执行是否收到用户纠正。收到纠正时，Worker 按最新输入创建后继，旧结果不会生成交付。
+- 返工事件绑定原 Review Pack。转派失败耗尽重试后，原事情显示失败，重试原消息会原子恢复排队。失败、重试与关闭都按当前 Run 和 owner 校验，旧交付保留可查。
+- 需要人工验收的事情在接受后才生成成功记忆，与自动验收使用同一个结束事务。退回前的技术通过仍保留为证据和 Run 历史。
+- 本次沿用已有 schema。切回不支持人工验收或新纠正恢复的版本前，结清待验收与返工，并排空未消费的纠正和只读解释事件。Supervisor 目前按 schema 版本兼容检查，跨同 schema 的这一语义回退需要执行上述步骤。
+
 ## 验收条件
 
 1. 用户可以从自由文本或语音开始，不需要先填表、选择工具或创建 Bot。
@@ -284,10 +298,10 @@ Outbox 的产品已读、外部投递状态、用户是否接受结果、evidenc
 ## 计划中的实现顺序
 
 1. [x] 定义 Goal Contract revision、EvidenceRef、Review Pack 和 criterion 状态合同；
-2. [x] 让 Executor 生成最小目标简报，并保存用户确认与修订；提案 API、blocking 澄清停放与用户回答后恢复已实现，Web 澄清卡片待接入；
+2. [x] 让 Executor 生成最小目标简报，并保存用户确认与修订；提案 API、blocking 澄清停放、Web 待补充入口与用户回答后恢复已实现；
 3. [x] 为结构化 Report 增加 evidence references，由 Control Plane 实施完成门禁；
 4. [x] 扩展 Artifact 与 Outbox API，支持 evidence 聚合、权限和预览；服务端元数据、聚合、所有者权限、最终修订守卫、所有者内容预览 API 与外部渠道脱敏投影已完成；
-5. 实现 Web Review Pack、视觉 evidence 画廊和 Channel 审计下钻；
+5. [x] 实现 Web Review Pack、证据画廊和 Channel 审计入口，明确要求用户验收的交付可接受或退回；
 6. 用真实任务样本验证哪些字段和提问有价值，再决定 Memory、Scheduler 与反馈闭环的后续范围。
 
 ## 当前服务端 API（Partial）

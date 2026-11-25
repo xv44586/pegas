@@ -1,7 +1,7 @@
 import type { AddressInfo } from 'node:net'
 import { createServer } from 'node:http'
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { loadConfig } from '../src/core/config.js'
 import type { InboxEvent, RoutingCandidate } from '../src/core/domain.js'
@@ -12,7 +12,7 @@ import type { JsonModelProvider } from '../src/model/provider.js'
 import { prefilterDecision } from '../src/router/prefilter.js'
 import { ModelTaskRouter } from '../src/router/router.js'
 import { runtimeSettingsDefaults } from '../src/settings/runtime-settings.js'
-import { PegasStore } from '../src/storage/sqlite-store.js'
+import { EventClaimError, PegasStore } from '../src/storage/sqlite-store.js'
 import {
   processNextEvent,
   RoutingEventHandler,
@@ -259,6 +259,159 @@ describe('PLAN-001 P2 collect window', () => {
       '帮我整理会议纪要\n重点是下周的排期\n输出成 Markdown',
     )
     store.close()
+  })
+
+  it.each(['lost claim before commit', 'interruption after routing'] as const)(
+    'keeps routing and every batch receipt atomic on %s',
+    async interruption => {
+      const store = new PegasStore(':memory:')
+      try {
+        store.initializeRuntimeSettings(runtimeSettingsDefaults(loadConfig({})))
+        const first = store.enqueueEvent(humanEvent('整理会议纪要')).event
+        const second = store.enqueueEvent(humanEvent('包含排期')).event
+        if (interruption === 'interruption after routing') {
+          vi.spyOn(store, 'completeEvent').mockImplementationOnce(() => {
+            throw new EventClaimError('Interrupted before receipt')
+          })
+        }
+        const provider: JsonModelProvider = {
+          name: 'batch-interruption',
+          generateJson: () => {
+            if (interruption === 'lost claim before commit')
+              store.releaseEventClaim(second.id, 'router')
+            return Promise.resolve({
+              kind: 'create_task',
+              title: '整理纪要',
+              goal: '整理纪要',
+              reason: 'test',
+            })
+          },
+        }
+        await processNextEvent(
+          store,
+          new RoutingEventHandler(
+            new ModelTaskRouter({ provider }),
+            'echo-test',
+          ),
+          'router',
+          undefined,
+          { collectWindowMs: 100 },
+        )
+        const events = store.listEvents('owner')
+        if (interruption === 'lost claim before commit') {
+          expect(store.listTasks('owner')).toHaveLength(0)
+          expect(events.find(event => event.id === first.id)?.status).toBe(
+            'processing',
+          )
+          expect(events.find(event => event.id === second.id)?.status).toBe(
+            'pending',
+          )
+        } else {
+          expect(events.every(event => event.status === 'processed')).toBe(true)
+          const [task] = store.listTasks('owner')
+          expect(task).toBeDefined()
+          if (!task) throw new Error('Expected routed task')
+          expect(store.listRuns(task.id)).toHaveLength(1)
+          expect(
+            store.listChannelEvents(task.id, 'owner').map(event => event.id),
+          ).toEqual(expect.arrayContaining([first.id, second.id]))
+          expect(store.claimNextEvent('replacement')).toBeUndefined()
+        }
+      } finally {
+        store.close()
+      }
+    },
+  )
+
+  it('keeps every collected input pending until the blocking Approval is settled', async () => {
+    const store = new PegasStore(':memory:')
+    try {
+      store.initializeRuntimeSettings(runtimeSettingsDefaults(loadConfig({})))
+      const origin = store.enqueueEvent(humanEvent('准备发布说明')).event
+      const { task } = store.applyRoutingDecision(
+        origin,
+        {
+          kind: 'create_task',
+          title: '准备发布说明',
+          goal: '准备发布说明',
+          input: '准备发布说明',
+          reason: 'Test fixture',
+        },
+        'echo-test',
+      )
+      expect(store.claimNextEvent('router')?.id).toBe(origin.id)
+      store.completeEvent(origin.id, 'router')
+      const run = store.claimNextRun('worker')
+      if (!run) throw new Error('Expected Run')
+      const { approval } = store.requestApproval(run.run.id, run.claimToken, {
+        kind: 'publish.release',
+        risk: 'high',
+        idempotencyKey: 'waiting-approval',
+        request: { release: 'v9' },
+        recoveryPoint: { step: 'before_publish' },
+        approval: {
+          summary: '发布 v9',
+          impact: '对外可见',
+          recommendedOptionId: 'approve',
+          options: [
+            { id: 'approve', label: '发布', kind: 'approve' },
+            { id: 'reject', label: '不发布', kind: 'reject' },
+          ],
+        },
+      })
+      const notes = ['先写清新增内容', '再补上版本兼容说明']
+      const ids = notes.map(
+        text => store.enqueueEvent(humanEvent(text)).event.id,
+      )
+      const provider: JsonModelProvider = {
+        name: 'continuing',
+        generateJson: () =>
+          Promise.resolve({
+            kind: 'continue_task',
+            taskId: task.id,
+            reason: 'Same work',
+          }),
+      }
+      const handler = new RoutingEventHandler(
+        new ModelTaskRouter({ provider }),
+        'echo-test',
+      )
+      function noteEvents() {
+        return store.listEvents('owner').filter(event => ids.includes(event.id))
+      }
+      await processNextEvent(store, handler, 'router', undefined, {
+        collectWindowMs: 100,
+      })
+      expect(noteEvents().map(event => event.status)).toEqual([
+        'processing',
+        'processing',
+      ])
+      expect(
+        store
+          .listChannelEvents(task.id, 'owner')
+          .filter(event => ids.includes(event.id)),
+      ).toHaveLength(2)
+
+      store.decideApproval(approval.id, 'owner', {
+        commandId: 'decline-v9',
+        optionId: 'reject',
+      })
+      expect(noteEvents().map(event => event.status)).toEqual([
+        'pending',
+        'pending',
+      ])
+      await processNextEvent(store, handler, 'router', undefined, {
+        collectWindowMs: 100,
+      })
+      expect(noteEvents().map(event => event.status)).toEqual([
+        'processed',
+        'processed',
+      ])
+      for (const note of notes)
+        expect(store.listRuns(task.id).at(-1)?.input).toContain(note)
+    } finally {
+      store.close()
+    }
   })
 
   it('never delays explicit references or stop commands', async () => {

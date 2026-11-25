@@ -324,6 +324,255 @@ describe('EXEC-005 conversation lane', () => {
     store.close()
   })
 
+  it('routes an owned reply reference to its original session and ignores the rolling session', async () => {
+    const store = new PegasStore(':memory:')
+    initializeSettings(store, true)
+    const router = new ModelTaskRouter({
+      provider: new StubProvider({
+        kind: 'reply',
+        taskId: '',
+        title: '',
+        goal: '',
+        reason: 'casual',
+      }),
+    })
+    await routeText(store, router, 'First conversation')
+    const original = store.claimNextRun(
+      'chat-original',
+      30_000,
+      undefined,
+      'conversation',
+    )
+    if (!original) throw new Error('Expected the original conversation Run')
+    store.streamSayFromRun(
+      original.run.id,
+      'chat-original',
+      'Selected answer about budget',
+      { streaming: false },
+    )
+    store.completeRun(original.run.id, 'chat-original', {
+      executorRef: 'original-chat-session',
+      output: 'Selected answer about budget',
+    })
+    const reply = store
+      .listOutbox('owner')
+      .find(message => message.projection?.lane === 'say')
+    if (!reply) throw new Error('Expected the original answer')
+    store.recordConversationSessionRef('owner', 'later-rolling-session')
+
+    const server = createControlPlane({ store, apiToken: 'secret' })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    try {
+      const { port } = server.address() as AddressInfo
+      const post = (userId: string, payload: Record<string, unknown>) =>
+        fetch(`http://127.0.0.1:${String(port)}/v1/events`, {
+          method: 'POST',
+          headers: {
+            authorization: 'Bearer secret',
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            userId,
+            type: 'user.message',
+            source: 'web',
+            dedupeKey: 'follow-up',
+            payload,
+          }),
+        })
+      expect(
+        (
+          await post('another-owner', {
+            text: 'Explain',
+            replyToMessageId: reply.id,
+          })
+        ).status,
+      ).toBe(404)
+      expect(
+        (
+          await post('owner', {
+            text: 'Explain',
+            replyToMessageId: reply.id,
+            taskId: original.task.id,
+          })
+        ).status,
+      ).toBe(400)
+      const accepted = await post('owner', {
+        text: 'Explain the second figure',
+        replyToMessageId: reply.id,
+      })
+      expect(accepted.status).toBe(202)
+      expect(
+        (
+          await post('owner', {
+            text: 'Explain the second figure',
+            replyToMessageId: reply.id,
+          })
+        ).status,
+      ).toBe(200)
+
+      const unrelated = store.enqueueEvent({
+        userId: 'owner',
+        type: 'user.message',
+        source: 'web',
+        authenticatedActor: 'human',
+        payload: { text: 'An unrelated message' },
+      }).event
+      expect(store.claimNextEvent('legacy-worker', 30_000, 2)?.payload).toEqual(
+        { text: 'An unrelated message' },
+      )
+      store.releaseEventClaim(unrelated.id, 'legacy-worker')
+      const handler = new RoutingEventHandler(
+        new RuleBasedTaskRouter(),
+        'echo-test',
+      )
+      await processNextEvent(store, handler, 'router', undefined, {
+        collectWindowMs: 40,
+      })
+      const followUp = store.claimNextRun(
+        'chat-follow-up',
+        30_000,
+        undefined,
+        'conversation',
+      )
+      if (!followUp) throw new Error('Expected the follow-up conversation Run')
+      expect(followUp.task.id).toBe(original.task.id)
+      expect(followUp.run.input).toContain('Selected answer about budget')
+      expect(followUp.run.input).toContain('Explain the second figure')
+      expect(followUp.run.input).not.toContain('An unrelated message')
+
+      const executor = new CapturingExecutor()
+      await executeClaimedRun(
+        store,
+        executor,
+        followUp,
+        'chat-follow-up',
+        process.cwd(),
+        new AbortController().signal,
+        'http://127.0.0.1:4317',
+      )
+      expect(executor.input?.resumeSessionId).toBe('original-chat-session')
+      expect(store.conversationSessionRef('owner')).toBe(
+        'later-rolling-session',
+      )
+      expect(store.listRuns(original.task.id)).toHaveLength(2)
+    } finally {
+      await new Promise<void>(resolve => server.close(() => resolve()))
+      store.close()
+    }
+  })
+
+  it('explains a work delivery in a read-only Run while its Task stays completed', async () => {
+    const store = new PegasStore(':memory:')
+    try {
+      initializeSettings(store, false)
+      const router = new RuleBasedTaskRouter()
+      await routeText(store, router, 'Prepare the budget')
+      const work = store.claimNextRun('work')
+      if (!work) throw new Error('Expected work Run')
+      store.completeRun(work.run.id, 'work', {
+        executorRef: 'writable-work-session',
+        output: 'The budget includes a reserve.',
+      })
+      const result = store.listOutbox('owner', work.task.id)[0]
+      if (!result) throw new Error('Expected work delivery')
+      store.enqueueEvent({
+        userId: 'owner',
+        type: 'user.message',
+        authenticatedActor: 'human',
+        source: 'web',
+        payload: {
+          text: 'Explain the reserve',
+          replyToMessageId: result.id,
+          intent: 'explain',
+        },
+      })
+      await processNextEvent(
+        store,
+        new RoutingEventHandler(router, 'echo-test'),
+        'router',
+      )
+      const explanation = store.claimNextRun(
+        'explain',
+        30_000,
+        undefined,
+        'conversation',
+      )
+      if (!explanation) throw new Error('Expected the explanation Run')
+      expect(explanation.run.executionContext.protocol).toBe('conversation-v1')
+      expect(explanation.run.executionContext.permissions).toContain(
+        'read-only',
+      )
+      expect(explanation.run.resumeFromRef).toBeUndefined()
+      expect(explanation.run.input).toContain('The budget includes a reserve.')
+      expect(store.findTask(work.task.id, 'owner')?.status).toBe('completed')
+      expect(store.listRuns(work.task.id)).toHaveLength(1)
+    } finally {
+      store.close()
+    }
+  })
+
+  it('replays a quoted follow-up merged into a queued work Run only once', async () => {
+    const store = new PegasStore(':memory:')
+    try {
+      const handler = new RoutingEventHandler(
+        new RuleBasedTaskRouter(),
+        'echo-test',
+      )
+      await routeText(store, new RuleBasedTaskRouter(), 'Review the budget')
+      const task = store.listTasks('owner')[0]
+      if (!task) throw new Error('Expected a work Task')
+      const first = store.claimNextRun('work-first')
+      if (!first) throw new Error('Expected the first work Run')
+      store.completeRun(first.run.id, 'work-first', {
+        executorRef: 'budget-session',
+        output: 'The selected work result',
+      })
+      const reply = store
+        .listOutbox('owner')
+        .find(message => message.taskId === task.id)
+      if (!reply) throw new Error('Expected the work result')
+      store.enqueueEvent({
+        userId: 'owner',
+        type: 'user.message',
+        source: 'web',
+        authenticatedActor: 'human',
+        payload: { text: 'Update the chart', taskId: task.id },
+      })
+      await processNextEvent(store, handler, 'router')
+
+      const quote = store.enqueueEvent({
+        userId: 'owner',
+        type: 'user.message',
+        source: 'web',
+        authenticatedActor: 'human',
+        payload: {
+          text: 'Explain the source of that number',
+          replyToMessageId: reply.id,
+        },
+      }).event
+      const claimed = store.claimNextEvent('router')
+      if (claimed?.id !== quote.id)
+        throw new Error('Expected the follow-up claim')
+      await handler.handle(claimed, store)
+      // Simulate a worker restart between committing the routing decision and
+      // completing the durable event.
+      store.releaseEventClaim(claimed.id, 'router')
+      await processNextEvent(store, handler, 'router-retry')
+
+      const runs = store.listRuns(task.id)
+      expect(runs).toHaveLength(2)
+      expect(runs[1]?.input).toContain('The selected work result')
+      expect(
+        runs[1]?.input.match(/Explain the source of that number/g),
+      ).toHaveLength(1)
+      expect(
+        store.listEvents('owner').find(event => event.id === quote.id)?.status,
+      ).toBe('processed')
+    } finally {
+      store.close()
+    }
+  })
+
   it('keeps chat and heavy Run claims in separate lanes', () => {
     const store = new PegasStore(':memory:')
     initializeSettings(store, true)

@@ -231,7 +231,7 @@ Worker 对 `automation.due` 先验证 Invocation/Event provenance，然后使用
 
 - Inbox 领取失败、处理异常和重试沿用既有 lease 与 attempts；Invocation 同步显示 `processing`、退回 `pending` 或进入 `failed`。
 - Event 已处理但响应丢失时，稳定 Event ID 和 Invocation 唯一约束阻止重复触发。
-- 目标 Task 在计划触发后关闭时，Event 按 Inbox retry 结算为失败；不能由机器 Event 复活 completed/cancelled Task。
+- 待人工验收或返工尚未入队时，existing-task 调用保留原到期时间。已经领取的调用归还 Inbox，原 invocation 继续等待且不消费重试次数。返工入队后恢复；周期沿用已有错过周期合并规则。接受或停止 Task 时取消 active/paused 计划，未创建 Run 的调用以 `automation_target_closed` 终结，历史 Run 和实际已派发调用保留，已落 Run 的调用在 Worker 恢复时仍可补齐回执。Scheduler 同样收尾历史关闭目标上的计划。
 - Scheduler 进程退出由 Supervisor 作为受管子进程处理；重启后从 SQLite 的 `next_fire_at` 继续。
 - schema v20 新增表不修改旧 Task、Run 或 Event。回滚目标不支持 v20 且仍有活跃 Automation 或 pending/processing Automation Event 时，Rollback Guard 拒绝切换；暂停/取消并结算 Event 后才允许回滚。
 

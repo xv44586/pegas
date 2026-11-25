@@ -240,6 +240,46 @@ describe('OBS-001 message trace', () => {
 })
 
 describe('OBS-001 review regressions', () => {
+  it('commits batch membership with its clarification even without a task decision', async () => {
+    const store = new PegasStore(':memory:')
+    try {
+      const head = enqueue(store, '核对一张报表')
+      const member = enqueue(store, '范围是十一月')
+      const router = {
+        route: () => {
+          expect(store.messageTrace(member.id, 'owner')?.rootEventId).toBe(
+            member.id,
+          )
+          return Promise.resolve({
+            kind: 'clarify' as const,
+            input: '核对一张报表',
+            reason: '需要确定答复对象',
+            question: '请问要核对哪张报表？',
+          })
+        },
+      }
+      await processNextEvent(
+        store,
+        new RoutingEventHandler(router, 'echo'),
+        'worker',
+        undefined,
+        { collectWindowMs: 12 },
+      )
+      const trace = store.messageTrace(member.id, 'owner')
+      expect(trace?.rootEventId).toBe(head.id)
+      expect(trace?.events.map(event => event.status)).toEqual([
+        'processed',
+        'processed',
+      ])
+      expect(trace?.decision).toBeUndefined()
+      expect(trace?.results.map(result => result.type)).toContain(
+        'routing.clarification_required',
+      )
+    } finally {
+      store.close()
+    }
+  })
+
   it('anchors a single retry to its own Run after a failed two-message batch', async () => {
     const store = new PegasStore(':memory:')
     try {
@@ -372,7 +412,7 @@ describe('OBS-001 review regressions', () => {
     }
   })
 
-  it('upgrades v54 diagnostics by scrubbing stored previews and recovering known steering edges', async () => {
+  it('upgrades v57 diagnostics by scrubbing stored previews and recovering known steering edges', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'pegas-trace-upgrade-'))
     const path = join(directory, 'pegas.sqlite')
     let store: PegasStore | undefined
@@ -402,7 +442,7 @@ describe('OBS-001 review regressions', () => {
       try {
         database.exec(`
           DROP TABLE message_trace_run_inputs;
-          DELETE FROM schema_migrations WHERE version = 55;
+          DELETE FROM schema_migrations WHERE version = 58;
         `)
         const previous = 'Cookie: sid=legacy-fixture-value'
         database

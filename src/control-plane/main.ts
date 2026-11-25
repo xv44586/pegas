@@ -30,6 +30,7 @@ const logger = createLogger({ service: 'control-plane' })
 const metrics = new MetricsRegistry()
 const store = new PegasStore(config.databasePath, {
   routingClarificationTtlMs: config.routingClarificationTtlMs,
+  defaultWorkspaceRoot: config.workspaceRoot,
 })
 const modelCredentialVault = loadModelCredentialVault(
   config.modelCredentialKeyPath,

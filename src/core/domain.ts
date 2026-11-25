@@ -601,6 +601,7 @@ export interface OutboxMessage {
    * and durable rows stay unchanged.
    */
   projection?: ConversationProjection
+  deliveryDecision?: 'accept' | 'request_changes' | 'cancelled'
 }
 
 export type ConversationLane = 'say' | 'work' | 'decide'
@@ -649,6 +650,7 @@ export interface ReleaseRef {
   compatibility?: {
     minimumSchema: number
     maximumSchema: number
+    taskWorkflowVersion?: number
   }
 }
 

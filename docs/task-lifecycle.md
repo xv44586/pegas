@@ -38,6 +38,8 @@ Task 与 Run 的合法状态与迁移由数据库和应用层双重约束：
 - cancelled 只表示用户明确停止，原 Task 永久不可恢复，也不能通过显式 `taskId`、重新授权或旧 Session 绕过；继续工作需要重新接单并创建带来源关系的新 Task。授权复核失败不改写为 cancelled，而是保持 completed 并把输入退回 Router/Eval。
 - Run、Worker Runtime 和 Executor Session 独立结束；旧 Session 只有通过兼容性检查才作为新 Run 的恢复引用。
 
+会话兼容检查以持久化的 Executor、模型、权限、工作区、节点、协议和执行档案为准。全局设置 revision 保留在新 Run 快照中以便审计，单独变化时不影响恢复引用。具体执行条件有变化时仍按不兼容处理。
+
 ```text
 completed + authorized user input
   → lock Task
@@ -69,6 +71,12 @@ Mandate = {
 Mandate 在接单时创建且内容不可变。executor 完成不撤销它；用户停止 withdraw，恢复前复核失败 revoke。已完成 Task 收到自己 Channel/Thread 上的人类输入时，无需新的接单 Decision：输入先持久化，复核通过后清除 ended、追加 resumed Input、创建新 Run；复核失败则保持 completed，把输入释放给 Router/Eval。Bot、CI、定时扫描和 context-only 关系不能恢复。
 
 `policyVersion` 由接单规则、accept mode 和各 Source Policy 生成；模型、并发数、暂停状态等执行设置不改变 Mandate。复核按原 basis 判断 Source 是否仍监听、sender/bot 是否仍允许、admission cell 是否仍提供不低于原来的 strength，以及 inferred Mandate 的 auto mode 和 matched rules 是否仍有效。
+
+### 当前来源授权
+
+schema v56 增加按 owner 与来源保存的恢复策略。Web 和 Mobile 默认为已授权的人工入口，可在两端之间继续同一事情。续接尚未归类的输入时，事务内重新校验原始接单事件、人类身份、sender、owner、两端策略和明确的 Task 或回复引用。来源撤权后，仍未归类的输入以可重试失败保留，原事情维持结束；调整授权后可重发原输入。来源或身份无法证实的历史及机器输入可以通过新建相关事情继续。已提交的 Run 沿用既有执行和审批边界。
+
+`GET /v1/task-resume-sources/{web|mobile}?userId=...` 读取策略及 revision，`PUT` 同地址接收 `{userId, enabled, expectedRevision}`，沿用实例认证。默认 revision 为 0，更新按 revision 比较，并支持同一更新的响应重放。旧版本会忽略新表，撤权期间不得切回不支持该策略的版本。
 
 ## 验证与剩余缺口
 

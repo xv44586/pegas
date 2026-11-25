@@ -29,8 +29,10 @@ import {
   reviewProjection,
   runIdFromMessage,
   taskAutomationActive,
+  textFromPayload,
   type AppData,
   type AppPage,
+  type ComposerTarget,
   type DrawerView,
   type SettingsSection,
   type ThemeChoice,
@@ -54,6 +56,7 @@ import type {
   RuntimeSettings,
   RewriteSettingsDraft,
   SpeechSettingsDraft,
+  WorkChannel,
   WorkRuleRecord,
   RoutingRuleRecord,
 } from './types'
@@ -75,8 +78,7 @@ export function App() {
   const [agentModels, setAgentModels] = useState<DshModelCatalog>()
   const [page, setPage] = useState<AppPage>(() => pageFromLocation())
   const [drawer, setDrawer] = useState<DrawerView>()
-  const [continuationTaskId, setContinuationTaskId] = useState<string>()
-  const [sourceContextTaskId, setSourceContextTaskId] = useState<string>()
+  const [composerTarget, setComposerTarget] = useState<ComposerTarget>()
   const [composerDraft, setComposerDraft] = useState('')
   const [settingsSection, setSettingsSection] = useState<SettingsSection>(() =>
     settingsSectionFromLocation(),
@@ -469,6 +471,21 @@ export function App() {
   function enrichDrawer(view: DrawerView): DrawerView {
     if (view.kind === 'runtime')
       return { ...view, run: data.snapshot.runs.at(-1) ?? view.run }
+    if (view.kind === 'review') {
+      const channel =
+        data.snapshot.channels.find(
+          channel => channel.id === view.channel.id,
+        ) ?? view.channel
+      return {
+        ...view,
+        channel,
+        decision: (
+          data.snapshot.messages.find(
+            message => message.id === view.message.id,
+          ) ?? view.message
+        ).deliveryDecision,
+      }
+    }
     if (view.kind !== 'task') return view
     const snapshotChannel = data.snapshot.channels.find(
       item => item.id === view.channel.id,
@@ -1207,7 +1224,7 @@ export function App() {
     )
     const restored = await restoreAttentionDrawer(message, requestId)
     if (!restored) return
-    const board = attentionBoard(data.snapshot.messages)
+    const board = attentionBoard(data.snapshot.messages, data.snapshot.channels)
     const group = message.taskId
       ? [...board.failed, ...board.activity].find(
           candidate => candidate.taskId === message.taskId,
@@ -1397,9 +1414,8 @@ export function App() {
     isDark,
     onOpenDrawer: openDrawer,
   }
-  function continueChannel(channelId: string) {
-    setContinuationTaskId(channelId)
-    setSourceContextTaskId(undefined)
+  function openComposer(target: ComposerTarget) {
+    setComposerTarget(target)
     const url = new URL(window.location.href)
     url.searchParams.delete('channel')
     url.searchParams.delete('task')
@@ -1414,7 +1430,24 @@ export function App() {
       document.querySelector<HTMLTextAreaElement>('#pegas-message')?.focus(),
     )
   }
-  const attentionTodoCount = attentionBoard(data.snapshot.messages).todo.length
+  function continueChannel(channel: WorkChannel) {
+    openComposer({ kind: 'task', channel })
+  }
+
+  async function workflowMessage(id: string) {
+    const findMessage = (messages: OutboxMessage[]) =>
+      messages.find(message => message.id === id)
+    const message =
+      findMessage(data.snapshot.messages) ??
+      findMessage((await api.snapshot()).messages)
+    if (!message) throw new Error('这条记录暂时不可用，请刷新后重试。')
+    return message
+  }
+
+  const attentionTodoCount = attentionBoard(
+    data.snapshot.messages,
+    data.snapshot.channels,
+  ).todo.length
   const selectedAgentProvider =
     data.settings?.settings.agentModelMode === 'override'
       ? data.settings.settings.agentModelProvider
@@ -1424,9 +1457,6 @@ export function App() {
       ? data.settings.settings.agentModelName
       : agentModels?.defaultModel
   const availableAgentModels = agentModels?.models ?? []
-  const continuationChannel = continuationTaskId
-    ? data.snapshot.channels.find(channel => channel.id === continuationTaskId)
-    : undefined
   const resolvedDrawer = drawer ? enrichDrawer(drawer) : undefined
 
   return (
@@ -1471,25 +1501,18 @@ export function App() {
           <ConversationPage
             actions={actions}
             api={api}
-            continuationChannel={continuationChannel}
-            sourceContextChannel={
-              sourceContextTaskId
-                ? data.snapshot.channels.find(
-                    channel => channel.id === sourceContextTaskId,
-                  )
-                : undefined
-            }
+            target={composerTarget}
             draft={composerDraft}
             modelProvider={selectedAgentProvider}
             models={availableAgentModels}
-            onAnswerClarification={channel => continueChannel(channel.id)}
+            onAnswerClarification={continueChannel}
             onOpenAttention={openAttentionMessage}
-            onSelectTask={taskId => {
-              setContinuationTaskId(taskId)
-              setSourceContextTaskId(undefined)
-            }}
-            onClearContinuation={() => setContinuationTaskId(undefined)}
-            onClearSourceContext={() => setSourceContextTaskId(undefined)}
+            onTargetChange={setComposerTarget}
+            onClearTarget={expected =>
+              setComposerTarget(current =>
+                current === expected ? undefined : current,
+              )
+            }
             onConfigureVoice={() => {
               setSettingsSection('voice')
               navigate('settings', 'voice')
@@ -1504,6 +1527,7 @@ export function App() {
             speechEnabled={
               data.settings?.speech?.provider === 'openai-compatible'
             }
+            snapshotReady={snapshotLoaded}
             snapshot={data.snapshot}
           />
         )}
@@ -1748,10 +1772,21 @@ export function App() {
           onOpenView={openNestedDrawer}
           onLoadRunActivity={openRunWorkflow}
           onLoadRunSubagents={openSubagentTranscript}
-          onContinue={channel => continueChannel(channel.id)}
+          onContinue={continueChannel}
+          onWorkflowMessage={async id =>
+            openAttentionMessage(await workflowMessage(id))
+          }
+          onExplainResult={async id => {
+            const message = await workflowMessage(id)
+            openComposer({
+              kind: 'reply',
+              id,
+              text: textFromPayload(message.payload),
+              explain: true,
+            })
+          }}
           onAnswerRouting={() => {
-            setContinuationTaskId(undefined)
-            setSourceContextTaskId(undefined)
+            setComposerTarget(undefined)
             setDrawer(undefined)
             navigate('conversation')
             window.setTimeout(() =>
@@ -1761,10 +1796,11 @@ export function App() {
             )
           }}
           onCreateRelated={channel => {
-            setSourceContextTaskId(channel.id)
-            setContinuationTaskId(undefined)
-            setDrawer(undefined)
-            navigate('conversation')
+            openComposer({ kind: 'source', channel })
+          }}
+          onDecideDelivery={async (packId, draft) => {
+            await api.decideDelivery(packId, draft)
+            await loadSnapshot()
           }}
           onResolveOutbox={resolveOutbox}
           onDecideApproval={async (approvalId, optionId, rationale) => {

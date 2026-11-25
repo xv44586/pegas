@@ -19,6 +19,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
+import type { ReviewDecisionDraft } from '../../../src/goal/goal-delivery'
 import { ApiError, type PegasApi } from '../api'
 import { MarkdownMessage } from '../MarkdownMessage'
 import type {
@@ -62,11 +63,12 @@ import {
   TextArea,
   TextInput,
 } from '@bui/index'
-import { StateHeader, type FactTone } from './ConversationBui'
+import { StateHeader, statusTone } from './ConversationBui'
 import { ModelPicker } from './ModelPicker'
 import {
   formatRelativeTime,
   needsOutboxResolution,
+  deliveryPackId,
   runStatusLabel,
   statusLabel,
   textFromPayload,
@@ -83,10 +85,13 @@ export function DetailDrawer({
   onLoadRunSubagents,
   onRetry,
   onContinue,
+  onWorkflowMessage,
+  onExplainResult,
   onAnswerRouting,
   onCreateRelated,
   onStop,
   onDecideApproval,
+  onDecideDelivery,
   onReconcileAction,
   onResolveOutbox,
 }: {
@@ -101,12 +106,18 @@ export function DetailDrawer({
   onContinue?: (
     channel: Extract<DrawerView, { kind: 'task' }>['channel'],
   ) => void
+  onWorkflowMessage?: (id: string) => Promise<void>
+  onExplainResult?: (id: string) => Promise<void>
   onAnswerRouting?: () => void
   onCreateRelated?: (
     channel: Extract<DrawerView, { kind: 'task' }>['channel'],
   ) => void
   onStop?: (
     channel: Extract<DrawerView, { kind: 'task' }>['channel'],
+  ) => Promise<void>
+  onDecideDelivery?: (
+    packId: string,
+    draft: ReviewDecisionDraft,
   ) => Promise<void>
   onDecideApproval?: (
     approvalId: string,
@@ -204,6 +215,8 @@ export function DetailDrawer({
             delivery={view.delivery}
             deliveryError={view.deliveryError}
             onContinue={onContinue}
+            onWorkflowMessage={onWorkflowMessage}
+            onExplainResult={onExplainResult}
             onCreateRelated={onCreateRelated}
             onLoadRunActivity={onLoadRunActivity}
             onLoadRunSubagents={onLoadRunSubagents}
@@ -283,6 +296,21 @@ export function DetailDrawer({
         )}
         {view.kind === 'review' && (
           <ReviewDetail
+            key={view.message.id}
+            decision={view.decision}
+            awaitingDecision={
+              view.channel.workflow?.state === 'awaiting_review' &&
+              view.channel.workflow.resultMessageId === view.message.id
+            }
+            onDecision={
+              onDecideDelivery
+                ? async draft => {
+                    const packId = deliveryPackId(view.message)
+                    if (!packId) throw new Error('这份交付缺少验收记录。')
+                    await onDecideDelivery(packId, draft)
+                  }
+                : undefined
+            }
             goal={view.goal}
             onOpenEvidence={
               onOpenView
@@ -1201,6 +1229,8 @@ function TaskDetail({
   onLoadRunSubagents,
   onRetry,
   onContinue,
+  onWorkflowMessage,
+  onExplainResult,
   onCreateRelated,
   onStop,
 }: {
@@ -1231,6 +1261,8 @@ function TaskDetail({
   onContinue?: (
     channel: Extract<DrawerView, { kind: 'task' }>['channel'],
   ) => void
+  onWorkflowMessage?: (id: string) => Promise<void>
+  onExplainResult?: (id: string) => Promise<void>
   onCreateRelated?: (
     channel: Extract<DrawerView, { kind: 'task' }>['channel'],
   ) => void
@@ -1238,12 +1270,60 @@ function TaskDetail({
     channel: Extract<DrawerView, { kind: 'task' }>['channel'],
   ) => Promise<void>
 }) {
+  const workflow = channel.workflow
   const baseState = statusLabel(channel, run)
   const state =
-    automationActive && baseState === '已完成' ? '已安排' : baseState
+    !workflow && automationActive && baseState === '已完成'
+      ? '已安排'
+      : baseState
+  const headline = stateHeadline(state)
   const runHistory = (runs ?? (run ? [run] : [])).toSorted(
     (left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt),
   )
+  const userEventIds = new Set(
+    timeline?.events
+      .filter(event => event.type === 'user.message')
+      .map(event => event.id),
+  )
+  const traceInputsByRun = new Map<string, string>()
+  for (const historyRun of runHistory) {
+    const directInput = historyRun.originEventId
+    const traceInput =
+      directInput && userEventIds.has(directInput)
+        ? directInput
+        : historyRun.retryOfRunId
+          ? traceInputsByRun.get(historyRun.retryOfRunId)
+          : undefined
+    if (traceInput) traceInputsByRun.set(historyRun.id, traceInput)
+  }
+  const retryTarget = workflow
+    ? runHistory.find(item => item.id === workflow.retryRunId)
+    : state === '失败'
+      ? run
+      : undefined
+  const attentionMessageId = workflow?.attentionMessageId
+  const resultMessageId = workflow?.resultMessageId
+  const closed =
+    channel.status === 'completed' || channel.status === 'cancelled'
+  const allowContinue = !workflow
+    ? channel.status !== 'cancelled'
+    : [
+        'not_started',
+        'queued',
+        'running',
+        'awaiting_input',
+        'failed',
+        'delivered',
+        'waiting_schedule',
+      ].includes(workflow.state)
+  const attentionLabel =
+    state === '待审批'
+      ? '查看审批'
+      : state === '待核对' || state === '已停止'
+        ? '核对动作结果'
+        : state === '待你补充'
+          ? '查看待补充问题'
+          : '查看等待详情'
   const progressByRun = new Map<string, RunProgressSummary>()
   for (const message of timeline?.messages ?? []) {
     const progress = runProgressFromPayload(message.payload)
@@ -1306,6 +1386,8 @@ function TaskDetail({
   const [stopError, setStopError] = useState('')
   const [retrying, setRetrying] = useState(false)
   const [retryError, setRetryError] = useState('')
+  const [openingAction, setOpeningAction] = useState(false)
+  const [workflowError, setWorkflowError] = useState('')
   const [summaryExpanded, setSummaryExpanded] = useState(false)
   const [expandedTimeline, setExpandedTimeline] = useState<Set<string>>(
     () => new Set(),
@@ -1335,17 +1417,35 @@ function TaskDetail({
     : undefined
 
   async function retryRun() {
-    if (!run || retrying) return
+    if (!retryTarget || retrying) return
     setRetrying(true)
     setRetryError('')
     try {
-      await onRetry(run)
+      await onRetry(retryTarget)
     } catch (caught) {
       setRetryError(
         caught instanceof Error ? caught.message : '重试失败，请稍后再试。',
       )
     } finally {
       setRetrying(false)
+    }
+  }
+
+  async function openWorkflowAction(
+    action: (id: string) => Promise<void>,
+    id: string,
+  ) {
+    if (openingAction) return
+    setOpeningAction(true)
+    setWorkflowError('')
+    try {
+      await action(id)
+    } catch (caught) {
+      setWorkflowError(
+        caught instanceof Error ? caught.message : '无法打开这一步，请重试。',
+      )
+    } finally {
+      setOpeningAction(false)
     }
   }
 
@@ -1367,10 +1467,10 @@ function TaskDetail({
 
   return (
     <div className="drawer-body bui">
-      <StateHeader label={state} tone={stateTone(state)}>
-        <h3 className="m-0 text-[13px] font-medium text-ink">
-          {stateHeadline(state)}
-        </h3>
+      <StateHeader label={state} tone={statusTone(state)}>
+        {headline !== state && (
+          <h3 className="m-0 text-[13px] font-medium text-ink">{headline}</h3>
+        )}
         {completedOutput ? (
           <div className="state-hero-markdown mt-1">
             <MarkdownMessage
@@ -1382,7 +1482,7 @@ function TaskDetail({
             />
           </div>
         ) : (
-          <p className="mt-1">{stateDescription(state, run)}</p>
+          <p className="mt-1">{stateDescription(state, run, workflow)}</p>
         )}
         {completedOutput && completedOutput.length > 600 && (
           <button
@@ -1394,18 +1494,20 @@ function TaskDetail({
           </button>
         )}
       </StateHeader>
-      {state === '失败' && (
+      {(state === '失败' || run?.status === 'failed') && (
         <section className="mt-3.5 rounded-card bg-surface p-3.5 shadow-card">
           <p className="flex items-center gap-1.5 text-[13px] font-medium text-red-text">
             <AlertTriangle size={15} />
-            执行已停止
+            {workflow && state !== '失败' ? '所选运行失败' : '执行已停止'}
           </p>
           <p className="mt-1.5 text-[13px] leading-[1.6] text-ink-2">
             {run?.lastError ?? '服务端没有提供失败原因。'}
           </p>
-          <p className="mt-1 text-[12px] text-ink-3">
-            重试会创建新的运行记录；既有记录会保留。
-          </p>
+          {retryTarget && (
+            <p className="mt-1 text-[12px] text-ink-2">
+              重试会创建新的运行记录；既有记录会保留。
+            </p>
+          )}
           {retryError && (
             <p className="mt-1 text-[12px] text-red-text" role="alert">
               {retryError}
@@ -1436,11 +1538,7 @@ function TaskDetail({
           </li>
           {runHistory.length ? (
             runHistory.map((historyRun, index) => {
-              const traceEvent = timeline?.events.find(
-                event =>
-                  event.id === historyRun.originEventId &&
-                  event.type === 'user.message',
-              )
+              const traceEventId = traceInputsByRun.get(historyRun.id)
               const historyState = runStatusLabel(historyRun)
               const progress = progressByRun.get(historyRun.id)
               const runUsage = usageByRun.get(historyRun.id)
@@ -1466,13 +1564,13 @@ function TaskDetail({
                       {runUsage?.durationMs !== undefined &&
                         ` · 用时 ${formatDurationMs(runUsage.durationMs)}`}
                     </small>
-                    {traceEvent && onOpenView && (
+                    {traceEventId && onOpenView && (
                       <button
                         className="mt-1 block w-fit text-[12px] text-accent-ink underline"
                         onClick={() =>
                           onOpenView({
                             kind: 'trace',
-                            eventId: traceEvent.id,
+                            eventId: traceEventId,
                             backLabel: '返回事情详情',
                           })
                         }
@@ -1749,8 +1847,27 @@ function TaskDetail({
           </div>
         </section>
       )}
+      {(workflowError ||
+        (retryError && state !== '失败' && run?.status !== 'failed')) && (
+        <p className="text-[13px] text-red-text" role="alert">
+          {workflowError || retryError}
+        </p>
+      )}
       <footer className="drawer-footer">
-        {state === '失败' && run && (
+        {attentionMessageId && onWorkflowMessage && (
+          <Button
+            variant="accent"
+            size="sm"
+            disabled={openingAction}
+            type="button"
+            onClick={() =>
+              void openWorkflowAction(onWorkflowMessage, attentionMessageId)
+            }
+          >
+            {attentionLabel}
+          </Button>
+        )}
+        {retryTarget && (
           <Button
             variant="secondary"
             size="sm"
@@ -1762,14 +1879,60 @@ function TaskDetail({
             {retrying ? '正在重试…' : '重试'}
           </Button>
         )}
-        {channel.status !== 'cancelled' && onContinue && (
+        {state === '待验收' && resultMessageId && onWorkflowMessage && (
           <Button
             variant="accent"
             size="sm"
-            onClick={() => onContinue(channel)}
+            disabled={openingAction}
+            type="button"
+            onClick={() =>
+              void openWorkflowAction(onWorkflowMessage, resultMessageId)
+            }
+          >
+            审查交付
+          </Button>
+        )}
+        {resultMessageId && onExplainResult && (
+          <Button
+            variant={state === '待验收' ? 'secondary' : 'accent'}
+            size="sm"
+            disabled={openingAction}
+            type="button"
+            onClick={() =>
+              void openWorkflowAction(onExplainResult, resultMessageId)
+            }
+          >
+            解释这次结果
+          </Button>
+        )}
+        {allowContinue &&
+          !(attentionMessageId && onWorkflowMessage) &&
+          onContinue && (
+            <Button
+              variant={
+                resultMessageId && onExplainResult ? 'secondary' : 'accent'
+              }
+              size="sm"
+              onClick={() => onContinue(channel)}
+              type="button"
+            >
+              {workflow
+                ? closed
+                  ? '继续执行'
+                  : state === '待你补充'
+                    ? '补充信息'
+                    : '补充要求'
+                : '继续追问'}
+            </Button>
+          )}
+        {closed && onCreateRelated && (
+          <Button
+            variant={channel.status === 'cancelled' ? 'accent' : 'secondary'}
+            size="sm"
+            onClick={() => onCreateRelated(channel)}
             type="button"
           >
-            继续追问
+            新建相关事情
           </Button>
         )}
         {channel.canStop && onStop && (
@@ -1782,22 +1945,6 @@ function TaskDetail({
             停止事情
           </Button>
         )}
-        {channel.status === 'cancelled' && (
-          <span className="drawer-footnote mt-2.5 block text-[12px] leading-[1.6] text-ink-2">
-            等待服务端返回下一步条件。
-          </span>
-        )}
-        {(channel.status === 'cancelled' || channel.status === 'completed') &&
-          onCreateRelated && (
-            <Button
-              variant="accent"
-              size="sm"
-              onClick={() => onCreateRelated(channel)}
-              type="button"
-            >
-              新建相关事情
-            </Button>
-          )}
       </footer>
     </div>
   )
@@ -2402,15 +2549,69 @@ function DeliverySection({
 
 function ReviewDetail({
   review,
+  awaitingDecision,
+  decision,
+  onDecision,
   goal,
   onOpenEvidence,
   onOpenTask,
 }: {
   review: ReviewProjection
+  awaitingDecision: boolean
+  decision?: 'accept' | 'request_changes' | 'cancelled'
+  onDecision?: (draft: ReviewDecisionDraft) => Promise<void>
   goal?: GoalContract
   onOpenEvidence?: (evidence: ReviewEvidencePreview) => void
   onOpenTask?: () => void
 }) {
+  const [note, setNote] = useState('')
+  const [editing, setEditing] = useState(false)
+  const [submitted, setSubmitted] = useState<ReviewDecisionDraft['decision']>()
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const noteRef = useRef<HTMLTextAreaElement>(null)
+  const editButtonRef = useRef<HTMLButtonElement>(null)
+  const decisionStatusRef = useRef<HTMLParagraphElement>(null)
+  const attemptRef = useRef<ReviewDecisionDraft | undefined>(undefined)
+  const outcome = submitted ?? decision
+  const canDecide = awaitingDecision && !outcome && Boolean(onDecision)
+
+  useEffect(() => {
+    if (submitted) decisionStatusRef.current?.focus()
+    else if (editing) noteRef.current?.focus()
+  }, [editing, submitted])
+
+  async function submit(choice: ReviewDecisionDraft['decision']) {
+    if (!onDecision || saving || !canDecide) return
+    const description = choice === 'request_changes' ? note.trim() : undefined
+    if (choice === 'request_changes' && !description) return
+    const previous = attemptRef.current
+    const attempt =
+      previous?.decision === choice && previous.note === description
+        ? previous
+        : {
+            commandId: crypto.randomUUID(),
+            decision: choice,
+            ...(description ? { note: description } : {}),
+          }
+    attemptRef.current = attempt
+    setError('')
+    setSaving(true)
+    try {
+      await onDecision(attempt)
+      setSubmitted(choice)
+    } catch (caught) {
+      setError(
+        caught instanceof ApiError && caught.status === 409
+          ? '这份交付的状态已变化。请重新查看当前交付。'
+          : caught instanceof Error
+            ? caught.message
+            : '保存验收决定失败，请重试。',
+      )
+    } finally {
+      setSaving(false)
+    }
+  }
   const statements = new Map(
     goal?.successCriteria.map(criterion => [
       criterion.criterionId,
@@ -2421,26 +2622,39 @@ function ReviewDetail({
     <div className="drawer-body bui">
       <StateHeader
         label={
-          review.finalOutcome === 'completed'
-            ? '已完成'
-            : review.finalOutcome === 'partial'
-              ? '待确认'
-              : '失败'
+          outcome === 'accept'
+            ? '已接受交付'
+            : outcome === 'request_changes'
+              ? '已退回修改'
+              : outcome === 'cancelled'
+                ? '验收已关闭'
+                : awaitingDecision
+                  ? '待验收'
+                  : review.finalOutcome === 'completed'
+                    ? '已完成'
+                    : review.finalOutcome === 'partial'
+                      ? '待确认'
+                      : '失败'
         }
         tone={
-          review.finalOutcome === 'completed'
+          outcome === 'accept'
             ? 'green'
-            : review.finalOutcome === 'partial'
-              ? 'orange'
-              : 'red'
+            : outcome
+              ? 'neutral'
+              : awaitingDecision || review.finalOutcome === 'partial'
+                ? 'orange'
+                : review.finalOutcome === 'completed'
+                  ? 'green'
+                  : 'red'
         }
       >
         <h3 className="m-0 text-[13px] font-medium text-ink">
           目标修订 v{String(review.goalRevision)} 的交付审查
         </h3>
         <p className="mt-1">
-          {outcomeLabel(review.finalOutcome)}
-          ：结论来自服务端 Review Pack，按完成标准与证据生成。
+          {awaitingDecision && !outcome
+            ? '所需证据已通过，等待你验收。'
+            : `${outcomeLabel(review.finalOutcome)}：结论来自服务端 Review Pack，按完成标准与证据生成。`}
         </p>
       </StateHeader>
       <section className="detail-section">
@@ -2468,9 +2682,111 @@ function ReviewDetail({
           </pre>
         </section>
       )}
+      {outcome && (
+        <p
+          className="mt-3 text-[13px] text-ink-2"
+          ref={decisionStatusRef}
+          role="status"
+          tabIndex={-1}
+        >
+          {outcome === 'request_changes'
+            ? '修改要求已发送给原事情。'
+            : outcome === 'accept'
+              ? '验收决定已保存。'
+              : '事情已停止，交付记录仍可查看。'}
+        </p>
+      )}
+      {error && (
+        <p
+          className="mt-3 text-[13px] text-red-text"
+          id="delivery-review-error"
+          role="alert"
+        >
+          {error}
+        </p>
+      )}
+      {canDecide && editing && (
+        <form
+          className="detail-section grid gap-2"
+          onSubmit={event => {
+            event.preventDefault()
+            void submit('request_changes')
+          }}
+        >
+          <label className="font-medium" htmlFor="delivery-rework-note">
+            修改要求
+          </label>
+          <textarea
+            ref={noteRef}
+            aria-describedby={error ? 'delivery-review-error' : undefined}
+            id="delivery-rework-note"
+            className="min-h-20 w-full rounded-control border border-line bg-surface p-2 text-[16px] text-ink outline-accent"
+            value={note}
+            maxLength={4000}
+            required
+            disabled={saving}
+            onChange={event => setNote(event.target.value)}
+          />
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="accent"
+              size="sm"
+              type="submit"
+              disabled={!note.trim() || saving}
+            >
+              {saving ? '正在提交…' : '提交修改要求'}
+            </Button>
+            <Button
+              variant="quiet"
+              size="sm"
+              type="button"
+              disabled={saving}
+              onClick={() => {
+                setEditing(false)
+                setError('')
+                window.setTimeout(() => editButtonRef.current?.focus())
+              }}
+            >
+              返回验收
+            </Button>
+          </div>
+        </form>
+      )}
       <footer className="drawer-footer">
+        {canDecide && !editing && (
+          <>
+            <Button
+              variant="accent"
+              size="sm"
+              type="button"
+              disabled={saving}
+              onClick={() => void submit('accept')}
+            >
+              {saving ? '正在保存…' : '接受交付'}
+            </Button>
+            <Button
+              ref={editButtonRef}
+              className="pointer-coarse:min-h-11"
+              variant="secondary"
+              size="sm"
+              type="button"
+              disabled={saving}
+              onClick={() => {
+                setEditing(true)
+                setError('')
+              }}
+            >
+              退回修改
+            </Button>
+          </>
+        )}
         {onOpenTask && (
-          <Button variant="accent" size="sm" onClick={onOpenTask} type="button">
+          <Button
+            variant={canDecide ? 'secondary' : 'accent'}
+            size="sm"
+            onClick={onOpenTask}
+            type="button"
+          >
             打开事情详情与审计时间线
           </Button>
         )}
@@ -3402,14 +3718,6 @@ function workerProfileSourceLabel(source?: 'global' | 'task') {
   if (source === 'task') return '这件事情'
   return undefined
 }
-function stateTone(state: string): FactTone {
-  if (state === '已完成') return 'green'
-  if (state === '已安排') return 'accent'
-  if (state === '失败') return 'red'
-  if (state === '进行中') return 'accent'
-  if (state === '待确认') return 'orange'
-  return 'neutral'
-}
 function runProgressClass(state: string) {
   if (state === '已完成') return 'is-done'
   if (state === '失败') return 'is-failed'
@@ -3427,9 +3735,34 @@ function stateHeadline(state: string): string {
   if (state === '失败') return '执行失败，记录已保留'
   if (state === '进行中') return 'Pegas 正在推进这件事'
   if (state === '已归档') return '这件事已归档'
-  return '等待下一步条件'
+  if (state === '等待中') return '等待下一步条件'
+  return state
 }
-function stateDescription(state: string, run?: Run): string {
+function stateDescription(
+  state: string,
+  run?: Run,
+  workflow?: Extract<DrawerView, { kind: 'task' }>['channel']['workflow'],
+): string {
+  if (workflow) {
+    const descriptions: Partial<Record<typeof workflow.state, string>> = {
+      not_started: '事情已创建，等待安排执行。',
+      queued: '已进入执行队列，Pegas 会在资源可用时开始。',
+      awaiting_input: 'Pegas 需要你补充信息才能推进。',
+      awaiting_approval: '需要你审批待执行的动作。',
+      awaiting_reconciliation:
+        '需要核对已有动作的结果，继续执行前先确认实际发生了什么。',
+      awaiting_evidence: '执行结果正在等待完成条件所需的证据。',
+      waiting_dependency: '这件事正在等待关联事情的结果。',
+      waiting_provider: '模型服务恢复后，可以重试这次运行。',
+      awaiting_review: '交付已准备好，请按验收标准检查结果。',
+      blocked: '事情暂时无法推进，可以查看运行记录内的具体原因。',
+      handed_off: '这件事的工作已移交给关联事情。',
+      closed_unfinished: '这件事已结束，但目标尚未完成。',
+      stopped: '这件事已永久停止。历史记录仍可查看。',
+    }
+    const description = descriptions[workflow.state]
+    if (description) return description
+  }
   if (state === '已完成')
     return run?.output
       ? `${run.output.slice(0, 260)}${run.output.length > 260 ? '…' : ''}`

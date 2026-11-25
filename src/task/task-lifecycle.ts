@@ -21,20 +21,38 @@ export function createMandate(
   }
 }
 
-/**
- * TASK-002 starts with Pegas's current authenticated single-user boundary.
- * The immutable shape matches Super Agent so Source policies can replace
- * these explicit checks without changing persisted Mandates.
- */
+export type TaskResumeSource = 'web' | 'mobile'
+
+export function isTaskResumeSource(source: string): source is TaskResumeSource {
+  return source === 'web' || source === 'mobile'
+}
+
+export interface TaskResumeSourcePolicy {
+  source: TaskResumeSource
+  enabled: boolean
+  revision: number
+}
+
 export function revalidateMandate(
   mandate: Mandate,
+  origin: InboxEvent,
   event: InboxEvent,
 ): boolean {
   return (
     event.type === 'user.message' &&
+    event.authenticatedActor === 'human' &&
+    isTaskResumeSource(event.source) &&
+    origin.type === 'user.message' &&
+    origin.authenticatedActor === 'human' &&
+    isTaskResumeSource(origin.source) &&
     mandate.strength === 'explicit' &&
     mandate.policyVersion === mandatePolicyVersion &&
-    mandate.actor.id === event.userId
+    mandate.basis.source === origin.source &&
+    mandate.actor.source === origin.source &&
+    mandate.basis.scope.conversation === origin.userId &&
+    (mandate.basis.sender ?? origin.userId) === event.userId &&
+    mandate.actor.id === event.userId &&
+    origin.userId === event.userId
   )
 }
 
@@ -48,5 +66,9 @@ export function sameExecutionContext(
     ...Object.keys(leftRecord),
     ...Object.keys(rightRecord),
   ])
-  return [...keys].every(key => leftRecord[key] === rightRecord[key])
+  // The global revision also changes for settings used only outside execution.
+  // The resolved model, workspace, permissions and profile still have to match.
+  return [...keys].every(
+    key => key === 'settingsRevision' || leftRecord[key] === rightRecord[key],
+  )
 }

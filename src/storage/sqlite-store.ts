@@ -7,9 +7,14 @@ import { systemClock, type Clock } from '../core/clock.js'
 import { assignWorkerIconId, isWorkerIconId } from '../brand/agent-icon.js'
 import { DeterministicPrivacyMasker } from '../privacy/masker.js'
 import {
+  resolveProjectIdentity,
+  type ProjectIdentity,
+} from '../memory/project-identity.js'
+import {
   projectWorkChannel,
   type ChannelSearchOptions,
   type ChannelSearchResult,
+  type WorkChannel,
 } from '../channel/work-channel.js'
 import {
   collaborationRequestFingerprint,
@@ -24,6 +29,8 @@ import { sourceContextInput } from '../collaboration/source-context.js'
 import {
   withConversationProjection,
   type ConversationProjectionContext,
+  quotableAgentReply,
+  replyReference,
 } from '../conversation/projection.js'
 import type {
   ActionOutcomeDraft,
@@ -113,6 +120,8 @@ import type {
   GoalContract,
   GoalContractDraft,
   ReviewCriterion,
+  ReviewDecision,
+  ReviewDecisionDraft,
   ReviewPack,
   TaskArtifact,
   WorkerReport,
@@ -120,12 +129,16 @@ import type {
 } from '../goal/goal-delivery.js'
 import {
   isTrustedVerifier,
+  ReviewDecisionConflictError,
   trustedVerifierIdentity,
   trustedVerifierVersion,
 } from '../goal/goal-delivery.js'
 import {
   createMandate,
+  isTaskResumeSource,
   revalidateMandate,
+  type TaskResumeSource,
+  type TaskResumeSourcePolicy,
   sameExecutionContext,
 } from '../task/task-lifecycle.js'
 import type {
@@ -322,12 +335,29 @@ const schemaInitializationAttempts = 3
 const schemaRetryDelayMs = 100
 const workerProfileCommandRetention = 256
 const maximumActiveChildCollaborations = 8
+
+/**
+ * MEMORY-001 M3 coalescing window: sibling retain jobs of the same owner +
+ * project + kind wait up to this long (or until enough accumulate) so one
+ * bounded model call distills them together. Busy projects converge to one
+ * call per window instead of one call per Run.
+ */
+const DERIVED_MEMORY_COALESCE_WINDOW_MS = 60_000
+const DERIVED_MEMORY_COALESCE_MAX_JOBS = 5
 const maximumCollaborationsPerRun = 32
 const maximumCollaborationsPerRoot = 32
 const maximumCollaborationDepth = 4
 const maximumPendingContextNotesPerTarget = 4
 const maximumActiveCollaborationsPerOwner = 64
-const currentInboxContractVersion = 2
+const currentInboxContractVersion = 4
+const automationReviewWaitReasons = [
+  'awaiting_delivery_acceptance',
+  'review_rework_queued',
+  'review_rework_failed',
+]
+const automationReviewWaitSql = automationReviewWaitReasons
+  .map(reason => `'${reason}'`)
+  .join(', ')
 
 const migration20 = `
 CREATE TABLE automations (
@@ -1085,6 +1115,16 @@ ON derived_memory_tombstones (user_id, source_run_id)
 WHERE source_run_id IS NOT NULL;
 `
 
+const migration56 = `
+CREATE TABLE task_resume_source_policies (
+  user_id TEXT NOT NULL,
+  source TEXT NOT NULL CHECK (source IN ('web', 'mobile')),
+  enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+  revision INTEGER NOT NULL CHECK (revision >= 1),
+  PRIMARY KEY (user_id, source)
+);
+`
+
 const migration53 = `
 -- MEMORY-001 M2: in-process local derived memory provider. Facts distilled
 -- from Run evidence live here; the shared M1 tombstones stay authoritative.
@@ -1171,6 +1211,54 @@ ON memory_usage_records (user_id, observed_at DESC);
 `
 
 const migration54 = `
+-- MEMORY-001 M3: implicit project identity. One row per (owner, canonical
+-- key); the key comes from the shared resolution chain (git remote > git
+-- common dir > realpath), so linked worktrees and fresh clones converge.
+-- The default workspace never creates a row.
+CREATE TABLE memory_projects (
+  user_id TEXT NOT NULL,
+  canonical_key TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, canonical_key)
+);
+
+ALTER TABLE local_derived_memories ADD COLUMN project_key TEXT;
+CREATE INDEX local_derived_memories_by_project
+ON local_derived_memories (user_id, project_key, updated_at DESC);
+
+-- Coalescing group for retain jobs: same owner + project + kind distills
+-- together in one bounded model call. NULL keeps project-less jobs apart.
+ALTER TABLE derived_memory_jobs ADD COLUMN project_key TEXT;
+
+-- Batch-distilled facts have several source Runs; deleting the fact must
+-- suppress re-distillation from every one of them, not just the anchor.
+CREATE TABLE derived_memory_tombstone_sources (
+  user_id TEXT NOT NULL,
+  memory_id TEXT NOT NULL,
+  source_run_id TEXT NOT NULL,
+  PRIMARY KEY (user_id, memory_id, source_run_id)
+);
+`
+
+const migration55 = `
+-- MEMORY-001 M4: L0 project summary. A bounded deterministic digest of the
+-- project's most salient facts, injected once per work Run so a project
+-- with thousands of facts still opens with constant-size context. Rebuilt
+-- from the fact table (never raw transcripts); no model call.
+CREATE TABLE memory_project_summaries (
+  user_id TEXT NOT NULL,
+  project_key TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  text TEXT NOT NULL,
+  fact_count INTEGER NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, project_key)
+);
+`
+
+const migration57 = `
 CREATE TABLE message_trace_batch_members (
   event_id TEXT PRIMARY KEY REFERENCES inbox_events(id),
   root_event_id TEXT NOT NULL REFERENCES inbox_events(id)
@@ -1202,8 +1290,6 @@ CREATE TABLE message_trace_run_starts (
   PRIMARY KEY (run_id, attempt, phase)
 );
 
-CREATE INDEX message_trace_runs_by_origin ON runs (origin_event_id);
-CREATE INDEX message_trace_runs_by_retry ON runs (retry_of_run_id);
 CREATE INDEX message_trace_actions_by_run ON actions (run_id);
 CREATE INDEX message_trace_outbox_by_run
 ON outbox_messages (user_id, json_extract(payload_json, '$.runId'));
@@ -1211,7 +1297,7 @@ CREATE INDEX message_trace_outbox_by_event
 ON outbox_messages (user_id, json_extract(payload_json, '$.eventId'));
 `
 
-const migration55 = `
+const migration58 = `
 CREATE TABLE message_trace_run_inputs (
   event_id TEXT PRIMARY KEY REFERENCES inbox_events(id),
   run_id TEXT NOT NULL REFERENCES runs(id)
@@ -2721,6 +2807,7 @@ interface DerivedMemoryJobRow {
   document_id: string
   content: string
   working_directory: string
+  project_key: string | null
   status: 'pending' | 'submitted' | 'processing'
   provider_operation_id: string | null
   attempts: number
@@ -2745,6 +2832,9 @@ interface LocalDerivedMemoryRow {
   tags_json: string
   metadata_json: string
   state: 'valid' | 'invalidated'
+  project_key: string | null
+  use_count: number
+  last_used_at: string | null
 }
 
 function toLocalDerivedMemory(row: LocalDerivedMemoryRow): DerivedMemory {
@@ -2755,6 +2845,7 @@ function toLocalDerivedMemory(row: LocalDerivedMemoryRow): DerivedMemory {
     tags: JSON.parse(row.tags_json) as string[],
     metadata: JSON.parse(row.metadata_json) as Record<string, unknown>,
     state: row.state,
+    ...(row.project_key ? { projectKey: row.project_key } : {}),
   }
 }
 
@@ -3326,6 +3417,30 @@ export class RoutingRuleLimitError extends Error {}
 
 export class BehaviorPreferencesConflictError extends Error {}
 
+function correctedRunInput(
+  originalInput: string,
+  directives: { text: string }[],
+): string {
+  const correction = directives.map(directive => directive.text).join('\n')
+  return JSON.stringify(
+    `${JSON.parse(originalInput) as string}\n\n[用户纠正] 用户在执行过程中发来了新的指示。请在已完成工作的基础上调整方向，不要重复已完成的副作用：\n${correction}`,
+  )
+}
+
+export class TaskResumePolicyConflictError extends Error {}
+
+export class TaskResumeDeniedError extends Error {
+  constructor() {
+    super('当前来源无权续接原事情。恢复来源授权后可重试，或新建相关事情。')
+  }
+}
+
+export class PendingRunSteeringError extends Error {
+  constructor() {
+    super('Run has pending steering directives')
+  }
+}
+
 export class TaskActionBlockedError extends Error {
   readonly taskId: string
   readonly actionStatus: string
@@ -3343,6 +3458,7 @@ export class PegasStore {
   readonly #routingClarificationTtlMs: number
   readonly #attachmentRoot: string | undefined
   readonly #derivedMemoryEnabled: boolean
+  readonly #defaultWorkspaceRoot: string | undefined
   #transactionDepth = 0
 
   constructor(
@@ -3351,11 +3467,13 @@ export class PegasStore {
       clock?: Clock
       routingClarificationTtlMs?: number
       derivedMemoryEnabled?: boolean
+      defaultWorkspaceRoot?: string
     } = {},
   ) {
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true })
     this.#clock = options.clock ?? systemClock
     this.#derivedMemoryEnabled = options.derivedMemoryEnabled === true
+    this.#defaultWorkspaceRoot = options.defaultWorkspaceRoot
     this.#routingClarificationTtlMs =
       options.routingClarificationTtlMs ?? 72 * 60 * 60 * 1000
     if (
@@ -3430,7 +3548,10 @@ export class PegasStore {
     this.#migrate(52, migration52)
     this.#migrate(53, migration53)
     this.#migrate(54, migration54)
-    this.#migrate(55, migration55, () => this.#redactLegacyMessageTraceCalls())
+    this.#migrate(55, migration55)
+    this.#migrate(56, migration56)
+    this.#migrate(57, migration57)
+    this.#migrate(58, migration58, () => this.#redactLegacyMessageTraceCalls())
   }
 
   #backfillWorkerIconIds(): void {
@@ -5045,6 +5166,82 @@ export class PegasStore {
     return row ? toAutomationInvocation(row) : undefined
   }
 
+  #closeTaskAutomations(taskId: string, userId: string, now: string): void {
+    this.#database
+      .prepare(
+        `UPDATE automations SET status = 'cancelled', next_fire_at = NULL,
+           revision = revision + 1, updated_at = ?
+         WHERE user_id = ? AND status IN ('active','paused')
+           AND json_extract(target_json, '$.kind') = 'existing_task'
+           AND json_extract(target_json, '$.taskId') = ?`,
+      )
+      .run(now, userId, taskId)
+    const abandoned = this.#database
+      .prepare(
+        `UPDATE inbox_events SET status = 'failed', claimed_by = NULL, lease_until = NULL,
+           processed_at = ?, last_error = 'automation_target_closed'
+         WHERE user_id = ? AND source = 'automation' AND type = 'automation.due'
+           AND status IN ('pending','processing')
+           AND json_extract(payload_json, '$.target.kind') = 'existing_task'
+           AND json_extract(payload_json, '$.target.taskId') = ?
+           AND NOT EXISTS (SELECT 1 FROM runs WHERE origin_event_id = inbox_events.id)
+         RETURNING id`,
+      )
+      .all(now, userId, taskId) as { id: string }[]
+    const closeInvocation = this.#database.prepare(
+      `UPDATE automation_invocations SET status = 'failed',
+         last_error = 'automation_target_closed', updated_at = ? WHERE event_id = ?`,
+    )
+    for (const input of abandoned) closeInvocation.run(now, input.id)
+  }
+
+  dispatchAutomationToTask(
+    event: InboxEvent,
+    decision: Extract<RoutingDecision, { kind: 'continue_task' }>,
+    executor: string,
+    context: (task: Task) => ExecutionContext,
+  ): true | undefined {
+    return this.#runInTransaction(() => {
+      this.#fenceRoutingWriteInTransaction(event)
+      const task = this.#taskById(decision.taskId)
+      if (task.userId !== event.userId)
+        throw new Error('Task belongs to another user')
+      // A Run committed before the Inbox acknowledgement. Honor that
+      // receipt even if the Task lifecycle advanced after the routing commit.
+      if (
+        this.#database
+          .prepare(
+            'SELECT 1 FROM runs WHERE origin_event_id = ? AND task_id = ?',
+          )
+          .get(event.id, task.id)
+      )
+        return undefined
+      if (task.status === 'completed' || task.status === 'cancelled') {
+        this.#closeTaskAutomations(
+          task.id,
+          task.userId,
+          this.#clock.now().toISOString(),
+        )
+        return true
+      }
+      if (
+        event.claimedBy &&
+        automationReviewWaitReasons.includes(task.statusReason ?? '')
+      ) {
+        this.releaseEventClaim(event.id, event.claimedBy)
+        this.#database
+          .prepare(
+            `UPDATE automation_invocations SET status = 'pending',
+               attempts = MAX(0, attempts - 1), updated_at = ? WHERE event_id = ?`,
+          )
+          .run(this.#clock.now().toISOString(), event.id)
+        return true
+      }
+      this.applyRoutingDecision(event, decision, executor, context)
+      return undefined
+    })
+  }
+
   fireDueAutomations(
     limit = 100,
   ): { automation: Automation; invocation: AutomationInvocation }[] {
@@ -5054,11 +5251,29 @@ export class PegasStore {
     const nowIso = now.toISOString()
     this.#database.exec('BEGIN IMMEDIATE')
     try {
+      const closed = this.#database
+        .prepare(
+          `SELECT DISTINCT tasks.id, tasks.user_id FROM tasks JOIN automations
+           ON automations.user_id = tasks.user_id
+           AND json_extract(automations.target_json, '$.kind') = 'existing_task'
+           AND json_extract(automations.target_json, '$.taskId') = tasks.id
+           WHERE tasks.status IN ('completed','cancelled') AND automations.status IN ('active','paused')`,
+        )
+        .all() as { id: string; user_id: string }[]
+      for (const task of closed)
+        this.#closeTaskAutomations(task.id, task.user_id, nowIso)
+
       const rows = this.#database
         .prepare(
           `SELECT * FROM automations
            WHERE status = 'active' AND next_fire_at IS NOT NULL
              AND next_fire_at <= ?
+             AND NOT EXISTS (
+               SELECT 1 FROM tasks WHERE tasks.user_id = automations.user_id
+                 AND json_extract(automations.target_json, '$.kind') = 'existing_task'
+                 AND tasks.id = json_extract(automations.target_json, '$.taskId')
+                 AND tasks.status_reason IN (${automationReviewWaitSql})
+             )
            ORDER BY next_fire_at ASC, rowid ASC LIMIT ?`,
         )
         .all(nowIso, limit) as unknown as AutomationRow[]
@@ -5286,6 +5501,36 @@ export class PegasStore {
       if (!row) {
         this.#database.exec('COMMIT')
         return undefined
+      }
+      // M3 coalescing window: an unsubmitted project job waits briefly so
+      // sibling Runs of the same project + kind distill in one model call.
+      // The window opens early when enough siblings accumulated or the
+      // oldest job aged out. Project-less jobs keep the M2 immediate path.
+      if (
+        row.status === 'pending' &&
+        !row.provider_operation_id &&
+        row.project_key
+      ) {
+        const group = this.#database
+          .prepare(
+            `SELECT COUNT(*) AS total, MIN(created_at) AS oldest
+             FROM derived_memory_jobs
+             WHERE user_id = ? AND project_key = ? AND kind = ?
+               AND status = 'pending' AND provider_operation_id IS NULL
+               AND (next_attempt_at IS NULL OR next_attempt_at <= ?)`,
+          )
+          .get(row.user_id, row.project_key, row.kind, nowIso) as {
+          total: number
+          oldest: string
+        }
+        const oldestAgeMs = now.getTime() - Date.parse(group.oldest)
+        if (
+          group.total < DERIVED_MEMORY_COALESCE_MAX_JOBS &&
+          oldestAgeMs < DERIVED_MEMORY_COALESCE_WINDOW_MS
+        ) {
+          this.#database.exec('COMMIT')
+          return undefined
+        }
       }
       const claimed = this.#database
         .prepare(
@@ -5691,6 +5936,135 @@ export class PegasStore {
       throw new Error(`Worker ${workerId} does not own memory job ${jobId}`)
   }
 
+  /**
+   * MEMORY-001 M3: after claiming the anchor job of a coalescing group,
+   * claim its due pending siblings (same owner + project + kind) under the
+   * same worker so one bounded model call distills the whole batch. Each
+   * sibling keeps its own durable row, retry budget and completion record.
+   */
+  claimDerivedMemoryJobSiblings(
+    anchor: DerivedMemoryJob,
+    workerId: string,
+    leaseMs: number,
+    maximum: number,
+  ): DerivedMemoryJob[] {
+    if (!anchor.projectKey || maximum < 1) return []
+    const now = this.#clock.now()
+    const nowIso = now.toISOString()
+    const leaseUntil = new Date(now.getTime() + leaseMs).toISOString()
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const rows = this.#database
+        .prepare(
+          `SELECT * FROM derived_memory_jobs
+           WHERE user_id = ? AND project_key = ? AND kind = ?
+             AND status = 'pending' AND provider_operation_id IS NULL
+             AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+             AND id <> ?
+           ORDER BY created_at, id
+           LIMIT ?`,
+        )
+        .all(
+          anchor.userId,
+          anchor.projectKey,
+          anchor.kind,
+          nowIso,
+          anchor.id,
+          maximum,
+        ) as unknown as DerivedMemoryJobRow[]
+      const claimed: DerivedMemoryJob[] = []
+      const update = this.#database.prepare(
+        `UPDATE derived_memory_jobs
+         SET status = 'processing', claimed_by = ?, lease_until = ?,
+             attempts = attempts + 1, error_attempts = error_attempts + 1,
+             updated_at = ?
+         WHERE id = ? AND status = 'pending'`,
+      )
+      for (const row of rows) {
+        const result = update.run(workerId, leaseUntil, nowIso, row.id)
+        if (result.changes === 1) {
+          claimed.push(
+            toDerivedMemoryJob({
+              ...row,
+              attempts: row.attempts + 1,
+              error_attempts: row.error_attempts + 1,
+            }),
+          )
+        }
+      }
+      this.#database.exec('COMMIT')
+      return claimed
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  /**
+   * M3: settle every job sharing one provider operation together. A
+   * coalesced batch submits once under the anchor's operation ID; when the
+   * provider reports a terminal state, all members converge in one write.
+   */
+  completeDerivedMemoryOperation(userId: string, operationId: string): void {
+    const now = this.#clock.now().toISOString()
+    this.#database
+      .prepare(
+        `UPDATE derived_memory_jobs
+         SET status = 'completed', content = '', claimed_by = NULL,
+             lease_until = NULL, next_attempt_at = NULL, last_error = NULL,
+             completed_at = ?, updated_at = ?
+         WHERE user_id = ? AND provider_operation_id = ?
+           AND status IN ('submitted','processing')`,
+      )
+      .run(now, now, userId, operationId)
+  }
+
+  failDerivedMemoryOperation(
+    userId: string,
+    operationId: string,
+    error: string,
+  ): void {
+    this.#database
+      .prepare(
+        `UPDATE derived_memory_jobs
+         SET status = 'failed', claimed_by = NULL, lease_until = NULL,
+             next_attempt_at = NULL, last_error = ?, updated_at = ?
+         WHERE user_id = ? AND provider_operation_id = ?
+           AND status IN ('submitted','processing')`,
+      )
+      .run(
+        error.slice(0, 2_000),
+        this.#clock.now().toISOString(),
+        userId,
+        operationId,
+      )
+  }
+
+  retryDerivedMemoryOperation(
+    userId: string,
+    operationId: string,
+    error: string,
+    retryAfterMs: number,
+    options: { clearError?: boolean } = {},
+  ): void {
+    const now = this.#clock.now()
+    this.#database
+      .prepare(
+        `UPDATE derived_memory_jobs
+         SET status = 'submitted', claimed_by = NULL, lease_until = NULL,
+             next_attempt_at = ?, last_error = ?, updated_at = ?
+         WHERE user_id = ? AND provider_operation_id = ?
+           AND status IN ('submitted','processing')`,
+      )
+      .run(
+        new Date(now.getTime() + retryAfterMs).toISOString(),
+        options.clearError === true ? null : error.slice(0, 2_000),
+        now.toISOString(),
+        userId,
+        operationId,
+      )
+  }
+
   recordDerivedMemoryRecall(
     runId: string,
     userId: string,
@@ -5841,14 +6215,18 @@ export class PegasStore {
   // tombstones remain the deletion authority; these rows are provider-owned
   // facts and the FTS mirror is a rebuildable derived index.
 
-  insertLocalDerivedMemory(userId: string, memory: DerivedMemory): void {
+  insertLocalDerivedMemory(
+    userId: string,
+    memory: DerivedMemory,
+    projectKey?: string,
+  ): void {
     const now = this.#clock.now().toISOString()
     this.#database
       .prepare(
         `INSERT INTO local_derived_memories
           (user_id, memory_id, text, memory_type, tags_json, metadata_json,
-           state, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'valid', ?, ?)`,
+           state, project_key, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'valid', ?, ?, ?)`,
       )
       .run(
         userId,
@@ -5857,6 +6235,7 @@ export class PegasStore {
         memory.type,
         JSON.stringify(memory.tags),
         JSON.stringify(memory.metadata),
+        projectKey ?? null,
         now,
         now,
       )
@@ -5888,9 +6267,19 @@ export class PegasStore {
 
   searchLocalDerivedMemories(
     userId: string,
-    options: { query: string; limit: number },
+    options: { query: string; limit: number; projectKey?: string },
   ): DerivedMemory[] {
     const query = options.query.trim()
+    // M3: when the caller resolved a project, only that project's facts and
+    // project-less (global) facts are candidates. Cross-project candidates
+    // never reach the model; the service audit still records tag filtering.
+    const projectFilter = options.projectKey
+      ? 'AND (memory.project_key IS NULL OR memory.project_key = ?)'
+      : ''
+    const projectFilterPlain = options.projectKey
+      ? 'AND (project_key IS NULL OR project_key = ?)'
+      : ''
+    const projectArguments = options.projectKey ? [options.projectKey] : []
     const rows =
       Array.from(query).length >= 3
         ? (this.#database
@@ -5899,12 +6288,14 @@ export class PegasStore {
                JOIN local_derived_memory_search search
                  ON search.rowid = memory.rowid
                WHERE memory.user_id = ? AND memory.state = 'valid'
+                 ${projectFilter}
                  AND local_derived_memory_search MATCH ?
                ORDER BY bm25(local_derived_memory_search), memory.updated_at DESC
                LIMIT ?`,
             )
             .all(
               userId,
+              ...projectArguments,
               ftsTrigramQuery(query),
               options.limit,
             ) as unknown as LocalDerivedMemoryRow[])
@@ -5912,10 +6303,15 @@ export class PegasStore {
             .prepare(
               `SELECT * FROM local_derived_memories
                WHERE user_id = ? AND state = 'valid'
+               ${projectFilterPlain}
                ORDER BY updated_at DESC, memory_id
                LIMIT ?`,
             )
-            .all(userId, options.limit) as unknown as LocalDerivedMemoryRow[])
+            .all(
+              userId,
+              ...projectArguments,
+              options.limit,
+            ) as unknown as LocalDerivedMemoryRow[])
     return rows.map(row => toLocalDerivedMemory(row))
   }
 
@@ -5973,6 +6369,7 @@ export class PegasStore {
          UNION SELECT user_id FROM derived_memory_cache
          UNION SELECT user_id FROM derived_memory_jobs
          UNION SELECT user_id FROM derived_memory_correction_jobs
+         UNION SELECT user_id FROM local_derived_memories
          ORDER BY user_id`,
       )
       .all() as { user_id: string }[]
@@ -6138,23 +6535,35 @@ export class PegasStore {
   }
 
   isDerivedMemorySuppressed(userId: string, memory: DerivedMemory): boolean {
+    const sourceRunIds = derivedMemorySourceRunIds(memory.metadata)
+    if (
+      this.#database
+        .prepare(
+          `SELECT 1 FROM derived_memory_tombstones
+           WHERE user_id = ? AND (memory_id = ? OR content_hash = ?)
+           LIMIT 1`,
+        )
+        .get(userId, memory.id, derivedMemoryContentHash(memory.text))
+    ) {
+      return true
+    }
+    if (sourceRunIds.length === 0) return false
+    const placeholders = sourceRunIds.map(() => '?').join(',')
     return Boolean(
       this.#database
         .prepare(
           `SELECT 1 FROM derived_memory_tombstones
-           WHERE user_id = ?
-             AND (memory_id = ? OR content_hash = ?
-               OR (source_run_id IS NOT NULL AND source_run_id = ?))
+           WHERE user_id = ? AND source_run_id IN (${placeholders})
            LIMIT 1`,
         )
-        .get(
-          userId,
-          memory.id,
-          derivedMemoryContentHash(memory.text),
-          typeof memory.metadata.run_id === 'string'
-            ? memory.metadata.run_id
-            : null,
-        ),
+        .get(userId, ...sourceRunIds) ??
+      this.#database
+        .prepare(
+          `SELECT 1 FROM derived_memory_tombstone_sources
+             WHERE user_id = ? AND source_run_id IN (${placeholders})
+             LIMIT 1`,
+        )
+        .get(userId, ...sourceRunIds),
     )
   }
 
@@ -6213,6 +6622,21 @@ export class PegasStore {
           memory ? derivedMemoryContentHash(memory.text) : null,
           sourceRunId,
         )
+      // M3: a coalesced fact has several contributing Runs; bind them all
+      // so re-distillation from any sibling Run stays suppressed.
+      if (memory) {
+        const insertSource = this.#database.prepare(
+          `INSERT INTO derived_memory_tombstone_sources
+            (user_id, memory_id, source_run_id)
+           VALUES (?, ?, ?)
+           ON CONFLICT(user_id, memory_id, source_run_id) DO NOTHING`,
+        )
+        for (const runId of derivedMemorySourceRunIds(
+          JSON.parse(memory.metadata_json) as Record<string, unknown>,
+        )) {
+          insertSource.run(userId, memoryId, runId)
+        }
+      }
       this.#database
         .prepare(
           `INSERT INTO derived_memory_curation_jobs
@@ -6365,12 +6789,20 @@ export class PegasStore {
     const workingDirectory = run.executionContext.workspace
     if (!workingDirectory) return
     const content = derivedMemoryEvidence(run, task, kind, outcome)
+    // M3: resolve the implicit project once, at settle time, inside the
+    // same transaction as the evidence. Recall resolves through the same
+    // chain, so linked worktrees and fresh clones converge on one key.
+    const project = resolveProjectIdentity(
+      workingDirectory,
+      this.#defaultWorkspaceRoot,
+    )
+    if (project) this.#registerMemoryProject(task.userId, project, now)
     this.#database
       .prepare(
         `INSERT INTO derived_memory_jobs
           (id, user_id, task_id, run_id, kind, document_id, content,
-           working_directory, status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+           working_directory, project_key, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
          ON CONFLICT(run_id, kind) DO NOTHING`,
       )
       .run(
@@ -6382,9 +6814,196 @@ export class PegasStore {
         `pegas:run:${run.id}`,
         content,
         workingDirectory,
+        project?.canonicalKey ?? null,
         now,
         now,
       )
+  }
+
+  #registerMemoryProject(
+    userId: string,
+    project: ProjectIdentity,
+    now: string,
+  ): void {
+    this.#database
+      .prepare(
+        `INSERT INTO memory_projects
+          (user_id, canonical_key, display_name, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(user_id, canonical_key) DO UPDATE SET
+           display_name = excluded.display_name,
+           updated_at = excluded.updated_at`,
+      )
+      .run(userId, project.canonicalKey, project.displayName, now, now)
+  }
+
+  /**
+   * MEMORY-001 M3: resolve a workspace to its project row for recall and
+   * history tools. Read-only; never creates a project (writes register at
+   * settle time), so a recall from an unknown directory sees no project.
+   */
+  memoryProjectForWorkspace(
+    userId: string,
+    workingDirectory: string,
+  ): { canonicalKey: string; displayName: string } | undefined {
+    const project = resolveProjectIdentity(
+      workingDirectory,
+      this.#defaultWorkspaceRoot,
+    )
+    if (!project) return undefined
+    const row = this.#database
+      .prepare(
+        `SELECT canonical_key, display_name FROM memory_projects
+         WHERE user_id = ? AND canonical_key = ?`,
+      )
+      .get(userId, project.canonicalKey) as
+      { canonical_key: string; display_name: string } | undefined
+    return row
+      ? { canonicalKey: row.canonical_key, displayName: row.display_name }
+      : undefined
+  }
+
+  /**
+   * MEMORY-001 M4 salience: record that injected local facts were actually
+   * used, so ranking can prefer proven facts and decay stale ones. Called
+   * from the same recall write path as the audit; explicit/Hindsight facts
+   * are unaffected.
+   */
+  recordLocalDerivedMemoryUse(
+    userId: string,
+    memoryIds: readonly string[],
+  ): void {
+    if (memoryIds.length === 0) return
+    const now = this.#clock.now().toISOString()
+    const update = this.#database.prepare(
+      `UPDATE local_derived_memories
+       SET use_count = use_count + 1, last_used_at = ?
+       WHERE user_id = ? AND memory_id = ? AND state = 'valid'`,
+    )
+    for (const memoryId of memoryIds) update.run(now, userId, memoryId)
+  }
+
+  /**
+   * M4 near-duplicate merge: when a newly distilled fact is lexically
+   * identical (normalized) to an existing valid fact in the same scope,
+   * keep the existing row and refresh its recency instead of inserting a
+   * second copy. Returns the surviving memory ID, or undefined when the
+   * candidate is novel.
+   */
+  mergeNearDuplicateLocalMemory(
+    userId: string,
+    candidate: DerivedMemory,
+    projectKey?: string,
+  ): string | undefined {
+    const normalized = normalizedFactText(candidate.text)
+    const rows = this.#database
+      .prepare(
+        `SELECT memory_id, text FROM local_derived_memories
+         WHERE user_id = ? AND state = 'valid'
+           AND ((project_key IS NULL AND ? IS NULL) OR project_key = ?)
+         ORDER BY updated_at DESC
+         LIMIT 200`,
+      )
+      .all(userId, projectKey ?? null, projectKey ?? null) as {
+      memory_id: string
+      text: string
+    }[]
+    const duplicate = rows.find(
+      row => normalizedFactText(row.text) === normalized,
+    )
+    if (!duplicate) return undefined
+    this.#database
+      .prepare(
+        `UPDATE local_derived_memories
+         SET updated_at = ?, use_count = use_count + 1
+         WHERE user_id = ? AND memory_id = ?`,
+      )
+      .run(this.#clock.now().toISOString(), userId, duplicate.memory_id)
+    return duplicate.memory_id
+  }
+
+  /**
+   * M4 L0 summary: rebuild the bounded project digest from the most salient
+   * valid facts (use_count first, then recency). Deterministic, no model
+   * call; the digest is at most 12 facts / 1600 characters.
+   */
+  refreshMemoryProjectSummary(userId: string, projectKey: string): void {
+    const project = this.#database
+      .prepare(
+        `SELECT display_name FROM memory_projects
+         WHERE user_id = ? AND canonical_key = ?`,
+      )
+      .get(userId, projectKey) as { display_name: string } | undefined
+    if (!project) return
+    const rows = this.#database
+      .prepare(
+        `SELECT text FROM local_derived_memories
+         WHERE user_id = ? AND project_key = ? AND state = 'valid'
+         ORDER BY use_count DESC, updated_at DESC, memory_id
+         LIMIT 12`,
+      )
+      .all(userId, projectKey) as { text: string }[]
+    const total = this.#database
+      .prepare(
+        `SELECT COUNT(*) AS total FROM local_derived_memories
+         WHERE user_id = ? AND project_key = ? AND state = 'valid'`,
+      )
+      .get(userId, projectKey) as { total: number }
+    const now = this.#clock.now().toISOString()
+    if (rows.length === 0) {
+      this.#database
+        .prepare(
+          `DELETE FROM memory_project_summaries
+           WHERE user_id = ? AND project_key = ?`,
+        )
+        .run(userId, projectKey)
+      return
+    }
+    const lines: string[] = []
+    let used = 0
+    for (const row of rows) {
+      const line = `- ${row.text.replaceAll(/\s+/g, ' ').slice(0, 160)}`
+      if (used + line.length > 1_600) break
+      lines.push(line)
+      used += line.length
+    }
+    this.#database
+      .prepare(
+        `INSERT INTO memory_project_summaries
+          (user_id, project_key, display_name, text, fact_count, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(user_id, project_key) DO UPDATE SET
+           display_name = excluded.display_name, text = excluded.text,
+           fact_count = excluded.fact_count, updated_at = excluded.updated_at`,
+      )
+      .run(
+        userId,
+        projectKey,
+        project.display_name,
+        lines.join('\n'),
+        total.total,
+        now,
+      )
+  }
+
+  memoryProjectSummary(
+    userId: string,
+    projectKey: string,
+  ): { displayName: string; text: string; factCount: number } | undefined {
+    const row = this.#database
+      .prepare(
+        `SELECT display_name, text, fact_count FROM memory_project_summaries
+         WHERE user_id = ? AND project_key = ?`,
+      )
+      .get(userId, projectKey) as
+      { display_name: string; text: string; fact_count: number } | undefined
+    return row
+      ? {
+          displayName: row.display_name,
+          text: row.text,
+          factCount: row.fact_count,
+        }
+      : undefined
   }
 
   #automationCommandReplay(
@@ -7814,6 +8433,16 @@ export class PegasStore {
   enqueueEvent(input: NewInboxEvent): { event: InboxEvent; inserted: boolean } {
     const id = input.id ?? randomUUID()
     const createdAt = this.#clock.now().toISOString()
+    const reference =
+      input.type === 'user.message' ? replyReference(input.payload) : undefined
+    const requiredContractVersion =
+      reference?.mode === 'explain'
+        ? 4
+        : reference
+          ? 3
+          : input.source === 'collaboration'
+            ? 2
+            : 1
     const result = this.#database
       .prepare(
         `INSERT OR IGNORE INTO inbox_events
@@ -7830,7 +8459,7 @@ export class PegasStore {
         input.deviceId ?? null,
         input.dedupeKey ?? null,
         JSON.stringify(input.payload),
-        input.source === 'collaboration' ? 2 : 1,
+        requiredContractVersion,
         createdAt,
       )
 
@@ -7868,6 +8497,15 @@ export class PegasStore {
            WHERE required_contract_version <= ? AND (
              status = 'pending'
              OR (status = 'processing' AND lease_until <= ?)
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM tasks WHERE inbox_events.source = 'automation'
+               AND inbox_events.type = 'automation.due'
+               AND tasks.user_id = inbox_events.user_id
+               AND json_extract(inbox_events.payload_json, '$.target.kind') = 'existing_task'
+               AND tasks.id = json_extract(inbox_events.payload_json, '$.target.taskId')
+               AND tasks.status_reason IN (${automationReviewWaitSql})
+               AND NOT EXISTS (SELECT 1 FROM runs WHERE origin_event_id = inbox_events.id)
            )
            ORDER BY created_at ASC
            LIMIT 1`,
@@ -7925,7 +8563,8 @@ export class PegasStore {
     const result = this.#database
       .prepare(
         `UPDATE inbox_events SET lease_until = ?
-         WHERE id = ? AND status = 'processing' AND claimed_by = ?`,
+         WHERE id = ? AND status = 'processing' AND claimed_by = ?
+           AND COALESCE(last_error, '') NOT LIKE 'blocked_by_action:%'`,
       )
       .run(new Date(now.getTime() + leaseMs).toISOString(), eventId, workerId)
     if (result.changes !== 1) {
@@ -7951,7 +8590,10 @@ export class PegasStore {
 
   #assertEventClaim(eventId: string, workerId: string): void {
     const row = this.#database
-      .prepare(`SELECT status, claimed_by FROM inbox_events WHERE id = ?`)
+      .prepare(
+        `SELECT status, claimed_by FROM inbox_events
+         WHERE id = ? AND COALESCE(last_error, '') NOT LIKE 'blocked_by_action:%'`,
+      )
       .get(eventId) as { status: string; claimed_by: string | null } | undefined
     if (row?.status !== 'processing' || row.claimed_by !== workerId) {
       throw new EventClaimError(
@@ -8068,6 +8710,11 @@ export class PegasStore {
         )
       if (nextStatus === 'failed') {
         this.#failTerminalCollaborationEvent(eventId, error)
+        this.#updateReviewReworkReason(
+          eventId,
+          'review_rework_queued',
+          'review_rework_failed',
+        )
       }
       this.#database.exec('COMMIT')
     } catch (failure) {
@@ -8076,53 +8723,46 @@ export class PegasStore {
     }
   }
 
+  #updateReviewReworkReason(
+    eventId: string,
+    from: 'review_rework_queued' | 'review_rework_failed',
+    to: 'review_rework_queued' | 'review_rework_failed',
+  ): boolean {
+    const result = this.#database
+      .prepare(
+        `UPDATE tasks SET status_reason = ?, updated_at = ?
+         WHERE status = 'started' AND status_reason = ? AND EXISTS (
+           SELECT 1 FROM inbox_events event
+           JOIN review_packs pack ON pack.id = json_extract(event.payload_json, '$.reviewPackId')
+           WHERE event.id = ? AND event.source = 'review' AND event.type = 'user.message'
+             AND event.user_id = tasks.user_id
+             AND pack.task_id = tasks.id
+             AND pack.run_id = (
+               SELECT id FROM runs WHERE task_id = tasks.id
+               ORDER BY created_at DESC, rowid DESC LIMIT 1
+             )
+         )`,
+      )
+      .run(to, this.#clock.now().toISOString(), from, eventId)
+    return result.changes === 1
+  }
+
   parkEventForBlockedAction(
     eventId: string,
     workerId: string,
     taskId: string,
   ): 'parked' | 'released' | 'failed' {
-    this.#assertEventClaim(eventId, workerId)
-    const now = this.#clock.now().toISOString()
-    this.#database.exec('BEGIN IMMEDIATE')
-    try {
-      const event = this.#database
-        .prepare(
-          `SELECT user_id FROM inbox_events
-           WHERE id = ? AND status = 'processing' AND claimed_by = ?`,
-        )
-        .get(eventId, workerId) as { user_id: string } | undefined
-      if (!event)
-        throw new Error(`Worker ${workerId} does not own event ${eventId}`)
+    return this.parkEventsForBlockedAction([eventId], workerId, taskId)
+  }
+
+  parkEventsForBlockedAction(
+    eventIds: readonly string[],
+    workerId: string,
+    taskId: string,
+  ): 'parked' | 'released' | 'failed' {
+    return this.#runInTransaction(() => {
+      const now = this.#clock.now().toISOString()
       const task = this.#taskById(taskId)
-      if (task.userId !== event.user_id)
-        throw new Error('Task belongs to another user')
-      this.#database
-        .prepare(
-          `INSERT INTO task_events (event_id, task_id, relation, created_at)
-           VALUES (?, ?, 'blocked_action', ?)
-           ON CONFLICT(event_id) DO UPDATE SET
-             task_id = excluded.task_id,
-             relation = CASE
-               WHEN task_events.relation IN (
-                 'context_note','collaboration_returned','collaboration_failed'
-               ) THEN task_events.relation
-               ELSE excluded.relation
-             END,
-             created_at = excluded.created_at`,
-        )
-        .run(eventId, taskId, now)
-      if (task.status === 'cancelled') {
-        this.#database
-          .prepare(
-            `UPDATE inbox_events
-             SET status = 'failed', claimed_by = NULL, lease_until = NULL,
-                 last_error = 'blocked_task_stopped'
-             WHERE id = ? AND claimed_by = ?`,
-          )
-          .run(eventId, workerId)
-        this.#database.exec('COMMIT')
-        return 'failed'
-      }
       const blockingAction = this.#database
         .prepare(
           `SELECT status FROM actions
@@ -8131,32 +8771,74 @@ export class PegasStore {
            ORDER BY updated_at DESC, id DESC LIMIT 1`,
         )
         .get(taskId) as { status: string } | undefined
-      if (!blockingAction) {
-        this.#database
-          .prepare(
-            `UPDATE inbox_events
-             SET status = 'pending', claimed_by = NULL, lease_until = NULL,
-                 last_error = NULL
-             WHERE id = ? AND claimed_by = ?`,
+      const transition =
+        task.status === 'cancelled'
+          ? {
+              eventStatus: 'failed',
+              lease: null,
+              error: 'blocked_task_stopped',
+              outcome: 'failed' as const,
+            }
+          : blockingAction
+            ? {
+                eventStatus: 'processing',
+                lease: '9999-12-31T23:59:59.999Z',
+                error: `blocked_by_action:${blockingAction.status}`,
+                outcome: 'parked' as const,
+              }
+            : {
+                eventStatus: 'pending',
+                lease: null,
+                error: null,
+                outcome: 'released' as const,
+              }
+      const loadOwner = this.#database.prepare(
+        `SELECT user_id FROM inbox_events
+         WHERE id = ? AND status = 'processing' AND claimed_by = ?
+           AND COALESCE(last_error, '') NOT LIKE 'blocked_by_action:%'`,
+      )
+      const linkEvent = this.#database.prepare(
+        `INSERT INTO task_events (event_id, task_id, relation, created_at)
+         VALUES (?, ?, 'blocked_action', ?)
+         ON CONFLICT(event_id) DO UPDATE SET
+           task_id = excluded.task_id,
+           relation = CASE
+             WHEN task_events.relation IN (
+               'context_note','collaboration_returned','collaboration_failed'
+             ) THEN task_events.relation
+             ELSE excluded.relation
+           END,
+           created_at = excluded.created_at`,
+      )
+      // Reserved contracts must retain their claim identity while processing.
+      // The parked marker and sentinel lease fence them until settlement.
+      const updateEvent = this.#database.prepare(
+        `UPDATE inbox_events
+         SET status = $status,
+             claimed_by = CASE WHEN $status = 'processing' AND required_contract_version > 1
+               THEN claimed_by ELSE NULL END,
+             lease_until = $lease, last_error = $error
+         WHERE id = $id`,
+      )
+      for (const eventId of eventIds) {
+        const event = loadOwner.get(eventId, workerId) as
+          { user_id: string } | undefined
+        if (!event)
+          throw new EventClaimError(
+            `Worker ${workerId} does not own event ${eventId}`,
           )
-          .run(eventId, workerId)
-        this.#database.exec('COMMIT')
-        return 'released'
+        if (task.userId !== event.user_id)
+          throw new Error('Task belongs to another user')
+        linkEvent.run(eventId, taskId, now)
+        updateEvent.run({
+          status: transition.eventStatus,
+          lease: transition.lease,
+          error: transition.error,
+          id: eventId,
+        })
       }
-      this.#database
-        .prepare(
-          `UPDATE inbox_events
-           SET status = 'processing', claimed_by = NULL,
-               lease_until = '9999-12-31T23:59:59.999Z', last_error = ?
-           WHERE id = ? AND claimed_by = ?`,
-        )
-        .run(`blocked_by_action:${blockingAction.status}`, eventId, workerId)
-      this.#database.exec('COMMIT')
-      return 'parked'
-    } catch (error) {
-      this.#database.exec('ROLLBACK')
-      throw error
-    }
+      return transition.outcome
+    })
   }
 
   createTaskFromEvent(event: InboxEvent, title: string): Task {
@@ -8324,6 +9006,18 @@ export class PegasStore {
       )
   }
 
+  #assertNoPendingSteering(runId: string): void {
+    if (
+      this.#database
+        .prepare(
+          'SELECT 1 FROM runs WHERE id = ? AND steering_json IS NOT NULL',
+        )
+        .get(runId)
+    ) {
+      throw new PendingRunSteeringError()
+    }
+  }
+
   listPendingRunSteering(
     runId: string,
     workerId: string,
@@ -8383,9 +9077,6 @@ export class PegasStore {
         return successor
       }
       const now = this.#clock.now().toISOString()
-      const steeringText = directives
-        .map(directive => directive.text)
-        .join('\n')
       const successorId = randomUUID()
       this.#database
         .prepare(
@@ -8402,9 +9093,7 @@ export class PegasStore {
           row.executor,
           row.executor_ref ?? row.resume_from_ref,
           row.goal_revision,
-          JSON.stringify(
-            `${JSON.parse(row.input_json) as string}\n\n[用户纠正] 用户在执行过程中发来了新的指示。请在已完成工作的基础上调整方向，不要重复已完成的副作用：\n${steeringText}`,
-          ),
+          correctedRunInput(row.input_json, directives),
           row.execution_context_json,
           row.execution_contract_version,
           now,
@@ -8432,7 +9121,7 @@ export class PegasStore {
     executionContext: ExecutionContext | ((task: Task) => ExecutionContext) = {
       executor,
     },
-    options: { collaborationRelationId?: string } = {},
+    options: { collaborationRelationId?: string; replyRunId?: string } = {},
   ): { task: Task; run: Run } {
     if (decision.kind === 'steer_task' || decision.kind === 'cancel_task') {
       throw new Error('Control intents must use applyControlIntent')
@@ -8455,27 +9144,21 @@ export class PegasStore {
     event: InboxEvent,
     decision: Extract<RoutingDecision, { kind: 'steer_task' | 'cancel_task' }>,
   ): { task: Task } {
-    this.#database.exec('BEGIN IMMEDIATE')
-    try {
+    return this.#runInTransaction(() => {
       if (event.source === 'collaboration') {
         throw new Error('Control intents require direct user routing')
       }
       this.#fenceRoutingWriteInTransaction(event)
       const task = this.#applyControlIntentInTransaction(event, decision)
-      this.#database.exec('COMMIT')
       return { task }
-    } catch (error) {
-      this.#database.exec('ROLLBACK')
-      throw error
-    }
+    })
   }
 
   applyRoutingClarification(
     event: InboxEvent,
     decision: Extract<RoutingDecision, { kind: 'clarify' }>,
   ): { message: OutboxMessage } {
-    this.#database.exec('BEGIN IMMEDIATE')
-    try {
+    return this.#runInTransaction(() => {
       if (event.source === 'collaboration') {
         throw new Error('Routing clarification requires direct user routing')
       }
@@ -8489,7 +9172,6 @@ export class PegasStore {
         { id: string } | undefined
       if (existing) {
         const message = this.#outboxById(existing.id)
-        this.#database.exec('COMMIT')
         return { message }
       }
       const message = this.enqueueOutbox({
@@ -8514,12 +9196,8 @@ export class PegasStore {
            WHERE id = ? AND expires_at IS NULL`,
         )
         .run(expiresAt, message.id)
-      this.#database.exec('COMMIT')
       return { message: this.#outboxById(message.id) }
-    } catch (error) {
-      this.#database.exec('ROLLBACK')
-      throw error
-    }
+    })
   }
 
   expireDueRoutingClarifications(
@@ -8586,9 +9264,119 @@ export class PegasStore {
     }
   }
 
+  commitRoutingBatch(
+    head: InboxEvent,
+    ids: readonly string[],
+    applyDecision: () => void,
+  ): void {
+    const workerId = head.claimedBy
+    if (!workerId || ids[0] !== head.id)
+      throw new EventClaimError('Routing batch must include its claimed head')
+    this.#runInTransaction(() => {
+      const owner = this.#database.prepare(
+        'SELECT user_id FROM inbox_events WHERE id = ?',
+      )
+      for (const id of ids) {
+        this.#assertEventClaim(id, workerId)
+        if (owner.get(id)?.user_id !== head.userId)
+          throw new EventClaimError('Routing batch inputs must share an owner')
+      }
+      this.recordMessageTraceBatch(head.id, ids, workerId)
+      applyDecision()
+      const decision = this.#database
+        .prepare('SELECT task_id FROM routing_decisions WHERE event_id = ?')
+        .get(head.id) as { task_id: string } | undefined
+      const now = this.#clock.now().toISOString()
+      if (decision) {
+        const link = this.#database.prepare(
+          `INSERT INTO task_events (event_id, task_id, relation, created_at)
+           VALUES (?, ?, 'batch_member', ?)
+           ON CONFLICT(event_id) DO UPDATE SET task_id = excluded.task_id,
+             relation = excluded.relation, created_at = excluded.created_at`,
+        )
+        for (const id of ids.slice(1)) link.run(id, decision.task_id, now)
+      }
+      const acknowledge = this.#database.prepare(
+        `UPDATE inbox_events SET status = 'processed', processed_at = ?,
+           claimed_by = NULL, lease_until = NULL, last_error = NULL WHERE id = ?`,
+      )
+      for (const id of ids) acknowledge.run(now, id)
+    })
+  }
+
   #fenceRoutingWriteInTransaction(event: InboxEvent): void {
     if (event.claimedBy === undefined) return
     this.#assertEventClaim(event.id, event.claimedBy)
+  }
+
+  taskResumeSourcePolicy(
+    userId: string,
+    source: TaskResumeSource,
+  ): TaskResumeSourcePolicy {
+    const row = this.#database
+      .prepare(
+        'SELECT enabled, revision FROM task_resume_source_policies WHERE user_id = ? AND source = ?',
+      )
+      .get(userId, source) as { enabled: number; revision: number } | undefined
+    return {
+      source,
+      enabled: row ? row.enabled === 1 : true,
+      revision: row?.revision ?? 0,
+    }
+  }
+
+  setTaskResumeSourcePolicy(
+    userId: string,
+    source: TaskResumeSource,
+    enabled: boolean,
+    expectedRevision: number,
+  ): TaskResumeSourcePolicy {
+    return this.#runInTransaction(() => {
+      const current = this.taskResumeSourcePolicy(userId, source)
+      if (
+        current.revision === expectedRevision + 1 &&
+        current.enabled === enabled
+      )
+        return current
+      if (current.revision !== expectedRevision)
+        throw new TaskResumePolicyConflictError('Resume source policy changed')
+      this.#database
+        .prepare(
+          `INSERT INTO task_resume_source_policies (user_id, source, enabled, revision)
+           VALUES (?, ?, ?, ?) ON CONFLICT(user_id, source) DO UPDATE SET
+             enabled = excluded.enabled, revision = excluded.revision`,
+        )
+        .run(userId, source, enabled ? 1 : 0, expectedRevision + 1)
+      return { source, enabled, revision: expectedRevision + 1 }
+    })
+  }
+
+  #assertTaskResumeAuthorized(task: Task, event: InboxEvent): void {
+    const origin = this.#eventById(task.originEventId)
+    if (
+      !revalidateMandate(task.mandate, origin, event) ||
+      !isTaskResumeSource(origin.source) ||
+      !isTaskResumeSource(event.source) ||
+      !this.taskResumeSourcePolicy(task.userId, origin.source).enabled ||
+      !this.taskResumeSourcePolicy(task.userId, event.source).enabled
+    ) {
+      throw new TaskResumeDeniedError()
+    }
+    const payload = event.payload
+    if (
+      payload &&
+      typeof payload === 'object' &&
+      'taskId' in payload &&
+      payload.taskId === task.id
+    )
+      return
+    const reference = replyReference(payload)
+    if (
+      reference?.mode === 'continue' &&
+      this.conversationReply(reference, event.userId).taskId === task.id
+    )
+      return
+    throw new TaskResumeDeniedError()
   }
 
   #applyTaskRoutingDecision(
@@ -8599,10 +9387,9 @@ export class PegasStore {
     >,
     executor: string,
     executionContext: ExecutionContext | ((task: Task) => ExecutionContext),
-    options: { collaborationRelationId?: string },
+    options: { collaborationRelationId?: string; replyRunId?: string },
   ): { task: Task; run: Run } {
-    this.#database.exec('BEGIN IMMEDIATE')
-    try {
+    return this.#runInTransaction(() => {
       this.#fenceRoutingWriteInTransaction(event)
       const collaboration = options.collaborationRelationId
         ? this.#collaborationForDispatch(options.collaborationRelationId, event)
@@ -8613,14 +9400,24 @@ export class PegasStore {
       const existingRun = this.#database
         .prepare('SELECT * FROM runs WHERE origin_event_id = ?')
         .get(event.id) as unknown as RunRow | undefined
+      const recorded =
+        existingRun || decision.kind === 'continue_task'
+          ? (this.#database
+              .prepare(
+                'SELECT kind, task_id FROM routing_decisions WHERE event_id = ?',
+              )
+              .get(event.id) as { kind: string; task_id: string } | undefined)
+          : undefined
+      if (
+        recorded &&
+        (recorded.kind !== decision.kind ||
+          (decision.kind === 'continue_task' &&
+            recorded.task_id !== decision.taskId))
+      ) {
+        throw new Error('Event already routed with a different decision')
+      }
       if (existingRun) {
         const existingTask = this.#taskById(existingRun.task_id)
-        const existingDecision = this.#database
-          .prepare('SELECT kind FROM routing_decisions WHERE event_id = ?')
-          .get(event.id) as { kind: string } | undefined
-        if (existingDecision && existingDecision.kind !== decision.kind) {
-          throw new Error('Event already routed with a different decision')
-        }
         if (collaboration) {
           if (collaboration.target_event_id === event.id) {
             this.#markCollaborationDispatchedInTransaction(
@@ -8630,8 +9427,21 @@ export class PegasStore {
             )
           }
         }
-        this.#database.exec('COMMIT')
         return { task: existingTask, run: toRun(existingRun) }
+      }
+
+      if (recorded) {
+        // Continuation can have amended an existing Run instead of creating
+        // one with this event as its origin. The stored decision fences replay.
+        const task = this.#taskById(recorded.task_id)
+        if (task.userId !== event.userId)
+          throw new Error('Task belongs to another user')
+        const run = this.#database
+          .prepare(
+            'SELECT * FROM runs WHERE task_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1',
+          )
+          .get(task.id) as unknown as RunRow
+        return { task, run: toRun(run) }
       }
 
       const now = this.#clock.now().toISOString()
@@ -8639,7 +9449,8 @@ export class PegasStore {
       if (decision.kind === 'create_task' || decision.kind === 'reply') {
         if (
           decision.kind === 'reply' &&
-          !this.getRuntimeSettings().chatLaneEnabled
+          !this.getRuntimeSettings().chatLaneEnabled &&
+          replyReference(event.payload)?.mode !== 'explain'
         ) {
           throw new Error('Reply routing requires the chat lane to be enabled')
         }
@@ -8691,11 +9502,12 @@ export class PegasStore {
           throw new Error('Task belongs to another user')
         if (task.status === 'cancelled')
           throw new Error('Task was stopped by the user')
-        if (
-          task.status === 'completed' &&
-          !revalidateMandate(task.mandate, event)
-        )
-          throw new Error('Task mandate no longer authorizes resume')
+        if (task.statusReason === 'awaiting_delivery_acceptance')
+          throw new Error(
+            'This delivery is awaiting your decision. Accept it or request changes in its review.',
+          )
+        if (task.status === 'completed')
+          this.#assertTaskResumeAuthorized(task, event)
       }
       if (
         collaboration?.target_event_id === event.id &&
@@ -8738,6 +9550,7 @@ export class PegasStore {
 
       if (
         decision.kind === 'continue_task' &&
+        task.kind !== 'conversation' &&
         !collaboration &&
         event.source !== 'automation'
       ) {
@@ -8809,7 +9622,6 @@ export class PegasStore {
             )
           const redirectedTask = this.#taskById(task.id)
           const redirectedRun = this.#runById(activeRun.id)
-          this.#database.exec('COMMIT')
           return { task: redirectedTask, run: redirectedRun }
         }
       }
@@ -8861,9 +9673,14 @@ export class PegasStore {
         .prepare(
           `SELECT executor_ref, execution_context_json FROM runs
            WHERE task_id = ? AND executor_ref IS NOT NULL
+             AND (? IS NULL OR id = ?)
            ORDER BY updated_at DESC, rowid DESC LIMIT 1`,
         )
-        .get(task.id) as
+        .get(
+          task.id,
+          options.replyRunId ?? null,
+          options.replyRunId ?? null,
+        ) as
         | { executor_ref: string; execution_context_json: string | null }
         | undefined
       const compatible =
@@ -8926,6 +9743,16 @@ export class PegasStore {
           task.id,
         )
 
+      if (decision.kind === 'continue_task') {
+        this.#database
+          .prepare(
+            `UPDATE runs SET status = 'cancelled', claimed_by = NULL, lease_until = NULL,
+               claim_token_hash = NULL, last_error = ?, updated_at = ?
+             WHERE task_id = ? AND status = 'waiting' AND goal_revision IS NOT NULL`,
+          )
+          .run(`superseded_by:${runId}`, now, task.id)
+      }
+
       const run = this.#runById(runId)
       task = this.#taskById(task.id)
       if (collaboration) {
@@ -8937,12 +9764,8 @@ export class PegasStore {
           )
         }
       }
-      this.#database.exec('COMMIT')
       return { task, run }
-    } catch (error) {
-      this.#database.exec('ROLLBACK')
-      throw error
-    }
+    })
   }
 
   listRuns(taskId?: string): Run[] {
@@ -9381,7 +10204,10 @@ export class PegasStore {
        LEFT JOIN message_trace_browser_receipts AS receipt
          ON receipt.subject_id = event.id AND receipt.phase = 'accepted'
        WHERE event.user_id = ? AND (event.id = ? OR event.id = ? OR event.id IN
-         (SELECT event_id FROM message_trace_batch_members WHERE root_event_id = ?))
+         (SELECT batch.event_id FROM message_trace_batch_members AS batch
+          WHERE batch.root_event_id = ? AND NOT EXISTS (
+            SELECT 1 FROM routing_decisions WHERE event_id = batch.event_id
+          )))
        ORDER BY event.created_at, event.rowid LIMIT 51`,
       )
       .all(userId, root, eventId, root) as unknown as (InboxRow & {
@@ -9661,6 +10487,27 @@ export class PegasStore {
     return rows.map(row => toTask(row as unknown as TaskRow))
   }
 
+  runReplyMode(runId: string): 'continue' | 'explain' | undefined {
+    const eventId = this.resolveRunInputEventId(runId)
+    return eventId
+      ? replyReference(this.#eventById(eventId).payload)?.mode
+      : undefined
+  }
+
+  conversationReply(
+    reference: NonNullable<ReturnType<typeof replyReference>>,
+    userId: string,
+  ): { taskId: string; text: string; runId?: string } {
+    const messageId = reference.id
+    const reply = quotableAgentReply(this.#outboxForUser(messageId, userId))
+    if (!reply) throw new Error('This message is unavailable for follow-up')
+    const task = this.findTask(reply.taskId, userId)
+    if (!task) throw new OutboxNotFoundError('Outbox message not found')
+    if (task.status === 'cancelled' && reference.mode !== 'explain')
+      throw new Error('Task was stopped by the user')
+    return reply
+  }
+
   conversationSessionRef(userId: string): string | undefined {
     const row = this.#database
       .prepare(
@@ -9680,6 +10527,70 @@ export class PegasStore {
            updated_at = excluded.updated_at`,
       )
       .run(userId, executorRef, this.#clock.now().toISOString())
+  }
+
+  projectWorkChannel(task: Task): WorkChannel {
+    const facts = this.#database
+      .prepare(
+        `WITH latest_run AS (
+           SELECT id, status, goal_revision FROM runs
+           WHERE task_id = $task ORDER BY created_at DESC, rowid DESC LIMIT 1
+         ), pending_approval AS (
+           SELECT id FROM approvals WHERE task_id = $task AND status = 'pending'
+           ORDER BY created_at DESC, rowid DESC LIMIT 1
+         ), reconciliation AS (
+           SELECT id FROM actions WHERE task_id = $task AND protocol_version = 1
+             AND status IN ('failed','unknown')
+           ORDER BY (status = 'unknown') DESC, updated_at DESC, rowid DESC LIMIT 1
+         )
+         SELECT
+           (SELECT status FROM runs WHERE task_id = $task AND status IN ('queued','running')
+            ORDER BY (status = 'running') DESC, created_at DESC, rowid DESC LIMIT 1) AS active,
+           (SELECT id FROM latest_run) AS lastRunId,
+           (SELECT status FROM latest_run) AS lastRunStatus,
+           (SELECT id FROM pending_approval) AS pendingApproval,
+           (SELECT id FROM reconciliation) AS reconciliation,
+           (SELECT id FROM outbox_messages
+            WHERE user_id = $owner AND task_id = $task AND channel = 'conversation'
+              AND status <> 'merged' AND json_valid(payload_json)
+              AND CASE
+                WHEN EXISTS (SELECT 1 FROM reconciliation) THEN
+                  json_extract(payload_json, '$.actionId') = (SELECT id FROM reconciliation)
+                  AND json_extract(payload_json, '$.type') IN ('action.failed','action.outcome_unknown','action.reconciliation_required')
+                WHEN EXISTS (SELECT 1 FROM pending_approval) THEN
+                  json_extract(payload_json, '$.approvalId') = (SELECT id FROM pending_approval)
+                WHEN $reason IN ('awaiting_goal_clarification','awaiting_user_input','awaiting_evidence','blocked') THEN
+                  json_extract(payload_json, '$.type') IN ('goal.clarification_required','input.required','input.requested','run.waiting','goal.evidence_required','goal.report_required','run.blocked')
+                ELSE 0
+              END
+            ORDER BY created_at DESC, rowid DESC LIMIT 1) AS attentionMessageId,
+           (SELECT id FROM outbox_messages
+            WHERE user_id = $owner AND task_id = $task AND channel = 'conversation'
+              AND status <> 'merged' AND json_valid(payload_json)
+              AND json_extract(payload_json, '$.type') IN ('run.completed', 'review.ready')
+              AND json_extract(payload_json, '$.runId') = (SELECT id FROM latest_run)
+            ORDER BY created_at DESC, rowid DESC LIMIT 1) AS resultMessageId,
+           EXISTS (SELECT 1 FROM automations WHERE user_id = $owner AND status = 'active'
+             AND json_extract(target_json, '$.kind') = 'existing_task'
+             AND json_extract(target_json, '$.taskId') = $task) AS scheduled,
+           (
+             EXISTS (SELECT 1 FROM actions WHERE protocol_version = 1 AND (
+               (resume_run_id = (SELECT id FROM latest_run) AND status IN ('authorized','succeeded','failed','unknown'))
+               OR (task_id = $task AND status IN ('awaiting_approval','authorized','failed','unknown'))
+             ))
+             OR EXISTS (SELECT 1 FROM action_reconciliations JOIN actions ON actions.id = action_id
+               WHERE actions.task_id = $task AND action_reconciliations.resolution = 'failed')
+           ) AS retryBlocked`,
+      )
+      .get({
+        task: task.id,
+        owner: task.userId,
+        reason: task.statusReason ?? null,
+      })
+    return projectWorkChannel(
+      task,
+      facts as unknown as Parameters<typeof projectWorkChannel>[1],
+    )
   }
 
   searchChannels(
@@ -9785,7 +10696,7 @@ export class PegasStore {
       )
       .all(...params, options.limit + 1) as unknown as TaskRow[]
     const pageRows = rows.slice(0, options.limit)
-    const channels = pageRows.map(row => projectWorkChannel(toTask(row)))
+    const channels = pageRows.map(row => this.projectWorkChannel(toTask(row)))
     const nextCursor =
       rows.length > options.limit ? pageRows.at(-1)?.id : undefined
     return {
@@ -9917,6 +10828,8 @@ export class PegasStore {
         throw new Error('Command ID is already used with a different Goal')
       return toGoalContract(existing)
     }
+    if (task.statusReason === 'awaiting_delivery_acceptance')
+      throw new Error('Decide on the current delivery before changing its Goal')
     if (task.status === 'completed' || task.status === 'cancelled')
       throw new Error('Closed Task cannot accept a new Goal revision')
     const sourcePlaceholders = draft.basedOnEventIds.map(() => '?').join(',')
@@ -10992,6 +11905,161 @@ export class PegasStore {
     }
   }
 
+  /**
+   * MEMORY-001 M5: bounded history search for the Executor read-only
+   * tools. Reuses the channel_search FTS surface (task titles/goals, user
+   * inputs, Run outputs, worker reports, artifact names, outbox text) but
+   * projects document-level hits with task title and time instead of whole
+   * transcripts. Owner isolation is enforced in SQL; conversation lanes
+   * are excluded. Results are untrusted data for the model, never
+   * instructions.
+   */
+  searchHistoryForRun(
+    runId: string,
+    claimToken: string,
+    query: string,
+    limit = 10,
+  ): {
+    results: {
+      taskId: string
+      taskTitle: string
+      sourceKind: string
+      sourceId: string
+      snippet: string
+      updatedAt: string
+    }[]
+  } {
+    this.#claimForCapability(runId, claimToken)
+    const run = this.#runById(runId)
+    const task = this.#taskById(run.taskId)
+    const trimmed = query.trim()
+    if (!trimmed || Array.from(trimmed).length > 200)
+      throw new Error('History query must be 1-200 characters')
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 20)
+      throw new Error('History limit must be between 1 and 20')
+    const rows =
+      Array.from(trimmed).length >= 3
+        ? (this.#database
+            .prepare(
+              `SELECT
+                 documents.task_id,
+                 tasks.title AS task_title,
+                 documents.source_kind,
+                 documents.source_id,
+                 snippet(channel_search, 0, '', '', '…', 24) AS snippet,
+                 documents.updated_at
+               FROM channel_search
+               INNER JOIN channel_search_documents documents
+                 ON documents.rowid = channel_search.rowid
+               INNER JOIN tasks ON tasks.id = documents.task_id
+               WHERE tasks.user_id = ? AND tasks.kind <> 'conversation'
+                 AND channel_search MATCH ?
+               ORDER BY bm25(channel_search), documents.updated_at DESC
+               LIMIT ?`,
+            )
+            .all(task.userId, ftsTrigramQuery(trimmed), limit) as unknown as {
+            task_id: string
+            task_title: string
+            source_kind: string
+            source_id: string
+            snippet: string
+            updated_at: string
+          }[])
+        : (this.#database
+            .prepare(
+              `SELECT
+                 documents.task_id,
+                 tasks.title AS task_title,
+                 documents.source_kind,
+                 documents.source_id,
+                 substr(
+                   documents.text,
+                   max(1, instr(lower(documents.text), lower(?)) - 32),
+                   96
+                 ) AS snippet,
+                 documents.updated_at
+               FROM channel_search_documents documents
+               INNER JOIN tasks ON tasks.id = documents.task_id
+               WHERE tasks.user_id = ? AND tasks.kind <> 'conversation'
+                 AND instr(lower(documents.text), lower(?)) > 0
+               ORDER BY documents.updated_at DESC
+               LIMIT ?`,
+            )
+            .all(trimmed, task.userId, trimmed, limit) as unknown as {
+            task_id: string
+            task_title: string
+            source_kind: string
+            source_id: string
+            snippet: string
+            updated_at: string
+          }[])
+    return {
+      results: rows.map(row => ({
+        taskId: row.task_id,
+        taskTitle: row.task_title,
+        sourceKind: row.source_kind,
+        sourceId: row.source_id,
+        snippet: row.snippet,
+        updatedAt: row.updated_at,
+      })),
+    }
+  }
+
+  /**
+   * M5: single bounded history document read. Only the exact source kinds
+   * the search surface indexes are readable; content is capped so one read
+   * can never flood the context. Cross-owner reads return not found.
+   */
+  readHistoryForRun(
+    runId: string,
+    claimToken: string,
+    sourceKind: string,
+    sourceId: string,
+  ): {
+    taskId: string
+    taskTitle: string
+    sourceKind: string
+    sourceId: string
+    text: string
+    updatedAt: string
+    truncated: boolean
+  } {
+    this.#claimForCapability(runId, claimToken)
+    const run = this.#runById(runId)
+    const task = this.#taskById(run.taskId)
+    const row = this.#database
+      .prepare(
+        `SELECT documents.task_id, tasks.title AS task_title,
+           documents.source_kind, documents.source_id,
+           documents.text, documents.updated_at
+         FROM channel_search_documents documents
+         INNER JOIN tasks ON tasks.id = documents.task_id
+         WHERE tasks.user_id = ? AND tasks.kind <> 'conversation'
+           AND documents.source_kind = ? AND documents.source_id = ?`,
+      )
+      .get(task.userId, sourceKind, sourceId) as
+      | {
+          task_id: string
+          task_title: string
+          source_kind: string
+          source_id: string
+          text: string
+          updated_at: string
+        }
+      | undefined
+    if (!row) throw new MemoryNotFoundError()
+    const maximumCharacters = 6_000
+    return {
+      taskId: row.task_id,
+      taskTitle: row.task_title,
+      sourceKind: row.source_kind,
+      sourceId: row.source_id,
+      text: row.text.slice(0, maximumCharacters),
+      updatedAt: row.updated_at,
+      truncated: row.text.length > maximumCharacters,
+    }
+  }
+
   createFollowUpFromRun(
     runId: string,
     claimToken: string,
@@ -11263,6 +12331,7 @@ export class PegasStore {
       )
         throw new Error('Final Worker Report requires a running or waiting Run')
       if (draft.status !== 'started' && draft.status !== 'progress') {
+        this.#assertNoPendingSteering(runId)
         const unresolvedAction = this.#database
           .prepare(
             `SELECT status FROM actions
@@ -11487,16 +12556,14 @@ export class PegasStore {
              lease_until = NULL, last_error = NULL, updated_at = ? WHERE id = ?`,
           )
           .run(now, runId)
-        this.#database
-          .prepare(
-            `UPDATE tasks SET status = 'completed', status_reason = NULL,
-             ended_json = ?, updated_at = ? WHERE id = ?`,
-          )
-          .run(
-            JSON.stringify({ at: now, by: 'executor', outcome: 'completed' }),
-            now,
-            task.id,
-          )
+        if (goal.requireAcceptance) {
+          this.#database
+            .prepare(
+              `UPDATE tasks SET status = 'started', status_reason = 'awaiting_delivery_acceptance',
+                       ended_json = NULL, updated_at = ? WHERE id = ?`,
+            )
+            .run(now, task.id)
+        }
         this.enqueueOutbox({
           userId: task.userId,
           taskId: task.id,
@@ -11507,6 +12574,7 @@ export class PegasStore {
             taskId: task.id,
             runId,
             reviewPackId: reviewPack.id,
+            ...(goal.requireAcceptance ? { requiresAcceptance: true } : {}),
             text: draft.summary,
             review: this.#reviewPackPreview(
               task.id,
@@ -11516,26 +12584,8 @@ export class PegasStore {
             ),
           },
         })
-        this.#settleInboundCollaborations(
-          task.id,
-          'completed',
-          draft.summary,
-          runId,
-          now,
-        )
-        this.#failUndeliveredContextNotes(
-          task.id,
-          'failed',
-          'Target Task completed before the context note was delivered.',
-          now,
-        )
-        this.#enqueueDerivedMemoryJob(
-          run,
-          task,
-          'run_success',
-          draft.summary,
-          now,
-        )
+        if (!goal.requireAcceptance)
+          this.#finishReviewedTask(task, runId, draft.summary, now, 'executor')
       } else if (draft.status === 'failed') {
         this.#database
           .prepare(
@@ -11653,6 +12703,140 @@ export class PegasStore {
       )
       .all(taskId)
     return rows.map(row => toReviewPack(row as unknown as ReviewPackRow))
+  }
+
+  #finishReviewedTask(
+    task: Task,
+    runId: string,
+    summary: string,
+    now: string,
+    by: 'executor' | 'human',
+  ): void {
+    this.#database
+      .prepare(
+        `UPDATE tasks SET status = 'completed', status_reason = NULL,
+                 ended_json = ?, updated_at = ? WHERE id = ?`,
+      )
+      .run(JSON.stringify({ at: now, by, outcome: 'completed' }), now, task.id)
+    this.#closeTaskAutomations(task.id, task.userId, now)
+    this.#enqueueDerivedMemoryJob(
+      this.#runById(runId),
+      task,
+      'run_success',
+      summary,
+      now,
+    )
+    this.#settleInboundCollaborations(task.id, 'completed', summary, runId, now)
+    this.#failUndeliveredContextNotes(
+      task.id,
+      'failed',
+      'Target Task completed before the context note was delivered.',
+      now,
+    )
+  }
+
+  decideDelivery(
+    reviewPackId: string,
+    userId: string,
+    draft: ReviewDecisionDraft,
+  ): ReviewDecision {
+    return this.#runInTransaction(() => {
+      const pack = this.#reviewPackById(reviewPackId)
+      const task = this.#taskById(pack.taskId)
+      if (task.userId !== userId)
+        throw new Error('Delivery does not exist for user')
+      const decisionKey = `delivery-decision:${pack.id}`
+      const replay = this.#database
+        .prepare(
+          `SELECT payload_json FROM inbox_events WHERE user_id = ? AND source = 'review' AND dedupe_key = ?`,
+        )
+        .get(userId, decisionKey) as { payload_json: string } | undefined
+      if (replay) {
+        const decision = JSON.parse(replay.payload_json) as ReviewDecision
+        if (
+          decision.commandId !== draft.commandId ||
+          decision.decision !== draft.decision ||
+          decision.note !== draft.note
+        )
+          throw new ReviewDecisionConflictError(
+            'This delivery already has a decision',
+          )
+        return decision
+      }
+      const goal = this.currentGoalContract(task.id, userId)
+      const currentPack =
+        goal && this.currentReviewPack(task.id, userId, goal.revision)
+      if (
+        task.status !== 'started' ||
+        task.statusReason !== 'awaiting_delivery_acceptance' ||
+        !goal?.requireAcceptance ||
+        currentPack?.id !== pack.id ||
+        pack.finalOutcome !== 'completed'
+      )
+        throw new ReviewDecisionConflictError(
+          'This delivery is no longer awaiting a decision',
+        )
+      const now = this.#clock.now().toISOString()
+      let nextEventId: string | undefined
+      if (draft.decision === 'accept') {
+        const report = this.#database
+          .prepare(
+            `SELECT summary FROM worker_reports WHERE review_pack_id = ? ORDER BY report_sequence DESC LIMIT 1`,
+          )
+          .get(pack.id) as { summary: string } | undefined
+        this.#finishReviewedTask(
+          task,
+          pack.runId,
+          report?.summary ?? task.goal,
+          now,
+          'human',
+        )
+      } else {
+        if (!draft.note?.trim()) throw new Error('Explain what needs to change')
+        nextEventId = this.enqueueEvent({
+          userId,
+          type: 'user.message',
+          source: 'review',
+          authenticatedActor: 'human',
+          dedupeKey: `delivery-rework:${pack.id}`,
+          payload: { taskId: task.id, text: draft.note, reviewPackId: pack.id },
+        }).event.id
+        this.#database
+          .prepare(
+            `UPDATE tasks SET status_reason = 'review_rework_queued', updated_at = ? WHERE id = ?`,
+          )
+          .run(now, task.id)
+      }
+      const response: ReviewDecision = {
+        ...draft,
+        id: randomUUID(),
+        reviewPackId: pack.id,
+        taskId: task.id,
+        decidedAt: now,
+        ...(nextEventId ? { nextEventId } : {}),
+      }
+      this.enqueueEvent({
+        id: response.id,
+        userId,
+        source: 'review',
+        type: 'goal.review.decided',
+        authenticatedActor: 'human',
+        dedupeKey: decisionKey,
+        payload: response,
+      })
+      this.#database
+        .prepare(
+          `UPDATE inbox_events SET status = 'processed', processed_at = ? WHERE id = ?`,
+        )
+        .run(now, response.id)
+      this.#database
+        .prepare(
+          `INSERT INTO task_events (event_id, task_id, relation, created_at)
+         VALUES (?, ?, 'delivery_decision', ?)`,
+        )
+        .run(response.id, task.id, now)
+      return response
+    })
   }
 
   currentReviewPack(
@@ -11779,6 +12963,7 @@ export class PegasStore {
       const claim = this.#claimForCapability(runId, claimToken)
       const run = this.#runById(runId)
       if (run.status !== 'running') throw new Error('Run is not executing')
+      this.#assertNoPendingSteering(runId)
       const task = this.#taskById(run.taskId)
       if (task.status === 'completed' || task.status === 'cancelled') {
         throw new Error('Task is closed')
@@ -12851,6 +14036,9 @@ export class PegasStore {
            )) OR (status = 'running' AND lease_until <= ?)
              OR (status = 'waiting' AND lease_until <= ? AND task_id IN (
                SELECT id FROM tasks WHERE status_reason = 'awaiting_evidence'
+             ) AND id = (
+               SELECT latest.id FROM runs latest WHERE latest.task_id = runs.task_id
+               ORDER BY latest.created_at DESC, latest.rowid DESC LIMIT 1
              )))
            ORDER BY created_at ASC, rowid ASC LIMIT 1`,
         )
@@ -13087,15 +14275,7 @@ export class PegasStore {
       if (run.claimedBy !== workerId || run.status !== 'running') {
         throw new Error(`Worker ${workerId} does not own run ${runId}`)
       }
-      const pendingSteering = this.#database
-        .prepare('SELECT steering_json FROM runs WHERE id = ?')
-        .get(runId) as { steering_json: string | null }
-      if (pendingSteering.steering_json) {
-        // A user correction arrived while the Executor was finishing. Do not
-        // complete the Task on stale instructions; the Worker parks this
-        // attempt and a successor resumes the session with the correction.
-        throw new Error('Run has pending steering directives')
-      }
+      this.#assertNoPendingSteering(runId)
       const task = this.#taskById(run.taskId)
       const resumedAction = this.#database
         .prepare(
@@ -13324,6 +14504,7 @@ export class PegasStore {
         !hasPendingWork &&
         !hasActiveAutomation
       ) {
+        this.#closeTaskAutomations(task.id, task.userId, now)
         this.#settleInboundCollaborations(
           task.id,
           'completed',
@@ -13667,6 +14848,18 @@ export class PegasStore {
         this.#database.exec('COMMIT')
         return toInboxEvent(row)
       }
+      if (
+        row.source === 'review' &&
+        !this.#updateReviewReworkReason(
+          eventId,
+          'review_rework_failed',
+          'review_rework_queued',
+        )
+      ) {
+        throw new ReviewDecisionConflictError(
+          'This rework can no longer be retried',
+        )
+      }
       this.#database
         .prepare(
           `UPDATE inbox_events
@@ -13836,14 +15029,14 @@ export class PegasStore {
       }
       this.#database
         .prepare(
-          `UPDATE inbox_events SET status = 'failed', lease_until = NULL,
+          `UPDATE inbox_events SET status = 'failed', claimed_by = NULL, lease_until = NULL,
              last_error = 'blocked_task_stopped'
            WHERE id IN (
-             SELECT event_id FROM task_events
-             WHERE task_id = ? AND relation = 'blocked_action'
+             SELECT event_id FROM task_events WHERE task_id = ?
            ) AND status = 'processing' AND last_error LIKE 'blocked_by_action:%'`,
         )
         .run(taskId)
+      this.#closeTaskAutomations(task.id, task.userId, now)
       this.#settleInboundCollaborations(
         taskId,
         'cancelled',
@@ -14952,14 +16145,13 @@ export class PegasStore {
   }
 
   #wakeBlockedTaskEvents(taskId: string, now: string): void {
-    this.#database
+    const released = this.#database
       .prepare(
         `UPDATE inbox_events
          SET status = 'pending', claimed_by = NULL, lease_until = NULL,
              last_error = NULL
          WHERE id IN (
-           SELECT event_id FROM task_events
-           WHERE task_id = ? AND relation = 'blocked_action'
+           SELECT event_id FROM task_events WHERE task_id = ?
          )
            AND status = 'processing'
            AND last_error LIKE 'blocked_by_action:%'
@@ -14967,22 +16159,21 @@ export class PegasStore {
              SELECT 1 FROM actions
              WHERE actions.task_id = ? AND actions.protocol_version = 1
                AND actions.status IN ('awaiting_approval','authorized','failed','unknown')
-           )`,
+           )
+         RETURNING id`,
       )
-      .run(taskId, taskId)
-    this.#database
-      .prepare(
-        `UPDATE task_events SET created_at = ?
-         WHERE task_id = ? AND relation = 'blocked_action'
-           AND event_id IN (
-             SELECT id FROM inbox_events WHERE status = 'pending'
-           )`,
-      )
-      .run(now, taskId)
+      .all(taskId, taskId) as { id: string }[]
+    const stamp = this.#database.prepare(
+      'UPDATE task_events SET created_at = ? WHERE event_id = ?',
+    )
+    for (const event of released) stamp.run(now, event.id)
   }
 
   #createRetry(row: RunRow, now: string): Run {
     const id = randomUUID()
+    const directives = row.steering_json
+      ? (JSON.parse(row.steering_json) as { text: string }[])
+      : []
     const goalRevision = (
       this.#database
         .prepare(
@@ -15004,13 +16195,21 @@ export class PegasStore {
         row.executor_ref ?? row.resume_from_ref,
         row.id,
         goalRevision,
-        row.input_json,
+        directives.length
+          ? correctedRunInput(row.input_json, directives)
+          : row.input_json,
         row.execution_context_json ??
           JSON.stringify({ executor: row.executor }),
         row.execution_contract_version,
         now,
         now,
       )
+    if (directives.length) {
+      this.#appendSteeringMarker(row.id, directives, now)
+      this.#database
+        .prepare('UPDATE runs SET steering_json = NULL WHERE id = ?')
+        .run(row.id)
+    }
     return this.#runById(id)
   }
 
@@ -15118,13 +16317,56 @@ export class PegasStore {
    */
   #projectOutboxMessage(message: OutboxMessage): OutboxMessage {
     try {
+      const deliveryDecision = this.#deliveryDecisionForOutbox(message)
       return withConversationProjection(
-        message,
+        { ...message, ...(deliveryDecision ? { deliveryDecision } : {}) },
         this.#conversationProjectionContext(message),
       )
     } catch {
       return withConversationProjection(message)
     }
+  }
+
+  #deliveryDecisionForOutbox(
+    message: OutboxMessage,
+  ): OutboxMessage['deliveryDecision'] {
+    if (
+      !message.taskId ||
+      !message.payload ||
+      typeof message.payload !== 'object'
+    )
+      return undefined
+    const { type, requiresAcceptance, reviewPackId } =
+      message.payload as Record<string, unknown>
+    if (
+      type !== 'review.ready' ||
+      requiresAcceptance !== true ||
+      typeof reviewPackId !== 'string'
+    )
+      return undefined
+    const row = this.#database
+      .prepare(
+        `SELECT json_extract(e.payload_json, '$.decision') AS decision, tasks.status
+       FROM tasks
+       JOIN review_packs ON review_packs.task_id = tasks.id AND review_packs.id = ?
+       LEFT JOIN inbox_events e ON e.user_id = tasks.user_id AND e.source = 'review'
+         AND e.dedupe_key = ?
+       WHERE tasks.id = ? AND tasks.user_id = ?`,
+      )
+      .get(
+        reviewPackId,
+        `delivery-decision:${reviewPackId}`,
+        message.taskId,
+        message.userId,
+      ) as
+      | {
+          decision: unknown
+          status: Task['status']
+        }
+      | undefined
+    if (row?.decision === 'accept' || row?.decision === 'request_changes')
+      return row.decision
+    return row?.status === 'cancelled' ? 'cancelled' : undefined
   }
 
   #conversationProjectionContext(
@@ -16800,6 +18042,7 @@ function toDerivedMemoryJob(row: DerivedMemoryJobRow): DerivedMemoryJob {
     documentId: row.document_id,
     content: row.content,
     workingDirectory: row.working_directory,
+    ...(row.project_key ? { projectKey: row.project_key } : {}),
     ...(row.provider_operation_id
       ? { providerOperationId: row.provider_operation_id }
       : {}),
@@ -16833,6 +18076,10 @@ function toDerivedMemoryCorrectionJob(
 function derivedMemoryContentHash(value: string): string {
   const normalized = value.trim().replaceAll(/\s+/g, ' ').toLocaleLowerCase()
   return createHash('sha256').update(normalized).digest('hex')
+}
+
+function normalizedFactText(value: string): string {
+  return value.trim().replaceAll(/\s+/g, ' ').toLocaleLowerCase()
 }
 
 /**
@@ -16869,6 +18116,25 @@ function sourceRunIdFromMetadata(metadataJson: string): string | null {
     return null
   }
   return null
+}
+
+/**
+ * M3: a coalesced fact records every contributing Run in `source_run_ids`
+ * (the anchor stays in `run_id`). Deletion must suppress re-distillation
+ * from any of them.
+ */
+function derivedMemorySourceRunIds(
+  metadata: Record<string, unknown>,
+): string[] {
+  const ids = new Set<string>()
+  if (typeof metadata.run_id === 'string' && metadata.run_id.trim())
+    ids.add(metadata.run_id)
+  if (Array.isArray(metadata.source_run_ids)) {
+    for (const value of metadata.source_run_ids) {
+      if (typeof value === 'string' && value.trim()) ids.add(value)
+    }
+  }
+  return [...ids]
 }
 
 function derivedMemoryEvidence(

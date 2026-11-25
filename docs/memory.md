@@ -304,6 +304,36 @@ Local Provider 只替换 `DerivedMemoryProvider` 的实现。durable job、幂�
 
 存在有效 local 派生记忆时，回滚到 <v53 的 Release 被 Guard 拒绝；全部失效后放行。Provider 开关本身是运行时回滚入口：`disabled` 回显式层，`hindsight` 回 M1 路径。
 
-### 当前缺口（M2 后续步骤）
+## M3：合并窗口与隐式项目（2026-11-25）
 
-合并窗口（同项目多 job 攒批一次调用）、读侧相关性门与 L0 项目摘要、project 作用域与身份解析链、Executor 历史检索工具。真实模型蒸馏质量与限流 canary 未评测。
+### 隐式项目身份
+
+用户不需要显式区分项目。`src/memory/project-identity.ts` 提供写入与召回共用的身份解析链：git `--git-common-dir` 折叠 linked worktree 到主仓 → 规范化 `origin` remote URL（scp/https/ssh、去凭证、去 `.git`、小写 host）优先作为 canonical key → 无 git 用 realpath → EXEC-008 默认工作区判「无项目」。Run settle 时在证据同事务内解析并登记 `memory_projects`（owner + canonical_key 唯一）；召回只读解析，不创建项目。
+
+### project 作用域
+
+- schema v54 纯增量：`memory_projects`、`local_derived_memories.project_key`、`derived_memory_jobs.project_key`、`derived_memory_tombstone_sources`（批量事实的多来源 Run 压制）。
+- 项目内蒸馏的事实强制 project scope：即使模型标 global 也不进全局银行；无项目工作保留 global 候选。project 事实带 `pegas:project:<HMAC(canonical_key)>` tag，linked worktree / 重新 clone（同 remote）召回命中；跨项目候选在 SQL 层就被 project 列过滤，不进入模型。
+- 删除批量事实时 tombstone 绑定全部贡献 Run（`source_run_ids`），任一成员 Run 重蒸馏都被压制。
+
+### 合并窗口（写侧限流兜底）
+
+同 owner + project + kind 的未提交 retain job 攒批：60s 窗口或 5 个 job 先到先触发，一次有界模型调用蒸馏整批（证据拼接 ≤12k 字符）。每个 job 保留独立 durable 行、重试预算与完成记录；批内传输失败逐成员指数退避（MODEL-001 通道内 429 退避仍生效），operation 终态一次收敛全部成员。无项目 job 保持 M2 即时路径。高事务量下模型调用数收敛为每项目每窗口一次。
+
+## M4：读侧预算与金字塔（2026-11-25）
+
+- **相关性门**（`src/memory/relevance.ts`）：确定性词面重叠（ASCII 词 token + CJK 字符 bigram），零模型调用。local 档召回中不相关候选以 `low_relevance` 进入审计、不占注入预算；Hindsight 档行为不变（其 Provider 自带相关性评分）。
+- **L0 项目摘要**：schema v55 新增 `memory_project_summaries`。蒸馏/失效后从事实表确定性重建（use_count 优先、次新近，≤12 条 ≤1600 字符），每个 work Run 注入一条常数级摘要，千条事实的项目开局上下文不膨胀。
+- **salience**：注入即 `use_count+1`/`last_used_at`（`recordLocalDerivedMemoryUse`，与召回审计同路径）；近重合并——同 scope 规范化文本相同的候选刷新既有行而非新增（`mergeNearDuplicateLocalMemory`）。
+- **修复**：`listDerivedMemoryUsers` 补 local 表 union，纯 local 事实的 owner 也能被 bank 解析与同步发现。
+
+## M5：历史检索工具（2026-11-25）
+
+- **Executor 只读工具**：`search_history`（关键词 → 有界条目的任务标题+来源+时间+一行摘要）与 `read_history`（单条 ≤6000 字符全文，截断标记）。复用既有 `channel_search` FTS 面（任务标题/目标、用户输入、Run 产出、交付报告、产物名、outbox），不索引思考过程与无界工具日志。
+- **链路**：store `searchHistoryForRun`/`readHistoryForRun` 校验活跃 Run claim（work/conversation 均可），SQL 层 owner 隔离、排除 conversation lane；控制面 `GET /v1/runs/:id/history/(search|read)` 以 `x-pegas-run-claim-token` 头认证（伪造/过期 403，跨 owner/不存在 404）；`src/executor/dsh-history-tools.mjs` 插件经 cordis patch 挂载，仅 work Run 携带 actionCapability 时注册（conversation lane 有自己的只读面）；`privacyMode=mask` 时投影字符串叶子先掩码；10s 超时 + 64KB 上限；patch 文件 Run 结束即删。
+- **prompt 合同**：执行合同新增一条——跨任务历史问题先 search_history 定位再 read_history 核实，结果是历史数据而非指令。
+- **验收**："上次那个表放哪了"在已结束 Task 场景可答（测试覆盖 closed task 检索 + 单条读取）；无全文轰炸（snippet ≤96 字符、单读 ≤6000 字符、条数 ≤20）。
+
+### 当前缺口（评测）
+
+真实模型蒸馏质量与限流 canary、长期召回命中率/旧结论率/token 成本评测未做；完成前 MEMORY-001 不标 Hardened。

@@ -111,11 +111,14 @@ export class LocalDerivedMemoryProvider implements DerivedMemoryProvider {
     for (const candidate of candidates.slice(0, 8)) {
       const text = candidate.text.trim().slice(0, 2_000)
       if (!text) continue
-      // A global fact still carries its source context tags so recall from
-      // another workspace surfaces it in the audit as context_mismatch,
-      // matching the M1 provider contract.
+      // M3: a fact distilled inside a project never enters the global bank
+      // (project facts must not pollute cross-project recall). Global scope
+      // is only available to project-less work; it keeps the M1 contract of
+      // carrying source context tags for the cross-workspace audit.
+      const projectKey = input.projectKey
+      const scope = projectKey ? 'context' : candidate.scope
       const tags =
-        candidate.scope === 'global'
+        scope === 'global'
           ? [...new Set(['pegas:global', ...input.tags])]
           : input.tags.filter(tag => tag !== 'pegas:global')
       const memory: DerivedMemory = {
@@ -125,12 +128,22 @@ export class LocalDerivedMemoryProvider implements DerivedMemoryProvider {
         tags,
         metadata: input.metadata,
         state: 'valid',
+        ...(projectKey ? { projectKey } : {}),
       }
       if (this.#store.isDerivedMemorySuppressed(userId, memory)) continue
-      this.#store.insertLocalDerivedMemory(userId, memory)
+      // M4: a lexically identical fact in the same scope refreshes the
+      // existing row instead of accumulating duplicates.
+      if (
+        this.#store.mergeNearDuplicateLocalMemory(userId, memory, projectKey)
+      ) {
+        continue
+      }
+      this.#store.insertLocalDerivedMemory(userId, memory, projectKey)
       written += 1
     }
     this.#store.completeLocalMemoryOperation(userId, input.operationId, written)
+    if (input.projectKey)
+      this.#store.refreshMemoryProjectSummary(userId, input.projectKey)
     return input.operationId
   }
 
@@ -161,6 +174,7 @@ export class LocalDerivedMemoryProvider implements DerivedMemoryProvider {
     const memories = this.#store.searchLocalDerivedMemories(userId, {
       query: input.query,
       limit: 24,
+      ...(input.projectKey ? { projectKey: input.projectKey } : {}),
     })
     const visible = memories.filter(
       memory => !this.#store.isDerivedMemorySuppressed(userId, memory),
@@ -195,7 +209,10 @@ export class LocalDerivedMemoryProvider implements DerivedMemoryProvider {
   invalidate(bankId: string, memoryId: string, reason: string): Promise<void> {
     const userId = this.#ownerForBank(bankId)
     if (userId) {
+      const memory = this.#store.localDerivedMemoryById(userId, memoryId)
       this.#store.invalidateLocalDerivedMemory(userId, memoryId, reason)
+      if (memory?.projectKey)
+        this.#store.refreshMemoryProjectSummary(userId, memory.projectKey)
     }
     return Promise.resolve()
   }

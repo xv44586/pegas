@@ -516,10 +516,17 @@ console.log(JSON.stringify({
     })
     const neverCaptured = JSON.parse(neverResult.output) as {
       bridgeEnabled: string | null
-      patches: unknown[]
+      patches: { insert?: { id: string }[] }[][]
     }
     expect(neverCaptured.bridgeEnabled).toBeNull()
-    expect(neverCaptured.patches).toEqual([])
+    // M5: a work Run with an action capability now also mounts the
+    // read-only history tools; the approval bridge itself stays absent.
+    expect(
+      neverCaptured.patches
+        .flat()
+        .flatMap(patch => patch.insert ?? [])
+        .filter(entry => entry.id === 'pegas-approval-bridge'),
+    ).toEqual([])
   })
 })
 

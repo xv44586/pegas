@@ -72,6 +72,61 @@ function payloadType(payload: unknown): string | undefined {
   return typeof payload.type === 'string' ? payload.type : undefined
 }
 
+/** The same eligibility and excerpt source are used by the composer and server. */
+export function quotableAgentReply(
+  message: Pick<OutboxMessage, 'taskId' | 'payload' | 'status' | 'projection'> &
+    Partial<Pick<OutboxMessage, 'channel'>>,
+): { taskId: string; text: string; runId?: string } | undefined {
+  const { taskId, payload } = message
+  if (
+    !taskId ||
+    (message.channel !== undefined && message.channel !== 'conversation') ||
+    message.status === 'merged' ||
+    message.projection?.weight === 'silent' ||
+    !isRecord(payload) ||
+    payload.streaming === true ||
+    !['agent.message', 'run.completed', 'review.ready'].includes(
+      payloadType(payload) ?? '',
+    ) ||
+    typeof payload.text !== 'string' ||
+    !payload.text.trim()
+  )
+    return undefined
+  return {
+    taskId,
+    text: payload.text.trim(),
+    ...(typeof payload.runId === 'string' ? { runId: payload.runId } : {}),
+  }
+}
+
+export function replyReference(
+  payload: unknown,
+): { id: string; mode: 'continue' | 'explain' } | undefined {
+  if (!isRecord(payload)) return undefined
+  if (!('replyToMessageId' in payload)) {
+    if (payload.intent === 'explain')
+      throw new Error('An explanation requires a reply reference')
+    return undefined
+  }
+  if (
+    typeof payload.replyToMessageId !== 'string' ||
+    !payload.replyToMessageId.trim()
+  )
+    throw new Error('replyToMessageId must be a non-empty string')
+  if (
+    payload.taskId !== undefined ||
+    payload.sourceTaskId !== undefined ||
+    (payload.intent !== undefined && payload.intent !== 'explain')
+  )
+    throw new Error(
+      'A reply reference cannot be combined with another message target or intent',
+    )
+  return {
+    id: payload.replyToMessageId,
+    mode: payload.intent === 'explain' ? 'explain' : 'continue',
+  }
+}
+
 function payloadTaskId(payload: unknown): string | undefined {
   if (!isRecord(payload)) return undefined
   return typeof payload.taskId === 'string' && payload.taskId.trim()
@@ -108,7 +163,12 @@ export function deriveConversationProjection(
   if (type && SILENT_TYPES.has(type)) {
     lane = 'work'
     weight = 'silent'
-  } else if (type && DECIDE_TYPES.has(type)) {
+  } else if (
+    (type === 'review.ready' &&
+      isRecord(message.payload) &&
+      message.payload.requiresAcceptance === true) ||
+    (type && DECIDE_TYPES.has(type))
+  ) {
     lane = 'decide'
     weight = 'card'
   } else if (type && WORK_TYPES.has(type)) {

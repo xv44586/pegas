@@ -50,7 +50,10 @@ export function conversationProgressText(text: string): string {
 }
 
 export function conversationPrompt(
-  input: Pick<ExecutorInput, 'prompt' | 'mandate' | 'memories' | 'workRules'>,
+  input: Pick<
+    ExecutorInput,
+    'prompt' | 'mandate' | 'memories' | 'workRules' | 'explainOnly'
+  >,
 ): string {
   const memoryContext =
     input.memories && input.memories.length > 0
@@ -69,6 +72,9 @@ export function conversationPrompt(
           2,
         ).replaceAll('<', '\\u003c')}\n</pegas_work_rules>`
       : ''
+  const workBoundary = input.explainOnly
+    ? '本轮只解释用户指定的结果。可以指出缺失信息，但不能新建或恢复工作、请求审批或发出任务升级标记。'
+    : '如果这条请求需要外部副作用、修改文件、长时间工作或有交付物，不要尝试执行，也不要假装完成。改为输出一段简短说明，并在末尾附加结构化升级标记：起始行写 PEGAS_SUGGEST_TASK_BEGIN，下一行写需要作为正式任务处理的完整目标描述，再下一行写 PEGAS_SUGGEST_TASK_END。Pegas 会把它升级为完整任务并走全部接单门禁。标记外的说明会原样展示给用户。不需要升级时绝不输出这两个标记行。'
   return `${input.prompt}
 
 <pegas_conversation_contract>
@@ -76,6 +82,6 @@ export function conversationPrompt(
 
 直接给出最终答案。不要发送"好的/收到/我来/我来查"式开场，不要口头预告将要做什么；"已收到"与"在干什么"由界面传输元数据承担，正文零确认、零模板过渡。
 
-如果这条请求需要外部副作用、修改文件、长时间工作或有交付物，不要尝试执行，也不要假装完成。改为输出一段简短说明，并在末尾附加结构化升级标记：起始行写 PEGAS_SUGGEST_TASK_BEGIN，下一行写需要作为正式任务处理的完整目标描述，再下一行写 PEGAS_SUGGEST_TASK_END。Pegas 会把它升级为完整任务并走全部接单门禁。标记外的说明会原样展示给用户。不需要升级时绝不输出这两个标记行。
+${workBoundary}
 </pegas_conversation_contract>`
 }

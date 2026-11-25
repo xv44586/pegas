@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
 
+const goalContractSchemaVersion = 15
 const collaborationSchemaVersion = 19
 const automationSchemaVersion = 20
 const memorySchemaVersion = 21
@@ -14,6 +15,7 @@ const approvalReviewSchemaVersion = 42
 const policyCallAuditSchemaVersion = 43
 const autoReconciliationSchemaVersion = 44
 const localDerivedMemorySchemaVersion = 53
+const taskResumeSourcePolicySchemaVersion = 56
 
 export class RollbackCompatibilityError extends Error {}
 
@@ -22,6 +24,7 @@ export class RollbackUnavailableError extends Error {}
 export function assertRollbackCompatible(
   databasePath: string,
   targetMaximumSchema: number,
+  targetTaskWorkflowVersion = 0,
 ): void {
   if (!existsSync(databasePath)) return
   const database = new DatabaseSync(databasePath, { readOnly: true })
@@ -30,6 +33,28 @@ export function assertRollbackCompatible(
       .prepare('SELECT MAX(version) AS version FROM schema_migrations')
       .get() as { version: number | null }
     const currentVersion = current.version ?? 0
+    if (
+      currentVersion >= taskResumeSourcePolicySchemaVersion &&
+      (targetTaskWorkflowVersion < 1 ||
+        targetMaximumSchema < taskResumeSourcePolicySchemaVersion) &&
+      database
+        .prepare(
+          'SELECT 1 FROM task_resume_source_policies WHERE enabled = 0 LIMIT 1',
+        )
+        .get()
+    ) {
+      throw new RollbackCompatibilityError(
+        'Rollback is unsafe while a Task resume source is revoked',
+      )
+    }
+    if (
+      targetTaskWorkflowVersion < 1 &&
+      hasLiveTaskWorkflow(database, currentVersion)
+    ) {
+      throw new RollbackCompatibilityError(
+        'Rollback is unsafe while Task workflow inputs or deliveries still need the newer contract',
+      )
+    }
     if (
       currentVersion >= collaborationSchemaVersion &&
       targetMaximumSchema < collaborationSchemaVersion
@@ -267,4 +292,58 @@ export function assertRollbackCompatible(
   } finally {
     database.close()
   }
+}
+
+function hasLiveTaskWorkflow(database: DatabaseSync, schema: number): boolean {
+  if (
+    schema >= collaborationSchemaVersion &&
+    database
+      .prepare(
+        `SELECT 1 FROM inbox_events
+       WHERE status IN ('pending','processing')
+       AND (required_contract_version >= 3 OR (source = 'review' AND type = 'user.message'))
+       LIMIT 1`,
+      )
+      .get()
+  )
+    return true
+  if (
+    schema >= collaborationSchemaVersion &&
+    database
+      .prepare(
+        `SELECT 1 FROM runs JOIN tasks ON tasks.id = runs.task_id
+       JOIN inbox_events ON inbox_events.id = tasks.origin_event_id
+       WHERE runs.status IN ('queued','running','waiting')
+       AND inbox_events.required_contract_version >= 4 LIMIT 1`,
+      )
+      .get()
+  )
+    return true
+  if (
+    schema >= steeringSchemaVersion &&
+    database
+      .prepare(
+        `SELECT 1 FROM runs JOIN tasks ON tasks.id = runs.task_id
+       WHERE runs.steering_json IS NOT NULL AND tasks.status NOT IN ('completed','cancelled')
+       AND runs.status IN ('queued','running','waiting','failed') LIMIT 1`,
+      )
+      .get()
+  )
+    return true
+  return (
+    schema >= goalContractSchemaVersion &&
+    Boolean(
+      database
+        .prepare(
+          `SELECT 1 FROM tasks WHERE tasks.status NOT IN ('completed','cancelled') AND (
+         tasks.status_reason IN ('awaiting_delivery_acceptance','review_rework_queued','review_rework_failed')
+         OR 1 = (
+           SELECT json_extract(contract_json, '$.requireAcceptance') FROM goal_contracts
+           WHERE task_id = tasks.id ORDER BY revision DESC LIMIT 1
+         )
+       ) LIMIT 1`,
+        )
+        .get(),
+    )
+  )
 }

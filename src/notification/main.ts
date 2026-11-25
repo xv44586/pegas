@@ -12,7 +12,9 @@ if (config.pushMode !== 'webhook' || !config.pushWebhookUrl) {
   throw new Error('Notification dispatcher requires PEGAS_PUSH_MODE=webhook')
 }
 
-const store = new PegasStore(config.databasePath)
+const store = new PegasStore(config.databasePath, {
+  defaultWorkspaceRoot: config.workspaceRoot,
+})
 const logger = createLogger({ service: 'notification' })
 const metrics = new MetricsRegistry()
 const dispatcherId = `dispatcher-${randomUUID()}`

@@ -44,7 +44,7 @@ function createClaimedRun(
   const event = store.enqueueEvent({
     userId: 'owner',
     type: 'user.message',
-    source: 'test',
+    source: 'web',
     authenticatedActor: 'human',
     payload: { text },
   }).event
@@ -197,9 +197,9 @@ describe('auto review settings and projection', () => {
     store.enqueueEvent({
       userId: 'owner',
       type: 'user.message',
-      source: 'test',
+      source: 'web',
       authenticatedActor: 'human',
-      payload: { text: longText },
+      payload: { text: longText, taskId: claimed.task.id },
     })
     const humanClaim = store.claimNextEvent('setup-mandate-a-human')
     if (!humanClaim) throw new Error('Expected human event claim')

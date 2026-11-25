@@ -59,6 +59,30 @@
 
 ## Lessons
 
+### LESSON-20261125-03：恢复回执必须尊重已经提交的归类
+
+- Rule：批量归类的结果与全部 Inbox 回执同事务提交。跨事务恢复时，先检查输入是否已经生成 Run，再评估当前事情能否接受新输入。
+- Why：Worker 退出后如果再次归类已获回执的批次成员，会重复执行。定时调用的 Run 已经创建时，如果回执恢复受后到的关闭状态阻拦，调用会永久停留在处理中。
+- Feature：TASK-002
+- Evidence：2026-11-25 的 `test/routing-cost.test.ts` 两处提交边界回归和 `test/run-automations.test.ts` 已路由调用恢复回归。
+- Seen：1（2026-11-25）
+- Severity：recovery
+- Status：Promoted
+- Enforcement：上述三条回归和服务端提交边界。
+- Owner / next action：其他新入站批处理沿用同一回执边界。
+
+### LESSON-20261125-02：执行恢复必须继承已提交的用户纠正
+
+- Rule：运行中已持久化的纠正必须跨 Worker 退出、租约恢复和人工重试保留。完成或发起新的审批前在写事务内复核纠正，后继和纠正消费在同一事务提交。
+- Why：纠正存于原 Run 的 steering 字段，旧重试仅复制 input，进程在两次心跳之间退出或恢复时会恢复旧目标；审批先停放旧 Run 则使纠正更难恢复。
+- Feature：ROUTE-001
+- Evidence：2026-11-25 `test/control-intents.test.ts` 的租约过期、失败重试、心跳前执行器错误、完成写回竞态和旧指令审批回归。
+- Seen：1（2026-11-25）
+- Severity：data-loss
+- Status：Promoted
+- Enforcement：同一文件的 5 条回归和 SQLite 提交边界。
+- Owner / next action：新增能停放当前 Run 的写入口时沿用同一纠正检查。
+
 ### LESSON-20261123-03：入口角标与页内计数必须同口径，已读粒度跟随详情落点
 
 - Rule：导航入口角标与目标页主计数必须回答同一个问题（同单位、同过滤条件），不得一个数「未读条数」另一个数「待办行数」；已读粒度跟随详情落点——多个列表项打开同一详情时，打开任一入口应结算该详情的全部对应未读，独立决定/独立内容的条目维持逐条已读。disclosure 展开态不得复用 hover/选中态的整行底色。
@@ -219,9 +243,11 @@
 
 - Rule：任何“进入 Task/Channel/Thread 后继续对话”的功能，必须分别验证写入携带正确目标 ID、读取只返回该目标事实，并使用至少两个同用户容器做反向隔离断言；客户端不得用全局快照模拟局部历史。
 - Why：CHANNEL-001 只验证了向选中 Channel 发送消息时携带 `taskId`，却继续把用户的全部 Inbox 和 Outbox 合并成对话时间线。结果每个 Channel 虽然写入目标正确，读取界面却完全相同；单一 Channel fixture 和正向断言无法发现这种串线。
-- Feature：CHANNEL-002
+- Feature：CHANNEL-002、ROUTE-001
 - Evidence：用户报告所有 Channel 显示与 Pegas 相同历史；服务端两个同用户 Channel、一个其他用户 Channel 的所有权/负向隔离回归；Web 从全局对话切换到 Channel 后立即移除相邻 Channel 内容的回归；真实 Candidate 在主对话展示两个 Channel、进入其中一个后只保留对应输入和结果的浏览器断言与截图。
-- Seen：1（2026-11-19）
+- 2026-11-25 证据：两个 Chat 回复共享同一 Task 时，Task ID 无法标识引用目标。Web 精确回复 ID 回归与服务端 owner、原文、原会话和重放测试覆盖该路径。
+- 同日补充：事情任务状态与所选 Run 的诊断分开投影，交付审查的命令绑定准确 Review Pack，验收与已读独立。
+- Seen：2（2026-11-19、2026-11-25）
 - Severity：normal
 - Status：Observed
 - Enforcement：尚未晋升为全仓规则；本轮已用服务端权威时间线接口、所有权校验、竞态响应丢弃和双 fixture 负向测试约束 CHANNEL-002。
@@ -377,7 +403,7 @@
 - Rule：把用户文本或模型响应持久化为诊断预览时，复用既有隐私 masker，并在写入前遮盖 Authorization、Cookie 和本地化凭证字段。升级时同步处理旧诊断摘要。
 - Why：OBS-001 的独立审核发现 Basic Auth、Cookie 和中文密钥值会进入持久化模型摘要。
 - Feature：OBS-001
-- Evidence：`test/message-trace.test.ts` 覆盖真实归类入库后的摘要及 v54 到 v55 的持久化清理。
+- Evidence：`test/message-trace.test.ts` 覆盖真实归类入库后的摘要及 v57 到 v58 的持久化清理。
 - Seen：1（2026-11-25）
 - Severity：security
 - Status：Promoted

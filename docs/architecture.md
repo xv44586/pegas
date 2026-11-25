@@ -161,9 +161,15 @@ Router 默认使用模型进行归属判断，但结果必须写入结构化数�
 
 第一版提供两级策略：显式 `taskId` 始终按确定性路径续接；未指定 Task 的输入默认交给 Model Router，在受限候选集中判断 `create_task`、`continue_task`、`steer_task` 或 `cancel_task`。默认连接 Magpie 的指定 Router 模型；输出无法解析、引用越权或 Provider 不可用时自动退回确定性新建策略，不能阻塞 Durable Inbox。
 
+显式追问可提交 `taskId`（事情详情）或互斥的 `replyToMessageId`（Chat 中选中的 Agent 回复），文字和语音直发使用同一目标合同。控制面与 Worker 按 owner 检查引用，Worker 从持久 Outbox 派生 Task、回复原文及可用的源 Run，再走既有 `continue_task` 和 Mandate 检查。引用正文作为有上限的数据交给 Executor，回复中的文字不授予权限。目标不可用时显式失败。工作 Run 进行中沿用补充输入的队列或 steering 事务；只读对话的定向追问按 Task 串行执行，优先使用所引 Run 的兼容会话，缺少兼容引用时携带原文开新会话。普通 Chat 继续使用用户级滚动会话。
+
+带回复引用的 Inbox 事件要求合同 v3，数据库沿用已有 claim fence，v2 Worker 会保留这些事件待处理。回滚前停止接受新引用、处理完待处理 v3 事件及定向对话 Run 后，让 Web 与控制面同时切回旧版本；已经落库的历史和 Run 可继续读取，无 schema 迁移。
+
 路由分三层且职责不得合并（PLAN-001，设计合同见 `docs/router-worker-design.md`）：**渠道路由**（消息进哪个入口）保持确定性；**归属路由**（输入属于哪个 Task）即本节 Router；**模型/难度路由**（用哪个模型与推理档位执行）落 WorkerProfile 与执行池，绝不进入归属 Router。归属候选只包含开放任务（backlog/unstarted/started），摘要由服务端从权威事实推导并携带等待事实（pending Approval、Executor 澄清、未消费 steering）；completed 任务不进默认候选，其续接只走 TASK-002 的 Mandate 复核路径（ROUTE-003）。日常即时应答由 `reply` 决策分类到 `kind=conversation` 的轻量 Task，由只读工具面的常驻对话执行单元答复，正文零确认、零模板过渡；需要副作用或长工作时经结构化 `suggest_task` 升级回完整 Task 门禁（ROUTE-004/EXEC-005，`chatLaneEnabled` 可整体回退）。控制意图与显式引用永远优先于任何快路径，且不被收集窗口延迟。
 
 控制意图与归属判断共用同一条持久 Routing Decision 合同（`ROUTE-001`）。`steer_task` 只允许指向 `started` 状态的候选 Task：目标 Run 仍在排队时，纠正文字在同一事务内合并进 Run 输入；目标 Run 正在执行时，纠正作为持久 steering 指令挂在该 Run 上，Worker 心跳在同一事务中续租并检测到指令后中止当前 Executor，把旧 Run 停放为 `superseded_by_steering` 并创建复用同一 Executor session 的后继 Run。带未消费 steering 的 Run 不能提交完成，防止旧方向的执行结果静默覆盖用户纠正；等待审批等阻塞 Action 时 steering 与普通输入一样被停放，不绕过 Action Policy。`cancel_task` 复用用户停止的同一事务语义：human/stopped ended、取消未终结 Run 与 pending Approval、authorized Action 转 unknown 并要求人工核对、结算协作关系。两种控制意图都只接受已认证的人类 `user.message`，机器事件与协作 handback 不能铸造控制命令；同一事件的决策幂等重放，冲突决策拒绝。schema v24 为 Run 增加 steering 载荷与 `steering_of_run_id` 后继链，存在未消费 steering 时回滚到旧 Release 被 Guard 拒绝。
+
+持久纠正在执行回写或后续审批前仍有效。已收到纠正的 Run 不能按旧要求完成或发起新审批。Executor 提前退出时 Worker 读取已保存的纠正，失败重试或租约恢复在创建后继的同一事务中转移未消费的纠正。旧 Run、审批幂等回执和已记录副作用保留。这一修复沿用已有 steering 和 Run 字段。切回旧 Worker 前先处理完未消费的纠正。
 
 Pegas 的 Model Provider 是小型控制面边界，不依赖本机 Agent 客户端或其登录态。第一版提供常见厂商、聚合网关、本地模型服务和自定义连接目录，通过 OpenAI Chat Completions 或 Anthropic Messages 协议完成结构化判断。Provider API key 由服务端实例密钥加密保存，读取接口只暴露是否已配置。同一份服务端模型连接也是 DSH Agent 的模型事实来源（EXEC-007）：Worker 与模型目录读取都通过受管临时 `--patch` 把连接目录（baseURL、协议映射、`apiKeyEnv` 引用）和当前 Agent 默认模型注入 DSH，明文 key 只经子进程环境传递、不落盘。DSH 使用 Pegas 数据目录内的隔离 home（`<dataDir>/dsh`，`PEGAS_DSH_HOME` 可覆盖），profile、session 与运行时文件不读写用户本机 `~/.dsh`；本机其他 DSH 项目或 magpie 对 `~/.dsh` 的改写不影响 Pegas。恢复已有 session 时沿用保存的模型快照生成同一份受管配置，不在恢复链路中途切换模型。
 
@@ -211,6 +217,10 @@ Worker 可以生成目标简报并请求用户纠正，但 Router 不参与业�
 
 Web、移动端和桌面端把 Task 呈现为 WorkChannel。WorkChannel 不是新的权威生命周期，也不等于 DSH session；第一阶段 `channelId` 与 `taskId` 相同，服务端通过兼容投影 API 返回。客户端进入 Channel 后发送的输入显式引用权威 Task，返回 Pegas 主对话后由 Router 恢复自动归属。
 
+WorkChannel 的 `workflow` 是服务端投影，包含当前事情状态、适用时的待办/交付消息 ID，以及可重试 Run ID。列表、搜索、详情和 Chat 共用该事实。一次 Run 的执行状态另行保留，查看历史失败不会改变当前事情的可用动作。
+
+用户请求解释结果时，带回复 ID 和 `intent: 'explain'` 的入站事件使用合同 v4，从引用的持久正文构造输入，开启独立只读会话，即使普通 Chat 即时应答关闭也可使用。解释无权恢复源 Task 或升级为新工作，普通回复续接与继续执行沿用各自的合同。回滚前先处理完待解释事件及其只读 Run。
+
 已完成 WorkChannel 保留历史、Mandate 和 Channel/Thread 订阅。自己 Thread 上的人类输入先附加，再由 Control Plane 复核原 Mandate；通过后恢复并创建新 Run，失败则保持 completed 并把输入退回 Router/Eval。取消后的 WorkChannel 永久只读，只能重新接单创建带来源关系的新 Channel。自动事件、普通 progress 和定时扫描不能单独恢复 ended Task。
 
 WorkChannel 的用户可见时间线由 Conversation Event、路由事实、Run Event、净化后的工具摘要、Artifact 和协作事件组成。隐藏提示词、密钥、原始凭证与未经净化的工具参数不得进入用户可见投影或全文索引。
@@ -243,6 +253,8 @@ Worker 只能提交结构化协作请求。Control Plane 校验来源 Run、授�
 schema v19 实现第一阶段 `ChannelRelation`：当前 Run capability 对结构化委派、交接、context note 与 handback 做 fencing；委派和交接的首次目标 Run 以来源 Run 的不可变 execution context 作为模型、工作区、工具、权限、隐私和协议上界，同时保留目标 Task 的独立 WorkerProfile。context note 不授予来源权限：它保留目标的模型/profile，只在同一 Executor、协议、workspace 和 profile 边界内取来源与目标权限的最小交集，并记录来源 Run。内部协作事件先于普通 Router 分流：明确目标的委派、交接和 note 直接进入目标 Task，handback 才重新经过 Router；Router 不选择 Executor 或工具，也不能把内部事件铸造成新的 explicit Mandate。目标 Run 创建和关系切换同事务提交；目标结束事务同时结算关系、来源事件、时间线与 Outbox，迟到结果不能自动恢复已经 completed/cancelled 的来源。
 
 协作事件使用 Inbox 消费契约 v2：新版 Worker 的 claim 声明支持版本，数据库拒绝旧 Worker 领取保留事件；过期 claim 先释放 owner 和版本标记再重新领取，旧 Worker 不能继承先前的 v2 标记。关系保存 parent/root/depth；数据库把父关系、来源/目标 Task、事件类型、payload relation ID、Task 映射和消费契约绑定为同一条因果链，并使来源、kind、请求、事件端点和父链 provenance 写入后不可变，应用层再限制来源 Run 总量、根关系总量、递归深度、活跃子关系和目标待处理 note。协作 `commandId` 只在来源 Run 内唯一；服务端持久化不可变的创建响应，历史 claim 只能对完全相同的命令重放该快照，不能读取后来写入的 result 或创建新命令。事件达到最大重试次数时，Event、关系、来源等待状态、时间线与 Outbox 在同一事务中失败结算；目标关闭也会退役已经被领取的协作事件。重试 Run 只沿 retry lineage 恢复入口显式认证为人类的外部输入 ID，不根据 source 名称推断授权，也不把内部事件、自动化输入或 schema v19 前没有证明的历史事件伪装成 handback 授权。嵌套 handoff 会让中间 Task 作为责任桥等待最终目标，成功后逐层结算，不留下 completed Task 上仍 active 的入站关系。Supervisor 把 Candidate 的 schema 兼容范围写入 ReleaseRef，并在自身目录把数据目录解析为传给全部 Candidate 的同一绝对路径；手动回滚先标记受控重启并停止所有写入进程，再对该权威数据库做最终兼容检查和 release 切换。Recovery API 串行化并发回滚请求，Supervisor 主循环在转换屏障释放前不能启动下一组子进程，回滚目标不支持 schema v19 且仍有活跃关系或待处理事件时，恢复 API 与自动回滚都 fail closed。
+
+携带版本契约的输入因目标 Action 等待而停放时，数据库保留领取身份和消费契约版本，用保留租约和明确的阻塞标记禁止待处理期间续租、完成或重新领取。审批拒绝或对账结算后，按目标 Task 的实际阻塞事件统一释放，即使其审计关系是协作回传或上下文补充。停止目标时终结仍停放的输入。继续使用同一事件 ID、关系和 owner，无 schema 迁移。
 
 #### Report 与 Watchdog
 

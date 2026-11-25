@@ -9,7 +9,8 @@ import {
 } from 'node:http'
 import { extname, resolve, sep } from 'node:path'
 
-import { projectWorkChannel } from '../channel/work-channel.js'
+import { replyReference } from '../conversation/projection.js'
+import { isTaskResumeSource } from '../task/task-lifecycle.js'
 import { spillBodyForGap } from '../activity/tool-semantics.js'
 import { isWorkerIconId, type WorkerIconId } from '../brand/agent-icon.js'
 import { parseWorkerCollaborationRequest } from '../collaboration/collaboration.js'
@@ -45,6 +46,8 @@ import {
   parseArtifactDraft,
   parseEvidenceClaimDraft,
   parseGoalContractDraft,
+  parseReviewDecision,
+  ReviewDecisionConflictError,
   parseWorkerReportDraft,
 } from '../goal/goal-delivery.js'
 import { verifyVisualEvidence } from '../goal/trusted-verifier.js'
@@ -142,6 +145,7 @@ import {
   WorkRuleLimitError,
   WorkRuleNotFoundError,
   WorkRuleRevisionConflictError,
+  TaskResumePolicyConflictError,
   type PegasStore,
 } from '../storage/sqlite-store.js'
 import {
@@ -524,6 +528,7 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         !isRunCapabilityWrite(request) &&
         !isConversationStateRead(request) &&
         !isRunPermissionRead(request) &&
+        !isRunHistoryRead(request) &&
         !isAuthorized(request, options.apiToken)
       ) {
         return sendJson(response, 401, { error: 'unauthorized' })
@@ -731,36 +736,7 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
       if (request.url === '/v1/events' && request.method === 'POST') {
         const body = await readJson(request)
         const input = parseNewInboxEvent(body)
-        const taskId = explicitTaskId(input)
-        if (taskId) {
-          const task = options.store.findTask(taskId, input.userId)
-          if (!task) throw new Error(`Task ${taskId} does not exist for user`)
-          if (task.status === 'cancelled')
-            throw new Error('Task was stopped by the user')
-          if (explicitSteerIntent(input)) {
-            if (task.status !== 'started')
-              throw new Error(
-                'Steering requires a started task; queue the message instead',
-              )
-            const activeRun = options.store
-              .listRunsForUser(input.userId, taskId)
-              .some(run => run.status === 'queued' || run.status === 'running')
-            if (!activeRun)
-              throw new Error(
-                'Steering requires a queued or running Run; queue the message instead',
-              )
-          }
-        }
-        const sourceTaskId = sourceContextTaskId(input)
-        if (sourceTaskId) {
-          const source = options.store.findTask(sourceTaskId, input.userId)
-          if (!source)
-            throw new Error(`Task ${sourceTaskId} does not exist for user`)
-          if (source.status !== 'completed' && source.status !== 'cancelled')
-            throw new Error(
-              'sourceTaskId must reference a completed or cancelled Task',
-            )
-        }
+        validateMessageTarget(input, options.store)
         const result = options.store.enqueueEvent(input)
         return sendJson(response, result.inserted ? 202 : 200, result)
       }
@@ -1493,6 +1469,43 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
           throw error
         }
       }
+      const taskResumeSourceMatch = /^\/v1\/task-resume-sources\/([^/]+)$/.exec(
+        taskResourceUrl.pathname,
+      )
+      if (
+        taskResumeSourceMatch &&
+        (request.method === 'GET' || request.method === 'PUT')
+      ) {
+        const source = taskResumeSourceMatch[1] ?? ''
+        if (!isTaskResumeSource(source))
+          return sendJson(response, 404, { error: 'not_found' })
+        if (request.method === 'GET')
+          return sendJson(response, 200, {
+            policy: options.store.taskResumeSourcePolicy(
+              requiredQuery(taskResourceUrl, 'userId'),
+              source,
+            ),
+          })
+        const body = await readJson(request)
+        if (!isRecord(body) || typeof body.enabled !== 'boolean')
+          throw new Error('enabled must be a boolean')
+        try {
+          return sendJson(response, 200, {
+            policy: options.store.setTaskResumeSourcePolicy(
+              requiredString(body.userId, 'userId'),
+              source,
+              body.enabled,
+              nonnegativeInteger(body.expectedRevision, 'expectedRevision'),
+            ),
+          })
+        } catch (error) {
+          if (error instanceof TaskResumePolicyConflictError)
+            return sendJson(response, 409, {
+              error: 'resume_source_policy_conflict',
+            })
+          throw error
+        }
+      }
       const taskGoalMatch = /^\/v1\/tasks\/([^/]+)\/goals$/.exec(
         taskResourceUrl.pathname,
       )
@@ -1577,6 +1590,29 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
           evidence: evidence.items,
           ...(evidence.nextCursor ? { nextCursor: evidence.nextCursor } : {}),
         })
+      }
+
+      const deliveryDecisionMatch =
+        /^\/v1\/review-packs\/([^/]+)\/decision$/.exec(taskResourceUrl.pathname)
+      if (deliveryDecisionMatch && request.method === 'POST') {
+        const body = await readJson(request)
+        if (!isRecord(body)) throw new Error('Request body must be an object')
+        try {
+          return sendJson(response, 200, {
+            decision: options.store.decideDelivery(
+              decodeURIComponent(deliveryDecisionMatch[1] ?? ''),
+              requiredString(body.userId, 'userId'),
+              parseReviewDecision(body),
+            ),
+          })
+        } catch (error) {
+          if (error instanceof ReviewDecisionConflictError)
+            return sendJson(response, 409, {
+              error: 'delivery_decision_conflict',
+              message: error.message,
+            })
+          throw error
+        }
       }
 
       const taskReviewMatch = /^\/v1\/tasks\/([^/]+)\/review-packs$/.exec(
@@ -1725,7 +1761,7 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
           cursor,
         )
         return sendJson(response, 200, {
-          channel: projectWorkChannel(task),
+          channel: options.store.projectWorkChannel(task),
           events: page.events,
           ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
           routing: options.store.listChannelRoutingDecisions(taskId, userId),
@@ -1804,7 +1840,7 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
           channels: options.store
             .listTasks(userId)
             .filter(task => task.kind !== 'conversation')
-            .map(task => projectWorkChannel(task)),
+            .map(task => options.store.projectWorkChannel(task)),
         })
       }
 
@@ -1963,7 +1999,7 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
           reason,
         )
         return sendJson(response, 200, {
-          channel: projectWorkChannel(task),
+          channel: options.store.projectWorkChannel(task),
         })
       }
 
@@ -2389,6 +2425,57 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
             throw error
           }
         }
+        const historySearchMatch =
+          /^\/v1\/runs\/([^/]+)\/history\/search$/.exec(url.pathname)
+        if (historySearchMatch) {
+          const claimToken = runClaimToken(request)
+          if (!claimToken)
+            return sendJson(response, 403, { error: 'run_claim_required' })
+          try {
+            const query = url.searchParams.get('q') ?? ''
+            const limit = Number(url.searchParams.get('limit') ?? '10')
+            return sendJson(
+              response,
+              200,
+              options.store.searchHistoryForRun(
+                decodeURIComponent(historySearchMatch[1] ?? ''),
+                claimToken,
+                query,
+                limit,
+              ),
+            )
+          } catch (error) {
+            if (error instanceof RunClaimError)
+              return sendJson(response, 403, { error: 'run_claim_invalid' })
+            throw error
+          }
+        }
+        const historyReadMatch = /^\/v1\/runs\/([^/]+)\/history\/read$/.exec(
+          url.pathname,
+        )
+        if (historyReadMatch) {
+          const claimToken = runClaimToken(request)
+          if (!claimToken)
+            return sendJson(response, 403, { error: 'run_claim_required' })
+          try {
+            return sendJson(
+              response,
+              200,
+              options.store.readHistoryForRun(
+                decodeURIComponent(historyReadMatch[1] ?? ''),
+                claimToken,
+                url.searchParams.get('kind') ?? '',
+                url.searchParams.get('id') ?? '',
+              ),
+            )
+          } catch (error) {
+            if (error instanceof RunClaimError)
+              return sendJson(response, 403, { error: 'run_claim_invalid' })
+            if (error instanceof MemoryNotFoundError)
+              return sendJson(response, 404, { error: 'not_found' })
+            throw error
+          }
+        }
         const userId = url.searchParams.get('userId')
         if (!userId) throw new Error('userId is required')
         const taskId = url.searchParams.get('taskId') ?? undefined
@@ -2630,7 +2717,47 @@ function cachedAgentModelCatalog(
   }
 }
 
-function explicitTaskId(input: NewInboxEvent): string | undefined {
+function validateMessageTarget(
+  input: Pick<NewInboxEvent, 'type' | 'userId' | 'payload'>,
+  store: PegasStore,
+): void {
+  if (input.type !== 'user.message') return
+  const reference = replyReference(input.payload)
+  if (reference) store.conversationReply(reference, input.userId)
+  const taskId = explicitTaskId(input)
+  if (taskId) {
+    const task = store.findTask(taskId, input.userId)
+    if (!task) throw new Error(`Task ${taskId} does not exist for user`)
+    if (task.status === 'cancelled')
+      throw new Error('Task was stopped by the user')
+    if (explicitSteerIntent(input)) {
+      if (task.status !== 'started')
+        throw new Error(
+          'Steering requires a started task; queue the message instead',
+        )
+      const activeRun = store
+        .listRunsForUser(input.userId, taskId)
+        .some(run => run.status === 'queued' || run.status === 'running')
+      if (!activeRun)
+        throw new Error(
+          'Steering requires a queued or running Run; queue the message instead',
+        )
+    }
+  }
+  const sourceTaskId = sourceContextTaskId(input)
+  if (sourceTaskId) {
+    const source = store.findTask(sourceTaskId, input.userId)
+    if (!source) throw new Error(`Task ${sourceTaskId} does not exist for user`)
+    if (source.status !== 'completed' && source.status !== 'cancelled')
+      throw new Error(
+        'sourceTaskId must reference a completed or cancelled Task',
+      )
+  }
+}
+
+function explicitTaskId(
+  input: Pick<NewInboxEvent, 'type' | 'payload'>,
+): string | undefined {
   if (
     input.type !== 'user.message' ||
     !input.payload ||
@@ -2642,7 +2769,9 @@ function explicitTaskId(input: NewInboxEvent): string | undefined {
   return typeof taskId === 'string' && taskId.trim() ? taskId : undefined
 }
 
-function sourceContextTaskId(input: NewInboxEvent): string | undefined {
+function sourceContextTaskId(
+  input: Pick<NewInboxEvent, 'type' | 'payload'>,
+): string | undefined {
   if (
     input.type !== 'user.message' ||
     !input.payload ||
@@ -2667,7 +2796,9 @@ function sourceContextTaskId(input: NewInboxEvent): string | undefined {
   return sourceTaskId
 }
 
-function explicitSteerIntent(input: NewInboxEvent): boolean {
+function explicitSteerIntent(
+  input: Pick<NewInboxEvent, 'type' | 'payload'>,
+): boolean {
   return (
     input.type === 'user.message' &&
     !!input.payload &&
@@ -2960,8 +3091,23 @@ async function acceptVoiceMessage(
   const url = new URL(request.url ?? '', 'http://localhost')
   const userId = requiredQuery(url, 'userId')
   const source = optionalQuery(url, 'source') ?? 'web'
+  if (source === 'review')
+    throw new Error('The review event source is reserved')
   const language = optionalQuery(url, 'language')
   const taskId = optionalQuery(url, 'taskId')
+  const sourceTaskId = optionalQuery(url, 'sourceTaskId')
+  const replyToMessageId = url.searchParams.get('replyToMessageId')
+  const intent = url.searchParams.get('intent')
+  const target = {
+    ...(taskId ? { taskId } : {}),
+    ...(sourceTaskId ? { sourceTaskId } : {}),
+    ...(replyToMessageId === null ? {} : { replyToMessageId }),
+    ...(intent === null ? {} : { intent }),
+  }
+  validateMessageTarget(
+    { type: 'user.message', userId, payload: target },
+    options.store,
+  )
   const dedupeKey = headerValue(request, 'idempotency-key')?.trim()
   if (!dedupeKey) {
     return sendJson(response, 400, {
@@ -2983,7 +3129,7 @@ async function acceptVoiceMessage(
     payload: {
       text: transcript.text,
       inputMode: 'voice',
-      ...(taskId ? { taskId } : {}),
+      ...target,
       voice: {
         provider: provider.name,
         model: provider.model,
@@ -3312,6 +3458,12 @@ function isConversationStateRead(request: IncomingMessage): boolean {
   )
 }
 
+function isRunHistoryRead(request: IncomingMessage): boolean {
+  if (request.method !== 'GET' || !request.url) return false
+  const pathname = new URL(request.url, 'http://localhost').pathname
+  return /^\/v1\/runs\/[^/]+\/history\/(search|read)$/.test(pathname)
+}
+
 function isRunPermissionRead(request: IncomingMessage): boolean {
   if (request.method !== 'GET' || !request.url) return false
   const pathname = new URL(request.url, 'http://localhost').pathname
@@ -3481,6 +3633,8 @@ function parseNewInboxEvent(value: unknown): NewInboxEvent {
     source === 'approval' ||
     type.startsWith('collaboration.') ||
     source === 'collaboration' ||
+    type.startsWith('goal.review.') ||
+    source === 'review' ||
     type.startsWith('automation.') ||
     source === 'automation'
   ) {

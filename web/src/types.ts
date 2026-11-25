@@ -37,6 +37,8 @@ export interface Task {
   updatedAt: string
 }
 
+import type { WorkWorkflow } from '../../src/channel/work-channel'
+
 export interface WorkChannel extends Task {
   taskId: string
   workerIconId: WorkerIconId
@@ -45,6 +47,7 @@ export interface WorkChannel extends Task {
   endedKind?: 'completed' | 'dropped' | 'stopped'
   canResume: boolean
   canStop: boolean
+  workflow?: WorkWorkflow
 }
 
 type RunStatus =
@@ -100,6 +103,7 @@ export interface OutboxMessage {
   id: string
   userId: string
   taskId?: string
+  channel?: string
   payload: unknown
   status: 'pending' | 'sending' | 'sent' | 'failed' | 'unknown'
   createdAt: string
@@ -109,6 +113,7 @@ export interface OutboxMessage {
   lastError?: string
   resolution?: OutboxResolution
   projection?: ConversationProjection
+  deliveryDecision?: 'accept' | 'request_changes' | 'cancelled'
 }
 
 export interface ConversationProjection {

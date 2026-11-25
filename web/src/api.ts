@@ -1,3 +1,4 @@
+import type { ReviewDecisionDraft } from '../../src/goal/goal-delivery'
 import type {
   BrowserTraceReceipt,
   MessageTrace,
@@ -56,6 +57,9 @@ import type {
   RoutingPreview,
 } from './types'
 import { fallbackWorkerIconId, isWorkerIconId } from './agent-icon-id'
+
+export type MessageTarget =
+  { taskId: string } | { sourceTaskId: string } | { replyToMessageId: string }
 
 export interface VoiceTranscript {
   text: string
@@ -329,8 +333,8 @@ export class PegasApi {
 
   async sendMessage(
     text: string,
-    taskId?: string,
-    sourceTaskId?: string,
+    target?: MessageTarget,
+    dedupeKey: string = crypto.randomUUID(),
   ): Promise<InboxEvent> {
     const startedAt = performance.now()
     const response = await fetch('/v1/events', {
@@ -340,11 +344,10 @@ export class PegasApi {
         userId: this.#userId,
         type: 'user.message',
         source: 'web',
-        dedupeKey: crypto.randomUUID(),
+        dedupeKey,
         payload: {
           text,
-          ...(taskId ? { taskId } : {}),
-          ...(sourceTaskId ? { sourceTaskId } : {}),
+          ...target,
         },
       }),
     })
@@ -614,6 +617,21 @@ export class PegasApi {
     )
   }
 
+  async decideDelivery(
+    reviewPackId: string,
+    draft: ReviewDecisionDraft,
+  ): Promise<void> {
+    const response = await fetch(
+      `/v1/review-packs/${encodeURIComponent(reviewPackId)}/decision`,
+      {
+        method: 'POST',
+        headers: this.#headers(true),
+        body: JSON.stringify({ userId: this.#userId, ...draft }),
+      },
+    )
+    if (!response.ok) await throwResponse(response)
+  }
+
   async notificationPreferences(): Promise<NotificationPreferences> {
     const user = encodeURIComponent(this.#userId)
     const response = await this.#get<{
@@ -772,14 +790,14 @@ export class PegasApi {
 
   async sendVoiceMessage(
     audio: Blob,
-    taskId?: string,
+    target?: MessageTarget,
     language = 'zh',
   ): Promise<{ transcript: VoiceTranscript; event: InboxEvent }> {
     const params = new URLSearchParams({
       userId: this.#userId,
       language,
       source: 'web',
-      ...(taskId ? { taskId } : {}),
+      ...target,
     })
     const response = await fetch(`/v1/voice/messages?${params.toString()}`, {
       method: 'POST',
