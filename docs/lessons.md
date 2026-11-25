@@ -59,6 +59,18 @@
 
 ## Lessons
 
+### LESSON-20261125-03：恢复回执必须尊重已经提交的归类
+
+- Rule：批量归类的结果与全部 Inbox 回执同事务提交。跨事务恢复时，先检查输入是否已经生成 Run，再评估当前事情能否接受新输入。
+- Why：Worker 退出后如果再次归类已获回执的批次成员，会重复执行。定时调用的 Run 已经创建时，如果回执恢复受后到的关闭状态阻拦，调用会永久停留在处理中。
+- Feature：TASK-002
+- Evidence：2026-11-25 的 `test/routing-cost.test.ts` 两处提交边界回归和 `test/run-automations.test.ts` 已路由调用恢复回归。
+- Seen：1（2026-11-25）
+- Severity：recovery
+- Status：Promoted
+- Enforcement：上述三条回归和服务端提交边界。
+- Owner / next action：其他新入站批处理沿用同一回执边界。
+
 ### LESSON-20261125-02：执行恢复必须继承已提交的用户纠正
 
 - Rule：运行中已持久化的纠正必须跨 Worker 退出、租约恢复和人工重试保留。完成或发起新的审批前在写事务内复核纠正，后继和纠正消费在同一事务提交。
