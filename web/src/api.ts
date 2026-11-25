@@ -62,6 +62,13 @@ export interface VoiceTranscript {
   language?: string
 }
 
+export function webAccessHeaders(token?: string): Record<string, string> {
+  return {
+    'x-pegas-local-web': '1',
+    ...(token ? { authorization: `Bearer ${token}` } : {}),
+  }
+}
+
 export class ApiError extends Error {
   readonly status: number
 
@@ -1228,7 +1235,7 @@ export class PegasApi {
 
   #headers(json: boolean): Record<string, string> {
     return {
-      ...(this.#token ? { authorization: `Bearer ${this.#token}` } : {}),
+      ...webAccessHeaders(this.#token),
       ...(json ? { 'content-type': 'application/json' } : {}),
     }
   }

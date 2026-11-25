@@ -45,7 +45,9 @@ pnpm build
 pnpm start:supervisor
 ```
 
-单独开发 Web 客户端时，分别启动 Control Plane、Worker、Scheduler 和 Vite：
+本机服务启动后，同一个系统用户可直接打开 [Pegas Web](http://127.0.0.1:4317/)。macOS 桌面版也会自动连接。实例访问令牌首次启动时生成并注入服务进程环境，模型服务凭证在需要时单独配置。代理部署或需要手动验证时可设置 `PEGAS_LOCAL_WEB_ACCESS=manual`。
+
+单独开发 Web 客户端时，分别启动 Control Plane、Worker、Scheduler 和 Vite。Vite 的代理入口使用显式实例令牌：
 
 ```bash
 pnpm dev

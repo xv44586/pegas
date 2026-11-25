@@ -2020,7 +2020,10 @@ function AccessGate({ onToken }: { onToken: (token: string) => void }) {
           <KeyRound size={20} />
         </span>
         <h1>连接到 Pegas</h1>
-        <p>输入本机 Control Plane 的访问令牌。令牌只保存在当前浏览器会话中。</p>
+        <p>
+          当前连接需要手动认证。输入 Pegas
+          实例的访问令牌，令牌只保存在当前浏览器会话中。
+        </p>
         <form
           onSubmit={event => {
             event.preventDefault()

@@ -921,6 +921,12 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - **当前证据（2026-11-21）**：`test/work-rules.test.ts` 7 测试（契约校验、幂等/revision/owner 隔离/重开持久化、100 条与 24000 字符上限、创建顺序装载与偏好 revision、HTTP CRUD 稳定错误码、bearer 鉴权、Executor 注入与 `<` 转义/空上下文不注入）；`web/src/App.test.tsx` 新增 4 回归（列表+启停带 revision、抽屉创建+指令保存、409 冲突重读、读取失败重试）；完整门禁 `pnpm check` 76 个测试文件、699 个测试；`pnpm smoke` 通过；`pnpm review:ui -- --force` 57 张截图（behavior 面板 seed 真实规则并确定性等待）。真实 Control Plane + fake DSH（捕获 stdin 提示词）联调：创建规则/保存指令后下一次执行注入两者；停用规则后下一次执行不再包含；删除规则与修改指令同样逐次生效；最终状态三条启用规则 + 指令全部出现在第 5 次执行提示词中。实拍 9 张见 `output/feature-review/live-evidence-rules/`（本地证据，不入库），axe color-contrast 三主题 × 列表/抽屉 0 违例。
 - **为什么仍为 Partial**：规则只有全局作用域；语言/回复长度锁定占位已删除（2026-11-24 修订落地：定位收敛为 Executor 偏好页，语言经自定义指令表达，长度非 Executor 语义，「开始工作前」Approval 硬边界保留；证据：App.test.tsx 占位删除断言先红后绿，pnpm check 130 文件/1335 测试全绿 + smoke + UI/a11y 通过；归类规则/测试归类已移交 ROUTE-005）；规则是否被遵守缺乏可观察证据（属执行证据体系后续）；未在真实 DSH 供应商上验证长提示词下的遵守度。
 
+### APPROVAL-001：本机 Web 与桌面认证（2026-11-25）
+
+- 用户结果：同一系统用户打开回环 Web UI、或打开内置服务的 macOS 桌面端，可直接使用。高级部署可选手动认证。保留原 Feature 状态。
+- 权威实现：`src/control-plane/local-web-access.ts` 验证实际 socket 用户和同源请求，`src/control-plane/server.ts` 应用统一门禁。实例凭证由 `src/core/instance-token.ts` 生成并在启动时装配。
+- 验收证据：`test/instance-token.test.ts` 验证自动访问与拒绝边界，`pnpm smoke` 验证同源写入和跨源拒绝，`pnpm smoke:desktop` 覆盖普通桌面窗口与隔离浏览器会话。部署约束、失败回退与回滚见 [审批生命周期](approval-lifecycle.md#本机-web-与桌面认证2026-11-25)。下一缺口为不同系统账户及其他浏览器的端到端矩阵。
+
 ### APPROVAL-001：持久审批与 Action 恢复验收边界（2026-11-21）
 
 - **用户结果**：真实 Executor 在准备执行高风险 Action 时可以创建结构化 Approval；Run 立即释放 Worker。用户稍后从任意客户端批准、拒绝或要求修改后，决定经 Durable Event Inbox 唤醒原 Task，并由新的 Run 从保存的 Executor session、恢复点和 Action 上下文继续。

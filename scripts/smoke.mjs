@@ -29,6 +29,7 @@ const apiToken = `smoke-${process.pid}`
 const environment = {
   ...process.env,
   PEGAS_API_HOST: '127.0.0.1',
+  PEGAS_LOCAL_WEB_ACCESS: 'auto',
   PEGAS_API_PORT: String(port),
   PEGAS_API_TOKEN: apiToken,
   PEGAS_DATA_DIR: dataDirectory,
@@ -65,10 +66,29 @@ try {
   const webDocument = await webResponse.text()
   if (!webResponse.ok || !webDocument.includes('<title>Pegas'))
     throw new Error('Control plane did not serve the Pegas web client')
-  const eventResponse = await fetch(`http://127.0.0.1:${port}/v1/events`, {
+  if (
+    webResponse.headers.get('content-security-policy') !==
+    "frame-ancestors 'none'"
+  )
+    throw new Error('The Pegas web client can be embedded in a frame')
+  const origin = `http://127.0.0.1:${port}`
+  const browserHeaders = {
+    'sec-fetch-site': 'same-origin',
+    'sec-fetch-mode': 'cors',
+    'x-pegas-local-web': '1',
+  }
+  const eventsUrl = `${origin}/v1/events`
+  const crossOrigin = await fetch(eventsUrl, {
+    method: 'POST',
+    headers: { ...browserHeaders, origin: 'http://localhost:4319' },
+  })
+  if (crossOrigin.status !== 401)
+    throw new Error('A different origin reached a protected API write')
+  const eventResponse = await fetch(eventsUrl, {
     method: 'POST',
     headers: {
-      authorization: `Bearer ${apiToken}`,
+      ...browserHeaders,
+      origin,
       'content-type': 'application/json',
     },
     body: JSON.stringify({

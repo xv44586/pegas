@@ -66,6 +66,7 @@ store.initializeSpeechConnection({
 const server = createControlPlane({
   store,
   webRoot: resolve('dist/web'),
+  allowLocalWebAccess: config.allowLocalWebAccess,
   logger,
   metrics,
   ...(config.apiToken ? { apiToken: config.apiToken } : {}),

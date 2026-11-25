@@ -26,6 +26,7 @@ export function defaultAgentWorkspace(dataDir: string): string {
 
 export interface PegasConfig {
   apiHost: string
+  allowLocalWebAccess: boolean
   apiPort: number
   apiToken?: string
   dataDir: string
@@ -88,6 +89,9 @@ export function loadConfig(
   const dataDir = resolve(environment.PEGAS_DATA_DIR ?? './data')
   const apiHost = environment.PEGAS_API_HOST ?? '127.0.0.1'
   const apiToken = environment.PEGAS_API_TOKEN
+  const localWebAccess = environment.PEGAS_LOCAL_WEB_ACCESS ?? 'auto'
+  if (localWebAccess !== 'auto' && localWebAccess !== 'manual')
+    throw new Error('PEGAS_LOCAL_WEB_ACCESS must be auto or manual')
   const routerMode = environment.PEGAS_ROUTER === 'rules' ? 'rules' : 'model'
   const rawModelProvider = environment.PEGAS_MODEL_PROVIDER ?? 'magpie'
   const modelProvider = legacyModelProvider(rawModelProvider)
@@ -181,6 +185,7 @@ export function loadConfig(
 
   return {
     apiHost,
+    allowLocalWebAccess: localWebAccess === 'auto' && isLoopback(apiHost),
     apiPort: parsePositiveInteger(
       environment.PEGAS_API_PORT,
       4317,

@@ -9,6 +9,7 @@ import {
 } from 'node:http'
 import { extname, resolve, sep } from 'node:path'
 
+import { createLocalWebAccess } from './local-web-access.js'
 import { replyReference } from '../conversation/projection.js'
 import { isTaskResumeSource } from '../task/task-lifecycle.js'
 import { spillBodyForGap } from '../activity/tool-semantics.js'
@@ -201,6 +202,7 @@ export interface ControlPlaneOptions {
   store: PegasStore
   apiToken?: string
   webRoot?: string
+  allowLocalWebAccess?: boolean
   speechProvider?: SpeechRecognitionProvider
   maximumAudioBytes?: number
   settingsCapabilities?: SettingsCapabilities | (() => SettingsCapabilities)
@@ -466,6 +468,10 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
   const logger = options.logger
   const metrics = options.metrics
   const linkPreviews = new LinkPreviewService(options.linkPreview)
+  const isLocalWebRequest =
+    options.allowLocalWebAccess && options.webRoot
+      ? createLocalWebAccess()
+      : undefined
   const server = createServer(async (request, response) => {
     const startedAt = performance.now()
     const method = request.method ?? 'GET'
@@ -524,12 +530,19 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
 
       if (await tryServeWeb(request, response, options.webRoot)) return
 
+      const hasInstanceBearer = isAuthorized(request, options.apiToken)
+      const hasLocalAccess =
+        !hasInstanceBearer && (await isLocalWebRequest?.(request))
+      const hasInstanceAccess = hasInstanceBearer || hasLocalAccess
+      if (hasLocalAccess)
+        response.setHeader('cache-control', 'private, no-store')
+
       if (
         !isRunCapabilityWrite(request) &&
         !isConversationStateRead(request) &&
         !isRunPermissionRead(request) &&
         !isRunHistoryRead(request) &&
-        !isAuthorized(request, options.apiToken)
+        !hasInstanceAccess
       ) {
         return sendJson(response, 401, { error: 'unauthorized' })
       }
@@ -1326,7 +1339,7 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
           taskResourceUrl.pathname,
         )
       if (workerProfileChangesMatch && request.method === 'GET') {
-        if (!options.apiToken || !isAuthorized(request, options.apiToken)) {
+        if (!options.apiToken || !hasInstanceAccess) {
           return sendJson(response, 401, { error: 'unauthorized' })
         }
         const taskId = decodeURIComponent(workerProfileChangesMatch[1] ?? '')
@@ -1900,7 +1913,7 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         request.url?.startsWith('/v1/policy-audit') &&
         request.method === 'GET'
       ) {
-        if (!options.apiToken || !isAuthorized(request, options.apiToken)) {
+        if (!options.apiToken || !hasInstanceAccess) {
           return sendJson(response, 401, { error: 'unauthorized' })
         }
         const url = new URL(request.url, 'http://localhost')
@@ -2029,7 +2042,7 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
 
       if (
         /^\/v1\/approvals(?:\/|$)/.test(taskResourceUrl.pathname) &&
-        (!options.apiToken || !isAuthorized(request, options.apiToken))
+        (!options.apiToken || !hasInstanceAccess)
       ) {
         return sendJson(response, 401, { error: 'unauthorized' })
       }
@@ -2090,7 +2103,7 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         taskResourceUrl.pathname,
       )
       if (actionMatch && request.method === 'GET') {
-        if (!options.apiToken || !isAuthorized(request, options.apiToken)) {
+        if (!options.apiToken || !hasInstanceAccess) {
           return sendJson(response, 401, { error: 'unauthorized' })
         }
         const action = options.store.getAction(
@@ -2106,7 +2119,7 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         taskResourceUrl.pathname,
       )
       if (actionReconcileMatch && request.method === 'POST') {
-        if (!options.apiToken || !isAuthorized(request, options.apiToken)) {
+        if (!options.apiToken || !hasInstanceAccess) {
           return sendJson(response, 401, { error: 'unauthorized' })
         }
         const body = await readJson(request)
@@ -2207,6 +2220,8 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
             'content-length': String(content.bytes.byteLength),
             'x-pegas-content-sha256': content.contentHash,
             'cache-control': 'private, no-store',
+            'content-security-policy': 'sandbox',
+            'x-content-type-options': 'nosniff',
           })
           response.end(content.bytes)
           return
@@ -3376,6 +3391,9 @@ async function tryServeWeb(
         ? 'no-cache'
         : 'public, max-age=31536000, immutable',
     'content-type': contentTypes[extname(file)] ?? 'application/octet-stream',
+    ...(extname(file) === '.html'
+      ? { 'content-security-policy': "frame-ancestors 'none'" }
+      : {}),
   })
   response.end(body)
   return true

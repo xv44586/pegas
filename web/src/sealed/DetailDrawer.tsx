@@ -2,6 +2,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   CircleHelp,
+  Download,
   Clock3,
   ExternalLink,
   FileText,
@@ -20,7 +21,7 @@ import {
 import { useEffect, useRef, useState } from 'react'
 
 import type { ReviewDecisionDraft } from '../../../src/goal/goal-delivery'
-import { ApiError, type PegasApi } from '../api'
+import { ApiError, webAccessHeaders, type PegasApi } from '../api'
 import { MarkdownMessage } from '../MarkdownMessage'
 import type {
   ApprovalRule,
@@ -4248,21 +4249,34 @@ function RoutingRuleDetail({
   )
 }
 
-function useEvidenceContentUrl(rawContentUrl?: string): {
-  contentUrl?: string
-  contentError: string
-  loadingContent: boolean
-} {
-  const [contentUrl, setContentUrl] = useState<string>()
+// Only inert media may be opened from a Pegas-origin Blob URL.
+const inlineEvidenceTypes = new Set([
+  'image/avif',
+  'image/bmp',
+  'image/gif',
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'video/mp4',
+  'video/ogg',
+  'video/quicktime',
+  'video/webm',
+])
+
+function useEvidenceContentUrl(rawContentUrl?: string) {
+  const [content, setContent] = useState<{
+    source: string
+    url: string
+    inline: boolean
+  }>()
   const [contentError, setContentError] = useState('')
   const [loadingContent, setLoadingContent] = useState(false)
-  const needsFetch = Boolean(
-    rawContentUrl && sessionStorage.getItem('pegas-token'),
-  )
   useEffect(() => {
     if (!rawContentUrl) return
-    if (!needsFetch) {
-      setContentUrl(rawContentUrl)
+    if (!rawContentUrl.startsWith('/v1/')) {
+      setContent({ source: rawContentUrl, url: rawContentUrl, inline: true })
+      setContentError('')
+      setLoadingContent(false)
       return
     }
     let cancelled = false
@@ -4270,9 +4284,7 @@ function useEvidenceContentUrl(rawContentUrl?: string): {
     setLoadingContent(true)
     setContentError('')
     fetch(rawContentUrl, {
-      headers: {
-        authorization: `Bearer ${sessionStorage.getItem('pegas-token') ?? ''}`,
-      },
+      headers: webAccessHeaders(sessionStorage.getItem('pegas-token') ?? ''),
     })
       .then(async response => {
         if (!response.ok) throw new Error('预览内容读取失败。')
@@ -4280,8 +4292,14 @@ function useEvidenceContentUrl(rawContentUrl?: string): {
       })
       .then(blob => {
         if (cancelled) return
-        objectUrl = URL.createObjectURL(blob)
-        setContentUrl(objectUrl)
+        const mime = blob.type.split(';')[0] ?? ''
+        const inline = inlineEvidenceTypes.has(mime)
+        objectUrl = URL.createObjectURL(
+          inline
+            ? blob
+            : new Blob([blob], { type: 'application/octet-stream' }),
+        )
+        setContent({ source: rawContentUrl, url: objectUrl, inline })
         setLoadingContent(false)
       })
       .catch((caught: unknown) => {
@@ -4295,14 +4313,20 @@ function useEvidenceContentUrl(rawContentUrl?: string): {
       cancelled = true
       if (objectUrl) URL.revokeObjectURL(objectUrl)
     }
-  }, [rawContentUrl, needsFetch])
-  return { contentUrl, contentError, loadingContent }
+  }, [rawContentUrl])
+  const current = content?.source === rawContentUrl ? content : undefined
+  return {
+    contentUrl: current?.url,
+    previewUrl: current?.inline ? current.url : undefined,
+    contentError,
+    loadingContent,
+  }
 }
 
 function EvidenceThumb({ alt, url }: { alt: string; url: string }) {
-  const { contentUrl, contentError } = useEvidenceContentUrl(url)
-  if (contentError || !contentUrl) return <ImageIcon size={26} />
-  return <img alt={alt} loading="lazy" src={contentUrl} />
+  const { previewUrl, contentError } = useEvidenceContentUrl(url)
+  if (contentError || !previewUrl) return <ImageIcon size={26} />
+  return <img alt={alt} loading="lazy" src={previewUrl} />
 }
 
 function PreviewDetail({
@@ -4312,9 +4336,8 @@ function PreviewDetail({
   onBack?: () => void
   view: Extract<DrawerView, { kind: 'preview' }>
 }) {
-  const { contentUrl, contentError, loadingContent } = useEvidenceContentUrl(
-    view.contentUrl,
-  )
+  const { contentUrl, previewUrl, contentError, loadingContent } =
+    useEvidenceContentUrl(view.contentUrl)
   const Icon =
     view.preview === 'image'
       ? ImageIcon
@@ -4346,14 +4369,14 @@ function PreviewDetail({
           <h3>{view.title}</h3>
           <p role="alert">{contentError}</p>
         </div>
-      ) : contentUrl && view.preview === 'image' ? (
+      ) : previewUrl && view.preview === 'image' ? (
         <figure className="evidence-preview">
-          <img alt={view.title} src={contentUrl} />
+          <img alt={view.title} src={previewUrl} />
           <figcaption>{view.title}</figcaption>
         </figure>
-      ) : contentUrl && view.preview === 'video' ? (
+      ) : previewUrl && view.preview === 'video' ? (
         <figure className="evidence-preview">
-          <video controls preload="metadata" src={contentUrl} />
+          <video controls preload="metadata" src={previewUrl} />
           <figcaption>{view.title}</figcaption>
         </figure>
       ) : (
@@ -4373,12 +4396,13 @@ function PreviewDetail({
         <footer className="drawer-footer">
           <a
             className={buttonVariants({ variant: 'accent', size: 'sm' })}
+            download={view.url ? undefined : view.title}
             href={view.url ?? contentUrl}
             rel="noreferrer"
-            target="_blank"
+            target={view.url ? '_blank' : undefined}
           >
-            <ExternalLink size={16} />
-            {view.url ? '打开来源' : '打开原始内容'}
+            {view.url ? <ExternalLink size={16} /> : <Download size={16} />}
+            {view.url ? '打开来源' : '下载原始内容'}
           </a>
         </footer>
       )}

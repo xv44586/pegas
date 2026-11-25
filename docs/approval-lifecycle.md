@@ -36,7 +36,14 @@ Run(running) + high-risk Action
 
 ## API
 
-所有 Approval 用户 API 强制使用已配置的实例 bearer（即使服务只监听 loopback），并以 `userId` 校验 Task owner；未配置实例 token 时这些端点 fail closed。Executor 写 API 不接受全局 bearer 代替 Run 身份，只接受短期 `x-pegas-run-claim-token`。服务端在解析业务 payload 前先验证 capability，因此错误 token 不会借由 400/403 差异探测 Action/Run 状态；已持久化命令的原 capability 仍可用于精确响应重放。
+所有 Approval 用户 API 要求实例已配置 bearer，并接受有效 bearer 或同用户回环 Web 认证，同时以 `userId` 校验 Task owner；未配置实例 token 时这些端点 fail closed。Executor 写 API 不接受全局 bearer 代替 Run 身份，只接受短期 `x-pegas-run-claim-token`。服务端在解析业务 payload 前先验证 capability，因此错误 token 不会借由 400/403 差异探测 Action/Run 状态；已持久化命令的原 capability 仍可用于精确响应重放。
+
+### 本机 Web 与桌面认证（2026-11-25）
+
+- 验收：同系统用户在 macOS、Linux 直连本机回环 Web 时自动认证，桌面首次启动自动连接。跨源、带转发头、入口端口不匹配、其他系统用户与普通无凭证 API 请求仍需有效凭证。审批的 Task 所有权和 Run capability 守卫沿用原约束。
+- Control Plane 从实际 TCP 连接验证请求为同用户的同源 Web 访问。macOS 使用系统 `lsof`，Linux 查询 `/proc/net/tcp*`。按连接缓存进程用户校验，并限制并发验证数。浏览器只发送请求类型标记，免凭证路径不返回 token 或 Cookie。页面禁止嵌入 iframe。私有证据和附件只内联预览允许的图片和视频类型，HTML、SVG 等原件走下载。指标、Supervisor Recovery 和 Executor 的专用身份校验沿用各自接口合同。
+- 桌面端、Supervisor 和 Control Plane 复用 `ensureInstanceBearer`。实例 token 首次启动写入 `dataDir/api-token`（0600），启动进程通过环境变量传递。显式 `PEGAS_API_TOKEN` 优先。
+- 非回环绑定、`PEGAS_LOCAL_WEB_ACCESS=manual`、系统无法确认对端身份、Vite 或其他代理入口回退到手动认证。同 UID 的透明 TCP 转发与直连使用相同的系统身份。通过此类代理对外提供服务前须显式配置 manual。当前范围不引入身份账户、模型密钥管理、实例 token 轮换或数据库迁移。回滚时保留 token 文件，旧 Web 恢复手动认证。
 
 ### 实例 bearer 引导修复 Intake（2026-11-24）
 
