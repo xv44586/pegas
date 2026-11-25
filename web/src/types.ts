@@ -112,6 +112,7 @@ export interface OutboxMessage {
   lastError?: string
   resolution?: OutboxResolution
   projection?: ConversationProjection
+  deliveryDecision?: 'accept' | 'request_changes' | 'cancelled'
 }
 
 export interface ConversationProjection {

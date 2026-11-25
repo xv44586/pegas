@@ -513,6 +513,13 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - 据此刷新 `docs/mvp-plan.md`：已落地项如实勾选（Web 澄清卡/Review Pack 卡/证据画廊为 DESIGN-002 §12、DSH tool-call 幂等与对账为 APPROVAL-001/EXEC-003、Memory Web CRUD 与只读节点列表为 DESIGN-002、归类规则/测试归类为 ROUTE-005 R1–R5）；「手机长期使用闭环」改为「桌面端本期闭环」+ 押后清单 + 桌面端剩余待补（Idea/Trigger 意图、SELF-001 签名与 worktree 清理、OBS-001 聚合告警、GOAL-001 validity、CONV-001 多附件、DESKTOP-001 加固）。纯文档变更，无代码/schema 改动。
 - 验证：隔离 worktree `mvp-desktop-scope`（基线 `bcaea50`，frozen-lockfile）`pnpm check` 134 文件 / 1377 测试全绿（statement 85.57 / branch 78.40 / fn 89.93 / line 88.65）；PR #88（标题沿用 mvp-plan 收尾先例 GOAL-001 归属，CI 证据步骤要求标题含 Feature ID）。
 
+### GOAL-001：当前交付的验收与返工（2026-11-25）
+
+- **状态**：Partial。启用 `requireAcceptance` 的目标形成「证据通过 → 待验收 → 接受或返工」的服务端流程。旧 Goal 默认自动完成，Review Pack 仍可审查。接受/退回由 owner 针对当前交付版本决定，重复命令返回同一结果。
+- **权威与证据**：`src/goal/goal-delivery.ts`、store 的交付事务、`POST /v1/review-packs/:id/decision`、Chat 与待办投影、Web 审查页。`test/goal-delivery.test.ts` 覆盖打开已读、接受、退回、越权与冲突；`web/src/App.test.tsx` 覆盖返工草稿和网络重放。
+- **集成验证**：基于 `origin/main fa05da7` 的 `pnpm check` 通过 145 个文件、1524 个测试。常规 smoke 通过，进程崩溃恢复 smoke 的 3 个注入点均只完成一次。桌面与 390px Chromium 验证只读结果解释、查看交付与接受独立、退回进入原事情及失败重试指向准确 Run。
+- **下一缺口**：更多证据的语义验证、跨设备验收和真实模型验收演练。回滚与兼容见 [Goal 合同](goal-contract-and-evidence.md)。
+
 ### GOAL-001：目标形成与证据化交付（2026-11-21）
 
 - **用户结果**：用户可以用不完整的愿望、问题、例子或语音开始；实际 Executor 帮助其澄清期望结果、关键上下文、前置条件、权限和完成标准。交付时，用户在 Outbox 按 success criteria 审查 evidence，而不是阅读代码、工具调用或处理过程。

@@ -95,6 +95,7 @@ export type DrawerView =
       channel: WorkChannel
       message: OutboxMessage
       goal?: GoalContract
+      decision?: 'accept' | 'request_changes' | 'cancelled'
     }
   | {
       kind: 'clarification'
@@ -375,9 +376,7 @@ export function attentionActionKind(
     case 'input':
       return 'answer'
     case 'result':
-      return payloadType(message.payload) === 'review.ready'
-        ? 'review'
-        : undefined
+      return requiresDeliveryAcceptance(message) ? 'review' : undefined
     default:
       return undefined
   }
@@ -478,18 +477,20 @@ export function attentionBoard(
   messages: readonly OutboxMessage[],
   channels: readonly WorkChannel[] = [],
 ): AttentionBoard {
-  const unresolved = unresolvedAttentionMessages(messages)
+  const channelById = new Map(channels.map(channel => [channel.id, channel]))
+  const unresolved = unresolvedAttentionMessages(messages).filter(
+    message =>
+      !message.taskId ||
+      !isHistoricalWorkWait(message, channelById.get(message.taskId)),
+  )
   const todo: OutboxMessage[] = []
   const failed: OutboxMessage[] = []
   const activity: OutboxMessage[] = []
-  const channelById = new Map(channels.map(channel => [channel.id, channel]))
   for (const message of unresolved) {
-    if (
-      message.taskId &&
-      isHistoricalWorkWait(message, channelById.get(message.taskId))
-    )
-      continue
-    const section = attentionSection(message)
+    const section =
+      requiresDeliveryAcceptance(message) && message.deliveryDecision
+        ? 'activity'
+        : attentionSection(message)
     if (section === 'todo') todo.push(message)
     else if (section === 'failed') failed.push(message)
     else if (section === 'activity') activity.push(message)
@@ -647,6 +648,8 @@ export function isResolvedDecisionMessage(
   message: OutboxMessage,
   messages: readonly OutboxMessage[],
 ): boolean {
+  if (requiresDeliveryAcceptance(message))
+    return message.deliveryDecision !== undefined
   if (conversationLane(message) !== 'decide') return false
   const type = payloadType(message.payload)
   if (type === 'approval.required' || type === 'approval.requested') {
@@ -770,6 +773,17 @@ export function routingClarification(
     question,
     input: typeof record.input === 'string' ? record.input : '',
   }
+}
+
+export function deliveryPackId(message: OutboxMessage): string | undefined {
+  return payloadString(payloadRecord(message.payload), 'reviewPackId')
+}
+
+function requiresDeliveryAcceptance(message: OutboxMessage): boolean {
+  return (
+    payloadType(message.payload) === 'review.ready' &&
+    payloadRecord(message.payload)?.requiresAcceptance === true
+  )
 }
 
 export function reviewProjection(

@@ -163,7 +163,12 @@ export function deriveConversationProjection(
   if (type && SILENT_TYPES.has(type)) {
     lane = 'work'
     weight = 'silent'
-  } else if (type && DECIDE_TYPES.has(type)) {
+  } else if (
+    (type === 'review.ready' &&
+      isRecord(message.payload) &&
+      message.payload.requiresAcceptance === true) ||
+    (type && DECIDE_TYPES.has(type))
+  ) {
     lane = 'decide'
     weight = 'card'
   } else if (type && WORK_TYPES.has(type)) {

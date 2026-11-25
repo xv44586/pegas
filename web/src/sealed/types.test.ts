@@ -335,12 +335,37 @@ describe('DESIGN-007 attention sections and grouping', () => {
     'maps %s to section %s with action %s',
     (type, section, action) => {
       const message = outbox(`kind-${type}`, type, {
-        payload: { type, actionId: 'action-1', approvalId: 'approval-1' },
+        payload: {
+          type,
+          actionId: 'action-1',
+          approvalId: 'approval-1',
+          ...(type === 'review.ready' ? { requiresAcceptance: true } : {}),
+        },
       })
       expect(attentionSection(message)).toBe(section)
       expect(attentionActionKind(message)).toBe(action)
     },
   )
+
+  it('keeps automatic and decided deliveries in activity without calling them todos', () => {
+    const auto = outbox('review-auto', 'review.ready')
+    const pending = outbox('review-pending', 'review.ready', {
+      payload: { type: 'review.ready', requiresAcceptance: true },
+      readAt: base.createdAt,
+    })
+    expect(
+      attentionBoard([auto, pending]).todo.map(message => message.id),
+    ).toEqual([pending.id])
+    const decided: OutboxMessage = { ...pending, deliveryDecision: 'accept' }
+    const board = attentionBoard([auto, decided])
+    expect(board.todo).toHaveLength(0)
+    expect(
+      board.activity
+        .flatMap(group => group.messages)
+        .map(message => message.id)
+        .sort(),
+    ).toEqual([auto.id, pending.id])
+  })
 
   it('routes delivery failures needing manual resolution to reconcile, not activity', () => {
     const message = outbox('delivery-unknown', 'run.completed', {
@@ -418,7 +443,9 @@ describe('DESIGN-007 attention sections and grouping', () => {
       outbox('approval-b', 'approval.required', {
         payload: { type: 'approval.required', approvalId: 'approval-b' },
       }),
-      outbox('review-a', 'review.ready'),
+      outbox('review-a', 'review.ready', {
+        payload: { type: 'review.ready', requiresAcceptance: true },
+      }),
     ])
     expect(board.todo.map(message => message.id)).toEqual([
       'approval-a',

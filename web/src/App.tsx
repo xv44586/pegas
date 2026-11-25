@@ -471,6 +471,21 @@ export function App() {
   function enrichDrawer(view: DrawerView): DrawerView {
     if (view.kind === 'runtime')
       return { ...view, run: data.snapshot.runs.at(-1) ?? view.run }
+    if (view.kind === 'review') {
+      const channel =
+        data.snapshot.channels.find(
+          channel => channel.id === view.channel.id,
+        ) ?? view.channel
+      return {
+        ...view,
+        channel,
+        decision: (
+          data.snapshot.messages.find(
+            message => message.id === view.message.id,
+          ) ?? view.message
+        ).deliveryDecision,
+      }
+    }
     if (view.kind !== 'task') return view
     const snapshotChannel = data.snapshot.channels.find(
       item => item.id === view.channel.id,
@@ -1778,6 +1793,10 @@ export function App() {
           }}
           onCreateRelated={channel => {
             openComposer({ kind: 'source', channel })
+          }}
+          onDecideDelivery={async (packId, draft) => {
+            await api.decideDelivery(packId, draft)
+            await loadSnapshot()
           }}
           onResolveOutbox={resolveOutbox}
           onDecideApproval={async (approvalId, optionId, rationale) => {

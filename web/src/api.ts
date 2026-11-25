@@ -1,3 +1,4 @@
+import type { ReviewDecisionDraft } from '../../src/goal/goal-delivery'
 import type {
   Approval,
   ApprovalRule,
@@ -512,6 +513,21 @@ export class PegasApi {
     return this.#get<TaskDelivery>(
       `/v1/tasks/${encodeURIComponent(taskId)}/delivery?userId=${user}`,
     )
+  }
+
+  async decideDelivery(
+    reviewPackId: string,
+    draft: ReviewDecisionDraft,
+  ): Promise<void> {
+    const response = await fetch(
+      `/v1/review-packs/${encodeURIComponent(reviewPackId)}/decision`,
+      {
+        method: 'POST',
+        headers: this.#headers(true),
+        body: JSON.stringify({ userId: this.#userId, ...draft }),
+      },
+    )
+    if (!response.ok) await throwResponse(response)
   }
 
   async notificationPreferences(): Promise<NotificationPreferences> {

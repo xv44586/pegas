@@ -110,6 +110,8 @@ import type {
   GoalContract,
   GoalContractDraft,
   ReviewCriterion,
+  ReviewDecision,
+  ReviewDecisionDraft,
   ReviewPack,
   TaskArtifact,
   WorkerReport,
@@ -117,6 +119,7 @@ import type {
 } from '../goal/goal-delivery.js'
 import {
   isTrustedVerifier,
+  ReviewDecisionConflictError,
   trustedVerifierIdentity,
   trustedVerifierVersion,
 } from '../goal/goal-delivery.js'
@@ -9126,6 +9129,10 @@ export class PegasStore {
           throw new Error('Task belongs to another user')
         if (task.status === 'cancelled')
           throw new Error('Task was stopped by the user')
+        if (task.statusReason === 'awaiting_delivery_acceptance')
+          throw new Error(
+            'This delivery is awaiting your decision. Accept it or request changes in its review.',
+          )
         if (
           task.status === 'completed' &&
           !revalidateMandate(task.mandate, event)
@@ -10074,6 +10081,8 @@ export class PegasStore {
         throw new Error('Command ID is already used with a different Goal')
       return toGoalContract(existing)
     }
+    if (task.statusReason === 'awaiting_delivery_acceptance')
+      throw new Error('Decide on the current delivery before changing its Goal')
     if (task.status === 'completed' || task.status === 'cancelled')
       throw new Error('Closed Task cannot accept a new Goal revision')
     const sourcePlaceholders = draft.basedOnEventIds.map(() => '?').join(',')
@@ -11799,16 +11808,14 @@ export class PegasStore {
              lease_until = NULL, last_error = NULL, updated_at = ? WHERE id = ?`,
           )
           .run(now, runId)
-        this.#database
-          .prepare(
-            `UPDATE tasks SET status = 'completed', status_reason = NULL,
-             ended_json = ?, updated_at = ? WHERE id = ?`,
-          )
-          .run(
-            JSON.stringify({ at: now, by: 'executor', outcome: 'completed' }),
-            now,
-            task.id,
-          )
+        if (goal.requireAcceptance) {
+          this.#database
+            .prepare(
+              `UPDATE tasks SET status = 'started', status_reason = 'awaiting_delivery_acceptance',
+                       ended_json = NULL, updated_at = ? WHERE id = ?`,
+            )
+            .run(now, task.id)
+        }
         this.enqueueOutbox({
           userId: task.userId,
           taskId: task.id,
@@ -11819,6 +11826,7 @@ export class PegasStore {
             taskId: task.id,
             runId,
             reviewPackId: reviewPack.id,
+            ...(goal.requireAcceptance ? { requiresAcceptance: true } : {}),
             text: draft.summary,
             review: this.#reviewPackPreview(
               task.id,
@@ -11828,19 +11836,8 @@ export class PegasStore {
             ),
           },
         })
-        this.#settleInboundCollaborations(
-          task.id,
-          'completed',
-          draft.summary,
-          runId,
-          now,
-        )
-        this.#failUndeliveredContextNotes(
-          task.id,
-          'failed',
-          'Target Task completed before the context note was delivered.',
-          now,
-        )
+        if (!goal.requireAcceptance)
+          this.#finishReviewedTask(task, runId, draft.summary, now, 'executor')
         this.#enqueueDerivedMemoryJob(
           run,
           task,
@@ -11965,6 +11962,132 @@ export class PegasStore {
       )
       .all(taskId)
     return rows.map(row => toReviewPack(row as unknown as ReviewPackRow))
+  }
+
+  #finishReviewedTask(
+    task: Task,
+    runId: string,
+    summary: string,
+    now: string,
+    by: 'executor' | 'human',
+  ): void {
+    this.#database
+      .prepare(
+        `UPDATE tasks SET status = 'completed', status_reason = NULL,
+                 ended_json = ?, updated_at = ? WHERE id = ?`,
+      )
+      .run(JSON.stringify({ at: now, by, outcome: 'completed' }), now, task.id)
+    this.#settleInboundCollaborations(task.id, 'completed', summary, runId, now)
+    this.#failUndeliveredContextNotes(
+      task.id,
+      'failed',
+      'Target Task completed before the context note was delivered.',
+      now,
+    )
+  }
+
+  decideDelivery(
+    reviewPackId: string,
+    userId: string,
+    draft: ReviewDecisionDraft,
+  ): ReviewDecision {
+    return this.#runInTransaction(() => {
+      const pack = this.#reviewPackById(reviewPackId)
+      const task = this.#taskById(pack.taskId)
+      if (task.userId !== userId)
+        throw new Error('Delivery does not exist for user')
+      const decisionKey = `delivery-decision:${pack.id}`
+      const replay = this.#database
+        .prepare(
+          `SELECT payload_json FROM inbox_events WHERE user_id = ? AND source = 'review' AND dedupe_key = ?`,
+        )
+        .get(userId, decisionKey) as { payload_json: string } | undefined
+      if (replay) {
+        const decision = JSON.parse(replay.payload_json) as ReviewDecision
+        if (
+          decision.commandId !== draft.commandId ||
+          decision.decision !== draft.decision ||
+          decision.note !== draft.note
+        )
+          throw new ReviewDecisionConflictError(
+            'This delivery already has a decision',
+          )
+        return decision
+      }
+      const goal = this.currentGoalContract(task.id, userId)
+      const currentPack =
+        goal && this.currentReviewPack(task.id, userId, goal.revision)
+      if (
+        task.status !== 'started' ||
+        task.statusReason !== 'awaiting_delivery_acceptance' ||
+        !goal?.requireAcceptance ||
+        currentPack?.id !== pack.id ||
+        pack.finalOutcome !== 'completed'
+      )
+        throw new ReviewDecisionConflictError(
+          'This delivery is no longer awaiting a decision',
+        )
+      const now = this.#clock.now().toISOString()
+      let nextEventId: string | undefined
+      if (draft.decision === 'accept') {
+        const report = this.#database
+          .prepare(
+            `SELECT summary FROM worker_reports WHERE review_pack_id = ? ORDER BY report_sequence DESC LIMIT 1`,
+          )
+          .get(pack.id) as { summary: string } | undefined
+        this.#finishReviewedTask(
+          task,
+          pack.runId,
+          report?.summary ?? task.goal,
+          now,
+          'human',
+        )
+      } else {
+        if (!draft.note?.trim()) throw new Error('Explain what needs to change')
+        nextEventId = this.enqueueEvent({
+          userId,
+          type: 'user.message',
+          source: 'review',
+          authenticatedActor: 'human',
+          dedupeKey: `delivery-rework:${pack.id}`,
+          payload: { taskId: task.id, text: draft.note, reviewPackId: pack.id },
+        }).event.id
+        this.#database
+          .prepare(
+            `UPDATE tasks SET status_reason = 'review_rework_queued', updated_at = ? WHERE id = ?`,
+          )
+          .run(now, task.id)
+      }
+      const response: ReviewDecision = {
+        ...draft,
+        id: randomUUID(),
+        reviewPackId: pack.id,
+        taskId: task.id,
+        decidedAt: now,
+        ...(nextEventId ? { nextEventId } : {}),
+      }
+      this.enqueueEvent({
+        id: response.id,
+        userId,
+        source: 'review',
+        type: 'goal.review.decided',
+        authenticatedActor: 'human',
+        dedupeKey: decisionKey,
+        payload: response,
+      })
+      this.#database
+        .prepare(
+          `UPDATE inbox_events SET status = 'processed', processed_at = ? WHERE id = ?`,
+        )
+        .run(now, response.id)
+      this.#database
+        .prepare(
+          `INSERT INTO task_events (event_id, task_id, relation, created_at)
+         VALUES (?, ?, 'delivery_decision', ?)`,
+        )
+        .run(response.id, task.id, now)
+      return response
+    })
   }
 
   currentReviewPack(
@@ -15430,13 +15553,56 @@ export class PegasStore {
    */
   #projectOutboxMessage(message: OutboxMessage): OutboxMessage {
     try {
+      const deliveryDecision = this.#deliveryDecisionForOutbox(message)
       return withConversationProjection(
-        message,
+        { ...message, ...(deliveryDecision ? { deliveryDecision } : {}) },
         this.#conversationProjectionContext(message),
       )
     } catch {
       return withConversationProjection(message)
     }
+  }
+
+  #deliveryDecisionForOutbox(
+    message: OutboxMessage,
+  ): OutboxMessage['deliveryDecision'] {
+    if (
+      !message.taskId ||
+      !message.payload ||
+      typeof message.payload !== 'object'
+    )
+      return undefined
+    const { type, requiresAcceptance, reviewPackId } =
+      message.payload as Record<string, unknown>
+    if (
+      type !== 'review.ready' ||
+      requiresAcceptance !== true ||
+      typeof reviewPackId !== 'string'
+    )
+      return undefined
+    const row = this.#database
+      .prepare(
+        `SELECT json_extract(e.payload_json, '$.decision') AS decision, tasks.status
+       FROM tasks
+       JOIN review_packs ON review_packs.task_id = tasks.id AND review_packs.id = ?
+       LEFT JOIN inbox_events e ON e.user_id = tasks.user_id AND e.source = 'review'
+         AND e.dedupe_key = ?
+       WHERE tasks.id = ? AND tasks.user_id = ?`,
+      )
+      .get(
+        reviewPackId,
+        `delivery-decision:${reviewPackId}`,
+        message.taskId,
+        message.userId,
+      ) as
+      | {
+          decision: unknown
+          status: Task['status']
+        }
+      | undefined
+    if (row?.decision === 'accept' || row?.decision === 'request_changes')
+      return row.decision
+    return row?.status === 'cancelled' ? 'cancelled' : undefined
   }
 
   #conversationProjectionContext(

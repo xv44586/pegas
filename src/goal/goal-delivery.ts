@@ -54,6 +54,7 @@ export interface GoalContractDraft {
   prerequisites: string[]
   permissionBoundary: Record<string, unknown>
   reviewCheckpoints: string[]
+  requireAcceptance?: boolean
   evidencePlan: GoalEvidencePlan[]
   failureAndRecovery: string
   feedbackSignals: string[]
@@ -201,6 +202,37 @@ export interface ReviewPack {
   createdAt: string
 }
 
+export interface ReviewDecisionDraft {
+  commandId: string
+  decision: 'accept' | 'request_changes'
+  note?: string
+}
+
+export interface ReviewDecision extends ReviewDecisionDraft {
+  id: string
+  reviewPackId: string
+  taskId: string
+  decidedAt: string
+  nextEventId?: string
+}
+
+export class ReviewDecisionConflictError extends Error {}
+
+export function parseReviewDecision(value: unknown): ReviewDecisionDraft {
+  const input = record(value, 'Review decision')
+  const commandId = nonempty(input.commandId, 'commandId')
+  if (commandId.length > 240) throw new Error('commandId is too long')
+  const decision = input.decision
+  if (decision !== 'accept' && decision !== 'request_changes')
+    throw new Error('A review decision must accept or request changes')
+  const note =
+    input.note === undefined ? undefined : nonempty(input.note, 'note')
+  if (note && note.length > 4000) throw new Error('Review note is too long')
+  if (decision === 'request_changes' && !note)
+    throw new Error('Explain what needs to change')
+  return { commandId, decision, ...(note ? { note } : {}) }
+}
+
 export function parseGoalContractDraft(value: unknown): GoalContractDraft {
   const input = record(value, 'Goal Contract')
   const successCriteria = array(input.successCriteria, 'successCriteria').map(
@@ -330,6 +362,14 @@ export function parseGoalContractDraft(value: unknown): GoalContractDraft {
     }),
     prerequisites: stringArray(input.prerequisites, 'prerequisites'),
     permissionBoundary: record(input.permissionBoundary, 'permissionBoundary'),
+    ...(input.requireAcceptance === undefined
+      ? {}
+      : {
+          requireAcceptance: booleanValue(
+            input.requireAcceptance,
+            'requireAcceptance',
+          ),
+        }),
     reviewCheckpoints: stringArray(
       input.reviewCheckpoints,
       'reviewCheckpoints',

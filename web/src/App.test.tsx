@@ -30,6 +30,7 @@ import type {
   TaskArtifact,
   TaskDelivery,
   WorkChannel,
+  OutboxMessage,
 } from './types'
 
 const channel: WorkChannel = {
@@ -6496,6 +6497,7 @@ describe('sealed Pegas UI', () => {
           id: 'review-ready',
           payload: {
             type: 'review.ready',
+            requiresAcceptance: true,
             title: '官网改版交付待验收',
             text: 'Review Pack 已生成。',
           },
@@ -7821,6 +7823,7 @@ describe('sealed Pegas UI', () => {
       id: 'message-review',
       payload: {
         type: 'review.ready',
+        requiresAcceptance: true,
         taskId: channel.id,
         text: '候选版本已交付，请审查。',
         review: reviewProjectionFixture,
@@ -8072,6 +8075,57 @@ describe('sealed Pegas UI', () => {
     await screen.findByLabelText('给 Pegas 发消息')
     expect(await screen.findByLabelText(/已处理：/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: /去回答/ })).toBeNull()
+  })
+
+  it('keeps a delivery awaiting review after reading and retries the same decision', async () => {
+    const task = {
+      ...channel,
+      workflow: {
+        state: 'awaiting_review' as const,
+        resultMessageId: 'awaiting-acceptance',
+      },
+    }
+    const base = snapshot.messages[0]
+    if (!base) throw new Error('Expected an outbox fixture')
+    const message: OutboxMessage = {
+      ...base,
+      id: 'awaiting-acceptance',
+      payload: {
+        type: 'review.ready',
+        reviewPackId: reviewPackFixture.id,
+        requiresAcceptance: true,
+        text: '请验收这份交付',
+        review: { ...reviewProjectionFixture, finalOutcome: 'completed' },
+      },
+      projection: { lane: 'decide', weight: 'card' },
+    }
+    const decide = vi
+      .fn(() => Promise.resolve())
+      .mockRejectedValueOnce(new Error('连接中断，请重试'))
+    render(
+      <DetailDrawer
+        onChange={vi.fn()}
+        onClose={vi.fn()}
+        onRetry={vi.fn()}
+        onDecideDelivery={decide}
+        view={{
+          kind: 'review',
+          channel: task,
+          message,
+          review: { ...reviewProjectionFixture, finalOutcome: 'completed' },
+        }}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: '退回修改' }))
+    const note = screen.getByRole('textbox', { name: '修改要求' })
+    expect(document.activeElement).toBe(note)
+    fireEvent.change(note, { target: { value: '解释分母并修正表格' } })
+    fireEvent.click(screen.getByRole('button', { name: '提交修改要求' }))
+    expect(await screen.findByText('连接中断，请重试')).toBeTruthy()
+    expect(note).toHaveProperty('value', '解释分母并修正表格')
+    fireEvent.click(screen.getByRole('button', { name: '提交修改要求' }))
+    expect(await screen.findByText('已退回修改')).toBeTruthy()
+    expect(decide.mock.calls[0]).toEqual(decide.mock.calls[1])
   })
 
   it('shows a compact review card in the conversation for review.ready', async () => {

@@ -19,6 +19,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
+import type { ReviewDecisionDraft } from '../../../src/goal/goal-delivery'
 import { ApiError, type PegasApi } from '../api'
 import { MarkdownMessage } from '../MarkdownMessage'
 import type {
@@ -66,6 +67,7 @@ import { ModelPicker } from './ModelPicker'
 import {
   formatRelativeTime,
   needsOutboxResolution,
+  deliveryPackId,
   runStatusLabel,
   statusLabel,
   textFromPayload,
@@ -88,6 +90,7 @@ export function DetailDrawer({
   onCreateRelated,
   onStop,
   onDecideApproval,
+  onDecideDelivery,
   onReconcileAction,
   onResolveOutbox,
 }: {
@@ -110,6 +113,10 @@ export function DetailDrawer({
   ) => void
   onStop?: (
     channel: Extract<DrawerView, { kind: 'task' }>['channel'],
+  ) => Promise<void>
+  onDecideDelivery?: (
+    packId: string,
+    draft: ReviewDecisionDraft,
   ) => Promise<void>
   onDecideApproval?: (
     approvalId: string,
@@ -273,6 +280,21 @@ export function DetailDrawer({
         )}
         {view.kind === 'review' && (
           <ReviewDetail
+            key={view.message.id}
+            decision={view.decision}
+            awaitingDecision={
+              view.channel.workflow?.state === 'awaiting_review' &&
+              view.channel.workflow.resultMessageId === view.message.id
+            }
+            onDecision={
+              onDecideDelivery
+                ? async draft => {
+                    const packId = deliveryPackId(view.message)
+                    if (!packId) throw new Error('这份交付缺少验收记录。')
+                    await onDecideDelivery(packId, draft)
+                  }
+                : undefined
+            }
             goal={view.goal}
             onOpenEvidence={
               onOpenView
@@ -1808,9 +1830,22 @@ function TaskDetail({
             {retrying ? '正在重试…' : '重试'}
           </Button>
         )}
-        {resultMessageId && onExplainResult && (
+        {state === '待验收' && resultMessageId && onWorkflowMessage && (
           <Button
             variant="accent"
+            size="sm"
+            disabled={openingAction}
+            type="button"
+            onClick={() =>
+              void openWorkflowAction(onWorkflowMessage, resultMessageId)
+            }
+          >
+            审查交付
+          </Button>
+        )}
+        {resultMessageId && onExplainResult && (
+          <Button
+            variant={state === '待验收' ? 'secondary' : 'accent'}
             size="sm"
             disabled={openingAction}
             type="button"
@@ -2465,15 +2500,69 @@ function DeliverySection({
 
 function ReviewDetail({
   review,
+  awaitingDecision,
+  decision,
+  onDecision,
   goal,
   onOpenEvidence,
   onOpenTask,
 }: {
   review: ReviewProjection
+  awaitingDecision: boolean
+  decision?: 'accept' | 'request_changes' | 'cancelled'
+  onDecision?: (draft: ReviewDecisionDraft) => Promise<void>
   goal?: GoalContract
   onOpenEvidence?: (evidence: ReviewEvidencePreview) => void
   onOpenTask?: () => void
 }) {
+  const [note, setNote] = useState('')
+  const [editing, setEditing] = useState(false)
+  const [submitted, setSubmitted] = useState<ReviewDecisionDraft['decision']>()
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const noteRef = useRef<HTMLTextAreaElement>(null)
+  const editButtonRef = useRef<HTMLButtonElement>(null)
+  const decisionStatusRef = useRef<HTMLParagraphElement>(null)
+  const attemptRef = useRef<ReviewDecisionDraft | undefined>(undefined)
+  const outcome = submitted ?? decision
+  const canDecide = awaitingDecision && !outcome && Boolean(onDecision)
+
+  useEffect(() => {
+    if (submitted) decisionStatusRef.current?.focus()
+    else if (editing) noteRef.current?.focus()
+  }, [editing, submitted])
+
+  async function submit(choice: ReviewDecisionDraft['decision']) {
+    if (!onDecision || saving || !canDecide) return
+    const description = choice === 'request_changes' ? note.trim() : undefined
+    if (choice === 'request_changes' && !description) return
+    const previous = attemptRef.current
+    const attempt =
+      previous?.decision === choice && previous.note === description
+        ? previous
+        : {
+            commandId: crypto.randomUUID(),
+            decision: choice,
+            ...(description ? { note: description } : {}),
+          }
+    attemptRef.current = attempt
+    setError('')
+    setSaving(true)
+    try {
+      await onDecision(attempt)
+      setSubmitted(choice)
+    } catch (caught) {
+      setError(
+        caught instanceof ApiError && caught.status === 409
+          ? '这份交付的状态已变化。请重新查看当前交付。'
+          : caught instanceof Error
+            ? caught.message
+            : '保存验收决定失败，请重试。',
+      )
+    } finally {
+      setSaving(false)
+    }
+  }
   const statements = new Map(
     goal?.successCriteria.map(criterion => [
       criterion.criterionId,
@@ -2484,26 +2573,39 @@ function ReviewDetail({
     <div className="drawer-body bui">
       <StateHeader
         label={
-          review.finalOutcome === 'completed'
-            ? '已完成'
-            : review.finalOutcome === 'partial'
-              ? '待确认'
-              : '失败'
+          outcome === 'accept'
+            ? '已接受交付'
+            : outcome === 'request_changes'
+              ? '已退回修改'
+              : outcome === 'cancelled'
+                ? '验收已关闭'
+                : awaitingDecision
+                  ? '待验收'
+                  : review.finalOutcome === 'completed'
+                    ? '已完成'
+                    : review.finalOutcome === 'partial'
+                      ? '待确认'
+                      : '失败'
         }
         tone={
-          review.finalOutcome === 'completed'
+          outcome === 'accept'
             ? 'green'
-            : review.finalOutcome === 'partial'
-              ? 'orange'
-              : 'red'
+            : outcome
+              ? 'neutral'
+              : awaitingDecision || review.finalOutcome === 'partial'
+                ? 'orange'
+                : review.finalOutcome === 'completed'
+                  ? 'green'
+                  : 'red'
         }
       >
         <h3 className="m-0 text-[13px] font-medium text-ink">
           目标修订 v{String(review.goalRevision)} 的交付审查
         </h3>
         <p className="mt-1">
-          {outcomeLabel(review.finalOutcome)}
-          ：结论来自服务端 Review Pack，按完成标准与证据生成。
+          {awaitingDecision && !outcome
+            ? '所需证据已通过，等待你验收。'
+            : `${outcomeLabel(review.finalOutcome)}：结论来自服务端 Review Pack，按完成标准与证据生成。`}
         </p>
       </StateHeader>
       <section className="detail-section">
@@ -2531,9 +2633,111 @@ function ReviewDetail({
           </pre>
         </section>
       )}
+      {outcome && (
+        <p
+          className="mt-3 text-[13px] text-ink-2"
+          ref={decisionStatusRef}
+          role="status"
+          tabIndex={-1}
+        >
+          {outcome === 'request_changes'
+            ? '修改要求已发送给原事情。'
+            : outcome === 'accept'
+              ? '验收决定已保存。'
+              : '事情已停止，交付记录仍可查看。'}
+        </p>
+      )}
+      {error && (
+        <p
+          className="mt-3 text-[13px] text-red-text"
+          id="delivery-review-error"
+          role="alert"
+        >
+          {error}
+        </p>
+      )}
+      {canDecide && editing && (
+        <form
+          className="detail-section grid gap-2"
+          onSubmit={event => {
+            event.preventDefault()
+            void submit('request_changes')
+          }}
+        >
+          <label className="font-medium" htmlFor="delivery-rework-note">
+            修改要求
+          </label>
+          <textarea
+            ref={noteRef}
+            aria-describedby={error ? 'delivery-review-error' : undefined}
+            id="delivery-rework-note"
+            className="min-h-20 w-full rounded-control border border-line bg-surface p-2 text-[16px] text-ink outline-accent"
+            value={note}
+            maxLength={4000}
+            required
+            disabled={saving}
+            onChange={event => setNote(event.target.value)}
+          />
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="accent"
+              size="sm"
+              type="submit"
+              disabled={!note.trim() || saving}
+            >
+              {saving ? '正在提交…' : '提交修改要求'}
+            </Button>
+            <Button
+              variant="quiet"
+              size="sm"
+              type="button"
+              disabled={saving}
+              onClick={() => {
+                setEditing(false)
+                setError('')
+                window.setTimeout(() => editButtonRef.current?.focus())
+              }}
+            >
+              返回验收
+            </Button>
+          </div>
+        </form>
+      )}
       <footer className="drawer-footer">
+        {canDecide && !editing && (
+          <>
+            <Button
+              variant="accent"
+              size="sm"
+              type="button"
+              disabled={saving}
+              onClick={() => void submit('accept')}
+            >
+              {saving ? '正在保存…' : '接受交付'}
+            </Button>
+            <Button
+              ref={editButtonRef}
+              className="pointer-coarse:min-h-11"
+              variant="secondary"
+              size="sm"
+              type="button"
+              disabled={saving}
+              onClick={() => {
+                setEditing(true)
+                setError('')
+              }}
+            >
+              退回修改
+            </Button>
+          </>
+        )}
         {onOpenTask && (
-          <Button variant="accent" size="sm" onClick={onOpenTask} type="button">
+          <Button
+            variant={canDecide ? 'secondary' : 'accent'}
+            size="sm"
+            onClick={onOpenTask}
+            type="button"
+          >
             打开事情详情与审计时间线
           </Button>
         )}
