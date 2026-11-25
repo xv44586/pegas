@@ -215,6 +215,10 @@ Worker 可以生成目标简报并请求用户纠正，但 Router 不参与业�
 
 Web、移动端和桌面端把 Task 呈现为 WorkChannel。WorkChannel 不是新的权威生命周期，也不等于 DSH session；第一阶段 `channelId` 与 `taskId` 相同，服务端通过兼容投影 API 返回。客户端进入 Channel 后发送的输入显式引用权威 Task，返回 Pegas 主对话后由 Router 恢复自动归属。
 
+WorkChannel 的 `workflow` 是服务端投影，包含当前事情状态、适用时的待办/交付消息 ID，以及可重试 Run ID。列表、搜索、详情和 Chat 共用该事实。一次 Run 的执行状态另行保留，查看历史失败不会改变当前事情的可用动作。
+
+用户请求解释结果时，带回复 ID 和 `intent: 'explain'` 的入站事件使用合同 v4，从引用的持久正文构造输入，开启独立只读会话，即使普通 Chat 即时应答关闭也可使用。解释无权恢复源 Task 或升级为新工作，普通回复续接与继续执行沿用各自的合同。回滚前先处理完待解释事件及其只读 Run。
+
 已完成 WorkChannel 保留历史、Mandate 和 Channel/Thread 订阅。自己 Thread 上的人类输入先附加，再由 Control Plane 复核原 Mandate；通过后恢复并创建新 Run，失败则保持 completed 并把输入退回 Router/Eval。取消后的 WorkChannel 永久只读，只能重新接单创建带来源关系的新 Channel。自动事件、普通 progress 和定时扫描不能单独恢复 ended Task。
 
 WorkChannel 的用户可见时间线由 Conversation Event、路由事实、Run Event、净化后的工具摘要、Artifact 和协作事件组成。隐藏提示词、密钥、原始凭证与未经净化的工具参数不得进入用户可见投影或全文索引。

@@ -26,7 +26,7 @@ import type {
 
 export type ComposerTarget =
   | { kind: 'task' | 'source'; channel: WorkChannel }
-  | { kind: 'reply'; id: string; text: string }
+  | { kind: 'reply'; id: string; text: string; explain?: boolean }
 
 export type AppPage =
   'conversation' | 'work' | 'attention' | 'automation' | 'memory' | 'settings'
@@ -819,7 +819,31 @@ export function sortWorkChannels(
   })
 }
 
+const workflowLabels: Record<
+  NonNullable<WorkChannel['workflow']>['state'],
+  string
+> = {
+  not_started: '未开始',
+  queued: '排队中',
+  running: '进行中',
+  awaiting_input: '待你补充',
+  awaiting_approval: '待审批',
+  awaiting_reconciliation: '待核对',
+  awaiting_evidence: '等待证据',
+  waiting_dependency: '等待协作',
+  waiting_schedule: '已安排',
+  waiting_provider: '等待模型服务',
+  blocked: '已阻塞',
+  failed: '失败',
+  awaiting_review: '待验收',
+  delivered: '已完成',
+  handed_off: '已移交',
+  closed_unfinished: '未完成关闭',
+  stopped: '已停止',
+}
+
 export function statusLabel(channel: WorkChannel, run?: Run): string {
+  if (channel.workflow) return workflowLabels[channel.workflow.state]
   if (channel.status === 'cancelled') return '已归档'
   if (run) return runStatusLabel(run)
   return channel.status === 'completed' ? '已完成' : '等待中'

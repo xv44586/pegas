@@ -75,11 +75,11 @@ import {
 } from '@bui/index'
 import {
   CopyMessageButton,
-  FollowUpList,
   MetaIconButton,
   RowStatusPill,
   RunTrace,
   SayBody,
+  statusTone,
   WorkEntryButton,
   type FactTone,
 } from './ConversationBui'
@@ -227,7 +227,7 @@ export function ConversationPage({
   const [copiedMessageId, setCopiedMessageId] = useState<string>()
   const [retryingMessageId, setRetryingMessageId] = useState<string>()
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([])
-  const [confirmingStop, setConfirmingStop] = useState(false)
+  const [stopTarget, setStopTarget] = useState<WorkChannel>()
   const [stopping, setStopping] = useState(false)
   const previousPegasIdsRef = useRef<Set<string>>(new Set())
   const sendOriginRef = useRef<DOMRect | undefined>(undefined)
@@ -443,42 +443,67 @@ export function ConversationPage({
   function queueDraft() {
     const text = draft.trim()
     if (!text || !continuationChannel) return
+    if (attachment || sending || dictationBusy) return
     setQueuedMessages(current => [
       ...current,
-      { id: crypto.randomUUID(), text, channelId: continuationChannel.id },
+      { id: crypto.randomUUID(), text, channel: continuationChannel },
     ])
     onDraftChange('')
     setError('')
   }
 
   useEffect(() => {
-    if (queuedMessages.length === 0 || sending) return
+    if (sending || dictationBusy) return
     const next = queuedMessages[0]
-    if (!next) return
-    const channel = snapshot.channels.find(item => item.id === next.channelId)
+    if (!next || next.error) return
+    const channel = snapshot.channels.find(item => item.id === next.channel.id)
+    function markFailure(message: string) {
+      setQueuedMessages(current =>
+        current.map(item =>
+          item.id === next?.id ? { ...item, error: message } : item,
+        ),
+      )
+    }
     if (!channel || channel.status === 'cancelled') {
-      setQueuedMessages(current => current.slice(1))
+      markFailure(
+        channel
+          ? '原事情已停止，稿件已保留。'
+          : '暂时读取不到原事情，稿件已保留。',
+      )
       return
     }
     const run = latestRunForTask(snapshot.runs, channel.id)
-    if (run && (run.status === 'running' || run.status === 'queued')) return
+    const busy = channel.workflow
+      ? !['delivered', 'failed', 'not_started'].includes(channel.workflow.state)
+      : run && ['running', 'queued', 'waiting'].includes(run.status)
+    if (busy) return
     void (async () => {
       setSending(true)
       try {
-        await api.sendMessage(next.text, { taskId: channel.id })
-        setQueuedMessages(current => current.slice(1))
+        await api.sendMessage(next.text, { taskId: channel.id }, next.id)
+        setQueuedMessages(current =>
+          current.filter(item => item.id !== next.id),
+        )
         await onSent()
       } catch (caught) {
-        setError(
+        markFailure(
           caught instanceof Error
-            ? `排队消息发送失败：${caught.message}`
-            : '排队消息发送失败，请重试。',
+            ? caught.message
+            : '待发消息提交失败，请重试。',
         )
       } finally {
         setSending(false)
       }
     })()
-  }, [queuedMessages, sending, snapshot.channels, snapshot.runs, api, onSent])
+  }, [
+    queuedMessages,
+    sending,
+    dictationBusy,
+    snapshot.channels,
+    snapshot.runs,
+    api,
+    onSent,
+  ])
 
   async function copyMessage(messageId: string, text: string) {
     try {
@@ -526,12 +551,12 @@ export function ConversationPage({
   }
 
   async function stopSummary() {
-    if (!summaryChannel || stopping) return
+    if (!stopTarget || stopping) return
     setStopping(true)
     setError('')
     try {
-      await api.stopChannel(summaryChannel.id, 'Stopped from the Pegas UI')
-      setConfirmingStop(false)
+      await api.stopChannel(stopTarget.id, 'Stopped from the Pegas UI')
+      setStopTarget(undefined)
       await onSent()
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '停止失败，请重试。')
@@ -649,10 +674,14 @@ export function ConversationPage({
         ? quotableAgentReply(message.source)
         : undefined
     const selectQuote = quote
-      ? (text?: string) => {
+      ? (explain = workEntryChannel?.status === 'completed') => {
           if (sending || dictationBusy) return
-          onTargetChange({ kind: 'reply', id: message.id, text: quote.text })
-          if (text) onDraftChange(text)
+          onTargetChange({
+            kind: 'reply',
+            id: message.id,
+            text: quote.text,
+            explain,
+          })
           setError('')
           composerInputRef.current?.focus()
         }
@@ -687,7 +716,9 @@ export function ConversationPage({
               onJumpToMessage={jumpToMessage}
               onOpenAttention={onOpenAttention}
               onOpenTask={openTaskDetails}
-              onFollowUp={selectQuote}
+              onExplainResult={
+                selectQuote ? () => selectQuote(true) : undefined
+              }
               onToggleExpanded={() =>
                 setExpandedMessages(current => {
                   const next = new Set(current)
@@ -882,7 +913,14 @@ export function ConversationPage({
             {trayChannels.map(channel => {
               const channelRun = latestRunForTask(snapshot.runs, channel.id)
               const selected = continuationChannel?.id === channel.id
-              const waitingOnUser = channel.statusReason !== undefined
+              const waitingOnUser = channel.workflow
+                ? [
+                    'awaiting_input',
+                    'awaiting_approval',
+                    'awaiting_reconciliation',
+                    'awaiting_review',
+                  ].includes(channel.workflow.state)
+                : channel.statusReason !== undefined
               return (
                 <button
                   aria-pressed={selected}
@@ -919,7 +957,7 @@ export function ConversationPage({
             })}
           </div>
         )}
-        {confirmingStop && summaryChannel && (
+        {stopTarget && (
           <div
             aria-labelledby="composer-stop-title"
             className="stop-confirmation mx-auto mt-3.5 mb-2.5 flex max-w-[1040px] items-center justify-between gap-3.5 rounded-card bg-red-tint p-4 shadow-hairline"
@@ -930,12 +968,13 @@ export function ConversationPage({
                 确定停止这件事？
               </strong>
               <p className="mt-1 text-[13px] leading-[1.55] text-ink-2">
-                停止后无法继续当前运行；历史记录会保留，你仍可重新发起事情。
+                「{stopTarget.title}
+                」停止后无法继续当前运行；历史记录会保留，你仍可重新发起事情。
               </p>
             </div>
             <div className="stop-confirmation-actions flex shrink-0 gap-2">
               <Button
-                onClick={() => setConfirmingStop(false)}
+                onClick={() => setStopTarget(undefined)}
                 size="sm"
                 type="button"
                 variant="secondary"
@@ -968,15 +1007,46 @@ export function ConversationPage({
                   className="composer-queue-preview min-w-0 flex-1 truncate text-ink-2"
                   title={item.text}
                 >
+                  <strong className="mr-2">{item.channel.title}</strong>
                   {item.text}
+                  {item.error && (
+                    <small
+                      className="block whitespace-normal text-red-text"
+                      role="alert"
+                    >
+                      {item.error}
+                    </small>
+                  )}
                 </span>
+                {item.error && (
+                  <Button
+                    disabled={sending || dictationBusy}
+                    onClick={() =>
+                      setQueuedMessages(current =>
+                        current.map(entry =>
+                          entry.id === item.id
+                            ? { ...entry, error: undefined }
+                            : entry,
+                        ),
+                      )
+                    }
+                    size="xs"
+                    type="button"
+                    variant="quiet"
+                  >
+                    重试发送
+                  </Button>
+                )}
                 <Button
                   aria-label={`编辑排队消息 ${String(index + 1)}`}
+                  disabled={Boolean(draft.trim()) || sending || dictationBusy}
                   onClick={() => {
                     setQueuedMessages(current =>
                       current.filter(entry => entry.id !== item.id),
                     )
+                    onTargetChange({ kind: 'task', channel: item.channel })
                     onDraftChange(item.text)
+                    composerInputRef.current?.focus()
                   }}
                   size="xs"
                   type="button"
@@ -987,6 +1057,7 @@ export function ConversationPage({
                 <Button
                   aria-label={`删除排队消息 ${String(index + 1)}`}
                   className="w-7 px-0"
+                  disabled={sending}
                   onClick={() =>
                     setQueuedMessages(current =>
                       current.filter(entry => entry.id !== item.id),
@@ -1078,7 +1149,9 @@ export function ConversationPage({
               onClick={() => jumpToMessage(target.id)}
               type="button"
             >
-              <span>追问这条回复：</span>
+              <span>
+                {target.explain ? '解释这次结果：' : '追问这条回复：'}
+              </span>
               <strong>{target.text.slice(0, 120)}</strong>
             </button>
             <MetaIconButton
@@ -1191,7 +1264,7 @@ export function ConversationPage({
                   正在整理…
                 </span>
               )}
-              {canSteer && draft.trim() && (
+              {canSteer && draft.trim() && !attachment && (
                 <Button
                   className="composer-steer-button h-[34px] rounded-full bg-accent-tint px-3 text-[13px] font-medium text-accent-ink hover:bg-accent-tint hover:brightness-95"
                   disabled={sending || dictationBusy}
@@ -1204,7 +1277,7 @@ export function ConversationPage({
                   <Zap size={15} /> 插话
                 </Button>
               )}
-              {canQueue && draft.trim() && (
+              {canQueue && draft.trim() && !attachment && (
                 <Button
                   className="composer-queue-button h-[34px] rounded-full bg-accent-tint px-3 text-[13px] font-medium text-accent-ink hover:bg-accent-tint hover:brightness-95"
                   disabled={sending || dictationBusy}
@@ -1276,7 +1349,7 @@ export function ConversationPage({
                   aria-label="停止"
                   className="send-button is-stop size-[42px] rounded-full bg-red p-0 text-white hover:bg-red hover:brightness-95 [&_svg]:fill-current pointer-coarse:size-11"
                   disabled={stopping}
-                  onClick={() => setConfirmingStop(true)}
+                  onClick={() => setStopTarget(summaryChannel)}
                   size="sm"
                   title="停止当前执行"
                   type="button"
@@ -1350,7 +1423,8 @@ function groupMessageThreads<T extends ThreadMessage>(
 interface QueuedMessage {
   id: string
   text: string
-  channelId: string
+  channel: WorkChannel
+  error?: string
 }
 
 interface FactCardMessage {
@@ -1422,7 +1496,7 @@ function FactCard({
   onOpenTask,
   onAnswerClarification,
   onOpenAttention,
-  onFollowUp,
+  onExplainResult,
 }: {
   message: FactCardMessage
   snapshot: Snapshot
@@ -1434,7 +1508,7 @@ function FactCard({
   onOpenTask: (taskId: string | undefined) => void
   onAnswerClarification: (channel: Snapshot['channels'][number]) => void
   onOpenAttention: (message: OutboxMessage) => Promise<void>
-  onFollowUp?: (text: string) => void
+  onExplainResult?: () => void
 }) {
   const heading = factCardHeading(message)
   const tone = factCardTone(message)
@@ -1558,20 +1632,17 @@ function FactCard({
           </Button>
         </div>
       )}
-      {message.lane === 'work' &&
-        tone === 'green' &&
-        onFollowUp &&
-        channel?.status === 'completed' && (
-          <FollowUpList
-            items={[
-              '这件事还有哪些没做完？',
-              '把这次结果整理成一段摘要',
-              '结果里有哪些风险需要注意？',
-            ]}
-            label="下一步"
-            onPick={onFollowUp}
-          />
-        )}
+      {channel?.workflow?.resultMessageId === message.id && onExplainResult && (
+        <Button
+          className="mt-2"
+          onClick={onExplainResult}
+          size="sm"
+          type="button"
+          variant="quiet"
+        >
+          解释这次结果
+        </Button>
+      )}
     </section>
   )
 }
@@ -1580,7 +1651,11 @@ function messageTarget(
   target: ComposerTarget | undefined,
 ): MessageTarget | undefined {
   if (!target) return undefined
-  if (target.kind === 'reply') return { replyToMessageId: target.id }
+  if (target.kind === 'reply')
+    return {
+      replyToMessageId: target.id,
+      ...(target.explain ? { intent: 'explain' as const } : {}),
+    }
   return target.kind === 'task'
     ? { taskId: target.channel.id }
     : { sourceTaskId: target.channel.id }
@@ -1610,22 +1685,18 @@ function RunStatusBar({
   const active = run.status === 'running' || run.status === 'queued'
   const progressText = latestRunProgressText(messages, run.id)
   const duration = formatRunDuration(run)
-  const headline = active
-    ? statusLabel(channel, run)
-    : run.status === 'completed'
-      ? '已完成'
-      : run.status === 'failed'
-        ? '执行失败'
-        : run.status === 'cancelled'
-          ? '已停止'
-          : '等待中'
-  const tone: FactTone = active
-    ? 'accent'
-    : run.status === 'completed'
-      ? 'green'
-      : run.status === 'failed'
-        ? 'red'
-        : 'neutral'
+  const headline = channel.workflow
+    ? statusLabel(channel)
+    : active
+      ? statusLabel(channel, run)
+      : run.status === 'completed'
+        ? '已完成'
+        : run.status === 'failed'
+          ? '执行失败'
+          : run.status === 'cancelled'
+            ? '已停止'
+            : '等待中'
+  const tone: FactTone = statusTone(headline)
   const detail = active
     ? undefined
     : run.status === 'completed' && duration

@@ -29,6 +29,7 @@ import {
   reviewProjection,
   runIdFromMessage,
   taskAutomationActive,
+  textFromPayload,
   type AppData,
   type AppPage,
   type ComposerTarget,
@@ -1394,8 +1395,8 @@ export function App() {
     isDark,
     onOpenDrawer: openDrawer,
   }
-  function continueChannel(channel: WorkChannel) {
-    setComposerTarget({ kind: 'task', channel })
+  function openComposer(target: ComposerTarget) {
+    setComposerTarget(target)
     const url = new URL(window.location.href)
     url.searchParams.delete('channel')
     url.searchParams.delete('task')
@@ -1410,6 +1411,20 @@ export function App() {
       document.querySelector<HTMLTextAreaElement>('#pegas-message')?.focus(),
     )
   }
+  function continueChannel(channel: WorkChannel) {
+    openComposer({ kind: 'task', channel })
+  }
+
+  async function workflowMessage(id: string) {
+    const findMessage = (messages: OutboxMessage[]) =>
+      messages.find(message => message.id === id)
+    const message =
+      findMessage(data.snapshot.messages) ??
+      findMessage((await api.snapshot()).messages)
+    if (!message) throw new Error('这条记录暂时不可用，请刷新后重试。')
+    return message
+  }
+
   const attentionTodoCount = attentionBoard(data.snapshot.messages).todo.length
   const selectedAgentProvider =
     data.settings?.settings.agentModelMode === 'override'
@@ -1735,6 +1750,18 @@ export function App() {
           onLoadRunActivity={openRunWorkflow}
           onLoadRunSubagents={openSubagentTranscript}
           onContinue={continueChannel}
+          onWorkflowMessage={async id =>
+            openAttentionMessage(await workflowMessage(id))
+          }
+          onExplainResult={async id => {
+            const message = await workflowMessage(id)
+            openComposer({
+              kind: 'reply',
+              id,
+              text: textFromPayload(message.payload),
+              explain: true,
+            })
+          }}
           onAnswerRouting={() => {
             setComposerTarget(undefined)
             setDrawer(undefined)
@@ -1746,9 +1773,7 @@ export function App() {
             )
           }}
           onCreateRelated={channel => {
-            setComposerTarget({ kind: 'source', channel })
-            setDrawer(undefined)
-            navigate('conversation')
+            openComposer({ kind: 'source', channel })
           }}
           onResolveOutbox={resolveOutbox}
           onDecideApproval={async (approvalId, optionId, rationale) => {

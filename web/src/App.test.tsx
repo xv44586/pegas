@@ -3930,6 +3930,36 @@ describe('sealed Pegas UI', () => {
     expect(screen.getByRole('button', { name: '重试' })).toBeTruthy()
   })
 
+  it('uses the current workflow action when inspecting an older failed run', () => {
+    const openAttention = vi.fn(() => Promise.resolve())
+    render(
+      <DetailDrawer
+        onChange={vi.fn()}
+        onClose={vi.fn()}
+        onWorkflowMessage={openAttention}
+        onContinue={vi.fn()}
+        onRetry={vi.fn()}
+        view={{
+          kind: 'task',
+          channel: {
+            ...channel,
+            workflow: {
+              state: 'awaiting_approval',
+              attentionMessageId: 'current-approval',
+            },
+          },
+          run: { ...run, status: 'failed', lastError: '旧 Run 的失败诊断' },
+        }}
+      />,
+    )
+    expect(screen.getByText('待审批')).toBeTruthy()
+    expect(screen.getByText('旧 Run 的失败诊断')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '重试' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '继续追问' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '查看审批' }))
+    expect(openAttention).toHaveBeenCalledWith('current-approval')
+  })
+
   it('presents the detail drawer as a modal and traps keyboard focus', () => {
     render(
       <DetailDrawer

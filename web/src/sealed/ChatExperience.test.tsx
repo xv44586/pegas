@@ -728,6 +728,43 @@ describe('DESIGN-003 chat page', () => {
     expect(screen.queryByText(/继续事情：/)).toBeNull()
   })
 
+  it('only offers result actions on the current delivery and preserves the draft', async () => {
+    const delivery = (id: string, text: string): OutboxMessage => ({
+      ...baseMessage,
+      id,
+      payload: { type: 'run.completed', text },
+      projection: { lane: 'work', weight: 'card' },
+    })
+    installChatFetch({
+      ...baseSnapshot,
+      channels: [
+        {
+          ...channel,
+          status: 'completed',
+          canResume: true,
+          canStop: false,
+          workflow: { state: 'delivered', resultMessageId: 'current-delivery' },
+        },
+      ],
+      runs: [{ ...runningRun, status: 'completed' }],
+      messages: [
+        delivery('older-delivery', '旧交付'),
+        delivery('current-delivery', '当前交付'),
+      ],
+    })
+    render(<App />)
+    const composer = await screen.findByLabelText('给 Pegas 发消息')
+    fireEvent.change(composer, { target: { value: '用户正在写的草稿' } })
+    const action = await screen.findByRole('button', { name: '解释这次结果' })
+    expect(action.closest('article')?.getAttribute('data-message-id')).toBe(
+      'current-delivery',
+    )
+    expect(screen.queryByText('这件事还有哪些没做完？')).toBeNull()
+    fireEvent.click(action)
+    expect(composer).toHaveProperty('value', '用户正在写的草稿')
+    expect(document.activeElement).toBe(composer)
+  })
+
   it('quotes the selected agent reply even when another task was selected', async () => {
     const reply = (id: string, text: string): OutboxMessage => ({
       ...baseMessage,

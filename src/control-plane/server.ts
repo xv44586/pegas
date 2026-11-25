@@ -10,7 +10,6 @@ import {
 import { extname, resolve, sep } from 'node:path'
 
 import { replyReference } from '../conversation/projection.js'
-import { projectWorkChannel } from '../channel/work-channel.js'
 import { spillBodyForGap } from '../activity/tool-semantics.js'
 import { isWorkerIconId, type WorkerIconId } from '../brand/agent-icon.js'
 import { parseWorkerCollaborationRequest } from '../collaboration/collaboration.js'
@@ -1660,7 +1659,7 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
           cursor,
         )
         return sendJson(response, 200, {
-          channel: projectWorkChannel(task),
+          channel: options.store.projectWorkChannel(task),
           events: page.events,
           ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
           routing: options.store.listChannelRoutingDecisions(taskId, userId),
@@ -1739,7 +1738,7 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
           channels: options.store
             .listTasks(userId)
             .filter(task => task.kind !== 'conversation')
-            .map(task => projectWorkChannel(task)),
+            .map(task => options.store.projectWorkChannel(task)),
         })
       }
 
@@ -1898,7 +1897,7 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
           reason,
         )
         return sendJson(response, 200, {
-          channel: projectWorkChannel(task),
+          channel: options.store.projectWorkChannel(task),
         })
       }
 
@@ -2621,8 +2620,8 @@ function validateMessageTarget(
   store: PegasStore,
 ): void {
   if (input.type !== 'user.message') return
-  const replyId = replyReference(input.payload)
-  if (replyId) store.conversationReply(replyId, input.userId)
+  const reference = replyReference(input.payload)
+  if (reference) store.conversationReply(reference, input.userId)
   const taskId = explicitTaskId(input)
   if (taskId) {
     const task = store.findTask(taskId, input.userId)
@@ -2994,10 +2993,12 @@ async function acceptVoiceMessage(
   const taskId = optionalQuery(url, 'taskId')
   const sourceTaskId = optionalQuery(url, 'sourceTaskId')
   const replyToMessageId = url.searchParams.get('replyToMessageId')
+  const intent = url.searchParams.get('intent')
   const target = {
     ...(taskId ? { taskId } : {}),
     ...(sourceTaskId ? { sourceTaskId } : {}),
     ...(replyToMessageId === null ? {} : { replyToMessageId }),
+    ...(intent === null ? {} : { intent }),
   }
   validateMessageTarget(
     { type: 'user.message', userId, payload: target },

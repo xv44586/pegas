@@ -177,6 +177,13 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - **远程 CI 验证（2026-11-22）**：推送 `origin/main`（`363f72f`）后 GitHub Actions run 44995511060 success（check job 约 2m40s，Post Run 显示 actions/checkout@v7、actions/setup-node@v7、pnpm/action-setup@v6）；check-runs annotations 为空——「Node.js 20 is deprecated」弃用警告已消失。主分支合并后 `pnpm smoke` 与 CI workflow 回归 10 测试通过。
 - **发布验证（2026-11-22）**：包含本 Feature 的 main `b22fa90` 已经 SELF-001 Candidate 链路发布到运行中的实例（`main-b22fa90-r1`，见 SELF-001 生产发布记录）；本 Feature 的交付物是 CI 配置，随仓库 commit 进入 Release 身份，运行时行为不变，node24 效果以远程 CI 零 annotation 为准。
 
+### TASK-002：事情状态与交付后的操作（2026-11-25）
+
+- **用户结果**：Chat、事情列表与详情统一展示服务端事情状态。排队、执行、等待与永久停止各有明确标签；当前可处理的审批、核对、澄清和可重试 Run 精确指向来源。历史 Run 留作诊断。
+- **范围与权威**：`src/channel/work-channel.ts` 与 store 的 WorkChannel 投影、Web 详情和 Chat。已交付卡片的操作绑定当前结果，移除固定推荐；引用解释进入独立的只读会话，原事情不重开。草稿与本页待发错发、连续重试和丢弃的路径显式处理。完整审计与验收见 [事情从发起到交付](task-workflow.md)。
+- **自动化证据**：`test/control-plane.test.ts`、`test/task-run-state-machine.test.ts`、`test/chat-lane.test.ts`、`web/src/App.test.tsx`、`web/src/sealed/ChatExperience.test.tsx`。
+- **状态与下一缺口**：Partial。跨设备待发稿、恢复时 Source Policy 复核和拒绝后的输入处置仍是后续工作。解释使用 Inbox 合同 v4、无 schema 迁移；回滚前处理完待解释事件及其 Run，再一起切换 Web、控制面和 Worker。
+
 ### TASK-001：Task/Run 完整状态迁移（2026-11-21）
 
 - **用户结果**：事情与执行的每个状态变化都走同一套持久状态机；非法状态在数据库层被拒绝，终态 Run 不接受迟到写回，用户停止/纠正/审批/重试都产生可审计的 Run 链。

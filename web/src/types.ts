@@ -37,6 +37,8 @@ export interface Task {
   updatedAt: string
 }
 
+import type { WorkWorkflow } from '../../src/channel/work-channel'
+
 export interface WorkChannel extends Task {
   taskId: string
   workerIconId: WorkerIconId
@@ -45,6 +47,7 @@ export interface WorkChannel extends Task {
   endedKind?: 'completed' | 'dropped' | 'stopped'
   canResume: boolean
   canStop: boolean
+  workflow?: WorkWorkflow
 }
 
 type RunStatus =
