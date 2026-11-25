@@ -671,7 +671,7 @@ describe('DESIGN-003 chat page', () => {
 
   it('lets the user edit or delete a queued message before it sends', async () => {
     installChatFetch(baseSnapshot)
-    render(<App />)
+    const first = render(<App />)
     fireEvent.click(
       await screen.findByRole('button', { name: /整理季度数据.*进行中/ }),
     )
@@ -679,8 +679,16 @@ describe('DESIGN-003 chat page', () => {
       await screen.findByLabelText<HTMLTextAreaElement>('给 Pegas 发消息')
     fireEvent.change(composer, { target: { value: '第一条排队' } })
     fireEvent.click(await screen.findByRole('button', { name: '排队' }))
-    fireEvent.click(screen.getByRole('button', { name: '编辑排队消息 1' }))
-    expect(composer.value).toBe('第一条排队')
+    first.unmount()
+    render(<App />)
+    fireEvent.click(
+      await screen.findByRole('button', { name: '编辑排队消息 1' }),
+    )
+    expect(screen.getByLabelText('给 Pegas 发消息')).toHaveProperty(
+      'value',
+      '第一条排队',
+    )
+    expect(screen.getByText(/继续事情：/)).toBeTruthy()
     expect(screen.queryByLabelText('排队消息')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '排队' }))
     fireEvent.click(screen.getByRole('button', { name: '删除排队消息 1' }))
@@ -726,6 +734,43 @@ describe('DESIGN-003 chat page', () => {
     fireEvent.click(second)
     expect(second.getAttribute('aria-pressed')).toBe('false')
     expect(screen.queryByText(/继续事情：/)).toBeNull()
+  })
+
+  it('only offers result actions on the current delivery and preserves the draft', async () => {
+    const delivery = (id: string, text: string): OutboxMessage => ({
+      ...baseMessage,
+      id,
+      payload: { type: 'run.completed', text },
+      projection: { lane: 'work', weight: 'card' },
+    })
+    installChatFetch({
+      ...baseSnapshot,
+      channels: [
+        {
+          ...channel,
+          status: 'completed',
+          canResume: true,
+          canStop: false,
+          workflow: { state: 'delivered', resultMessageId: 'current-delivery' },
+        },
+      ],
+      runs: [{ ...runningRun, status: 'completed' }],
+      messages: [
+        delivery('older-delivery', '旧交付'),
+        delivery('current-delivery', '当前交付'),
+      ],
+    })
+    render(<App />)
+    const composer = await screen.findByLabelText('给 Pegas 发消息')
+    fireEvent.change(composer, { target: { value: '用户正在写的草稿' } })
+    const action = await screen.findByRole('button', { name: '解释这次结果' })
+    expect(action.closest('article')?.getAttribute('data-message-id')).toBe(
+      'current-delivery',
+    )
+    expect(screen.queryByText('这件事还有哪些没做完？')).toBeNull()
+    fireEvent.click(action)
+    expect(composer).toHaveProperty('value', '用户正在写的草稿')
+    expect(document.activeElement).toBe(composer)
   })
 
   it('quotes the selected agent reply even when another task was selected', async () => {

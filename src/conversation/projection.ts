@@ -99,8 +99,15 @@ export function quotableAgentReply(
   }
 }
 
-export function replyReference(payload: unknown): string | undefined {
-  if (!isRecord(payload) || !('replyToMessageId' in payload)) return undefined
+export function replyReference(
+  payload: unknown,
+): { id: string; mode: 'continue' | 'explain' } | undefined {
+  if (!isRecord(payload)) return undefined
+  if (!('replyToMessageId' in payload)) {
+    if (payload.intent === 'explain')
+      throw new Error('An explanation requires a reply reference')
+    return undefined
+  }
   if (
     typeof payload.replyToMessageId !== 'string' ||
     !payload.replyToMessageId.trim()
@@ -109,12 +116,15 @@ export function replyReference(payload: unknown): string | undefined {
   if (
     payload.taskId !== undefined ||
     payload.sourceTaskId !== undefined ||
-    payload.intent !== undefined
+    (payload.intent !== undefined && payload.intent !== 'explain')
   )
     throw new Error(
       'A reply reference cannot be combined with another message target or intent',
     )
-  return payload.replyToMessageId
+  return {
+    id: payload.replyToMessageId,
+    mode: payload.intent === 'explain' ? 'explain' : 'continue',
+  }
 }
 
 function payloadTaskId(payload: unknown): string | undefined {

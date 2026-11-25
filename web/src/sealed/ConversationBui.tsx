@@ -21,14 +21,16 @@ import { thinkingHeadline, toolHeadline } from './activityModel'
 export type FactTone = 'green' | 'orange' | 'red' | 'accent' | 'neutral'
 
 /** shared status-label → pill tone lookup for work rows, trays and menus */
-function statusTone(label: string): FactTone {
+export function statusTone(label: string): FactTone {
   if (label === '已完成' || label === '已派发') return 'green'
-  if (label === '失败' || label === '执行失败') return 'red'
+  if (['失败', '执行失败', '未完成关闭'].includes(label)) return 'red'
   if (
     label === '进行中' ||
     label === '执行中' ||
     label === '已启用' ||
-    label === '处理中'
+    label === '处理中' ||
+    label === '排队中' ||
+    label === '已安排'
   )
     return 'accent'
   if (
@@ -36,7 +38,16 @@ function statusTone(label: string): FactTone {
     label === '等待中' ||
     label === '需要你决定' ||
     label === '已暂停' ||
-    label === '待触发'
+    label === '待触发' ||
+    [
+      '待你补充',
+      '待审批',
+      '待核对',
+      '等待证据',
+      '等待协作',
+      '等待模型服务',
+      '待验收',
+    ].includes(label)
   )
     return 'orange'
   return 'neutral'
@@ -153,68 +164,6 @@ export function CopyMessageButton({
 }
 
 /** follow-up prompt row — same visual language as StreamingText follow-ups */
-function FollowUpRow({
-  text,
-  index,
-  onPick,
-}: {
-  text: string
-  index: number
-  onPick: (text: string) => void
-}) {
-  return (
-    <button
-      onClick={() => onPick(text)}
-      className="-mx-1.5 flex items-center gap-2 rounded-[7px] border-b border-line
-        px-1.5 py-1.5 text-left text-[12.5px] text-ink transition-colors
-        duration-100 hover:bg-hover-2"
-      style={{
-        animation: `fade-up 350ms cubic-bezier(0.23,1,0.32,1) ${String(index * 90)}ms both`,
-      }}
-      type="button"
-    >
-      <svg
-        width="11"
-        height="11"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="var(--ink-3)"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        className="shrink-0"
-        aria-hidden="true"
-      >
-        <path d="M9 10l-5 5 5 5" />
-        <path d="M20 4v7a4 4 0 0 1-4 4H4" />
-      </svg>
-      {text}
-    </button>
-  )
-}
-
-export function FollowUpList({
-  label,
-  items,
-  onPick,
-}: {
-  label: string
-  items: readonly string[]
-  onPick: (text: string) => void
-}) {
-  if (items.length === 0) return null
-  return (
-    <div className="mt-2.5">
-      <p className="text-[12px] font-medium text-ink-2">{label}</p>
-      <div className="mt-0.5 flex flex-col">
-        {items.map((text, index) => (
-          <FollowUpRow index={index} key={text} onPick={onPick} text={text} />
-        ))}
-      </div>
-    </div>
-  )
-}
-
 /** settled/streaming say body: markdown when settled, BUI StreamText while streaming */
 export function SayBody({
   text,

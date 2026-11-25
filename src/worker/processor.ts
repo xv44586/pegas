@@ -125,13 +125,14 @@ export class RoutingEventHandler implements EventHandler {
       this.#handleConversationSuggestion(event, store)
       return
     }
-    const replyId =
+    const reference =
       event.type === 'user.message' ? replyReference(event.payload) : undefined
-    if (replyId && event.authenticatedActor !== 'human')
+    if (reference && event.authenticatedActor !== 'human')
       throw new Error('A reply reference requires authenticated human input')
-    const reply = replyId
-      ? store.conversationReply(replyId, event.userId)
+    const reply = reference
+      ? store.conversationReply(reference, event.userId)
       : undefined
+    const explaining = reference?.mode === 'explain'
     const routingContext = {
       resolveExplicitTask: (taskId: string) =>
         store.findTask(taskId, event.userId),
@@ -140,12 +141,19 @@ export class RoutingEventHandler implements EventHandler {
     }
     const candidates = reply ? [] : store.listRoutingCandidates(event.userId)
     const decision = reply
-      ? {
-          kind: 'continue_task' as const,
-          taskId: reply.taskId,
-          input: quotedFollowUpInput(userMessageText(event), reply.text),
-          reason: 'The message explicitly follows up on an agent reply.',
-        }
+      ? explaining
+        ? {
+            kind: 'reply' as const,
+            input: quotedFollowUpInput(userMessageText(event), reply.text),
+            reason:
+              'The user requested a read-only explanation of this result.',
+          }
+        : {
+            kind: 'continue_task' as const,
+            taskId: reply.taskId,
+            input: quotedFollowUpInput(userMessageText(event), reply.text),
+            reason: 'The message explicitly follows up on an agent reply.',
+          }
       : (prefilterDecision(event, candidates, {
           chatLaneEnabled:
             store.hasRuntimeSettings() &&
@@ -187,6 +195,7 @@ export class RoutingEventHandler implements EventHandler {
     }
     if (
       decision.kind === 'reply' &&
+      !explaining &&
       !store.getRuntimeSettings().chatLaneEnabled
     ) {
       store.applyRoutingDecision(
@@ -504,7 +513,8 @@ async function executeConversationRun(
     claimed.task.id,
   )
   const workRules = store.workRuleContextForUser(claimed.task.userId)
-  const targetedReply = store.runRepliesToMessage(claimed.run.id)
+  const replyMode = store.runReplyMode(claimed.run.id)
+  const targetedReply = replyMode !== undefined
   const resumeSessionId = targetedReply
     ? (claimed.run.executorRef ?? claimed.run.resumeFromRef)
     : store.conversationSessionRef(claimed.task.userId)
@@ -519,6 +529,7 @@ async function executeConversationRun(
       executionContext: claimed.run.executionContext,
       executionContractVersion: claimed.run.executionContractVersion,
       mandate: claimed.task.mandate,
+      ...(replyMode === 'explain' ? { explainOnly: true } : {}),
       conversationStateCapability: {
         baseUrl: controlPlaneBaseUrl,
         runId: claimed.run.id,
@@ -573,7 +584,18 @@ async function executeConversationRun(
   if (!targetedReply)
     store.recordConversationSessionRef(claimed.task.userId, result.executorRef)
   const suggestion = conversationSuggestion(result.output)
-  if (suggestion) {
+  if (suggestion && replyMode === 'explain') {
+    if (!suggestion.reply) {
+      store.failRun(
+        claimed.run.id,
+        workerId,
+        'The Executor did not produce a read-only explanation.',
+      )
+      return
+    }
+    result = { ...result, output: suggestion.reply }
+  }
+  if (suggestion && replyMode !== 'explain') {
     store.streamSayFromRun(
       claimed.run.id,
       workerId,

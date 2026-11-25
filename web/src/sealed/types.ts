@@ -26,7 +26,7 @@ import type {
 
 export type ComposerTarget =
   | { kind: 'task' | 'source'; channel: WorkChannel }
-  | { kind: 'reply'; id: string; text: string }
+  | { kind: 'reply'; id: string; text: string; explain?: boolean }
 
 export type AppPage =
   'conversation' | 'work' | 'attention' | 'automation' | 'memory' | 'settings'
@@ -457,14 +457,38 @@ function groupAttentionMessages(
   return result
 }
 
+export function isHistoricalWorkWait(
+  message: OutboxMessage,
+  channel: WorkChannel | undefined,
+): boolean {
+  if (!channel?.workflow) return false
+  const state = payloadType(message.payload)
+  const wait =
+    state === 'goal.clarification_required' ||
+    state === 'input.required' ||
+    state === 'input.requested' ||
+    state === 'run.waiting' ||
+    state === 'run.blocked' ||
+    state === 'goal.evidence_required' ||
+    state === 'goal.report_required'
+  return wait && channel.workflow.attentionMessageId !== message.id
+}
+
 export function attentionBoard(
   messages: readonly OutboxMessage[],
+  channels: readonly WorkChannel[] = [],
 ): AttentionBoard {
   const unresolved = unresolvedAttentionMessages(messages)
   const todo: OutboxMessage[] = []
   const failed: OutboxMessage[] = []
   const activity: OutboxMessage[] = []
+  const channelById = new Map(channels.map(channel => [channel.id, channel]))
   for (const message of unresolved) {
+    if (
+      message.taskId &&
+      isHistoricalWorkWait(message, channelById.get(message.taskId))
+    )
+      continue
     const section = attentionSection(message)
     if (section === 'todo') todo.push(message)
     else if (section === 'failed') failed.push(message)
@@ -819,8 +843,34 @@ export function sortWorkChannels(
   })
 }
 
+const workflowLabels: Record<
+  NonNullable<WorkChannel['workflow']>['state'],
+  string
+> = {
+  not_started: '未开始',
+  queued: '排队中',
+  running: '进行中',
+  awaiting_input: '待你补充',
+  awaiting_approval: '待审批',
+  awaiting_reconciliation: '待核对',
+  awaiting_evidence: '等待证据',
+  waiting_dependency: '等待协作',
+  waiting_schedule: '已安排',
+  waiting_provider: '等待模型服务',
+  blocked: '已阻塞',
+  failed: '失败',
+  awaiting_review: '待验收',
+  delivered: '已完成',
+  handed_off: '已移交',
+  closed_unfinished: '未完成关闭',
+  stopped: '已停止',
+}
+
 export function statusLabel(channel: WorkChannel, run?: Run): string {
+  if (channel.workflow) return workflowLabels[channel.workflow.state]
   if (channel.status === 'cancelled') return '已归档'
+  if (run?.status === 'queued') return '进行中'
+  if (run?.status === 'cancelled') return '已归档'
   if (run) return runStatusLabel(run)
   return channel.status === 'completed' ? '已完成' : '等待中'
 }
@@ -832,11 +882,16 @@ export function runStatusLabel(run: Run): string {
     case 'waiting':
       return '等待中'
     case 'running':
-    case 'queued':
       return '进行中'
+    case 'queued':
+      return '排队中'
     case 'completed':
       return '已完成'
     case 'cancelled':
-      return '已归档'
+      return run.lastError === 'stopped_by_user'
+        ? '已停止'
+        : run.lastError?.startsWith('superseded')
+          ? '已替换'
+          : '已取消'
   }
 }

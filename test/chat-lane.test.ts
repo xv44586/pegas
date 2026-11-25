@@ -461,6 +461,56 @@ describe('EXEC-005 conversation lane', () => {
     }
   })
 
+  it('explains a work delivery in a read-only Run while its Task stays completed', async () => {
+    const store = new PegasStore(':memory:')
+    try {
+      initializeSettings(store, false)
+      const router = new RuleBasedTaskRouter()
+      await routeText(store, router, 'Prepare the budget')
+      const work = store.claimNextRun('work')
+      if (!work) throw new Error('Expected work Run')
+      store.completeRun(work.run.id, 'work', {
+        executorRef: 'writable-work-session',
+        output: 'The budget includes a reserve.',
+      })
+      const result = store.listOutbox('owner', work.task.id)[0]
+      if (!result) throw new Error('Expected work delivery')
+      store.enqueueEvent({
+        userId: 'owner',
+        type: 'user.message',
+        authenticatedActor: 'human',
+        source: 'web',
+        payload: {
+          text: 'Explain the reserve',
+          replyToMessageId: result.id,
+          intent: 'explain',
+        },
+      })
+      await processNextEvent(
+        store,
+        new RoutingEventHandler(router, 'echo-test'),
+        'router',
+      )
+      const explanation = store.claimNextRun(
+        'explain',
+        30_000,
+        undefined,
+        'conversation',
+      )
+      if (!explanation) throw new Error('Expected the explanation Run')
+      expect(explanation.run.executionContext.protocol).toBe('conversation-v1')
+      expect(explanation.run.executionContext.permissions).toContain(
+        'read-only',
+      )
+      expect(explanation.run.resumeFromRef).toBeUndefined()
+      expect(explanation.run.input).toContain('The budget includes a reserve.')
+      expect(store.findTask(work.task.id, 'owner')?.status).toBe('completed')
+      expect(store.listRuns(work.task.id)).toHaveLength(1)
+    } finally {
+      store.close()
+    }
+  })
+
   it('replays a quoted follow-up merged into a queued work Run only once', async () => {
     const store = new PegasStore(':memory:')
     try {

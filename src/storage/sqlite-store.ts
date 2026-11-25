@@ -14,6 +14,7 @@ import {
   projectWorkChannel,
   type ChannelSearchOptions,
   type ChannelSearchResult,
+  type WorkChannel,
 } from '../channel/work-channel.js'
 import {
   collaborationRequestFingerprint,
@@ -332,7 +333,7 @@ const maximumCollaborationsPerRoot = 32
 const maximumCollaborationDepth = 4
 const maximumPendingContextNotesPerTarget = 4
 const maximumActiveCollaborationsPerOwner = 64
-const currentInboxContractVersion = 3
+const currentInboxContractVersion = 4
 
 const migration20 = `
 CREATE TABLE automations (
@@ -8213,12 +8214,16 @@ export class PegasStore {
   enqueueEvent(input: NewInboxEvent): { event: InboxEvent; inserted: boolean } {
     const id = input.id ?? randomUUID()
     const createdAt = this.#clock.now().toISOString()
+    const reference =
+      input.type === 'user.message' ? replyReference(input.payload) : undefined
     const requiredContractVersion =
-      input.type === 'user.message' && replyReference(input.payload)
-        ? 3
-        : input.source === 'collaboration'
-          ? 2
-          : 1
+      reference?.mode === 'explain'
+        ? 4
+        : reference
+          ? 3
+          : input.source === 'collaboration'
+            ? 2
+            : 1
     const result = this.#database
       .prepare(
         `INSERT OR IGNORE INTO inbox_events
@@ -9068,7 +9073,8 @@ export class PegasStore {
       if (decision.kind === 'create_task' || decision.kind === 'reply') {
         if (
           decision.kind === 'reply' &&
-          !this.getRuntimeSettings().chatLaneEnabled
+          !this.getRuntimeSettings().chatLaneEnabled &&
+          replyReference(event.payload)?.mode !== 'explain'
         ) {
           throw new Error('Reply routing requires the chat lane to be enabled')
         }
@@ -9727,23 +9733,23 @@ export class PegasStore {
     return rows.map(row => toTask(row as unknown as TaskRow))
   }
 
-  runRepliesToMessage(runId: string): boolean {
+  runReplyMode(runId: string): 'continue' | 'explain' | undefined {
     const eventId = this.resolveRunInputEventId(runId)
-    return (
-      eventId !== undefined &&
-      replyReference(this.#eventById(eventId).payload) !== undefined
-    )
+    return eventId
+      ? replyReference(this.#eventById(eventId).payload)?.mode
+      : undefined
   }
 
   conversationReply(
-    messageId: string,
+    reference: NonNullable<ReturnType<typeof replyReference>>,
     userId: string,
   ): { taskId: string; text: string; runId?: string } {
+    const messageId = reference.id
     const reply = quotableAgentReply(this.#outboxForUser(messageId, userId))
     if (!reply) throw new Error('This message is unavailable for follow-up')
     const task = this.findTask(reply.taskId, userId)
     if (!task) throw new OutboxNotFoundError('Outbox message not found')
-    if (task.status === 'cancelled')
+    if (task.status === 'cancelled' && reference.mode !== 'explain')
       throw new Error('Task was stopped by the user')
     return reply
   }
@@ -9767,6 +9773,70 @@ export class PegasStore {
            updated_at = excluded.updated_at`,
       )
       .run(userId, executorRef, this.#clock.now().toISOString())
+  }
+
+  projectWorkChannel(task: Task): WorkChannel {
+    const facts = this.#database
+      .prepare(
+        `WITH latest_run AS (
+           SELECT id, status, goal_revision FROM runs
+           WHERE task_id = $task ORDER BY created_at DESC, rowid DESC LIMIT 1
+         ), pending_approval AS (
+           SELECT id FROM approvals WHERE task_id = $task AND status = 'pending'
+           ORDER BY created_at DESC, rowid DESC LIMIT 1
+         ), reconciliation AS (
+           SELECT id FROM actions WHERE task_id = $task AND protocol_version = 1
+             AND status IN ('failed','unknown')
+           ORDER BY (status = 'unknown') DESC, updated_at DESC, rowid DESC LIMIT 1
+         )
+         SELECT
+           (SELECT status FROM runs WHERE task_id = $task AND status IN ('queued','running')
+            ORDER BY (status = 'running') DESC, created_at DESC, rowid DESC LIMIT 1) AS active,
+           (SELECT id FROM latest_run) AS lastRunId,
+           (SELECT status FROM latest_run) AS lastRunStatus,
+           (SELECT id FROM pending_approval) AS pendingApproval,
+           (SELECT id FROM reconciliation) AS reconciliation,
+           (SELECT id FROM outbox_messages
+            WHERE user_id = $owner AND task_id = $task AND channel = 'conversation'
+              AND status <> 'merged' AND json_valid(payload_json)
+              AND CASE
+                WHEN EXISTS (SELECT 1 FROM reconciliation) THEN
+                  json_extract(payload_json, '$.actionId') = (SELECT id FROM reconciliation)
+                  AND json_extract(payload_json, '$.type') IN ('action.failed','action.outcome_unknown','action.reconciliation_required')
+                WHEN EXISTS (SELECT 1 FROM pending_approval) THEN
+                  json_extract(payload_json, '$.approvalId') = (SELECT id FROM pending_approval)
+                WHEN $reason IN ('awaiting_goal_clarification','awaiting_user_input','awaiting_evidence','blocked') THEN
+                  json_extract(payload_json, '$.type') IN ('goal.clarification_required','input.required','input.requested','run.waiting','goal.evidence_required','goal.report_required','run.blocked')
+                ELSE 0
+              END
+            ORDER BY created_at DESC, rowid DESC LIMIT 1) AS attentionMessageId,
+           (SELECT id FROM outbox_messages
+            WHERE user_id = $owner AND task_id = $task AND channel = 'conversation'
+              AND status <> 'merged' AND json_valid(payload_json)
+              AND json_extract(payload_json, '$.type') IN ('run.completed', 'review.ready')
+              AND json_extract(payload_json, '$.runId') = (SELECT id FROM latest_run)
+            ORDER BY created_at DESC, rowid DESC LIMIT 1) AS resultMessageId,
+           EXISTS (SELECT 1 FROM automations WHERE user_id = $owner AND status = 'active'
+             AND json_extract(target_json, '$.kind') = 'existing_task'
+             AND json_extract(target_json, '$.taskId') = $task) AS scheduled,
+           (
+             EXISTS (SELECT 1 FROM actions WHERE protocol_version = 1 AND (
+               (resume_run_id = (SELECT id FROM latest_run) AND status IN ('authorized','succeeded','failed','unknown'))
+               OR (task_id = $task AND status IN ('awaiting_approval','authorized','failed','unknown'))
+             ))
+             OR EXISTS (SELECT 1 FROM action_reconciliations JOIN actions ON actions.id = action_id
+               WHERE actions.task_id = $task AND action_reconciliations.resolution = 'failed')
+           ) AS retryBlocked`,
+      )
+      .get({
+        task: task.id,
+        owner: task.userId,
+        reason: task.statusReason ?? null,
+      })
+    return projectWorkChannel(
+      task,
+      facts as unknown as Parameters<typeof projectWorkChannel>[1],
+    )
   }
 
   searchChannels(
@@ -9872,7 +9942,7 @@ export class PegasStore {
       )
       .all(...params, options.limit + 1) as unknown as TaskRow[]
     const pageRows = rows.slice(0, options.limit)
-    const channels = pageRows.map(row => projectWorkChannel(toTask(row)))
+    const channels = pageRows.map(row => this.projectWorkChannel(toTask(row)))
     const nextCursor =
       rows.length > options.limit ? pageRows.at(-1)?.id : undefined
     return {

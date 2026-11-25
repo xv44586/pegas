@@ -206,6 +206,21 @@ describe('TASK-001 Task/Run state machine', () => {
     expect(store.listRuns(taskId)[0]?.status).toBe('waiting')
     expect(store.findTask(taskId, 'owner')?.status).toBe('started')
 
+    const task = store.findTask(taskId, 'owner')
+    if (!task) throw new Error('Expected the work Task')
+    const approvalMessage = store
+      .listOutbox('owner', taskId)
+      .find(
+        message =>
+          (message.payload as { approvalId?: string }).approvalId ===
+          approval.id,
+      )
+    expect(approvalMessage).toBeDefined()
+    expect(store.projectWorkChannel(task).workflow).toEqual({
+      state: 'awaiting_approval',
+      attentionMessageId: approvalMessage?.id,
+    })
+
     const decided = store.decideApproval(approval.id, 'owner', {
       commandId: 'decision-1',
       optionId: 'approve',
