@@ -59,6 +59,18 @@
 
 ## Lessons
 
+### LESSON-20261125-09：一次性授权与停放输入必须有确定性的结算路径
+
+- Rule：任何把用户输入停放在「等待动作结算」上的机制，必须保证每个被等待的状态都有确定性的结算出口。一次性授权在恢复执行结束仍未消费时按未执行结算；已记录 failed 结局的动作不再拦新输入；审批 API 的持久 4xx 只拒绝单次调用。新增 Pegas 注册工具时，策略门分级合同必须同步覆盖（自动检查注册面全员工具都有非 unknown 分级）。
+- Why：桌面运行实例中 `search_history`（Pegas 自注册只读工具）被策略门误判 unknown→人工审批；批准后会话重放换了 callId 与参数，一次性授权失配后无人结算，Action 停在 authorized，两条用户消息被哨兵 lease 永久停放（用户看到「处理中」超过 8 分钟且无审批卡）；恢复 Run 里下一个审批请求被 400 拒绝又被桥当致命错误，整个 Run 失败、Action fence 成 unknown，只能人工核对解锁。
+- Feature：APPROVAL-001
+- Evidence：2026-11-25 桌面实例 `exec-007-488027fc-r1` 的 inbox_events（`blocked_by_action:authorized` + `9999-12-31` lease）、policy_call_audit（重试 call 无 action_id）、runs.last_error（`Approval bridge failed to request: Pegas API returned 400`）与 DSH session 日志（批准 callId 与重放 callId 不同、参数被改写）。回归：`test/policy-gate.test.ts` 注册面分级合同、`test/dsh-approval-bridge.test.ts` 未消费 grant 结算与持久 400 不杀 Run、`test/approval.test.ts` 幂等回放，全部先红后绿。
+- Seen：1（2026-11-25）
+- Severity：recovery
+- Status：Promoted
+- Enforcement：上述回归纳入 `pnpm check`；`#blockingActionForInput` 与 `#wakeBlockedTaskEvents` 在存储层保证已记录 failed 结局不产生永久停放；桥 `agent/status` idle 钩子保证未消费授权确定性结算。
+- Owner / next action：APPROVAL-001。新增执行面工具或授权形态时，先补分级合同与结算出口再上线。
+
 ### LESSON-20261125-08：凭证契约要在真实模型请求上验证
 
 - Rule：验收执行模型接入时，目录读取和 patch 形状只能作为前置检查。用真实 DSH 请求回环网关，验证无 Key、已有 Key 和缺少必需 Key 的分支，断言真正发出的请求或在出站前阻断。

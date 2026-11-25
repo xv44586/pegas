@@ -13,6 +13,11 @@ const READ_TOOLS = new Set([
   'grep',
   'web_search',
   'web_fetch',
+  'working_directory',
+  'search_history',
+  'read_history',
+  'pegas_tasks',
+  'pegas_memories',
 ])
 const WRITE_TOOLS = new Set(['write', 'edit'])
 

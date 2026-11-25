@@ -274,6 +274,225 @@ describe('DSH approval bridge plugin', () => {
     }
   })
 
+  it('settles an unconsumed one-time grant as failed when the resumed run never replays the call', async () => {
+    const store = new PegasStore(':memory:')
+    const claimed = createClaimedRun(store, 'owner', 'worker-drift')
+    const requested = store.requestApproval(
+      claimed.run.id,
+      claimed.claimToken,
+      {
+        kind: 'dsh.tool.search_history',
+        risk: 'high',
+        idempotencyKey: 'dsh-tool:drift-1',
+        request: {
+          tool: 'search_history',
+          callId: 'call-original',
+          reason: '无法静态判定工具 search_history 的实际效果，需要你确认。',
+          argumentsHash: stableHash({ query: 'pegas 语音输入', limit: 10 }),
+        },
+        recoveryPoint: { step: 'before_tool_call' },
+        approval: {
+          summary: '批准工具 search_history 越权执行一次',
+          impact: '一次越权调用',
+          recommendedOptionId: 'approve',
+          options: [
+            { id: 'approve', label: '批准', kind: 'approve' },
+            { id: 'reject', label: '拒绝', kind: 'reject' },
+          ],
+        },
+      },
+    )
+    store.decideApproval(requested.approval.id, 'owner', {
+      commandId: 'drift-approve',
+      optionId: 'approve',
+    })
+    const route = () =>
+      Promise.resolve({
+        kind: 'continue_task' as const,
+        taskId: claimed.task.id,
+        input: '再调研一下tts/stt，我想要集成到pegas',
+        reason: 'test parked continuation',
+      })
+    const handler = new RoutingEventHandler({ route }, 'echo')
+    expect(await processNextEvent(store, handler, 'event-drift-decided')).toBe(
+      true,
+    )
+    const continuation = store.enqueueEvent({
+      userId: 'owner',
+      type: 'user.message',
+      source: 'test',
+      payload: { text: '再调研一下tts/stt，我想要集成到pegas' },
+    }).event
+    expect(await processNextEvent(store, handler, 'event-drift')).toBe(true)
+    expect(
+      store.listEvents('owner').find(event => event.id === continuation.id),
+    ).toMatchObject({
+      status: 'processing',
+      lastError: 'blocked_by_action:authorized',
+    })
+
+    const resumed = store.claimNextRun('worker-drift-resumed')
+    if (!resumed) throw new Error('Expected approved successor Run')
+    const command = fakeDsh(`
+console.log(JSON.stringify({ type: 'session', sessionId: 'session-drift' }))
+console.log(JSON.stringify({
+  type: 'tool_call', callId: 'call-replayed', tool: 'search_history'
+}))
+console.log(JSON.stringify({
+  type: 'tool_result', callId: 'call-replayed', status: 'error'
+}))
+console.log(JSON.stringify({
+  type: 'final', sessionId: 'session-drift',
+  text: '批准的调用没有按原参数重放，我改用其他方式继续。',
+  reason: { kind: 'completed' }
+}))
+`)
+    const executor = new DshCliExecutor({ command, approvalPolicy: 'ask' })
+    const server = createControlPlane({ store, apiToken: 'loop-test' })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const baseUrl = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+    try {
+      const previous = { ...process.env }
+      process.env.PEGAS_APPROVAL_BRIDGE = '1'
+      process.env.PEGAS_CONTROL_PLANE_URL = baseUrl
+      process.env.PEGAS_RUN_ID = resumed.run.id
+      process.env.PEGAS_RUN_CLAIM_TOKEN = resumed.claimToken
+      const bridge = await loadBridge()
+      const ctx = bridgeContext()
+      bridge.apply(ctx, {
+        grant: {
+          actionId: requested.action.id,
+          tool: 'search_history',
+          argumentsHash: stableHash({ query: 'pegas 语音输入', limit: 10 }),
+        },
+        emit: () => undefined,
+      })
+      const preExecute = ctx.handlers.get('tools/pre-execute')
+      const approvalRequest = ctx.handlers.get('approval/request')
+      const agentStatus = ctx.handlers.get('agent/status')
+      if (!preExecute || !approvalRequest || !agentStatus) {
+        throw new Error('bridge did not register its hooks')
+      }
+      const replayed = {
+        callId: 'call-replayed',
+        name: 'search_history',
+        arguments: { query: 'pegas 架构 客户端', limit: 10 },
+      }
+      await preExecute(replayed, () => Promise.resolve({ kind: 'allow' }))
+      const decision = await approvalRequest(
+        { toolName: 'search_history', callId: 'call-replayed' },
+        () => Promise.resolve('unavailable'),
+      )
+      expect(decision).toBe('rejected')
+      await executeClaimedRun(
+        store,
+        executor,
+        resumed,
+        'worker-drift-resumed',
+        process.cwd(),
+        new AbortController().signal,
+        baseUrl,
+      )
+      await agentStatus({ status: 'idle' })
+      restoreEnvironment(previous)
+    } finally {
+      await new Promise<void>(resolve => server.close(() => resolve()))
+    }
+    const action = store.getAction(requested.action.id, 'owner')
+    expect(action).toMatchObject({ status: 'failed' })
+    expect(
+      store.listEvents('owner').find(event => event.id === continuation.id),
+    ).toMatchObject({ status: 'pending' })
+    expect(await processNextEvent(store, handler, 'event-drift')).toBe(true)
+    expect(
+      store.listEvents('owner').find(event => event.id === continuation.id),
+    ).toMatchObject({ status: 'processed' })
+    store.close()
+  })
+
+  it('keeps the run alive when the approval API durably rejects a new request', async () => {
+    const store = new PegasStore(':memory:')
+    const claimed = createClaimedRun(store, 'owner', 'worker-reject-api')
+    const first = store.requestApproval(claimed.run.id, claimed.claimToken, {
+      kind: 'dsh.tool.bash',
+      risk: 'high',
+      idempotencyKey: 'dsh-tool:reject-api-1',
+      request: {
+        tool: 'bash',
+        callId: 'call-first',
+        reason: 'escalate sandbox',
+        argumentsHash: stableHash({ command: 'echo one' }),
+      },
+      recoveryPoint: { step: 'before_tool_call' },
+      approval: {
+        summary: '批准 bash',
+        impact: '一次越权命令',
+        recommendedOptionId: 'approve',
+        options: [
+          { id: 'approve', label: '批准', kind: 'approve' },
+          { id: 'reject', label: '拒绝', kind: 'reject' },
+        ],
+      },
+    })
+    store.decideApproval(first.approval.id, 'owner', {
+      commandId: 'reject-api-approve',
+      optionId: 'approve',
+    })
+    const resumed = store.claimNextRun('worker-reject-api-resumed')
+    if (!resumed) throw new Error('Expected approved successor Run')
+    const server = createControlPlane({ store, apiToken: 'loop-test' })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const baseUrl = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+    const previous = { ...process.env }
+    process.env.PEGAS_APPROVAL_BRIDGE = '1'
+    process.env.PEGAS_CONTROL_PLANE_URL = baseUrl
+    process.env.PEGAS_RUN_ID = resumed.run.id
+    process.env.PEGAS_RUN_CLAIM_TOKEN = resumed.claimToken
+    try {
+      const bridge = await loadBridge()
+      const ctx = bridgeContext()
+      const events: Record<string, unknown>[] = []
+      bridge.apply(ctx, {
+        emit: (event: unknown) => events.push(event as Record<string, unknown>),
+      })
+      const preExecute = ctx.handlers.get('tools/pre-execute')
+      const approvalRequest = ctx.handlers.get('approval/request')
+      if (!preExecute || !approvalRequest) {
+        throw new Error('bridge did not register its hooks')
+      }
+      const exec = {
+        callId: 'call-second',
+        name: 'bash',
+        arguments: { command: 'chmod 777 /outside' },
+      }
+      await preExecute(exec, () => Promise.resolve({ kind: 'allow' }))
+      const outcome = await approvalRequest(
+        { toolName: 'bash', callId: 'call-second' },
+        () => Promise.resolve('unavailable'),
+      )
+      expect(outcome).toBe('rejected')
+      expect(
+        events.filter(event => event.type === 'approval_bridge_error'),
+      ).toEqual([])
+      const rejected = events.filter(
+        event => event.type === 'approval_request_rejected',
+      )
+      expect(rejected).toHaveLength(1)
+      expect(rejected[0]).toMatchObject({
+        callId: 'call-second',
+        message: 'Pegas API returned 400',
+      })
+      expect(store.pageApprovals('owner', 10).items).toHaveLength(1)
+      expect(store.getAction(first.action.id, 'owner')).toMatchObject({
+        status: 'authorized',
+      })
+    } finally {
+      restoreEnvironment(previous)
+      await new Promise<void>(resolve => server.close(() => resolve()))
+      store.close()
+    }
+  })
+
   it('records a failed outcome when the granted tool call fails', async () => {
     const store = new PegasStore(':memory:')
     const claimed = createClaimedRun(store, 'owner', 'worker-failed')

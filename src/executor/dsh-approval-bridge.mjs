@@ -48,8 +48,43 @@ export function apply(ctx, config = {}) {
   const reviewedCalls = new Map()
   /** @type {Map<string, ReviewOutcome>} */
   const reviewOutcomes = new Map()
+  /** @type {Set<string>} */
+  const parkedCallKeys = new Set()
+  /** @type {Set<string>} */
+  const rejectedCallKeys = new Set()
   let grantConsumed = false
+  let grantSettled = false
   let parked = false
+
+  /**
+   * APPROVAL-001: a one-time grant that the resumed session never replays
+   * (the model rephrased the call or moved on) must not stay authorized
+   * forever. The call demonstrably never executed under this grant, so the
+   * bridge settles it as failed with an auditable reason; parked follow-ups
+   * wake and new Approvals become possible again.
+   *
+   * @param {string} reason
+   */
+  const settleUnconsumedGrant = async reason => {
+    if (!grant || grantConsumed || grantSettled || !capability) return
+    grantSettled = true
+    try {
+      await recordGrantFailure(capability, grant, reason)
+      emit({
+        type: 'approval_grant_settled',
+        actionId: grant.actionId,
+        tool: grant.tool,
+        reason,
+      })
+    } catch (error) {
+      emit({
+        type: 'approval_bridge_error',
+        stage: 'outcome',
+        actionId: grant.actionId,
+        message: errorMessage(error),
+      })
+    }
+  }
 
   const controlPlaneGuard =
     /** @param {ToolExecution} exec */
@@ -134,6 +169,16 @@ export function apply(ctx, config = {}) {
             targets: classification.targets,
           })
           return next()
+        }
+        if (
+          grant &&
+          !grantConsumed &&
+          classification.category !== 'control-plane-mutation' &&
+          exec.name === grant.tool
+        ) {
+          await settleUnconsumedGrant(
+            '恢复执行以不同参数重新发起了同名工具调用，原批准的一次性调用未执行。',
+          )
         }
         const reviewedActionId = reviewedCalls.get(callKey)
         if (
@@ -354,14 +399,27 @@ export function apply(ctx, config = {}) {
             reviewOutcome,
             policy,
           )
-          if (pending) parked = true
+          if (pending) {
+            parked = true
+            parkedCallKeys.add(callKey)
+          }
         } catch (error) {
-          emit({
-            type: 'approval_bridge_error',
-            stage: 'request',
-            callId: callKey,
-            message: errorMessage(error),
-          })
+          if (isDurableRejection(error)) rejectedCallKeys.add(callKey)
+          emit(
+            isDurableRejection(error)
+              ? {
+                  type: 'approval_request_rejected',
+                  callId: callKey,
+                  tool: exec.name,
+                  message: errorMessage(error),
+                }
+              : {
+                  type: 'approval_bridge_error',
+                  stage: 'request',
+                  callId: callKey,
+                  message: errorMessage(error),
+                },
+          )
         }
         return { kind: 'deny', reason: askReason }
       }
@@ -421,7 +479,6 @@ export function apply(ctx, config = {}) {
         callKey === undefined ? undefined : gateDecisions.get(callKey)
       if (classification?.category === 'control-plane-mutation') {
         if (!capability || callKey === undefined || parked) return 'rejected'
-        parked = true
         try {
           const pending = await parkCall(
             capability,
@@ -434,14 +491,24 @@ export function apply(ctx, config = {}) {
             undefined,
             policy,
           )
-          if (!pending) parked = false
+          if (pending) parkedCallKeys.add(callKey)
+          if (pending) parked = true
         } catch (error) {
-          emit({
-            type: 'approval_bridge_error',
-            stage: 'request',
-            callId: callKey,
-            message: errorMessage(error),
-          })
+          emit(
+            isDurableRejection(error)
+              ? {
+                  type: 'approval_request_rejected',
+                  callId: callKey,
+                  tool: request.toolName,
+                  message: errorMessage(error),
+                }
+              : {
+                  type: 'approval_bridge_error',
+                  stage: 'request',
+                  callId: callKey,
+                  message: errorMessage(error),
+                },
+          )
         }
         return 'rejected'
       }
@@ -461,6 +528,9 @@ export function apply(ctx, config = {}) {
       }
       if (callKey !== undefined && reviewedCalls.has(callKey)) {
         return 'allowed-once'
+      }
+      if (callKey !== undefined && rejectedCallKeys.has(callKey)) {
+        return 'rejected'
       }
       if (callKey !== undefined && classification !== undefined) {
         const tierState = gateTiers.get(callKey)
@@ -484,7 +554,6 @@ export function apply(ctx, config = {}) {
         if (classification?.action === 'ask') return 'rejected'
         return next()
       }
-      parked = true
       const reason = request.reason ?? `工具 ${request.toolName} 请求越权执行`
       try {
         const seamReview = reviewOutcomes.get(callKey)
@@ -502,14 +571,24 @@ export function apply(ctx, config = {}) {
           seamReview,
           policy,
         )
-        if (!pending) parked = false
+        if (pending) parkedCallKeys.add(callKey)
+        if (pending) parked = true
       } catch (error) {
-        emit({
-          type: 'approval_bridge_error',
-          stage: 'request',
-          callId: callKey,
-          message: errorMessage(error),
-        })
+        emit(
+          isDurableRejection(error)
+            ? {
+                type: 'approval_request_rejected',
+                callId: callKey,
+                tool: request.toolName,
+                message: errorMessage(error),
+              }
+            : {
+                type: 'approval_bridge_error',
+                stage: 'request',
+                callId: callKey,
+                message: errorMessage(error),
+              },
+        )
       }
       return 'rejected'
     },
@@ -544,6 +623,21 @@ export function apply(ctx, config = {}) {
         }
       }
       return decision
+    },
+  )
+
+  ctx.on(
+    'agent/status',
+    /** @param {{ status: string }} payload */
+    async payload => {
+      if (payload.status !== 'idle') return
+      // The turn ended while a call is parked: the durable Approval owns
+      // the wait and the successor resumes the session. Only an idle exit
+      // with nothing parked proves the granted call never ran.
+      if (parkedCallKeys.size > 0) return
+      await settleUnconsumedGrant(
+        '恢复执行已结束，批准的一次性调用未按原参数执行。',
+      )
     },
   )
 }
@@ -1344,6 +1438,22 @@ async function recordOutcome(capability, actionId, exec, failed) {
 
 /**
  * @param {BridgeCapability} capability
+ * @param {ToolGrant} grant
+ * @param {string} reason
+ */
+async function recordGrantFailure(capability, grant, reason) {
+  await post(capability, `/v1/actions/${grant.actionId}/outcomes`, {
+    commandId: `dsh-tool-outcome:${grant.actionId}`,
+    status: 'failed',
+    result: {
+      tool: grant.tool,
+      summary: reason,
+    },
+  })
+}
+
+/**
+ * @param {BridgeCapability} capability
  * @param {string} path
  * @param {unknown} payload
  * @returns {Promise<unknown>}
@@ -1364,13 +1474,37 @@ async function post(capability, path, payload) {
         signal: AbortSignal.timeout(10_000),
       })
       if (!response.ok) {
-        throw new Error(`Pegas API returned ${String(response.status)}`)
+        const detail = await response.text().catch(() => '')
+        const error =
+          /** @type {Error & { status: number, detail: string }} */ (
+            new Error(`Pegas API returned ${String(response.status)}`)
+          )
+        error.status = response.status
+        error.detail = detail.slice(0, 2_000)
+        throw error
       }
       /** @type {unknown} */
       const parsed = await response.json()
       return parsed
     } catch (error) {
       lastError = error
+      const status =
+        error instanceof Error && 'status' in error
+          ? /** @type {number} */ (
+              /** @type {Error & { status: number }} */ (error).status
+            )
+          : undefined
+      // A 4xx other than 408/429 is a durable rejection; retrying the same
+      // body cannot change the answer.
+      if (
+        status !== undefined &&
+        status >= 400 &&
+        status < 500 &&
+        status !== 408 &&
+        status !== 429
+      ) {
+        break
+      }
     }
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError))
@@ -1598,4 +1732,21 @@ function isRecordOrAbsent(value) {
 /** @param {unknown} error */
 function errorMessage(error) {
   return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * A durable 4xx from the approval API means the request itself was
+ * rejected (for example an earlier authorized Action still needs its
+ * outcome). The single call stays denied, but the Run must not die: the
+ * parked input and the pending decision remain the recovery path.
+ *
+ * @param {unknown} error
+ * @returns {boolean}
+ */
+function isDurableRejection(error) {
+  if (!(error instanceof Error) || !('status' in error)) return false
+  const status = /** @type {number} */ (
+    /** @type {Error & { status: number }} */ (error).status
+  )
+  return status >= 400 && status < 500 && status !== 408 && status !== 429
 }
