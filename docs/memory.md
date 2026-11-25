@@ -304,6 +304,22 @@ Local Provider 只替换 `DerivedMemoryProvider` 的实现。durable job、幂�
 
 存在有效 local 派生记忆时，回滚到 <v53 的 Release 被 Guard 拒绝；全部失效后放行。Provider 开关本身是运行时回滚入口：`disabled` 回显式层，`hindsight` 回 M1 路径。
 
-### 当前缺口（M2 后续步骤）
+## M3：合并窗口与隐式项目（2026-11-25）
 
-合并窗口（同项目多 job 攒批一次调用）、读侧相关性门与 L0 项目摘要、project 作用域与身份解析链、Executor 历史检索工具。真实模型蒸馏质量与限流 canary 未评测。
+### 隐式项目身份
+
+用户不需要显式区分项目。`src/memory/project-identity.ts` 提供写入与召回共用的身份解析链：git `--git-common-dir` 折叠 linked worktree 到主仓 → 规范化 `origin` remote URL（scp/https/ssh、去凭证、去 `.git`、小写 host）优先作为 canonical key → 无 git 用 realpath → EXEC-008 默认工作区判「无项目」。Run settle 时在证据同事务内解析并登记 `memory_projects`（owner + canonical_key 唯一）；召回只读解析，不创建项目。
+
+### project 作用域
+
+- schema v54 纯增量：`memory_projects`、`local_derived_memories.project_key`、`derived_memory_jobs.project_key`、`derived_memory_tombstone_sources`（批量事实的多来源 Run 压制）。
+- 项目内蒸馏的事实强制 project scope：即使模型标 global 也不进全局银行；无项目工作保留 global 候选。project 事实带 `pegas:project:<HMAC(canonical_key)>` tag，linked worktree / 重新 clone（同 remote）召回命中；跨项目候选在 SQL 层就被 project 列过滤，不进入模型。
+- 删除批量事实时 tombstone 绑定全部贡献 Run（`source_run_ids`），任一成员 Run 重蒸馏都被压制。
+
+### 合并窗口（写侧限流兜底）
+
+同 owner + project + kind 的未提交 retain job 攒批：60s 窗口或 5 个 job 先到先触发，一次有界模型调用蒸馏整批（证据拼接 ≤12k 字符）。每个 job 保留独立 durable 行、重试预算与完成记录；批内传输失败逐成员指数退避（MODEL-001 通道内 429 退避仍生效），operation 终态一次收敛全部成员。无项目 job 保持 M2 即时路径。高事务量下模型调用数收敛为每项目每窗口一次。
+
+### 当前缺口（M4+）
+
+读侧相关性门与 L0 项目摘要、salience 生命周期、Executor 历史检索工具。真实模型蒸馏质量与限流 canary 未评测。

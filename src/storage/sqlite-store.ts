@@ -7,6 +7,10 @@ import { systemClock, type Clock } from '../core/clock.js'
 import { assignWorkerIconId, isWorkerIconId } from '../brand/agent-icon.js'
 import { DeterministicPrivacyMasker } from '../privacy/masker.js'
 import {
+  resolveProjectIdentity,
+  type ProjectIdentity,
+} from '../memory/project-identity.js'
+import {
   projectWorkChannel,
   type ChannelSearchOptions,
   type ChannelSearchResult,
@@ -312,6 +316,15 @@ const schemaInitializationAttempts = 3
 const schemaRetryDelayMs = 100
 const workerProfileCommandRetention = 256
 const maximumActiveChildCollaborations = 8
+
+/**
+ * MEMORY-001 M3 coalescing window: sibling retain jobs of the same owner +
+ * project + kind wait up to this long (or until enough accumulate) so one
+ * bounded model call distills them together. Busy projects converge to one
+ * call per window instead of one call per Run.
+ */
+const DERIVED_MEMORY_COALESCE_WINDOW_MS = 60_000
+const DERIVED_MEMORY_COALESCE_MAX_JOBS = 5
 const maximumCollaborationsPerRun = 32
 const maximumCollaborationsPerRoot = 32
 const maximumCollaborationDepth = 4
@@ -1158,6 +1171,38 @@ CREATE TABLE memory_usage_records (
 );
 CREATE INDEX memory_usage_records_by_user
 ON memory_usage_records (user_id, observed_at DESC);
+`
+
+const migration54 = `
+-- MEMORY-001 M3: implicit project identity. One row per (owner, canonical
+-- key); the key comes from the shared resolution chain (git remote > git
+-- common dir > realpath), so linked worktrees and fresh clones converge.
+-- The default workspace never creates a row.
+CREATE TABLE memory_projects (
+  user_id TEXT NOT NULL,
+  canonical_key TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, canonical_key)
+);
+
+ALTER TABLE local_derived_memories ADD COLUMN project_key TEXT;
+CREATE INDEX local_derived_memories_by_project
+ON local_derived_memories (user_id, project_key, updated_at DESC);
+
+-- Coalescing group for retain jobs: same owner + project + kind distills
+-- together in one bounded model call. NULL keeps project-less jobs apart.
+ALTER TABLE derived_memory_jobs ADD COLUMN project_key TEXT;
+
+-- Batch-distilled facts have several source Runs; deleting the fact must
+-- suppress re-distillation from every one of them, not just the anchor.
+CREATE TABLE derived_memory_tombstone_sources (
+  user_id TEXT NOT NULL,
+  memory_id TEXT NOT NULL,
+  source_run_id TEXT NOT NULL,
+  PRIMARY KEY (user_id, memory_id, source_run_id)
+);
 `
 
 const migration39 = `
@@ -2646,6 +2691,7 @@ interface DerivedMemoryJobRow {
   document_id: string
   content: string
   working_directory: string
+  project_key: string | null
   status: 'pending' | 'submitted' | 'processing'
   provider_operation_id: string | null
   attempts: number
@@ -2670,6 +2716,9 @@ interface LocalDerivedMemoryRow {
   tags_json: string
   metadata_json: string
   state: 'valid' | 'invalidated'
+  project_key: string | null
+  use_count: number
+  last_used_at: string | null
 }
 
 function toLocalDerivedMemory(row: LocalDerivedMemoryRow): DerivedMemory {
@@ -2680,6 +2729,7 @@ function toLocalDerivedMemory(row: LocalDerivedMemoryRow): DerivedMemory {
     tags: JSON.parse(row.tags_json) as string[],
     metadata: JSON.parse(row.metadata_json) as Record<string, unknown>,
     state: row.state,
+    ...(row.project_key ? { projectKey: row.project_key } : {}),
   }
 }
 
@@ -3268,6 +3318,7 @@ export class PegasStore {
   readonly #routingClarificationTtlMs: number
   readonly #attachmentRoot: string | undefined
   readonly #derivedMemoryEnabled: boolean
+  readonly #defaultWorkspaceRoot: string | undefined
   #transactionDepth = 0
 
   constructor(
@@ -3276,11 +3327,13 @@ export class PegasStore {
       clock?: Clock
       routingClarificationTtlMs?: number
       derivedMemoryEnabled?: boolean
+      defaultWorkspaceRoot?: string
     } = {},
   ) {
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true })
     this.#clock = options.clock ?? systemClock
     this.#derivedMemoryEnabled = options.derivedMemoryEnabled === true
+    this.#defaultWorkspaceRoot = options.defaultWorkspaceRoot
     this.#routingClarificationTtlMs =
       options.routingClarificationTtlMs ?? 72 * 60 * 60 * 1000
     if (
@@ -3354,6 +3407,7 @@ export class PegasStore {
     this.#migrate(51, migration51)
     this.#migrate(52, migration52)
     this.#migrate(53, migration53)
+    this.#migrate(54, migration54)
   }
 
   #backfillWorkerIconIds(): void {
@@ -5209,6 +5263,36 @@ export class PegasStore {
         this.#database.exec('COMMIT')
         return undefined
       }
+      // M3 coalescing window: an unsubmitted project job waits briefly so
+      // sibling Runs of the same project + kind distill in one model call.
+      // The window opens early when enough siblings accumulated or the
+      // oldest job aged out. Project-less jobs keep the M2 immediate path.
+      if (
+        row.status === 'pending' &&
+        !row.provider_operation_id &&
+        row.project_key
+      ) {
+        const group = this.#database
+          .prepare(
+            `SELECT COUNT(*) AS total, MIN(created_at) AS oldest
+             FROM derived_memory_jobs
+             WHERE user_id = ? AND project_key = ? AND kind = ?
+               AND status = 'pending' AND provider_operation_id IS NULL
+               AND (next_attempt_at IS NULL OR next_attempt_at <= ?)`,
+          )
+          .get(row.user_id, row.project_key, row.kind, nowIso) as {
+          total: number
+          oldest: string
+        }
+        const oldestAgeMs = now.getTime() - Date.parse(group.oldest)
+        if (
+          group.total < DERIVED_MEMORY_COALESCE_MAX_JOBS &&
+          oldestAgeMs < DERIVED_MEMORY_COALESCE_WINDOW_MS
+        ) {
+          this.#database.exec('COMMIT')
+          return undefined
+        }
+      }
       const claimed = this.#database
         .prepare(
           `UPDATE derived_memory_jobs
@@ -5613,6 +5697,135 @@ export class PegasStore {
       throw new Error(`Worker ${workerId} does not own memory job ${jobId}`)
   }
 
+  /**
+   * MEMORY-001 M3: after claiming the anchor job of a coalescing group,
+   * claim its due pending siblings (same owner + project + kind) under the
+   * same worker so one bounded model call distills the whole batch. Each
+   * sibling keeps its own durable row, retry budget and completion record.
+   */
+  claimDerivedMemoryJobSiblings(
+    anchor: DerivedMemoryJob,
+    workerId: string,
+    leaseMs: number,
+    maximum: number,
+  ): DerivedMemoryJob[] {
+    if (!anchor.projectKey || maximum < 1) return []
+    const now = this.#clock.now()
+    const nowIso = now.toISOString()
+    const leaseUntil = new Date(now.getTime() + leaseMs).toISOString()
+    this.#database.exec('BEGIN IMMEDIATE')
+    try {
+      const rows = this.#database
+        .prepare(
+          `SELECT * FROM derived_memory_jobs
+           WHERE user_id = ? AND project_key = ? AND kind = ?
+             AND status = 'pending' AND provider_operation_id IS NULL
+             AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+             AND id <> ?
+           ORDER BY created_at, id
+           LIMIT ?`,
+        )
+        .all(
+          anchor.userId,
+          anchor.projectKey,
+          anchor.kind,
+          nowIso,
+          anchor.id,
+          maximum,
+        ) as unknown as DerivedMemoryJobRow[]
+      const claimed: DerivedMemoryJob[] = []
+      const update = this.#database.prepare(
+        `UPDATE derived_memory_jobs
+         SET status = 'processing', claimed_by = ?, lease_until = ?,
+             attempts = attempts + 1, error_attempts = error_attempts + 1,
+             updated_at = ?
+         WHERE id = ? AND status = 'pending'`,
+      )
+      for (const row of rows) {
+        const result = update.run(workerId, leaseUntil, nowIso, row.id)
+        if (result.changes === 1) {
+          claimed.push(
+            toDerivedMemoryJob({
+              ...row,
+              attempts: row.attempts + 1,
+              error_attempts: row.error_attempts + 1,
+            }),
+          )
+        }
+      }
+      this.#database.exec('COMMIT')
+      return claimed
+    } catch (error) {
+      this.#database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  /**
+   * M3: settle every job sharing one provider operation together. A
+   * coalesced batch submits once under the anchor's operation ID; when the
+   * provider reports a terminal state, all members converge in one write.
+   */
+  completeDerivedMemoryOperation(userId: string, operationId: string): void {
+    const now = this.#clock.now().toISOString()
+    this.#database
+      .prepare(
+        `UPDATE derived_memory_jobs
+         SET status = 'completed', content = '', claimed_by = NULL,
+             lease_until = NULL, next_attempt_at = NULL, last_error = NULL,
+             completed_at = ?, updated_at = ?
+         WHERE user_id = ? AND provider_operation_id = ?
+           AND status IN ('submitted','processing')`,
+      )
+      .run(now, now, userId, operationId)
+  }
+
+  failDerivedMemoryOperation(
+    userId: string,
+    operationId: string,
+    error: string,
+  ): void {
+    this.#database
+      .prepare(
+        `UPDATE derived_memory_jobs
+         SET status = 'failed', claimed_by = NULL, lease_until = NULL,
+             next_attempt_at = NULL, last_error = ?, updated_at = ?
+         WHERE user_id = ? AND provider_operation_id = ?
+           AND status IN ('submitted','processing')`,
+      )
+      .run(
+        error.slice(0, 2_000),
+        this.#clock.now().toISOString(),
+        userId,
+        operationId,
+      )
+  }
+
+  retryDerivedMemoryOperation(
+    userId: string,
+    operationId: string,
+    error: string,
+    retryAfterMs: number,
+    options: { clearError?: boolean } = {},
+  ): void {
+    const now = this.#clock.now()
+    this.#database
+      .prepare(
+        `UPDATE derived_memory_jobs
+         SET status = 'submitted', claimed_by = NULL, lease_until = NULL,
+             next_attempt_at = ?, last_error = ?, updated_at = ?
+         WHERE user_id = ? AND provider_operation_id = ?
+           AND status IN ('submitted','processing')`,
+      )
+      .run(
+        new Date(now.getTime() + retryAfterMs).toISOString(),
+        options.clearError === true ? null : error.slice(0, 2_000),
+        now.toISOString(),
+        userId,
+        operationId,
+      )
+  }
+
   recordDerivedMemoryRecall(
     runId: string,
     userId: string,
@@ -5763,14 +5976,18 @@ export class PegasStore {
   // tombstones remain the deletion authority; these rows are provider-owned
   // facts and the FTS mirror is a rebuildable derived index.
 
-  insertLocalDerivedMemory(userId: string, memory: DerivedMemory): void {
+  insertLocalDerivedMemory(
+    userId: string,
+    memory: DerivedMemory,
+    projectKey?: string,
+  ): void {
     const now = this.#clock.now().toISOString()
     this.#database
       .prepare(
         `INSERT INTO local_derived_memories
           (user_id, memory_id, text, memory_type, tags_json, metadata_json,
-           state, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'valid', ?, ?)`,
+           state, project_key, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'valid', ?, ?, ?)`,
       )
       .run(
         userId,
@@ -5779,6 +5996,7 @@ export class PegasStore {
         memory.type,
         JSON.stringify(memory.tags),
         JSON.stringify(memory.metadata),
+        projectKey ?? null,
         now,
         now,
       )
@@ -5810,9 +6028,19 @@ export class PegasStore {
 
   searchLocalDerivedMemories(
     userId: string,
-    options: { query: string; limit: number },
+    options: { query: string; limit: number; projectKey?: string },
   ): DerivedMemory[] {
     const query = options.query.trim()
+    // M3: when the caller resolved a project, only that project's facts and
+    // project-less (global) facts are candidates. Cross-project candidates
+    // never reach the model; the service audit still records tag filtering.
+    const projectFilter = options.projectKey
+      ? 'AND (memory.project_key IS NULL OR memory.project_key = ?)'
+      : ''
+    const projectFilterPlain = options.projectKey
+      ? 'AND (project_key IS NULL OR project_key = ?)'
+      : ''
+    const projectArguments = options.projectKey ? [options.projectKey] : []
     const rows =
       Array.from(query).length >= 3
         ? (this.#database
@@ -5821,12 +6049,14 @@ export class PegasStore {
                JOIN local_derived_memory_search search
                  ON search.rowid = memory.rowid
                WHERE memory.user_id = ? AND memory.state = 'valid'
+                 ${projectFilter}
                  AND local_derived_memory_search MATCH ?
                ORDER BY bm25(local_derived_memory_search), memory.updated_at DESC
                LIMIT ?`,
             )
             .all(
               userId,
+              ...projectArguments,
               ftsTrigramQuery(query),
               options.limit,
             ) as unknown as LocalDerivedMemoryRow[])
@@ -5834,10 +6064,15 @@ export class PegasStore {
             .prepare(
               `SELECT * FROM local_derived_memories
                WHERE user_id = ? AND state = 'valid'
+               ${projectFilterPlain}
                ORDER BY updated_at DESC, memory_id
                LIMIT ?`,
             )
-            .all(userId, options.limit) as unknown as LocalDerivedMemoryRow[])
+            .all(
+              userId,
+              ...projectArguments,
+              options.limit,
+            ) as unknown as LocalDerivedMemoryRow[])
     return rows.map(row => toLocalDerivedMemory(row))
   }
 
@@ -6060,23 +6295,35 @@ export class PegasStore {
   }
 
   isDerivedMemorySuppressed(userId: string, memory: DerivedMemory): boolean {
+    const sourceRunIds = derivedMemorySourceRunIds(memory.metadata)
+    if (
+      this.#database
+        .prepare(
+          `SELECT 1 FROM derived_memory_tombstones
+           WHERE user_id = ? AND (memory_id = ? OR content_hash = ?)
+           LIMIT 1`,
+        )
+        .get(userId, memory.id, derivedMemoryContentHash(memory.text))
+    ) {
+      return true
+    }
+    if (sourceRunIds.length === 0) return false
+    const placeholders = sourceRunIds.map(() => '?').join(',')
     return Boolean(
       this.#database
         .prepare(
           `SELECT 1 FROM derived_memory_tombstones
-           WHERE user_id = ?
-             AND (memory_id = ? OR content_hash = ?
-               OR (source_run_id IS NOT NULL AND source_run_id = ?))
+           WHERE user_id = ? AND source_run_id IN (${placeholders})
            LIMIT 1`,
         )
-        .get(
-          userId,
-          memory.id,
-          derivedMemoryContentHash(memory.text),
-          typeof memory.metadata.run_id === 'string'
-            ? memory.metadata.run_id
-            : null,
-        ),
+        .get(userId, ...sourceRunIds) ??
+      this.#database
+        .prepare(
+          `SELECT 1 FROM derived_memory_tombstone_sources
+             WHERE user_id = ? AND source_run_id IN (${placeholders})
+             LIMIT 1`,
+        )
+        .get(userId, ...sourceRunIds),
     )
   }
 
@@ -6135,6 +6382,21 @@ export class PegasStore {
           memory ? derivedMemoryContentHash(memory.text) : null,
           sourceRunId,
         )
+      // M3: a coalesced fact has several contributing Runs; bind them all
+      // so re-distillation from any sibling Run stays suppressed.
+      if (memory) {
+        const insertSource = this.#database.prepare(
+          `INSERT INTO derived_memory_tombstone_sources
+            (user_id, memory_id, source_run_id)
+           VALUES (?, ?, ?)
+           ON CONFLICT(user_id, memory_id, source_run_id) DO NOTHING`,
+        )
+        for (const runId of derivedMemorySourceRunIds(
+          JSON.parse(memory.metadata_json) as Record<string, unknown>,
+        )) {
+          insertSource.run(userId, memoryId, runId)
+        }
+      }
       this.#database
         .prepare(
           `INSERT INTO derived_memory_curation_jobs
@@ -6287,12 +6549,20 @@ export class PegasStore {
     const workingDirectory = run.executionContext.workspace
     if (!workingDirectory) return
     const content = derivedMemoryEvidence(run, task, kind, outcome)
+    // M3: resolve the implicit project once, at settle time, inside the
+    // same transaction as the evidence. Recall resolves through the same
+    // chain, so linked worktrees and fresh clones converge on one key.
+    const project = resolveProjectIdentity(
+      workingDirectory,
+      this.#defaultWorkspaceRoot,
+    )
+    if (project) this.#registerMemoryProject(task.userId, project, now)
     this.#database
       .prepare(
         `INSERT INTO derived_memory_jobs
           (id, user_id, task_id, run_id, kind, document_id, content,
-           working_directory, status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+           working_directory, project_key, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
          ON CONFLICT(run_id, kind) DO NOTHING`,
       )
       .run(
@@ -6304,9 +6574,53 @@ export class PegasStore {
         `pegas:run:${run.id}`,
         content,
         workingDirectory,
+        project?.canonicalKey ?? null,
         now,
         now,
       )
+  }
+
+  #registerMemoryProject(
+    userId: string,
+    project: ProjectIdentity,
+    now: string,
+  ): void {
+    this.#database
+      .prepare(
+        `INSERT INTO memory_projects
+          (user_id, canonical_key, display_name, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(user_id, canonical_key) DO UPDATE SET
+           display_name = excluded.display_name,
+           updated_at = excluded.updated_at`,
+      )
+      .run(userId, project.canonicalKey, project.displayName, now, now)
+  }
+
+  /**
+   * MEMORY-001 M3: resolve a workspace to its project row for recall and
+   * history tools. Read-only; never creates a project (writes register at
+   * settle time), so a recall from an unknown directory sees no project.
+   */
+  memoryProjectForWorkspace(
+    userId: string,
+    workingDirectory: string,
+  ): { canonicalKey: string; displayName: string } | undefined {
+    const project = resolveProjectIdentity(
+      workingDirectory,
+      this.#defaultWorkspaceRoot,
+    )
+    if (!project) return undefined
+    const row = this.#database
+      .prepare(
+        `SELECT canonical_key, display_name FROM memory_projects
+         WHERE user_id = ? AND canonical_key = ?`,
+      )
+      .get(userId, project.canonicalKey) as
+      { canonical_key: string; display_name: string } | undefined
+    return row
+      ? { canonicalKey: row.canonical_key, displayName: row.display_name }
+      : undefined
   }
 
   #automationCommandReplay(
@@ -16352,6 +16666,7 @@ function toDerivedMemoryJob(row: DerivedMemoryJobRow): DerivedMemoryJob {
     documentId: row.document_id,
     content: row.content,
     workingDirectory: row.working_directory,
+    ...(row.project_key ? { projectKey: row.project_key } : {}),
     ...(row.provider_operation_id
       ? { providerOperationId: row.provider_operation_id }
       : {}),
@@ -16421,6 +16736,25 @@ function sourceRunIdFromMetadata(metadataJson: string): string | null {
     return null
   }
   return null
+}
+
+/**
+ * M3: a coalesced fact records every contributing Run in `source_run_ids`
+ * (the anchor stays in `run_id`). Deletion must suppress re-distillation
+ * from any of them.
+ */
+function derivedMemorySourceRunIds(
+  metadata: Record<string, unknown>,
+): string[] {
+  const ids = new Set<string>()
+  if (typeof metadata.run_id === 'string' && metadata.run_id.trim())
+    ids.add(metadata.run_id)
+  if (Array.isArray(metadata.source_run_ids)) {
+    for (const value of metadata.source_run_ids) {
+      if (typeof value === 'string' && value.trim()) ids.add(value)
+    }
+  }
+  return [...ids]
 }
 
 function derivedMemoryEvidence(

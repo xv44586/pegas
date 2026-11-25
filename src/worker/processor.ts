@@ -16,6 +16,7 @@ import type {
   DerivedMemoryBrowseService,
   DerivedMemoryCorrectionService,
   DerivedMemoryCurationService,
+  DerivedMemoryJob,
   DerivedMemoryRecallService,
   DerivedMemoryRetainService,
 } from '../memory/derived-memory.js'
@@ -935,6 +936,11 @@ export async function executeClaimedRun(
     >['entries']
     if (derivedMemory) {
       try {
+        const workspace = runExecutionWorkspace(claimed.run, workingDirectory)
+        const project = store.memoryProjectForWorkspace(
+          claimed.task.userId,
+          workspace,
+        )
         const recalled = await derivedMemory.recall({
           userId: claimed.task.userId,
           taskId: claimed.task.id,
@@ -942,10 +948,8 @@ export async function executeClaimedRun(
           query: [claimed.task.title, claimed.task.goal, claimed.run.input]
             .filter(Boolean)
             .join('\n'),
-          workingDirectory: runExecutionWorkspace(
-            claimed.run,
-            workingDirectory,
-          ),
+          workingDirectory: workspace,
+          ...(project ? { projectKey: project.canonicalKey } : {}),
         })
         const suppressed = recalled.memories.filter(memory =>
           store.isDerivedMemorySuppressed(claimed.task.userId, memory),
@@ -1271,10 +1275,21 @@ export async function processNextDerivedMemoryJob(
 ): Promise<boolean> {
   const job = store.claimNextDerivedMemoryJob(workerId, 30_000)
   if (!job) return false
+  // M3 coalescing: an unsubmitted project job claims its due siblings and
+  // distills the whole batch in one bounded model call. Every job keeps its
+  // own durable row and retry budget; a batch failure retries each member.
+  const siblings = job.providerOperationId
+    ? []
+    : store.claimDerivedMemoryJobSiblings(job, workerId, 30_000, 4)
+  const batch = [job, ...siblings]
   try {
     if (!job.providerOperationId) {
-      const operationId = await service.submit(job)
-      store.markDerivedMemoryJobSubmitted(job.id, workerId, operationId)
+      const operationId = await service.submit(
+        siblings.length > 0 ? coalescedRetainJob(batch) : job,
+      )
+      for (const member of batch) {
+        store.markDerivedMemoryJobSubmitted(member.id, workerId, operationId)
+      }
       return true
     }
     if (job.pollCount > MAX_MEMORY_OPERATION_POLLS) {
@@ -1291,13 +1306,13 @@ export async function processNextDerivedMemoryJob(
     }
     const operation = await service.operationStatus(job)
     if (operation.status === 'completed') {
-      store.completeDerivedMemoryJob(job.id, workerId)
+      store.completeDerivedMemoryOperation(job.userId, job.providerOperationId)
       return true
     }
     if (operation.status === 'failed' || operation.status === 'cancelled') {
-      store.failDerivedMemoryJob(
-        job.id,
-        workerId,
+      store.failDerivedMemoryOperation(
+        job.userId,
+        job.providerOperationId,
         operation.error ?? `Hindsight operation ${operation.status}`,
       )
       telemetry?.metrics?.increment('pegas_errors_total', {
@@ -1306,21 +1321,31 @@ export async function processNextDerivedMemoryJob(
       })
       return true
     }
-    store.retryDerivedMemoryJob(job.id, workerId, operation.status, 1_000, {
-      clearError: true,
-    })
+    store.retryDerivedMemoryOperation(
+      job.userId,
+      job.providerOperationId,
+      operation.status,
+      1_000,
+      { clearError: true },
+    )
     return true
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    if (job.errorAttempts >= 8)
-      store.failDerivedMemoryJob(job.id, workerId, message)
-    else {
-      const retryAfterMs = Math.min(60_000, 500 * 2 ** (job.errorAttempts - 1))
-      store.retryDerivedMemoryJob(job.id, workerId, message, retryAfterMs)
+    for (const member of batch) {
+      if (member.errorAttempts >= 8)
+        store.failDerivedMemoryJob(member.id, workerId, message)
+      else {
+        const retryAfterMs = Math.min(
+          60_000,
+          500 * 2 ** (member.errorAttempts - 1),
+        )
+        store.retryDerivedMemoryJob(member.id, workerId, message, retryAfterMs)
+      }
     }
     telemetry?.logger?.warn('memory.retain_retry', {
       jobId: job.id,
       attempts: job.errorAttempts,
+      batchSize: batch.length,
       error: message,
     })
     telemetry?.metrics?.increment('pegas_errors_total', {
@@ -1328,6 +1353,30 @@ export async function processNextDerivedMemoryJob(
       kind: 'retain',
     })
     return true
+  }
+}
+
+/**
+ * MEMORY-001 M3: merge a coalescing group into one retain input. Evidence
+ * stays bounded (the provider slices to its own cap); every contributing
+ * Run is recorded so deleting a batch fact suppresses re-distillation from
+ * any member. The anchor job supplies identity, tags and project scope.
+ */
+function coalescedRetainJob(batch: DerivedMemoryJob[]): DerivedMemoryJob {
+  const anchor = batch[0]
+  if (!anchor) throw new Error('Coalesced retain batch must not be empty')
+  if (batch.length === 1) return anchor
+  return {
+    ...anchor,
+    content: batch
+      .map(
+        member =>
+          `--- Run ${member.runId} (${member.kind}) ---\n${member.content}`,
+      )
+      .join('\n\n')
+      .slice(0, 12_000),
+    documentId: `pegas:batch:${anchor.id}`,
+    sourceRunIds: batch.map(member => member.runId),
   }
 }
 

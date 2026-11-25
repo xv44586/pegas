@@ -631,6 +631,13 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - **合并顺序**：M1 已经 PR #100 合入 main；本分支已 rebase 到 `origin/main`（`d14214b`）并解决 derived-memory/worker/docs 三处冲突，双方语义均保留（M1 P3 globalPreferences/shutdown/HMAC 校验 + M2 local 路径）。协调合同见 research/agent-memory/m1-m2-coordination.md（本地）。
 - **剩余缺口**：合并窗口（同项目多 job 攒批）与读侧相关性门、L0 项目摘要、project 作用域、历史检索工具属 M2 后续步骤（见轻量方案第 2–4 步）；真实模型蒸馏质量与限流 canary 未评测；默认档切换后旧实例首次启动会自动生成 memory.key。
 
+#### M3：合并窗口与隐式项目（2026-11-25，Partial）
+
+- **用户结果**：用户无需显式区分项目——同仓库的 linked worktree、重新 clone（同 remote）共享记忆；项目事实不污染全局、不跨项目泄漏；高事务量下同项目多个 Run 攒批一次模型调用，429 场景 job 退避不丢。
+- **实现**：`src/memory/project-identity.ts` 写入/召回共用身份解析链（git common dir → 规范化 remote → realpath → 默认工作区无项目）；settle 同事务登记 `memory_projects` 并给 job 打 project_key。schema v54 纯增量：`memory_projects`、local 表与 job 表 project_key 列、`derived_memory_tombstone_sources`。项目事实强制 project scope + `pegas:project:<HMAC>` tag；跨项目候选 SQL 层过滤。合并窗口：同 owner+project+kind 60s/5 job 攒批一次蒸馏，成员独立重试预算，operation 终态批量收敛；批量事实删除绑定全部贡献 Run。
+- **自动化证据**：`test/memory-project.test.ts` 8 用例（remote 规范化、worktree/clone 收敛、默认工作区无项目、worktree 召回命中、项目事实不进全局不跨项目、攒批一次调用共同 settle、批量删除全来源压制、批失败逐成员退避）。既有 M1/M2 测试不改语义通过。门禁：`pnpm check` 146 文件 / 1,519 测试全绿（statement 78.07% / line 81.22%）；`pnpm smoke`（task d2bed897）+ `pnpm smoke:crash`（三崩溃点）通过。
+- **剩余缺口**：读侧相关性门、L0 项目摘要、salience 生命周期、历史检索工具（M4+）；真实模型蒸馏质量与限流 canary 未评测。
+
 ### SETTINGS-001：模型服务设置重构验收边界（2026-11-19）
 
 - **用户结果**：“模型服务”只管理 Provider 连接、凭证状态、连接测试与模型目录；Router 的模型绑定在“事情归类”中，Pegas/Worker 的执行模型只在“Pegas”页配置，三者不重复承担职责。

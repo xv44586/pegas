@@ -111,11 +111,14 @@ export class LocalDerivedMemoryProvider implements DerivedMemoryProvider {
     for (const candidate of candidates.slice(0, 8)) {
       const text = candidate.text.trim().slice(0, 2_000)
       if (!text) continue
-      // A global fact still carries its source context tags so recall from
-      // another workspace surfaces it in the audit as context_mismatch,
-      // matching the M1 provider contract.
+      // M3: a fact distilled inside a project never enters the global bank
+      // (project facts must not pollute cross-project recall). Global scope
+      // is only available to project-less work; it keeps the M1 contract of
+      // carrying source context tags for the cross-workspace audit.
+      const projectKey = input.projectKey
+      const scope = projectKey ? 'context' : candidate.scope
       const tags =
-        candidate.scope === 'global'
+        scope === 'global'
           ? [...new Set(['pegas:global', ...input.tags])]
           : input.tags.filter(tag => tag !== 'pegas:global')
       const memory: DerivedMemory = {
@@ -125,9 +128,10 @@ export class LocalDerivedMemoryProvider implements DerivedMemoryProvider {
         tags,
         metadata: input.metadata,
         state: 'valid',
+        ...(projectKey ? { projectKey } : {}),
       }
       if (this.#store.isDerivedMemorySuppressed(userId, memory)) continue
-      this.#store.insertLocalDerivedMemory(userId, memory)
+      this.#store.insertLocalDerivedMemory(userId, memory, projectKey)
       written += 1
     }
     this.#store.completeLocalMemoryOperation(userId, input.operationId, written)
@@ -161,6 +165,7 @@ export class LocalDerivedMemoryProvider implements DerivedMemoryProvider {
     const memories = this.#store.searchLocalDerivedMemories(userId, {
       query: input.query,
       limit: 24,
+      ...(input.projectKey ? { projectKey: input.projectKey } : {}),
     })
     const visible = memories.filter(
       memory => !this.#store.isDerivedMemorySuppressed(userId, memory),
