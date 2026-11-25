@@ -23,6 +23,7 @@ import { ModelTaskRouter } from '../src/router/router.js'
 import type { JsonModelProvider } from '../src/model/provider.js'
 import {
   buildSelfChangeCandidate,
+  materializeCandidateDependencies,
   verifyCandidateReleaseTree,
 } from '../src/self-change/candidate-builder.js'
 import { SelfChangeExecutor } from '../src/self-change/self-change-executor.js'
@@ -261,6 +262,100 @@ describe('SELF-001 candidate builder', () => {
           }),
       }),
     ).rejects.toThrow(/uncommitted/)
+  })
+
+  it('materializes candidate dependencies so the release survives worktree cleanup', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'pegas-self-materialize-'))
+    cleanups.push(() => {
+      restoreWritable(directory)
+      rmSync(directory, { recursive: true, force: true })
+    })
+    const repository = join(directory, 'repo')
+    initRepository(repository)
+    const worktree = join(directory, 'worktree')
+    execFileSync(
+      'git',
+      ['worktree', 'add', '-b', 'self/materialize', worktree],
+      {
+        cwd: repository,
+      },
+    )
+    mkdirSync(join(worktree, 'node_modules'), { recursive: true })
+    mkdirSync(join(worktree, 'node_modules/dep'), { recursive: true })
+    writeFileSync(
+      join(worktree, 'node_modules/dep/index.js'),
+      'module.exports={}\n',
+    )
+    writeFileSync(join(worktree, 'dist/change.txt'), 'materialize\n')
+    execFileSync('git', ['add', '-A'], { cwd: worktree })
+    execFileSync('git', ['commit', '-qm', 'materialize'], { cwd: worktree })
+
+    const outputRoot = join(directory, 'candidates')
+    const built = await buildSelfChangeCandidate({
+      worktree,
+      outputRoot,
+      releaseId: 'self-materialize-1',
+      featureIds: ['SELF-001'],
+      compatibility: { minimumSchema: 1, maximumSchema: 25 },
+      reviewer: 'test-reviewer',
+      runGate: () =>
+        Promise.resolve({
+          commands: [{ command: 'pnpm check', testCount: 3 }],
+          smoke: {
+            command: 'pnpm smoke',
+            status: 'passed',
+            completedAt: new Date().toISOString(),
+          },
+        }),
+    })
+    // Fresh builds point node_modules at the worktree; that link must not
+    // be the release's long-term dependency source.
+    expect(
+      statSync(join(built.releaseRoot, 'node_modules')).isDirectory(),
+    ).toBe(true)
+
+    const result = materializeCandidateDependencies({
+      releaseRoot: built.releaseRoot,
+      artifactPath: built.artifactPath,
+      manifestPath: built.manifestPath,
+      reviewReportPath: built.reviewReportPath,
+      dependencyRoot: join(directory, 'dependencies', 'self-materialize-1'),
+    })
+    expect(result.digest).toMatch(/^[0-9a-f]{64}$/)
+    verifyCandidateReleaseTree(built.releaseRoot, built.artifactPath)
+
+    // The dependency store is read-only and self-contained.
+    expect(
+      statSync(join(directory, 'dependencies', 'self-materialize-1')).mode &
+        0o222,
+    ).toBe(0)
+    expect(
+      readFileSync(
+        join(directory, 'dependencies', 'self-materialize-1', 'dep/index.js'),
+        'utf8',
+      ),
+    ).toBe('module.exports={}\n')
+
+    // Removing the build worktree must not break the release.
+    restoreWritable(worktree)
+    rmSync(worktree, { recursive: true, force: true })
+    verifyCandidateReleaseTree(built.releaseRoot, built.artifactPath)
+    expect(
+      readFileSync(
+        join(built.releaseRoot, 'node_modules/dep/index.js'),
+        'utf8',
+      ),
+    ).toBe('module.exports={}\n')
+
+    // A second materialization with the same content is idempotent.
+    const again = materializeCandidateDependencies({
+      releaseRoot: built.releaseRoot,
+      artifactPath: built.artifactPath,
+      manifestPath: built.manifestPath,
+      reviewReportPath: built.reviewReportPath,
+      dependencyRoot: join(directory, 'dependencies', 'self-materialize-1'),
+    })
+    expect(again.digest).toBe(result.digest)
   })
 })
 

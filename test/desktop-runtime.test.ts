@@ -1,6 +1,14 @@
 import { describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { readFileSync } from 'node:fs'
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { ChildProcess } from 'node:child_process'
 
 import {
@@ -8,6 +16,7 @@ import {
   desktopRequestHeaders,
   desktopServiceEnvironment,
   desktopServiceRoot,
+  desktopSupervisorRoot,
   isLoopbackAppUrl,
   isTrustedAppUrl,
   signalDesktopChild,
@@ -15,6 +24,7 @@ import {
   waitForControlPlane,
 } from '../src/desktop/runtime.js'
 import { defaultAgentWorkspace } from '../src/core/config.js'
+import { ReleaseStateStore } from '../src/supervisor/release-state.js'
 
 const desktopSmoke = readFileSync(
   new URL('../scripts/smoke-desktop.mjs', import.meta.url),
@@ -181,6 +191,72 @@ describe('desktop runtime', () => {
         resourcesPath: '/workspace/pegas',
       }),
     ).toBe('/workspace/pegas')
+  })
+
+  it('boots the active staged release when the supervisor state names one', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'pegas-hot-boot-'))
+    try {
+      const fallback = join(directory, 'app.asar.unpacked')
+      mkdirSync(fallback, { recursive: true })
+      const releaseRoot = join(directory, 'releases', 'hot-1')
+      mkdirSync(join(releaseRoot, 'dist/supervisor'), { recursive: true })
+      writeFileSync(
+        join(releaseRoot, 'dist/supervisor/main.js'),
+        '// staged supervisor\n',
+      )
+      const state = new ReleaseStateStore(join(directory, 'supervisor.json'))
+      state.ensure({
+        id: 'hot-1',
+        root: releaseRoot,
+        createdAt: '2026-11-25T00:00:00.000Z',
+      })
+
+      expect(
+        desktopSupervisorRoot({
+          fallbackRoot: fallback,
+          statePath: join(directory, 'supervisor.json'),
+        }),
+      ).toBe(releaseRoot)
+
+      // A release without a supervisor entry must fall back to the bundled
+      // one instead of failing startup.
+      const bare = join(directory, 'releases', 'bare')
+      mkdirSync(bare, { recursive: true })
+      const bareState = new ReleaseStateStore(join(directory, 'bare.json'))
+      bareState.ensure({
+        id: 'bare',
+        root: bare,
+        createdAt: '2026-11-25T00:00:00.000Z',
+      })
+      expect(
+        desktopSupervisorRoot({
+          fallbackRoot: fallback,
+          statePath: join(directory, 'bare.json'),
+        }),
+      ).toBe(fallback)
+
+      // Missing or corrupt state falls back to the bundled release.
+      expect(
+        desktopSupervisorRoot({
+          fallbackRoot: fallback,
+          statePath: join(directory, 'missing.json'),
+        }),
+      ).toBe(fallback)
+      writeFileSync(join(directory, 'corrupt.json'), '{broken')
+      expect(
+        desktopSupervisorRoot({
+          fallbackRoot: fallback,
+          statePath: join(directory, 'corrupt.json'),
+        }),
+      ).toBe(fallback)
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('wires the staged-release boot into the desktop shell', () => {
+    expect(desktopMain).toContain('desktopSupervisorRoot({')
+    expect(desktopMain).toContain('supervisor.json')
   })
 
   it('trusts only the application origin', () => {

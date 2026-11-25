@@ -1,21 +1,27 @@
-import { execFile } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
   chmodSync,
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
+  readlinkSync,
   readdirSync,
+  renameSync,
   statSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { dirname, join, relative, resolve } from 'node:path'
 import { promisify } from 'node:util'
 
 import {
   createCandidateManifest,
+  readCandidateManifest,
+  verifyCandidateManifest,
   writeCandidateManifest,
   type CandidateManifest,
 } from '../supervisor/candidate-manifest.js'
@@ -64,6 +70,139 @@ export interface BuiltCandidate {
   artifactPath: string
   reviewReportPath: string
   releaseRoot: string
+}
+
+export interface MaterializeDependenciesRequest {
+  releaseRoot: string
+  artifactPath: string
+  manifestPath: string
+  reviewReportPath: string
+  /** Persistent read-only store that outlives the build worktree. */
+  dependencyRoot: string
+}
+
+/**
+ * Replaces the candidate's build-worktree dependency link with a
+ * self-contained read-only copy (APFS clonefile where available), then
+ * re-attests the release tree. Idempotent: a release already anchored to the
+ * same dependency store verifies and returns unchanged. This makes the
+ * active release survive worktree cleanup (LESSON-20261122-04) without any
+ * manual re-anchoring scripts.
+ */
+export function materializeCandidateDependencies(
+  request: MaterializeDependenciesRequest,
+): { digest: string; dependencyRoot: string } {
+  const releaseRoot = resolve(request.releaseRoot)
+  const dependencyRoot = resolve(request.dependencyRoot)
+  const modulesPath = join(releaseRoot, 'node_modules')
+  const modulesStat = lstatSync(modulesPath)
+
+  if (
+    modulesStat.isSymbolicLink() &&
+    resolve(dirname(modulesPath), readlinkSync(modulesPath)) === dependencyRoot
+  ) {
+    verifyCandidateReleaseTree(releaseRoot, request.artifactPath)
+    return { digest: directoryDigest(releaseRoot), dependencyRoot }
+  }
+
+  const source = modulesStat.isSymbolicLink()
+    ? resolve(dirname(modulesPath), readlinkSync(modulesPath))
+    : modulesPath
+  if (!statSync(source).isDirectory())
+    throw new Error('Candidate dependencies must be a directory')
+
+  if (!existsSync(dependencyRoot)) {
+    mkdirSync(dirname(dependencyRoot), { recursive: true })
+    // Clone to a fresh sibling name first: `cp -R` nests the source inside
+    // an existing destination directory, so the final name must not exist
+    // during the copy. The rename makes the store appear atomically.
+    const staging = `${dependencyRoot}.staging-${String(process.pid)}`
+    if (existsSync(staging))
+      throw new Error(`Dependency staging path already exists: ${staging}`)
+    cloneDirectory(source, staging)
+    assertContainedSymlinks(staging)
+    renameSync(staging, dependencyRoot)
+    freezeTree(dependencyRoot)
+  }
+  if ((statSync(dependencyRoot).mode & 0o222) !== 0)
+    throw new Error('Persistent candidate dependencies must be read-only')
+
+  const rootMode = statSync(releaseRoot).mode & 0o777
+  try {
+    chmodSync(releaseRoot, rootMode | 0o200)
+    if (modulesStat.isSymbolicLink()) unlinkSync(modulesPath)
+    else
+      renameSync(modulesPath, `${modulesPath}.retired-${String(process.pid)}`)
+    symlinkSync(dependencyRoot, modulesPath)
+  } finally {
+    chmodSync(releaseRoot, rootMode)
+  }
+
+  // The digest skips symlinks, so anchoring identical dependency bytes keeps
+  // the attested content stable; the artifact and manifest are re-sealed to
+  // the verified tree either way.
+  const digest = directoryDigest(releaseRoot)
+  const artifact = JSON.parse(readFileSync(request.artifactPath, 'utf8')) as {
+    sha256?: string
+  }
+  artifact.sha256 = digest
+  writeFileSync(
+    request.artifactPath,
+    `${JSON.stringify(artifact, null, 2)}\n`,
+    { mode: 0o600 },
+  )
+  const manifest = readCandidateManifest(request.manifestPath)
+  manifest.artifact.sha256 = createHash('sha256')
+    .update(readFileSync(request.artifactPath))
+    .digest('hex')
+  manifest.artifact.sizeBytes = statSync(request.artifactPath).size
+  writeCandidateManifest(request.manifestPath, manifest)
+  verifyCandidateManifest(
+    JSON.parse(readFileSync(request.manifestPath, 'utf8')) as CandidateManifest,
+    request.artifactPath,
+    request.reviewReportPath,
+  )
+  verifyCandidateReleaseTree(releaseRoot, request.artifactPath)
+  return { digest, dependencyRoot }
+}
+
+function cloneDirectory(source: string, destination: string): void {
+  try {
+    // APFS clonefile: near-instant, space-shared copy on macOS.
+    execFileSync('cp', ['-cR', source, destination])
+  } catch {
+    cpSync(source, destination, { recursive: true, verbatimSymlinks: true })
+  }
+}
+
+function assertContainedSymlinks(root: string): void {
+  const walk = (directory: string): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name)
+      if (entry.isSymbolicLink()) {
+        const target = resolve(directory, readlinkSync(path))
+        const rel = relative(root, target)
+        if (rel.startsWith('..') || resolve(root, rel) !== target)
+          throw new Error(`Dependency symlink escapes its tree: ${path}`)
+        continue
+      }
+      if (entry.isDirectory()) walk(path)
+    }
+  }
+  walk(root)
+}
+
+function freezeTree(root: string): void {
+  const walk = (directory: string): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name)
+      if (entry.isSymbolicLink()) continue
+      if (entry.isDirectory()) walk(path)
+      else if (entry.isFile()) chmodSync(path, statSync(path).mode & 0o555)
+    }
+    chmodSync(directory, statSync(directory).mode & 0o555)
+  }
+  walk(root)
 }
 
 /**

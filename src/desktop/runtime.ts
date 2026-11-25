@@ -1,8 +1,10 @@
 import { createServer } from 'node:net'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ChildProcess } from 'node:child_process'
 
 import { defaultAgentWorkspace } from '../core/config.js'
+import { ReleaseStateStore } from '../supervisor/release-state.js'
 
 export interface DesktopServiceOptions {
   port: number
@@ -20,6 +22,33 @@ export function desktopServiceRoot(options: {
   return options.isPackaged
     ? join(options.resourcesPath, 'app.asar.unpacked')
     : options.appPath
+}
+
+/**
+ * Hot-release boot: when the Supervisor state names a staged release whose
+ * Supervisor entry exists on disk, boot that release instead of the copy
+ * bundled inside the app. The app bundle then only carries the Electron
+ * shell, and server/web fixes ship as immutable candidates without
+ * repackaging. Missing or unreadable state falls back to the bundled
+ * release, so a fresh install and a wiped state file still start.
+ */
+export function desktopSupervisorRoot(options: {
+  fallbackRoot: string
+  statePath: string
+}): string {
+  try {
+    const inspection = new ReleaseStateStore(options.statePath).inspect()
+    const root = inspection.state?.active.root
+    if (
+      inspection.integrity === 'ok' &&
+      root &&
+      existsSync(join(root, 'dist', 'supervisor', 'main.js'))
+    )
+      return root
+  } catch {
+    // Unreadable state must never block startup; the bundled release runs.
+  }
+  return options.fallbackRoot
 }
 
 export async function terminateDesktopChildren(
