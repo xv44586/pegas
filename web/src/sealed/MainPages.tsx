@@ -1255,10 +1255,10 @@ export function ConversationPage({
           aria-label="发送消息"
           className={[
             'composer',
-            'mx-auto grid max-w-[1040px] grid-rows-[auto_auto] bg-surface shadow-card transition-[border-radius,box-shadow,padding] duration-150 focus-within:shadow-raised pointer-coarse:pb-2',
+            'mx-auto grid max-w-[1040px] grid-rows-[auto_auto] rounded-[24px] bg-surface shadow-card transition-[box-shadow,padding] max-[820px]:rounded-[20px] duration-150 focus-within:shadow-raised pointer-coarse:pb-2',
             draft.includes('\n') || attachment || target
-              ? 'is-multiline rounded-[24px] px-3.5 py-2.5 pl-5 max-[820px]:rounded-[20px] max-[820px]:px-3 max-[820px]:py-2.5 max-[820px]:pl-4'
-              : 'is-single-line rounded-full py-1.5 pr-2 pl-5 max-[820px]:pl-4',
+              ? 'is-multiline px-3.5 py-2.5 pl-5 max-[820px]:px-3 max-[820px]:py-2.5 max-[820px]:pl-4'
+              : 'is-single-line py-1.5 pr-2 pl-5 max-[820px]:pl-4',
           ].join(' ')}
           onSubmit={event => {
             event.preventDefault()

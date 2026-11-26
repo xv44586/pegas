@@ -1592,7 +1592,6 @@ describe('DESIGN-009 contextual follow-ups', () => {
   })
 })
 
-
 describe('DESIGN-009 prompt bar', () => {
   it('opens the add menu before invoking the file picker', async () => {
     installChatFetch(baseSnapshot)

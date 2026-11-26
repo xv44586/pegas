@@ -125,6 +125,11 @@ export async function verifyComposerMenu(page, capture, size) {
       .locator('.composer-context')
       .filter({ hasText: '继续事情：' })
       .waitFor()
+    await capture(
+      page,
+      `${size}-composer-task-context.png`,
+      `${size}-composer-task-context`,
+    )
     await input.fill('/auto')
     await input.press('Enter')
     assert.equal(
@@ -146,6 +151,11 @@ export async function verifyComposerMenu(page, capture, size) {
       buffer: Buffer.from('local review fixture'),
     })
     await page.getByText('composer-check.txt', { exact: true }).waitFor()
+    await capture(
+      page,
+      `${size}-composer-attachment.png`,
+      `${size}-composer-attachment`,
+    )
     await page.getByRole('button', { name: '移除附件' }).click()
     await input.fill('')
     assert.deepEqual(errors, [])

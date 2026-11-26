@@ -297,7 +297,7 @@
 - Why：DS Bot 前端重构连续经历了壳层重做、设置和工作区补回、工作区定位与收缩态修复、默认 ASR、默认 Magpie、跨 Candidate session 恢复和错误提示布局修复。反复修改不是因为这些问题无法同时发现，而是第一轮没有把完整闭环定义为一个验收对象：我把明确的“复刻”要求当成可解释的设计方向，没有先逐项对照源码与参考截图；自动化主要验证 DOM、状态和局部 CSS，没有在真实布局里检查几何关系；模型和语音先验证了配置值，没有在最终 Candidate 上走真实服务；运行代码所在 worktree 又被误当成 DSH 的稳定 Task workspace；同一界面存在多层主题 CSS，最终级联覆盖没有在所有关键状态下渲染验证。最近一次又在 Candidate 的 390px 截图和静态 CSS 测试通过后先宣告修复，服务重启后仍未按用户的桌面展开态复现；随后还因只检查了 568px 移动覆盖态而误判为浏览器缓存。直到在新的桌面页面测量真实几何，才发现 Channel 列表继承旧布局的 `align-items: center`，宽度扩张到约 690px 并居中到负坐标。根因是用相邻证据替代原始场景证据，而不是单纯“服务没重启”。
 - Feature：QUALITY-001、CONV-002、VOICE-001、SETTINGS-001、EXEC-003、DESIGN-009
 - Evidence：2026-11-18 至 2026-11-19 的提交序列 `56906db`、`0427a0a`、`1598a76`、`d4747d6`、`1f2ced6`、`d205ccb`、`f2142dd`、`5d4dd3c`、`fb9c8a6`；用户连续提供的首页、工作区、收缩栏、设置、错误状态、165 模型选择器压缩和 Channels 文案消失截图；首次修复只覆盖移动侧栏，随后在运行中的 main 上确认桌面侧栏列表因继承 `align-items: center` 而扩张到约 690px、居中到负坐标；随后补入的 `web/src/App.test.tsx`、`test/workspace-theme.test.ts`、`test/dsh-cli-executor.test.ts`、`test/css-cascade-lint.test.ts`、`scripts/capture-ui-review.mjs` 与 `scripts/lint-css-cascade.ts` 回归；首轮 QUALITY-001 CI artifact 名称绑定 PR head、报告正文却绑定 GitHub synthetic merge commit，最终核验发现后增加显式 head checkout 回归。
-- 补充证据：2026-11-26 用户指出正式输入器只有外观迁移，加号仍直接开文件、缺少 `/`；仓库 BUI PromptBar 保留演示来源/模型/附件，不能作为产品能力证据。新增三条回归在原实现全部失败；产品适配只接入真实附件/模型/事情/停止控制，并明确区分本地验证与运行实例发布。
+- 补充证据：2026-11-26 用户指出正式输入器只有外观迁移，加号仍直接开文件、缺少 `/`；仓库 BUI PromptBar 保留演示来源/模型/附件，不能作为产品能力证据。新增三条回归在原实现全部失败；产品适配只接入真实附件/模型/事情/停止控制，并明确区分本地验证与运行实例发布。同日圆角返工：用户参考为四角圆角矩形，既有空输入胶囊合同却被保留；新浏览器四角半径断言在旧实现失败，修订后同时验证空输入、多行、附件和事情上下文。属于同日补证，不增加 Seen 日期。
 - Seen：3（2026-11-18、2026-11-19、2026-11-26）
 - Severity：normal
 - Status：Promoted
