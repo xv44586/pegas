@@ -479,7 +479,7 @@ describe('DESIGN-003 chat page', () => {
     installChatFetch(decideSnapshot)
     render(<App />)
     const decideCard = await screen.findByLabelText(/已处理：/)
-    expect(decideCard.classList.contains('opacity-70')).toBe(true)
+    expect(decideCard.classList.contains('opacity-70')).toBe(false)
     expect(decideCard.textContent).toContain('发布前需要确认影响范围')
     expect(
       within(decideCard).queryByRole('button', { name: /查看内容|去处理/ }),

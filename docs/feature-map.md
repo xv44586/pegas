@@ -111,7 +111,15 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - **非目标 / 边界**：仅修复 Web 呈现与事件处理，不改变 Router、Executor、权限确认、服务端 WorkerProfile、Run 快照或数据库；不修改运行实例。
 - **失败 / 恢复**：沿用现有保存失败提示和草稿保留；菜单关闭释放交互锁，保留再次打开路径；回滚本 Feature 提交即可，无迁移。
 - **权威实现 / 证据**：`web/src/sealed/DetailDrawer.tsx` 事情执行设置四个 SelectContent 层级改为 80（高于抽屉 70），抽屉键盘处理尊重 defaultPrevented；表单从结构化 Profile 字段回填并按标量依赖更新，不再冒号拼接/拆解 ID；先补 `web/src/App.test.tsx` Escape 回归与 `scripts/capture-ui-review.mjs` 实际命中/重复选择回归。先红证据：UI review 报 `select is painted beneath the drawer`；两条 Escape 测试误关详情；两条保存回填断言在真实 ID 格式下失败。修复后 7 条定向测试通过；完整 UI review 通过（桌面 1440×900 与移动 390×844，各 12 次重复开关、实际命中、键盘打开/Escape、保存与重开回读、pageerror=0）；`pnpm smoke` 通过。已 rebase 最新 `origin/main 5de2602e`，使用 `PEGAS_LIVE_MODEL=codex/gpt-5.6-luna pnpm check` 完整门禁通过：151 文件 / 1595 测试（包括全部 11 项真实模型集成），格式/品牌/Lint/类型/Knip/覆盖率/构建全绿；覆盖率 statements 78.21%、branches 71.75%、functions 75.06%、lines 81.27%。DESIGN-009 整体保持 Partial，既有缺口不变。
-- **剩余风险 / 交付边界**：默认真实模型路由遇 429（11 项 live tests 失败，其余 1584 项通过），按既有 QUALITY-001 契约用 `PEGAS_LIVE_MODEL=codex/gpt-5.6-luna` 显式覆盖复跑，不改变产品默认、不跳过测试。额外 `pnpm a11y:review` 的 light 六场景通过，dark-conversation 的「已处理」和澄清正文分别为 4.03/4.12 对比度，低于 4.5；相关 MainPages/BUI 色彩样式在本次无 diff，记录为 DESIGN-009 相邻缺口，不扩大修复。本次状态 `DONE_WITH_CONCERNS`（额外 a11y 缺口）；尚未 CI / 合并 / 发布，运行实例未变；回滚可 revert 本 Feature 提交。
+- **剩余风险 / 交付边界**：默认真实模型路由遇 429（11 项 live tests 失败，其余 1584 项通过），按既有 QUALITY-001 契约用 `PEGAS_LIVE_MODEL=codex/gpt-5.6-luna` 显式覆盖复跑，不改变产品默认、不跳过测试。额外 `pnpm a11y:review` 的 light 六场景通过，dark-conversation 的「已处理」和澄清正文分别为 4.03/4.12 对比度，低于 4.5；相关 MainPages/BUI 色彩样式在本次无 diff，记录为 DESIGN-009 相邻缺口，不扩大修复。首次开发交付状态为 `DONE_WITH_CONCERNS`（额外 a11y 缺口），当时尚未合并/发布。后续按用户授权继续 PR #134：合并最新 main `6b42c3df`，保留已合入的 SETTINGS-001 与已处理卡片对比度修复，解决 Feature Map 相邻插入冲突；重新执行完整门禁后走既有 Candidate/Supervisor 热更新。精确提交的门禁、CI、发布与实机验收记录保存在本地 `output/release-drawer/`，运行版本以 Supervisor active 与 readyz 为准。回滚可撤销本 Feature 提交或切回 previous Candidate。
+
+### DESIGN-009：已处理事实卡可读性修复（2026-11-26）
+
+- **Intake**：基线 `28509be3`，主工作区 clean，独立 `fix/design-009-resolved-contrast` worktree。深色页已处理事实卡整体 opacity 0.7 使状态和正文降至 4.03/4.12 对比度。
+- **验收**：已处理状态继续显示文字标记并撤下处理按钮，历史正文保持语义文字色、不叠加容器透明度；明暗主题全站 axe、完整 check 和 smoke 通过。
+- **非目标 / 边界**：不改颜色 token、不改变审批或事实状态；仅修复客户端可读性，不写服务端数据。
+- **失败与回滚**：可独立回退此提交，无配置与 schema 变更。
+- **证据 / 状态**：回归先红后绿，`ChatExperience.test.tsx` 34 测试通过；`pnpm build` 与全站 `pnpm a11y:review` 通过（明暗主题、首次设置、强制颜色、移动端均零违例）。合入共享真实模型门禁修复后，`PEGAS_LIVE_MODEL=codex/gpt-5.6-luna pnpm check` 151 文件 / 1593 测试全通过，`pnpm smoke` 通过；独立提交待 CI / 集成。 之后合入 SETTINGS-001 完整首次设置与目录修复，组合分支 152 文件 / 1605 测试、smoke、全站 a11y、review:ui 和精确 head CI 全通过；本分支作为最终 Candidate 候选重新验证。旧设置流程导致的 UI 目录采集失败由 SETTINGS-001 修复，不放宽采集断言。
 
 ### DESIGN-004：字号阶梯、字重与层级收敛（2026-11-22）
 

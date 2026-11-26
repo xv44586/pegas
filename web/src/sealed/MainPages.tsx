@@ -1616,7 +1616,6 @@ function FactCard({
         'fact-card',
         `is-${message.lane}`,
         'mt-3.5 grid w-full max-w-[560px] min-w-0 gap-2.5 rounded-card bg-surface p-3.5 shadow-card',
-        message.resolved ? 'opacity-70' : '',
       ]
         .filter(Boolean)
         .join(' ')}
