@@ -1,7 +1,7 @@
 # 权限档位与审批 Policy Gate（APPROVAL-001 第二阶段）
 
-> 状态：P1 Gate 覆盖面、P2 权限档位对象、P3 规则批准、P4 审批卡升级、P5 自动审阅、P6 逐调用审计表、P7 档位审计 UI、P8 对外副作用逐次人工确认已实现（见下方实现记录）
-> 更新日期：2026-11-24
+> 状态：P1 Gate 覆盖面、P2 权限档位对象、P3 规则批准、P4 审批卡升级、P5 自动审阅、P6 逐调用审计表、P7 档位审计 UI、P8 对外副作用逐次人工确认已实现；P9 目录信任集成验证通过，待发布（见下方实现记录）
+> 更新日期：2026-11-26
 > 基线：`origin/main` `74c2f8c`（Intake 初稿基线 `4baab43`）
 > 外部调研：`research/approval-permissions-codex-cindy/NOTES.md`（本地，不入库；Codex CLI/webview、Cindy Apache-2.0 docs、DSH MIT 源码）
 
@@ -304,5 +304,5 @@
 - 路径判断使用真实 DSH workingDirectory 服务，每次调用与原生审批入口重新获取 session cwd；bash 的绝对或相对 workdir 优先于 cwd。授权边界仍是原 workspace，切换目录不扩大权限；写入效果指纹使用相同解析基准。
 - 服务端固定目录授权选项的名称、规范目录、持续时间及撤销说明，执行器不能把长期授权伪装成一次性选项；默认推荐退回普通批准，原始请求指纹保持重放幂等。
 - 规则列表返回所有有效规则，只对已撤销历史保留最近 100 项，避免授权仍有效但用户找不到撤销入口。
-- 三项审查回归先红后绿，另补 session cwd 在两个审批钩子间变化的集成回归。完整 `pnpm check` 152 文件、1689 测试通过；覆盖率 statement 78.67%、branch 72.26%、function 75.69%、line 81.69%。`pnpm smoke` 与真实 Electron→DSH 回环目录/工具/session 恢复验证通过（3 次本地模型协议请求，无付费模型）。
+- 三项审查回归先红后绿，另补 session cwd 在两个审批钩子间变化的集成回归。完整 `pnpm check` 152 文件、1689 测试通过；覆盖率 statement 78.66%、branch 72.26%、function 75.67%、line 81.69%。`pnpm smoke` 与真实 Electron→DSH 回环目录/工具/session 恢复验证通过（3 次本地模型协议请求，无付费模型）。`pnpm review:ui --force` 桌面/移动端 216 次交互复验通过，`pnpm a11y:review` 零违例。
 - 发布由独立 Supervisor 验证不可变 Candidate；schema v59 为加列迁移。已用临时 v59 数据库验证当前 Supervisor 的回滚兼容检查与上一 Candidate 的 Store 重开均通过，schema 保持 59。回滚后目录通配规则不被旧版精确规则匹配，恢复逐次询问；不得删除授权记录或降级数据库。
