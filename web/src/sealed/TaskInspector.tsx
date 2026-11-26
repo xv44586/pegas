@@ -1,3 +1,4 @@
+import { GitBranch } from 'lucide-react'
 import { useEffect, useState, type ComponentProps } from 'react'
 import { Button, Tabs, TabsList, TabsTrigger, TabsContent } from '@bui/index'
 import type {
@@ -21,6 +22,7 @@ import {
   latestRunForTask,
   runStatusLabel,
   statusLabel,
+  textFromPayload,
   type DrawerView,
 } from './types'
 
@@ -40,6 +42,9 @@ export function TaskInspector({
   onOpenView: (view: DrawerView) => void
 }) {
   const { channel, runs } = timeline
+  const userEvents = timeline.events.filter(
+    event => event.type === 'user.message',
+  )
   const [delivery, setDelivery] = useState<TaskDelivery>()
   const [deliveryError, setDeliveryError] = useState('')
   const [profile, setProfile] = useState<WorkerProfileResponse>()
@@ -193,6 +198,50 @@ export function TaskInspector({
           .map(item => (
             <RunRecord key={item.id} api={api} run={item} />
           ))}
+        {userEvents.length > 0 && (
+          <details className="min-w-0 rounded-card bg-inset p-3">
+            <summary className="cursor-pointer font-medium">
+              消息调用链 · {userEvents.length}
+            </summary>
+            <p className="mt-3 text-[12px] text-ink-2">
+              按用户输入查看路由与执行过程。
+            </p>
+            <ol role="list" aria-label="消息调用链" className="mt-3 grid gap-3">
+              {userEvents.toReversed().map(event => {
+                const text = textFromPayload(event.payload) || '用户输入'
+                return (
+                  <li
+                    key={event.id}
+                    className="min-w-0 border-t border-line pt-3"
+                  >
+                    <p className="line-clamp-2 break-words" title={text}>
+                      {text}
+                    </p>
+                    <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                      <time
+                        className="text-[12px] text-ink-2"
+                        dateTime={event.createdAt}
+                      >
+                        {formatRelativeTime(event.createdAt)}
+                      </time>
+                      <Button
+                        size="sm"
+                        variant="quiet"
+                        aria-label={`查看调用链：${text.slice(0, 60)}`}
+                        onClick={() =>
+                          onOpenView({ kind: 'trace', eventId: event.id })
+                        }
+                      >
+                        <GitBranch size={14} aria-hidden="true" />
+                        查看调用链
+                      </Button>
+                    </div>
+                  </li>
+                )
+              })}
+            </ol>
+          </details>
+        )}
       </TabsContent>
       <TabsContent
         value="settings"

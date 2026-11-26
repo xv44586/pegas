@@ -1,11 +1,13 @@
 import {
   useCallback,
+  useId,
   useEffect,
   useRef,
   useState,
   type ComponentProps,
   type SetStateAction,
 } from 'react'
+import { X } from 'lucide-react'
 import { Button, Dialog, DialogContent, DialogTitle } from '@bui/index'
 import type { ChannelTimeline } from '../types'
 import { ConversationPage } from './MainPages'
@@ -47,6 +49,7 @@ export function TaskConversationPage({ taskId, ...props }: Props) {
     writeTaskDraft(taskId, draftRef.current)
     setQuoteState(next)
   }
+  const detailsId = useId()
   const [tab, setTab] = useState('overview')
   const [detailsOpen, setDetailsOpen] = useState(
     () => window.innerWidth >= 1200,
@@ -167,6 +170,8 @@ export function TaskConversationPage({ taskId, ...props }: Props) {
               }}
               taskScope={{
                 channel: timeline.channel,
+                detailsOpen,
+                detailsId,
                 onDetails: () => setDetailsOpen(value => !value),
                 onSettings: () => {
                   setTab('settings')
@@ -177,15 +182,42 @@ export function TaskConversationPage({ taskId, ...props }: Props) {
           </div>
           {wide && detailsOpen && (
             <aside
+              id={detailsId}
               aria-label="事情信息"
               className="bui w-[360px] shrink-0 overflow-y-auto border-l border-line bg-surface p-4"
             >
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <h2 className="text-[14px] font-medium">事情信息</h2>
+                <Button
+                  aria-label="关闭事情信息"
+                  title="关闭事情信息"
+                  className="size-10 p-0 pointer-coarse:size-11"
+                  size="sm"
+                  variant="quiet"
+                  onClick={() => {
+                    setDetailsOpen(false)
+                    document
+                      .querySelector<HTMLButtonElement>('[data-task-info]')
+                      ?.focus()
+                  }}
+                >
+                  <X size={18} aria-hidden="true" />
+                </Button>
+              </div>
               {inspector}
             </aside>
           )}
           {!wide && (
             <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
               <DialogContent
+                id={detailsId}
+                closeLabel="关闭事情信息"
+                onCloseAutoFocus={event => {
+                  event.preventDefault()
+                  document
+                    .querySelector<HTMLButtonElement>('[data-task-info]')
+                    ?.focus()
+                }}
                 aria-describedby={undefined}
                 className="max-h-[85dvh] overflow-y-auto"
               >

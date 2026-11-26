@@ -25,6 +25,8 @@ import {
   LoaderCircle,
   Mic,
   PauseCircle,
+  PanelRightOpen,
+  PanelRightClose,
   Plus,
   Reply,
   RotateCw,
@@ -217,6 +219,8 @@ export function ConversationPage({
   snapshot: Snapshot
   taskScope?: {
     channel: WorkChannel
+    detailsOpen: boolean
+    detailsId: string
     onDetails: () => void
     onSettings: () => void
   }
@@ -959,7 +963,7 @@ export function ConversationPage({
               taskTitle={workEntry.channel.title}
             />
           )}
-          {message.role === 'user' && (
+          {message.role === 'user' && !taskScope && (
             <MetaIconButton
               label="查看调用链"
               onClick={() =>
@@ -1011,11 +1015,22 @@ export function ConversationPage({
         {taskScope && (
           <Button
             data-task-info=""
+            aria-label={taskScope.detailsOpen ? '收起事情信息' : '展开事情信息'}
+            title={taskScope.detailsOpen ? '收起事情信息' : '展开事情信息'}
+            aria-expanded={taskScope.detailsOpen}
+            aria-controls={
+              taskScope.detailsOpen ? taskScope.detailsId : undefined
+            }
+            className="size-10 shrink-0 p-0 pointer-coarse:size-11"
             size="sm"
             variant="quiet"
             onClick={taskScope.onDetails}
           >
-            事情信息
+            {taskScope.detailsOpen ? (
+              <PanelRightClose size={20} aria-hidden="true" />
+            ) : (
+              <PanelRightOpen size={20} aria-hidden="true" />
+            )}
           </Button>
         )}
       </PageHeader>

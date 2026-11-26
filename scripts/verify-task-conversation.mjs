@@ -161,6 +161,12 @@ export async function verifyTaskConversation(hostPage, capture, size) {
         },
       }),
     )
+    await page.route('**/v1/events/history-204/trace?*', route =>
+      route.fulfill({
+        status: 503,
+        json: { message: '调用链暂时不可用，请刷新重试。' },
+      }),
+    )
     await page.route('**/v1/events', route => {
       const body = route.request().postDataJSON()
       posts.push(body)
@@ -201,6 +207,12 @@ export async function verifyTaskConversation(hostPage, capture, size) {
       await page.getByRole('button', { name: '查看工作详情' }).count(),
       0,
     )
+    assert.equal(
+      await page
+        .getByRole('button', { name: '查看调用链', exact: true })
+        .count(),
+      0,
+    )
     await capture(
       page,
       `${size}-task-conversation.png`,
@@ -216,7 +228,7 @@ export async function verifyTaskConversation(hostPage, capture, size) {
     assert.equal(posts.length, 2)
     assert.ok(posts.every(body => body.payload.taskId === taskId))
     if (size === 'mobile')
-      await page.getByRole('button', { name: '事情信息' }).click()
+      await page.getByRole('button', { name: '展开事情信息' }).click()
     for (const [tab, file] of [
       ['概览', 'overview'],
       ['交付', 'delivery'],
@@ -227,6 +239,7 @@ export async function verifyTaskConversation(hostPage, capture, size) {
       if (tab === '执行记录') {
         await page.locator('summary').filter({ hasText: '已完成' }).click()
         await page.locator('.activity-timeline').waitFor()
+        await page.locator('summary').filter({ hasText: '消息调用链' }).click()
       }
       if (tab === '设置')
         await page
@@ -256,8 +269,75 @@ export async function verifyTaskConversation(hostPage, capture, size) {
       })),
       [],
     )
-    if (size === 'mobile')
-      await page.getByRole('button', { name: '关闭', exact: true }).click()
+    // Close and reopen using both the explicit close button and the header toggle.
+    await page
+      .getByRole('button', { name: '关闭事情信息', exact: true })
+      .click()
+    const toggle = page.getByRole('button', {
+      name: '展开事情信息',
+      exact: true,
+    })
+    assert.equal(await toggle.getAttribute('aria-expanded'), 'false')
+    await page.waitForFunction(() =>
+      globalThis.document.activeElement?.matches('[data-task-info]'),
+    )
+    await capture(
+      page,
+      `${size}-task-sidebar-closed.png`,
+      `${size}-task-sidebar-closed`,
+    )
+    await toggle.press('Enter')
+    assert.equal(
+      await page
+        .getByRole('tab', { name: '设置', exact: true })
+        .getAttribute('aria-selected'),
+      'true',
+    )
+    if (size === 'desktop') {
+      await page
+        .getByRole('button', { name: '收起事情信息', exact: true })
+        .click()
+      await toggle.click()
+      assert.equal(
+        await page
+          .getByRole('tab', { name: '设置', exact: true })
+          .getAttribute('aria-selected'),
+        'true',
+      )
+    }
+    await page.getByRole('tab', { name: '执行记录', exact: true }).click()
+    await page.locator('summary').filter({ hasText: '消息调用链' }).click()
+    const traceRequest = page.waitForRequest(
+      request =>
+        new URL(request.url()).pathname === '/v1/events/history-204/trace',
+    )
+    await page
+      .getByRole('button', {
+        name: '查看调用链：请把主要变化和还需要核对的数据整理出来。',
+        exact: true,
+      })
+      .click()
+    await traceRequest
+    const traceDialog = page.getByRole('dialog', {
+      name: '调用链',
+      exact: true,
+    })
+    await traceDialog.getByRole('alert').waitFor()
+    await page.keyboard.press('Escape')
+    await traceDialog.waitFor({ state: 'hidden' })
+    if (size === 'mobile') {
+      await toggle.click()
+      assert.equal(
+        await page
+          .getByRole('tab', { name: '执行记录', exact: true })
+          .getAttribute('aria-selected'),
+        'true',
+      )
+      await page.keyboard.press('Escape')
+      await page.waitForFunction(() =>
+        globalThis.document.activeElement?.matches('[data-task-info]'),
+      )
+    }
     await composer.fill('切换后仍保留的事情草稿')
     if (size === 'desktop') {
       await page.goBack()
@@ -292,7 +372,7 @@ export async function verifyTaskConversation(hostPage, capture, size) {
       `${size}-task-long-title`,
     )
     console.log(
-      `Task conversation verified: ${size}, 205 inputs, fixed sends, four tabs, history recovery, zero a11y violations`,
+      `Task conversation verified: ${size}, 205 inputs, fixed sends, four tabs, trace entry, sidebar close/reopen + focus, history recovery, zero a11y violations`,
     )
   } finally {
     await page.close()

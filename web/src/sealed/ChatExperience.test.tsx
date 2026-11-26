@@ -619,6 +619,75 @@ describe('CONV-002 task conversation', () => {
     ).toHaveLength(0)
   })
 
+  it('moves task message traces into execution records and opens the exact input trace', async () => {
+    const { mock } = installTaskHistory()
+    window.history.replaceState({}, '', '/?task=task-1')
+    render(<App />)
+    await screen.findByLabelText('就这件事继续聊天')
+    expect(screen.queryByRole('button', { name: '查看调用链' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '展开事情信息' }))
+    fireEvent.mouseDown(screen.getByRole('tab', { name: '执行记录' }), {
+      button: 0,
+      ctrlKey: false,
+    })
+    const summary = screen.getByText(/消息调用链/).closest('summary')
+    if (!summary) throw new Error('Expected trace disclosure')
+    fireEvent.click(summary)
+    fireEvent.click(
+      screen.getByRole('button', { name: '查看调用链：事情内输入 1' }),
+    )
+    expect(await screen.findByRole('dialog', { name: '调用链' })).toBeTruthy()
+    await waitFor(() =>
+      expect(
+        mock.mock.calls.some(
+          ([path]) =>
+            typeof path === 'string' && path.includes('/history-1/trace'),
+        ),
+      ).toBe(true),
+    )
+  })
+
+  it.each([390, 1440])(
+    'keeps the selected inspector tab after close/reopen at width %i',
+    async width => {
+      vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(width)
+      installTaskHistory()
+      window.history.replaceState({}, '', '/?task=task-1')
+      render(<App />)
+      await screen.findByLabelText('就这件事继续聊天')
+      if (width < 1200)
+        fireEvent.click(screen.getByRole('button', { name: '展开事情信息' }))
+      expect(
+        screen
+          .getByRole('button', { name: '收起事情信息', hidden: width < 1200 })
+          .getAttribute('aria-expanded'),
+      ).toBe('true')
+      fireEvent.mouseDown(screen.getByRole('tab', { name: '执行记录' }), {
+        button: 0,
+        ctrlKey: false,
+      })
+      fireEvent.click(screen.getByRole('button', { name: '关闭事情信息' }))
+      const toggle = screen.getByRole('button', { name: '展开事情信息' })
+      expect(toggle.getAttribute('aria-expanded')).toBe('false')
+      await waitFor(() => expect(document.activeElement).toBe(toggle))
+      fireEvent.click(toggle)
+      expect(
+        screen
+          .getByRole('tab', { name: '执行记录' })
+          .getAttribute('aria-selected'),
+      ).toBe('true')
+      if (width >= 1200) {
+        fireEvent.click(screen.getByRole('button', { name: '收起事情信息' }))
+        fireEvent.click(screen.getByRole('button', { name: '展开事情信息' }))
+        expect(
+          screen
+            .getByRole('tab', { name: '执行记录' })
+            .getAttribute('aria-selected'),
+        ).toBe('true')
+      }
+    },
+  )
+
   it('offers the four supported inspector tabs with expandable execution history', async () => {
     installTaskHistory({}, path => {
       if (path.includes('/timeline?'))
@@ -642,7 +711,7 @@ describe('CONV-002 task conversation', () => {
     })
     window.history.replaceState({}, '', '/?task=task-1')
     render(<App />)
-    fireEvent.click(await screen.findByRole('button', { name: '事情信息' }))
+    fireEvent.click(await screen.findByRole('button', { name: '展开事情信息' }))
     for (const name of ['概览', '交付', '执行记录', '设置'])
       expect(screen.getByRole('tab', { name })).toBeTruthy()
     fireEvent.mouseDown(screen.getByRole('tab', { name: '执行记录' }), {
