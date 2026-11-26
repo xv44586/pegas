@@ -1182,7 +1182,9 @@ describe('sealed Pegas UI', () => {
     let saves = 0
     installFetch((path, init) => {
       if (path === '/v1/settings' && init?.method === 'PUT') {
-        const update = JSON.parse(String(init.body)) as {
+        const update = JSON.parse(
+          typeof init.body === 'string' ? init.body : '{}',
+        ) as {
           chatLaneEnabled: boolean
         }
         saves += 1
