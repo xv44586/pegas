@@ -59,6 +59,18 @@
 
 ## Lessons
 
+### LESSON-20261126-01：已处理内容仍需要完整文字对比度
+
+- Rule：历史事实与已处理卡片仍是可阅读内容，不能用整个容器透明度表达完成态；使用明确状态文字与操作可用性。
+- Why：事实卡 opacity 0.7 把深色模式正文/状态对比度降至 4.12/4.03，既有语义颜色本身符合要求。
+- Feature：DESIGN-009
+- Evidence：全站 axe dark-conversation 两处 color-contrast 失败；`ChatExperience.test.tsx` 已处理卡片回归先红后绿，保留状态文字、原文与无重复操作断言。
+- Seen：1（2026-11-26）
+- Severity：normal
+- Status：Observed
+- Enforcement：本次回归与全站 `pnpm a11y:review`。
+- Owner / next action：DESIGN-009；保持明暗主题可读性检查，不降低颜色门禁。
+
 ### LESSON-20261125-09：一次性授权与停放输入必须有确定性的结算路径
 
 - Rule：任何把用户输入停放在「等待动作结算」上的机制，必须保证每个被等待的状态都有确定性的结算出口。一次性授权在恢复执行结束仍未消费时按未执行结算；已记录 failed 结局的动作不再拦新输入；人工核对的两种结论（succeeded/failed）都必须唤醒停放输入；幂等命令回放必须收敛全部副作用（含唤醒），使旧代码写入的存量状态可经重放修复；被唤醒输入的重放路由必须容忍停放期写入的 task_events 链接（upsert 而非裸 INSERT）；审批 API 的持久 4xx 只拒绝单次调用。新增 Pegas 注册工具时，策略门分级合同必须同步覆盖（自动检查注册面全员工具都有非 unknown 分级）。
