@@ -194,7 +194,7 @@ export function TaskInspector({
       <TabsContent
         value="execution"
         forceMount
-        className="grid gap-3 data-[state=inactive]:hidden"
+        className="grid min-w-0 gap-3 data-[state=inactive]:hidden"
       >
         {runs.length === 0 && <p className="text-ink-2">还没有执行记录。</p>}
         {executionRuns.map(item => (

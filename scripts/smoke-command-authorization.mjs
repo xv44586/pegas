@@ -417,6 +417,27 @@ try {
     .first()
     .click()
   await window.getByRole('heading', { name: '授权管理', exact: true }).waitFor()
+  const tracePanel = window
+    .getByText('授权执行记录', { exact: true })
+    .first()
+    .locator('..')
+  await tracePanel
+    .locator('.approval-rule-item')
+    .filter({ hasText: repo })
+    .waitFor()
+  assert(
+    await tracePanel.evaluate(
+      element => element.scrollWidth <= element.clientWidth,
+    ),
+    'Authorization trace must wrap long paths',
+  )
+  const traceBounds = await tracePanel.boundingBox()
+  assert(
+    traceBounds &&
+      traceBounds.x + traceBounds.width <=
+        (await window.evaluate(() => globalThis.innerWidth)),
+    'Authorization trace must fit the task inspector',
+  )
   await window.screenshot({ path: join(output, 'desktop-command-trace.png') })
   await window.goto(baseUrl)
   await window.getByRole('button', { name: '设置', exact: true }).click()

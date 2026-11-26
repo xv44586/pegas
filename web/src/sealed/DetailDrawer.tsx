@@ -3702,7 +3702,7 @@ export function AuthorizationTrace({
   }
   return (
     <details
-      className="run-progress-details"
+      className="run-progress-details min-w-0"
       onToggle={event => {
         if (event.currentTarget.open && !page && !loading && !error) void load()
       }}
@@ -3721,7 +3721,7 @@ export function AuthorizationTrace({
       <ul>
         {page?.entries.map(entry => (
           <li key={entry.id} className="my-2 text-[13px]">
-            <p className="break-words">{entry.reason}</p>
+            <p className="[overflow-wrap:anywhere]">{entry.reason}</p>
             <small>{formatRelativeTime(entry.createdAt)}</small>
             {entry.ruleId && (
               <button
