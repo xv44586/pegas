@@ -1001,6 +1001,20 @@ function approvalView(
                 description:
                   '仅覆盖 write 对相同目标（/srv/shared/plan.md）的同类操作；目标变化会重新审批，可在事情详情撤销。',
               },
+              {
+                id: 'approve_directory_task',
+                label: '本事情内信任这些目录',
+                kind: 'approve_rule' as const,
+                description:
+                  '允许文件工具读写 /srv/shared 及子目录。本事情内有效，可在事情详情撤销；外发、破坏性操作和无法确定范围的命令仍需确认。',
+              },
+              {
+                id: 'approve_directory_user',
+                label: '始终信任这些目录',
+                kind: 'approve_rule' as const,
+                description:
+                  '允许文件工具读写 /srv/shared 及子目录。对你以后的事情持续有效，可在任意事情详情撤销；外发、破坏性操作和无法确定范围的命令仍需确认。',
+              },
             ]
           : []),
         { id: 'reject', label: '不执行', kind: 'reject' },

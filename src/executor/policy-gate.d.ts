@@ -34,3 +34,9 @@ export declare function canonicalRuleTarget(
   value: unknown,
   roots: PolicyRoots,
 ): string | undefined
+
+export declare function approvalDirectories(
+  tool: string,
+  targets: string[],
+  command?: string,
+): string[]

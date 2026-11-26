@@ -227,6 +227,57 @@ describe('approval rule contract', () => {
 })
 
 describe('approval rule persistence', () => {
+  it('rejects directory approval with unverifiable preview facts atomically', () => {
+    const store = new PegasStore(':memory:')
+    try {
+      const claimed = createClaimedRun(store, 'directory-invalid')
+      const pending = store.requestApproval(
+        claimed.run.id,
+        claimed.claimToken,
+        {
+          kind: 'dsh.tool.write',
+          risk: 'high',
+          idempotencyKey: 'invalid-dir',
+          request: {
+            tool: 'write',
+            category: 'out-of-workspace-write',
+            targets: ['/missing-dir/file'],
+            trustedDirectories: ['/'],
+          },
+          recoveryPoint: { step: 'before_tool_call' },
+          approval: {
+            summary: '信任目录',
+            impact: '测试',
+            recommendedOptionId: 'reject',
+            options: [
+              {
+                id: 'approve_directory_user',
+                label: '始终信任这些目录',
+                kind: 'approve_rule',
+              },
+              { id: 'reject', label: '拒绝', kind: 'reject' },
+            ],
+          },
+        },
+      )
+      expect(() =>
+        store.decideApproval(pending.approval.id, 'owner', {
+          commandId: 'invalid-directory',
+          optionId: 'approve_directory_user',
+        }),
+      ).toThrow(/Directory targets/)
+      expect(store.listApprovalRules(claimed.task.id, 'owner')).toEqual([])
+      expect(store.getApproval(pending.approval.id, 'owner')?.status).toBe(
+        'pending',
+      )
+      expect(
+        store.getAction(pending.action.id, 'owner')?.resumeRunId,
+      ).toBeUndefined()
+    } finally {
+      store.close()
+    }
+  })
+
   it('creates a task-scoped rule from an approve_rule decision with timeline audit', () => {
     const store = new PegasStore(':memory:')
     const workspace = workspaceRoot()
@@ -515,7 +566,7 @@ describe('approval rule persistence', () => {
       const versions = db
         .prepare('SELECT MAX(version) AS version FROM schema_migrations')
         .get() as { version: number }
-      expect(versions.version).toBe(58)
+      expect(versions.version).toBe(59)
       const decisionKinds = db
         .prepare('SELECT kind FROM approval_decisions')
         .all() as { kind: string }[]

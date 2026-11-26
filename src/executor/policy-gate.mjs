@@ -1,4 +1,4 @@
-import { realpathSync } from 'node:fs'
+import { realpathSync, statSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 
 /** @typedef {import('./policy-gate.d.ts').PolicyRisk} PolicyRisk */
@@ -177,6 +177,62 @@ export function canonicalRuleTarget(value, roots) {
 }
 
 /**
+ * Derive the exact directories shown to the user. Never infer a shell's entire
+ * effect from a partial list of operands.
+ * @param {string} tool
+ * @param {string[]} targets
+ * @param {string | undefined} [command]
+ * @returns {string[]}
+ */
+export function approvalDirectories(tool, targets, command) {
+  if (
+    !['write', 'edit', 'apply_patch'].includes(tool) &&
+    !(tool === 'bash' && boundedPatch(command) !== undefined)
+  )
+    return []
+  if (targets.length === 0) return []
+  const directories = []
+  try {
+    for (const target of targets) {
+      if (!isAbsolute(target) || canonicalRuleTarget(target, {}) !== target)
+        return []
+      let directory = statSync(target, {
+        throwIfNoEntry: false,
+      })?.isDirectory()
+        ? target
+        : dirname(target)
+      while (
+        !statSync(directory, { throwIfNoEntry: false }) &&
+        directory !== dirname(directory)
+      )
+        directory = dirname(directory)
+      if (
+        directory === dirname(directory) ||
+        !statSync(directory).isDirectory()
+      )
+        return []
+      directories.push(realpathSync(directory))
+    }
+  } catch {
+    return []
+  }
+  return [...new Set(directories)].sort()
+}
+
+/** @param {string | undefined} command @returns {string | undefined} */
+function boundedPatch(command) {
+  // Only a single, quoted heredoc: no substitution, trailing command or cd.
+  const match = command?.match(
+    /^apply_patch <<'([A-Za-z_][A-Za-z_0-9]*)'\n(\*\*\* Begin Patch\n[\s\S]*\n\*\*\* End Patch)\n\1\n?$/,
+  )
+  const delimiter = match?.[1]
+  const patch = match?.[2]
+  if (!delimiter || !patch || patch.split('\n').includes(delimiter))
+    return undefined
+  return patch
+}
+
+/**
  * @param {string} target
  * @param {string | undefined} root
  * @returns {boolean}
@@ -307,6 +363,12 @@ function classifyBash(execution, context) {
   if (typeof command !== 'string' || command.trim().length === 0) {
     return unknownDecision('bash 缺少可判定的命令内容，需要你确认。')
   }
+  const patch = boundedPatch(command)
+  if (patch !== undefined)
+    return classifyApplyPatch(
+      { name: 'apply_patch', arguments: { input: patch } },
+      context,
+    )
   const writeTargets = bashWriteTargets(command, context)
   const protectedTargets = writeTargets.filter(target =>
     context.protectedRoots.some(root => isInside(target, root)),

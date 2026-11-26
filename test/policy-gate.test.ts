@@ -16,7 +16,10 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { createControlPlane } from '../src/control-plane/server.js'
 import { loadConfig } from '../src/core/config.js'
 import { runtimeSettingsDefaults } from '../src/settings/runtime-settings.js'
-import { classifyToolCall } from '../src/executor/policy-gate.mjs'
+import {
+  approvalDirectories,
+  classifyToolCall,
+} from '../src/executor/policy-gate.mjs'
 import type { ToolCallClassification } from '../src/executor/policy-gate.mjs'
 import { historyTools } from '../src/executor/dsh-history-tools.mjs'
 import { conversationStateTools } from '../src/executor/dsh-readonly-surface.mjs'
@@ -66,6 +69,30 @@ function classify(
 }
 
 describe('policy gate classifier', () => {
+  it('offers directory trust only for bounded file operations and quoted patch shells', () => {
+    const roots = gateRoots()
+    const target = join(realpathSync(roots.dshHome), 'file.md')
+    const command = `apply_patch <<'PATCH'\n*** Begin Patch\n*** Add File: ${target}\n+ok\n*** End Patch\nPATCH`
+    expect(classify('bash', { command }, roots).category).toBe(
+      'control-plane-mutation',
+    )
+    expect(approvalDirectories('bash', [target], command)).toEqual([
+      realpathSync(roots.dshHome),
+    ])
+    for (const unsafe of [
+      command + '\necho unsafe',
+      command.replace('+ok', 'PATCH\necho unsafe'),
+      command.replace("<<'PATCH'", '<<PATCH'),
+      'echo x > ' + target,
+    ]) {
+      expect(approvalDirectories('bash', [target], unsafe)).toEqual([])
+    }
+    expect(approvalDirectories('write', ['/file.md'])).toEqual([])
+    expect(approvalDirectories('unknown', [target])).toEqual([])
+    expect(approvalDirectories('write', ['relative/file'])).toEqual([])
+    expect(approvalDirectories('write', [])).toEqual([])
+  })
+
   it('allows Pegas read-only projection tools without approval', () => {
     const roots = gateRoots()
     for (const [tool, arguments_] of [

@@ -2,12 +2,16 @@ import { createHash } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 import { isAbsolute, join, resolve, sep } from 'node:path'
 
-import { canonicalRuleTarget, classifyToolCall } from './policy-gate.mjs'
+import {
+  approvalDirectories,
+  canonicalRuleTarget,
+  classifyToolCall,
+} from './policy-gate.mjs'
 import { deriveWriteEffect } from './write-effect.mjs'
 
 /** @typedef {{ baseUrl: string, runId: string, claimToken: string }} BridgeCapability */
 /** @typedef {{ actionId: string, tool: string, argumentsHash: string }} ToolGrant */
-/** @typedef {{ id: string, tool: string, category: string, targets: string[], fingerprint: string }} ApprovalRule */
+/** @typedef {{ id: string, tool: string, category: string, targets: string[], fingerprint: string, scope?: string }} ApprovalRule */
 /** @typedef {{ eventId: string, text: string, createdAt: string }} MandateInstruction */
 /** @typedef {{ instructions: MandateInstruction[], omitted: boolean }} MandateProjection */
 /** @typedef {{ tier: import('./policy-gate.d.ts').PolicyTier, generation: string, mismatch: boolean, rules: ApprovalRule[], autoReviewEnabled: boolean, mandate: MandateProjection }} TierState */
@@ -220,7 +224,7 @@ export function apply(ctx, config = {}) {
             category: classification.category,
             risk: classification.risk,
             decision: 'allow',
-            reason: `命中本事情已批准规则：${matchedRule.tool}（${matchedRule.targets.join('、')}）。`,
+            reason: `命中已批准规则：${matchedRule.tool}（${matchedRule.targets.join('、')}）。`,
             ruleId: matchedRule.id,
             tier: tierState.tier,
             generation: tierState.generation,
@@ -533,12 +537,20 @@ export function apply(ctx, config = {}) {
         return 'rejected'
       }
       if (callKey !== undefined && classification !== undefined) {
-        const tierState = gateTiers.get(callKey)
+        const tierState = capability
+          ? await readTierState(capability)
+          : gateTiers.get(callKey)
         if (
           tierState &&
           matchApprovalRule(
             tierState,
-            { name: request.toolName },
+            {
+              name: request.toolName,
+              arguments:
+                captured?.command === undefined
+                  ? undefined
+                  : { command: captured.command },
+            },
             classification,
             policy,
           )
@@ -804,6 +816,7 @@ function normalizeRules(value) {
         category: record.category,
         targets: /** @type {string[]} */ (targets),
         fingerprint: record.fingerprint,
+        ...(typeof record.scope === 'string' ? { scope: record.scope } : {}),
       })
     }
   }
@@ -818,7 +831,7 @@ function normalizeRules(value) {
  * @returns {ApprovalRule | undefined}
  */
 function matchApprovalRule(tierState, execution, classification, policy) {
-  if (tierState.mismatch) return undefined
+  if (tierState.mismatch || tierState.tier === 'strict') return undefined
   if (classification.risk !== 'high') return undefined
   if (classification.category !== 'out-of-workspace-write') {
     return undefined
@@ -828,6 +841,33 @@ function matchApprovalRule(tierState, execution, classification, policy) {
     .filter(target => target !== undefined)
   if (targets.length === 0 || targets.length !== classification.targets.length)
     return undefined
+  const directories = approvalDirectories(
+    execution.name,
+    targets,
+    typeof execution.arguments === 'object' &&
+      execution.arguments !== null &&
+      'command' in execution.arguments &&
+      typeof execution.arguments.command === 'string'
+      ? execution.arguments.command
+      : undefined,
+  )
+  const directoryRule =
+    directories.length > 0
+      ? tierState.rules.find(
+          rule =>
+            (rule.scope === 'task_directory' ||
+              rule.scope === 'user_directory') &&
+            rule.category === classification.category &&
+            targets.every(target =>
+              rule.targets.some(
+                root =>
+                  canonicalRuleTarget(root, policy) === root &&
+                  (target === root || target.startsWith(root + sep)),
+              ),
+            ),
+        )
+      : undefined
+  if (directoryRule) return directoryRule
   const fingerprint = createHash('sha256')
     .update(
       JSON.stringify({
@@ -839,6 +879,7 @@ function matchApprovalRule(tierState, execution, classification, policy) {
     .digest('hex')
   return tierState.rules.find(
     rule =>
+      (rule.scope === undefined || rule.scope === 'exact') &&
       rule.tool === execution.name &&
       rule.category === classification.category &&
       rule.fingerprint === fingerprint,
@@ -926,9 +967,18 @@ function normalizePolicy(value) {
  */
 async function createApproval(capability, input) {
   const ruleEligible =
+    input.tierState?.tier !== 'strict' &&
+    input.tierState?.mismatch !== true &&
     input.classification.risk === 'high' &&
     input.classification.category === 'out-of-workspace-write' &&
     input.classification.targets.length > 0
+  const directories = ruleEligible
+    ? approvalDirectories(
+        input.tool,
+        input.classification.targets,
+        input.captured?.command,
+      )
+    : []
   const egressPayload =
     input.classification.category === 'network-egress' &&
     input.tool === 'bash' &&
@@ -952,6 +1002,7 @@ async function createApproval(capability, input) {
       reason: input.classification.reason,
       category: input.classification.category,
       targets: input.classification.targets,
+      ...(directories.length ? { trustedDirectories: directories } : {}),
       argumentsHash: input.captured?.argumentsHash ?? null,
       ...(input.captured?.effect === undefined
         ? {}
@@ -984,7 +1035,12 @@ async function createApproval(capability, input) {
     recoveryPoint: { step: 'before_tool_call', callId: input.callKey },
     approval: {
       summary: approvalSummary(input.tool, input.classification),
-      impact: input.classification.reason,
+      impact:
+        input.classification.reason +
+        (input.classification.category === 'out-of-workspace-write' &&
+        input.classification.targets.length === 0
+          ? ' 此请求未能确定具体目录，不能建立目录授权；可改用带明确路径的文件工具。'
+          : ''),
       recommendedOptionId: 'approve',
       options: [
         { id: 'approve', label: '批准执行一次', kind: 'approve' },
@@ -995,6 +1051,22 @@ async function createApproval(capability, input) {
                 label: '本事情内同类不再询问',
                 kind: 'approve_rule',
                 description: `仅覆盖 ${input.tool} 对相同目标（${input.classification.targets.join('、')}）的同类操作；参数内容变化不影响命中，目标变化会重新审批，可在事情详情撤销。`,
+              },
+            ]
+          : []),
+        ...(directories.length
+          ? [
+              {
+                id: 'approve_directory_task',
+                label: '本事情内信任这些目录',
+                kind: 'approve_rule',
+                description: `允许文件工具读写这些目录及子目录：${directories.join('、')}。本事情内有效，可在事情详情撤销；外发、破坏性操作和无法确定范围的命令仍需确认。`,
+              },
+              {
+                id: 'approve_directory_user',
+                label: '始终信任这些目录',
+                kind: 'approve_rule',
+                description: `允许文件工具读写这些目录及子目录：${directories.join('、')}。对你以后的事情持续有效，可在任意事情详情撤销；外发、破坏性操作和无法确定范围的命令仍需确认。`,
               },
             ]
           : []),

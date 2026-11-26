@@ -3603,7 +3603,7 @@ function ApprovalRulesSection({
     setRevokingId(rule.id)
     setRevokeError('')
     try {
-      const updated = await api.revokeApprovalRule(channel.id, rule.id)
+      const updated = await api.revokeApprovalRule(rule.taskId, rule.id)
       setRules(current =>
         current?.map(item => (item.id === updated.id ? updated : item)),
       )
@@ -3639,7 +3639,12 @@ function ApprovalRulesSection({
             <li className="approval-rule-item" key={rule.id}>
               <div>
                 <strong>
-                  {rule.tool} · {approvalRuleCategoryLabel(rule.category)}
+                  {rule.scope === 'user_directory'
+                    ? '始终信任目录'
+                    : rule.scope === 'task_directory'
+                      ? '本事情内信任目录'
+                      : `${rule.tool} · ${approvalRuleCategoryLabel(rule.category)}`}
+                  {rule.scope && rule.scope !== 'exact' && ' · 含子目录'}
                 </strong>
                 <small>{rule.targets.join('、')}</small>
                 <small>
