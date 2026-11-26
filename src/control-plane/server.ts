@@ -72,6 +72,7 @@ import { PrivacyMaskingProvider } from '../privacy/provider.js'
 import type { JsonModelProvider } from '../model/provider.js'
 import {
   parseRuntimeSettingsUpdate,
+  parseModelProviderConnection,
   type RuntimeSettings,
   type SettingsCapabilities,
 } from '../settings/runtime-settings.js'
@@ -464,6 +465,10 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
   const loadAgentModelCatalog = cachedAgentModelCatalog(
     options.agentModelCatalog,
     options.agentModelCatalogTtlMs,
+    () =>
+      options.store.hasRuntimeSettings()
+        ? options.store.getRuntimeSettings().revision
+        : 0,
   )
   const logger = options.logger
   const metrics = options.metrics
@@ -695,6 +700,7 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         const connection = modelProbeConnection(
           await readJson(request),
           options,
+          true,
         )
         const models = await discoverModelCatalog({
           protocol: connection.protocol,
@@ -2682,6 +2688,26 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
           message: error.message,
         })
       const message = error instanceof Error ? error.message : 'Unknown error'
+      if (
+        path === '/v1/settings/models/discover' ||
+        path === '/v1/settings/models/test'
+      ) {
+        const status = /(?:returned|返回)\s+(401|403|404|429|5\d\d)\b/.exec(
+          message,
+        )?.[1]
+        const guidance =
+          status === '401' || status === '403'
+            ? '密钥无效或没有模型权限，请检查 API Key。'
+            : status === '404'
+              ? '找不到模型接口，请检查 Base URL 和供应商。'
+              : status === '429'
+                ? '请求过于频繁，请稍后重试或检查额度。'
+                : '模型连接测试失败，请检查地址、Key 和网络后重试。'
+        return sendJson(response, 400, {
+          error: 'model_connection_failed',
+          message: guidance,
+        })
+      }
       logger?.error('http.request_failed', error, {
         method,
         route: metricRoute(path),
@@ -2712,23 +2738,36 @@ function metricRoute(path: string): string {
 function cachedAgentModelCatalog(
   load: ControlPlaneOptions['agentModelCatalog'],
   ttlMs = 5_000,
+  revision: () => number = () => 0,
 ): (() => Promise<DshModelCatalog>) | undefined {
   if (!load) return undefined
-  let cached: { value: DshModelCatalog; expiresAt: number } | undefined
-  let inFlight: Promise<DshModelCatalog> | undefined
+  let cached:
+    { value: DshModelCatalog; expiresAt: number; revision: number } | undefined
+  let inFlight:
+    { promise: Promise<DshModelCatalog>; revision: number } | undefined
   return async () => {
+    const currentRevision = revision()
     const now = Date.now()
-    if (cached && cached.expiresAt > now) return cached.value
-    if (inFlight) return inFlight
-    inFlight = load()
+    if (cached?.revision === currentRevision && cached.expiresAt > now)
+      return cached.value
+    if (inFlight?.revision === currentRevision) return inFlight.promise
+    const pending: Promise<DshModelCatalog> = load()
       .then(value => {
-        cached = { value, expiresAt: Date.now() + Math.max(0, ttlMs) }
+        // A load started before a settings save belongs only to its original
+        // callers; it must never populate the new revision's cache.
+        if (revision() === currentRevision)
+          cached = {
+            value,
+            expiresAt: Date.now() + Math.max(0, ttlMs),
+            revision: currentRevision,
+          }
         return value
       })
       .finally(() => {
-        inFlight = undefined
+        if (inFlight?.promise === pending) inFlight = undefined
       })
-    return inFlight
+    inFlight = { promise: pending, revision: currentRevision }
+    return pending
   }
 }
 
@@ -2826,6 +2865,7 @@ function explicitSteerIntent(
 function modelProbeConnection(
   value: unknown,
   options: ControlPlaneOptions,
+  discovery = false,
 ): {
   protocol: 'openai-chat' | 'anthropic-messages'
   baseUrl: string
@@ -2838,16 +2878,25 @@ function modelProbeConnection(
   }
   if (!isRecord(value)) throw new Error('Request body must be an object')
   const current = options.store.getRuntimeSettings()
-  const update = parseRuntimeSettingsUpdate(
-    {
-      ...current,
-      expectedRevision: current.revision,
-      modelProvider: value.modelProvider,
-      modelName: value.modelName,
-      provider: value.provider,
-    },
-    capabilities,
-  )
+  const update = discovery
+    ? {
+        provider: parseModelProviderConnection(
+          value.modelProvider,
+          value.provider,
+          capabilities,
+        ),
+        settings: { modelName: '' },
+      }
+    : parseRuntimeSettingsUpdate(
+        {
+          ...current,
+          expectedRevision: current.revision,
+          modelProvider: value.modelProvider,
+          modelName: value.modelName,
+          provider: value.provider,
+        },
+        capabilities,
+      )
   const stored = options.store.getModelProviderConnection(update.provider.id)
   const storedApiKey =
     !update.provider.clearApiKey &&

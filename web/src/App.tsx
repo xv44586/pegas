@@ -1145,7 +1145,14 @@ export function App() {
     if (!data.settings) throw new Error('模型设置仍在加载，请稍后重试。')
     try {
       await saveSettings(
-        { ...data.settings.settings, modelProvider, modelName },
+        {
+          ...data.settings.settings,
+          modelProvider,
+          modelName,
+          agentModelMode: 'override',
+          agentModelProvider: modelProvider,
+          agentModelName: modelName,
+        },
         provider,
       )
     } catch (caught) {
@@ -1946,7 +1953,10 @@ export function App() {
           response={data.settings}
           onSelectModel={selectAgentModel}
           onSaveConnection={saveOnboardingConnection}
-          onTestConnection={(provider, model, draft) =>
+          onTestConnection={(provider, draft) =>
+            api.discoverModels(provider, undefined, draft)
+          }
+          onTestModel={(provider, model, draft) =>
             api.testModel(provider, model, draft)
           }
           onReloadCatalog={() => void loadConfiguration(true)}

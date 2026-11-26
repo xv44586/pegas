@@ -105,7 +105,7 @@
 - Severity：normal
 - Status：Observed
 - Enforcement：SETTINGS-001 页面回归覆盖保存前后两个目录状态。
-- Owner / next action：后续改变模型目录加载时保留同一会话的验收路径。
+- Owner / next action：后续改变模型目录加载时保留同一会话的验收路径。2026-11-25 同日补证（Seen 仍为 1）：供应商目录局部 state 随 tab 卸载丢失；新增 tab/Provider 往返、连接编辑/取消、迟到响应与失败保留回归。连接测试通过仍不代表执行目录可用，桌面 PATH 问题另记下条。
 
 ### LESSON-20261125-03：恢复回执必须尊重已经提交的归类
 
@@ -185,23 +185,27 @@
 - Why：第一次修复让用户可以从 165 个模型中选择，却仍只呈现前 50 个结果，其余结果不能按浏览路径到达；获取成功反馈又以大字号独立卡片占据设置页，且 Router 模型与 Agent 执行模型在同一分类重复出现，造成配置归属不清。分页重构后，搜索框沿用了已经失效的父级选择器而退回浏览器默认宽度；“Magpie 排第一”也没有阻止默认 Router 继续使用规则模式和小模型池。
 - Feature：SETTINGS-001
 - Evidence：用户在 2026-11-18 和 2026-11-19 提供的模型设置截图；`web/src/App.test.tsx` 的大列表分页、搜索复位、模型选择、信息架构和 404 反馈回归；`test/config.test.ts`、`test/initial-model.test.ts` 与 `test/runtime-settings.test.ts` 的默认 Router/Magpie/指定模型回归；`test/workspace-theme.test.ts` 的搜索宽度、分页与紧凑反馈布局合同；`scripts/capture-ui-review.mjs` 的默认三元组断言、搜索几何断言及桌面/390px 截图。
-- Seen：3（2026-11-18、2026-11-19、2026-11-23）
+- Seen：4（2026-11-18、2026-11-19、2026-11-23、2026-11-25）
 - Severity：normal
 - Status：Promoted（2026-11-23）
 - Enforcement：已晋升为自动化门禁——`test/workspace-theme.test.ts`「keeps every model-selection entry on the paginated shared catalog」断言所有模型选择入口共享 30/页分页、composer 不按 Provider 过滤目录、UI review 携带分页断言与隔离模型网关；`scripts/capture-ui-review.mjs` `assertPickerPagination` 在桌面与 390px 真实布局断言 34 模型目录 30+4 分页完整可达；`test/dsh-home.test.ts` 与 `test/connection-catalog.test.ts` 钉死服务端目录装配（全目录注入、选中模型首位、单连接失败回退）。既有目录完整可达、搜索复位、默认三元组、单一配置归属、紧凑反馈回归继续生效。
 - Owner / next action：2026-11-23 用户报告对话框选择器固定 1 个模型（第三个独立日期）：根因是服务端受管 DSH patch 每 Provider 只声明 1 个模型 + composer 按接入点过滤且无分页；已修复并晋升门禁。同日后续：用户指出设置页 6 处仍是原生 select/手填框，已抽取共享 `web/src/sealed/ModelPicker.tsx` 统一全部入口（分页/搜索/置顶特殊值/手填保底），门禁扩展为断言三个消费方引用共享组件与搜索框容器聚焦合同；「抽取通用异步选项目录组件」候选项完成。
 
+- 2026-11-25 新证据：首次设置要求预填模型 ID 测试但测试不返回目录，形成「连接正常、模型不可选」断路。`web/src/App.test.tsx` 新增无需模型 ID 发现目录、预设 URL 编辑、先选择后原子保存、空目录/参数变更/推理失败及冲突重试回归；`test/control-plane.test.ts` 验证 discovery 无 modelName、受认证只读与错误脱敏；UI review 验证发现后先选模型再保存。
+
 ### LESSON-20261123-01：保存路径不得静默重置已配置的连接地址
 
-- Rule：非 custom Provider 的设置保存/探测路径必须保留 capabilities 中已存连接或环境配置的 baseUrl，不得无条件回写 preset 默认地址；隔离 UI/集成夹具必须断言请求真的落在夹具网关上。
+- Rule：非 custom Provider 的设置保存/探测路径必须保留 capabilities 中已存连接或环境配置的 baseUrl，显式提交的新 baseUrl 必须生效，不得无条件回写 preset 默认地址或旧地址；隔离 UI/集成夹具必须断言请求真的落在夹具网关上。
 - Why：`parseRuntimeSettingsUpdate` 对非 custom Provider 一律 `baseUrl: preset.baseUrl`，把 `PEGAS_MODEL_BASE_URL` 初始化的连接在目录探测/测试/保存时静默改写到 preset 地址；UI review 的 34 模型隔离网关因此被绕过，目录探测打到真实 Magpie 网关返回 83 个真实模型，隔离性失效且可能误导用户覆盖连接配置。
 - Feature：SETTINGS-001
 - Evidence：2026-11-23 UI review 隔离夹具断言失败（已读取 83 个模型 ≠ 34）；`test/runtime-settings.test.ts`「keeps the configured preset connection address instead of resetting it」回归；`scripts/capture-ui-review.mjs` 目录 34 模型计数断言。
-- Seen：1（2026-11-23）
+- Seen：2（2026-11-23、2026-11-25）
 - Severity：normal
 - Status：Observed
 - Enforcement：尚未晋升；回归测试 + UI review 夹具计数断言已落地。
 - Owner / next action：后续出现同类问题时补充独立日期证据；候选检查其他写路径是否存在 preset 覆盖已存配置的同类模式。
+
+- 2026-11-25 新证据：首次设置预设 URL 只读，服务端忽略显式提交的预设地址；已用 `test/runtime-settings.test.ts` 与 `test/control-plane.test.ts` 固定新地址生效、换地址不发送旧 Key、原地址凭证不被只读探测修改。
 
 ### LESSON-20261118-03：密文末字符变更不能稳定代表字节篡改
 
@@ -483,6 +487,18 @@
 - Enforcement：默认值共享与覆盖契约回归纳入 `pnpm check`。
 - Owner / next action：QUALITY-001。记录验收使用的模型；故障继续失败并保留诊断。
 
+### LESSON-20261126-03：配置保存必须同时隔离派生目录缓存与进行中请求
+
+- Rule：以权威设置 revision 标记派生模型目录的缓存和进行中加载；新版本不复用旧版本的结果，迟到旧结果不得污染新缓存。
+- Why：首次设置保存后立即刷新仍命中服务端 5 秒旧缓存，UI review 在 CI 和本地返回仅含 Magpie 的旧目录。
+- Feature：SETTINGS-001
+- Evidence：`test/control-plane.test.ts` 两项 HTTP 回归先红后绿，覆盖已缓存与旧请求未完成两种保存时序；完整文件 21 项通过。
+- Seen：1（2026-11-26）
+- Severity：normal
+- Status：Observed
+- Enforcement：HTTP 保存后立即读取目录的回归纳入 `pnpm check`；保留 UI 目录断言。
+- Owner / next action：SETTINGS-001。新增缓存时沿用同一设置版本边界。
+
 <!--
 ### LESSON-YYYYMMDD-NN：简短标题
 
@@ -496,3 +512,15 @@
 - Enforcement：尚未晋升
 - Owner / next action：
 -->
+
+### LESSON-20261125-07：桌面目录与执行器必须验证真实启动环境
+
+- Rule：模型目录和实际 Executor 使用同一 DSH 启动解析；桌面验收包含 Finder 最小 PATH 下的 Node CLI 启动，不把终端中 `dsh` 可用当作 GUI 可用。
+- Why：供应商 HTTP 探测成功，但桌面子进程继承 `/usr/bin:/bin:/usr/sbin:/sbin`，无法启动用户安装的 DSH；只补 DSH 绝对路径仍可能卡在 `env node`。
+- Feature：SETTINGS-001
+- Evidence：桌面实例目录 API 503、同机终端目录 200；新增 `test/dsh-model-catalog.test.ts` 最小 PATH 回归先报 ENOENT 再通过。真实 Electron 最小 PATH canary 发现和返回均为 63 模型；`test/dsh-launch.test.ts` 实际运行 Node CLI 并校验命令优先级。
+- Seen：1（2026-11-25）
+- Severity：normal
+- Status：Observed
+- Enforcement：共享启动器回归加入 `pnpm check`，未扩张仓库强制标准。
+- Owner / next action：SETTINGS-001。2026-11-26 用户授权使用已充值的 DeepSeek，合入 QUALITY-001 共享模型配置后 1,601 测试与 smoke 全绿；后续打包验证继续覆盖 GUI 最小 PATH。

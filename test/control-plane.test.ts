@@ -983,6 +983,16 @@ describe('control plane', () => {
       headers,
       body,
     })
+    const withoutModel = await fetch(`${baseUrl}/v1/settings/models/discover`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ ...JSON.parse(body), modelName: undefined }),
+    })
+    expect(withoutModel.status).toBe(200)
+    expect(await withoutModel.json()).toEqual({
+      models: [{ id: 'router-model', name: 'router-model' }],
+    })
+    expect(store.listModelProviderConnectionSummaries()).toEqual([])
     const tested = await fetch(`${baseUrl}/v1/settings/models/test`, {
       method: 'POST',
       headers,
@@ -999,6 +1009,185 @@ describe('control plane', () => {
       defaultModel: 'agent-default',
     })
   })
+
+  it('discovers edited preset URLs without leaking saved keys or upstream errors', async () => {
+    const authorizations: (string | undefined)[] = []
+    let status = 200
+    const upstream = createServer((request, response) => {
+      authorizations.push(request.headers.authorization)
+      response.writeHead(status, { 'content-type': 'application/json' })
+      response.end(
+        status === 200
+          ? JSON.stringify({ data: [{ id: 'discovered-model' }] })
+          : 'private-upstream-detail fixture-secret',
+      )
+    })
+    await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve))
+    const upstreamUrl = `http://127.0.0.1:${String((upstream.address() as AddressInfo).port)}/v1`
+    const store = new PegasStore(':memory:')
+    const vault = new ModelCredentialVault(Buffer.alloc(32, 9))
+    store.initializeRuntimeSettings({
+      routerMode: 'model',
+      modelProvider: 'magpie',
+      modelName: 'old-model',
+      agentModelMode: 'profile',
+      agentModelProvider: '',
+      agentModelName: '',
+      privacyMode: 'disabled',
+      rewriteMode: 'disabled',
+    })
+    store.updateRuntimeSettingsAndProvider(1, store.getRuntimeSettings(), {
+      id: 'magpie',
+      name: 'Magpie',
+      protocol: 'openai-chat',
+      baseUrl: 'https://old.example/v1',
+      apiKeyCiphertext: vault.encrypt('saved-fixture-key'),
+      clearApiKey: false,
+    })
+    const server = createControlPlane({
+      store,
+      apiToken: 'fixture-token',
+      modelCredentialVault: vault,
+      settingsCapabilities: () =>
+        settingsCapabilities(
+          loadConfig({}),
+          store.listModelProviderConnectionSummaries(),
+        ),
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    cleanups.push(
+      () => new Promise<void>(resolve => server.close(() => resolve())),
+      () => new Promise<void>(resolve => upstream.close(() => resolve())),
+      () => Promise.resolve(store.close()),
+    )
+    const endpoint = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}/v1/settings/models/discover`
+    const body = { modelProvider: 'magpie', provider: { baseUrl: upstreamUrl } }
+    const denied = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    expect(denied.status).toBe(401)
+    expect(authorizations).toEqual([])
+    const headers = {
+      'content-type': 'application/json',
+      authorization: 'Bearer fixture-token',
+    }
+    const discovered = await fetch(endpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    })
+    expect(discovered.status).toBe(200)
+    expect(await discovered.json()).toEqual({
+      models: [{ id: 'discovered-model', name: 'discovered-model' }],
+    })
+    expect(authorizations).toEqual([undefined])
+    status = 401
+    const failed = await fetch(endpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        ...body,
+        provider: { ...body.provider, apiKey: 'new-fixture-key' },
+      }),
+    })
+    expect(await failed.json()).toEqual({
+      error: 'model_connection_failed',
+      message: '密钥无效或没有模型权限，请检查 API Key。',
+    })
+    expect(authorizations).toEqual([undefined, 'Bearer new-fixture-key'])
+    expect(store.getRuntimeSettings().revision).toBe(2)
+    expect(store.getModelProviderConnection('magpie')?.baseUrl).toBe(
+      'https://old.example/v1',
+    )
+  })
+
+  it.each([false, true])(
+    'invalidates saved model catalogs across revisions (old load pending: %s)',
+    async pendingOld => {
+      const store = new PegasStore(':memory:')
+      store.initializeRuntimeSettings({
+        routerMode: 'rules',
+        modelProvider: 'magpie',
+        modelName: 'old',
+        agentModelMode: 'override',
+        agentModelProvider: 'magpie',
+        agentModelName: 'old',
+        privacyMode: 'disabled',
+        rewriteMode: 'disabled',
+      })
+      const config = loadConfig({})
+      const catalog = (model: string) => ({
+        defaultProvider: 'magpie',
+        defaultModel: model,
+        models: [{ provider: 'magpie', id: model, name: model }],
+      })
+      let releaseOld!: (value: ReturnType<typeof catalog>) => void
+      const old = new Promise<ReturnType<typeof catalog>>(resolve => {
+        releaseOld = resolve
+      })
+      let calls = 0
+      const server = createControlPlane({
+        store,
+        modelCredentialVault: new ModelCredentialVault(Buffer.alloc(32, 3)),
+        settingsCapabilities: () =>
+          settingsCapabilities(
+            config,
+            store.listModelProviderConnectionSummaries(),
+          ),
+        agentModelCatalogTtlMs: 60_000,
+        agentModelCatalog: () => {
+          calls += 1
+          return calls === 1
+            ? old
+            : Promise.resolve(catalog(store.getRuntimeSettings().modelName))
+        },
+      })
+      await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+      cleanups.push(
+        () => new Promise<void>(resolve => server.close(() => resolve())),
+        () => Promise.resolve(store.close()),
+      )
+      const origin = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+      const first = fetch(origin + '/v1/settings/agent-models')
+      await vi.waitFor(() => expect(calls).toBe(1))
+      if (!pendingOld) {
+        releaseOld(catalog('old'))
+        await first
+      }
+      const saved = await fetch(origin + '/v1/settings', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          ...store.getRuntimeSettings(),
+          expectedRevision: 1,
+          modelName: 'new',
+          agentModelName: 'new',
+          provider: {
+            name: 'Magpie',
+            protocol: 'openai-chat',
+            baseUrl: 'http://127.0.0.1:3425/v1',
+          },
+        }),
+      })
+      expect(saved.status).toBe(200)
+      const requested = new Promise<void>(resolve =>
+        server.once('request', () => resolve()),
+      )
+      const fresh = fetch(origin + '/v1/settings/agent-models')
+      await requested
+      releaseOld(catalog('old'))
+      expect(await (await fresh).json()).toEqual(catalog('new'))
+      expect(await (await first).json()).toEqual(catalog('old'))
+      // A late old response must neither replace the new cache nor become a
+      // shared load for a client observing the saved revision.
+      expect(
+        await (await fetch(origin + '/v1/settings/agent-models')).json(),
+      ).toEqual(catalog('new'))
+      expect(calls).toBe(2)
+    },
+  )
 
   it('shares an in-flight Agent model catalog load and retries failures', async () => {
     const store = new PegasStore(':memory:')
