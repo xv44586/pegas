@@ -165,10 +165,11 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 
 ### QUALITY-001：默认测试隔离付费模型（2026-11-26）
 
-- **状态**：本地实现与门禁通过，独立提交交付、待 CI / 集成；沿用 QUALITY-001。基线 `6b42c3df`，主工作区 clean，独立 `codex/fix-quality-001-offline-tests` worktree。
+- **状态**：本地实现与门禁通过，通过独立 Feature PR 集成（远程状态以 PR 为准）；沿用 QUALITY-001。基线 `6b42c3df`，主工作区 clean，独立 `codex/fix-quality-001-offline-tests` worktree。
 - **用户结果与验收**：普通 test/coverage/check 不自动收集四组真实模型验收；显式 test:live 保留全部 11 项原断言，依赖不可用则失败；普通 fetch 拦截真实出口；完整 check/smoke 通过。数据边界、失败恢复、非目标与回滚见 `docs/test-isolation.md`。
 - **权威实现**：`vitest.config.ts`、`vitest.live.config.ts`、`test/support/test-suites.ts`、`test/support/live-model.ts`、`test/support/offline-fetch.ts`、`test/support/offline-setup.ts`、`package.json`。
 - **证据**：四项收集回归 + 一项 smoke 配置回归先红后绿；定向 3 文件 / 31 项通过。对齐最新目标分支后 `pnpm check` 149 文件 / 1616 项通过、0 跳过，statement 78.25%、branch 71.73%、function 75.07%、line 81.31%，阈值未降；`pnpm smoke` 与继承开启记忆/改写环境的 smoke 均通过且零模型请求。四套件未授权收集显式失败；11 项真实验收测试体 AST 与基线一致，付费验收未执行。详见 `docs/test-isolation.md`。
+- **合并前复验（2026-11-26）**：rebase 最新 `origin/main`（`9755635d`）后，`pnpm check` 149 文件 / 1618 项通过、0 跳过，`pnpm smoke` 通过；真实付费验收未运行。
 - **下一缺口**：付费验收预算计量及子进程级网络隔离；本次不调用付费模型。
 
 ### QUALITY-001：真实模型门禁共享默认配置（2026-11-26）

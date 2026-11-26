@@ -26,4 +26,5 @@
 - `pnpm smoke` 通过，Task→Run、通知 webhook、定时 Automation 与零模型请求断言通过；额外在继承 `PEGAS_MEMORY_PROVIDER=hindsight PEGAS_REWRITE_MODE=light` 时也通过。
 - `env -u PEGAS_LIVE_TESTS pnpm exec vitest run --config vitest.live.config.ts` 按预期拒绝全部四组套件（4 个显式 opt-in 错误，0 个测试执行），没有网关探测或 DSH 启动。
 - 四组 11 项真实验收的 TypeScript 测试体 AST 与基线一致，原有断言和文字参数保留。付费验收未运行，不声称本次验证了上游模型质量。
-- 交付为独立 Feature 提交；尚未推送、运行远程 CI 或合并主分支。
+- 初次交付为独立 Feature 提交，后续通过 PR 集成；远程 CI 和合并状态以对应 PR 记录为准。
+- 合并前复验（2026-11-26）：rebase 最新 `origin/main`（`9755635d`）无冲突，`pnpm check` 149 文件 / 1618 项通过、0 跳过；statement 78.31%、branch 71.76%、function 75.12%、line 81.37%；`pnpm smoke` 通过。未运行付费验收。
