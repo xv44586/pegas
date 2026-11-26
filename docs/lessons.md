@@ -499,6 +499,18 @@
 - Enforcement：默认值共享与覆盖契约回归纳入 `pnpm check`。
 - Owner / next action：QUALITY-001。记录验收使用的模型；故障继续失败并保留诊断。
 
+### LESSON-20261126-03：配置保存必须同时隔离派生目录缓存与进行中请求
+
+- Rule：以权威设置 revision 标记派生模型目录的缓存和进行中加载；新版本不复用旧版本的结果，迟到旧结果不得污染新缓存。
+- Why：首次设置保存后立即刷新仍命中服务端 5 秒旧缓存，UI review 在 CI 和本地返回仅含 Magpie 的旧目录。
+- Feature：SETTINGS-001
+- Evidence：`test/control-plane.test.ts` 两项 HTTP 回归先红后绿，覆盖已缓存与旧请求未完成两种保存时序；完整文件 21 项通过。
+- Seen：1（2026-11-26）
+- Severity：normal
+- Status：Observed
+- Enforcement：HTTP 保存后立即读取目录的回归纳入 `pnpm check`；保留 UI 目录断言。
+- Owner / next action：SETTINGS-001。新增缓存时沿用同一设置版本边界。
+
 <!--
 ### LESSON-YYYYMMDD-NN：简短标题
 
