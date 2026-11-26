@@ -471,6 +471,18 @@
 - Enforcement：Web 回归纳入 `pnpm check`。
 - Owner / next action：NOTIFY-004。新增历史交付入口时沿用同一读取路径。
 
+### LESSON-20261126-02：真实模型门禁共享默认值并显式配置可用路由
+
+- Rule：真实集成套件复用产品默认模型，通过显式环境变量覆盖可用路由；不能把目录可读当作推理成功，不能通过跳过断言让上游故障变绿。
+- Why：四个套件写死的旧 Qwen 路由返回 401；默认路由最小请求可成功，但完整工具调用返回配额 429。
+- Feature：QUALITY-001
+- Evidence：`test/live-model.test.ts` 两项先红后绿；四套件保留原断言，显式模型执行真实 Router 与 DSH 请求。
+- Seen：1（2026-11-26）
+- Severity：normal
+- Status：Observed
+- Enforcement：默认值共享与覆盖契约回归纳入 `pnpm check`。
+- Owner / next action：QUALITY-001。记录验收使用的模型；故障继续失败并保留诊断。
+
 <!--
 ### LESSON-YYYYMMDD-NN：简短标题
 

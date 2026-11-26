@@ -1,3 +1,4 @@
+import { liveModelName } from './support/live-model.js'
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'
 import type { AddressInfo } from 'node:net'
@@ -71,12 +72,12 @@ describe.skipIf(!dshAvailable || !gatewayReachable)(
           },
         ],
         vault: { decrypt: () => 'placeholder-key' },
-        agentModel: { provider: 'magpie', model: 'qwen-cn-2/qwen4-max' },
+        agentModel: { provider: 'magpie', model: liveModelName() },
       })
       const router = new ModelTaskRouter({
         provider: new OpenAiCompatibleProvider({
           baseUrl: 'http://127.0.0.1:3425/v1',
-          model: 'qwen-cn-2/qwen4-max',
+          model: liveModelName(),
           apiKey: 'placeholder-key',
           timeoutMs: 60_000,
         }),
