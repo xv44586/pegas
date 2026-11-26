@@ -1300,6 +1300,19 @@ export function ConversationPage({
                 event.currentTarget.form?.requestSubmit()
               }
             }}
+            onPaste={event => {
+              const imageItem = Array.from(event.clipboardData.items).find(
+                item => item.kind === 'file' && item.type.startsWith('image/'),
+              )
+              const image =
+                imageItem?.getAsFile() ??
+                Array.from(event.clipboardData.files).find(file =>
+                  file.type.startsWith('image/'),
+                )
+              if (!image) return
+              event.preventDefault()
+              selectAttachment(image)
+            }}
             placeholder={
               dictation.state === 'recording'
                 ? voiceDirectSend

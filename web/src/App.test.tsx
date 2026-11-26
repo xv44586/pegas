@@ -12500,6 +12500,41 @@ describe('sealed Pegas UI', () => {
     expect(screen.queryByText(/附件：/)).toBeNull()
   })
 
+  it('adds a pasted image as an attachment without intercepting text paste', async () => {
+    installFetch()
+    render(<App />)
+    const composer = await screen.findByLabelText('给 Pegas 发消息')
+    const image = new File(['image bytes'], 'clipboard.png', {
+      type: 'image/png',
+    })
+
+    expect(
+      fireEvent.paste(composer, {
+        clipboardData: {
+          files: [image],
+          items: [
+            {
+              getAsFile: () => image,
+              kind: 'file',
+              type: 'image/png',
+            },
+          ],
+        },
+      }),
+    ).toBe(false)
+    expect(await screen.findByText(/附件：/)).toBeTruthy()
+    expect(screen.getByText('clipboard.png')).toBeTruthy()
+
+    expect(
+      fireEvent.paste(composer, {
+        clipboardData: {
+          files: [],
+          items: [{ kind: 'string', type: 'text/plain' }],
+        },
+      }),
+    ).toBe(true)
+  })
+
   it('opens an uploaded attachment preview from the task timeline', async () => {
     stubImagePreview()
     const sourceEvent = snapshot.events[0]
