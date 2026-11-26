@@ -3881,18 +3881,6 @@ function DerivedMemoryCorrectionForm({
   const [correction, setCorrection] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
-  const dialogRef = useRef<HTMLElement>(null)
-  useEffect(() => {
-    dialogRef.current?.focus()
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        onCancel()
-      }
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [onCancel])
   async function submit() {
     if (saving) return
     const next = correction.trim()
@@ -3911,59 +3899,54 @@ function DerivedMemoryCorrectionForm({
     }
   }
   return (
-    <div
-      className="modal-backdrop"
-      onMouseDown={event => event.target === event.currentTarget && onCancel()}
-    >
-      <section
+    <Dialog open onOpenChange={open => !open && onCancel()}>
+      <DialogContent
         aria-label="纠正自动记忆"
-        aria-modal="true"
-        className="command-dialog record-form"
-        ref={dialogRef}
-        role="dialog"
-        tabIndex={-1}
+        aria-describedby={undefined}
+        className="record-form flex max-h-[min(720px,86dvh)] w-[min(560px,calc(100vw-32px))] flex-col p-0"
       >
-        <header className="record-form-header">
-          <h2>纠正自动记忆</h2>
-          <button aria-label="关闭" onClick={onCancel} type="button">
-            <X size={18} />
-          </button>
+        <header className="record-form-header flex items-center justify-between border-b border-line px-4.5 py-3.5">
+          <DialogTitle>纠正自动记忆</DialogTitle>
         </header>
-        <div className="record-form-body">
+        <div className="record-form-body overflow-auto px-4.5 py-4">
           {error && (
-            <div className="page-error" role="alert">
+            <div
+              className="mb-4 rounded-card bg-red-tint p-3 text-[13px] text-red-text"
+              role="alert"
+            >
               {error}
             </div>
           )}
-          <p className="field-hint">原内容：{memory.text}</p>
-          <label className="field-label">
-            正确内容
-            <textarea
+          <p className="my-3 text-[12px] leading-[1.6] text-ink-2">
+            原内容：{memory.text}
+          </p>
+          <FormField className="my-3.5" label="正确内容">
+            <TextArea
               maxLength={4_000}
               onChange={event => setCorrection(event.target.value)}
               rows={3}
               value={correction}
             />
-          </label>
-          <p className="field-hint">
+          </FormField>
+          <p className="my-3 text-[12px] leading-[1.6] text-ink-2">
             旧内容会立即停止注入；新内容由 Worker 在后台沉淀，不需要审批。
           </p>
         </div>
-        <footer className="record-form-footer">
-          <button className="quiet-button" onClick={onCancel} type="button">
+        <footer className="record-form-footer flex items-center justify-end gap-2 border-t border-line px-4.5 py-3">
+          <Button variant="quiet" onClick={onCancel} type="button">
             取消
-          </button>
-          <button
-            className="primary-button"
+          </Button>
+          <Button
+            variant="primary"
             disabled={saving}
             onClick={() => void submit()}
             type="button"
           >
             {saving ? '保存中…' : '保存纠正'}
-          </button>
+          </Button>
         </footer>
-      </section>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 

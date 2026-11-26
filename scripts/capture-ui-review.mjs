@@ -15,6 +15,8 @@ import { relative, resolve, sep } from 'node:path'
 
 import { chromium } from 'playwright'
 
+import { verifyUiOverlays } from './verify-ui-overlays.mjs'
+
 const repositoryRoot = resolve(import.meta.dirname, '..')
 const args = process.argv.slice(2)
 const option = name => {
@@ -281,6 +283,7 @@ try {
   await page.goto(`http://127.0.0.1:${String(port)}/`)
   const composerInput = page.getByRole('textbox', { name: '给 Pegas 发消息' })
   await composerInput.waitFor()
+  await verifyUiOverlays(page, capture, 'desktop')
   await capture(page, 'desktop-conversation.png', 'desktop-conversation')
   await composerInput.focus()
   await capture(page, 'desktop-composer-focus.png', 'desktop-composer-focus')
@@ -775,6 +778,7 @@ try {
     name: '给 Pegas 发消息',
   })
   await mobileComposer.waitFor()
+  await verifyUiOverlays(mobilePage, capture, 'mobile')
   await capture(mobilePage, 'mobile-conversation.png', 'mobile-conversation')
   await mobileComposer.focus()
   await capture(

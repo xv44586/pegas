@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react'
 import { useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -32,6 +38,33 @@ import {
 afterEach(cleanup)
 
 describe('BUI component library', () => {
+  it('returns focus to the opener of a controlled dialog without DialogTrigger', async () => {
+    function ControlledDialog() {
+      const [open, setOpen] = useState(false)
+      return (
+        <>
+          <button onClick={() => setOpen(true)}>编辑记录</button>
+          <Dialog open={open} onOpenChange={setOpen}>
+            <DialogContent aria-describedby={undefined}>
+              <DialogTitle>编辑记录窗口</DialogTitle>
+              <input aria-label="内容" />
+            </DialogContent>
+          </Dialog>
+        </>
+      )
+    }
+    render(<ControlledDialog />)
+    const opener = screen.getByRole('button', { name: '编辑记录' })
+    opener.focus()
+    fireEvent.click(opener)
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('textbox')),
+    )
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    await waitFor(() => expect(document.activeElement).toBe(opener))
+  })
+
   it('renders the pill button variants with press feedback classes', () => {
     render(
       <div className="bui">
