@@ -752,10 +752,10 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 
 ### SETTINGS-001：tab 目录保持与桌面执行目录（2026-11-25）
 
-- **交付状态**：`DONE_WITH_CONCERNS`，独立 worktree 修复，尚未合并或发布；沿用 Feature 总体 Usable，不宣称完整门禁已绿。
+- **交付状态**：源码门禁已通过，等待最终 CI 与统一发布；沿用 Feature 总体 Usable。2026-11-25 的 `DONE_WITH_CONCERNS` 上游测试阻塞已于次日按用户授权切换 DeepSeek 后解除。
 - **根因与权威实现**：模型服务局部 state 随 tab 卸载清空；Finder PATH 缺少 DSH/Node，桌面实例 `agent-models` 返回 503，而直接供应商探测成功。`web/src/sealed/SettingsPage.tsx` 按 Provider 保持设置会话的目录投影，恢复已保存服务端目录，连接编辑/取消/保存使缓存失效，迟到响应不跨连接。`src/executor/dsh-launch.ts` 为 `dsh-model-catalog.ts` 与 `dsh-cli-executor.ts` 提供同一 CLI 定位和 Node 入口启动规则，保留命令优先级与隔离 profile。
 - **自动化与实机证据**：两个原始复现先红后绿；`web/src/App.test.tsx` 新增 tab/Provider 往返、连接变更、迟到响应、刷新失败保留与取消草稿用例；`test/dsh-model-catalog.test.ts` 最小 Finder PATH 回归；`test/dsh-launch.test.ts` 验证实际 Node 子进程、PATH 优先、显式命令、shell/相对 wrapper 和缺失命令。相关 4 文件 / 289 测试通过。真实 Electron + 桌面已保存连接 + 最小 PATH 返回全部 63 模型；build、smoke、真实 DSH HTTP 合同 4 场景通过。
-- **门禁与下一缺口**：最终 `pnpm check`：151 文件 / 1,599 测试，1,588 通过、11 个现有真实供应商用例因上游 401 失败；format、brand、lint、typecheck、Knip 均通过。未修改基线 `28509be3` 的相同 4 文件 / 11 用例全部复现。需要供应商认证恢复后复验，不改凭证或跳过门禁。当前运行实例仍待 Candidate 发布。
+- **门禁与下一缺口**：最终 `pnpm check`：151 文件 / 1,599 测试，1,588 通过、11 个现有真实供应商用例因上游 401 失败；format、brand、lint、typecheck、Knip 均通过。未修改基线 `28509be3` 的相同 4 文件 / 11 用例全部复现。2026-11-26 按用户授权使用已充值的 `deepseek/deepseek-flash`，合入 QUALITY-001 共享测试配置（main `5de2602e`）后执行 `PEGAS_LIVE_MODEL=deepseek/deepseek-flash pnpm check`：152 文件 / 1,601 测试全部通过，覆盖率 statement 78.21%、branch 71.78%、function 75.05%、line 81.26%；build 与 smoke 通过。保留全部真实场景及断言，未改 Magpie 凭证。当前运行实例仍待统一 Candidate 发布。
 - **边界与回滚**：仅内存目录投影，不落浏览器凭证、不把草稿目录当作执行模型事实；无数据库迁移。验收和失败恢复见 `docs/runtime-settings.md` Intake。revert 本次提交即可，线上只经不可变 Candidate / Supervisor 切换。
 
 ### CONV-002：旧 DS Bot 壳层的处置（2026-11-19）
