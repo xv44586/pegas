@@ -1170,9 +1170,25 @@ describe('sealed Pegas UI', () => {
   })
 
   it('clears the saved notice when the draft is edited again or cancelled', async () => {
+    let currentSettings = settingsResponse
+    let saves = 0
     installFetch((path, init) => {
-      if (path === '/v1/settings' && init?.method === 'PUT')
-        return Response.json(settingsResponse)
+      if (path === '/v1/settings' && init?.method === 'PUT') {
+        const update = JSON.parse(String(init.body)) as {
+          chatLaneEnabled: boolean
+        }
+        saves += 1
+        currentSettings = {
+          ...currentSettings,
+          settings: {
+            ...currentSettings.settings,
+            revision: currentSettings.settings.revision + 1,
+            chatLaneEnabled: update.chatLaneEnabled,
+          },
+        }
+        return Response.json(currentSettings)
+      }
+      if (path === '/v1/settings') return Response.json(currentSettings)
       if (path.startsWith('/v1/routing-rules?'))
         return Response.json({ rules: [] })
       return undefined
@@ -1185,16 +1201,34 @@ describe('sealed Pegas UI', () => {
     )
     fireEvent.click(await screen.findByRole('button', { name: /事情归类/ }))
     expect(screen.queryByRole('button', { name: '保存更改' })).toBeNull()
+    const expectedChecked =
+      screen.getByLabelText('启用即时应答').getAttribute('aria-checked') !==
+      'true'
     fireEvent.click(screen.getByLabelText('启用即时应答'))
     expect(screen.getByText('有未保存的更改')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
     await screen.findByText('更改已保存')
+    await waitFor(() => {
+      expect(saves).toBe(1)
+      expect(currentSettings.settings.revision).toBe(
+        settingsResponse.settings.revision + 1,
+      )
+      expect(screen.queryByRole('button', { name: '保存更改' })).toBeNull()
+      expect(
+        screen.getByLabelText('启用即时应答').getAttribute('aria-checked'),
+      ).toBe(String(expectedChecked))
+    })
     fireEvent.click(screen.getByLabelText('启用即时应答'))
     await waitFor(() => expect(screen.queryByText('更改已保存')).toBeNull())
+    expect(screen.getByText('有未保存的更改')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '取消' }))
     await waitFor(() =>
       expect(screen.queryByRole('button', { name: '保存更改' })).toBeNull(),
     )
+    expect(saves).toBe(1)
+    expect(
+      screen.getByLabelText('启用即时应答').getAttribute('aria-checked'),
+    ).toBe(String(expectedChecked))
   })
 
   it('shows no idle spinner on the unconfigured pool fixed option', async () => {
@@ -1367,6 +1401,7 @@ describe('sealed Pegas UI', () => {
   })
 
   it('EXEC-005: toggles the chat lane from settings and persists the switch', async () => {
+    let saveCount = 0
     let savedBody: Record<string, unknown> | undefined
     let currentSettings: SettingsResponse = {
       ...settingsResponse,
@@ -1374,6 +1409,7 @@ describe('sealed Pegas UI', () => {
     }
     installFetch((path, init) => {
       if (path === '/v1/settings' && init?.method === 'PUT') {
+        saveCount += 1
         savedBody = JSON.parse(
           typeof init.body === 'string' ? init.body : '{}',
         ) as Record<string, unknown>
@@ -1406,6 +1442,7 @@ describe('sealed Pegas UI', () => {
     await waitFor(() =>
       expect(screen.queryByRole('button', { name: '保存更改' })).toBeNull(),
     )
+    expect(saveCount).toBe(1)
     expect(savedBody?.chatLaneEnabled).toBe(true)
     expect(
       screen.getByLabelText('启用即时应答').getAttribute('aria-checked'),
@@ -1413,6 +1450,13 @@ describe('sealed Pegas UI', () => {
     fireEvent.click(screen.getByLabelText('启用即时应答'))
     fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
     await screen.findByText('更改已保存')
+    await waitFor(() => {
+      expect(saveCount).toBe(2)
+      expect(currentSettings.settings.revision).toBe(
+        settingsResponse.settings.revision + 2,
+      )
+      expect(screen.queryByRole('button', { name: '保存更改' })).toBeNull()
+    })
     expect(savedBody?.chatLaneEnabled).toBe(false)
     expect(
       screen.getByLabelText('启用即时应答').getAttribute('aria-checked'),
