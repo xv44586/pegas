@@ -1591,3 +1591,330 @@ describe('DESIGN-009 contextual follow-ups', () => {
     )
   })
 })
+
+describe('DESIGN-009 prompt bar', () => {
+  it('opens the add menu before invoking the file picker', async () => {
+    installChatFetch(baseSnapshot)
+    render(<App />)
+    await screen.findByLabelText('给 Pegas 发消息')
+    const input = screen.getByLabelText('选择附件文件')
+    const chooseFile = vi.spyOn(input, 'click')
+    fireEvent.click(screen.getByRole('button', { name: '添加内容' }))
+    expect(chooseFile).not.toHaveBeenCalled()
+    fireEvent.click(
+      await screen.findByRole('menuitem', { name: /添加照片和文件/ }),
+    )
+    expect(chooseFile).toHaveBeenCalledOnce()
+  })
+
+  it('offers slash commands and opens the real model picker without sending a message', async () => {
+    const fetchMock = installChatFetch(baseSnapshot)
+    render(<App />)
+    const input = await screen.findByLabelText('给 Pegas 发消息')
+    fireEvent.change(input, { target: { value: '/model' } })
+    expect(await screen.findByRole('option', { name: /选择模型/ })).toBeTruthy()
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(await screen.findByRole('dialog', { name: '选择模型' })).toBeTruthy()
+    expect(
+      fetchMock.mock.calls.some(
+        ([path, init]) =>
+          typeof path === 'string' &&
+          path.startsWith('/v1/events') &&
+          init?.method === 'POST',
+      ),
+    ).toBe(false)
+  })
+
+  it.each(['/not-a-command', '/unknown123', '/unknown_cmd'])(
+    'keeps unknown slash command %s local and preserves the draft',
+    async command => {
+      const fetchMock = installChatFetch(baseSnapshot)
+      render(<App />)
+      const input = await screen.findByLabelText('给 Pegas 发消息')
+      fireEvent.change(input, { target: { value: command } })
+      fireEvent.click(screen.getByRole('button', { name: '发送' }))
+      expect(await screen.findByRole('alert')).toHaveProperty(
+        'textContent',
+        expect.stringContaining('未知命令'),
+      )
+      expect(input).toHaveProperty('value', command)
+      expect(
+        fetchMock.mock.calls.some(
+          ([path, init]) =>
+            typeof path === 'string' &&
+            path.startsWith('/v1/events') &&
+            init?.method === 'POST',
+        ),
+      ).toBe(false)
+    },
+  )
+})
+
+describe('DESIGN-009 prompt bar boundaries', () => {
+  it('selects a Chinese @ task and sends through the existing task target', async () => {
+    const fetchMock = installChatFetch(baseSnapshot)
+    render(<App />)
+    const input = await screen.findByLabelText('给 Pegas 发消息')
+    fireEvent.change(input, { target: { value: '@季度' } })
+    fireEvent.click(await screen.findByRole('option', { name: /整理季度数据/ }))
+    expect(input).toHaveProperty('value', '')
+    expect(await screen.findByText('继续事情：')).toBeTruthy()
+    fireEvent.change(input, { target: { value: '继续核对收入' } })
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    await waitFor(() => {
+      const request = fetchMock.mock.calls.find(
+        ([path, init]) => path === '/v1/events' && init?.method === 'POST',
+      )
+      expect(JSON.parse(request?.[1]?.body as string)).toMatchObject({
+        payload: { text: '继续核对收入', taskId: 'task-1' },
+      })
+    })
+  })
+
+  it('requires the existing stop confirmation and never sends /stop to the agent', async () => {
+    const fetchMock = installChatFetch(baseSnapshot)
+    render(<App />)
+    const input = await screen.findByLabelText('给 Pegas 发消息')
+    fireEvent.change(input, { target: { value: '/stop' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    const confirmation = await screen.findByRole('alertdialog', {
+      name: '确定停止这件事？',
+    })
+    expect(
+      fetchMock.mock.calls.some(
+        ([path, init]) =>
+          typeof path === 'string' &&
+          path.includes('/stop') &&
+          init?.method === 'POST',
+      ),
+    ).toBe(false)
+    fireEvent.click(
+      within(confirmation).getByRole('button', { name: '确认停止' }),
+    )
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([path, init]) =>
+            typeof path === 'string' &&
+            path.includes('/stop') &&
+            init?.method === 'POST',
+        ),
+      ).toBe(true),
+    )
+    expect(
+      fetchMock.mock.calls.some(
+        ([path, init]) => path === '/v1/events' && init?.method === 'POST',
+      ),
+    ).toBe(false)
+  })
+
+  it('keeps stop errors visible and preserves input when no task is stoppable', async () => {
+    installChatFetch({ ...baseSnapshot, channels: [], runs: [] })
+    render(<App />)
+    const input = await screen.findByLabelText('给 Pegas 发消息')
+    fireEvent.change(input, { target: { value: '/stop' } })
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    expect(await screen.findByRole('alert')).toHaveProperty(
+      'textContent',
+      '当前没有可停止的事情。',
+    )
+    expect(input).toHaveProperty('value', '/stop')
+  })
+
+  it('ignores IME confirmation and supports keyboard completion and Escape', async () => {
+    installChatFetch(baseSnapshot)
+    render(<App />)
+    const input = await screen.findByLabelText('给 Pegas 发消息')
+    fireEvent.change(input, { target: { value: '/' } })
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true, keyCode: 229 })
+    expect(input).toHaveProperty('value', '/')
+    expect(screen.getAllByRole('option')).toHaveLength(5)
+    fireEvent.keyDown(input, { key: 'ArrowDown' })
+    expect(
+      screen
+        .getByRole('option', { name: /添加照片和文件/ })
+        .getAttribute('aria-selected'),
+    ).toBe('true')
+    fireEvent.keyDown(input, { key: 'Escape' })
+    await waitFor(() =>
+      expect(screen.queryByRole('listbox', { name: '基础命令' })).toBeNull(),
+    )
+    expect(input).toHaveProperty('value', '/')
+  })
+
+  it('routes /attach to the file picker and /help to local help', async () => {
+    installChatFetch(baseSnapshot)
+    render(<App />)
+    const input = await screen.findByLabelText('给 Pegas 发消息')
+    const chooseFile = vi.spyOn(screen.getByLabelText('选择附件文件'), 'click')
+    fireEvent.change(input, { target: { value: '/attach' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(chooseFile).toHaveBeenCalledOnce()
+    fireEvent.change(input, { target: { value: '/help' } })
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    expect(await screen.findByRole('menu', { name: '基础命令' })).toBeTruthy()
+    expect(input).toHaveProperty('value', '')
+  })
+
+  it('restores automatic targeting without discarding attachments', async () => {
+    installChatFetch(baseSnapshot)
+    render(<App />)
+    const input = await screen.findByLabelText('给 Pegas 发消息')
+    fireEvent.change(input, { target: { value: '@季度' } })
+    fireEvent.click(await screen.findByRole('option', { name: /整理季度数据/ }))
+    fireEvent.change(screen.getByLabelText('选择附件文件'), {
+      target: { files: [new File(['notes'], 'notes.txt')] },
+    })
+    fireEvent.change(input, { target: { value: '/auto' } })
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    expect(screen.queryByText('继续事情：')).toBeNull()
+    expect(screen.getByText('notes.txt')).toBeTruthy()
+  })
+
+  it('preserves prose around a caret @ token and excludes cancelled tasks', async () => {
+    installChatFetch({
+      ...baseSnapshot,
+      channels: [
+        ...baseSnapshot.channels,
+        {
+          ...channel,
+          id: 'cancelled',
+          title: '已停止事情',
+          status: 'cancelled',
+        },
+      ],
+    })
+    render(<App />)
+    const input =
+      await screen.findByLabelText<HTMLTextAreaElement>('给 Pegas 发消息')
+    fireEvent.change(input, {
+      target: {
+        value: '请继续 @季度 后续',
+        selectionStart: 7,
+        selectionEnd: 7,
+      },
+    })
+    fireEvent.select(input, { target: { selectionStart: 7, selectionEnd: 7 } })
+    fireEvent.click(await screen.findByRole('option', { name: /整理季度数据/ }))
+    expect(input.value).toBe('请继续  后续')
+    fireEvent.change(input, { target: { value: '@已停止' } })
+    expect(await screen.findByText(/没有匹配的事情/)).toBeTruthy()
+    expect(screen.queryByRole('option', { name: /已停止事情/ })).toBeNull()
+  })
+
+  it('does not interpret a URL or slash inside prose as a command', async () => {
+    const fetchMock = installChatFetch(baseSnapshot)
+    render(<App />)
+    const input = await screen.findByLabelText('给 Pegas 发消息')
+    fireEvent.change(input, {
+      target: { value: '查看 https://example.com/a/b 和 /tmp/file' },
+    })
+    expect(screen.queryByRole('listbox', { name: '基础命令' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([path, init]) => path === '/v1/events' && init?.method === 'POST',
+        ),
+      ).toBe(true),
+    )
+  })
+
+  it('rejects command arguments instead of silently losing text', async () => {
+    const fetchMock = installChatFetch(baseSnapshot)
+    render(<App />)
+    const input = await screen.findByLabelText('给 Pegas 发消息')
+    fireEvent.change(input, { target: { value: '/model 这段正文要保留' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(await screen.findByRole('alert')).toHaveProperty(
+      'textContent',
+      expect.stringContaining('不接受参数'),
+    )
+    expect(input).toHaveProperty('value', '/model 这段正文要保留')
+    expect(
+      fetchMock.mock.calls.some(
+        ([path, init]) => path === '/v1/events' && init?.method === 'POST',
+      ),
+    ).toBe(false)
+  })
+
+  it('keeps a draft while navigating the add menu and restores focus on Escape', async () => {
+    installChatFetch(baseSnapshot)
+    render(<App />)
+    const input = await screen.findByLabelText('给 Pegas 发消息')
+    fireEvent.change(input, { target: { value: '未发送草稿' } })
+    const trigger = screen.getByRole('button', { name: '添加内容' })
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' })
+    const menu = await screen.findByRole('menu', { name: '添加内容' })
+    fireEvent.keyDown(menu, { key: 'End' })
+    expect(document.activeElement).toBe(
+      screen.getByRole('menuitem', { name: /基础命令/ }),
+    )
+    fireEvent.keyDown(document.activeElement ?? menu, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+    expect(input).toHaveProperty('value', '未发送草稿')
+    expect(document.activeElement).toBe(trigger)
+  })
+})
+
+it('preserves text after a bare slash instead of clearing it as help', async () => {
+  installChatFetch(baseSnapshot)
+  render(<App />)
+  const input = await screen.findByLabelText('给 Pegas 发消息')
+  fireEvent.change(input, { target: { value: '/ 这段正文不能丢失' } })
+  fireEvent.click(screen.getByRole('button', { name: '发送' }))
+  expect(await screen.findByRole('alert')).toHaveProperty(
+    'textContent',
+    expect.stringContaining('正文已保留'),
+  )
+  expect(input).toHaveProperty('value', '/ 这段正文不能丢失')
+})
+
+it.each(['/model\nfirst\nsecond', '/unknown\nfirst\nsecond'])(
+  'keeps multiline command %s local without losing the draft',
+  async draft => {
+    const fetchMock = installChatFetch(baseSnapshot)
+    render(<App />)
+    const input = await screen.findByLabelText('给 Pegas 发消息')
+    fireEvent.change(input, { target: { value: draft } })
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    expect(await screen.findByRole('alert')).toBeTruthy()
+    expect(input).toHaveProperty('value', draft)
+    expect(
+      fetchMock.mock.calls.some(
+        ([path, init]) => path === '/v1/events' && init?.method === 'POST',
+      ),
+    ).toBe(false)
+  },
+)
+
+it('preserves steer and queue for path-leading prose while blocking command bypass', async () => {
+  installChatFetch(baseSnapshot)
+  render(<App />)
+  const input = await screen.findByLabelText('给 Pegas 发消息')
+  fireEvent.change(input, { target: { value: '@季度' } })
+  fireEvent.click(await screen.findByRole('option', { name: /整理季度数据/ }))
+  fireEvent.change(input, { target: { value: '/tmp/file 请检查这个文件' } })
+  expect(screen.getByRole('button', { name: '插话' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: '排队' })).toBeTruthy()
+  fireEvent.change(input, { target: { value: '/stop' } })
+  expect(screen.queryByRole('button', { name: '插话' })).toBeNull()
+  expect(screen.queryByRole('button', { name: '排队' })).toBeNull()
+})
+
+it.each(['/stop', '/model'])(
+  'reports unavailable command %s on Enter and preserves input',
+  async command => {
+    installChatFetch({ ...baseSnapshot, channels: [], runs: [] }, path =>
+      path === '/v1/settings/agent-models'
+        ? Response.json({ models: [] })
+        : undefined,
+    )
+    render(<App />)
+    const input = await screen.findByLabelText('给 Pegas 发消息')
+    fireEvent.change(input, { target: { value: command } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(await screen.findByRole('alert')).toBeTruthy()
+    expect(input).toHaveProperty('value', command)
+  },
+)
