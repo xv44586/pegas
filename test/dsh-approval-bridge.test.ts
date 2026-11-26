@@ -598,6 +598,103 @@ console.log(JSON.stringify({
   })
 })
 
+describe('DSH approval outcome ownership contract', () => {
+  const capturePrompt = () =>
+    fakeDsh(`
+let input = ''
+process.stdin.setEncoding('utf8')
+for await (const chunk of process.stdin) input += chunk
+console.log(JSON.stringify({
+  type: 'final', sessionId: 'session-contract', text: input,
+  reason: { kind: 'completed' }
+}))
+`)
+
+  it.each(['fresh', 'approved', 'rejected', 'business'] as const)(
+    'keeps bridge-owned outcomes out of manual instructions on %s runs',
+    async phase => {
+      const grant = {
+        actionId: 'tool-action-9',
+        tool: 'bash',
+        argumentsHash: 'hash-9',
+      }
+      const result = await new DshCliExecutor({
+        command: capturePrompt(),
+        approvalPolicy: 'ask',
+      }).execute({
+        runId: 'run-contract',
+        taskId: 'task-contract',
+        prompt:
+          phase === 'fresh'
+            ? '创建 PR'
+            : JSON.stringify({
+                type: 'approval.decision',
+                actionId: grant.actionId,
+                decision: phase === 'rejected' ? 'reject' : 'approve',
+                action: {
+                  kind:
+                    phase === 'business' ? 'publish.release' : 'dsh.tool.bash',
+                },
+              }),
+        workingDirectory: process.cwd(),
+        ...(phase !== 'fresh' ? { resumeSessionId: 'session-contract' } : {}),
+        ...(phase === 'approved' ? { toolApprovalGrant: grant } : {}),
+        actionCapability: {
+          baseUrl: 'http://127.0.0.1:4317',
+          claimToken: 'claim',
+        },
+      })
+      expect(result.output).toContain(
+        'dsh.tool.* 的审批与 outcome 由审批桥自动管理',
+      )
+      expect(result.output).toContain('不要手动回写这些工具 Action 的 outcome')
+      expect(result.output).toContain('不得用当前 Run 的凭证补写旧 Action')
+      if (phase === 'approved') {
+        expect(result.output).toContain('本次工具授权：')
+        expect(result.output).toContain('"actionId":"tool-action-9"')
+        expect(result.output).not.toContain(
+          'POST /v1/actions/:actionId/outcomes',
+        )
+        expect(result.output).not.toContain('stable-outcome-key')
+      } else {
+        expect(result.output).toContain(
+          '仅对你显式创建的非 dsh.tool.* 业务 Action',
+        )
+        expect(result.output).toContain('POST /v1/actions/:actionId/outcomes')
+      }
+    },
+  )
+
+  it.each(['never', 'ask-without-capability'] as const)(
+    'retains the manual business lifecycle when the bridge is not mounted (%s)',
+    async mode => {
+      const result = await new DshCliExecutor({
+        command: capturePrompt(),
+        approvalPolicy: mode === 'never' ? 'never' : 'ask',
+      }).execute({
+        runId: 'run-manual',
+        taskId: 'task-manual',
+        prompt: '发布业务结果',
+        workingDirectory: process.cwd(),
+        ...(mode === 'never'
+          ? {
+              actionCapability: {
+                baseUrl: 'http://127.0.0.1:4317',
+                claimToken: 'claim',
+              },
+            }
+          : {}),
+      })
+      expect(result.output).not.toContain(
+        'dsh.tool.* 的审批与 outcome 由审批桥自动管理',
+      )
+      expect(result.output).toContain('POST /v1/runs/:runId/approvals')
+      expect(result.output).toContain('POST /v1/actions/:actionId/outcomes')
+      expect(result.output).toContain('stable-outcome-key')
+    },
+  )
+})
+
 describe('DshCliExecutor approval parking', () => {
   it('returns approvalPending instead of failing when the bridge parks the run', async () => {
     const command = fakeDsh(`
@@ -750,76 +847,107 @@ console.log(JSON.stringify({
 })
 
 describe('worker tool approval loop', () => {
-  it('settles a parked run as waiting and grants the approved successor exactly once', async () => {
-    const store = new PegasStore(':memory:')
-    const server = createControlPlane({ store, apiToken: 'loop-test' })
-    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
-    const baseUrl = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
-    const command = fakeDsh(loopDshSource())
-    const executor = new DshCliExecutor({ command, approvalPolicy: 'ask' })
-    try {
-      store.enqueueEvent({
-        userId: 'owner',
-        type: 'user.message',
-        source: 'test',
-        payload: { text: '在沙箱外写入文件' },
-      })
-      await processNextEvent(
-        store,
-        new RoutingEventHandler(new RuleBasedTaskRouter(), executor.name),
-        'worker-loop',
-      )
-      const claimed = store.claimNextRun('worker-loop')
-      if (!claimed) throw new Error('Expected claimed Run')
-      await executeClaimedRun(
-        store,
-        executor,
-        claimed,
-        'worker-loop',
-        process.cwd(),
-        new AbortController().signal,
-        baseUrl,
-      )
-      const approval = store.pageApprovals('owner', 10).items[0]
-      if (!approval) throw new Error('Expected parked Approval')
-      expect(store.listRuns(claimed.task.id).at(-1)).toMatchObject({
-        status: 'waiting',
-      })
-      expect(store.findTask(claimed.task.id, 'owner')).toMatchObject({
-        statusReason: 'awaiting_approval',
-      })
-      expect(store.claimNextRun('other-worker')).toBeUndefined()
+  it.each([false, true])(
+    'settles the bridge-owned outcome once without a manual approval loop (failed=%s)',
+    async failed => {
+      const store = new PegasStore(':memory:')
+      const server = createControlPlane({ store, apiToken: 'loop-test' })
+      await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+      const baseUrl = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+      const command = fakeDsh(loopDshSource(failed))
+      const executor = new DshCliExecutor({ command, approvalPolicy: 'ask' })
+      try {
+        const foreign = createClaimedRun(
+          store,
+          'owner',
+          'foreign-outcome-worker',
+        )
+        store.enqueueEvent({
+          userId: 'owner',
+          type: 'user.message',
+          source: 'test',
+          payload: { text: '在沙箱外写入文件' },
+        })
+        await processNextEvent(
+          store,
+          new RoutingEventHandler(new RuleBasedTaskRouter(), executor.name),
+          'worker-loop',
+        )
+        const claimed = store.claimNextRun('worker-loop')
+        if (!claimed) throw new Error('Expected claimed Run')
+        await executeClaimedRun(
+          store,
+          executor,
+          claimed,
+          'worker-loop',
+          process.cwd(),
+          new AbortController().signal,
+          baseUrl,
+        )
+        const approval = store.pageApprovals('owner', 10).items[0]
+        if (!approval) throw new Error('Expected parked Approval')
+        expect(store.listRuns(claimed.task.id).at(-1)).toMatchObject({
+          status: 'waiting',
+        })
+        expect(store.findTask(claimed.task.id, 'owner')).toMatchObject({
+          statusReason: 'awaiting_approval',
+        })
+        expect(store.claimNextRun('other-worker')).toBeUndefined()
 
-      store.decideApproval(approval.id, 'owner', {
-        commandId: 'loop-approve',
-        optionId: 'approve',
-      })
-      const successor = store.claimNextRun('worker-loop-resumed')
-      if (!successor) throw new Error('Expected successor Run')
-      await executeClaimedRun(
-        store,
-        executor,
-        successor,
-        'worker-loop-resumed',
-        process.cwd(),
-        new AbortController().signal,
-        baseUrl,
-      )
-      expect(store.getAction(approval.actionId, 'owner')).toMatchObject({
-        status: 'succeeded',
-      })
-      expect(store.listRuns(claimed.task.id).at(-1)).toMatchObject({
-        status: 'completed',
-      })
-      const outboxTypes = outboxPayloadTypes(store)
-      expect(outboxTypes.filter(type => type === 'run.completed')).toHaveLength(
-        1,
-      )
-    } finally {
-      await new Promise<void>(resolve => server.close(() => resolve()))
-      store.close()
-    }
-  })
+        store.decideApproval(approval.id, 'owner', {
+          commandId: 'loop-approve',
+          optionId: 'approve',
+        })
+        const successor = store.claimNextRun('worker-loop-resumed')
+        if (!successor) throw new Error('Expected successor Run')
+        await executeClaimedRun(
+          store,
+          executor,
+          successor,
+          'worker-loop-resumed',
+          process.cwd(),
+          new AbortController().signal,
+          baseUrl,
+        )
+        expect(store.getAction(approval.actionId, 'owner')).toMatchObject({
+          status: failed ? 'failed' : 'succeeded',
+          result: { tool: 'bash', callId: 'call-granted' },
+        })
+        expect(store.pageApprovals('owner', 10).items).toHaveLength(1)
+        expect(store.listRuns(claimed.task.id)).toHaveLength(2)
+        // A different Run still cannot overwrite the bridge's recorded outcome.
+        const overwrite = await fetch(
+          `${baseUrl}/v1/actions/${approval.actionId}/outcomes`,
+          {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              'x-pegas-run-claim-token': foreign.claimToken,
+            },
+            body: JSON.stringify({
+              commandId: 'foreign-outcome',
+              status: 'succeeded',
+              result: {},
+            }),
+          },
+        )
+        expect(overwrite.status).toBe(403)
+        expect(await overwrite.json()).toMatchObject({
+          error: 'run_claim_invalid',
+        })
+        expect(store.listRuns(claimed.task.id).at(-1)).toMatchObject({
+          status: 'completed',
+        })
+        const outboxTypes = outboxPayloadTypes(store)
+        expect(
+          outboxTypes.filter(type => type === 'run.completed'),
+        ).toHaveLength(1)
+      } finally {
+        await new Promise<void>(resolve => server.close(() => resolve()))
+        store.close()
+      }
+    },
+  )
 
   it('does not grant a rejected or foreign approval decision', async () => {
     const store = new PegasStore(':memory:')
@@ -882,7 +1010,7 @@ describe('worker tool approval loop', () => {
   })
 })
 
-function loopDshSource(): string {
+function loopDshSource(failed = false): string {
   return `
 async function main() {
 let input = ''
@@ -914,15 +1042,31 @@ if (prompt.startsWith('{"type":"approval.decision"')) {
   console.log(JSON.stringify({
     type: 'tool_result', callId: 'call-granted', status: 'completed'
   }))
-  const response = await fetch(baseUrl + '/v1/actions/' + context.actionId + '/outcomes', {
-    method: 'POST', headers,
-    body: JSON.stringify({
-      commandId: 'loop-outcome:' + context.actionId,
-      status: 'succeeded',
-      result: { tool: 'bash', callId: 'call-granted' }
-    })
+  // Exercise the real post-execute bridge, not an Agent-owned HTTP write.
+  const contract = input.slice(prompt.length)
+  if (contract.includes('POST /v1/actions/:actionId/outcomes')) {
+    throw new Error('bridge-owned successor still instructs the Agent to write outcomes')
+  }
+  const fs = require('node:fs')
+  const args = process.argv.slice(2)
+  const patches = args.flatMap((value, index) => value === '--patch'
+    ? JSON.parse(fs.readFileSync(args[index + 1], 'utf8')) : [])
+  const config = patches.flatMap(patch => patch.insert ?? [])
+    .find(entry => entry.id === 'pegas-approval-bridge').config
+  const { apply } = await import(${JSON.stringify(new URL('../src/executor/dsh-approval-bridge.mjs', import.meta.url).href)})
+  const handlers = new Map()
+  apply({ on: (name, handler) => handlers.set(name, handler) }, {
+    grant: config.grant,
+    emit: event => console.log(JSON.stringify(event))
   })
-  if (!response.ok) throw new Error('outcome failed: ' + response.status)
+  const exec = { agent: {}, callId: 'call-granted', name: 'bash', arguments: { command: 'echo approved' } }
+  await handlers.get('tools/pre-execute')(exec, async () => ({ kind: 'allow' }))
+  const allowed = await handlers.get('approval/request')(
+    { agent: {}, toolName: 'bash', callId: exec.callId }, async () => 'unavailable')
+  if (allowed !== 'allowed-once') throw new Error('missing one-time tool grant')
+  await handlers.get('tools/post-execute')(exec, { isError: ${String(failed)} }, async () => ({ kind: 'accept' }))
+  // Duplicate delivery of the hook must not issue a second outcome write.
+  await handlers.get('tools/post-execute')(exec, { isError: ${String(failed)} }, async () => ({ kind: 'accept' }))
   console.log(JSON.stringify({
     type: 'final', sessionId,
     text: '已按批准执行一次。',
@@ -938,7 +1082,7 @@ const response = await fetch(baseUrl + '/v1/runs/' + runId + '/approvals', {
     idempotencyKey: 'loop:' + runId + ':call-1',
     request: {
       tool: 'bash', callId: 'call-1', reason: 'escalate sandbox',
-      argumentsHash: 'loop-hash'
+      argumentsHash: '${stableHash({ command: 'echo approved' })}'
     },
     recoveryPoint: { step: 'before_tool_call', callId: 'call-1' },
     approval: {

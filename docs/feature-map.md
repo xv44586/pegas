@@ -1274,3 +1274,13 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - 验收：复现 completed → follow-up queued → claim 的全链路及服务端 workflow；有结果的 failed 不再拦新输入运行，unknown/未结算动作仍保持原保护；重试、新 Approval、目标变更仍遵循原有各自作用域的权限校验，新 Run 不复用旧动作授权。
 - 非目标：改写历史动作结果、自动提交人工核对、修改审批分类、增加新的恢复权限或前端猜测。无需数据库迁移；失败时保留原审计，回滚代码即恢复原行为，已排队 Run 不重建不复制。
 - 权威实现：`src/storage/sqlite-store.ts`；自动化：`test/action-reconciliation.test.ts` 两条回归先红后绿，相关审批测试 41 项通过；最终完整 `pnpm check` 153 文件、1711 项全过（无跳过），`pnpm smoke` 通过。真实事件的只读一致性快照验证：原 queued Run 能被领取为 running，workflow 为 queued，未改写生产库。证据保存在本地 `output/reconciliation-entry/`；发布需继续通过精确提交 CI 与 Supervisor Candidate 验证。APPROVAL-001 整体维持 Usable；下一缺口仍按本 Feature 主条目追踪。
+
+### APPROVAL-001：工具审批 outcome 单一归属（2026-11-26）
+
+- **Intake / 隔离**：主工作区基线 `154a9b205c0df268ff56e2cb2fb243187f7b8e79`、clean，保留 `fix/clipboard-image-paste` 原状；从最新 `origin/main` `34c2b9daff217a2e661e242dc62a52cdc6aa4507` 创建独占 worktree `pegas-worktrees/approval-001-outcome-ownership`，分支 `fix/APPROVAL-001-outcome-ownership`。复用 APPROVAL-001，整体保持 Partial。
+- **用户结果 / 验收**：桥管理的 `dsh.tool.*` 审批恢复后，Executor 明确由桥记录 outcome，不再按通用提示手动回写或为回写再次请求审批；桥只记录一次，任务正常收尾。未启用桥及显式业务审批仍保留手动生命周期；错误/跨 Run capability 仍返回 403。
+- **非目标 / 边界**：不放宽服务端权限、不更改 Action 状态机/数据库、不修改 Router、客户端或线上数据，不合并或发布当前 PR。只使用 Executor 已掌握的桥挂载状态及服务端核验的 grant 描述本次职责，不从用户正文推断授权。
+- **失败 / 恢复 / 回滚**：桥上报失败沿用现有失败与人工核对路径；不让 Agent 以旧 actionId、新 Run claim 补写或重做已发生副作用。重试继续使用现有幂等键。无迁移，独立 revert 恢复原提示；存量 outcome 不改写。
+- **权威实现 / 自动化证据**：`src/executor/dsh-cli-executor.ts` 按真实桥挂载状态生成合同，服务端核验 grant 的恢复仅说明自动结算职责，不再注入手动 Approval/outcome 示例；`src/executor/dsh-approval-bridge.mjs` 仍是自动回写权威。`test/dsh-approval-bridge.test.ts` 初轮 5 条先红（3 条职责合同、2 条成功/失败恢复），修复后定向 3 文件 / 81 测试通过；fixture 改用真实桥 post-execute + 真实 Control Plane/SQLite，验证单审批双 Run、成功/失败、重复 hook、拒绝恢复和跨 Run 403。新增共 7 条测试，桥接文件合计 18 条。
+- **完整门禁 / 集成**：本 worktree `pnpm check` 通过（153 文件 / 1739 通过，既有 instance-token 裸进程用例因首次构建前无 dist 条件跳过 1 条；构建后单独补跑该文件 7/7 通过）。覆盖率 statements 78.96%、branches 72.66%、functions 75.88%、lines 81.94%；格式/品牌/Lint/类型/Knip/三端构建全绿。`pnpm smoke` 通过（task `942e28f3-cf8c-4561-8ecf-799e47165a2f`），真实控制面/Worker/Scheduler/通知/SQLite 闭环。门禁后重新 fetch 确认目标仍为 `34c2b9da`，无新增集成差异。
+- **交付 / 下一缺口**：提交修复 PR，未合并或发布；真实模型在旧会话历史中的遵循度需上线后观察，不能把合同测试等同模型行为保证。现存会话与外部副作用不做回填。整体保持 Partial；CI 与审查 head 在 PR 中记录。
