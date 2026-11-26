@@ -381,6 +381,12 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - **原子归类回执**：成功归类与短收集窗内的全部 Inbox 回执同事务提交。任一版本的领取失效则整批回滚；提交后的所有输入已处理，已归类到事情的补充共享目标时间线。回归覆盖写入前失去次条领取和写入后进程中断。
 - **服务端复核（2026-11-25）**：短收集窗中的原消息共享审批阻塞的提交边界。任一领取失效则整批回滚，等待结算期间每条都保留为独立待处理输入。拒绝审批后恢复每条输入，原始顺序仍由 Inbox 领取。权威实现为 `processNextEvent`、`parkEventsForBlockedAction`，`test/routing-cost.test.ts` 回归先失败再通过。范围和无迁移回退见 [Router 与 Worker](router-worker-design.md)。
 
+### EXEC-005：保存后再次编辑门禁（2026-11-26）
+
+- **Intake**：基线 `9755635d`，独立 clean worktree `exec-005-settings-notice` / `fix/exec-005-settings-notice`；CI run 45747326916 重现已有保存提示测试失败。
+- **验收**：测试服务端按 PUT 实际更新设置与 revision；第二次编辑前确认保存后的开关与干净状态；连续保存断言绑定本次 PUT 与 revision，不复用旧成功提示。
+- **边界 / 恢复**：仅修正测试夹具和同步条件，不修改运行时代码、权限、数据或 API；无迁移，回滚测试提交即可。回归先红后绿，完整 check/smoke 与 CI 通过后集成。
+
 ### ROUTE-004 + EXEC-005：即时应答车道（2026-11-22）
 
 - **用户结果**：日常提问/闲聊由 reply 决策进入 conversation 车道，在用户级滚动 session 上秒级应答，不产生重量级 Channel、不占用重任务执行预算；需要副作用的请求经 suggest_task 升级回完整 Task 门禁；chat 正文零确认（PLAN-001 决策 2 C'）。
