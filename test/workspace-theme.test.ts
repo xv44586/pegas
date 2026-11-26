@@ -163,7 +163,7 @@ describe('sealed UI layout contracts', () => {
       new URL('../web/src/sealed/Onboarding.tsx', import.meta.url),
       'utf8',
     )
-    expect(onboarding).toContain('role="group" aria-label="默认模型"')
+    expect(onboarding).toMatch(/role="group"\s+aria-label="默认模型"/)
     expect(onboarding).not.toMatch(/<input[\s>]/)
     expect(sealedUi).not.toMatch(/\.setup-form input,/)
     const app = readFileSync(
