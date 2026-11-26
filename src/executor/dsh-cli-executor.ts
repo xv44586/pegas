@@ -5,6 +5,11 @@ import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 
+import {
+  answerFollowUpsContract,
+  splitAnswerFollowUps,
+} from '../conversation/follow-ups.js'
+
 import type { ModelTokenUsage } from '../core/domain.js'
 import type { DshModelConfiguration } from './dsh-home.js'
 import { dshLaunch } from './dsh-launch.js'
@@ -354,6 +359,8 @@ export class DshCliExecutor implements RunExecutor {
     let streamError: string | undefined
     let pendingAssistantText: string[] = []
     let acknowledgementEmitted = false
+    let progressText = ''
+    let emittedProgressLength = 0
     let usage: ModelTokenUsage | undefined
     let reportedSteps = 0
     let unreportedSteps = 0
@@ -405,7 +412,13 @@ export class DshCliExecutor implements RunExecutor {
           pendingAssistantText.push(event.text)
         }
         if (event.type === 'text' && acknowledgementEmitted) {
-          input.onProgress?.({ type: 'message', text: event.text })
+          progressText += event.text
+          const visible = splitAnswerFollowUps(progressText, true).text
+          const delta = visible.slice(emittedProgressLength)
+          if (delta) {
+            input.onProgress?.({ type: 'message', text: delta })
+            emittedProgressLength = visible.length
+          }
         }
         if (event.type === 'thinking') {
           input.onProgress?.({ type: 'thinking', text: event.text })
@@ -1189,6 +1202,7 @@ status 只能是 succeeded、failed 或 unknown。idempotencyKey 和 commandId �
 用户要求周期性地围绕当前事情继续（例如“每分钟报一个数，从 1 数到 10”“每小时检查一次构建”）时，使用同一组环境变量和 claim header 调用 POST /v1/runs/:runId/automations，请求体为 {"commandId":"stable-key","prompt":"每次触发要做的事","everySeconds":60,"startsAt":"可选，ISO-8601 未来时间且必须带时区偏移或 Z","title":"可选短标题"}。everySeconds 最小 60。服务端把它保存为周期 Automation 并固定续接当前事情；prompt 必须自足描述每一次触发要做什么、如何判断进度与何时停止（例如数到 10 后调用取消接口收尾），因为每次触发是独立的机器输入。创建成功后立即结束当前 turn 或继续剩余工作，把周期性等待交给调度器；禁止用 sleep/循环在当前 Run 里模拟周期任务。到点由 Pegas 调度器唤醒当前事情；事情已停止或完成时不会唤醒，周期责任也不会复活已关闭的事情。收尾或调整时用同一 claim header 调用 POST /v1/runs/:runId/automations/:automationId/pause（或 resume、cancel），请求体为 {"commandId":"stable-key","expectedRevision":当前 revision}；只能操作续接当前事情的 Automation，创建响应里带 id 和 revision。commandId 是网络重试键，同一周期 Automation 或状态命令重试必须保持原键和完全相同的 payload。
 
 用户意图不完整、需要形成或修订可验收目标时，由你（实际 Executor）在检查真实工具与权限后提交 Goal Contract：POST /v1/runs/:runId/goal-proposals，使用同一 claim header。请求体为 {"commandId":"stable-key","goal":{完整 GoalContractDraft}}。goal 必须包含 basedOnEventIds（引用本 Task 已有输入事件，含 PEGAS_INPUT_EVENT_ID）、desiredOutcome、successCriteria（每条含稳定 criterionId、observableStatement、required、evidencePlanRef）、evidencePlan（每条含 id、criterionId、acceptedKinds、acceptedTrustClasses、minimumCount、presentation）以及 beneficiaries、nonGoals、constraints、contextSources、assumptions、unknowns、prerequisites、permissionBoundary、reviewCheckpoints、failureAndRecovery、feedbackSignals 数组/对象字段。只把会实质改变结果、成本、权限或风险的未知项标记 unknowns[].blocking=true；存在 blocking 未知项时 Pegas 会把问题交给用户并暂停执行，你提交后应立即结束当前 turn 等待用户回答。没有 blocking 未知项时提交成功后继续按新合同执行。用户明确要求交付后由其验收时，在 goal 中设置 requireAcceptance:true；其他事情省略该字段。不要为简单明确的低风险请求强行发起访谈；目标或权限范围扩大必须通过新 revision 而不是覆盖原始输入。commandId 是网络重试键，同一提案重试必须保持原键和完全相同的 payload。
+${answerFollowUpsContract}
 </pegas_execution_contract>`
 }
 

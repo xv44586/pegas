@@ -120,3 +120,5 @@ export {
 } from './overlays/CommandPalette'
 
 export { cn } from './lib/utils'
+
+export { FollowUpList } from './components/primitives/FollowUpList'

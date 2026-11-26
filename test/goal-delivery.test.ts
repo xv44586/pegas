@@ -55,7 +55,8 @@ describe('GOAL-001 delivery contracts', () => {
         reportSequence: 1,
         status: 'ready',
         evidenceRefIds: [evidence.id],
-        summary: 'Ready for the owner to check.',
+        summary:
+          'Ready for the owner to check.\nPEGAS_QUESTIONS_BEGIN\n["What assumptions affect this result?"]\nPEGAS_QUESTIONS_END',
         limitations: [],
         remainingRisks: [],
       })
@@ -82,6 +83,11 @@ describe('GOAL-001 delivery contracts', () => {
         )
       if (!review) throw new Error('Expected a review decision card')
       expect(review.projection?.lane).toBe('decide')
+      expect(review.payload).toMatchObject({
+        text: 'Ready for the owner to check.',
+        followUps: ['What assumptions affect this result?'],
+      })
+      expect(report.report.summary).toBe('Ready for the owner to check.')
       store.markOutboxRead(review.id, 'owner')
       expect(store.findTask(seeded.taskId, 'owner')?.statusReason).toBe(
         'awaiting_delivery_acceptance',

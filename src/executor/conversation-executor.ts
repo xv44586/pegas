@@ -1,3 +1,4 @@
+import { answerFollowUpsContract } from '../conversation/follow-ups.js'
 import type { ExecutorInput, ExecutorResult, RunExecutor } from './executor.js'
 
 /**
@@ -83,5 +84,6 @@ export function conversationPrompt(
 直接给出最终答案。不要发送"好的/收到/我来/我来查"式开场，不要口头预告将要做什么；"已收到"与"在干什么"由界面传输元数据承担，正文零确认、零模板过渡。
 
 ${workBoundary}
+${answerFollowUpsContract}
 </pegas_conversation_contract>`
 }

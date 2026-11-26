@@ -312,3 +312,7 @@
 - 修复：①`PageHeader` 新增 `hasPageSearch`，「所有事情」「待你处理」两页工具栏不再重复渲染全局搜索按钮；⌘K/Ctrl+K 与其他页面入口不变。②`.page-search` 接入与 `model-search` 相同的容器聚焦合同（`:focus-within` 边框 accent、内部 `outline: none`、placeholder muted、search 原生外观清除），并把两页搜索 input 统一为 `type="search"`。③排序按钮改为真实菜单（`role="menu"` + `menuitemradio`，最近更新/最近创建/最近结束），语义与 CHANNEL-003 服务端 `sort` 合同一致：updated=`latestActivityAt`、created=`createdAt`、ended=`endedAt ?? updatedAt`，同刻按 id 倒序稳定排序；排序作用于已加载快照列表，是视图投影，不改服务端事实。Esc/外点关闭并还原焦点；≤520px 不再隐藏排序入口，随筛选行横向滚动可达。
 - 边界：排序菜单结构对齐既有 `.message-derived-menu` 弹层模式（局部 `position: relative` 包含块 + `--shadow-pop`）；纯前端交互适配，无服务端契约与存储变更；回滚 revert 即恢复。
 - 门禁：`web/src/App.test.tsx` +2（单页单搜索入口 + ⌘K 保留、三种排序顺序/菜单语义/Esc 焦点还原）；`web/src/sealed/types.test.ts` +2（排序投影不变更输入、ended 回退与 id 决胜）；`test/workspace-theme.test.ts` +2（page-search 容器聚焦合同、排序菜单局部包含块）；`scripts/capture-ui-review.mjs` 新增搜索聚焦几何断言与桌面/移动排序菜单 fixture（`desktop-all-work-search-focus`、`desktop-all-work-sort-menu`、`mobile-all-work-sort-menu`），移动端排序按钮 44px 触控断言。
+
+### DESIGN-009：回复末尾的上下文追问
+
+`FollowUpList` 从 BUI `StreamingText` 的追问行提取为共享组件；主对话展示服务端 `followUps`，仅定稿后出现，有 0–3 条具体问题，不再以固定问题冒充建议。原生按钮保留 Tab 顺序和 Enter/空格激活；有草稿、附件或听写/发送中时以 `aria-disabled` 和可见原因阻止覆盖，保持键盘可发现性。选中后聚焦输入器并绑定原回复，只由用户发送。桌面/390px UI review 覆盖流式隐藏、焦点、键盘采纳和已有草稿保护，沿用既有视觉与权限边界。

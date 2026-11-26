@@ -1,3 +1,4 @@
+import { verifyAnswerFollowUps } from './verify-answer-follow-ups.mjs'
 import { execFileSync, spawn } from 'node:child_process'
 import {
   chmodSync,
@@ -284,6 +285,7 @@ try {
   const composerInput = page.getByRole('textbox', { name: '给 Pegas 发消息' })
   await composerInput.waitFor()
   await verifyUiOverlays(page, capture, 'desktop')
+  await verifyAnswerFollowUps(page, capture, 'desktop')
   await capture(page, 'desktop-conversation.png', 'desktop-conversation')
   await composerInput.focus()
   await capture(page, 'desktop-composer-focus.png', 'desktop-composer-focus')
@@ -779,6 +781,7 @@ try {
   })
   await mobileComposer.waitFor()
   await verifyUiOverlays(mobilePage, capture, 'mobile')
+  await verifyAnswerFollowUps(mobilePage, capture, 'mobile')
   await capture(mobilePage, 'mobile-conversation.png', 'mobile-conversation')
   await mobileComposer.focus()
   await capture(

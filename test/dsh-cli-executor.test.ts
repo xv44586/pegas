@@ -26,6 +26,30 @@ afterEach(() => {
 })
 
 describe('DshCliExecutor', () => {
+  it('keeps final question metadata out of work activity even across stream chunks', async () => {
+    const output =
+      '分析完成。\nPEGAS_QUESTIONS_BEGIN\n["为什么出现差异？"]\nPEGAS_QUESTIONS_END'
+    const command = fakeDsh(`
+console.log(JSON.stringify({type:'text',text:'我来分析数据。'}))
+console.log(JSON.stringify({type:'tool_call',callId:'read-1',tool:'read'}))
+for (const text of ${JSON.stringify(output)}) console.log(JSON.stringify({type:'text',text}))
+console.log(JSON.stringify({type:'final',sessionId:'followups',text:${JSON.stringify(output)},reason:{kind:'completed'}}))
+`)
+    const messages: string[] = []
+    const result = await new DshCliExecutor({ command }).execute({
+      runId: 'run',
+      taskId: 'task',
+      prompt: '分析',
+      workingDirectory: process.cwd(),
+      onProgress: event => {
+        if (event.type === 'message') messages.push(event.text)
+      },
+    })
+    expect(messages.join('').trim()).toBe('分析完成。')
+    expect(result.output).toBe(output)
+    expect(executorPrompt('分析')).toContain('不必每轮给建议')
+  })
+
   it('does not expose Pegas control-plane credentials to the Executor process', () => {
     expect(
       executorEnvironment({

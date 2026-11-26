@@ -1,3 +1,4 @@
+import { FollowUpList } from './FollowUpList'
 import type * as React from 'react'
 import { useEffect, useState } from 'react'
 
@@ -329,51 +330,12 @@ export default function StreamingText({
         </div>
       </div>
 
-      {/* follow-ups */}
-      {followUps.length > 0 && (
-        <div
-          className="mt-2.5 transition-opacity duration-400"
-          style={{
-            opacity: done ? 1 : 0,
-            pointerEvents: done ? 'auto' : 'none',
-          }}
-        >
-          <p className="text-[12px] font-medium text-ink-2">{l.followUps}</p>
-          <div className="mt-0.5 flex flex-col">
-            {followUps.map((text, i) => (
-              <button
-                key={text}
-                onClick={() => onFollowUp?.(text, i)}
-                className="-mx-1.5 flex items-center gap-2 rounded-[7px] border-b border-line
-                px-1.5 py-1.5 text-left text-[12.5px] text-ink transition-colors
-                duration-100 hover:bg-hover-2"
-                style={
-                  done
-                    ? {
-                        animation: `fade-up 350ms cubic-bezier(0.23,1,0.32,1) ${i * 90}ms both`,
-                      }
-                    : { opacity: 0 }
-                }
-              >
-                <svg
-                  width="11"
-                  height="11"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="var(--ink-3)"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="shrink-0"
-                >
-                  <path d="M9 10l-5 5 5 5" />
-                  <path d="M20 4v7a4 4 0 0 1-4 4H4" />
-                </svg>
-                {text}
-              </button>
-            ))}
-          </div>
-        </div>
+      {done && (
+        <FollowUpList
+          items={followUps}
+          label={l.followUps}
+          onSelect={onFollowUp}
+        />
       )}
     </div>
   )
