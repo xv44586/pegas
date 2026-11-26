@@ -1,6 +1,6 @@
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { X } from 'lucide-react'
-import type { ComponentProps, ReactNode } from 'react'
+import { useRef, type ComponentProps, type ReactNode } from 'react'
 
 import { cn } from '@bui/lib/utils'
 
@@ -13,11 +13,14 @@ export function DialogContent({
   className,
   closeLabel = '关闭',
   showClose = true,
+  onOpenAutoFocus,
+  onCloseAutoFocus,
   ...props
 }: ComponentProps<typeof DialogPrimitive.Content> & {
   closeLabel?: string
   showClose?: boolean
 }) {
+  const opener = useRef<HTMLElement | null>(null)
   return (
     <DialogPrimitive.Portal>
       <DialogPrimitive.Overlay className="bui fixed inset-0 z-50 bg-black/30 backdrop-blur-[2px] data-[state=open]:animate-[fade-in_150ms_ease-out]" />
@@ -29,6 +32,25 @@ export function DialogContent({
           className,
         )}
         {...props}
+        onOpenAutoFocus={event => {
+          opener.current =
+            document.activeElement instanceof HTMLElement
+              ? document.activeElement
+              : null
+          onOpenAutoFocus?.(event)
+        }}
+        onCloseAutoFocus={event => {
+          onCloseAutoFocus?.(event)
+          // Controlled dialogs may have no Radix DialogTrigger to restore.
+          if (
+            !event.defaultPrevented &&
+            opener.current?.isConnected &&
+            opener.current !== document.body
+          ) {
+            event.preventDefault()
+            opener.current.focus()
+          }
+        }}
       >
         {children}
         {showClose && (

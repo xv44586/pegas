@@ -521,7 +521,7 @@
 - Severity：normal
 - Status：Observed
 - Enforcement：上述自动化回归保留；尚未晋升为全仓强制规则。
-- Owner / next action：DESIGN-009；后续抽屉内新增 Portal 控件复用同类验证。
+- Owner / next action：DESIGN-009；后续抽屉内新增 Portal 控件复用同类验证。2026-11-26 同日全站扩查发现受控 Dialog 无 Trigger 时丢失关闭焦点、自动记忆纠正仍引用已移除旧样式；补 `verify-ui-overlays.mjs` 桌面/移动实际交互及 BUI 焦点回归。沿用既有 Dialog 统一控制，不追加另一套手写模态逻辑；同日新证据不增加独立 Seen 日期。
 
 ### LESSON-20261126-05：表单同步不能把身份字段当作分隔协议
 
