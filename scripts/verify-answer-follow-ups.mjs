@@ -158,7 +158,6 @@ export async function verifyAnswerFollowUps(page, capture, size) {
     })
     assert.equal(await composer.inputValue(), '保留用户正在写的问题')
     assert.equal(await editor.inputValue(), '具体展开复购率的影响')
-    await page.getByText('已发送到对应事情', { exact: true }).waitFor()
     await page.locator('[data-message-id="followup-event-1"]').waitFor()
     assert.equal(
       await page

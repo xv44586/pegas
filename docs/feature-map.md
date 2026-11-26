@@ -1230,10 +1230,10 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 
 ### DESIGN-009：事情内的候选直发与快速回复（2026-11-26 修订）
 
-- **基线与隔离**：main `73ecec83`，工作区干净；独立 `design-009-inline-followups` worktree / `codex/fix-design-009-inline-followups` 分支。
+- **基线与隔离**：main `73ecec83`，工作区干净；合入最新 main `ed5687cf` 后重跑门禁；独立 `design-009-inline-followups` worktree / `codex/fix-design-009-inline-followups` 分支。
 - **验收**：每条定稿回复最多 4 个按需生成的候选；点击/键盘激活直接向该回复所属事情提交候选文本和确切回复引用，不经过公共输入器，不受当前选中事情影响。候选与局部输入就地置于原回复下方同一区域，以位置表达归属，不增加目标/摘要说明组（仅保留读屏上下文）。发送后 Chat 显示一条用户原文消息；引用正文不混入消息文本。鼠标悬停回复时下方显现快速回复框；键盘聚焦、点击和触屏同样可达。局部草稿与公共草稿互不覆盖，失败保留原目标、文本及重试键，连续点击不重复提交，Enter 发送、Shift+Enter 换行，中文输入法确认不误发。
 - **权威与权限**：复用 ROUTE-001 `replyToMessageId`；服务端鉴权后解析原 Task 与正文，确定性 `continue_task`，不同时信任客户端 taskId，不再使用独立 `intent:explain` 车道。已完成事情续接、停止、Mandate 与权限校验保持原服务端规则。
 - **非目标**：不改 Router、调度 Follow-up、历史元数据补生成或全局输入器；不将候选视为新增授权。
 - **失败与恢复**：网络失败同键手动重试；服务端接受后的列表刷新失败不能重新发送；无 schema 迁移，可通过上一 Candidate 回滚，4 项元数据在旧版最多 3 项校验下可降级不显示。
-- **自动化证据**：修复前四项回归失败；修复后 `answer-follow-ups` 5 项覆盖 0–4/超限/流式协议，`ChatExperience` 5 项覆盖候选直发、并行事情隔离、局部 Enter/IME 与 Chat 用户原文回显，`InlineReply` 4 项覆盖重复点击、网络同键重试、刷新失败不重发、轮询保稿与停止禁用。既有 `chat-lane` 验证精确回复→原 Task/原 session、原文上下文、owner 隔离与服务端幂等。完整 `pnpm check` 152 文件 / 1649 测试全绿；`pnpm smoke`、真实 Electron `smoke:dsh-runtime`、无障碍审计通过。桌面/390px UI review 验证四候选、Tab/Enter、悬停/触屏输入、用户原文回显与无溢出，复验 213 次全站下拉/弹层交互及详情执行设置 24 次开关、键盘、保存回读。
+- **自动化证据**：修复前四项回归失败；修复后 `answer-follow-ups` 5 项覆盖 0–4/超限/流式协议，`ChatExperience` 5 项覆盖候选直发、并行事情隔离、局部 Enter/IME 与 Chat 用户原文回显，`InlineReply` 4 项覆盖重复点击、网络同键重试、刷新失败不重发、轮询保稿与停止禁用。既有 `chat-lane` 验证精确回复→原 Task/原 session、原文上下文、owner 隔离与服务端幂等。完整 `pnpm check` 152 文件 / 1670 测试全绿；`pnpm smoke`、真实 Electron `smoke:dsh-runtime`、无障碍审计通过。桌面/390px UI review 验证四候选、Tab/Enter、悬停/触屏输入、用户原文回显与无溢出，复验 216 次全站下拉/弹层交互及详情执行设置 24 次开关、键盘、保存回读。另以真实触屏几何断言先复现发送按钮被 44px 最小触控高度撑出输入框，修订为 48px 输入框内的 44px 发送目标，并纳入桌面/移动 UI 门禁。
 - **状态与下一缺口**：本次修订验收通过，待绿色 PR CI 后合并和 Candidate 发布；DESIGN-009 整体状态不升级。旧回复不补生成；真实模型建议质量未做付费抽样，可能没有候选；局部草稿不跨刷新持久化，已发送候选仅在本次挂载期间防重复。证据保存在本地 `output/inline-followups/` 与 `output/feature-review/inline-followups/`，不入库。

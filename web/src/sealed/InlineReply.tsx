@@ -120,7 +120,7 @@ export function InlineReply({
             ref={editorRef}
             aria-describedby={`${id}-context`}
             rows={1}
-            className="block w-full resize-none pr-12"
+            className="block min-h-12 w-full resize-none pr-14"
             enterKeyHint="send"
             value={draft}
             disabled={pending || Boolean(disabledReason)}
@@ -152,7 +152,7 @@ export function InlineReply({
           <Button
             type="submit"
             size="sm"
-            className="absolute right-1 top-1 h-7 w-7 p-0"
+            className="absolute right-0.5 top-0.5 h-11 w-11 p-0"
             aria-label="发送回复"
             disabled={pending || Boolean(disabledReason) || !draft.trim()}
           >
@@ -182,7 +182,14 @@ export function InlineReply({
         )}
       </form>
       {notice && (
-        <p role="status" className="mt-1 text-[12px] text-ink-2">
+        <p
+          role="status"
+          className={
+            notice === '已发送到对应事情'
+              ? 'visually-hidden'
+              : 'mt-1 text-[12px] text-ink-2'
+          }
+        >
           {notice}
         </p>
       )}
