@@ -551,15 +551,15 @@
 
 ### LESSON-20261125-07：桌面目录与执行器必须验证真实启动环境
 
-- Rule：模型目录和实际 Executor 使用同一 DSH 启动解析；桌面验收包含 Finder 最小 PATH 下的 Node CLI 启动，不把终端中 `dsh` 可用当作 GUI 可用。
-- Why：供应商 HTTP 探测成功，但桌面子进程继承 `/usr/bin:/bin:/usr/sbin:/sbin`，无法启动用户安装的 DSH；只补 DSH 绝对路径仍可能卡在 `env node`。
-- Feature：SETTINGS-001
-- Evidence：桌面实例目录 API 503、同机终端目录 200；新增 `test/dsh-model-catalog.test.ts` 最小 PATH 回归先报 ENOENT 再通过。真实 Electron 最小 PATH canary 发现和返回均为 63 模型；`test/dsh-launch.test.ts` 实际运行 Node CLI 并校验命令优先级。
-- Seen：1（2026-11-25）
+- Rule：目录成功不是执行成功。DSH 必须使用独立且经验证的 Node；Electron 的 Node 模式不能代替。桌面执行改动必须在真实 Electron + Finder 最小 PATH 下完成真实 DSH host boot、模型请求、工具执行与 session 恢复。
+- Why：11-25 缺少 PATH；第一次修复误用 process.execPath，把 Electron 当成普通 Node。11-26 目录能读取但实际任务 native internal loader 崩溃。此前假 CLI 回归及 Node 下 HTTP 门禁均没覆盖桌面宿主，错误完成声明由验收层级不足造成。
+- Feature：EXEC-007（原 SETTINGS-001 启动器修复）
+- Evidence：同一隔离 profile 的真实已安装 App --dump-config 成功、--help 失败；独立 Node 两者成功。新增 smoke-dsh-runtime 先在 Electron 可执行路径断言失败，修复后目录、真实 read 工具、3 次 HTTP 请求与 session 恢复通过。test/dsh-node-runtime.test.ts 覆盖最低版本、Electron 伪装、坏 bundle 和明确失败。
+- Seen：2（2026-11-25、2026-11-26）
 - Severity：normal
-- Status：Observed
-- Enforcement：共享启动器回归加入 `pnpm check`，未扩张仓库强制标准。
-- Owner / next action：SETTINGS-001。2026-11-26 用户授权使用已充值的 DeepSeek，合入 QUALITY-001 共享模型配置后 1,601 测试与 smoke 全绿；后续打包验证继续覆盖 GUI 最小 PATH。
+- Status：Promoted（用户本次明确要求加入 lint/CI；非虚构第三个独立日期）
+- Enforcement：eslint 禁止 executor 绕过共享启动器直接使用 process.execPath/直接 spawn dsh；CI 始终运行真实 Electron→DSH loopback smoke。Node 二进制及许可证随 dist 进入安装包和 Candidate。
+- Owner / next action：EXEC-007；任何 DSH/Node/Electron 更新都运行同一真实执行门禁。安装包发布后验证精确 Candidate，并保留旧 Candidate 回滚；Windows 自定义 wrapper 不在本次桌面 macOS 验收范围。
 
 ### LESSON-20261126-04：本机模型网关可用不代表允许付费测试
 

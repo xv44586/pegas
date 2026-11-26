@@ -73,5 +73,31 @@ export default tseslint.config(
       },
     },
   },
+  {
+    files: ['src/executor/**/*.ts'],
+    ignores: ['src/executor/dsh-node-runtime.ts'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector:
+            "MemberExpression[object.name='process'][property.name='execPath']",
+          message:
+            'EXEC-007: Use dshLaunch; the host executable may be Electron.',
+        },
+        {
+          selector:
+            "MemberExpression[object.name='process'][property.value='execPath']",
+          message:
+            'EXEC-007: Use dshLaunch; the host executable may be Electron.',
+        },
+        {
+          selector:
+            "CallExpression[callee.name=/^(spawn|spawnSync|execFile|execFileSync)$/] > Literal[value='dsh']",
+          message: 'EXEC-007: Resolve DSH through dshLaunch before spawning.',
+        },
+      ],
+    },
+  },
   prettier,
 )
