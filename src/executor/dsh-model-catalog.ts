@@ -3,6 +3,8 @@ import { promisify } from 'node:util'
 
 import { parse } from 'yaml'
 
+import { dshLaunch } from './dsh-launch.js'
+
 const execFileAsync = promisify(execFile)
 
 interface DshModelCatalogItem {
@@ -27,7 +29,12 @@ export async function loadDshModelCatalog(
     timeoutMs?: number
   } = {},
 ): Promise<DshModelCatalog> {
-  const { stdout } = await execFileAsync(
+  const environment = {
+    ...process.env,
+    ...(options.home ? { DSH_HOME: options.home } : {}),
+    ...options.environment,
+  }
+  const launch = dshLaunch(
     options.command ?? 'dsh',
     [
       '--profile',
@@ -35,17 +42,14 @@ export async function loadDshModelCatalog(
       ...(options.patchPath ? ['--patch', options.patchPath] : []),
       '--dump-config',
     ],
-    {
-      encoding: 'utf8',
-      maxBuffer: 8 * 1024 * 1024,
-      timeout: options.timeoutMs ?? 15_000,
-      env: {
-        ...process.env,
-        ...(options.home ? { DSH_HOME: options.home } : {}),
-        ...options.environment,
-      },
-    },
+    environment,
   )
+  const { stdout } = await execFileAsync(launch.command, launch.args, {
+    encoding: 'utf8',
+    maxBuffer: 8 * 1024 * 1024,
+    timeout: options.timeoutMs ?? 15_000,
+    env: environment,
+  })
   return parseDshModelCatalog(stdout)
 }
 

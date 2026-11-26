@@ -851,6 +851,78 @@ describe('sealed Pegas UI', () => {
     )
   })
 
+  it('retains discovered models across settings tabs and provider switches', async () => {
+    installFetch((path, init) => {
+      if (path === '/v1/settings/models/discover' && init?.method === 'POST')
+        return Response.json({
+          models: [{ id: 'retained-model', name: 'Retained model' }],
+        })
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /模型服务/ }))
+    fireEvent.click(screen.getByRole('button', { name: '获取模型目录' }))
+    expect(await screen.findByText('Retained model')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /事情归类/ }))
+    fireEvent.click(screen.getByRole('button', { name: /模型服务/ }))
+    expect(screen.getByText('Retained model')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /Anthropic/ }))
+    expect(screen.queryByText('Retained model')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /Magpie/ }))
+    expect(screen.getByText('Retained model')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('API Key'), {
+      target: { value: 'changed-key' },
+    })
+    expect(screen.queryByText('Retained model')).toBeNull()
+  })
+
+  it('ignores a pending catalog after connection edits and keeps the last successful refresh', async () => {
+    let discovery = 0
+    const pending = Promise.withResolvers<Response>()
+    installFetch((path, init) => {
+      if (path === '/v1/settings/models/discover' && init?.method === 'POST') {
+        discovery += 1
+        if (discovery === 1) return pending.promise
+        if (discovery === 3)
+          return Response.json({ error: 'offline' }, { status: 503 })
+        return Response.json({ models: [{ id: 'fresh', name: 'Fresh model' }] })
+      }
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /模型服务/ }))
+    fireEvent.click(screen.getByRole('button', { name: '获取模型目录' }))
+    fireEvent.change(screen.getByLabelText('API Key'), {
+      target: { value: 'new-key' },
+    })
+    pending.resolve(
+      Response.json({ models: [{ id: 'stale', name: 'Stale model' }] }),
+    )
+    await act(async () => pending.promise)
+    expect(screen.queryByText('Stale model')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '获取模型目录' }))
+    expect(await screen.findByText('Fresh model')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '获取模型目录' }))
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: '获取模型目录' }),
+      ).toHaveProperty('disabled', false),
+    )
+    expect(screen.getByText('Fresh model')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '取消' }))
+    expect(screen.queryByText('Fresh model')).toBeNull()
+  })
+
   it('does not probe a non-current custom provider without a model', async () => {
     const customSettings: SettingsResponse = {
       ...settingsResponse,
