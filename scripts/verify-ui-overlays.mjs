@@ -9,6 +9,40 @@ export async function verifyUiOverlays(page, capture, size) {
   let cycles = 0
   async function hit(locator, label) {
     await locator.scrollIntoViewIfNeeded()
+    // Portaled poppers can be visible before their position/z-index settles.
+    // Wait for actual pointer actionability, retaining the independent hit test.
+    try {
+      await locator.click({ trial: true })
+    } catch (error) {
+      console.error(
+        'Overlay hit failure',
+        label,
+        await locator.evaluate(element => {
+          const rect = element.getBoundingClientRect()
+          return {
+            rect: rect.toJSON(),
+            stack: globalThis.document
+              .elementsFromPoint(
+                rect.x + rect.width / 2,
+                rect.y + rect.height / 2,
+              )
+              .slice(0, 5)
+              .map(node => ({
+                tag: node.tagName,
+                role: node.getAttribute('role'),
+                className: node.className,
+                zIndex: globalThis.getComputedStyle(node).zIndex,
+              })),
+          }
+        }),
+      )
+      await capture(
+        page,
+        `${size}-overlay-hit-failure.png`,
+        `${size}-overlay-hit-failure`,
+      )
+      throw error
+    }
     assert.equal(
       await locator.evaluate(element => {
         const rect = element.getBoundingClientRect()
