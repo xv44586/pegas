@@ -25,6 +25,7 @@ Pegas 是一个以自然对话为统一入口的个人智能代理。
 - [Feature Map](docs/feature-map.md)
 - [Feature Review 门禁](docs/feature-review-gate.md)
 - [贡献与质量门禁](CONTRIBUTING.md)
+- [命令与目录授权、撤销及真实桌面验证](docs/command-authorization.md)
 
 ## 本地验证
 

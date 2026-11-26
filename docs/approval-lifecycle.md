@@ -98,6 +98,7 @@ Run capability 的 HTTP 传输固定使用 loopback。`PEGAS_API_HOST` 为 `0.0.
 - `GET /v1/approvals/:approvalId?userId=`：读取单个 Approval。
 - `POST /v1/approvals/:approvalId/decisions`：owner 提交一次结构化决定并写入 Inbox。
 - `GET /v1/actions/:actionId?userId=`：owner 读取 Action 的授权与最终 outcome。
+- `GET /v1/approval-rules?userId=`：读取该 owner 的授权管理列表，包含规则状态与最近命中时间；撤销仍走 `POST /v1/tasks/:taskId/approval-rules/:ruleId/revoke`，使用规则原属 Task 与幂等 commandId。
 - `POST /v1/actions/:actionId/outcomes`：恢复后的 Run 用自己的 claim 记录 Action outcome。
 - `POST /v1/actions/:actionId/reconcile`：owner 人工核对 `failed`/`unknown` outcome。请求体为 `{userId, commandId, resolution, note}`；`resolution` 只能是 `succeeded` 或 `failed`，`note` 必填且不超过 2000 字符。
 
@@ -105,7 +106,7 @@ Run capability 的 HTTP 传输固定使用 loopback。`PEGAS_API_HOST` 为 `0.0.
 
 已记录 `failed` outcome 的动作保留失败审计，但不阻塞新的用户输入及其 Run 领取；workflow 也不把这一已结算失败投影为「待核对」。路由、Worker claim 与状态投影必须使用相同判断，不能允许消息入队后又永久阻止领取。`unknown` 和未记录失败 outcome 的 `failed` 继续等待核对。新 Approval、原 Run retry、Goal revision 与协作仍遵循各自的严格保护，允许回答新的追问不表示允许重做外部副作用。
 
-`unknown` 或尚未记录 outcome 的 `failed` 会阻塞 continuation；已记录的失败允许新追问，不等于授予新的外部操作权限。原授权 successor 在失败未核对时不能请求下一项 Approval；新的 Run 请求新的 Approval 仍需走完整审批流程；人工确认失败则在整个 Task 范围阻止新 Approval。用户确实需要核对外部结果时，在外部系统核实后通过 reconcile API 提交一次性结论：
+`unknown` 或尚未记录 outcome 的 `failed` 会阻塞 continuation；已记录的失败允许新追问，不等于授予新的外部操作权限。原授权 successor 在失败未核对时不能请求下一项 Approval，唯一例外是桥已明确记录 failed outcome 且 `notExecuted: true`，证明该调用尚未开始，可重新请求审批；缺失或非布尔 true 不构成此例外。新的 Run 请求新的 Approval 仍需走完整审批流程；人工确认失败则在整个 Task 范围阻止新 Approval。用户确实需要核对外部结果时，在外部系统核实后通过 reconcile API 提交一次性结论：
 
 - 核对记录 append-only：`action_reconciliations` 保存 resolution、note、核对前的 status 与 result 快照、核对人和时间；数据库 trigger 拒绝改写或删除。每个 Action 只允许一条核对记录，重复提交返回 `409 action_reconciliation_conflict`。
 - 相同 `commandId` 加相同 payload 幂等重放当前 Action 投影；不同 payload 复用 command 返回 409。不存在和跨 owner 一律 `404 not_found`。
@@ -217,11 +218,11 @@ Gate 的边界事实来自 Executor 注入的 patch config `policy { workspaceRo
 
 档位映射：`strict`→read-only 沙箱且 write/edit/apply_patch/bash/web_fetch/web_search 全部 ask；`standard`→workspace-write 沙箱 + Gate 分级；`full`→danger-full-access 沙箱 + ask（Web 启用前强制风险确认）。control-plane-mutation 的 guard 硬拦在三档一致。切档走 `PUT /v1/tasks/:id/worker-profile`（`permissionMode` 字段，commandId+expectedRevision 幂等），权限变更写 append-only `worker_profile_changes` 审计并发 `task.permission_changed` 时间线事件；判定时的 tier/generation/mismatch 随 `policy_decision` 事件与 Action request 持久化。
 
-### 规则批准（APPROVAL-001 P3）
+### 规则批准（APPROVAL-001，含统一命令与目录授权）
 
-批准审批时可选「本事情内同类不再询问」（决定 option kind `approve_rule`）：决定与规则创建同事务，规则是一等持久对象（`approval_rules`，append-only，触发器只允许 active→revoked 翻转）。规则范围=工具 + 类别 + canonical 目标集合的 sha256 指纹：参数内容变体命中，目标变体不命中。只有 high 风险的 out-of-workspace-write / network-egress 且目标非空的动作提供规则选项；critical、unknown、control-plane-mutation 在桥（不给选项）与服务端（risk 守卫拒绝 approve_rule）双层拒绝，guard 硬拦不受规则影响。
+`approve_rule` 将用户选择的范围、实际规则与决定同事务保存；规则为一等持久对象，撤销保留历史。普通文件写入可选择本事情或同用户长期目录授权；已适配的 `git fetch` 可选择准确参数或命令族，各有事情 / 长期期限，默认仍是仅本次批准。命令许可不按字符串前缀推断，外发、破坏性操作、控制面修改及未适配命令不因普通规则获得持久权限。具体适配、路径与配置边界见 [命令授权](command-authorization.md)。
 
-桥每次 pre-execute 现读的权限投影包含本 Task active 规则集（并入 generation 指纹）；分类后按指纹匹配放行，`policy_decision` 事件带 ruleId，seam 对已命中 callId 返回 allowed-once。规则命中不逐次创建 Action/outcome（Activity 记录 + 规则创建/撤销审计）；strict 档与 mismatch 下规则不放行。撤销走 `POST /v1/tasks/:id/approval-rules/:ruleId/revoke`（commandId 幂等、owner 隔离），下一次调用立即重新审批；规则列表与撤销入口在事情抽屉「已批准规则」。存在 active 规则时 Supervisor 拒绝回滚到 <v41。
+桥的 pre-execute 与 approval/request 均重新读取本事情及同 owner 长期有效规则，并重新核验实际资源；strict 档与 mismatch 下不复用。事情规则在事情完成或停止时撤销，重开不复活；长期规则跨事情和重启保留。每次匹配通过 `policy_decision` 的 ruleId 写入独立逐调用审计，事情执行面板可查看授权依据；后续复用不逐次创建 Action/outcome，首次批准恢复的 Action 则必须结算真实 outcome。设置 → 隐私 → 授权管理或事情详情可撤销，尚未开始的下一次调用重新审批，进行中的进程沿用现有停止能力。
 
 审批卡在 Web 待处理抽屉以结构化形态渲染（P4）：来源事情入口（打开对应事情抽屉）、操作预览（类别 + 风险白话、工具 + 生效档位、bash 命令等宽块、canonical 目标列表、档位错配提示）与「需要你决定」reason 行；桥的 Action request 携带命令原串（`command`）。`approval.required` 通知经 external 投递（webhook 等）时，payload 投影为指向 `/?view=outbox&outbox=<messageId>` 的 deepLink（复用既有收件箱恢复参数），其余通知类型 payload 不变。
 
@@ -232,8 +233,8 @@ Gate 的边界事实来自 Executor 注入的 patch config `policy { workspaceRo
 ### 停放与恢复（seam 共用链路）
 
 1. **停放**：插件用当前 Run 的 claim capability 调 `POST /v1/runs/:runId/approvals` 创建持久 Approval。Action `kind` 为 `dsh.tool.<tool>`，risk 由 Gate 分级写入（`high`/`critical`；seam 越权无 Gate 判定时按 `high`），`request` 保存 `tool`、`callId`、`reason`、`category`、`targets` 与 `argumentsHash`（工具参数的稳定序列化 SHA-256），幂等键为 `dsh-tool:<runId>:<callId>`。创建成功后向 headless JSON 流写入 `approval_pending` 事件并对本次调用返回 `rejected`；Executor 识别该事件后按持久等待结算 Run（服务端已把 Run 置为 `waiting` 并清除 lease），不再提交 Report。创建失败时写入 `approval_bridge_error` 事件，Executor 将其作为执行失败处理，不放行工具。
-2. **恢复**：用户批准后，successor Run 的输入是结构化 `approval.decision` 上下文。Worker 解析出 `actionId`，回查服务端 Action 确认 `status='authorized'` 且 `resumeRunId` 等于当前 Run，才构造一次性 `toolApprovalGrant {actionId, tool, argumentsHash}` 传给 Executor，并随桥接 patch 注入 DSH。
-3. **一次性放行**：插件在 `tools/pre-execute` 记录每个 `callId` 的工具名与参数哈希；grant 命中（`tool` 与 `argumentsHash` 完全一致）时在 Gate 层直接放行并登记 outcome 追踪，seam 到达时返回 `allowed-once`；每个 DSH 进程只消费一次。模型改写参数后重试不会命中 grant，会重新走停放流程。control-plane-mutation 类别永不接受 grant 豁免。
+2. **恢复**：用户以 `approve` 或 `approve_rule` 批准后，successor Run 的输入是结构化 `approval.decision` 上下文。Worker 解析出 `actionId`，回查服务端 Action 确认 `status='authorized'` 且 `resumeRunId` 等于当前 Run，才构造一次性 `toolApprovalGrant {actionId, tool, argumentsHash}`；存在命令 selector 或所绑定规则时一并传入，持久决定标记必须复核规则。规则去重也保留该决定到实际规则的绑定。
+3. **一次性放行**：插件记录每个 `callId` 的工具名与参数哈希；只有 `tool`、`argumentsHash` 及适用的规则、命令上下文复核通过时才放行并登记 outcome 追踪，seam 同样重新核验，每个 DSH 进程只消费一次。首次 grant 的规则检查只针对它绑定的 Action，不阻断后续独立授权的调用。复核确认尚未执行即失效时记录 `failed` 与 `notExecuted: true` 后重新审批；一般执行失败或未知结果沿用原核对保护。control-plane-mutation 类别永不接受 grant 豁免。
 4. **记录结果**：被放行调用结束后，插件在 `tools/post-execute` 用 successor 的 claim 调 `POST /v1/actions/:actionId/outcomes`（`commandId` 为 `dsh-tool-outcome:<actionId>`）：工具报错或 post-execute 被 block 记 `failed`，否则记 `succeeded`。outcome 上报失败会发出 `approval_bridge_error` 事件并使该 Run 失败，Action 由既有 lease/完成 fence 转为 `unknown` 进入人工核对，不会静默丢失。
 
 claim token 只经进程环境传给 DSH 主进程，DSH 自身的 subprocess 环境清洗会剥离 `*TOKEN*` 与 `DSH_*` 变量，因此不会进入 bash 等工具子进程。`PEGAS_TOOL_APPROVAL_GRANT` 与 `PEGAS_APPROVAL_BRIDGE` 也在 Worker 的父进程环境剥离清单内，防止残留串扰。
@@ -258,3 +259,5 @@ claim token 只经进程环境传给 DSH 主进程，DSH 自身的 subprocess �
 schema v23 只新增 `action_reconciliations` 表与 trigger。存在 `status='reconciled'` 的 Action 时，回滚到不支持 v23 的 Release 会被 Rollback Guard 以 `rollback_incompatible` 拒绝：旧版本不认识该状态，会把人工确认过的外部事实误判为仍在等待或允许绕过。未核对的 `failed`/`unknown` Action 在旧版本中仍被原有 fence 阻塞，可以安全回滚。
 
 schema v44 为 `action_reconciliations` 追加 `automatic` 标记列（默认 0，人工核对不受影响）。存在 `automatic=1` 的自动核对记录时，回滚到 schema < 44 的 Release 被拒绝：旧版本没有探测语义，会把系统结算的事实误当作人工确认。仅有 v44 列而全部为人工核对时可安全回滚（v23 Guard 仍按 reconciled 状态独立生效）。
+
+schema v60 为规则添加 kind、lifetime、command selector 与不可变决定绑定，并回填已结束事情的旧规则失效状态。存在带 commandSelector 且仍 awaiting_approval、authorized 或 unknown 的 Action 时，Supervisor 拒绝回滚到 schema < 60；旧版不复用新命令规则并恢复询问。既有 v41 等 Guard 继续独立生效，规则与审计数据不得删除；完整兼容范围见 [命令授权](command-authorization.md#数据与回滚)。

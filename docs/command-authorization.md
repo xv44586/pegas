@@ -30,6 +30,8 @@ Executor 的 pre-execute 与 DSH approval/request 使用同一匹配模块，每
 
 ## 验证证据
 
+本地先运行 `pnpm build`，再在 DSH 位于 PATH 的环境执行 `pnpm smoke:command-authorization`。CI 使用 `xvfb-run --auto-servernum npm exec --yes --package=@deepseek-ai/dsh@0.2.2-rc.5 -- pnpm smoke:command-authorization`，在真实 Electron 中运行同一脚本；依赖缺失或断言失败会使检查失败。`output/command-grants/` 以 `command-authorization-<commit SHA>` artifact 上传并保留 7 天，证据只代表对应提交的实际验证结果。
+
 - `test/command-policy.test.ts`：实际临时 Git 仓库、worktree、参数/远端差异、PATH、启动变量、hook、helper、SSH 与配置边界。
 - `test/approval-rule-bridge.test.ts`：真实 SQLite + HTTP，四种命令授权、目录授权、owner 隔离、规则去重绑定、双入口撤销、首次 grant 撤销后重新审批并结算、终态失效及迁移回滚检查。
 - `test/processor.test.ts`：持久决定首次 grant/outcome 与停放后的 session-ref，两条原问题先红后绿。
