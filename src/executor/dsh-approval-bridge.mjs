@@ -1,3 +1,9 @@
+import {
+  commandAuthorization,
+  commandFingerprint,
+  isCommandSelector,
+  isGitFetchCommand,
+} from './command-policy.mjs'
 import { createHash } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 import { isAbsolute, join, resolve, sep } from 'node:path'
@@ -10,12 +16,12 @@ import {
 import { deriveWriteEffect } from './write-effect.mjs'
 
 /** @typedef {{ baseUrl: string, runId: string, claimToken: string }} BridgeCapability */
-/** @typedef {{ actionId: string, tool: string, argumentsHash: string }} ToolGrant */
-/** @typedef {{ id: string, tool: string, category: string, targets: string[], fingerprint: string, scope?: string }} ApprovalRule */
+/** @typedef {{ actionId: string, tool: string, argumentsHash: string, commandSelector?: import('./command-policy.mjs').CommandSelector, ruleId?: string, ruleRequired?: boolean }} ToolGrant */
+/** @typedef {{ id: string, tool: string, category: string, targets: string[], fingerprint: string, scope?: string, kind?: string, lifetime?: string, command?: {selector: import('./command-policy.mjs').CommandSelector, precision: 'exact'|'family'} }} ApprovalRule */
 /** @typedef {{ eventId: string, text: string, createdAt: string }} MandateInstruction */
 /** @typedef {{ instructions: MandateInstruction[], omitted: boolean }} MandateProjection */
-/** @typedef {{ tier: import('./policy-gate.d.ts').PolicyTier, generation: string, mismatch: boolean, rules: ApprovalRule[], autoReviewEnabled: boolean, mandate: MandateProjection }} TierState */
-/** @typedef {{ tool: string, argumentsHash: string, command?: string, effect?: { contentHash?: string, targets?: Record<string, string>, absent?: string[] }, classification?: import('./policy-gate.d.ts').ToolCallClassification }} CapturedCall */
+/** @typedef {{ tier: import('./policy-gate.d.ts').PolicyTier, generation: string, mismatch: boolean, rules: ApprovalRule[], revokedRules?: ApprovalRule[], autoReviewEnabled: boolean, mandate: MandateProjection }} TierState */
+/** @typedef {{ tool: string, argumentsHash: string, command?: string, commandDirectory?: string, commandSelector?: import('./command-policy.mjs').CommandSelector, commandRuleReason?: string, effect?: { contentHash?: string, targets?: Record<string, string>, absent?: string[] }, classification?: import('./policy-gate.d.ts').ToolCallClassification }} CapturedCall */
 /** @typedef {{ session?: { requestHeader?: () => { config?: { provider?: unknown, model?: unknown } } | undefined } }} ReviewAgent */
 /** @typedef {{ callId?: string | number, name: string, arguments?: unknown, agent?: ReviewAgent, signal?: AbortSignal }} ToolExecution */
 /** @typedef {{ callId?: string | number, toolName: string, reason?: string, signal?: { aborted?: boolean } }} ApprovalRequest */
@@ -141,7 +147,27 @@ export function apply(ctx, config = {}) {
             mandate: { instructions: [], omitted: false },
           }
       const callPolicy = await executionPolicy(exec)
-      const classification = classifyToolCall(exec, callPolicy, tierState.tier)
+      const commandFacts = commandFactsFor(exec, callPolicy)
+      const baseClassification = classifyToolCall(
+        exec,
+        callPolicy,
+        tierState.tier,
+      )
+      const classification =
+        commandFacts.commandReviewRequired &&
+        ![
+          'control-plane-mutation',
+          'destructive-command',
+          'network-egress',
+        ].includes(baseClassification.category)
+          ? {
+              ...baseClassification,
+              category: /** @type {const} */ ('unknown'),
+              risk: /** @type {const} */ ('high'),
+              action: /** @type {const} */ ('ask'),
+              reason: commandApprovalReason(commandFacts, tierState),
+            }
+          : baseClassification
       if (callKey !== undefined) {
         executions.set(callKey, exec)
         toolCalls.set(callKey, {
@@ -152,6 +178,17 @@ export function apply(ctx, config = {}) {
           'command' in exec.arguments &&
           typeof exec.arguments.command === 'string'
             ? { command: exec.arguments.command }
+            : {}),
+          ...commandFacts,
+          ...(exec.name === 'apply_patch' &&
+          exec.arguments &&
+          typeof exec.arguments === 'object'
+            ? {
+                command:
+                  /** @type {{input?:string,patch?:string}} */ (exec.arguments)
+                    .input ??
+                  /** @type {{patch?:string}} */ (exec.arguments).patch,
+              }
             : {}),
           ...capturedWriteEffect(exec, callPolicy),
           classification,
@@ -172,7 +209,9 @@ export function apply(ctx, config = {}) {
           !grantConsumed &&
           classification.category !== 'control-plane-mutation' &&
           exec.name === grant.tool &&
-          stableHash(exec.arguments) === grant.argumentsHash
+          stableHash(exec.arguments) === grant.argumentsHash &&
+          commandGrantMatches(grant, commandFacts, tierState) &&
+          ruleGrantMatches(grant, tierState, exec, classification, callPolicy)
         if (granted) {
           grantConsumed = true
           grantedCalls.set(callKey, grant.actionId)
@@ -232,7 +271,7 @@ export function apply(ctx, config = {}) {
           tierState,
           exec,
           classification,
-          policy,
+          callPolicy,
         )
         if (matchedRule) {
           emit({
@@ -242,7 +281,9 @@ export function apply(ctx, config = {}) {
             category: classification.category,
             risk: classification.risk,
             decision: 'allow',
-            reason: `命中已批准规则：${matchedRule.tool}（${matchedRule.targets.join('、')}）。`,
+            reason: matchedRule.command
+              ? `已按${matchedRule.lifetime === 'user' ? '长期' : '本事情'}命令授权执行：git fetch · ${matchedRule.command.selector.repository} · ${matchedRule.command.selector.remote}。`
+              : `命中已批准规则：${matchedRule.tool}（${matchedRule.targets.join('、')}）。`,
             ruleId: matchedRule.id,
             tier: tierState.tier,
             generation: tierState.generation,
@@ -499,15 +540,53 @@ export function apply(ctx, config = {}) {
         callKey === undefined ? undefined : toolCalls.get(callKey)
       const execution =
         callKey === undefined ? undefined : executions.get(callKey)
+      const seamPolicy = execution ? await executionPolicy(execution) : policy
+      const seamFacts = execution ? commandFactsFor(execution, seamPolicy) : {}
+      if (captured) {
+        delete captured.commandSelector
+        delete captured.commandRuleReason
+        Object.assign(captured, seamFacts)
+      }
+      const liveGrantTier = capability
+        ? await readTierState(capability)
+        : gateTiers.get(callKey ?? '')
       const classification = execution
         ? classifyToolCall(
             execution,
-            await executionPolicy(execution),
-            capability ? (await readTierState(capability)).tier : 'standard',
+            seamPolicy,
+            liveGrantTier?.tier ?? 'strict',
           )
         : callKey === undefined
           ? undefined
           : gateDecisions.get(callKey)
+      const grantValid =
+        grant &&
+        liveGrantTier &&
+        commandGrantMatches(grant, seamFacts, liveGrantTier) &&
+        execution &&
+        classification &&
+        ruleGrantMatches(
+          grant,
+          liveGrantTier,
+          execution,
+          classification,
+          seamPolicy,
+        )
+      if (
+        grant &&
+        capability &&
+        callKey !== undefined &&
+        grantedCalls.get(callKey) === grant.actionId &&
+        !grantValid
+      ) {
+        await recordGrantFailure(
+          capability,
+          grant,
+          '恢复前命令范围或授权已变化，本次调用未执行。',
+        )
+        grantedCalls.delete(callKey)
+        grantSettled = true
+      }
       if (classification?.category === 'control-plane-mutation') {
         if (!capability || callKey === undefined || parked) return 'rejected'
         try {
@@ -548,7 +627,8 @@ export function apply(ctx, config = {}) {
         !grantConsumed &&
         callKey !== undefined &&
         captured?.tool === grant.tool &&
-        captured.argumentsHash === grant.argumentsHash
+        captured.argumentsHash === grant.argumentsHash &&
+        grantValid
       ) {
         grantConsumed = true
         grantedCalls.set(callKey, grant.actionId)
@@ -573,7 +653,7 @@ export function apply(ctx, config = {}) {
             tierState,
             execution ?? { name: request.toolName },
             classification,
-            policy,
+            seamPolicy,
           )
         ) {
           return 'allowed-once'
@@ -590,14 +670,25 @@ export function apply(ctx, config = {}) {
       const reason = request.reason ?? `工具 ${request.toolName} 请求越权执行`
       try {
         const seamReview = reviewOutcomes.get(callKey)
-        const seamTier = gateTiers.get(callKey)
+        const seamTier = liveGrantTier ?? gateTiers.get(callKey)
         const pending = await parkCall(
           capability,
           callKey,
           request.toolName,
-          classification?.action === 'ask'
-            ? classification
-            : escalateClassification(reason),
+          seamFacts.commandReviewRequired &&
+            seamTier &&
+            ![
+              'control-plane-mutation',
+              'destructive-command',
+              'network-egress',
+            ].includes(classification?.category ?? '')
+            ? {
+                ...escalateClassification(reason),
+                reason: commandApprovalReason(seamFacts, seamTier),
+              }
+            : classification?.action === 'ask'
+              ? classification
+              : escalateClassification(reason),
           captured,
           emit,
           seamTier,
@@ -763,6 +854,7 @@ async function readTierState(capability) {
         typeof projection.generation === 'string' ? projection.generation : '',
       mismatch: projection.mismatch === true,
       rules: normalizeRules(projection.rules),
+      revokedRules: normalizeRules(projection.revokedRules),
       autoReviewEnabled: projection.autoReviewEnabled === true,
       mandate: normalizeMandate(projection.mandate),
     }
@@ -838,10 +930,134 @@ function normalizeRules(value) {
         targets: /** @type {string[]} */ (targets),
         fingerprint: record.fingerprint,
         ...(typeof record.scope === 'string' ? { scope: record.scope } : {}),
+        ...(record.kind === 'command' &&
+        record.command &&
+        typeof record.command === 'object' &&
+        'selector' in record.command &&
+        isCommandSelector(record.command.selector) &&
+        'precision' in record.command &&
+        (record.command.precision === 'exact' ||
+          record.command.precision === 'family')
+          ? {
+              kind: 'command',
+              lifetime: String(record.lifetime),
+              command: {
+                selector: record.command.selector,
+                precision: record.command.precision,
+              },
+            }
+          : {}),
       })
     }
   }
   return rules
+}
+
+/** Explain the closest rule without granting or exposing another owner's history.
+ * @param {{ commandSelector?: import('./command-policy.mjs').CommandSelector, commandRuleReason?: string }} facts
+ * @param {TierState} tier
+ */
+function commandApprovalReason(facts, tier) {
+  if (tier.mismatch)
+    return '权限档位已收紧或无法读取当前权限，本次调用需要重新确认。'
+  if (tier.tier === 'strict')
+    return '当前为严格模式，已有命令授权不复用；仅可确认本次调用。'
+  if (!facts.commandSelector)
+    return facts.commandRuleReason ?? '无法确认命令范围，本次调用需要单次确认。'
+  const current = facts.commandSelector
+  /** @param {ApprovalRule} rule */
+  const matching = rule =>
+    rule.command &&
+    commandFingerprint(rule.command.selector, rule.command.precision) ===
+      commandFingerprint(current, rule.command.precision)
+  if (tier.rules.some(matching)) return '拉取远端更新需要命令授权。'
+  if (tier.revokedRules?.some(matching))
+    return '对应命令授权已撤销或随事情结束失效，本次调用需要重新授权。'
+  const commands = tier.rules.filter(rule => rule.command)
+  const sameRepo = commands.filter(
+    rule => rule.command?.selector.repositoryId === current.repositoryId,
+  )
+  if (!sameRepo.length)
+    return commands.length
+      ? '当前仓库与已授权仓库不同，需要为此仓库确认命令权限。'
+      : '尚无适用的命令授权；可选择本事情或长期有效。'
+  const sameRemote = sameRepo.filter(
+    rule =>
+      rule.command?.selector.remote === current.remote &&
+      rule.command.selector.remoteUrl === current.remoteUrl,
+  )
+  if (!sameRemote.length)
+    return '远端名称或实际地址与已授权范围不同，需要重新确认。'
+  const previous = sameRemote[0]?.command
+  if (
+    previous?.precision === 'exact' &&
+    (previous.selector.cwd !== current.cwd ||
+      JSON.stringify(previous.selector.argv) !== JSON.stringify(current.argv))
+  )
+    return '实际工作目录或命令参数与准确命令授权不同，需要重新确认。'
+  return '命令程序、执行环境或仓库配置与授权时不同，需要重新确认。'
+}
+
+/** @param {{name:string,arguments?:unknown}} execution @param {import('./policy-gate.d.ts').PolicyRoots} policy @returns {{commandReviewRequired?: boolean, commandDirectory?: string, commandSelector?: import('./command-policy.mjs').CommandSelector, commandRuleReason?: string}} */
+function commandFactsFor(execution, policy) {
+  if (
+    execution.name !== 'bash' ||
+    !execution.arguments ||
+    typeof execution.arguments !== 'object' ||
+    !('command' in execution.arguments) ||
+    typeof execution.arguments.command !== 'string'
+  )
+    return {}
+  const args = /** @type {Record<string,unknown>} */ (execution.arguments)
+  const commandReviewRequired = isGitFetchCommand(execution.arguments.command)
+  const directory =
+    typeof args.workdir === 'string'
+      ? canonicalRuleTarget(args.workdir, policy)
+      : (policy.currentDirectory ?? policy.workspaceRoot)
+  if (!directory)
+    return {
+      commandReviewRequired,
+      commandRuleReason: '无法确认实际工作目录，不能创建命令授权。',
+    }
+  const result = commandAuthorization(
+    execution.arguments.command,
+    directory,
+    policy.protectedRoots ?? [],
+  )
+  return {
+    commandReviewRequired,
+    commandDirectory: directory,
+    ...(result.selector
+      ? { commandSelector: result.selector }
+      : { commandRuleReason: result.reason }),
+  }
+}
+
+/** @param {ToolGrant} grant @param {{commandSelector?: import('./command-policy.mjs').CommandSelector}} facts @param {TierState} tier */
+function commandGrantMatches(grant, facts, tier) {
+  if (!grant.commandSelector) return true
+  if (tier.mismatch || tier.tier === 'strict' || !facts.commandSelector)
+    return false
+  if (grant.ruleId && !tier.rules.some(rule => rule.id === grant.ruleId))
+    return false
+  return (
+    commandFingerprint(grant.commandSelector, 'exact') ===
+    commandFingerprint(facts.commandSelector, 'exact')
+  )
+}
+
+/** @param {ToolGrant} grant @param {TierState} tier @param {{name:string,arguments?:unknown}} execution @param {import('./policy-gate.d.ts').ToolCallClassification} classification @param {import('./policy-gate.d.ts').PolicyRoots} policy */
+function ruleGrantMatches(grant, tier, execution, classification, policy) {
+  if (!grant.ruleRequired && !grant.ruleId) return true
+  if (!grant.ruleId) return false
+  return (
+    matchApprovalRule(
+      { ...tier, rules: tier.rules.filter(rule => rule.id === grant.ruleId) },
+      execution,
+      classification,
+      policy,
+    )?.id === grant.ruleId
+  )
 }
 
 /**
@@ -853,6 +1069,26 @@ function normalizeRules(value) {
  */
 function matchApprovalRule(tierState, execution, classification, policy) {
   if (tierState.mismatch || tierState.tier === 'strict') return undefined
+  if (
+    [
+      'control-plane-mutation',
+      'destructive-command',
+      'network-egress',
+    ].includes(classification.category)
+  )
+    return undefined
+  const facts = commandFactsFor(execution, policy)
+  if (facts.commandSelector) {
+    const selector = facts.commandSelector
+    const found = tierState.rules.find(
+      rule =>
+        rule.kind === 'command' &&
+        rule.command &&
+        commandFingerprint(rule.command.selector, rule.command.precision) ===
+          commandFingerprint(selector, rule.command.precision),
+    )
+    if (found) return found
+  }
   if (classification.risk !== 'high') return undefined
   if (classification.category !== 'out-of-workspace-write') {
     return undefined
@@ -870,7 +1106,13 @@ function matchApprovalRule(tierState, execution, classification, policy) {
       'command' in execution.arguments &&
       typeof execution.arguments.command === 'string'
       ? execution.arguments.command
-      : undefined,
+      : execution.name === 'apply_patch' &&
+          execution.arguments &&
+          typeof execution.arguments === 'object'
+        ? (/** @type {{input?:string,patch?:string}} */ (execution.arguments)
+            .input ??
+          /** @type {{patch?:string}} */ (execution.arguments).patch)
+        : undefined,
   )
   const directoryRule =
     directories.length > 0
@@ -889,6 +1131,7 @@ function matchApprovalRule(tierState, execution, classification, policy) {
         )
       : undefined
   if (directoryRule) return directoryRule
+  if (directories.length === 0) return undefined
   const fingerprint = createHash('sha256')
     .update(
       JSON.stringify({
@@ -954,6 +1197,15 @@ function normalizeGrant(value) {
       actionId: value.actionId,
       tool: value.tool,
       argumentsHash: value.argumentsHash,
+      ...('ruleRequired' in value && value.ruleRequired === true
+        ? { ruleRequired: true }
+        : {}),
+      ...('commandSelector' in value && isCommandSelector(value.commandSelector)
+        ? { commandSelector: value.commandSelector }
+        : {}),
+      ...('ruleId' in value && typeof value.ruleId === 'string'
+        ? { ruleId: value.ruleId }
+        : {}),
     }
   }
   return undefined
@@ -987,19 +1239,29 @@ function normalizePolicy(value) {
  * @returns {Promise<{ actionId: string, approvalId: string }>}
  */
 async function createApproval(capability, input) {
-  const ruleEligible =
+  const commandEligible =
+    input.captured?.commandSelector &&
+    input.tierState?.tier !== 'strict' &&
+    input.tierState?.mismatch !== true &&
+    ![
+      'control-plane-mutation',
+      'destructive-command',
+      'network-egress',
+    ].includes(input.classification.category)
+  const baseRuleEligible =
     input.tierState?.tier !== 'strict' &&
     input.tierState?.mismatch !== true &&
     input.classification.risk === 'high' &&
     input.classification.category === 'out-of-workspace-write' &&
     input.classification.targets.length > 0
-  const directories = ruleEligible
+  const directories = baseRuleEligible
     ? approvalDirectories(
         input.tool,
         input.classification.targets,
         input.captured?.command,
       )
     : []
+  const ruleEligible = baseRuleEligible && directories.length > 0
   const egressPayload =
     input.classification.category === 'network-egress' &&
     input.tool === 'bash' &&
@@ -1025,6 +1287,15 @@ async function createApproval(capability, input) {
       targets: input.classification.targets,
       ...(directories.length ? { trustedDirectories: directories } : {}),
       argumentsHash: input.captured?.argumentsHash ?? null,
+      ...(input.captured?.commandDirectory
+        ? { commandDirectory: input.captured.commandDirectory }
+        : {}),
+      ...(commandEligible
+        ? { commandSelector: input.captured?.commandSelector }
+        : {}),
+      ...(input.captured?.commandRuleReason
+        ? { commandRuleReason: input.captured.commandRuleReason }
+        : {}),
       ...(input.captured?.effect === undefined
         ? {}
         : { effect: input.captured.effect }),
@@ -1065,6 +1336,16 @@ async function createApproval(capability, input) {
       recommendedOptionId: 'approve',
       options: [
         { id: 'approve', label: '批准执行一次', kind: 'approve' },
+        ...(commandEligible
+          ? ['family', 'exact'].flatMap(precision =>
+              ['task', 'user'].map(lifetime => ({
+                id: `approve_command_${precision}_${lifetime}`,
+                kind: 'approve_rule',
+                label: `${lifetime === 'user' ? '始终' : '本事情内'}允许${precision === 'family' ? ' git fetch' : '此准确命令'}`,
+                description: '绑定实际仓库、远端和执行环境，可撤销。',
+              })),
+            )
+          : []),
         ...(ruleEligible
           ? [
               {
@@ -1541,6 +1822,7 @@ async function recordGrantFailure(capability, grant, reason) {
     result: {
       tool: grant.tool,
       summary: reason,
+      notExecuted: true,
     },
   })
 }

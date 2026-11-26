@@ -1274,3 +1274,12 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - 验收：复现 completed → follow-up queued → claim 的全链路及服务端 workflow；有结果的 failed 不再拦新输入运行，unknown/未结算动作仍保持原保护；重试、新 Approval、目标变更仍遵循原有各自作用域的权限校验，新 Run 不复用旧动作授权。
 - 非目标：改写历史动作结果、自动提交人工核对、修改审批分类、增加新的恢复权限或前端猜测。无需数据库迁移；失败时保留原审计，回滚代码即恢复原行为，已排队 Run 不重建不复制。
 - 权威实现：`src/storage/sqlite-store.ts`；自动化：`test/action-reconciliation.test.ts` 两条回归先红后绿，相关审批测试 41 项通过；最终完整 `pnpm check` 153 文件、1711 项全过（无跳过），`pnpm smoke` 通过。真实事件的只读一致性快照验证：原 queued Run 能被领取为 running，workflow 为 queued，未改写生产库。证据保存在本地 `output/reconciliation-entry/`；发布需继续通过精确提交 CI 与 Supervisor Candidate 验证。APPROVAL-001 整体维持 Usable；下一缺口仍按本 Feature 主条目追踪。
+
+### APPROVAL-001：统一命令授权与真实桌面复用（2026-11-26）
+
+- 用户结果：准确命令 / git fetch 命令族 × 事情 / 长期授权真正跨执行入口生效，设置与事情详情可撤销；历史审批改为只读结果。
+- 基线与隔离：ebc5b433；独立 codex/approval-001-command-grants。验收、范围、失败恢复、增量 schema 60 与回滚边界见 docs/command-authorization.md。
+- 权威实现：src/executor/command-policy.mjs、src/executor/dsh-approval-bridge.mjs、src/storage/sqlite-store.ts、src/worker/processor.ts；客户端仅适配服务端事实。
+- 自动化证据：命令/目录双入口、去重绑定、首次撤销重审批、终态失效、真实 Worker 首调用 outcome、历史界面测试；实际 Electron + Worker + DSH fetch 的复用、SQLite/桌面重启、worktree、撤销不执行与重新询问已验证。证据位于 output/command-grants/。
+- 本地验证：154 文件 / 1775 测试、完整 check 与 smoke 通过；真实 Electron + Worker + DSH 连续副作用验证、窄屏及授权记录追溯通过。独立安全/对抗/测试审查及 Codex CLI 的已确认发现均经回归修复。集成最新 main 后重跑门禁；精确提交 CI 与 Supervisor 发布尚待执行。
+- 下一边界：本版持久命令适配为受约束的 HTTPS/本地 git fetch；SSH、自定义 helper、其他程序及危险选项继续单次审批，不宣称支持任意命令永久授权。

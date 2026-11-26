@@ -1,3 +1,5 @@
+import type { PegasApi } from '../api'
+import { ApprovalRulesSection } from './DetailDrawer'
 import {
   AlertTriangle,
   Bell,
@@ -209,6 +211,7 @@ const sectionIcons: Record<SettingsSection, typeof Bot> = {
 }
 
 interface SettingsPageProps {
+  api?: PegasApi
   initialSection?: SettingsSection
   response?: SettingsResponse
   memories?: MemoryRecord[]
@@ -286,6 +289,7 @@ type SettingsTestRewrite = (
 }>
 
 export function SettingsPage({
+  api,
   initialSection = 'pegas',
   response,
   memories,
@@ -653,11 +657,14 @@ export function SettingsPage({
                   />
                 )}
                 {section === 'privacy' && (
-                  <PrivacySettings
-                    available={response.capabilities.privacyAvailable}
-                    draft={draft}
-                    onChange={editDraft}
-                  />
+                  <>
+                    <PrivacySettings
+                      available={response.capabilities.privacyAvailable}
+                      draft={draft}
+                      onChange={editDraft}
+                    />
+                    <ApprovalRulesSection api={api} />
+                  </>
                 )}
                 {section === 'notifications' && (
                   <NotificationSettings

@@ -493,6 +493,7 @@ console.log(JSON.stringify({
 `)
     const executor = new DshCliExecutor({ command })
     const decisions: Record<string, unknown>[] = []
+    const activities: string[] = []
     await executor.execute({
       runId: 'run-1',
       taskId: 'task-1',
@@ -500,8 +501,10 @@ console.log(JSON.stringify({
       workingDirectory: process.cwd(),
       onProgress: event => {
         if (event.type === 'policy_decision') decisions.push({ ...event })
+        if (event.type === 'activity') activities.push(event.label)
       },
     })
+    expect(activities).toContain('命中本事情已批准规则。')
     expect(decisions).toHaveLength(1)
     expect(decisions[0]).toMatchObject({
       callId: 'call-audit',

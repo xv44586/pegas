@@ -2495,18 +2495,9 @@ describe('sealed Pegas UI', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: '提交决定' }))
 
-    await waitFor(() =>
-      expect(
-        screen
-          .getByRole('radio', { name: /暂不发布/ })
-          .getAttribute('data-state') === 'checked',
-      ).toBe(true),
-    )
-    expect(
-      screen.getByPlaceholderText<HTMLTextAreaElement>(
-        '告诉 Pegas 需要注意什么',
-      ).value,
-    ).toBe('另一台设备决定暂不发布')
+    expect(await screen.findByText('另一台设备决定暂不发布')).toBeTruthy()
+    expect(screen.queryByRole('radiogroup', { name: '你的决定' })).toBeNull()
+    expect(screen.queryByPlaceholderText('告诉 Pegas 需要注意什么')).toBeNull()
     expect(screen.getByText('已拒绝执行此动作。')).toBeTruthy()
     expect(screen.queryByText(/提交决定失败/)).toBeNull()
   })
@@ -4767,16 +4758,9 @@ describe('sealed Pegas UI', () => {
       />,
     )
 
-    expect(
-      screen
-        .getByRole('radio', { name: /^发布/ })
-        .getAttribute('data-state') === 'checked',
-    ).toBe(true)
-    expect(
-      screen.getByPlaceholderText<HTMLTextAreaElement>(
-        '告诉 Pegas 需要注意什么',
-      ).value,
-    ).toBe('先保留旧版本')
+    expect(screen.getByText('先保留旧版本')).toBeTruthy()
+    expect(screen.queryByRole('radiogroup', { name: '你的决定' })).toBeNull()
+    expect(screen.queryByPlaceholderText('告诉 Pegas 需要注意什么')).toBeNull()
     expect(screen.getByText('执行成功')).toBeTruthy()
     expect(screen.getByText(/published/)).toBeTruthy()
   })
@@ -9407,6 +9391,10 @@ describe('sealed Pegas UI', () => {
 
   it.each([
     ['approve_rule', '本事情内同类不再询问'],
+    ['approve_command_family_task', '本事情内允许 git fetch'],
+    ['approve_command_family_user', '始终允许 git fetch'],
+    ['approve_command_exact_task', '本事情内允许此准确命令'],
+    ['approve_command_exact_user', '始终允许此准确命令'],
     ['approve_directory_task', '本事情内信任这些目录'],
     ['approve_directory_user', '始终信任这些目录'],
   ])(
@@ -9684,6 +9672,72 @@ describe('sealed Pegas UI', () => {
     ).toBeTruthy()
     expect(screen.getByText('对外网络发送 · 高风险')).toBeTruthy()
     expect(screen.queryByLabelText(/本事情内同类不再询问/)).toBeNull()
+  })
+
+  it('shows persisted authorization reasons and opens the matching rule for revocation', async () => {
+    const rule = {
+      id: 'trace-rule',
+      taskId: 'task-1',
+      tool: 'write',
+      category: 'out-of-workspace-write',
+      targets: ['/tmp/trace-shared'],
+      scope: 'user_directory',
+      fingerprint: 'f'.repeat(64),
+      status: 'active',
+      createdFromApprovalId: 'trace-approval',
+      createdFromDecisionId: 'trace-decision',
+      createdBy: 'owner',
+      createdAt: '2026-11-26T12:00:00.000Z',
+    }
+    let revoked = false
+    installFetch((path, init) => {
+      if (path.startsWith('/v1/policy-audit?'))
+        return Response.json({
+          entries: [
+            {
+              id: 'audit-1',
+              decision: 'allow',
+              reason: '已按长期命令授权执行：git fetch · Pegas · origin。',
+              ruleId: rule.id,
+              createdAt: rule.createdAt,
+            },
+          ],
+        })
+      if (path.startsWith('/v1/approval-rules?'))
+        return Response.json({ rules: [rule] })
+      if (
+        path === '/v1/tasks/task-1/approval-rules/trace-rule/revoke' &&
+        init?.method === 'POST'
+      ) {
+        revoked = true
+        return Response.json({ rule: { ...rule, status: 'revoked' } })
+      }
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /所有事情/,
+      }),
+    )
+    fireEvent.click(
+      within(mainCanvas()).getByRole('button', { name: /安全自更新流程/ }),
+    )
+    const summary = (await screen.findAllByText('授权执行记录'))[0]
+    const details = summary?.closest('details')
+    if (!details) throw new Error('Expected authorization records')
+    details.open = true
+    fireEvent(details, new Event('toggle'))
+    expect(
+      await screen.findByText(
+        '已按长期命令授权执行：git fetch · Pegas · origin。',
+      ),
+    ).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '查看此授权' }))
+    expect(await screen.findByText('/tmp/trace-shared')).toBeTruthy()
+    fireEvent.click(within(details).getByRole('button', { name: '撤销规则' }))
+    await waitFor(() => expect(revoked).toBe(true))
+    expect(await within(details).findByText('已撤销')).toBeTruthy()
   })
 
   it.each(['exact', 'task_directory', 'user_directory'])(

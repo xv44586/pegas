@@ -193,6 +193,11 @@ export function canonicalRuleTarget(value, roots) {
  */
 export function approvalDirectories(tool, targets, command) {
   if (
+    (tool === 'apply_patch' || tool === 'bash') &&
+    (!command || /^\*\*\* (Delete File|Move to):/m.test(command))
+  )
+    return []
+  if (
     !['write', 'edit', 'apply_patch'].includes(tool) &&
     !(tool === 'bash' && boundedPatch(command) !== undefined)
   )
@@ -203,22 +208,17 @@ export function approvalDirectories(tool, targets, command) {
     for (const target of targets) {
       if (!isAbsolute(target) || canonicalRuleTarget(target, {}) !== target)
         return []
-      let directory = statSync(target, {
+      const directory = statSync(target, {
         throwIfNoEntry: false,
       })?.isDirectory()
         ? target
         : dirname(target)
-      while (
-        !statSync(directory, { throwIfNoEntry: false }) &&
-        directory !== dirname(directory)
-      )
-        directory = dirname(directory)
       if (
         directory === dirname(directory) ||
-        !statSync(directory).isDirectory()
+        canonicalRuleTarget(directory, {}) !== directory
       )
         return []
-      directories.push(realpathSync(directory))
+      directories.push(directory)
     }
   } catch {
     return []

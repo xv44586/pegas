@@ -1693,6 +1693,7 @@ export function App() {
         )}
         {page === 'settings' && (
           <SettingsPage
+            api={api}
             agentModels={agentModels}
             behaviorPreferences={behaviorPreferences}
             behaviorPreferencesError={behaviorPreferencesError}

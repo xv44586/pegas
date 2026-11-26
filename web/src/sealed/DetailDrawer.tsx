@@ -520,83 +520,142 @@ function ApprovalDetail({
           </p>
         )}
         <p className="mt-2.5 text-[13px] leading-[1.55] text-ink-2">
-          需要你决定：{approvalReason(view)}
+          {pending ? '需要你决定：' : '当时的审批原因：'}
+          {approvalReason(view)}
         </p>
         <dl className="approval-meta grid text-[13px]">
           <Meta label="状态" value={approvalStatus(view.approval.status)} />
-          <Meta label="Action" value={actionStatus(view.action.status)} />
-          <Meta label="Run" value={view.approval.requestRunId} />
+          <Meta label="执行结果" value={actionStatus(view.action.status)} />
         </dl>
-        {view.action.result && (
-          <pre className="approval-result mt-1 overflow-x-auto whitespace-pre-wrap break-words rounded-control bg-inset px-3 py-2.5 text-[12.5px] text-ink-2">
-            {JSON.stringify(view.action.result, null, 2)}
-          </pre>
+        <details>
+          <summary>技术详情</summary>
+          <dl>
+            <Meta label="Run" value={view.approval.requestRunId} />
+          </dl>
+          {view.action.result && (
+            <pre className="approval-result mt-1 overflow-x-auto whitespace-pre-wrap break-words rounded-control bg-inset px-3 py-2.5 text-[12.5px] text-ink-2">
+              {JSON.stringify(view.action.result, null, 2)}
+            </pre>
+          )}
+        </details>
+        {typeof view.action.request.commandRuleReason === 'string' && (
+          <p className="text-[13px] text-ink-2">
+            命令授权不可用：{view.action.request.commandRuleReason}
+          </p>
         )}
         <ReconciliationRecord action={view.action} />
       </section>
       {needsReconciliation && onReconcile && (
         <ReconciliationForm action={view.action} onReconcile={onReconcile} />
       )}
-      <section className="detail-section">
-        <fieldset className="approval-options">
-          <legend>你的决定</legend>
-          <RadioGroup
-            aria-label="你的决定"
-            disabled={!pending || submitting}
-            onValueChange={value => setSelected(value)}
-            value={selected}
-          >
-            {view.approval.prompt.options.map(option => (
-              <label
-                className="approval-option mt-2.5 flex cursor-pointer items-start gap-3 rounded-card border border-line px-3.5 py-3 transition-colors duration-150 hover:bg-hover-2 has-[[data-state=checked]]:border-accent has-[[data-state=checked]]:bg-accent-tint"
-                key={option.id}
-              >
-                <RadioItem
-                  aria-label={option.label}
-                  className="mt-[3px]"
-                  value={option.id}
-                />
-                <span className="grid min-w-0 gap-[3px]">
-                  <strong>
-                    {option.label}
-                    {option.id === view.approval.prompt.recommendedOptionId
-                      ? ' · 建议'
-                      : ''}
-                  </strong>
-                  {option.description && (
-                    <small className="text-ink-3">{option.description}</small>
-                  )}
-                </span>
-              </label>
-            ))}
-          </RadioGroup>
-        </fieldset>
-        <label className="approval-rationale mt-4 grid gap-2">
-          <span className="text-ink-2">补充说明（可选）</span>
-          <TextArea
-            className="min-h-[88px] w-full resize-y"
-            disabled={!pending || submitting}
-            onChange={event => setRationale(event.target.value)}
-            placeholder="告诉 Pegas 需要注意什么"
-            value={rationale}
-          />
-        </label>
-        {(error || view.decisionError) && (
-          <p
-            className="settings-error mb-3 rounded-card bg-red-tint px-3 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_color-mix(in_srgb,var(--red)_22%,transparent)]"
-            role="alert"
-          >
-            {error || view.decisionError}
+      {pending ? (
+        <section className="detail-section">
+          <fieldset className="approval-options">
+            <legend>你的决定</legend>
+            <RadioGroup
+              aria-label="你的决定"
+              disabled={submitting}
+              onValueChange={value => setSelected(value)}
+              value={selected}
+            >
+              {view.approval.prompt.options.map(option => (
+                <label
+                  className="approval-option mt-2.5 flex cursor-pointer items-start gap-3 rounded-card border border-line px-3.5 py-3 transition-colors duration-150 hover:bg-hover-2 has-[[data-state=checked]]:border-accent has-[[data-state=checked]]:bg-accent-tint"
+                  key={option.id}
+                >
+                  <RadioItem
+                    aria-label={option.label}
+                    className="mt-[3px]"
+                    value={option.id}
+                  />
+                  <span className="grid min-w-0 gap-[3px]">
+                    <strong>
+                      {option.label}
+                      {option.id === view.approval.prompt.recommendedOptionId
+                        ? ' · 建议'
+                        : ''}
+                    </strong>
+                    {option.description && (
+                      <small className="text-ink-3">{option.description}</small>
+                    )}
+                  </span>
+                </label>
+              ))}
+            </RadioGroup>
+          </fieldset>
+          <label className="approval-rationale mt-4 grid gap-2">
+            <span className="text-ink-2">补充说明（可选）</span>
+            <TextArea
+              className="min-h-[88px] w-full resize-y"
+              disabled={submitting}
+              onChange={event => setRationale(event.target.value)}
+              placeholder="告诉 Pegas 需要注意什么"
+              value={rationale}
+            />
+          </label>
+          {(error || view.decisionError) && (
+            <p
+              className="settings-error mb-3 rounded-card bg-red-tint px-3 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_color-mix(in_srgb,var(--red)_22%,transparent)]"
+              role="alert"
+            >
+              {error || view.decisionError}
+            </p>
+          )}
+        </section>
+      ) : (
+        <section className="detail-section" aria-label="审批结果">
+          <h3>审批结果</h3>
+          {view.decisionError && <p role="alert">{view.decisionError}</p>}
+          <p>
+            {view.approval.prompt.options.find(
+              option => option.id === view.approval.decision?.optionId,
+            )?.label ?? approvalStatus(view.approval.status)}
+          </p>
+          <p className="text-[13px] text-ink-2">
+            {
+              view.approval.prompt.options.find(
+                option => option.id === view.approval.decision?.optionId,
+              )?.description
+            }
+          </p>
+          {view.approval.decision?.rationale && (
+            <p>{view.approval.decision.rationale}</p>
+          )}
+          {view.approval.decision?.kind === 'approve_rule' && (
+            <p role="status">
+              授权规则已保存，可在事情详情或设置的授权管理中查看和撤销。
+            </p>
+          )}
+          {onOpenTask && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={onOpenTask}
+              type="button"
+            >
+              查看事情与授权
+            </Button>
+          )}
+        </section>
+      )}
+      <footer className="drawer-footer">
+        {pending && (
+          <p className="min-w-0 flex-1 text-[13px] text-ink-2" role="status">
+            本次选择：
+            {
+              view.approval.prompt.options.find(
+                option => option.id === selected,
+              )?.label
+            }
           </p>
         )}
-      </section>
-      <footer className="drawer-footer">
         {pending && onDecide ? (
           <Button
             variant="accent"
             size="sm"
             disabled={submitting}
             onClick={() => void submitDecision()}
+            className="shrink-0 whitespace-nowrap"
             type="button"
           >
             {submitting ? '正在提交…' : '提交决定'}
@@ -630,6 +689,11 @@ function approvalTaskOpener(
 
 function ApprovalOperationPreview({ action }: { action: DurableAction }) {
   const request = action.request
+  const commandScope =
+    typeof request.commandSelector === 'object' &&
+    request.commandSelector !== null
+      ? (request.commandSelector as Record<string, unknown>)
+      : undefined
   const tool = typeof request.tool === 'string' ? request.tool : undefined
   const category =
     typeof request.category === 'string' ? request.category : undefined
@@ -652,7 +716,8 @@ function ApprovalOperationPreview({ action }: { action: DurableAction }) {
     <section aria-label="操作预览" className="approval-operation">
       {category && (
         <p className="approval-operation-category">
-          {approvalCategoryLabel(category)} · {actionRiskLabel(action.risk)}
+          {commandScope ? '拉取仓库远端更新' : approvalCategoryLabel(category)}{' '}
+          · {actionRiskLabel(action.risk)}
         </p>
       )}
       {tool && (
@@ -668,6 +733,22 @@ function ApprovalOperationPreview({ action }: { action: DurableAction }) {
         <pre className="approval-command">
           <code>{command}</code>
         </pre>
+      )}
+      {commandScope && (
+        <dl className="approval-meta grid text-[13px]">
+          <Meta
+            label="仓库"
+            value={
+              typeof commandScope.repository === 'string'
+                ? commandScope.repository
+                : ''
+            }
+          />
+          <Meta
+            label="远端"
+            value={`${typeof commandScope.remote === 'string' ? commandScope.remote : ''} · ${typeof commandScope.remoteUrl === 'string' ? commandScope.remoteUrl : ''}`}
+          />
+        </dl>
       )}
       {targets.length > 0 && (
         <ul className="approval-targets">
@@ -1611,6 +1692,9 @@ function TaskDetail({
                       >
                         查看调用链
                       </button>
+                    )}
+                    {api && (
+                      <AuthorizationTrace api={api} runId={historyRun.id} />
                     )}
                     {runHistory.length > 1 && historyRun.lastError && (
                       <small>{historyRun.lastError}</small>
@@ -3586,12 +3670,87 @@ export function PermissionTierHistorySection({
   )
 }
 
+function AuthorizationTrace({ api, runId }: { api: PegasApi; runId: string }) {
+  const [page, setPage] =
+    useState<Awaited<ReturnType<PegasApi['policyAudit']>>>()
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [selected, setSelected] = useState<string>()
+  async function load(cursor?: string) {
+    if (loading) return
+    setLoading(true)
+    setError('')
+    try {
+      const next = await api.policyAudit(runId, cursor)
+      setPage(current => ({
+        ...next,
+        entries: cursor
+          ? [...(current?.entries ?? []), ...next.entries]
+          : next.entries,
+      }))
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '授权记录读取失败。')
+    } finally {
+      setLoading(false)
+    }
+  }
+  return (
+    <details
+      className="run-progress-details"
+      onToggle={event => {
+        if (event.currentTarget.open && !page && !loading && !error) void load()
+      }}
+    >
+      <summary>授权执行记录</summary>
+      {loading && <p role="status">正在读取授权记录…</p>}
+      {error && (
+        <p role="alert">
+          {error}{' '}
+          <button type="button" onClick={() => void load()}>
+            重试
+          </button>
+        </p>
+      )}
+      {page?.entries.length === 0 && <p>这次运行没有授权检查记录。</p>}
+      <ul>
+        {page?.entries.map(entry => (
+          <li key={entry.id} className="my-2 text-[13px]">
+            <p>{entry.reason}</p>
+            <small>{formatRelativeTime(entry.createdAt)}</small>
+            {entry.ruleId && (
+              <button
+                type="button"
+                className="ml-2 text-accent-ink underline"
+                onClick={() => setSelected(entry.ruleId)}
+              >
+                查看此授权
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
+      {page?.nextCursor && (
+        <button
+          type="button"
+          disabled={loading}
+          onClick={() => void load(page.nextCursor)}
+        >
+          更多授权记录
+        </button>
+      )}
+      {selected && <ApprovalRulesSection api={api} ruleId={selected} />}
+    </details>
+  )
+}
+
 export function ApprovalRulesSection({
   api,
   channel,
+  ruleId,
 }: {
   api?: PegasApi
-  channel: Extract<DrawerView, { kind: 'task' }>['channel']
+  channel?: Extract<DrawerView, { kind: 'task' }>['channel']
+  ruleId?: string
 }) {
   const [rules, setRules] = useState<ApprovalRule[]>()
   const [loadError, setLoadError] = useState('')
@@ -3604,9 +3763,10 @@ export function ApprovalRulesSection({
     if (!api) return
     let cancelled = false
     api
-      .approvalRules(channel.id)
+      .approvalRules(channel?.id)
       .then(loaded => {
-        if (!cancelled) setRules(loaded)
+        if (!cancelled)
+          setRules(ruleId ? loaded.filter(rule => rule.id === ruleId) : loaded)
       })
       .catch((caught: unknown) => {
         if (!cancelled)
@@ -3617,7 +3777,7 @@ export function ApprovalRulesSection({
     return () => {
       cancelled = true
     }
-  }, [api, channel.id])
+  }, [api, channel?.id, ruleId])
   if (!api) return null
   async function revoke(rule: ApprovalRule) {
     if (!api || revokingId) return
@@ -3638,7 +3798,10 @@ export function ApprovalRulesSection({
   }
   return (
     <section className="detail-section">
-      <h3>已批准规则</h3>
+      <h3>{channel ? '已批准规则' : '授权管理'}</h3>
+      <p className="text-[13px] text-ink-2">
+        撤销会影响下一次尚未开始的调用；长期授权的撤销也影响其他事情。历史记录保留。
+      </p>
       {loadError ? (
         <p
           className="drawer-footnote mt-2.5 text-[12px] leading-[1.6] text-red-text"
@@ -3660,14 +3823,35 @@ export function ApprovalRulesSection({
             <li className="approval-rule-item" key={rule.id}>
               <div>
                 <strong>
-                  {rule.scope === 'user_directory'
-                    ? '始终信任目录'
-                    : rule.scope === 'task_directory'
-                      ? '本事情内信任目录'
-                      : `${rule.tool} · ${approvalRuleCategoryLabel(rule.category)}`}
+                  {rule.command
+                    ? `${rule.lifetime === 'user' ? '长期' : '本事情'}命令授权 · ${rule.command.precision === 'family' ? 'git fetch' : '准确命令'}`
+                    : rule.scope === 'user_directory'
+                      ? '始终信任目录'
+                      : rule.scope === 'task_directory'
+                        ? '本事情内信任目录'
+                        : `${rule.tool} · ${approvalRuleCategoryLabel(rule.category)}`}
                   {rule.scope && rule.scope !== 'exact' && ' · 含子目录'}
                 </strong>
-                <small>{rule.targets.join('、')}</small>
+                <small>
+                  {rule.command
+                    ? `${rule.command.selector.repository} · ${rule.command.selector.remote} (${rule.command.selector.remoteUrl})`
+                    : rule.targets.join('、')}
+                </small>
+                {rule.command?.precision === 'exact' && (
+                  <small>
+                    {rule.command.selector.argv.join(' ')} ·{' '}
+                    {rule.command.selector.cwd}
+                  </small>
+                )}
+                <small>
+                  来源事情：{rule.taskId} ·{' '}
+                  {rule.scope === 'user_directory' || rule.lifetime === 'user'
+                    ? '长期有效，可撤销'
+                    : '仅本事情有效'}
+                </small>
+                {rule.lastUsedAt && (
+                  <small>最近使用：{formatRelativeTime(rule.lastUsedAt)}</small>
+                )}
                 <small>
                   {rule.status === 'active'
                     ? `生效中 · ${formatRelativeTime(rule.createdAt)}批准`
