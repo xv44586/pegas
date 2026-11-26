@@ -851,6 +851,78 @@ describe('sealed Pegas UI', () => {
     )
   })
 
+  it('retains discovered models across settings tabs and provider switches', async () => {
+    installFetch((path, init) => {
+      if (path === '/v1/settings/models/discover' && init?.method === 'POST')
+        return Response.json({
+          models: [{ id: 'retained-model', name: 'Retained model' }],
+        })
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /模型服务/ }))
+    fireEvent.click(screen.getByRole('button', { name: '获取模型目录' }))
+    expect(await screen.findByText('Retained model')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /事情归类/ }))
+    fireEvent.click(screen.getByRole('button', { name: /模型服务/ }))
+    expect(screen.getByText('Retained model')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /Anthropic/ }))
+    expect(screen.queryByText('Retained model')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /Magpie/ }))
+    expect(screen.getByText('Retained model')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('API Key'), {
+      target: { value: 'changed-key' },
+    })
+    expect(screen.queryByText('Retained model')).toBeNull()
+  })
+
+  it('ignores a pending catalog after connection edits and keeps the last successful refresh', async () => {
+    let discovery = 0
+    const pending = Promise.withResolvers<Response>()
+    installFetch((path, init) => {
+      if (path === '/v1/settings/models/discover' && init?.method === 'POST') {
+        discovery += 1
+        if (discovery === 1) return pending.promise
+        if (discovery === 3)
+          return Response.json({ error: 'offline' }, { status: 503 })
+        return Response.json({ models: [{ id: 'fresh', name: 'Fresh model' }] })
+      }
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /模型服务/ }))
+    fireEvent.click(screen.getByRole('button', { name: '获取模型目录' }))
+    fireEvent.change(screen.getByLabelText('API Key'), {
+      target: { value: 'new-key' },
+    })
+    pending.resolve(
+      Response.json({ models: [{ id: 'stale', name: 'Stale model' }] }),
+    )
+    await act(async () => pending.promise)
+    expect(screen.queryByText('Stale model')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '获取模型目录' }))
+    expect(await screen.findByText('Fresh model')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '获取模型目录' }))
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: '获取模型目录' }),
+      ).toHaveProperty('disabled', false),
+    )
+    expect(screen.getByText('Fresh model')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '取消' }))
+    expect(screen.queryByText('Fresh model')).toBeNull()
+  })
+
   it('does not probe a non-current custom provider without a model', async () => {
     const customSettings: SettingsResponse = {
       ...settingsResponse,
@@ -3595,6 +3667,17 @@ describe('sealed Pegas UI', () => {
         onComplete={onComplete}
         onContinueSettings={vi.fn()}
         response={settingsResponse}
+        catalog={{
+          defaultProvider: 'magpie',
+          defaultModel: settingsResponse.settings.agentModelName,
+          models: [
+            {
+              provider: settingsResponse.settings.agentModelProvider,
+              id: settingsResponse.settings.agentModelName,
+              name: 'Configured model',
+            },
+          ],
+        }}
       />,
     )
     expect(screen.getByText('欢迎使用 Pegas')).toBeTruthy()
@@ -3737,6 +3820,161 @@ describe('sealed Pegas UI', () => {
     expect(localStorage.getItem('pegas-setup-complete')).toBe('true')
   })
 
+  it('discovers draft models before saving an editable preset and its default model atomically', async () => {
+    localStorage.removeItem('pegas-setup-complete')
+    const model = { id: 'chosen-model', name: 'Chosen model' }
+    const fetchMock = installFetch((path, init) => {
+      if (path === '/v1/settings/agent-models')
+        return Response.json({ models: [] })
+      if (path === '/v1/settings/models/discover')
+        return Response.json({ models: [model] })
+      if (path === '/v1/settings/models/test')
+        return Response.json({ ok: true, latencyMs: 5 })
+      if (path === '/v1/settings' && init?.method === 'PUT')
+        return Response.json({
+          ...settingsResponse,
+          settings: {
+            ...settingsResponse.settings,
+            revision: 2,
+            modelProvider: 'magpie',
+            modelName: model.id,
+            agentModelMode: 'override',
+            agentModelProvider: 'magpie',
+            agentModelName: model.id,
+          },
+        })
+      return undefined
+    })
+    render(<App />)
+    await screen.findByText('欢迎使用 Pegas')
+    fireEvent.click(screen.getByRole('button', { name: /^继续$/ }))
+    const url = await screen.findByLabelText('Base URL')
+    expect(url).toHaveProperty('readOnly', false)
+    expect(url).toHaveProperty(
+      'value',
+      settingsResponse.capabilities.providers[0]?.baseUrl,
+    )
+    expect(screen.queryByLabelText('模型 ID')).toBeNull()
+    fireEvent.change(url, { target: { value: 'https://proxy.example/v1' } })
+    fireEvent.change(screen.getByLabelText('API Key'), {
+      target: { value: 'draft-key' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
+    const trigger = await screen.findByRole('button', { name: /默认模型$/ })
+    await waitFor(() => expect(trigger).toHaveProperty('disabled', false))
+    expect(
+      fetchMock.mock.calls.some(
+        ([path]) => path === '/v1/settings/models/test',
+      ),
+    ).toBe(false)
+    expect(
+      fetchMock.mock.calls.some(([, init]) => init?.method === 'PUT'),
+    ).toBe(false)
+    fireEvent.click(trigger)
+    fireEvent.click(await screen.findByRole('option', { name: /Chosen model/ }))
+    expect(screen.getByRole('button', { name: /^继续$/ })).toHaveProperty(
+      'disabled',
+      true,
+    )
+    fireEvent.click(screen.getByRole('button', { name: '保存连接' }))
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([path, init]) => {
+          if (path !== '/v1/settings' || init?.method !== 'PUT') return false
+          const body: unknown = JSON.parse(
+            typeof init.body === 'string' ? init.body : '{}',
+          )
+          expect(body).toMatchObject({
+            modelProvider: 'magpie',
+            modelName: model.id,
+            agentModelMode: 'override',
+            agentModelProvider: 'magpie',
+            agentModelName: model.id,
+            provider: {
+              baseUrl: 'https://proxy.example/v1',
+              apiKey: 'draft-key',
+            },
+          })
+          return true
+        }),
+      ).toBe(true),
+    )
+    await screen.findByText('连接和默认模型已保存')
+    expect(screen.queryByLabelText('API Key')).toBeNull()
+    expect(
+      screen.getByRole('button', { name: /Chosen model.*默认模型$/ }),
+    ).toBeTruthy()
+    expect(screen.getByRole('button', { name: /^继续$/ })).toHaveProperty(
+      'disabled',
+      false,
+    )
+  })
+
+  it('invalidates discovered models on connection edits and preserves drafts on empty catalogs and model failures', async () => {
+    const discover = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce(new Error('目录暂时不可用'))
+      .mockResolvedValue([{ id: 'model-a', name: 'Model A' }])
+    const save = vi.fn()
+    const test = vi.fn().mockRejectedValue(new Error('模型权限不足'))
+    render(
+      <Onboarding
+        response={settingsResponse}
+        onComplete={vi.fn()}
+        onContinueSettings={vi.fn()}
+        onTestConnection={discover}
+        onSaveConnection={save}
+        onTestModel={test}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: /^继续$/ }))
+    const key = screen.getByLabelText('API Key')
+    fireEvent.change(key, { target: { value: 'fixture-key' } })
+    fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
+    await screen.findByText(/没有返回可用模型/)
+    expect(screen.getByRole('button', { name: /默认模型$/ })).toHaveProperty(
+      'disabled',
+      true,
+    )
+    expect(key).toHaveProperty('value', 'fixture-key')
+    fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
+    await screen.findByText('目录暂时不可用')
+    for (const [label, value] of [
+      ['Base URL', 'https://changed.example/v1'],
+      ['API Key', 'updated-fixture-key'],
+    ] as const) {
+      fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
+      await screen.findByText(/已获取 1 个模型/)
+      fireEvent.click(screen.getByRole('button', { name: '保存连接' }))
+      await screen.findByText('请先测试连接并选择默认模型。')
+      fireEvent.click(screen.getByRole('button', { name: /默认模型$/ }))
+      fireEvent.click(await screen.findByRole('option', { name: /Model A/ }))
+      expect(screen.queryByText('请先测试连接并选择默认模型。')).toBeNull()
+      fireEvent.click(screen.getByRole('button', { name: '保存连接' }))
+      await screen.findByText('模型权限不足')
+      expect(save).not.toHaveBeenCalled()
+      fireEvent.change(screen.getByLabelText(label), { target: { value } })
+      expect(screen.getByRole('button', { name: /默认模型$/ })).toHaveProperty(
+        'disabled',
+        true,
+      )
+      expect(screen.queryByRole('button', { name: '保存连接' })).toBeNull()
+    }
+    fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
+    await screen.findByText(/已获取 1 个模型/)
+    await chooseOption('供应商', 'Anthropic')
+    expect(screen.getByLabelText('API Key')).toHaveProperty('value', '')
+    expect(screen.getByRole('button', { name: /默认模型$/ })).toHaveProperty(
+      'disabled',
+      true,
+    )
+    expect(screen.getByRole('button', { name: /^继续$/ })).toHaveProperty(
+      'disabled',
+      true,
+    )
+  })
+
   it('opens custom connection setup even when the preset claims to be available', async () => {
     localStorage.removeItem('pegas-setup-complete')
     const model = {
@@ -3853,30 +4091,32 @@ describe('sealed Pegas UI', () => {
               defaultModel: model.id,
               models: [model],
             })
-      if (path === '/v1/settings/models/test') {
+      if (path === '/v1/settings/models/test')
+        return Response.json({ ok: true, latencyMs: 42 })
+      if (path === '/v1/settings/models/discover') {
         if (typeof init?.body !== 'string')
           throw new Error('Expected a JSON body')
-        expect(JSON.parse(init.body)).toMatchObject(connection)
+        expect(JSON.parse(init.body)).toMatchObject({
+          modelProvider: connection.modelProvider,
+          provider: connection.provider,
+        })
         testAttempts += 1
         return testAttempts === 1
           ? Response.json({ message: '请检查 API Key' }, { status: 400 })
-          : Response.json({ ok: true, latencyMs: 42 })
+          : Response.json({ models: [model] })
       }
       return undefined
     })
     render(<App />)
     await screen.findByText('欢迎使用 Pegas')
     fireEvent.click(screen.getByRole('button', { name: /^继续$/ }))
-    await chooseOption('接入方式', '自定义 · OpenAI 兼容')
+    await chooseOption('供应商', '自定义 · OpenAI 兼容')
     expect(screen.getByLabelText('Base URL')).toHaveProperty(
       'value',
       connection.provider.baseUrl,
     )
     const key = screen.getByLabelText('API Key')
     fireEvent.change(key, { target: { value: connection.provider.apiKey } })
-    fireEvent.change(screen.getByLabelText('模型 ID'), {
-      target: { value: model.id },
-    })
     fireEvent.submit(screen.getByRole('form', { name: '模型连接配置' }))
     expect(await screen.findByText('请检查 API Key')).toBeTruthy()
     expect(key).toHaveProperty('value', connection.provider.apiKey)
@@ -3884,6 +4124,10 @@ describe('sealed Pegas UI', () => {
       fetchMock.mock.calls.some(([, init]) => init?.method === 'PUT'),
     ).toBe(false)
 
+    fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
+    await screen.findByText(/已获取 1 个模型/)
+    fireEvent.click(screen.getByRole('button', { name: /默认模型$/ }))
+    fireEvent.click(await screen.findByRole('option', { name: /Custom model/ }))
     fireEvent.click(screen.getByRole('button', { name: '保存连接' }))
     expect(await screen.findByText('设置已更新，请重试')).toBeTruthy()
     expect(key).toHaveProperty('value', connection.provider.apiKey)
@@ -3902,7 +4146,7 @@ describe('sealed Pegas UI', () => {
     expect(screen.queryByLabelText('API Key')).toBeNull()
   })
 
-  it('lets first-run setup configure the model connection before picking a model', async () => {
+  it('lets first-run setup discover and select a model before saving the connection', async () => {
     localStorage.removeItem('pegas-setup-complete')
     let keySaved = false
     const unconfigured: SettingsResponse = {
@@ -3954,6 +4198,13 @@ describe('sealed Pegas UI', () => {
               { error: 'agent_models_unavailable' },
               { status: 503 },
             )
+      if (path === '/v1/settings/models/discover')
+        return Response.json({
+          models: [
+            { id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash' },
+            { id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol' },
+          ],
+        })
       if (path === '/v1/settings/models/test' && init?.method === 'POST') {
         const body = JSON.parse(
           typeof init.body === 'string' ? init.body : '{}',
@@ -4008,7 +4259,11 @@ describe('sealed Pegas UI', () => {
     const keyInput = await screen.findByLabelText('API Key')
     fireEvent.change(keyInput, { target: { value: 'sk-onboarding' } })
     fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
-    expect(await screen.findByText(/连接正常 · 42 ms/)).toBeTruthy()
+    expect(await screen.findByText(/已获取 2 个模型/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /默认模型$/ }))
+    fireEvent.click(
+      await screen.findByRole('option', { name: /DeepSeek V4.1 Flash/ }),
+    )
     fireEvent.click(screen.getByRole('button', { name: '保存连接' }))
     await waitFor(() =>
       expect(

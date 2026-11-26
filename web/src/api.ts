@@ -1324,7 +1324,7 @@ export class PegasApi {
 
   async discoverModels(
     modelProvider: RuntimeSettings['modelProvider'],
-    modelName: string,
+    modelName: string | undefined,
     provider: ModelProviderDraft,
   ): Promise<ModelCatalogItem[]> {
     const response = await fetch('/v1/settings/models/discover', {

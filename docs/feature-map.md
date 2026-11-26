@@ -751,12 +751,32 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - **数据与权限边界**：模型目录、Provider 可用性和运行设置仍来自服务端；Web 只分页、搜索和呈现已返回目录。API key 继续只提交新值或清除意图，读取时不回显明文。
 - **失败与恢复**：目录获取或连接测试失败时保留未保存表单和手填模型 ID，错误提供就地重试路径；刷新目录、切换供应商或重新搜索时分页回到有效页，不能留下空白页或越界页码。
 
+### SETTINGS-001：首次设置先发现模型再选择（2026-11-25）
+
+- **Intake / 状态**：本次修复验收通过（独立提交，等待最终集成和发布）；基线 `28509be3b7ead06a40db4e14b07dc4fe9b639d6c`，主工作区 clean；独立分支 `fix/settings-001-onboarding-discovery`、独立 worktree `pegas-settings-001-onboarding`。
+- **验收**：供应商预填 Base URL 始终可编辑；无需模型 ID 即可测试连接并读取模型目录；使用共享搜索/分页选择默认模型，一次保存连接和默认执行模型；修改供应商/URL/Key 后旧目录失效；未测试、未选模型或保存失败不能继续。
+- **非目标**：不重做普通设置页、不改变执行会话恢复模型，不新增供应商协议或 DSH 目录事实来源。
+- **数据与权限边界**：复用受认证 discovery/test/settings API，探测不持久化，Key 不回显且换地址不复用旧 Key；保存复用 revision 与加密事务。
+- **失败与恢复**：空目录/发现失败保留草稿并可重试；选定模型保存前验证实际推理；冲突刷新 revision 后保留草稿与地址绑定。无数据库迁移，可回退本次代码，已保存设置继续兼容。
+
+- **权威实现**：`web/src/sealed/Onboarding.tsx` + `web/src/App.tsx`；`src/settings/runtime-settings.ts` 共享连接校验支持预设 URL 编辑；`src/control-plane/server.ts` 无模型名目录发现、地址/凭证隔离及安全错误投影。
+- **自动化证据**：修复前 3 个回归失败、修复后通过；聚焦 4 文件 / 290 测试通过，覆盖可编辑预设、无需 ID 发现、原子保存、空目录/失败/参数变更、冲突重试、目录刷新失败仍显示已保存选择、认证/只读探测/换地址不泄漏旧 Key。`pnpm build`、`pnpm smoke`、`pnpm review:ui --force` 通过（桌面 + 390px，先选模型再保存、选择后关闭面板）；首次设置补充 axe 检查 7 场景 / 0 违例。
+- **完整门禁与剩余风险（2026-11-26）**：合入 QUALITY-001 与 DESIGN-009 后，`PEGAS_LIVE_MODEL=deepseek/deepseek-flash pnpm check` 151 文件 / 1597 测试全通过，`pnpm smoke`、全站 `pnpm a11y:review`（零违例）、`pnpm review:ui --force` 通过。真实 Electron 独立数据目录验证：OpenAI/Magpie 默认 URL 可编辑、无模型 ID 发现 64 项目录、未选模型阻止保存和继续、DeepSeek 实际推理后保存默认值、四步完成与刷新持久化；选模型后清除过期错误提示回归先红后绿。最终集成需包含目录与桌面 DSH 启动修复并重新门禁，随后经精确 SHA 的 CI 和 Supervisor Candidate 发布。第三方供应商未逐家实测；无 schema 变更，回退代码或 previous Candidate，已保存设置兼容。
+
 ### SETTINGS-001：首次接入与执行模型目录刷新（2026-11-25）
 
-- **状态**：沿用 SETTINGS-001 的 Usable。首次设置可选择预设或填写自定义 Base URL、API Key 和模型 ID，测试并保存后可从服务端目录选择默认模型。普通设置保存连接和凭证后，Pegas 的执行模型列表在同一页面会话内重新载入。
+- **状态**：沿用 SETTINGS-001 的 Usable。首次设置可选择供应商并编辑预填 Base URL、API Key，测试直接读取目录，选择默认模型后一次保存连接与选择（2026-11-25 修订见上一节）。普通设置保存连接和凭证后，Pegas 的执行模型列表在同一页面会话内重新载入。
 - **权威实现**：`web/src/sealed/Onboarding.tsx` 和 `web/src/App.tsx` 复用设置、连接探测与执行模型目录 API。数据边界和重试见 `docs/runtime-settings.md`。
 - **自动化证据**：`web/src/App.test.tsx` 覆盖可用预设但目录请求失败时的自定义接入、测试失败保留输入、保存冲突重试时保持 Key 绑定的连接地址、保存后选择模型，以及从空目录到普通设置保存后就地刷新。UI review 使用隔离网关覆盖桌面与 390px 首次接入，实际点击保存后选择器里的模型，并在同一页面会话验证 Pegas 设置能读到已保存的模型。
 - **回滚与下一缺口**：回退 Web 更改即可，已有连接和设置可由原设置页继续读取，无数据库迁移。执行目录仍依赖部署中的 DSH 运行时，真实第三方供应商需各自验证。
+
+### SETTINGS-001：tab 目录保持与桌面执行目录（2026-11-25）
+
+- **交付状态**：源码门禁已通过，等待最终 CI 与统一发布；沿用 Feature 总体 Usable。2026-11-25 的 `DONE_WITH_CONCERNS` 上游测试阻塞已于次日按用户授权切换 DeepSeek 后解除。
+- **根因与权威实现**：模型服务局部 state 随 tab 卸载清空；Finder PATH 缺少 DSH/Node，桌面实例 `agent-models` 返回 503，而直接供应商探测成功。`web/src/sealed/SettingsPage.tsx` 按 Provider 保持设置会话的目录投影，恢复已保存服务端目录，连接编辑/取消/保存使缓存失效，迟到响应不跨连接。`src/executor/dsh-launch.ts` 为 `dsh-model-catalog.ts` 与 `dsh-cli-executor.ts` 提供同一 CLI 定位和 Node 入口启动规则，保留命令优先级与隔离 profile。
+- **自动化与实机证据**：两个原始复现先红后绿；`web/src/App.test.tsx` 新增 tab/Provider 往返、连接变更、迟到响应、刷新失败保留与取消草稿用例；`test/dsh-model-catalog.test.ts` 最小 Finder PATH 回归；`test/dsh-launch.test.ts` 验证实际 Node 子进程、PATH 优先、显式命令、shell/相对 wrapper 和缺失命令。相关 4 文件 / 289 测试通过。真实 Electron + 桌面已保存连接 + 最小 PATH 返回全部 63 模型；build、smoke、真实 DSH HTTP 合同 4 场景通过。
+- **门禁与下一缺口**：最终 `pnpm check`：151 文件 / 1,599 测试，1,588 通过、11 个现有真实供应商用例因上游 401 失败；format、brand、lint、typecheck、Knip 均通过。未修改基线 `28509be3` 的相同 4 文件 / 11 用例全部复现。2026-11-26 按用户授权使用已充值的 `deepseek/deepseek-flash`，合入 QUALITY-001 共享测试配置（main `5de2602e`）后执行 `PEGAS_LIVE_MODEL=deepseek/deepseek-flash pnpm check`：152 文件 / 1,601 测试全部通过，覆盖率 statement 78.21%、branch 71.78%、function 75.05%、line 81.26%；build 与 smoke 通过。保留全部真实场景及断言，未改 Magpie 凭证。当前运行实例仍待统一 Candidate 发布。
+- **边界与回滚**：仅内存目录投影，不落浏览器凭证、不把草稿目录当作执行模型事实；无数据库迁移。验收和失败恢复见 `docs/runtime-settings.md` Intake。revert 本次提交即可，线上只经不可变 Candidate / Supervisor 切换。
 
 ### CONV-002：旧 DS Bot 壳层的处置（2026-11-19）
 
