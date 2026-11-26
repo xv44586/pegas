@@ -33,7 +33,9 @@ pnpm smoke
 
 `pnpm check` 依次验证格式、ESLint、TypeScript、无用代码、覆盖率阈值和生产构建。`pnpm test` 可用于快速反馈，但提交前必须运行完整检查。
 
-本地 Magpie 与 DSH 可用时，真实集成测试使用产品默认模型；上游路由不可用时可显式运行 `PEGAS_LIVE_MODEL=codex/gpt-5.6-luna pnpm check`（或指定当前可用的模型）。覆盖只影响测试，不修改产品配置；错误仍使门禁失败，不能跳过断言或静默替换供应商。目录可访问不代表推理配额和凭证可用。
+默认 `pnpm test`、`pnpm test:coverage`、`pnpm check` 不收集付费模型验收，本机网关在线或设置 `PEGAS_LIVE_MODEL` 都不会自动开启。普通测试使用固定响应与本地 HTTP 夹具，fetch 防护拒绝外网、3425 网关与自动重定向。
+
+只有显式执行 `pnpm test:live` 才运行四组真实模型验收（会消耗 token）。可用 `PEGAS_LIVE_MODEL=<模型路由> pnpm test:live` 指定模型，并在命令末尾附测试文件或 `-t` 只运行相关场景。该命令不属于默认 CI / check；串行执行且不自动重跑失败用例。显式验收缺少 DSH、网关不可达、凭证或配额失败时均报错，不再跳过。普通测试、回环协议测试、付费验收的边界与限制见 [测试隔离](docs/test-isolation.md)。
 
 UI 改动由 CI 在隔离 Pegas 实例中生成短期截图；本地可运行 `pnpm review:ui -- --changed-from origin/main`。`pnpm review:evidence` 把准确 SHA、命令结果和媒体哈希写入 `output/feature-review/`。这些运行产物只供审核和 Candidate stage 使用，不进入主分支；详见 [Feature Review 门禁](docs/feature-review-gate.md)。
 
