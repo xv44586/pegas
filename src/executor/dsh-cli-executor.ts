@@ -1055,6 +1055,7 @@ function parseDshEvent(
 }
 
 function policyActivityLabel(event: DshPolicyDecisionEvent): string {
+  if (event.ruleId && event.decision === 'allow') return event.reason
   if (event.decision === 'deny') {
     return `已拦截 ${event.tool}：${event.reason}`
   }

@@ -667,6 +667,59 @@ describe('approval rule persistence', () => {
     store.close()
   })
 
+  it.each(['completed', 'cancelled'])(
+    'expires pre-upgrade task rules for %s tasks without reviving on reopen',
+    status => {
+      const base = mkdtempSync(join(tmpdir(), 'pegas-rules-upgrade-'))
+      temporaryDirectories.push(base)
+      const path = join(base, 'pegas.db')
+      const store = new PegasStore(path)
+      const parked = parkOutsideWrite(
+        store,
+        'upgrade-rule',
+        join(workspaceRoot(), '..', 'shared', 'old.md'),
+        'old-call',
+      )
+      store.decideApproval(parked.approvalId, 'owner', {
+        commandId: 'old-decision',
+        optionId: 'approve_rule',
+      })
+      const rule = store.listApprovalRules(parked.taskId, 'owner')[0]
+      if (!rule) throw new Error('Expected legacy rule')
+      store.close()
+      const db = new DatabaseSync(path)
+      db.exec(`DROP TRIGGER approval_rules_expire_on_task_end;
+      DROP TRIGGER approval_rules_command_immutable;
+      DROP TABLE approval_rule_bindings;
+      ALTER TABLE approval_rules DROP COLUMN kind;
+      ALTER TABLE approval_rules DROP COLUMN lifetime;
+      ALTER TABLE approval_rules DROP COLUMN command_json;
+      DELETE FROM schema_migrations WHERE version = 60;`)
+      db.prepare('UPDATE tasks SET status = ? WHERE id = ?').run(
+        status,
+        parked.taskId,
+      )
+      db.close()
+      const upgraded = new PegasStore(path)
+      expect(
+        upgraded
+          .listApprovalRules(parked.taskId, 'owner')
+          .find(item => item.id === rule.id)?.status,
+      ).toBe('revoked')
+      upgraded.close()
+      const reopened = new DatabaseSync(path)
+      reopened
+        .prepare("UPDATE tasks SET status = 'started' WHERE id = ?")
+        .run(parked.taskId)
+      expect(
+        reopened
+          .prepare('SELECT status FROM approval_rules WHERE id = ?')
+          .get(rule.id),
+      ).toMatchObject({ status: 'revoked' })
+      reopened.close()
+    },
+  )
+
   it('blocks rollback below the rule schema while active rules exist', () => {
     const base = mkdtempSync(join(tmpdir(), 'pegas-rules-rollback-'))
     temporaryDirectories.push(base)
@@ -694,7 +747,7 @@ describe('approval rule persistence', () => {
       const versions = db
         .prepare('SELECT MAX(version) AS version FROM schema_migrations')
         .get() as { version: number }
-      expect(versions.version).toBe(59)
+      expect(versions.version).toBe(60)
       const decisionKinds = db
         .prepare('SELECT kind FROM approval_decisions')
         .all() as { kind: string }[]

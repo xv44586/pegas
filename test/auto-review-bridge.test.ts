@@ -12,6 +12,10 @@ import { runtimeSettingsDefaults } from '../src/settings/runtime-settings.js'
 import { PegasStore } from '../src/storage/sqlite-store.js'
 
 const temporaryDirectories: string[] = []
+function required<T>(value: T | undefined | null): T {
+  if (value == null) throw new Error('Missing fixture value')
+  return value
+}
 
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
@@ -257,6 +261,98 @@ function reviewAgent() {
 }
 
 describe('DSH bridge auto review', () => {
+  it('does not revalidate a settled persistent grant against a later independently reviewed action', async () => {
+    const previous = { ...process.env }
+    const run = await startBridgeRun(
+      'grant-then-review',
+      { text: '请写入共享目录及另一个目录', authenticated: true },
+      '{"risk":"medium","decision":"allow"}',
+      { enable: false },
+    )
+    try {
+      const first = outsideWriteCall(run.roots, 'initial')
+      await required(run.harness.handlers.get('tools/pre-execute'))(first, () =>
+        Promise.resolve({ kind: 'allow' }),
+      )
+      await required(run.harness.handlers.get('approval/request'))(
+        { callId: first.callId, toolName: 'write' },
+        () => Promise.resolve('unavailable'),
+      )
+      const pending = required(
+        run.harness.events.find(e => e.type === 'approval_pending'),
+      )
+      const approval = required(
+        run.store.getApproval(String(pending.approvalId), 'owner'),
+      )
+      run.store.decideApproval(approval.id, 'owner', {
+        commandId: 'grant-dir',
+        optionId: 'approve_directory_user',
+      })
+      const resumed = required(run.store.claimNextRun('resumed'))
+      process.env.PEGAS_RUN_ID = resumed.run.id
+      process.env.PEGAS_RUN_CLAIM_TOKEN = resumed.claimToken
+      enableAutoReview(run.store)
+      const action = required(run.store.getAction(approval.actionId, 'owner'))
+      const rule = required(run.store.listApprovalRules(run.taskId, 'owner')[0])
+      const harness = gateHarness([], '{"risk":"medium","decision":"allow"}')
+      const bridge = await loadBridge()
+      bridge.apply(harness.ctx, {
+        grant: {
+          actionId: action.id,
+          tool: 'write',
+          argumentsHash: action.request.argumentsHash,
+          ruleId: rule.id,
+          ruleRequired: true,
+        },
+        policy: {
+          workspaceRoot: run.roots.workspace,
+          protectedRoots: [run.roots.dataDir],
+        },
+        emit: (e: unknown) => harness.events.push(e as Record<string, unknown>),
+      })
+      const pre = required(harness.handlers.get('tools/pre-execute')),
+        seam = required(harness.handlers.get('approval/request')),
+        post = required(harness.handlers.get('tools/post-execute'))
+      await pre(first, () => Promise.resolve({ kind: 'allow' }))
+      expect(
+        await seam({ callId: first.callId, toolName: 'write' }, () =>
+          Promise.resolve('unavailable'),
+        ),
+      ).toBe('allowed-once')
+      await post(first, { isError: false }, () =>
+        Promise.resolve({ kind: 'accept' }),
+      )
+      const second = {
+        ...outsideWriteCall(run.roots, 'reviewed-next'),
+        arguments: {
+          file_path: join(run.roots.workspace, '..', 'other', 'next.md'),
+          content: 'next',
+        },
+      }
+      expect(
+        await pre(second, () => Promise.resolve({ kind: 'allow' })),
+      ).toMatchObject({ kind: 'allow' })
+      expect(
+        await seam({ callId: second.callId, toolName: 'write' }, () =>
+          Promise.resolve('unavailable'),
+        ),
+      ).toBe('allowed-once')
+      await post(second, { isError: false }, () =>
+        Promise.resolve({ kind: 'accept' }),
+      )
+      expect(run.store.getAction(action.id, 'owner')?.status).toBe('succeeded')
+      const reviewed = required(
+        harness.events.find(e => e.reviewDecision === 'allow'),
+      )
+      expect(
+        run.store.getAction(String(reviewed.actionId), 'owner')?.status,
+      ).toBe('succeeded')
+    } finally {
+      restoreEnvironment(previous)
+      await run.close()
+    }
+  })
+
   it('allows a reviewed medium call once and records the review server-side', async () => {
     const previous = { ...process.env }
     const run = await startBridgeRun(

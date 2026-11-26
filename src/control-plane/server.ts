@@ -1707,6 +1707,19 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         })
       }
 
+      if (
+        taskResourceUrl.pathname === '/v1/approval-rules' &&
+        request.method === 'GET'
+      ) {
+        if (!options.apiToken || !hasInstanceAccess)
+          return sendJson(response, 401, { error: 'unauthorized' })
+        return sendJson(response, 200, {
+          rules: options.store.listUserApprovalRules(
+            requiredQuery(taskResourceUrl, 'userId'),
+          ),
+        })
+      }
+
       const approvalRulesMatch = /^\/v1\/tasks\/([^/]+)\/approval-rules$/.exec(
         taskResourceUrl.pathname,
       )

@@ -1175,6 +1175,7 @@ export async function executeClaimedRun(
         : {}),
       onExecutorRef: executorRef => {
         liveExecutorRef = executorRef
+        if (!store.ownsRun(claimed.run.id, workerId)) return
         store.recordExecutorRef(claimed.run.id, workerId, executorRef)
       },
       onProgress: event => {
@@ -1882,7 +1883,8 @@ function resolveToolApprovalGrant(
   claimed: ClaimedRun,
 ): ToolApprovalGrant | undefined {
   const context = parseApprovalDecisionContext(claimed.run.input)
-  if (context?.decision !== 'approve') return undefined
+  if (!context || !['approve', 'approve_rule'].includes(context.decision))
+    return undefined
   if (!context.action.kind.startsWith('dsh.tool.')) return undefined
   const action = store.getAction(context.actionId, claimed.task.userId)
   if (
@@ -1896,7 +1898,22 @@ function resolveToolApprovalGrant(
   if (typeof tool !== 'string' || typeof argumentsHash !== 'string') {
     return undefined
   }
-  return { actionId: action.id, tool, argumentsHash }
+  const command = action.request.commandSelector
+  const ruleId = store.approvalRuleIdForAction(action.id, claimed.task.userId)
+  return {
+    actionId: action.id,
+    tool,
+    argumentsHash,
+    ...(command && typeof command === 'object'
+      ? {
+          commandSelector: command as NonNullable<
+            ToolApprovalGrant['commandSelector']
+          >,
+        }
+      : {}),
+    ...(ruleId ? { ruleId } : {}),
+    ...(context.decision === 'approve_rule' ? { ruleRequired: true } : {}),
+  }
 }
 
 /**

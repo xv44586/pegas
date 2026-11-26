@@ -39,6 +39,8 @@ pnpm smoke
 
 UI 改动由 CI 在隔离 Pegas 实例中生成短期截图；本地可运行 `pnpm review:ui -- --changed-from origin/main`。`pnpm review:evidence` 把准确 SHA、命令结果和媒体哈希写入 `output/feature-review/`。这些运行产物只供审核和 Candidate stage 使用，不进入主分支；详见 [Feature Review 门禁](docs/feature-review-gate.md)。
 
+命令授权链路还需运行 `pnpm smoke:command-authorization`：先完成 `pnpm build`，并确保 DSH 可执行程序在 PATH 中。它使用真实 Electron、Worker、DSH 和隔离本地 Git 远端，验证首次授权、复用、重启、撤销与窄屏操作；模型响应来自本地确定性网关，不调用付费模型。Linux 无显示环境须通过 `xvfb-run --auto-servernum` 启动；固定 DSH 版本的 CI 命令与证据位置见 [命令授权验证](docs/command-authorization.md#验证证据)。
+
 覆盖率基线由 `vitest.config.ts` 管理。阈值只能在新增验证后保持或提高；不要通过降低阈值掩盖缺失测试。动态入口导致 Knip 误报时，只添加精确到文件或符号的例外。
 
 ## 提交原则

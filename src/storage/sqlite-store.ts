@@ -1,3 +1,8 @@
+import {
+  commandAuthorization,
+  commandFingerprint,
+  isCommandSelector,
+} from '../executor/command-policy.mjs'
 import { approvalDirectories } from '../executor/policy-gate.mjs'
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -3027,6 +3032,10 @@ interface ApprovalDecisionRow {
 }
 
 interface ApprovalRuleRow {
+  kind: 'operation' | 'command'
+  lifetime: 'task' | 'user'
+  command_json: string | null
+  last_used_at?: string | null
   id: string
   task_id: string
   tool: string
@@ -3565,6 +3574,37 @@ export class PegasStore {
       WHEN NEW.scope <> OLD.scope BEGIN SELECT RAISE(ABORT, 'Rule scope is immutable'); END;
     `,
     )
+    this.#migrate(
+      60,
+      `
+      ALTER TABLE approval_rules ADD COLUMN kind TEXT NOT NULL DEFAULT 'operation' CHECK(kind IN ('operation','command'));
+      ALTER TABLE approval_rules ADD COLUMN lifetime TEXT NOT NULL DEFAULT 'task' CHECK(lifetime IN ('task','user'));
+      ALTER TABLE approval_rules ADD COLUMN command_json TEXT;
+      CREATE TABLE approval_rule_bindings (
+        decision_id TEXT PRIMARY KEY REFERENCES approval_decisions(id),
+        rule_id TEXT NOT NULL REFERENCES approval_rules(id)
+      );
+      INSERT INTO approval_rule_bindings (decision_id,rule_id)
+      SELECT created_from_decision_id,id FROM approval_rules;
+      CREATE TRIGGER approval_rule_bindings_no_update BEFORE UPDATE ON approval_rule_bindings
+      BEGIN SELECT RAISE(ABORT, 'Command decision binding is immutable'); END;
+      CREATE TRIGGER approval_rule_bindings_no_delete BEFORE DELETE ON approval_rule_bindings
+      BEGIN SELECT RAISE(ABORT, 'Command decision binding is immutable'); END;
+      CREATE TRIGGER approval_rules_command_immutable BEFORE UPDATE ON approval_rules
+      WHEN NEW.kind <> OLD.kind OR NEW.lifetime <> OLD.lifetime OR NEW.command_json IS NOT OLD.command_json
+      BEGIN SELECT RAISE(ABORT, 'Command authorization is immutable'); END;
+      UPDATE approval_rules SET status = 'revoked',
+        revoked_at = (SELECT updated_at FROM tasks WHERE tasks.id = approval_rules.task_id), revoked_by = 'task-ended'
+      WHERE status = 'active' AND scope <> 'user_directory' AND NOT (kind = 'command' AND lifetime = 'user')
+        AND task_id IN (SELECT id FROM tasks WHERE status IN ('completed','cancelled'));
+      CREATE TRIGGER approval_rules_expire_on_task_end AFTER UPDATE OF status ON tasks
+      WHEN NEW.status IN ('completed','cancelled') AND OLD.status NOT IN ('completed','cancelled')
+      BEGIN
+        UPDATE approval_rules SET status = 'revoked', revoked_at = NEW.updated_at, revoked_by = 'task-ended'
+        WHERE task_id = NEW.id AND status = 'active' AND scope <> 'user_directory' AND NOT (kind = 'command' AND lifetime = 'user');
+      END;
+    `,
+    )
   }
 
   #backfillWorkerIconIds(): void {
@@ -3950,6 +3990,17 @@ export class PegasStore {
     optionId: string,
   ): void {
     const action = this.#actionById(approval.actionId)
+    if (optionId.startsWith('approve_command_')) {
+      this.#createCommandRule(
+        approval,
+        action,
+        decisionId,
+        userId,
+        now,
+        optionId,
+      )
+      return
+    }
     const tool = action.request.tool
     const category = action.request.category
     const rawTargets = action.request.targets
@@ -4006,10 +4057,17 @@ export class PegasStore {
     const existing = this.#database
       .prepare(
         `SELECT id FROM approval_rules
-         WHERE (task_id = ? OR (scope = 'user_directory' AND created_by = ?)) AND fingerprint = ? AND status = 'active'`,
+         WHERE (task_id = ? OR ((scope = 'user_directory' OR (kind = 'command' AND lifetime = 'user')) AND created_by = ?)) AND fingerprint = ? AND status = 'active'`,
       )
       .get(approval.taskId, userId, fingerprint) as { id: string } | undefined
-    if (existing) return
+    if (existing) {
+      this.#database
+        .prepare(
+          'INSERT INTO approval_rule_bindings (decision_id,rule_id) VALUES (?,?)',
+        )
+        .run(decisionId, existing.id)
+      return
+    }
     const ruleId = randomUUID()
     this.#database
       .prepare(
@@ -4032,6 +4090,11 @@ export class PegasStore {
         now,
         scope,
       )
+    this.#database
+      .prepare(
+        'INSERT INTO approval_rule_bindings (decision_id,rule_id) VALUES (?,?)',
+      )
+      .run(decisionId, ruleId)
     this.enqueueOutbox({
       userId,
       taskId: approval.taskId,
@@ -4051,6 +4114,111 @@ export class PegasStore {
     })
   }
 
+  #createCommandRule(
+    approval: Approval,
+    action: DurableAction,
+    decisionId: string,
+    userId: string,
+    now: string,
+    optionId: string,
+  ): void {
+    const selector = validatedCommandSelector(action.request)
+    if (
+      !selector ||
+      action.risk !== 'high' ||
+      action.request.tier === 'strict' ||
+      action.request.tierMismatch === true
+    )
+      throw new Error(
+        'Command scope changed or cannot be verified; request a new Approval',
+      )
+    const precision = optionId.includes('_family_') ? 'family' : 'exact'
+    const lifetime = optionId.endsWith('_user') ? 'user' : 'task'
+    if (!/^approve_command_(exact|family)_(task|user)$/.test(optionId))
+      throw new Error('Invalid command authorization option')
+    const fingerprint = createHash('sha256')
+      .update(lifetime + ':' + commandFingerprint(selector, precision))
+      .digest('hex')
+    const exists = this.#database
+      .prepare(
+        `SELECT id FROM approval_rules WHERE created_by = ? AND fingerprint = ? AND status = 'active' AND (task_id = ? OR lifetime = 'user')`,
+      )
+      .get(userId, fingerprint, approval.taskId) as { id: string } | undefined
+    if (exists) {
+      this.#database
+        .prepare(
+          'INSERT INTO approval_rule_bindings (decision_id,rule_id) VALUES (?,?)',
+        )
+        .run(decisionId, exists.id)
+      return
+    }
+    const id = randomUUID()
+    this.#database
+      .prepare(
+        `INSERT INTO approval_rules
+      (id,task_id,tool,category,targets_json,fingerprint,status,created_from_approval_id,created_from_decision_id,created_by,created_at,scope,kind,lifetime,command_json)
+      VALUES (?,?,'bash','command','[]',?,'active',?,?,?,?,'exact','command',?,?)`,
+      )
+      .run(
+        id,
+        approval.taskId,
+        fingerprint,
+        approval.id,
+        decisionId,
+        userId,
+        now,
+        lifetime,
+        JSON.stringify({ selector, precision }),
+      )
+    this.#database
+      .prepare(
+        'INSERT INTO approval_rule_bindings (decision_id,rule_id) VALUES (?,?)',
+      )
+      .run(decisionId, id)
+    this.enqueueOutbox({
+      userId,
+      taskId: approval.taskId,
+      channel: 'timeline',
+      dedupeKey: `approval-rule-created:${id}`,
+      payload: {
+        type: 'task.approval_rule_changed',
+        taskId: approval.taskId,
+        ruleId: id,
+        change: 'created',
+        approvalId: approval.id,
+        text: `已保存${lifetime === 'user' ? '长期' : '本事情'}命令授权：git fetch · ${selector.repository} · ${selector.remote}。可在授权管理中撤销。`,
+      },
+    })
+  }
+
+  approvalRuleIdForAction(
+    actionId: string,
+    userId: string,
+  ): string | undefined {
+    const action = this.#actionById(actionId)
+    if (this.#taskById(action.taskId).userId !== userId)
+      throw new Error('Action belongs to another user')
+    const row = this.#database
+      .prepare(
+        `SELECT binding.rule_id FROM approval_rule_bindings binding
+      JOIN approval_decisions decision ON decision.id = binding.decision_id
+      JOIN approvals approval ON approval.id = decision.approval_id WHERE approval.action_id = ?`,
+      )
+      .get(actionId) as { rule_id: string } | undefined
+    return row?.rule_id
+  }
+
+  listUserApprovalRules(userId: string): ApprovalRule[] {
+    const rows = this.#database
+      .prepare(
+        `SELECT approval_rules.*,
+      (SELECT MAX(created_at) FROM policy_call_audit WHERE rule_id = approval_rules.id AND decision = 'allow') AS last_used_at
+      FROM approval_rules WHERE created_by = ? ORDER BY created_at DESC,id DESC`,
+      )
+      .all(userId) as unknown as ApprovalRuleRow[]
+    return rows.map(toApprovalRule)
+  }
+
   listApprovalRules(taskId: string, userId: string): ApprovalRule[] {
     const task = this.#taskById(taskId)
     if (task.userId !== userId) throw new Error('Task belongs to another user')
@@ -4058,7 +4226,7 @@ export class PegasStore {
       .prepare(
         `WITH visible AS (
            SELECT * FROM approval_rules
-           WHERE task_id = ? OR (scope = 'user_directory' AND created_by = ?)
+           WHERE task_id = ? OR ((scope = 'user_directory' OR (kind = 'command' AND lifetime = 'user')) AND created_by = ?)
          ), recent_history AS (
            SELECT * FROM visible WHERE status = 'revoked'
            ORDER BY created_at DESC, id DESC LIMIT 100
@@ -4148,9 +4316,9 @@ export class PegasStore {
   #activeApprovalRuleProjections(taskId: string): ApprovalRuleProjection[] {
     const rows = this.#database
       .prepare(
-        `SELECT id, tool, category, targets_json, fingerprint, scope
+        `SELECT id, tool, category, targets_json, fingerprint, scope, kind, lifetime, command_json
          FROM approval_rules
-         WHERE (task_id = ? OR (scope = 'user_directory' AND created_by = ?)) AND status = 'active'
+         WHERE (task_id = ? OR ((scope = 'user_directory' OR (kind = 'command' AND lifetime = 'user')) AND created_by = ?)) AND status = 'active'
          ORDER BY created_at, id`,
       )
       .all(taskId, this.#taskById(taskId).userId) as unknown as {
@@ -4159,6 +4327,9 @@ export class PegasStore {
       category: string
       targets_json: string
       scope: NonNullable<ApprovalRule['scope']>
+      kind: ApprovalRuleRow['kind']
+      lifetime: ApprovalRuleRow['lifetime']
+      command_json: string | null
       fingerprint: string
     }[]
     return rows.map(row => ({
@@ -4167,6 +4338,15 @@ export class PegasStore {
       category: row.category,
       targets: JSON.parse(row.targets_json) as string[],
       fingerprint: row.fingerprint,
+      ...(row.kind === 'command'
+        ? {
+            kind: row.kind,
+            lifetime: row.lifetime,
+            command: JSON.parse(row.command_json ?? '{}') as NonNullable<
+              ApprovalRule['command']
+            >,
+          }
+        : {}),
       ...(row.scope === 'exact' ? {} : { scope: row.scope }),
     }))
   }
@@ -4183,6 +4363,7 @@ export class PegasStore {
     generation: string
     source: 'global' | 'task'
     rules: ApprovalRuleProjection[]
+    revokedRules: ApprovalRuleProjection[]
     autoReviewEnabled: boolean
     mandate: ApprovalMandateProjection
   } {
@@ -4202,6 +4383,32 @@ export class PegasStore {
       liveTier: effective.permissionTier,
     })
     const rules = this.#activeApprovalRuleProjections(task.id)
+    // Diagnostic history never participates in permission matching.
+    const revokedRules = this.listApprovalRules(task.id, task.userId)
+      .filter(rule => rule.status === 'revoked')
+      .map(
+        ({
+          id,
+          tool,
+          category,
+          targets,
+          fingerprint,
+          scope,
+          kind,
+          lifetime,
+          command,
+        }) => ({
+          id,
+          tool,
+          category,
+          targets,
+          fingerprint,
+          scope,
+          kind,
+          lifetime,
+          command,
+        }),
+      )
     const autoReviewEnabled = settings.autoReviewEnabled === true
     const mandate = autoReviewEnabled
       ? this.#taskMandateProjection(task.id)
@@ -4228,6 +4435,7 @@ export class PegasStore {
       generation,
       source: effective.permissionSource,
       rules,
+      revokedRules,
       autoReviewEnabled,
       mandate,
     }
@@ -13083,6 +13291,10 @@ export class PegasStore {
           `SELECT status FROM actions
            WHERE resume_run_id = ? AND protocol_version = 1
              AND status IN ('authorized','failed','unknown')
+             AND NOT (status = 'failed' AND EXISTS (
+               SELECT 1 FROM action_outcomes outcome WHERE outcome.action_id = actions.id
+                 AND outcome.status = 'failed' AND json_type(outcome.result_json, '$.notExecuted') = 'true'
+             ))
            ORDER BY updated_at DESC, id DESC LIMIT 1`,
         )
         .get(runId) as
@@ -13111,7 +13323,7 @@ export class PegasStore {
           'A human-confirmed failed Action blocks new Approvals on this Task',
         )
       }
-      const approvalPrompt = canonicalDirectoryApprovalPrompt(draft)
+      const approvalPrompt = canonicalCommandApprovalPrompt(draft)
       const now = this.#clock.now().toISOString()
       const actionId = randomUUID()
       const approvalId = randomUUID()
@@ -18783,6 +18995,16 @@ function toApprovalRule(row: ApprovalRuleRow): ApprovalRule {
     category: row.category,
     targets: JSON.parse(row.targets_json) as string[],
     fingerprint: row.fingerprint,
+    ...(row.kind === 'command'
+      ? {
+          kind: row.kind,
+          lifetime: row.lifetime,
+          command: JSON.parse(row.command_json ?? '{}') as NonNullable<
+            ApprovalRule['command']
+          >,
+        }
+      : {}),
+    ...(row.last_used_at ? { lastUsedAt: row.last_used_at } : {}),
     ...(row.scope === 'exact' ? {} : { scope: row.scope }),
     status: row.status,
     createdFromApprovalId: row.created_from_approval_id,
@@ -19408,6 +19630,71 @@ function deriveLegacySemantic(
         ? { status: entry.status, ...(result !== undefined ? { result } : {}) }
         : undefined,
     ),
+  }
+}
+
+function validatedCommandSelector(request: Record<string, unknown>) {
+  if (
+    request.tool !== 'bash' ||
+    typeof request.command !== 'string' ||
+    typeof request.commandDirectory !== 'string' ||
+    !isCommandSelector(request.commandSelector)
+  )
+    return undefined
+  const actual = commandAuthorization(
+    request.command,
+    request.commandDirectory,
+  ).selector
+  if (
+    !actual ||
+    commandFingerprint(actual, 'exact') !==
+      commandFingerprint(request.commandSelector, 'exact')
+  )
+    return undefined
+  return actual
+}
+
+function canonicalCommandApprovalPrompt(
+  draft: ActionRequestDraft,
+): ApprovalPrompt {
+  const prompt = canonicalDirectoryApprovalPrompt(draft)
+  const commandOptions = prompt.options.filter(option =>
+    option.id.startsWith('approve_command_'),
+  )
+  if (!commandOptions.length) return prompt
+  const selector = validatedCommandSelector(draft.request)
+  if (
+    !selector ||
+    draft.risk !== 'high' ||
+    draft.request.tier === 'strict' ||
+    draft.request.tierMismatch === true
+  )
+    throw new Error('Command authorization facts are not verifiable')
+  const options = prompt.options.map(option => {
+    if (!commandOptions.includes(option)) return option
+    if (
+      !/^approve_command_(exact|family)_(task|user)$/.test(option.id) ||
+      option.kind !== 'approve_rule'
+    )
+      throw new Error('Invalid command authorization option')
+    const family = option.id.includes('_family_')
+    const user = option.id.endsWith('_user')
+    return {
+      ...option,
+      label: `${user ? '始终' : '本事情内'}允许${family ? ' git fetch' : '此准确命令'}`,
+      description: `仓库：${selector.repository}；远端：${selector.remote}（${selector.remoteUrl}）。${family ? '含同仓库工作树与普通分支/tag 拉取，不含 push、危险参数或新远端。' : `完整参数与工作目录必须一致：${selector.argv.join(' ')}；${selector.cwd}。`}${user ? '长期有效，跨事情可用' : '仅本事情后续运行有效'}，可撤销。`,
+    }
+  })
+  return {
+    ...prompt,
+    summary: '授权拉取仓库远端更新（git fetch）',
+    options,
+    recommendedOptionId:
+      options.find(option => option.kind === 'approve')?.id ??
+      options.find(option => option.kind === 'reject')?.id ??
+      (() => {
+        throw new Error('Command approval requires a one-time or reject option')
+      })(),
   }
 }
 

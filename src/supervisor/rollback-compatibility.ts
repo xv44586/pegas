@@ -34,6 +34,21 @@ export function assertRollbackCompatible(
       .get() as { version: number | null }
     const currentVersion = current.version ?? 0
     if (
+      currentVersion >= 60 &&
+      targetMaximumSchema < 60 &&
+      database
+        .prepare(
+          `SELECT 1 FROM actions
+      WHERE json_type(request_json, '$.commandSelector') = 'object'
+      AND status IN ('awaiting_approval','authorized','unknown') LIMIT 1`,
+        )
+        .get()
+    ) {
+      throw new RollbackCompatibilityError(
+        'Rollback is unsafe while command authorization is pending or executing',
+      )
+    }
+    if (
       currentVersion >= taskResumeSourcePolicySchemaVersion &&
       (targetTaskWorkflowVersion < 1 ||
         targetMaximumSchema < taskResumeSourcePolicySchemaVersion) &&

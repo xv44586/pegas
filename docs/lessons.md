@@ -622,3 +622,19 @@
 - Status：Promoted（数据丢失与恢复生命线问题一次确认即晋升）
 - Enforcement：`test/release-retention.test.ts`、`scripts/smoke-self-change.mjs` 和运行时发布目录锁；未知引用/状态/协调器时保守停止删除。
 - Owner / next action：SELF-001；新增发布入口必须复用共享锁，新增启动形态必须有真实引用扫描证据。
+
+### LESSON-20261126-10：授权选项必须穿过真实 Worker、执行与撤销闭环
+
+- Rule：所有持久授权决定必须绑定实际规则（含去重），首次恢复也复核规则、档位与资源；真实运行验证须检查外部效果，不能只检查按钮或 allow 事件。命令适配必须绑定实际执行组件与 helper 展开语义。
+- Why：真实桌面验证发现 approve_rule 未进入首次结果记录，调用执行后却变为 unknown；目录首次 grant 未绑定规则可绕过撤销；未执行调用失效后又被失败动作门禁阻止重新审批。审查还复现任意 credential helper 及裸 gh helper 的实际执行对象不同。
+- Feature：APPROVAL-001
+- Evidence：processor 两项、首次撤销两入口回归先红后绿；真实 Electron + Worker + DSH 连续 fetch，每次推进本地 remote commit 校验实际 FETCH_HEAD，桌面撤销后确认引用不变并重新出现审批。
+- Seen：1（2026-11-26）
+- Severity：security / recovery
+- Status：Promoted（安全与恢复生命线问题一次确认即晋升）
+- Enforcement：`test/processor.test.ts`、`test/approval-rule-bridge.test.ts`、`test/command-policy.test.ts` 和 `scripts/smoke-command-authorization.mjs`；运行时不可变决定绑定、双入口复核及明确 notExecuted 结算。
+- Owner / next action：APPROVAL-001；新增适配器必须复用相同权威链路与真实副作用验证，禁止把未知脚本作为长期命令许可。
+
+- APPROVAL-001 同轮独立审查补证：Git 全局选项不能逃过 fetch 分类；配置驱动的 prune/refspec 必须与 CLI 参数同样校验；升级须回填已结束事情的旧规则；首次 grant 复核必须精确关联 Action，避免阻断后续独立审阅。四项均有先红后绿回归；授权命中原因不能在 Activity 适配层丢失，既有审计需有真实桌面查看与撤销入口。
+
+- APPROVAL-001 Linux CI 补证（2026-11-27）：bwrap 的私有 `/tmp` 会隐藏工作区外的测试远端，授权命中不等于命令成功。真实副作用门禁已捕获；夹具移至隔离用户目录，保留工作区外只读远端与原沙箱，并补充 Git 非零退出断言。

@@ -19,7 +19,8 @@
     "src/executor/policy-gate.mjs",
     "src/executor/dsh-readonly-surface.mjs",
     "test/**/*.ts",
-    "scripts/**/*.ts"
+    "scripts/**/*.ts",
+    "src/executor/command-policy.mjs"
   ],
   "exclude": ["src/desktop/main.ts"]
 }
