@@ -1869,3 +1869,52 @@ it('preserves text after a bare slash instead of clearing it as help', async () 
   )
   expect(input).toHaveProperty('value', '/ 这段正文不能丢失')
 })
+
+it.each(['/model\nfirst\nsecond', '/unknown\nfirst\nsecond'])(
+  'keeps multiline command %s local without losing the draft',
+  async draft => {
+    const fetchMock = installChatFetch(baseSnapshot)
+    render(<App />)
+    const input = await screen.findByLabelText('给 Pegas 发消息')
+    fireEvent.change(input, { target: { value: draft } })
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    expect(await screen.findByRole('alert')).toBeTruthy()
+    expect(input).toHaveProperty('value', draft)
+    expect(
+      fetchMock.mock.calls.some(
+        ([path, init]) => path === '/v1/events' && init?.method === 'POST',
+      ),
+    ).toBe(false)
+  },
+)
+
+it('preserves steer and queue for path-leading prose while blocking command bypass', async () => {
+  installChatFetch(baseSnapshot)
+  render(<App />)
+  const input = await screen.findByLabelText('给 Pegas 发消息')
+  fireEvent.change(input, { target: { value: '@季度' } })
+  fireEvent.click(await screen.findByRole('option', { name: /整理季度数据/ }))
+  fireEvent.change(input, { target: { value: '/tmp/file 请检查这个文件' } })
+  expect(screen.getByRole('button', { name: '插话' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: '排队' })).toBeTruthy()
+  fireEvent.change(input, { target: { value: '/stop' } })
+  expect(screen.queryByRole('button', { name: '插话' })).toBeNull()
+  expect(screen.queryByRole('button', { name: '排队' })).toBeNull()
+})
+
+it.each(['/stop', '/model'])(
+  'reports unavailable command %s on Enter and preserves input',
+  async command => {
+    installChatFetch({ ...baseSnapshot, channels: [], runs: [] }, path =>
+      path === '/v1/settings/agent-models'
+        ? Response.json({ models: [] })
+        : undefined,
+    )
+    render(<App />)
+    const input = await screen.findByLabelText('给 Pegas 发消息')
+    fireEvent.change(input, { target: { value: command } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(await screen.findByRole('alert')).toBeTruthy()
+    expect(input).toHaveProperty('value', command)
+  },
+)

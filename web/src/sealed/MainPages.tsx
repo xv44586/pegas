@@ -1354,7 +1354,7 @@ export function ConversationPage({
               )}
               {canSteer &&
                 draft.trim() &&
-                !draft.trimStart().startsWith('/') &&
+                !composerMenu.isCommand &&
                 !attachment && (
                   <Button
                     className="composer-steer-button h-[34px] rounded-full bg-accent-tint px-3 text-[13px] font-medium text-accent-ink hover:bg-accent-tint hover:brightness-95"
@@ -1370,7 +1370,7 @@ export function ConversationPage({
                 )}
               {canQueue &&
                 draft.trim() &&
-                !draft.trimStart().startsWith('/') &&
+                !composerMenu.isCommand &&
                 !attachment && (
                   <Button
                     className="composer-queue-button h-[34px] rounded-full bg-accent-tint px-3 text-[13px] font-medium text-accent-ink hover:bg-accent-tint hover:brightness-95"

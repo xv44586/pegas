@@ -116,6 +116,7 @@ export function useComposerMenu({
   const beforeCaret = draft.slice(0, caret)
   const atMatch = /(^|\s)@([^\s@]*)$/u.exec(beforeCaret)
   const slashMatch = /^\/([\w-]*)$/iu.exec(beforeCaret)
+  const commandInput = /^\/([\w-]*)(?:\s+([\s\S]*))?$/iu.exec(draft.trim())
   const token =
     !dismissed && !disabled
       ? slashMatch && caret === draft.length
@@ -292,14 +293,19 @@ export function useComposerMenu({
     }
     if (event.key === 'Enter' && !event.shiftKey && rows.length) {
       event.preventDefault()
-      selectRow(selected)
+      if (
+        completion &&
+        commandInput?.[1]?.toLowerCase() === rows[selected]?.key
+      )
+        consumeSubmit()
+      else selectRow(selected)
       return true
     }
     return false
   }
   function consumeSubmit() {
     // Reserve command-shaped input; paths, URLs and slashes within prose remain ordinary text.
-    const match = /^\/([\w-]*)(?:\s+([^\n]*))?$/iu.exec(draft.trim())
+    const match = commandInput
     if (!match) return false
     const name = (match[1] ?? '').toLowerCase()
     const command = commands.find(item => item.key === name)
@@ -314,6 +320,7 @@ export function useComposerMenu({
   }
 
   return {
+    isCommand: commandInput !== null,
     onKeyDown,
     consumeSubmit,
     onInput(value: string, position: number) {

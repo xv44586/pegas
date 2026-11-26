@@ -302,7 +302,7 @@
 - Severity：normal
 - Status：Promoted
 - Enforcement：第三个独立日期确认后晋升为自动化门禁，沿用已有 QUALITY-001 验收机制：仓库永久保存验收条件和测试能力；CI 显式检出 PR head 并在准确 SHA 上生成短期报告与 UI 截图；UI Review 必须打开大模型列表并检查面板宽度/滚动区，同时检查窄侧栏导航子元素边界和整个 Channel 列表是否仍位于 rail 内；`pnpm lint` 阻断后置 column flex 主题规则隐式继承旧 `align-items`；关键 `Not tried` 阻断审核；Candidate schema v2 绑定报告哈希与人工 reviewed commit；完成报告必须区分源码、Candidate、main 与运行实例四层证据，只有运行实例按原始场景复现后才能声称用户问题已修复。运行结果不再作为永久 Feature manifest 提交。
-- Owner / next action：通知投递 real-service canary 已进 CI（2026-11-24，`pnpm review:canary`，QUALITY-001）；剩余缺口为需要生产凭证的模型/ASR canary 与受控 Candidate 环境通用 runner。2026-11-26 已晋升；本轮 Prompt Bar 将基础操作闭环纳入 `ChatExperience.test.tsx` 与 `verify-composer-menu.mjs`，覆盖加号/文件、命令、@ 事情、焦点和桌面/移动可点击性。
+- Owner / next action：通知投递 real-service canary 已进 CI（2026-11-24，`pnpm review:canary`，QUALITY-001）；剩余缺口为需要生产凭证的模型/ASR canary 与受控 Candidate 环境通用 runner。2026-11-26 已晋升；本轮 Prompt Bar 将基础操作闭环纳入 `ChatExperience.test.tsx` 与 `verify-composer-menu.mjs`，覆盖加号/文件、命令、@ 事情、焦点和桌面/移动可点击性。同日发布前审查补充：命令识别需覆盖多行全文，发送、Enter 与插话/排队共用分类边界；绝对路径正文不能按命令拦截。新增 5 条先红后绿回归防止上述交互分支漂移。
 
 ### LESSON-20261119-04：上下文切换必须同时验证写入目标和读取投影
 
