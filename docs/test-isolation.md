@@ -29,3 +29,5 @@
 - 四组 11 项真实验收的 TypeScript 测试体 AST 与基线一致，原有断言和文字参数保留。付费验收未运行，不声称本次验证了上游模型质量。
 - 初次交付为独立 Feature 提交，后续通过 PR 集成；远程 CI 和合并状态以对应 PR 记录为准。
 - 合并前复验（2026-11-26）：rebase 最新 `origin/main`（`9755635d`）无冲突，`pnpm check` 149 文件 / 1618 项通过、0 跳过；statement 78.31%、branch 71.76%、function 75.12%、line 81.37%；`pnpm smoke` 通过。未运行付费验收。
+
+APPROVAL-001 桌面命令夹具在 Linux 使用用户目录下的独立临时目录：bwrap 会把 `/tmp` 换成私有挂载，工作区之外的 sibling remote 不可见。远端仍位于授权工作区之外且只读，不添加可写目录或关闭沙箱；每次 Git 工具结果同时断言零退出和真实 FETCH_HEAD。

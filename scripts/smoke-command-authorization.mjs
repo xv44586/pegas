@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { createServer } from 'node:http'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { _electron as electron } from 'playwright'
 import { PegasStore } from '../dist/storage/sqlite-store.js'
@@ -29,7 +29,15 @@ import { executeClaimedRun } from '../dist/worker/processor.js'
 
 const root = resolve(import.meta.dirname, '..')
 const fixture = realpathSync(
-  mkdtempSync(join(tmpdir(), 'pegas-command-desktop-')),
+  // Linux bwrap mounts a private /tmp; a sibling remote there is invisible.
+  // Keep the real remote outside the workspace and visible read-only, without
+  // adding writable directories or weakening the executor sandbox.
+  mkdtempSync(
+    join(
+      process.platform === 'linux' ? homedir() : tmpdir(),
+      '.pegas-command-desktop-',
+    ),
+  ),
 )
 const output = join(root, 'output', 'command-grants')
 mkdirSync(output, { recursive: true })
@@ -248,6 +256,13 @@ async function execute(claimed) {
     join(output, 'last-executor.json'),
     JSON.stringify({ result, events }, null, 2),
   )
+  for (const event of events) {
+    if (event.type === 'tool_result')
+      assert(
+        !/\[exit code: [1-9]\d*\]/.test(event.result ?? ''),
+        `The real Git command failed: ${event.result}`,
+      )
+  }
   return { result, events }
 }
 async function openApproval(approvalId) {
