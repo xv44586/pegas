@@ -145,6 +145,8 @@ export function DetailDrawer({
   }, [view.kind])
   useEffect(() => {
     const containFocus = (event: KeyboardEvent) => {
+      // Nested selects and model pickers own their Escape before the drawer.
+      if (event.defaultPrevented) return
       if (event.key === 'Escape') {
         event.preventDefault()
         onCloseRef.current()
@@ -3038,6 +3040,7 @@ function collaborationRequestText(relation: ChannelRelation): string {
   return request.goal
 }
 
+// These selects portal to body: z-80 keeps their menus above the z-70 drawer.
 function WorkerProfileSection({
   api,
   channel,
@@ -3065,26 +3068,21 @@ function WorkerProfileSection({
   const [saveNotice, setSaveNotice] = useState('')
   const [catalogLoading, setCatalogLoading] = useState(false)
   const current = response ?? profile
-  const profileKey = current
-    ? `${current.profile.id}:${String(current.profile.revision)}:${current.profile.modelMode}:${current.profile.modelProvider ?? ''}:${current.profile.modelName ?? ''}:${current.profile.pool ?? ''}:${current.profile.effort ?? ''}:${current.profile.permissionMode ?? 'inherit'}`
-    : ''
   useEffect(() => {
     setResponse(undefined)
     setSaveError('')
     setSaveNotice('')
   }, [channel.id])
   useEffect(() => {
-    if (!profileKey) return
-    const [
-      ,
-      ,
-      mode = 'inherit',
-      provider = '',
-      name = '',
-      savedPool = '',
-      savedEffort = '',
-      savedPermission = 'inherit',
-    ] = profileKey.split(':')
+    if (!current) return
+    const {
+      modelMode: mode,
+      modelProvider: provider = '',
+      modelName: name = '',
+      pool: savedPool = '',
+      effort: savedEffort = '',
+      permissionMode: savedPermission = 'inherit',
+    } = current.profile
     setModelMode(mode === 'override' ? 'override' : 'inherit')
     setModelKey(
       mode === 'override' && provider && name ? `${provider}/${name}` : '',
@@ -3102,7 +3100,16 @@ function WorkerProfileSection({
         ? savedPermission
         : 'inherit',
     )
-  }, [profileKey])
+  }, [
+    current?.profile.id,
+    current?.profile.revision,
+    current?.profile.modelMode,
+    current?.profile.modelProvider,
+    current?.profile.modelName,
+    current?.profile.pool,
+    current?.profile.effort,
+    current?.profile.permissionMode,
+  ])
   const readOnly = channel.status === 'cancelled'
   if (!current && !profileError) return null
   const selectedModel = catalog?.models.find(
@@ -3258,7 +3265,7 @@ function WorkerProfileSection({
                   >
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent className="z-[80]">
                     <SelectItem value="inherit">跟随 Pegas 全局设置</SelectItem>
                     <SelectItem value="override">为这件事情指定模型</SelectItem>
                   </SelectContent>
@@ -3289,7 +3296,7 @@ function WorkerProfileSection({
                     >
                       <SelectValue />
                     </SelectTrigger>
-                    <SelectContent>
+                    <SelectContent className="z-[80]">
                       <SelectItem value="default">
                         不指定（全局默认）
                       </SelectItem>
@@ -3318,7 +3325,7 @@ function WorkerProfileSection({
                   >
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent className="z-[80]">
                     <SelectItem value="default">跟随模型默认</SelectItem>
                     <SelectItem value="low">low · 轻快</SelectItem>
                     <SelectItem value="medium">medium · 均衡</SelectItem>
@@ -3355,7 +3362,7 @@ function WorkerProfileSection({
                   >
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent className="z-[80]">
                     <SelectItem value="inherit">跟随 Pegas 全局设置</SelectItem>
                     <SelectItem value="standard">
                       标准 · 区内放行，越界审批
