@@ -209,6 +209,8 @@ export class DshCliExecutor implements RunExecutor {
 
   async #executeOnce(input: ExecutorInput): Promise<ExecutorResult> {
     const startedAt = performance.now()
+    // Validate the runtime before creating temporary patches/capabilities.
+    const launch = dshLaunch(this.#command, [])
     const patch =
       !input.resumeSessionId && this.#agentModel && !this.#modelConfiguration
         ? createAgentModelPatch(this.#agentModel, this.#reasoningEffort)
@@ -289,8 +291,7 @@ export class DshCliExecutor implements RunExecutor {
       ...(input.resumeSessionId ? ['--session-id', input.resumeSessionId] : []),
       '-',
     ]
-    const launch = dshLaunch(this.#command, arguments_)
-    const child = spawn(launch.command, launch.args, {
+    const child = spawn(launch.command, [...launch.args, ...arguments_], {
       cwd: input.workingDirectory,
       env: {
         ...executorEnvironment(process.env),

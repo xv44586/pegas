@@ -130,7 +130,7 @@ fast/balanced/deep 三池各指向一个已配置的 provider/model，允许只�
   模型目录读取；patch 文件在子进程退出后删除，明文 key 只经子进程环境传递。
   恢复已有 session 时忽略当前覆盖并按保存的模型快照重建配置。DSH 运行在
   `<dataDir>/dsh` 隔离 home 内（`PEGAS_DSH_HOME` 可覆盖），不读写本机 `~/.dsh`。
-- 目录读取和 Executor 共用 `src/executor/dsh-launch.ts` 定位 DSH：尊重显式命令与 PATH，默认 `dsh` 未命中 PATH 时再查 `~/.local/bin`、`/opt/homebrew/bin`、`/usr/local/bin`。标准 `#!/usr/bin/env node` 入口使用当前 Node/Electron Node 运行时启动，避免 Finder 缺少 `dsh` 和 `node` 的 PATH 导致 503；其他 shebang、相对 wrapper 和 Windows 保持原启动方式。不会执行用户 shell 启动脚本；缺失命令仍诚实失败。
+- 目录读取和 Executor 共用 `src/executor/dsh-launch.ts` 定位 DSH：尊重显式命令与 PATH，默认 `dsh` 未命中 PATH 时再查 `~/.local/bin`、`/opt/homebrew/bin`、`/usr/local/bin`。标准 `#!/usr/bin/env node` 入口经 `dsh-node-runtime.ts` 使用候选版本自带的独立 Node >=24.9.0（`dist/runtime/node`），避免 Finder 缺少 PATH 和 Electron 原生 ABI 不兼容；只有源码开发允许使用当前兼容的独立 Node，Electron 缺少 bundle 时明确失败；其他 shebang、相对 wrapper 和 Windows 保持原启动方式。不会执行用户 shell 启动脚本；缺失命令仍诚实失败。
 - Agent 执行工作区默认是 `~/.pegas/workspaces/<dataDir 绝对路径 SHA-256 前
 12 位>`（`PEGAS_WORKSPACE_ROOT` 可显式覆盖），Worker 启动时幂等创建。工作区
   物理上位于任何代码 checkout 之外：DSH 会从 cwd 向上走到最近 `.git` 根并加载
@@ -175,3 +175,9 @@ fast/balanced/deep 三池各指向一个已配置的 provider/model，允许只�
 - 验证（2026-11-25）：两个原始回归先红（tab 返回目录丢失；最小 PATH `spawn dsh ENOENT`）再绿。相关 4 文件 / 289 测试通过；真实 Electron + 桌面已保存匿名连接 + 最小 PATH canary 发现 63 / 返回 63 模型，零 stderr。`pnpm smoke` 与 `pnpm smoke:dsh-auth` 通过（17 Provider 静态约束、真实 DSH 4 个 HTTP 合同）。最终完整本地门禁 151 文件 / 1,599 测试，1,588 通过、11 个真实供应商集成失败；这 11 个失败已在未修改基线复现（4 文件 / 11 失败，上游 401），不跳过或修改这些测试。
 
 - 2026-11-26 集成复验：按用户授权改用 `deepseek/deepseek-flash`，合入 QUALITY-001 共享测试模型配置后，`PEGAS_LIVE_MODEL=deepseek/deepseek-flash pnpm check` 152 文件 / 1,601 测试全绿，build 与 smoke 通过；原 11 个真实集成场景保持全部断言，401 阻塞解除。发布由首次设置聊天统一协调，源码通过不等同于 App 已更新。
+
+### EXEC-007：桌面 DSH 运行时合同（2026-11-26）
+
+`pnpm build:server` 使用构建机的独立 Node >=24.9.0 将二进制、完整 LICENSE 和版本/架构/SHA-256 manifest 写入 dist/runtime。构建 Node 分发目录必须包含 LICENSE；构建不下载、不搜索或执行用户 shell 配置。安装包的 asarUnpack 和 Candidate 的 dist 复制将其一起携带，回滚跟随整个 Candidate。不可只替换单独的 Node 文件。
+
+目录读取、实际执行共用启动器，启动前验证独立 Node 身份和最低版本；损坏/过旧/误装 Electron 时报可操作错误，不回退到宿主。自定义 shell/相对 wrapper 仍由配置者维护运行时。原目录 canary 只能证明配置组合，不能证明 DSH host boot；`pnpm smoke:dsh-runtime` 从真实 Electron + 最小 PATH 运行真实 DSH，对隔离 loopback 模型完成 read 工具及 session 恢复。CI 固定 DSH 0.2.2-rc.5；升级 DSH、Electron 或 Node 时同一门禁必须通过。可用 PEGAS_DESKTOP_EXECUTABLE 指定安装包可执行文件、PEGAS_RUNTIME_ROOT 指定待验证 Candidate/解包资源根，验证实际发布字节。
