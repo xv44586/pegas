@@ -169,3 +169,5 @@ fast/balanced/deep 三池各指向一个已配置的 provider/model，允许只�
 - 失败恢复：获取失败保留同连接的已有列表，可重试；未找到命令继续原失败路径；设置变更使缓存失效。回滚 revert 本次提交，无 schema 迁移；线上只通过不可变 Candidate 与 Supervisor 切换。
 
 - 验证（2026-11-25）：两个原始回归先红（tab 返回目录丢失；最小 PATH `spawn dsh ENOENT`）再绿。相关 4 文件 / 289 测试通过；真实 Electron + 桌面已保存匿名连接 + 最小 PATH canary 发现 63 / 返回 63 模型，零 stderr。`pnpm smoke` 与 `pnpm smoke:dsh-auth` 通过（17 Provider 静态约束、真实 DSH 4 个 HTTP 合同）。最终完整本地门禁 151 文件 / 1,599 测试，1,588 通过、11 个真实供应商集成失败；这 11 个失败已在未修改基线复现（4 文件 / 11 失败，上游 401），不跳过或修改这些测试。
+
+- 2026-11-26 集成复验：按用户授权改用 `deepseek/deepseek-flash`，合入 QUALITY-001 共享测试模型配置后，`PEGAS_LIVE_MODEL=deepseek/deepseek-flash pnpm check` 152 文件 / 1,601 测试全绿，build 与 smoke 通过；原 11 个真实集成场景保持全部断言，401 阻塞解除。发布由首次设置聊天统一协调，源码通过不等同于 App 已更新。

@@ -511,4 +511,4 @@
 - Severity：normal
 - Status：Observed
 - Enforcement：共享启动器回归加入 `pnpm check`，未扩张仓库强制标准。
-- Owner / next action：SETTINGS-001。供应商上游认证恢复后重跑真实模型门禁；后续打包验证继续覆盖 GUI 最小 PATH。
+- Owner / next action：SETTINGS-001。2026-11-26 用户授权使用已充值的 DeepSeek，合入 QUALITY-001 共享模型配置后 1,601 测试与 smoke 全绿；后续打包验证继续覆盖 GUI 最小 PATH。
