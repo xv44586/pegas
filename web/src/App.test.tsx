@@ -9405,84 +9405,92 @@ describe('sealed Pegas UI', () => {
     expect(screen.getByText('跟随全局 → 严格 · v2')).toBeTruthy()
   })
 
-  it('approves a tool call as a task-scoped rule from the approval drawer', async () => {
-    const sourceMessage = snapshot.messages[0]
-    if (!sourceMessage) throw new Error('Expected an outbox message fixture')
-    const pending = approvalFixture('approval-rule-flow')
-    const withRuleOption: Approval = {
-      ...pending,
-      prompt: {
-        ...pending.prompt,
-        recommendedOptionId: 'approve',
-        options: [
-          { id: 'approve', label: '批准执行一次', kind: 'approve' },
-          {
-            id: 'approve_rule',
-            label: '本事情内同类不再询问',
-            kind: 'approve_rule',
-            description: '仅覆盖 write 对相同目标的同类操作，可随时撤销。',
-          },
-          { id: 'reject', label: '不执行', kind: 'reject' },
-        ],
-      },
-    }
-    const resolved: Approval = {
-      ...withRuleOption,
-      status: 'approved',
-      resolvedAt: '2026-11-23T13:30:00.000Z',
-    }
-    const approvalMessage = {
-      ...sourceMessage,
-      payload: { type: 'approval.required', approvalId: pending.id },
-    }
-    let submitted: unknown
-    installSnapshotFetch(
-      { ...snapshot, messages: [approvalMessage] },
-      (path, init) => {
-        if (path.startsWith(`/v1/approvals/${pending.id}?`))
-          return Response.json({
-            approval: submitted ? resolved : withRuleOption,
-          })
-        if (path.startsWith(`/v1/actions/${pending.actionId}?`))
-          return Response.json({
-            action: actionFixture(submitted ? resolved : withRuleOption),
-          })
-        if (
-          path === `/v1/approvals/${pending.id}/decisions` &&
-          init?.method === 'POST'
-        ) {
-          submitted = JSON.parse(
-            typeof init.body === 'string' ? init.body : '{}',
-          )
-          return Response.json({ approval: resolved })
-        }
-        if (path.endsWith('/read'))
-          return Response.json({
-            message: {
-              ...approvalMessage,
-              readAt: '2026-11-23T13:30:00.000Z',
+  it.each([
+    ['approve_rule', '本事情内同类不再询问'],
+    ['approve_directory_task', '本事情内信任这些目录'],
+    ['approve_directory_user', '始终信任这些目录'],
+  ])(
+    'submits explicit approval scope %s from the drawer',
+    async (optionId, label) => {
+      const sourceMessage = snapshot.messages[0]
+      if (!sourceMessage) throw new Error('Expected an outbox message fixture')
+      const pending = approvalFixture('approval-rule-flow')
+      const withRuleOption: Approval = {
+        ...pending,
+        prompt: {
+          ...pending.prompt,
+          recommendedOptionId: 'approve',
+          options: [
+            { id: 'approve', label: '批准执行一次', kind: 'approve' },
+            {
+              id: optionId,
+              label,
+              kind: 'approve_rule',
+              description: '仅覆盖 write 对相同目标的同类操作，可随时撤销。',
             },
-          })
-        return undefined
-      },
-    )
-    render(<App />)
-    fireEvent.click(
-      within(await screen.findByLabelText('主导航')).getByRole('button', {
-        name: /待你处理/,
-      }),
-    )
-    fireEvent.click(screen.getByRole('button', { name: /^查看内容：/ }))
-    const ruleOption = await screen.findByLabelText(/本事情内同类不再询问/)
-    fireEvent.click(ruleOption)
-    fireEvent.click(screen.getByRole('button', { name: '提交决定' }))
-    await waitFor(() =>
-      expect(submitted).toMatchObject({
-        userId: 'owner',
-        optionId: 'approve_rule',
-      }),
-    )
-  })
+            { id: 'reject', label: '不执行', kind: 'reject' },
+          ],
+        },
+      }
+      const resolved: Approval = {
+        ...withRuleOption,
+        status: 'approved',
+        resolvedAt: '2026-11-23T13:30:00.000Z',
+      }
+      const approvalMessage = {
+        ...sourceMessage,
+        payload: { type: 'approval.required', approvalId: pending.id },
+      }
+      let submitted: unknown
+      installSnapshotFetch(
+        { ...snapshot, messages: [approvalMessage] },
+        (path, init) => {
+          if (path.startsWith(`/v1/approvals/${pending.id}?`))
+            return Response.json({
+              approval: submitted ? resolved : withRuleOption,
+            })
+          if (path.startsWith(`/v1/actions/${pending.actionId}?`))
+            return Response.json({
+              action: actionFixture(submitted ? resolved : withRuleOption),
+            })
+          if (
+            path === `/v1/approvals/${pending.id}/decisions` &&
+            init?.method === 'POST'
+          ) {
+            submitted = JSON.parse(
+              typeof init.body === 'string' ? init.body : '{}',
+            )
+            return Response.json({ approval: resolved })
+          }
+          if (path.endsWith('/read'))
+            return Response.json({
+              message: {
+                ...approvalMessage,
+                readAt: '2026-11-23T13:30:00.000Z',
+              },
+            })
+          return undefined
+        },
+      )
+      render(<App />)
+      fireEvent.click(
+        within(await screen.findByLabelText('主导航')).getByRole('button', {
+          name: /待你处理/,
+        }),
+      )
+      fireEvent.click(screen.getByRole('button', { name: /^查看内容：/ }))
+      const ruleOption = await screen.findByLabelText(label)
+      fireEvent.click(ruleOption)
+      expect(submitted).toBeUndefined()
+      fireEvent.click(screen.getByRole('button', { name: '提交决定' }))
+      await waitFor(() =>
+        expect(submitted).toMatchObject({
+          userId: 'owner',
+          optionId,
+        }),
+      )
+    },
+  )
 
   it('renders the structured approval card with operation preview, reason, tier and source task entry', async () => {
     const sourceMessage = snapshot.messages[0]
@@ -9678,59 +9686,74 @@ describe('sealed Pegas UI', () => {
     expect(screen.queryByLabelText(/本事情内同类不再询问/)).toBeNull()
   })
 
-  it('lists approved task rules and revokes one with immediate feedback', async () => {
-    const activeRule = {
-      id: 'rule-1',
-      taskId: 'task-1',
-      tool: 'write',
-      category: 'out-of-workspace-write',
-      targets: ['/tmp/shared/plan.md'],
-      fingerprint: 'f'.repeat(64),
-      status: 'active',
-      createdFromApprovalId: 'approval-rule-1',
-      createdFromDecisionId: 'decision-rule-1',
-      createdBy: 'owner',
-      createdAt: '2026-11-23T12:00:00.000Z',
-    }
-    let revoked = false
-    let revokeBody: unknown
-    installFetch((path, init) => {
-      if (
-        path.startsWith('/v1/tasks/task-1/approval-rules?') &&
-        (!init?.method || init.method === 'GET')
-      ) {
-        return Response.json({
-          rules: [revoked ? { ...activeRule, status: 'revoked' } : activeRule],
-        })
+  it.each(['exact', 'task_directory', 'user_directory'])(
+    'lists and revokes %s rules with immediate feedback',
+    async scope => {
+      const activeRule = {
+        id: 'rule-1',
+        taskId: scope === 'user_directory' ? 'original-task' : 'task-1',
+        scope,
+        tool: 'write',
+        category: 'out-of-workspace-write',
+        targets: ['/tmp/shared/plan.md'],
+        fingerprint: 'f'.repeat(64),
+        status: 'active',
+        createdFromApprovalId: 'approval-rule-1',
+        createdFromDecisionId: 'decision-rule-1',
+        createdBy: 'owner',
+        createdAt: '2026-11-23T12:00:00.000Z',
       }
-      if (
-        path === '/v1/tasks/task-1/approval-rules/rule-1/revoke' &&
-        init?.method === 'POST'
-      ) {
-        revokeBody = JSON.parse(
-          typeof init.body === 'string' ? init.body : '{}',
-        )
-        revoked = true
-        return Response.json({ rule: { ...activeRule, status: 'revoked' } })
-      }
-      return undefined
-    })
-    render(<App />)
-    fireEvent.click(
-      within(await screen.findByLabelText('主导航')).getByRole('button', {
-        name: /所有事情/,
-      }),
-    )
-    fireEvent.click(
-      within(mainCanvas()).getByRole('button', { name: /安全自更新流程/ }),
-    )
-    expect(await screen.findByText('已批准规则')).toBeTruthy()
-    expect(await screen.findByText('/tmp/shared/plan.md')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: '撤销规则' }))
-    await waitFor(() => expect(revokeBody).toMatchObject({ userId: 'owner' }))
-    expect(await screen.findByText('已撤销')).toBeTruthy()
-    expect(screen.queryByRole('button', { name: '撤销规则' })).toBeNull()
-  })
+      let revoked = false
+      let revokeBody: unknown
+      installFetch((path, init) => {
+        if (
+          path.startsWith('/v1/tasks/task-1/approval-rules?') &&
+          (!init?.method || init.method === 'GET')
+        ) {
+          return Response.json({
+            rules: [
+              revoked ? { ...activeRule, status: 'revoked' } : activeRule,
+            ],
+          })
+        }
+        if (
+          path ===
+            `/v1/tasks/${activeRule.taskId}/approval-rules/rule-1/revoke` &&
+          init?.method === 'POST'
+        ) {
+          revokeBody = JSON.parse(
+            typeof init.body === 'string' ? init.body : '{}',
+          )
+          revoked = true
+          return Response.json({ rule: { ...activeRule, status: 'revoked' } })
+        }
+        return undefined
+      })
+      render(<App />)
+      fireEvent.click(
+        within(await screen.findByLabelText('主导航')).getByRole('button', {
+          name: /所有事情/,
+        }),
+      )
+      fireEvent.click(
+        within(mainCanvas()).getByRole('button', { name: /安全自更新流程/ }),
+      )
+      expect(await screen.findByText('已批准规则')).toBeTruthy()
+      expect(await screen.findByText('/tmp/shared/plan.md')).toBeTruthy()
+      if (scope !== 'exact')
+        expect(
+          screen.getByText(
+            scope === 'user_directory'
+              ? '始终信任目录 · 含子目录'
+              : '本事情内信任目录 · 含子目录',
+          ),
+        ).toBeTruthy()
+      fireEvent.click(screen.getByRole('button', { name: '撤销规则' }))
+      await waitFor(() => expect(revokeBody).toMatchObject({ userId: 'owner' }))
+      expect(await screen.findByText('已撤销')).toBeTruthy()
+      expect(screen.queryByRole('button', { name: '撤销规则' })).toBeNull()
+    },
+  )
 
   it('toggles the auto review switch from privacy settings', async () => {
     let submitted: unknown

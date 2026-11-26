@@ -4,6 +4,7 @@ export interface ApprovalRule {
   tool: string
   category: string
   targets: string[]
+  scope?: 'exact' | 'task_directory' | 'user_directory'
   fingerprint: string
   status: 'active' | 'revoked'
   createdFromApprovalId: string
@@ -19,6 +20,7 @@ export interface ApprovalRuleProjection {
   tool: string
   category: string
   targets: string[]
+  scope?: 'exact' | 'task_directory' | 'user_directory'
   fingerprint: string
 }
 

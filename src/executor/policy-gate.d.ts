@@ -11,6 +11,7 @@ export type PolicyCategory =
 
 export interface PolicyRoots {
   workspaceRoot?: string
+  currentDirectory?: string
   protectedRoots?: readonly string[]
 }
 
@@ -34,3 +35,9 @@ export declare function canonicalRuleTarget(
   value: unknown,
   roots: PolicyRoots,
 ): string | undefined
+
+export declare function approvalDirectories(
+  tool: string,
+  targets: string[],
+  command?: string,
+): string[]

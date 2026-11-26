@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -227,6 +227,185 @@ describe('approval rule contract', () => {
 })
 
 describe('approval rule persistence', () => {
+  it('renders persistent scope and paths from trusted server facts instead of executor labels', () => {
+    const store = new PegasStore(':memory:')
+    try {
+      const directory = realpathSync(workspaceRoot())
+      const claimed = createClaimedRun(store, 'scope-label')
+      const pending = store.requestApproval(
+        claimed.run.id,
+        claimed.claimToken,
+        {
+          kind: 'dsh.tool.write',
+          risk: 'high',
+          idempotencyKey: 'misleading-label',
+          request: {
+            tool: 'write',
+            category: 'out-of-workspace-write',
+            targets: [join(directory, 'file.md')],
+            trustedDirectories: [directory],
+          },
+          recoveryPoint: { step: 'before_tool_call' },
+          approval: {
+            summary: 'Approve once',
+            impact: 'one call',
+            recommendedOptionId: 'approve_directory_user',
+            options: [
+              {
+                id: 'approve_directory_user',
+                kind: 'approve_rule',
+                label: '批准执行一次',
+                description: '没有持久权限',
+              },
+              { id: 'approve', kind: 'approve', label: '批准执行一次' },
+              { id: 'reject', kind: 'reject', label: '拒绝' },
+            ],
+          },
+        },
+      )
+      const option = pending.approval.prompt.options[0]
+      expect(option?.label).toBe('始终信任这些目录')
+      expect(option?.description).toContain(directory)
+      expect(option?.description).toContain('以后的事情持续有效')
+      expect(pending.approval.prompt.recommendedOptionId).toBe('approve')
+      const replay = store.requestApproval(claimed.run.id, claimed.claimToken, {
+        kind: 'dsh.tool.write',
+        risk: 'high',
+        idempotencyKey: 'misleading-label',
+        request: {
+          tool: 'write',
+          category: 'out-of-workspace-write',
+          targets: [join(directory, 'file.md')],
+          trustedDirectories: [directory],
+        },
+        recoveryPoint: { step: 'before_tool_call' },
+        approval: {
+          summary: 'Approve once',
+          impact: 'one call',
+          recommendedOptionId: 'approve_directory_user',
+          options: [
+            {
+              id: 'approve_directory_user',
+              kind: 'approve_rule',
+              label: '批准执行一次',
+              description: '没有持久权限',
+            },
+            { id: 'approve', kind: 'approve', label: '批准执行一次' },
+            { id: 'reject', kind: 'reject', label: '拒绝' },
+          ],
+        },
+      })
+      expect(replay.approval.prompt).toEqual(pending.approval.prompt)
+    } finally {
+      store.close()
+    }
+  })
+
+  it('keeps every active rule visible for revocation even beyond one hundred records', () => {
+    const databasePath = join(workspaceRoot(), 'rules.db')
+    const store = new PegasStore(databasePath)
+    const db = new DatabaseSync(databasePath)
+    try {
+      const parked = parkOutsideWrite(
+        store,
+        'many-rules',
+        '/tmp/shared/file.md',
+        'many-rules',
+      )
+      store.decideApproval(parked.approvalId, 'owner', {
+        commandId: 'many-rules',
+        optionId: 'approve_rule',
+      })
+      const original = store.listApprovalRules(parked.taskId, 'owner')[0]
+      if (!original) throw new Error('Expected original rule')
+      // Isolated listing fixtures; provenance constraints are covered by the API lifecycle tests.
+      db.exec('PRAGMA foreign_keys = OFF')
+      const insert = db.prepare(`INSERT INTO approval_rules
+        (id,task_id,tool,category,targets_json,fingerprint,status,created_from_approval_id,created_from_decision_id,created_by,created_at,revoked_at,revoked_by,scope)
+        SELECT ?,task_id,tool,category,targets_json,?, ?,created_from_approval_id,?,created_by,'9999-01-01T00:00:00.000Z',NULL,NULL,'user_directory'
+        FROM approval_rules WHERE id=?`)
+      for (let i = 0; i < 101; i++) {
+        insert.run(
+          `active-${String(i)}`,
+          `active-${String(i)}`,
+          'active',
+          `decision-active-${String(i)}`,
+          original.id,
+        )
+        insert.run(
+          `revoked-${String(i)}`,
+          `revoked-${String(i)}`,
+          'revoked',
+          `decision-revoked-${String(i)}`,
+          original.id,
+        )
+      }
+      const rules = store.listApprovalRules(parked.taskId, 'owner')
+      expect(rules.filter(rule => rule.status === 'active')).toHaveLength(102)
+      expect(rules.filter(rule => rule.status === 'revoked')).toHaveLength(100)
+      expect(rules.some(rule => rule.id === original.id)).toBe(true)
+      expect(
+        store.revokeApprovalRule(parked.taskId, original.id, 'owner', {
+          commandId: 'old-active-revoke',
+        }).status,
+      ).toBe('revoked')
+    } finally {
+      db.close()
+      store.close()
+    }
+  })
+
+  it('rejects directory approval with unverifiable preview facts atomically', () => {
+    const store = new PegasStore(':memory:')
+    try {
+      const claimed = createClaimedRun(store, 'directory-invalid')
+      const pending = store.requestApproval(
+        claimed.run.id,
+        claimed.claimToken,
+        {
+          kind: 'dsh.tool.write',
+          risk: 'high',
+          idempotencyKey: 'invalid-dir',
+          request: {
+            tool: 'write',
+            category: 'out-of-workspace-write',
+            targets: ['/missing-dir/file'],
+            trustedDirectories: ['/'],
+          },
+          recoveryPoint: { step: 'before_tool_call' },
+          approval: {
+            summary: '信任目录',
+            impact: '测试',
+            recommendedOptionId: 'reject',
+            options: [
+              {
+                id: 'approve_directory_user',
+                label: '始终信任这些目录',
+                kind: 'approve_rule',
+              },
+              { id: 'reject', label: '拒绝', kind: 'reject' },
+            ],
+          },
+        },
+      )
+      expect(() =>
+        store.decideApproval(pending.approval.id, 'owner', {
+          commandId: 'invalid-directory',
+          optionId: 'approve_directory_user',
+        }),
+      ).toThrow(/Directory targets/)
+      expect(store.listApprovalRules(claimed.task.id, 'owner')).toEqual([])
+      expect(store.getApproval(pending.approval.id, 'owner')?.status).toBe(
+        'pending',
+      )
+      expect(
+        store.getAction(pending.action.id, 'owner')?.resumeRunId,
+      ).toBeUndefined()
+    } finally {
+      store.close()
+    }
+  })
+
   it('creates a task-scoped rule from an approve_rule decision with timeline audit', () => {
     const store = new PegasStore(':memory:')
     const workspace = workspaceRoot()
@@ -515,7 +694,7 @@ describe('approval rule persistence', () => {
       const versions = db
         .prepare('SELECT MAX(version) AS version FROM schema_migrations')
         .get() as { version: number }
-      expect(versions.version).toBe(58)
+      expect(versions.version).toBe(59)
       const decisionKinds = db
         .prepare('SELECT kind FROM approval_decisions')
         .all() as { kind: string }[]

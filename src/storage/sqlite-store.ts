@@ -1,3 +1,4 @@
+import { approvalDirectories } from '../executor/policy-gate.mjs'
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -3031,6 +3032,7 @@ interface ApprovalRuleRow {
   tool: string
   category: string
   targets_json: string
+  scope: NonNullable<ApprovalRule['scope']>
   fingerprint: string
   status: ApprovalRule['status']
   created_from_approval_id: string
@@ -3554,6 +3556,15 @@ export class PegasStore {
     this.#migrate(56, migration56)
     this.#migrate(57, migration57)
     this.#migrate(58, migration58, () => this.#redactLegacyMessageTraceCalls())
+    this.#migrate(
+      59,
+      `
+      ALTER TABLE approval_rules ADD COLUMN scope TEXT NOT NULL DEFAULT 'exact'
+        CHECK (scope IN ('exact', 'task_directory', 'user_directory'));
+      CREATE TRIGGER approval_rules_scope_immutable BEFORE UPDATE ON approval_rules
+      WHEN NEW.scope <> OLD.scope BEGIN SELECT RAISE(ABORT, 'Rule scope is immutable'); END;
+    `,
+    )
   }
 
   #backfillWorkerIconIds(): void {
@@ -3936,28 +3947,68 @@ export class PegasStore {
     decisionId: string,
     userId: string,
     now: string,
+    optionId: string,
   ): void {
     const action = this.#actionById(approval.actionId)
     const tool = action.request.tool
     const category = action.request.category
-    const targets = action.request.targets
+    const rawTargets = action.request.targets
     if (
       typeof tool !== 'string' ||
       typeof category !== 'string' ||
-      !Array.isArray(targets) ||
-      !targets.every(target => typeof target === 'string')
+      !Array.isArray(rawTargets) ||
+      !rawTargets.every(target => typeof target === 'string')
     ) {
       throw new Error(
         'Action request does not carry rule fingerprint facts (tool/category/targets)',
       )
     }
-    const fingerprint = approvalRuleFingerprint({ tool, category, targets })
+    let targets: string[] = rawTargets
+    const scope =
+      optionId === 'approve_directory_user'
+        ? 'user_directory'
+        : optionId === 'approve_directory_task'
+          ? 'task_directory'
+          : 'exact'
+    if (scope !== 'exact') {
+      if (category !== 'out-of-workspace-write')
+        throw new Error('Directory trust requires file writes')
+      const directories = approvalDirectories(
+        tool,
+        targets,
+        typeof action.request.command === 'string'
+          ? action.request.command
+          : undefined,
+      )
+      if (
+        !directories.length ||
+        JSON.stringify(directories) !==
+          JSON.stringify(action.request.trustedDirectories)
+      ) {
+        throw new Error(
+          'Directory targets changed or are not verifiable; request a new approval',
+        )
+      }
+      targets = directories
+    }
+    const ruleTool = scope === 'exact' ? tool : '*'
+    const baseFingerprint = approvalRuleFingerprint({
+      tool: ruleTool,
+      category,
+      targets,
+    })
+    const fingerprint =
+      scope === 'exact'
+        ? baseFingerprint
+        : createHash('sha256')
+            .update(scope + ':' + baseFingerprint)
+            .digest('hex')
     const existing = this.#database
       .prepare(
         `SELECT id FROM approval_rules
-         WHERE task_id = ? AND fingerprint = ? AND status = 'active'`,
+         WHERE (task_id = ? OR (scope = 'user_directory' AND created_by = ?)) AND fingerprint = ? AND status = 'active'`,
       )
-      .get(approval.taskId, fingerprint) as { id: string } | undefined
+      .get(approval.taskId, userId, fingerprint) as { id: string } | undefined
     if (existing) return
     const ruleId = randomUUID()
     this.#database
@@ -3965,13 +4016,13 @@ export class PegasStore {
         `INSERT INTO approval_rules
           (id, task_id, tool, category, targets_json, fingerprint, status,
            created_from_approval_id, created_from_decision_id, created_by,
-           created_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)`,
+           created_at, scope)
+         VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)`,
       )
       .run(
         ruleId,
         approval.taskId,
-        tool,
+        ruleTool,
         category,
         JSON.stringify([...new Set(targets)].sort()),
         fingerprint,
@@ -3979,6 +4030,7 @@ export class PegasStore {
         decisionId,
         userId,
         now,
+        scope,
       )
     this.enqueueOutbox({
       userId,
@@ -3994,7 +4046,7 @@ export class PegasStore {
         category,
         targets: [...new Set(targets)].sort(),
         approvalId: approval.id,
-        text: `已批准本事情内同类操作：${tool}（${approvalRuleTargetsSummary(targets)}），可在事情详情随时撤销。`,
+        text: `已批准${scope === 'user_directory' ? '长期目录信任' : scope === 'task_directory' ? '本事情目录信任' : '本事情内同类操作'}：${tool}（${approvalRuleTargetsSummary(targets)}），可在事情详情随时撤销。`,
       },
     })
   }
@@ -4004,12 +4056,18 @@ export class PegasStore {
     if (task.userId !== userId) throw new Error('Task belongs to another user')
     const rows = this.#database
       .prepare(
-        `SELECT * FROM approval_rules
-         WHERE task_id = ?
-         ORDER BY created_at DESC, id DESC
-         LIMIT 100`,
+        `WITH visible AS (
+           SELECT * FROM approval_rules
+           WHERE task_id = ? OR (scope = 'user_directory' AND created_by = ?)
+         ), recent_history AS (
+           SELECT * FROM visible WHERE status = 'revoked'
+           ORDER BY created_at DESC, id DESC LIMIT 100
+         )
+         SELECT * FROM visible WHERE status = 'active'
+         UNION ALL SELECT * FROM recent_history
+         ORDER BY created_at DESC, id DESC`,
       )
-      .all(taskId) as unknown as ApprovalRuleRow[]
+      .all(taskId, userId) as unknown as ApprovalRuleRow[]
     return rows.map(row => toApprovalRule(row))
   }
 
@@ -4090,16 +4148,17 @@ export class PegasStore {
   #activeApprovalRuleProjections(taskId: string): ApprovalRuleProjection[] {
     const rows = this.#database
       .prepare(
-        `SELECT id, tool, category, targets_json, fingerprint
+        `SELECT id, tool, category, targets_json, fingerprint, scope
          FROM approval_rules
-         WHERE task_id = ? AND status = 'active'
+         WHERE (task_id = ? OR (scope = 'user_directory' AND created_by = ?)) AND status = 'active'
          ORDER BY created_at, id`,
       )
-      .all(taskId) as unknown as {
+      .all(taskId, this.#taskById(taskId).userId) as unknown as {
       id: string
       tool: string
       category: string
       targets_json: string
+      scope: NonNullable<ApprovalRule['scope']>
       fingerprint: string
     }[]
     return rows.map(row => ({
@@ -4108,6 +4167,7 @@ export class PegasStore {
       category: row.category,
       targets: JSON.parse(row.targets_json) as string[],
       fingerprint: row.fingerprint,
+      ...(row.scope === 'exact' ? {} : { scope: row.scope }),
     }))
   }
 
@@ -13035,6 +13095,7 @@ export class PegasStore {
           'A human-confirmed failed Action blocks new Approvals on this Task',
         )
       }
+      const approvalPrompt = canonicalDirectoryApprovalPrompt(draft)
       const now = this.#clock.now().toISOString()
       const actionId = randomUUID()
       const approvalId = randomUUID()
@@ -13072,7 +13133,7 @@ export class PegasStore {
           task.userId,
           task.id,
           actionId,
-          JSON.stringify(draft.approval),
+          JSON.stringify(approvalPrompt),
           now,
         )
       const autoReview =
@@ -13105,9 +13166,9 @@ export class PegasStore {
             approvalId,
             actionId,
             risk: draft.risk,
-            summary: draft.approval.summary,
-            impact: draft.approval.impact,
-            prompt: draft.approval,
+            summary: approvalPrompt.summary,
+            impact: approvalPrompt.impact,
+            prompt: approvalPrompt,
           },
         })
       }
@@ -13727,7 +13788,13 @@ export class PegasStore {
         )
         .run(approvalId)
       if (option.kind === 'approve_rule') {
-        this.#createApprovalRuleInTransaction(approval, decisionId, userId, now)
+        this.#createApprovalRuleInTransaction(
+          approval,
+          decisionId,
+          userId,
+          now,
+          option.id,
+        )
       }
       this.#applyApprovalDecisionInTransaction(event)
       const decision = this.#decisionByApprovalId(approvalId)
@@ -18696,6 +18763,7 @@ function toApprovalRule(row: ApprovalRuleRow): ApprovalRule {
     category: row.category,
     targets: JSON.parse(row.targets_json) as string[],
     fingerprint: row.fingerprint,
+    ...(row.scope === 'exact' ? {} : { scope: row.scope }),
     status: row.status,
     createdFromApprovalId: row.created_from_approval_id,
     createdFromDecisionId: row.created_from_decision_id,
@@ -19321,4 +19389,49 @@ function deriveLegacySemantic(
         : undefined,
     ),
   }
+}
+
+function canonicalDirectoryApprovalPrompt(
+  draft: ActionRequestDraft,
+): ApprovalPrompt {
+  const directoryOptions = draft.approval.options.filter(
+    option =>
+      option.kind === 'approve_rule' &&
+      (option.id === 'approve_directory_task' ||
+        option.id === 'approve_directory_user'),
+  )
+  if (!directoryOptions.length) return draft.approval
+  const targets = draft.request.targets
+  const directories =
+    typeof draft.request.tool === 'string' &&
+    Array.isArray(targets) &&
+    targets.every(target => typeof target === 'string')
+      ? approvalDirectories(
+          draft.request.tool,
+          targets,
+          typeof draft.request.command === 'string'
+            ? draft.request.command
+            : undefined,
+        )
+      : []
+  const options = draft.approval.options.map(option => {
+    if (!directoryOptions.includes(option)) return option
+    const persistent = option.id === 'approve_directory_user'
+    return {
+      ...option,
+      label: persistent ? '始终信任这些目录' : '本事情内信任这些目录',
+      description: directories.length
+        ? `允许文件工具读写这些目录及子目录：${directories.join('、')}。${persistent ? '对你以后的事情持续有效，可在任意事情详情撤销' : '本事情内有效，可在事情详情撤销'}；外发、破坏性操作和无法确定范围的命令仍需确认。`
+        : '目录范围无法验证，无法建立目录授权。',
+    }
+  })
+  const recommendedOptionId = directoryOptions.some(
+    option => option.id === draft.approval.recommendedOptionId,
+  )
+    ? ((
+        options.find(option => option.kind === 'approve') ??
+        options.find(option => option.kind === 'reject')
+      )?.id ?? draft.approval.recommendedOptionId)
+    : draft.approval.recommendedOptionId
+  return { ...draft.approval, options, recommendedOptionId }
 }

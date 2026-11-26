@@ -1,7 +1,7 @@
 # 权限档位与审批 Policy Gate（APPROVAL-001 第二阶段）
 
-> 状态：P1 Gate 覆盖面、P2 权限档位对象、P3 规则批准、P4 审批卡升级、P5 自动审阅、P6 逐调用审计表、P7 档位审计 UI、P8 对外副作用逐次人工确认已实现（见下方实现记录）
-> 更新日期：2026-11-24
+> 状态：P1 Gate 覆盖面、P2 权限档位对象、P3 规则批准、P4 审批卡升级、P5 自动审阅、P6 逐调用审计表、P7 档位审计 UI、P8 对外副作用逐次人工确认已实现；P9 目录信任集成验证通过，待发布（见下方实现记录）
+> 更新日期：2026-11-26
 > 基线：`origin/main` `74c2f8c`（Intake 初稿基线 `4baab43`）
 > 外部调研：`research/approval-permissions-codex-cindy/NOTES.md`（本地，不入库；Codex CLI/webview、Cindy Apache-2.0 docs、DSH MIT 源码）
 
@@ -277,3 +277,32 @@
 - **真实实例关键路径探针**（运行实例 4317，用户 owner）：web 来源认证人类原话要求原样执行 `curl -X POST --data @/tmp/p8-live/payload.json http://127.0.0.1:9/collect` → Action `dsh.tool.bash` `network-egress/high` 人工停放（awaiting_approval）；审批选项仅 approve/reject（无 approve_rule）；`request.egressPayload.items[0]` path/content 与探针文件**逐字一致**；`approval_reviews` 零记录（未进审阅；实例 autoReviewEnabled 当前为关，审阅开场景由测试与真实 DSH 探针覆盖）。探针审批保持 pending 留用户处置（发布验证不代用户做决定）。
 - **如实记录的相邻观察（不属本 Feature，未修改）**：运行实例未配置 `PEGAS_API_TOKEN`（launchd 环境无此变量），而 approvals/actions/policy-audit 端点使用 `!options.apiToken || !isAuthorized(...)` 守卫——无 token 时这些端点恒 401（fail-closed），与 tasks/events 等 `isAuthorized`（无 token 放行）语义不一致。方向安全（拒而非放），Web 访问令牌门在无 token 部署下无法通过；已口头报告用户，候选登记待确认。
 - **回滚**：previous=`main-36c81b7-r1` 保留，Supervisor rollback 可用；无 schema 变更，无数据兼容问题。
+
+## P9 目录授权 Intake（2026-11-26）
+
+- Feature：APPROVAL-001；基线 `245900307e884b447f52a927b4e7a3fe4eda9fd1`；独立 branch `codex/approval-001-directory-trust`。主工作区已有 App.test.tsx/MainPages.tsx 未提交改动，不纳入本任务。
+- 验收：保留仅本次/拒绝；确定目标的文件写入提供本事情信任目录与长期信任目录；目录包含子目录、跨文件工具；长期规则只在同一用户生效，重启保留，可在任意事情详情撤销；撤销下一调用生效。
+- 边界：服务端权威，规则与决定同事务；显示实际规范路径；符号链接重新解析，路径前缀相似不算命中；严格档、控制面、外发与破坏性操作不豁免。不以目录信任批准不透明的任意 shell。
+- 非目标：全磁盘免审批、命令前缀授权、改变 Router 或发布当前运行实例。无法识别目录时诚实说明，并建议使用可确定目标的文件工具。
+- 恢复：沿用一次性 grant/outcome 与幂等 successor；增加 scope 列默认 exact，旧规则语义不变；回滚旧版停止识别目录规则而不扩大权限，规则数据保留。
+
+### P9 实现与验证（2026-11-26）
+
+- 服务端复用 `approve_rule` 决定与原子恢复事务。schema v59 增加 `approval_rules.scope`（exact/task_directory/user_directory），默认 exact 兼容原规则，触发器禁止更改 scope。目录规则使用工具通配、规范目录集合和带 scope 的指纹；长期规则按 created_by 隔离，创建去重、重放、撤销沿用既有幂等合同。
+- Executor 提供「本事情内信任这些目录」「始终信任这些目录」，列出目录、子目录、有效期和撤销入口。服务端决定时重新验证目录与审批预览一致；目录不存在时只建议最近已存在的父目录，拒绝根目录。每次调用现读规则，沙箱审批入口也再次读取，撤销后不复用旧快照。
+- write/edit/apply_patch 跨工具、同目录新文件和子目录可命中。bash 只对完整匹配的单个带引号 apply_patch heredoc 支持目录信任；拒绝提前结束 heredoc、变量展开和后置命令。只读工具沿用既有放行。严格档、档位不一致、外发、破坏性操作、控制面不通过目录规则豁免；规范路径与目录分隔符匹配防止相似前缀和符号链接越界。
+- Web 由服务端选项驱动，不在浏览器推导权限。任意事情详情同时显示当前用户的长期规则，撤销提交原规则的 taskId；选择 radio 不会自动提交。旧版已停放审批保留原选项，新选项从新版 Executor 的新审批开始提供。
+- 自动化：`test/approval-rule-bridge.test.ts` 用真实 Control Plane HTTP 与桥钩子验证三种 scope、跨工具、新文件/子目录、同用户跨事情、其他用户隔离、SQLite 重开、严格档、路径前缀、符号链接越界、patch shell、撤销后下一调用及沙箱审批入口重新询问。`test/approval-rules.test.ts` 验证错误目录预览使整个决定事务回滚；`test/policy-gate.test.ts` 验证有界与不透明 shell 区分。Web 六项 scope 参数化用例验证选择/显式提交和跨事情撤销。
+- 基线同步：fetch origin/main 后仍为 `24590030`，worktree 执行 merge --ff-only 确认已最新，再跑完整门禁。`pnpm check`：152 文件、1677 通过、1 项既有跳过；statement 78.61%、branch 72.20%、function 75.60%、line 81.65%，格式/品牌/Lint/类型/Knip/构建通过。`pnpm smoke` 通过；`pnpm a11y:review` 全部场景零违例。
+- `pnpm review:ui --force` 通过，含 1440px/390px 审批卡实拍。另用 Playwright 在隔离实例 390px 宽度点击「始终信任这些目录」，确认滚动到选项、选中状态和仍等待显式提交；截图 `output/playwright/directory-trust-mobile.png`（本地产物不提交）。
+- 剩余范围：任意 Python/Node/shell 脚本不因目录信任获得全磁盘权限；仍需单次审批或改用可确定目标的工具。尚未验证真实模型在生产 DSH 中的连续跨目录任务；本次没有发布或修改运行实例。检查与实际文件执行之间的操作系统级竞争窗口沿用现有工具边界，不声称提供独立文件系统沙箱。
+- 回滚：撤销目录规则立即停止未来命中；revert 本增量恢复原行为。v59 仅加列/触发器，保留数据，旧版本按工具/指纹精确匹配而不会命中目录通配规则；回滚后目录授权失效并恢复询问。不得删除授权审计数据。
+
+### P9 发布前审查修订（2026-11-26）
+
+- 已合并 main `11298995`，仅在 Feature worktree 验证；主目录未知改动未触碰。
+- 路径判断使用真实 DSH workingDirectory 服务，每次调用与原生审批入口重新获取 session cwd；bash 的绝对或相对 workdir 优先于 cwd。授权边界仍是原 workspace，切换目录不扩大权限；写入效果指纹使用相同解析基准。
+- 服务端固定目录授权选项的名称、规范目录、持续时间及撤销说明，执行器不能把长期授权伪装成一次性选项；默认推荐退回普通批准，原始请求指纹保持重放幂等。
+- 规则列表返回所有有效规则，只对已撤销历史保留最近 100 项，避免授权仍有效但用户找不到撤销入口。
+- 三项审查回归先红后绿，另补 session cwd 在两个审批钩子间变化的集成回归。完整 `pnpm check` 152 文件、1689 测试通过；覆盖率 statement 78.66%、branch 72.26%、function 75.67%、line 81.69%。`pnpm smoke` 与真实 Electron→DSH 回环目录/工具/session 恢复验证通过（3 次本地模型协议请求，无付费模型）。`pnpm review:ui --force` 桌面/移动端 216 次交互复验通过，`pnpm a11y:review` 零违例。
+- 发布由独立 Supervisor 验证不可变 Candidate；schema v59 为加列迁移。已用临时 v59 数据库验证当前 Supervisor 的回滚兼容检查与上一 Candidate 的 Store 重开均通过，schema 保持 59。回滚后目录通配规则不被旧版精确规则匹配，恢复逐次询问；不得删除授权记录或降级数据库。

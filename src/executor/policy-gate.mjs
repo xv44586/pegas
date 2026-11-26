@@ -1,4 +1,4 @@
-import { realpathSync } from 'node:fs'
+import { realpathSync, statSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 
 /** @typedef {import('./policy-gate.d.ts').PolicyRisk} PolicyRisk */
@@ -75,7 +75,12 @@ export function classifyToolCall(execution, roots, tier = 'standard') {
   const protectedAliases = (roots.protectedRoots ?? [])
     .filter(root => typeof root === 'string' && root.length > 0)
     .map(root => resolve(root))
-  const context = { workspaceRoot, protectedRoots, protectedAliases }
+  const context = {
+    workspaceRoot,
+    protectedRoots,
+    protectedAliases,
+    pathRoot: canonicalRoot(roots.currentDirectory ?? roots.workspaceRoot),
+  }
   if (tier === 'strict') {
     if (execution.name === 'web_fetch' || execution.name === 'web_search') {
       return decision(
@@ -130,15 +135,16 @@ function canonicalRoot(root) {
 
 /**
  * @param {unknown} value
- * @param {{ workspaceRoot: string | undefined, protectedRoots: string[], protectedAliases: string[] }} context
+ * @param {{ workspaceRoot: string | undefined, protectedRoots: string[], protectedAliases: string[], pathRoot?: string }} context
  * @returns {string | undefined}
  */
 function canonicalTarget(value, context) {
   if (typeof value !== 'string' || value.trim().length === 0) return undefined
+  const pathRoot = context.pathRoot ?? context.workspaceRoot
   const absolute = isAbsolute(value)
     ? value
-    : context.workspaceRoot
-      ? join(context.workspaceRoot, value)
+    : pathRoot
+      ? join(pathRoot, value)
       : resolve(value)
   return canonicalize(absolute)
 }
@@ -171,9 +177,66 @@ function canonicalize(absolute) {
 export function canonicalRuleTarget(value, roots) {
   return canonicalTarget(value, {
     workspaceRoot: canonicalRoot(roots.workspaceRoot),
+    pathRoot: canonicalRoot(roots.currentDirectory ?? roots.workspaceRoot),
     protectedRoots: [],
     protectedAliases: [],
   })
+}
+
+/**
+ * Derive the exact directories shown to the user. Never infer a shell's entire
+ * effect from a partial list of operands.
+ * @param {string} tool
+ * @param {string[]} targets
+ * @param {string | undefined} [command]
+ * @returns {string[]}
+ */
+export function approvalDirectories(tool, targets, command) {
+  if (
+    !['write', 'edit', 'apply_patch'].includes(tool) &&
+    !(tool === 'bash' && boundedPatch(command) !== undefined)
+  )
+    return []
+  if (targets.length === 0) return []
+  const directories = []
+  try {
+    for (const target of targets) {
+      if (!isAbsolute(target) || canonicalRuleTarget(target, {}) !== target)
+        return []
+      let directory = statSync(target, {
+        throwIfNoEntry: false,
+      })?.isDirectory()
+        ? target
+        : dirname(target)
+      while (
+        !statSync(directory, { throwIfNoEntry: false }) &&
+        directory !== dirname(directory)
+      )
+        directory = dirname(directory)
+      if (
+        directory === dirname(directory) ||
+        !statSync(directory).isDirectory()
+      )
+        return []
+      directories.push(realpathSync(directory))
+    }
+  } catch {
+    return []
+  }
+  return [...new Set(directories)].sort()
+}
+
+/** @param {string | undefined} command @returns {string | undefined} */
+function boundedPatch(command) {
+  // Only a single, quoted heredoc: no substitution, trailing command or cd.
+  const match = command?.match(
+    /^apply_patch <<'([A-Za-z_][A-Za-z_0-9]*)'\n(\*\*\* Begin Patch\n[\s\S]*\n\*\*\* End Patch)\n\1\n?$/,
+  )
+  const delimiter = match?.[1]
+  const patch = match?.[2]
+  if (!delimiter || !patch || patch.split('\n').includes(delimiter))
+    return undefined
+  return patch
 }
 
 /**
@@ -208,7 +271,7 @@ function unknownDecision(reason) {
 
 /**
  * @param {string[]} targets
- * @param {{ workspaceRoot: string | undefined, protectedRoots: string[], protectedAliases: string[] }} context
+ * @param {{ workspaceRoot: string | undefined, protectedRoots: string[], protectedAliases: string[], pathRoot?: string }} context
  * @param {string} summary
  * @returns {ToolCallClassification}
  */
@@ -251,7 +314,7 @@ function judgeWriteTargets(targets, context, summary) {
 
 /**
  * @param {{ name: string, arguments?: unknown }} execution
- * @param {{ workspaceRoot: string | undefined, protectedRoots: string[], protectedAliases: string[] }} context
+ * @param {{ workspaceRoot: string | undefined, protectedRoots: string[], protectedAliases: string[], pathRoot?: string }} context
  * @returns {ToolCallClassification}
  */
 function classifyWriteTool(execution, context) {
@@ -267,7 +330,7 @@ function classifyWriteTool(execution, context) {
 
 /**
  * @param {{ name: string, arguments?: unknown }} execution
- * @param {{ workspaceRoot: string | undefined, protectedRoots: string[], protectedAliases: string[] }} context
+ * @param {{ workspaceRoot: string | undefined, protectedRoots: string[], protectedAliases: string[], pathRoot?: string }} context
  * @returns {ToolCallClassification}
  */
 function classifyApplyPatch(execution, context) {
@@ -298,7 +361,7 @@ function classifyApplyPatch(execution, context) {
 
 /**
  * @param {{ name: string, arguments?: unknown }} execution
- * @param {{ workspaceRoot: string | undefined, protectedRoots: string[], protectedAliases: string[] }} context
+ * @param {{ workspaceRoot: string | undefined, protectedRoots: string[], protectedAliases: string[], pathRoot?: string }} context
  * @returns {ToolCallClassification}
  */
 function classifyBash(execution, context) {
@@ -307,6 +370,20 @@ function classifyBash(execution, context) {
   if (typeof command !== 'string' || command.trim().length === 0) {
     return unknownDecision('bash 缺少可判定的命令内容，需要你确认。')
   }
+  if (arguments_?.workdir !== undefined) {
+    if (typeof arguments_.workdir !== 'string' || !arguments_.workdir.trim())
+      return unknownDecision('bash workdir is invalid')
+    context = {
+      ...context,
+      pathRoot: canonicalTarget(arguments_.workdir, context),
+    }
+  }
+  const patch = boundedPatch(command)
+  if (patch !== undefined)
+    return classifyApplyPatch(
+      { name: 'apply_patch', arguments: { input: patch } },
+      context,
+    )
   const writeTargets = bashWriteTargets(command, context)
   const protectedTargets = writeTargets.filter(target =>
     context.protectedRoots.some(root => isInside(target, root)),
@@ -361,7 +438,7 @@ function classifyBash(execution, context) {
 
 /**
  * @param {string} command
- * @param {{ workspaceRoot: string | undefined, protectedRoots: string[], protectedAliases: string[] }} context
+ * @param {{ workspaceRoot: string | undefined, protectedRoots: string[], protectedAliases: string[], pathRoot?: string }} context
  * @returns {ToolCallClassification | undefined}
  */
 function classifyDestructive(command, context) {
@@ -421,7 +498,7 @@ function hasWriteShape(command) {
 
 /**
  * @param {string} command
- * @param {{ workspaceRoot: string | undefined, protectedRoots: string[], protectedAliases: string[] }} context
+ * @param {{ workspaceRoot: string | undefined, protectedRoots: string[], protectedAliases: string[], pathRoot?: string }} context
  * @returns {string[]}
  */
 function bashRedirectTargets(command, context) {
@@ -440,7 +517,7 @@ function bashRedirectTargets(command, context) {
 
 /**
  * @param {string} command
- * @param {{ workspaceRoot: string | undefined, protectedRoots: string[], protectedAliases: string[] }} context
+ * @param {{ workspaceRoot: string | undefined, protectedRoots: string[], protectedAliases: string[], pathRoot?: string }} context
  * @returns {string[]}
  */
 function bashWriteTargets(command, context) {
