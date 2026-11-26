@@ -104,6 +104,14 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 
 **SETTINGS-001 追加修复（2026-11-23，新用户引导页模型连接配置闭环）**：用户确认引导页缺少 URL/Key 配置入口。原引导第 2 步只能选默认模型，连接未配置时显示「尚未连接/服务端未提供」且无补救路径。修复：`Onboarding` 新增 `onSaveConnection`/`onTestConnection`（App 复用 `api.saveSettings`/`api.testModel` 与设置页同一保存/探测路径，保存成功后 `loadConfiguration(true)` 刷新目录），当归类 Provider 不可用或目录为空时在第 2 步内嵌连接表单：服务地址（custom 可编辑、preset 只读，与服务端约束一致）、API Key（password、不回显）、探测模型（默认取归类模型/preset 默认）、「测试连接」「保存连接」（保存前先探测，失败就地报错），保存成功且目录非空后表单收起、默认模型选择器即可用；目录加载中不误报未配置。配套：引导弹窗改为 flex 列布局 + `max-height: calc(100dvh - 12vh - 20px)`、`.setup-body` 内滚（`overflow-y:auto`、`min-height:0`），header/进度/footer 常驻，连接表单不再把弹窗撑出视口（移动端同步约束）；ui-review assertGeometry 新增引导弹窗纵向越界断言。门禁扩展：workspace-theme 新增连接表单合同（复用保存/探测路径、目录刷新、弹窗限高内滚、单框选择器）；ui-review 与 a11y-review 的模型网关夹具补 `/chat/completions` 探测响应，新增「未配置目录」隔离场景（route 拦截 agent-models 返回空目录 → 填 key → 测试连接 → 保存连接 → 表单收起 → 34 模型分页选择），a11y 新增 onboarding-connection-setup/tested/picker 三个审计场景。回归：App 测试新增未配置→测试→保存→选模型全链路（PUT apiKey 断言、保存后目录刷新、picker 启用）。门禁：`pnpm check` 109 文件/1167 测试全绿（statement 85.55% / line 88.72%）、`pnpm smoke`、`pnpm review:ui --force`、`pnpm a11y:review` 0 违例。剩余风险：引导内只配置归类 Provider 连接（服务端约束），其他 Provider 仍需进设置页；探测模型需用户填写有效模型 ID（preset 默认可能失效）。回滚：revert 即回到无连接表单的引导，无数据迁移。合并集成：PR #54 经 CI run 45178737456 success 后合入 main（merge `0ef0811`，基线 `6c0f013`，与 origin/main 无冲突）。上线：Candidate `main-0ef0811-r1`（schema 31–38 无破坏性迁移）构建（1167 测试）后按 LESSON-20261122-04 clonefile 实体化 node_modules 并重算 attestation/manifest（`releases/candidates/main-0ef0811-r1.reanchor.json`），Supervisor staging → stable，active=`main-0ef0811-r1`，previous=`main-2b36940-r1` 可回滚。实机验证（运行实例 http://127.0.0.1:4317）：以 route 拦截空目录构造未配置态，连接表单出现、服务地址预填、弹窗在视口内且 body 内滚、填 key 后测试连接显示「连接正常 · 7 ms」（探测/保存请求均被拦截，未对真实服务端产生写入），脚本 `output/release-settings001-r5/live-connection-verify.mjs` PASSED（截图 `live-onboarding-connection*.png`，本地不入库）；引导默认模型 83 模型分页、统一选择器全入口、事情抽屉、composer 触发器几何断言复跑均 PASSED。连续两次 Supervisor restart 后 `/readyz` ready、phase=stable、integrity=ok，active 候选树不依赖开发 worktree（已清理）。
 
+### DESIGN-009：已处理事实卡可读性修复（2026-11-26）
+
+- **Intake**：基线 `28509be3`，主工作区 clean，独立 `fix/design-009-resolved-contrast` worktree。深色页已处理事实卡整体 opacity 0.7 使状态和正文降至 4.03/4.12 对比度。
+- **验收**：已处理状态继续显示文字标记并撤下处理按钮，历史正文保持语义文字色、不叠加容器透明度；明暗主题全站 axe、完整 check 和 smoke 通过。
+- **非目标 / 边界**：不改颜色 token、不改变审批或事实状态；仅修复客户端可读性，不写服务端数据。
+- **失败与回滚**：可独立回退此提交，无配置与 schema 变更。
+- **证据 / 状态**：回归先红后绿，`ChatExperience.test.tsx` 34 测试通过；`pnpm build` 与全站 `pnpm a11y:review` 通过（明暗主题、首次设置、强制颜色、移动端均零违例）。完整 check 与 smoke 待共享真实模型门禁修复合入后复验。
+
 ### DESIGN-004：字号阶梯、字重与层级收敛（2026-11-22）
 
 ### DESIGN-006：自动化列表安静化（2026-11-23）
