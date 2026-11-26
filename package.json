@@ -57,6 +57,7 @@
     "start:healthcheck": "node dist/observability/healthcheck-main.js",
     "start:reconciliation": "node dist/observability/reconciliation-main.js",
     "test": "vitest run",
+    "test:live": "PEGAS_LIVE_TESTS=1 vitest run --config vitest.live.config.ts",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit && tsc -p web/tsconfig.json --noEmit && tsc -p web/tsconfig.node.json --noEmit && tsc -p desktop/tsconfig.json --noEmit",
     "a11y:review": "node scripts/a11y-review.mjs",

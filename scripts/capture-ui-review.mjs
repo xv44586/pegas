@@ -624,6 +624,18 @@ try {
     await page.getByRole('button', { name: '继续', exact: true }).click()
     await page.getByRole('heading', { name: heading, exact: true }).waitFor()
     if (slug === 'models') {
+      await page.getByRole('form', { name: '模型连接配置' }).waitFor()
+      if (await page.getByRole('button', { name: /默认模型$/ }).count())
+        throw new Error(
+          'First-run setup must require discovery before showing models',
+        )
+      await capture(
+        page,
+        'desktop-onboarding-entry.png',
+        'desktop-onboarding-entry',
+      )
+      await page.getByRole('button', { name: '测试连接', exact: true }).click()
+      await page.getByText(/已获取 34 个模型/).waitFor()
       await page.getByRole('button', { name: /，默认模型$/ }).click()
       await assertPickerPagination(page, 'onboarding model picker')
       const panelGeometry = await page.evaluate(() => {
@@ -653,8 +665,9 @@ try {
         'desktop-onboarding-models-picker.png',
         'desktop-onboarding-models-picker',
       )
-      await page.keyboard.press('Escape')
-      await page.getByRole('button', { name: /，默认模型$/ }).waitFor()
+      await page.getByRole('option', { name: /DeepSeek V4.1 Flash/ }).click()
+      await page.getByRole('button', { name: '保存连接', exact: true }).click()
+      await page.getByText('连接和默认模型已保存', { exact: true }).waitFor()
     }
     await capture(
       page,

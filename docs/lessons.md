@@ -419,12 +419,12 @@
 - Rule：Release 关键路径 smoke 必须至少一次从真实用户入口（Web/桌面）完成该 Release 的核心用户动作（如审批决定），不能只验证 `/readyz`、字节一致与服务端 API 直探；启动路径差异（launchd/Supervisor/裸进程/桌面）产生的配置缺口只有真实入口能暴露。
 - Why：APPROVAL-001 P8 发布（Candidate main-7bf4fdd-r1）restart/字节一致/服务端探针全部通过，但运行实例无 `PEGAS_API_TOKEN`（launchd 环境未配置，Supervisor 不生成），审批类端点按 fail-closed 合同恒 401，Web 访问令牌门永远无法通过——用户实际不可审批，直到下一次真实入口核验才发现。桌面端早有随机 bearer 生成，Supervisor/裸启动路径缺失同等 bootstrap。
 - Feature：APPROVAL-001（同样约束 SELF-001 发布 checklist）
-- Evidence：P8 发布记录「相邻观察」（docs/approval-policy-gate.md）；修复 PR #86（`src/core/instance-token.ts` + `test/instance-token.test.ts` 真实裸进程回归：无凭证 401 / 引导 token 200）；docs/approval-lifecycle.md 引导实现记录。2026-11-25 用户从普通浏览器打开发布页面仍看到访问令牌表单，已有登录或脚本注入令牌的会话掩盖了首开断点。
-- Seen：2（2026-11-24、2026-11-25）
+- Evidence：P8 发布记录「相邻观察」（docs/approval-policy-gate.md）；修复 PR #86（`src/core/instance-token.ts` + `test/instance-token.test.ts` 真实裸进程回归：无凭证 401 / 引导 token 200）；docs/approval-lifecycle.md 引导实现记录。2026-11-25 用户从普通浏览器打开发布页面仍看到访问令牌表单，已有登录或脚本注入令牌的会话掩盖了首开断点。2026-11-26 首次设置验证先点击「更改模型连接」，掩盖了已有配置时未直接展示接入表单的入口错误。
+- Seen：3（2026-11-24、2026-11-25、2026-11-26）
 - Severity：normal
-- Status：Observed
-- Enforcement：尚未晋升；已有真实裸进程 bearer 回归，本机 Web 首开在隔离 Electron 会话验证。再次出现「产物一致但用户入口不可用」时按同类计数；晋升时把「真实入口完成一次核心动作」纳入发布 checklist 或自动化。
-- Owner / next action：SELF-001 发布流程复核时评估自动化（Playwright 真实入口审批探针）；与 LESSON-20261123-02（凭证须真实执行链路可达）同族但断点不同（启动配置 vs 中间层过滤），暂不合并计数。
+- Status：Promoted
+- Enforcement：保留真实裸进程 bearer 回归；`web/src/App.test.tsx` 强制验证已有配置时首次设置仍直接显示接入表单；`scripts/capture-ui-review.mjs` 与 `scripts/a11y-review.mjs` 从欢迎页进入连接步骤，断言接入表单存在且测试前无模型选择器，不允许先点击「更改模型连接」绕过入口。
+- Owner / next action：SETTINGS-001 与 SELF-001 发布验证保持真实入口检查；新发布核心动作须从用户实际入口完成。
 
 ### LESSON-20261124-02：连续保存类 UI 测试不得复用上一次的成功提示判定第二次保存
 
@@ -432,12 +432,12 @@
 - Why：DESKTOP-001 PR #91 首次 CI 中既有 EXEC-005 chat lane 开关用例失败（第二次保存后 `savedBody.chatLaneEnabled` 仍为 true）：本地隔离与整文件复跑全绿，CI 慢 runner 上第二次点击与 notice 清除之间存在可观察窗口；隔离复跑 CI 即绿，确认为测试断言竞态而非产品缺陷（保存按钮 `disabled={saving}` 语义正确）。
 - Feature：EXEC-005（用例归属）；DESKTOP-001（观察现场）
 - Evidence：PR #91 CI run 45401147747 首次 attempt 失败日志（App.test.tsx:1047）与同 run 隔离复跑 success；`web/src/sealed/SettingsPage.tsx` save() 的 `setSaving(true)`/`setNotice(undefined)` 同一同步块。
-- Seen：2（2026-11-24、2026-11-25）
+- Seen：3（2026-11-24、2026-11-25、2026-11-26）
 - Severity：normal
-- Status：Observed
-- Enforcement：尚未晋升；修复归属 EXEC-005（本 PR 不改无关用例）。再次出现同类「复用旧成功提示」竞态时按同类计数；晋升时给连续保存断言加请求次数绑定的测试规约或 lint。
-- Owner / next action：EXEC-005 下次触碰该用例时改为绑定第二次 PUT 证据；已知 flaky 清单同 dsh SIGTERM 计时用例并列。
-- 第二次观察（2026-11-25）：MEMORY-001 M3 合入 main 后首跑 CI run 45548014723 失败于 `web/src/App.test.tsx`「clears the saved notice when the draft is edited again or cancelled」（同类保存提示清除竞态，MEMORY-001 未触碰该用例）；同代码 PR head CI run 45545266063 与后续 main CI run 45548738121、45549354710 均 success。仍差一个独立日期即满足三次晋升条件；用例修复归属 EXEC-005。
+- Status：Promoted
+- Enforcement：`web/src/App.test.tsx` 保存提示测试的 PUT/GET 夹具维护真实持久状态和 revision；再次编辑前断言保存后的开关值、PUT 次数和无脏状态。连续保存测试的第二次断言同时绑定 PUT 次数、revision 与保存按钮消失，不复用旧提示判断完成。
+- Owner / next action：EXEC-005 自动化门禁已落实；保留原提示清除、取消还原和持久化断言，无运行时行为变更。
+- 后续证据：2026-11-25 CI run 45548014723 与 2026-11-26 CI run 45747326916 在保存提示用例再次失败。2026-11-26 加入「保存后开关值与干净状态」断言后原夹具确定性失败：PUT 返回未更新的旧设置，第二次点击可能发生在旧响应重置草稿前。改为真实持久响应并等待保存状态收敛后通过。
 
 ### LESSON-20261124-03：真实子进程行为超时不能兼任进程启动就绪预算
 
@@ -560,3 +560,15 @@
 - Status：Observed
 - Enforcement：共享启动器回归加入 `pnpm check`，未扩张仓库强制标准。
 - Owner / next action：SETTINGS-001。2026-11-26 用户授权使用已充值的 DeepSeek，合入 QUALITY-001 共享模型配置后 1,601 测试与 smoke 全绿；后续打包验证继续覆盖 GUI 最小 PATH。
+
+### LESSON-20261126-04：本机模型网关可用不代表允许付费测试
+
+- Rule：普通质量门禁与付费模型验收分开收集；真实验收必须显式开启。测试依赖不可用时，显式请求的验收失败而非跳过。
+- Why：四组真实模型用例以网关可达 / DSH 已安装为启动条件，被普通 coverage/check 自动收集；每次检查都可能触发真实 Router 与工具执行请求。普通 smoke 的默认 local memory 也存在蒸馏出口。
+- Feature：QUALITY-001
+- Evidence：`test/offline-test-boundary.test.ts` 默认收集 4 项与 smoke 隔离 1 项在旧实现失败；`test/live-model.test.ts` 验证未授权零探测、DSH 缺失、网关失败和显式开启。
+- Seen：1（2026-11-26）
+- Severity：normal
+- Status：Observed
+- Enforcement：本 Feature 的收集隔离与 fetch 回环约束回归纳入默认 check；尚未晋升通用仓库规则。
+- Owner / next action：QUALITY-001。后续增加子进程网络隔离与付费验收预算上限；原有模型配置 Lesson 继续适用于显式验收。

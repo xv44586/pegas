@@ -353,6 +353,14 @@ function stubImagePreview() {
   return createObjectURL
 }
 
+async function completeSetupConnection(modelName: RegExp) {
+  fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
+  fireEvent.click(await screen.findByRole('button', { name: /默认模型$/ }))
+  fireEvent.click(await screen.findByRole('option', { name: modelName }))
+  fireEvent.click(screen.getByRole('button', { name: '保存连接' }))
+  await screen.findByText('连接和默认模型已保存')
+}
+
 function installFetch(
   custom?: (
     path: string,
@@ -1170,9 +1178,27 @@ describe('sealed Pegas UI', () => {
   })
 
   it('clears the saved notice when the draft is edited again or cancelled', async () => {
+    let currentSettings = settingsResponse
+    let saves = 0
     installFetch((path, init) => {
-      if (path === '/v1/settings' && init?.method === 'PUT')
-        return Response.json(settingsResponse)
+      if (path === '/v1/settings' && init?.method === 'PUT') {
+        const update = JSON.parse(
+          typeof init.body === 'string' ? init.body : '{}',
+        ) as {
+          chatLaneEnabled: boolean
+        }
+        saves += 1
+        currentSettings = {
+          ...currentSettings,
+          settings: {
+            ...currentSettings.settings,
+            revision: currentSettings.settings.revision + 1,
+            chatLaneEnabled: update.chatLaneEnabled,
+          },
+        }
+        return Response.json(currentSettings)
+      }
+      if (path === '/v1/settings') return Response.json(currentSettings)
       if (path.startsWith('/v1/routing-rules?'))
         return Response.json({ rules: [] })
       return undefined
@@ -1185,16 +1211,34 @@ describe('sealed Pegas UI', () => {
     )
     fireEvent.click(await screen.findByRole('button', { name: /事情归类/ }))
     expect(screen.queryByRole('button', { name: '保存更改' })).toBeNull()
+    const expectedChecked =
+      screen.getByLabelText('启用即时应答').getAttribute('aria-checked') !==
+      'true'
     fireEvent.click(screen.getByLabelText('启用即时应答'))
     expect(screen.getByText('有未保存的更改')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
     await screen.findByText('更改已保存')
+    await waitFor(() => {
+      expect(saves).toBe(1)
+      expect(currentSettings.settings.revision).toBe(
+        settingsResponse.settings.revision + 1,
+      )
+      expect(screen.queryByRole('button', { name: '保存更改' })).toBeNull()
+      expect(
+        screen.getByLabelText('启用即时应答').getAttribute('aria-checked'),
+      ).toBe(String(expectedChecked))
+    })
     fireEvent.click(screen.getByLabelText('启用即时应答'))
     await waitFor(() => expect(screen.queryByText('更改已保存')).toBeNull())
+    expect(screen.getByText('有未保存的更改')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '取消' }))
     await waitFor(() =>
       expect(screen.queryByRole('button', { name: '保存更改' })).toBeNull(),
     )
+    expect(saves).toBe(1)
+    expect(
+      screen.getByLabelText('启用即时应答').getAttribute('aria-checked'),
+    ).toBe(String(expectedChecked))
   })
 
   it('shows no idle spinner on the unconfigured pool fixed option', async () => {
@@ -1367,6 +1411,7 @@ describe('sealed Pegas UI', () => {
   })
 
   it('EXEC-005: toggles the chat lane from settings and persists the switch', async () => {
+    let saveCount = 0
     let savedBody: Record<string, unknown> | undefined
     let currentSettings: SettingsResponse = {
       ...settingsResponse,
@@ -1374,6 +1419,7 @@ describe('sealed Pegas UI', () => {
     }
     installFetch((path, init) => {
       if (path === '/v1/settings' && init?.method === 'PUT') {
+        saveCount += 1
         savedBody = JSON.parse(
           typeof init.body === 'string' ? init.body : '{}',
         ) as Record<string, unknown>
@@ -1406,6 +1452,7 @@ describe('sealed Pegas UI', () => {
     await waitFor(() =>
       expect(screen.queryByRole('button', { name: '保存更改' })).toBeNull(),
     )
+    expect(saveCount).toBe(1)
     expect(savedBody?.chatLaneEnabled).toBe(true)
     expect(
       screen.getByLabelText('启用即时应答').getAttribute('aria-checked'),
@@ -1413,6 +1460,13 @@ describe('sealed Pegas UI', () => {
     fireEvent.click(screen.getByLabelText('启用即时应答'))
     fireEvent.click(screen.getByRole('button', { name: '保存更改' }))
     await screen.findByText('更改已保存')
+    await waitFor(() => {
+      expect(saveCount).toBe(2)
+      expect(currentSettings.settings.revision).toBe(
+        settingsResponse.settings.revision + 2,
+      )
+      expect(screen.queryByRole('button', { name: '保存更改' })).toBeNull()
+    })
     expect(savedBody?.chatLaneEnabled).toBe(false)
     expect(
       screen.getByLabelText('启用即时应答').getAttribute('aria-checked'),
@@ -3660,13 +3714,44 @@ describe('sealed Pegas UI', () => {
     expect(sessionStorage.getItem('pegas-token')).toBe('local-token')
   })
 
-  it('walks through all four first-run setup steps', () => {
+  it('opens connection setup directly even when a saved provider and model catalog are available', async () => {
+    localStorage.removeItem('pegas-setup-complete')
+    const fetchMock = installFetch()
+    render(<App />)
+    await screen.findByText('欢迎使用 Pegas')
+    fireEvent.click(screen.getByRole('button', { name: /^继续$/ }))
+    expect(
+      await screen.findByRole('form', { name: '模型连接配置' }),
+    ).toBeTruthy()
+    expect(screen.getByLabelText('供应商')).toBeTruthy()
+    expect(screen.getByLabelText('Base URL')).toHaveProperty('readOnly', false)
+    expect(screen.getByLabelText('API Key')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '更改模型连接' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /默认模型$/ })).toBeNull()
+    expect(screen.getByRole('button', { name: /^继续$/ })).toHaveProperty(
+      'disabled',
+      true,
+    )
+    expect(
+      fetchMock.mock.calls.some(([, init]) => init?.method === 'PUT'),
+    ).toBe(false)
+  })
+
+  it('walks through all four first-run setup steps', async () => {
     const onComplete = vi.fn()
     render(
       <Onboarding
         onComplete={onComplete}
         onContinueSettings={vi.fn()}
         response={settingsResponse}
+        onTestConnection={vi.fn().mockResolvedValue([
+          {
+            id: settingsResponse.settings.agentModelName,
+            name: 'Configured model',
+          },
+        ])}
+        onTestModel={vi.fn().mockResolvedValue({ ok: true, latencyMs: 1 })}
+        onSaveConnection={vi.fn().mockResolvedValue(undefined)}
         catalog={{
           defaultProvider: 'magpie',
           defaultModel: settingsResponse.settings.agentModelName,
@@ -3684,6 +3769,7 @@ describe('sealed Pegas UI', () => {
     expect(screen.getByText(/高风险 Action 会持久等待/)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: /继续/ }))
     expect(screen.getByText('连接模型服务')).toBeTruthy()
+    await completeSetupConnection(/Configured model/)
     fireEvent.click(screen.getByRole('button', { name: /继续/ }))
     expect(screen.getByText('准备执行环境')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: /继续/ }))
@@ -3713,11 +3799,21 @@ describe('sealed Pegas UI', () => {
 
   it('marks onboarding complete when continuing into settings', async () => {
     localStorage.removeItem('pegas-setup-complete')
-    installFetch()
+    installFetch(path =>
+      path === '/v1/settings/models/discover'
+        ? Response.json({
+            models: [{ id: 'deepseek-v4.1-flash', name: 'Setup model' }],
+          })
+        : path === '/v1/settings/models/test'
+          ? Response.json({ ok: true, latencyMs: 1 })
+          : undefined,
+    )
     render(<App />)
     await screen.findByText('欢迎使用 Pegas')
-    for (let index = 0; index < 3; index += 1)
-      fireEvent.click(screen.getByRole('button', { name: /^继续$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^继续$/ }))
+    await completeSetupConnection(/Setup model/)
+    fireEvent.click(screen.getByRole('button', { name: /^继续$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^继续$/ }))
     fireEvent.click(screen.getByRole('button', { name: '继续设置' }))
     expect(await screen.findByRole('heading', { name: /^Pegas$/ })).toBeTruthy()
     expect(localStorage.getItem('pegas-setup-complete')).toBe('true')
@@ -3726,23 +3822,27 @@ describe('sealed Pegas UI', () => {
   it('lets first-run setup pick the default model from the paginated catalog', async () => {
     localStorage.removeItem('pegas-setup-complete')
     const catalogModels = Array.from({ length: 33 }, (_, index) => ({
-      provider: 'Magpie',
+      provider: 'magpie',
       id: `gateway/setup-${String(index + 1).padStart(2, '0')}`,
       name: `Setup Model ${String(index + 1).padStart(2, '0')}`,
     }))
     const fetchMock = installFetch((path, init) => {
+      if (path === '/v1/settings/models/discover')
+        return Response.json({ models: catalogModels })
+      if (path === '/v1/settings/models/test')
+        return Response.json({ ok: true, latencyMs: 1 })
       if (path === '/v1/settings' && init?.method !== 'PUT')
         return Response.json({
           ...settingsResponse,
           settings: {
             ...settingsResponse.settings,
-            agentModelProvider: 'Magpie',
+            agentModelProvider: 'magpie',
             agentModelName: 'gateway/setup-01',
           },
         })
       if (path === '/v1/settings/agent-models')
         return Response.json({
-          defaultProvider: 'Magpie',
+          defaultProvider: 'magpie',
           defaultModel: 'gateway/setup-01',
           models: catalogModels,
         })
@@ -3760,7 +3860,7 @@ describe('sealed Pegas UI', () => {
             ...settingsResponse.settings,
             revision: 2,
             agentModelMode: 'override',
-            agentModelProvider: update.agentModelProvider ?? 'Magpie',
+            agentModelProvider: update.agentModelProvider ?? 'magpie',
             agentModelName: update.agentModelName ?? 'gateway/setup-01',
           },
         })
@@ -3771,9 +3871,9 @@ describe('sealed Pegas UI', () => {
     await screen.findByText('欢迎使用 Pegas')
     fireEvent.click(screen.getByRole('button', { name: /^继续$/ }))
     expect(screen.getByText('连接模型服务')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /默认模型$/ })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
     const trigger = await screen.findByRole('button', { name: /，默认模型$/ })
-    await waitFor(() => expect(trigger.textContent).toContain('Setup Model 01'))
-    expect(trigger.textContent).toContain('Magpie · gateway/setup-01')
     fireEvent.click(trigger)
     const dialog = await screen.findByRole('dialog', { name: '选择模型' })
     expect(within(dialog).getByText('33 个可用')).toBeTruthy()
@@ -3788,6 +3888,8 @@ describe('sealed Pegas UI', () => {
       name: /Setup Model 31/,
     })
     fireEvent.click(target)
+    fireEvent.click(screen.getByRole('button', { name: '保存连接' }))
+    await screen.findByText('连接和默认模型已保存')
     await waitFor(() =>
       expect(
         fetchMock.mock.calls.some(([path, init]) => {
@@ -3801,7 +3903,7 @@ describe('sealed Pegas UI', () => {
           }
           return (
             body.agentModelMode === 'override' &&
-            body.agentModelProvider === 'Magpie' &&
+            body.agentModelProvider === 'magpie' &&
             body.agentModelName === 'gateway/setup-31'
           )
         }),
@@ -3933,10 +4035,7 @@ describe('sealed Pegas UI', () => {
     fireEvent.change(key, { target: { value: 'fixture-key' } })
     fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
     await screen.findByText(/没有返回可用模型/)
-    expect(screen.getByRole('button', { name: /默认模型$/ })).toHaveProperty(
-      'disabled',
-      true,
-    )
+    expect(screen.queryByRole('button', { name: /默认模型$/ })).toBeNull()
     expect(key).toHaveProperty('value', 'fixture-key')
     fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
     await screen.findByText('目录暂时不可用')
@@ -3955,20 +4054,14 @@ describe('sealed Pegas UI', () => {
       await screen.findByText('模型权限不足')
       expect(save).not.toHaveBeenCalled()
       fireEvent.change(screen.getByLabelText(label), { target: { value } })
-      expect(screen.getByRole('button', { name: /默认模型$/ })).toHaveProperty(
-        'disabled',
-        true,
-      )
+      expect(screen.queryByRole('button', { name: /默认模型$/ })).toBeNull()
       expect(screen.queryByRole('button', { name: '保存连接' })).toBeNull()
     }
     fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
     await screen.findByText(/已获取 1 个模型/)
     await chooseOption('供应商', 'Anthropic')
     expect(screen.getByLabelText('API Key')).toHaveProperty('value', '')
-    expect(screen.getByRole('button', { name: /默认模型$/ })).toHaveProperty(
-      'disabled',
-      true,
-    )
+    expect(screen.queryByRole('button', { name: /默认模型$/ })).toBeNull()
     expect(screen.getByRole('button', { name: /^继续$/ })).toHaveProperty(
       'disabled',
       true,
