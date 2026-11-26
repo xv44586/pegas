@@ -132,6 +132,16 @@ export async function verifyAnswerFollowUps(page, capture, size) {
       await editor.waitFor({ state: 'visible' })
     }
     await editor.click()
+    const inputBounds = await editor.boundingBox()
+    const sendBounds = await article
+      .getByRole('button', { name: '发送回复' })
+      .boundingBox()
+    assert.ok(inputBounds && sendBounds)
+    assert.ok(
+      sendBounds.y + sendBounds.height <=
+        inputBounds.y + inputBounds.height + 1,
+      'Inline send button must stay inside its input on touch devices',
+    )
     await editor.fill('具体展开复购率的影响')
     await first.focus()
     const accepted = page.waitForResponse(
