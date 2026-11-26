@@ -42,6 +42,9 @@ export function TaskInspector({
   onOpenView: (view: DrawerView) => void
 }) {
   const { channel, runs } = timeline
+  const executionRuns = runs.toSorted(
+    (a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt),
+  )
   const userEvents = timeline.events.filter(
     event => event.type === 'user.message',
   )
@@ -193,11 +196,15 @@ export function TaskInspector({
         className="grid gap-3 data-[state=inactive]:hidden"
       >
         {runs.length === 0 && <p className="text-ink-2">还没有执行记录。</p>}
-        {runs
-          .toSorted((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
-          .map(item => (
-            <RunRecord key={item.id} api={api} run={item} />
-          ))}
+        {executionRuns.map(item => (
+          <RunRecord
+            key={item.id}
+            api={api}
+            run={item}
+            latest={item.id === executionRuns[0]?.id}
+            visible={tab === 'execution'}
+          />
+        ))}
         {userEvents.length > 0 && (
           <details className="min-w-0 rounded-card bg-inset p-3">
             <summary className="cursor-pointer font-medium">
@@ -266,13 +273,24 @@ export function TaskInspector({
   )
 }
 
-function RunRecord({ api, run }: { api: Api; run: Run }) {
-  const [open, setOpen] = useState(false)
+function RunRecord({
+  api,
+  run,
+  latest,
+  visible,
+}: {
+  api: Api
+  run: Run
+  latest: boolean
+  visible: boolean
+}) {
+  const [expanded, setExpanded] = useState<boolean>()
+  const open = expanded ?? latest
   const [activity, setActivity] = useState<RunActivityReport>()
   const [error, setError] = useState('')
   const [retry, setRetry] = useState(0)
   useEffect(() => {
-    if (!open) return
+    if (!open || !visible) return
     let active = true
     void api
       .runActivity(run.id)
@@ -293,17 +311,25 @@ function RunRecord({ api, run }: { api: Api; run: Run }) {
     return () => {
       active = false
     }
-  }, [api, open, run.id, run.taskId, run.updatedAt, retry])
+  }, [api, open, visible, run.id, run.taskId, run.updatedAt, retry])
   return (
     <details
       className="min-w-0 rounded-card bg-inset p-3"
       open={open}
-      onToggle={event => setOpen(event.currentTarget.open)}
+      onToggle={event => {
+        if (event.currentTarget.open !== open)
+          setExpanded(event.currentTarget.open)
+      }}
     >
       <summary className="cursor-pointer">
-        <strong>{runStatusLabel(run)}</strong>
-        <span className="ml-2 text-[12px] text-ink-2">
-          {formatRelativeTime(run.createdAt)}
+        <span className="font-medium">
+          执行过程 · {latest ? '最新一次' : '历史执行'}
+        </span>
+        <span className="mt-1 block">
+          <strong>{runStatusLabel(run)}</strong>
+          <span className="ml-2 text-[12px] text-ink-2">
+            {formatRelativeTime(run.createdAt)}
+          </span>
         </span>
       </summary>
       {open && (
@@ -311,6 +337,12 @@ function RunRecord({ api, run }: { api: Api; run: Run }) {
           <dl className="grid gap-1 break-all text-[12px] text-ink-2">
             <dt>执行</dt>
             <dd>{run.id}</dd>
+            {run.retryOfRunId && (
+              <>
+                <dt>重试自</dt>
+                <dd>{run.retryOfRunId}</dd>
+              </>
+            )}
             {run.executionContext?.model && (
               <>
                 <dt>模型</dt>

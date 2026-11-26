@@ -619,6 +619,142 @@ describe('CONV-002 task conversation', () => {
     ).toHaveLength(0)
   })
 
+  it('searches only the complete task history without losing the draft', async () => {
+    const { mock } = installTaskHistory({ eventCount: 205 })
+    window.history.replaceState({}, '', '/?task=task-1')
+    render(<App />)
+    const composer = await screen.findByLabelText('就这件事继续聊天')
+    fireEvent.change(composer, { target: { value: '继续聊的草稿' } })
+    expect(screen.queryByRole('button', { name: '全局搜索' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /切换到.*外观/ })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '搜索当前事情' }))
+    const dialog = await screen.findByRole('dialog', { name: '搜索当前事情' })
+    const search = within(dialog).getByRole('searchbox', {
+      name: '搜索当前事情的对话',
+    })
+    fireEvent.change(search, { target: { value: '这件事的回复' } })
+    expect(
+      within(dialog).getByRole('button', { name: /定位消息：这件事的回复/ }),
+    ).toBeTruthy()
+    fireEvent.change(search, { target: { value: '事情内输入 204' } })
+    expect(within(dialog).getByText('找到 1 条消息')).toBeTruthy()
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: /定位消息：事情内输入 204/ }),
+    )
+    await waitFor(() =>
+      expect(document.activeElement?.getAttribute('data-message-id')).toBe(
+        'history-204',
+      ),
+    )
+    expect(composer).toHaveProperty('value', '继续聊的草稿')
+    expect(window.location.search).toBe('?task=task-1')
+    expect(
+      mock.mock.calls.some(
+        ([path]) => typeof path === 'string' && path.includes('/search'),
+      ),
+    ).toBe(false)
+  })
+
+  it('searches folded message text and restores focus when cancelling', async () => {
+    const longText = '可折叠的历史正文。'.repeat(100) + '末尾核对暗号'
+    installTaskHistory({}, path =>
+      path.includes('/timeline?')
+        ? Response.json({
+            channel,
+            events: [
+              { ...baseEvent, id: 'long-input', payload: { text: longText } },
+            ],
+            messages: [],
+            runs: [],
+          })
+        : undefined,
+    )
+    window.history.replaceState({}, '', '/?task=task-1')
+    render(<App />)
+    const toggle = await screen.findByRole('button', { name: '搜索当前事情' })
+    fireEvent.click(toggle)
+    let dialog = await screen.findByRole('dialog', { name: '搜索当前事情' })
+    fireEvent.change(within(dialog).getByRole('searchbox'), {
+      target: { value: '另一件事的内容' },
+    })
+    expect(within(dialog).getByText('当前事情中没有匹配的消息。')).toBeTruthy()
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: '关闭事情搜索' }),
+    )
+    await waitFor(() => expect(document.activeElement).toBe(toggle))
+    fireEvent.click(toggle)
+    dialog = await screen.findByRole('dialog', { name: '搜索当前事情' })
+    fireEvent.change(within(dialog).getByRole('searchbox'), {
+      target: { value: '末尾核对暗号' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: /定位消息/ }))
+    await waitFor(() =>
+      expect(document.activeElement?.textContent).toContain('末尾核对暗号'),
+    )
+    expect(screen.queryByRole('dialog', { name: '搜索当前事情' })).toBeNull()
+  })
+
+  it('opens the latest execution process only when visiting execution records', async () => {
+    const { mock } = installTaskHistory({}, path => {
+      if (path.includes('/timeline?'))
+        return Response.json({
+          channel,
+          events: [],
+          messages: [],
+          runs: [
+            {
+              ...runningRun,
+              id: 'old-run',
+              createdAt: '2026-11-21T08:00:00.000Z',
+            },
+            runningRun,
+          ],
+        })
+      if (path.includes('/run-1/activity'))
+        return Response.json({
+          runId: 'run-1',
+          taskId: 'task-1',
+          totalEntries: 1,
+          truncated: false,
+          entries: [
+            {
+              seq: 1,
+              kind: 'thinking',
+              label: '先核对口径',
+              detail: '先核对口径，再汇总变化。',
+              createdAt: runningRun.createdAt,
+              updatedAt: runningRun.updatedAt,
+            },
+          ],
+        })
+      return undefined
+    })
+    window.history.replaceState({}, '', '/?task=task-1')
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '展开事情信息' }))
+    expect(
+      mock.mock.calls.some(
+        ([path]) => typeof path === 'string' && path.includes('/activity'),
+      ),
+    ).toBe(false)
+    fireEvent.mouseDown(screen.getByRole('tab', { name: '执行记录' }), {
+      button: 0,
+      ctrlKey: false,
+    })
+    const latest = await screen.findByText('执行过程 · 最新一次')
+    expect(latest.closest('details')?.open).toBe(true)
+    expect(
+      screen.getByText('执行过程 · 历史执行').closest('details')?.open,
+    ).toBe(false)
+    expect(await screen.findByText('先核对口径，再汇总变化。')).toBeTruthy()
+    expect(
+      mock.mock.calls.some(
+        ([path]) =>
+          typeof path === 'string' && path.includes('/old-run/activity'),
+      ),
+    ).toBe(false)
+  })
+
   it('moves task message traces into execution records and opens the exact input trace', async () => {
     const { mock } = installTaskHistory()
     window.history.replaceState({}, '', '/?task=task-1')
@@ -722,9 +858,7 @@ describe('CONV-002 task conversation', () => {
     const summary = record.closest('summary')
     const details = record.closest('details')
     if (!summary || !details) throw new Error('Expected expandable Run')
-    fireEvent.click(summary)
-    details.open = true
-    fireEvent(details, new Event('toggle'))
+    expect(details.open).toBe(true)
     expect(await screen.findByText(/0 \/ 2 条记录/)).toBeTruthy()
   })
 })

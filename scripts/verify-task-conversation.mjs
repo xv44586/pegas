@@ -55,6 +55,7 @@ export async function verifyTaskConversation(hostPage, capture, size) {
   ]
   const run = {
     id: 'conversation-run',
+    retryOfRunId: 'conversation-failed',
     taskId,
     executor: 'dsh',
     status: 'completed',
@@ -68,6 +69,68 @@ export async function verifyTaskConversation(hostPage, capture, size) {
       workspace: '/review/quarterly-analysis',
     },
   }
+  const failedRun = {
+    ...run,
+    id: 'conversation-failed',
+    retryOfRunId: undefined,
+    status: 'failed',
+    createdAt: new Date(Date.parse(date) - 60000).toISOString(),
+    updatedAt: new Date(Date.parse(date) - 60000).toISOString(),
+  }
+  const activityEntries = [
+    {
+      seq: 1,
+      kind: 'tool_call',
+      tool: 'todo_write',
+      callId: 'plan-1',
+      status: 'completed',
+      label: '制定核对计划',
+      semantic: {
+        kind: 'todo',
+        items: [
+          { content: '核对季度数据口径', status: 'completed' },
+          { content: '分析收入与毛利率变化', status: 'completed' },
+          { content: '列出尚待核实的数据', status: 'completed' },
+        ],
+      },
+    },
+    {
+      seq: 2,
+      kind: 'thinking',
+      status: 'completed',
+      label: '先核对口径，再形成结论',
+      detail:
+        '收入按已确认订单统计；渠道费用有两笔缺少凭据，因此将其标记为待核实，暂不计入确定结论。',
+    },
+    {
+      seq: 3,
+      kind: 'tool_call',
+      tool: 'read',
+      callId: 'call-1',
+      status: 'completed',
+      label: '读取季度数据',
+      semantic: {
+        kind: 'file_read',
+        path: 'quarterly.csv',
+        preview: '收入,成本\n120000,72000',
+        lineCount: 2,
+      },
+    },
+    {
+      seq: 4,
+      kind: 'tool_call',
+      tool: 'bash',
+      callId: 'check-1',
+      status: 'completed',
+      label: '重新校验数据',
+      semantic: {
+        kind: 'shell',
+        command: 'python check_quarterly.py quarterly.csv',
+        output: '核对完成：收入 120000，成本 72000；2 笔渠道费用待核实。',
+        exitCode: 0,
+      },
+    },
+  ].map(entry => ({ ...entry, createdAt: date, updatedAt: date }))
   const profile = {
     id: 'conversation-profile',
     taskId,
@@ -109,7 +172,7 @@ export async function verifyTaskConversation(hostPage, capture, size) {
           channel,
           events: cursor ? events.slice(200) : events.slice(0, 200),
           messages,
-          runs: [run],
+          runs: [failedRun, run],
           ...(!cursor ? { nextCursor: 'history-199' } : {}),
         },
       })
@@ -143,21 +206,38 @@ export async function verifyTaskConversation(hostPage, capture, size) {
         json: {
           runId: run.id,
           taskId,
+          entries: activityEntries,
+          truncated: false,
+          totalEntries: activityEntries.length,
+        },
+      }),
+    )
+    await page.route('**/v1/runs/conversation-failed/activity?*', route =>
+      route.fulfill({
+        json: {
+          runId: failedRun.id,
+          taskId,
+          totalEntries: 1,
+          truncated: false,
           entries: [
             {
               seq: 1,
               kind: 'tool_call',
-              tool: 'read',
-              callId: 'call-1',
-              status: 'completed',
-              label: '读取季度数据',
-              createdAt: date,
-              updatedAt: date,
-              semantic: { kind: 'file_read', path: 'quarterly.csv' },
+              tool: 'bash',
+              callId: 'failed-check',
+              status: 'error',
+              label: '校验原始数据',
+              createdAt: failedRun.createdAt,
+              updatedAt: failedRun.updatedAt,
+              semantic: {
+                kind: 'shell',
+                command: 'python check_quarterly.py missing.csv',
+                exitCode: 1,
+                output:
+                  'FileNotFoundError: missing.csv。确认正确文件为 quarterly.csv 后重试。',
+              },
             },
           ],
-          truncated: false,
-          totalEntries: 1,
         },
       }),
     )
@@ -195,6 +275,10 @@ export async function verifyTaskConversation(hostPage, capture, size) {
     }
     const composer = page.getByRole('textbox', { name: '就这件事继续聊天' })
     await composer.waitFor()
+    const require = createRequire(import.meta.url)
+    await page.addScriptTag({
+      content: readFileSync(require.resolve('axe-core'), 'utf8'),
+    })
     assert.equal(
       await page.locator('[data-message-id="history-204"]').count(),
       1,
@@ -218,6 +302,71 @@ export async function verifyTaskConversation(hostPage, capture, size) {
       `${size}-task-conversation.png`,
       `${size}-task-conversation`,
     )
+    assert.equal(
+      await page.getByRole('button', { name: '全局搜索', exact: true }).count(),
+      0,
+    )
+    assert.equal(
+      await page.getByRole('button', { name: /切换到.*外观/ }).count(),
+      0,
+    )
+    await composer.fill('搜索期间保留的草稿')
+    const searchToggle = page.getByRole('button', {
+      name: '搜索当前事情',
+      exact: true,
+    })
+    await searchToggle.click()
+    const searchDialog = page.getByRole('dialog', {
+      name: '搜索当前事情',
+      exact: true,
+    })
+    const searchInput = searchDialog.getByRole('searchbox')
+    await searchInput.press('Control+k')
+    assert.equal(
+      await page.getByRole('dialog', { name: '全局搜索', exact: true }).count(),
+      0,
+    )
+    await searchInput.fill('历史补充 1：')
+    assert.deepEqual(
+      await page.evaluate(async () =>
+        (
+          await globalThis.axe.run('[role="dialog"]', {
+            runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa'] },
+          })
+        ).violations.map(item => ({
+          id: item.id,
+          nodes: item.nodes.map(node => node.failureSummary),
+        })),
+      ),
+      [],
+    )
+    await capture(page, `${size}-task-search.png`, `${size}-task-search`)
+    await searchInput.press('Tab')
+    await page.keyboard.press('Enter')
+    await page.waitForFunction(
+      () =>
+        globalThis.document.activeElement?.getAttribute('data-message-id') ===
+        'history-0',
+    )
+    const original = page.locator('[data-message-id="history-0"]')
+    const rowBox = await original.boundingBox()
+    const scrollBox = await page.locator('.conversation-scroll').boundingBox()
+    assert.ok(
+      rowBox &&
+        scrollBox &&
+        rowBox.y >= scrollBox.y &&
+        rowBox.y < scrollBox.y + scrollBox.height,
+    )
+    assert.equal(await composer.inputValue(), '搜索期间保留的草稿')
+    await searchToggle.click()
+    await searchInput.fill('不存在的关键词')
+    await searchDialog.getByText('当前事情中没有匹配的消息。').waitFor()
+    await page.keyboard.press('Escape')
+    await page.waitForFunction(
+      () =>
+        globalThis.document.activeElement?.getAttribute('aria-label') ===
+        '搜索当前事情',
+    )
     for (const text of ['请再核对一次数据来源', '只保留可以核实的结论']) {
       await composer.fill(text)
       await page.getByRole('button', { name: '发送', exact: true }).click()
@@ -237,8 +386,59 @@ export async function verifyTaskConversation(hostPage, capture, size) {
     ]) {
       await page.getByRole('tab', { name: tab, exact: true }).click()
       if (tab === '执行记录') {
-        await page.locator('summary').filter({ hasText: '已完成' }).click()
-        await page.locator('.activity-timeline').waitFor()
+        const latest = page
+          .locator('details')
+          .filter({
+            has: page
+              .locator('summary')
+              .filter({ hasText: '执行过程 · 最新一次' }),
+          })
+          .first()
+        assert.equal(await latest.getAttribute('open'), '')
+        await latest.locator('.activity-timeline').waitFor()
+        await latest
+          .locator('summary')
+          .filter({ hasText: '更新任务清单' })
+          .click()
+        await latest.locator('summary').filter({ hasText: '思考' }).click()
+        await latest.getByText('核对季度数据口径', { exact: true }).waitFor()
+        await capture(
+          page,
+          `${size}-task-process-plan.png`,
+          `${size}-task-process-plan`,
+        )
+        await latest.locator('summary').filter({ hasText: '已读取' }).click()
+        await latest
+          .locator('summary')
+          .filter({ hasText: 'python check_quarterly.py quarterly.csv' })
+          .click()
+        await latest.locator('.shell-output').scrollIntoViewIfNeeded()
+        await capture(
+          page,
+          `${size}-task-process-tools.png`,
+          `${size}-task-process-tools`,
+        )
+        const history = page
+          .locator('summary')
+          .filter({ hasText: '执行过程 · 历史执行' })
+        await history.click()
+        const failed = page.locator('details').filter({ has: history }).first()
+        await failed.locator('.activity-timeline').waitFor()
+        await failed
+          .locator('summary')
+          .filter({ hasText: 'python check_quarterly.py missing.csv' })
+          .click()
+        await failed.locator('.shell-output').scrollIntoViewIfNeeded()
+        await capture(
+          page,
+          `${size}-task-process-retry.png`,
+          `${size}-task-process-retry`,
+        )
+        await history.click()
+        await latest
+          .locator('summary')
+          .filter({ hasText: '执行过程 · 最新一次' })
+          .scrollIntoViewIfNeeded()
         await page.locator('summary').filter({ hasText: '消息调用链' }).click()
       }
       if (tab === '设置')
@@ -247,10 +447,6 @@ export async function verifyTaskConversation(hostPage, capture, size) {
           .waitFor()
       await capture(page, `${size}-task-${file}.png`, `${size}-task-${file}`)
     }
-    const require = createRequire(import.meta.url)
-    await page.addScriptTag({
-      content: readFileSync(require.resolve('axe-core'), 'utf8'),
-    })
     const violations = await page.evaluate(
       async () =>
         (
@@ -372,7 +568,7 @@ export async function verifyTaskConversation(hostPage, capture, size) {
       `${size}-task-long-title`,
     )
     console.log(
-      `Task conversation verified: ${size}, 205 inputs, fixed sends, four tabs, trace entry, sidebar close/reopen + focus, history recovery, zero a11y violations`,
+      `Task conversation verified: ${size}, 205 inputs, fixed sends, four tabs, scoped search + keyboard navigation, plans/tools/retry process, trace entry, sidebar close/reopen + focus, history recovery, zero a11y violations`,
     )
   } finally {
     await page.close()

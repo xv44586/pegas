@@ -6,6 +6,7 @@ import {
   type SendAttempt,
 } from './taskConversationDraft'
 import { InlineReply } from './InlineReply'
+import { TaskHistorySearch } from './TaskHistorySearch'
 import { answerFollowUps } from '../../../src/conversation/follow-ups'
 import {
   ArrowUp,
@@ -156,6 +157,7 @@ function PageHeader({
   children,
   compact = false,
   hasPageSearch = false,
+  showToolbar = true,
   truncateTitle = false,
 }: {
   title: string
@@ -164,6 +166,7 @@ function PageHeader({
   children?: React.ReactNode
   compact?: boolean
   hasPageSearch?: boolean
+  showToolbar?: boolean
   truncateTitle?: boolean
 }) {
   return (
@@ -183,12 +186,14 @@ function PageHeader({
         }
       >
         {children}
-        <PageToolbar
-          isDark={actions.isDark}
-          onSearch={actions.onSearch}
-          onToggleAppearance={actions.onToggleAppearance}
-          showSearch={!hasPageSearch}
-        />
+        {showToolbar && (
+          <PageToolbar
+            isDark={actions.isDark}
+            onSearch={actions.onSearch}
+            onToggleAppearance={actions.onToggleAppearance}
+            showSearch={!hasPageSearch}
+          />
+        )}
       </div>
     </header>
   )
@@ -270,6 +275,8 @@ export function ConversationPage({
     () => new Set(),
   )
   const chatScroll = useChatScroll()
+  const [taskSearchOpen, setTaskSearchOpen] = useState(false)
+  const taskSearchButton = useRef<HTMLButtonElement>(null)
   const [copiedMessageId, setCopiedMessageId] = useState<string>()
   const [retryingMessageId, setRetryingMessageId] = useState<string>()
   const [queuedMessages, setQueuedMessages] = useState(readQueuedMessages)
@@ -731,14 +738,21 @@ export function ConversationPage({
   const highlightTimerRef = useRef<number>(0)
   useEffect(() => () => window.clearTimeout(highlightTimerRef.current), [])
 
-  function jumpToMessage(messageId: string) {
+  function jumpToMessage(messageId: string, focus = false) {
     const content = chatScroll.contentRef.current
     const row = content?.querySelector<HTMLElement>(
       `[data-message-id="${CSS.escape(messageId)}"]`,
     )
     if (!row) return
     if ('scrollIntoView' in row)
-      row.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      row.scrollIntoView({
+        block: 'center',
+        behavior: focus ? 'instant' : 'smooth',
+      })
+    if (focus) {
+      row.focus({ preventScroll: true })
+      chatScroll.onScroll()
+    }
     setHighlightedId(messageId)
     window.clearTimeout(highlightTimerRef.current)
     highlightTimerRef.current = window.setTimeout(
@@ -818,6 +832,7 @@ export function ConversationPage({
         ]
           .filter(Boolean)
           .join(' ')}
+        tabIndex={taskScope ? -1 : undefined}
         data-message-id={message.id}
         data-result-trace={message.role === 'pegas' ? message.id : undefined}
         key={message.id}
@@ -999,6 +1014,7 @@ export function ConversationPage({
       <PageHeader
         actions={actions}
         compact={!taskScope}
+        showToolbar={!taskScope}
         truncateTitle={Boolean(taskScope)}
         description={
           taskScope
@@ -1012,6 +1028,19 @@ export function ConversationPage({
         }
         title={taskScope?.channel.title ?? 'Pegas'}
       >
+        {taskScope && (
+          <Button
+            aria-label="搜索当前事情"
+            title="搜索当前事情"
+            className="size-10 shrink-0 p-0 pointer-coarse:size-11"
+            size="sm"
+            variant="quiet"
+            ref={taskSearchButton}
+            onClick={() => setTaskSearchOpen(true)}
+          >
+            <Search size={20} aria-hidden="true" />
+          </Button>
+        )}
         {taskScope && (
           <Button
             data-task-info=""
@@ -1034,6 +1063,18 @@ export function ConversationPage({
           </Button>
         )}
       </PageHeader>
+      {taskScope && (
+        <TaskHistorySearch
+          open={taskSearchOpen}
+          onOpenChange={setTaskSearchOpen}
+          messages={messages}
+          onRestoreFocus={() => taskSearchButton.current?.focus()}
+          onSelect={messageId => {
+            setExpandedMessages(current => new Set([...current, messageId]))
+            requestAnimationFrame(() => jumpToMessage(messageId, true))
+          }}
+        />
+      )}
       <div
         className="conversation-scroll"
         onScroll={chatScroll.onScroll}
