@@ -85,7 +85,10 @@ const featureIds = (process.env.PEGAS_HOT_FEATURE_IDS ?? 'SELF-001').split(',')
 const releaseId =
   process.env.PEGAS_HOT_RELEASE_ID ??
   `${featureIds[0].toLowerCase()}-${shortCommit}-r1`
-const outputRoot = join(repositoryRoot, 'releases/candidates')
+const releaseRoot = resolve(
+  process.env.PEGAS_RELEASE_ROOT ?? join(repositoryRoot, 'releases'),
+)
+const outputRoot = join(releaseRoot, 'candidates')
 const contract = readTaskWorkflowContract(worktree)
 
 const built = await buildSelfChangeCandidate({
@@ -119,7 +122,7 @@ const built = await buildSelfChangeCandidate({
   ],
 })
 
-const dependencyRoot = join(repositoryRoot, 'releases/dependencies', releaseId)
+const dependencyRoot = join(releaseRoot, 'dependencies', releaseId)
 const materialized = materializeCandidateDependencies({
   releaseRoot: built.releaseRoot,
   artifactPath: built.artifactPath,
@@ -259,6 +262,26 @@ writeFileSync(
   { mode: 0o600 },
 )
 console.log(JSON.stringify(evidence))
+
+// Also covers desktop shells whose already-running Supervisor predates retention.
+try {
+  const { defaultInstances, pruneReleaseHistory, recordRetentionResult } =
+    await import(
+      pathToFileURL(join(worktree, 'dist/self-change/release-retention.js'))
+        .href
+    )
+  const retention = await pruneReleaseHistory({
+    releaseRoot,
+    instances: defaultInstances(releaseRoot, {
+      dataDirectory,
+      statePath: join(dataDirectory, 'supervisor.json'),
+    }),
+  })
+  await recordRetentionResult(releaseRoot, retention)
+  console.log(JSON.stringify({ event: 'release.retention', ...retention }))
+} catch (error) {
+  console.warn('Release is healthy; cleanup needs attention: ' + String(error))
+}
 
 if (appBundle) {
   // One-time migration for shells that still boot their bundled supervisor:

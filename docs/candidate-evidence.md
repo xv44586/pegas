@@ -4,7 +4,7 @@
 >
 > 状态：Usable（构建与 staging 闭环）；artifact 签名待实现
 >
-> 更新日期：2026-11-21
+> 更新日期：2026-11-26
 
 ## 用户结果
 
@@ -47,3 +47,24 @@ Pegas 只有在 Candidate 的构建产物、Git commit 和验证证据属于同�
 - CI URL 和 run ID 是审计证据，不作为认证凭证；manifest 不得包含 token、环境变量或测试日志原文。
 - manifest 校验失败时保持当前 active Release 不变。修复方式是重新运行准确 SHA 的验证和审核并产生新的 Candidate，不能编辑 hash、伪造 reviewed commit 或把失败结论改成 success。
 - 当前 artifact 在 stage 时验证；未来还需要 Release Registry 在解包和启动前再次验证签名或内容清单。
+
+## 发布后保留策略（SELF-001，2026-11-26）
+
+- 基线：`5396aaa6`；独立 worktree `self-001-release-retention`，主目录既有未提交改动不纳入。
+- 验收：成功上线且 Supervisor stable 后自动保留按 manifest 创建时间排序的最新 3 个 Candidate，额外保护所有已知实例的 active/previous、在运行进程、启动配置与保留版本引用的依赖；仅删除已识别的旧 Candidate 和对应不再引用的依赖。
+- 接入：Supervisor 稳定确认后调用；release:hot 成功验证后补调，兼容仍运行旧 Supervisor 的桌面壳。重复调用幂等，构建、依赖物化、staging 与清理共用发布目录锁，避免引用检查之后有新版本被切换。旧 Supervisor 没有锁协议时保守跳过，不能以补调绕过。
+- 权限边界：仅发布根下 candidates/dependencies 的已识别直接子目录；数据、备份、工作区和未完成构建不进入删除集合。目录符号链接、损坏 manifest、缺失/损坏实例状态、未知 Supervisor、处于验证或回滚阶段、保护事实变化时停止清理。
+- 失败与恢复：清理失败仅记录诊断，不撤销已成功发布的版本；下次成功上线重试。删除前重新检查引用；失败删除不移除其 manifest，保留重试线索。删除不可恢复，因此所有运行、启动、回滚引用均为硬保护。
+- 非目标：定时任务、清理工作区/数据库备份、停止其他实例、强制只剩 3 个目录或自动升级其他实例。
+
+### 实现、恢复与验收
+
+权威实现为 `src/self-change/release-retention.ts`、`release-directory-lock.ts` 与独立进程入口 `retention/main.ts`；Supervisor 仅在稳定确认后启动清理，`scripts/release-hot.mjs` 完成实机验证后补调。`PEGAS_RELEASE_ROOT` 可显式指定持久发布根，默认仍为调用脚本仓库下的 `releases`。
+
+清理会核对主状态及 last-good、所有已登记 Supervisor PID、实际进程与打开文件、LaunchAgent/systemd 配置（包括符号链接）。保留树的符号链接逐跳解析，中间 Candidate 与最终依赖均受保护。无法读取、状态非 stable、旧协调进程、未知实例或引用变化均保留全部尚未删除的版本。最新诊断原子写入 `<发布根>/retention-last.json`；失败不影响健康版本。
+
+`.release-directory.lock` 不自动抢占：进程异常退出留下锁时，维护者先检查记录中的 PID、所有构建/发布/清理进程及当前状态，确认没有持有者后才移除该锁并重试。正常解锁同时核对 inode 与唯一 owner，不能移除后来者的锁。升级现有实例时，必须让其 Supervisor 启动路径也使用支持锁协议的新 Candidate；未升级时保持 skipped，不能据此宣称自动清理已生效。
+
+回滚继续使用 Supervisor 的 previous。清理不修改 schema；恢复旧协调器后自动清理会保守暂停。清理前检查与共享发布锁保护在役/回滚版本；删除旧历史不能撤销，不提供自动恢复已删除历史的承诺。
+
+自动化：`test/release-retention.test.ts` 19 项覆盖最新三份、双实例、启动/运行引用、跨 Candidate 多跳依赖、不可读启动链接、冻结目录与外部链接、损坏状态、引用变化、锁冲突/残留及旧协调器；`scripts/smoke-self-change.mjs` 使用实际 Recovery API 验证清理锁阻止 staging 后正常切换与失败回滚。完整 `pnpm check` 通过：153 个测试文件、1708 项测试；`pnpm smoke` 与真实 Supervisor self-change smoke 通过。上线前生产 dry-run 按预期识别两个旧协调器并零删除；协调器升级与最终实机结果另存本次发布审计证据。

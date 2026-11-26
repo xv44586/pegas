@@ -171,6 +171,26 @@ try {
         },
       }),
   })
+  // A real Recovery API stage must honor the same cleanup fence.
+  const { acquireReleaseDirectoryLock } =
+    await import('../dist/self-change/release-directory-lock.js')
+  const releaseFence = acquireReleaseDirectoryLock(workspace)
+  try {
+    let rejected = false
+    try {
+      await stageCandidate(good)
+    } catch (error) {
+      if (!String(error).includes('maintenance')) throw error
+      rejected = true
+    }
+    if (!rejected || (await fetchStatus())?.active?.id !== 'smoke-base')
+      throw new Error('Staging bypassed release cleanup fence')
+  } finally {
+    releaseFence()
+  }
+  console.log(
+    'Scenario 5 fence passed: cleanup lock rejects real staging without changing active release',
+  )
   await stageCandidate(good)
   await waitForRelease('smoke-good', 60_000)
   const confirmed = await waitFor(

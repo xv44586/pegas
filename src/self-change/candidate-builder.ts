@@ -1,3 +1,7 @@
+import {
+  acquireReleaseDirectoryLock,
+  withReleaseDirectoryLock,
+} from './release-directory-lock.js'
 import { execFile, execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
@@ -92,6 +96,19 @@ export interface MaterializeDependenciesRequest {
 export function materializeCandidateDependencies(
   request: MaterializeDependenciesRequest,
 ): { digest: string; dependencyRoot: string } {
+  const unlock = acquireReleaseDirectoryLock(
+    dirname(dirname(resolve(request.releaseRoot))),
+  )
+  try {
+    return materializeDependencies(request)
+  } finally {
+    unlock()
+  }
+}
+function materializeDependencies(request: MaterializeDependenciesRequest): {
+  digest: string
+  dependencyRoot: string
+} {
   const releaseRoot = resolve(request.releaseRoot)
   const dependencyRoot = resolve(request.dependencyRoot)
   const modulesPath = join(releaseRoot, 'node_modules')
@@ -212,6 +229,14 @@ function freezeTree(root: string): void {
  * the resulting directory is frozen read-only after the manifest is written.
  */
 export async function buildSelfChangeCandidate(
+  request: SelfChangeCandidateRequest,
+): Promise<BuiltCandidate> {
+  return await withReleaseDirectoryLock(
+    dirname(resolve(request.outputRoot)),
+    () => buildCandidate(request),
+  )
+}
+async function buildCandidate(
   request: SelfChangeCandidateRequest,
 ): Promise<BuiltCandidate> {
   const worktree = resolve(request.worktree)
