@@ -247,7 +247,13 @@ export async function verifyTaskConversation(hostPage, capture, size) {
         ).violations,
     )
     assert.deepEqual(
-      violations.map(item => ({ id: item.id, nodes: item.nodes.length })),
+      violations.map(item => ({
+        id: item.id,
+        nodes: item.nodes.map(node => ({
+          target: node.target,
+          summary: node.failureSummary,
+        })),
+      })),
       [],
     )
     if (size === 'mobile')
@@ -276,6 +282,18 @@ export async function verifyTaskConversation(hostPage, capture, size) {
     await page.getByRole('button', { name: '重新读取事情历史' }).click()
     await composer.waitFor()
     assert.equal(await composer.inputValue(), '切换后仍保留的事情草稿')
+    channel.title =
+      '季度经营分析与数据核对 · ' + 'quarterly_reconciliation_'.repeat(6)
+    await page.reload()
+    await composer.waitFor()
+    await capture(
+      page,
+      `${size}-task-long-title.png`,
+      `${size}-task-long-title`,
+    )
+    console.log(
+      `Task conversation verified: ${size}, 205 inputs, fixed sends, four tabs, history recovery, zero a11y violations`,
+    )
   } finally {
     await page.close()
   }

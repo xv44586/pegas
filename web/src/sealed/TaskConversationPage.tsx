@@ -116,7 +116,10 @@ export function TaskConversationPage({ taskId, ...props }: Props) {
     />
   )
   return (
-    <div className="flex h-full min-h-0 flex-col" data-task-page={taskId}>
+    <div
+      className="flex h-full min-h-0 min-w-0 flex-col"
+      data-task-page={taskId}
+    >
       {error && (
         <div className="connection-banner" role="alert">
           <span>
@@ -135,7 +138,7 @@ export function TaskConversationPage({ taskId, ...props }: Props) {
           {loading ? '正在读取完整事情历史…' : '暂时无法打开这件事。请重试。'}
         </div>
       ) : (
-        <div className="flex min-h-0 flex-1">
+        <div className="flex min-h-0 min-w-0 flex-1">
           <div className="min-w-0 flex-1">
             <ConversationPage
               {...props}

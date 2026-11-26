@@ -95,10 +95,18 @@ export function TaskInspector({
       className="grid min-w-0 gap-5 text-[13px] leading-relaxed text-ink"
     >
       <TabsList aria-label="事情信息分类" className="w-full">
-        <TabsTrigger value="overview">概览</TabsTrigger>
-        <TabsTrigger value="delivery">交付</TabsTrigger>
-        <TabsTrigger value="execution">执行记录</TabsTrigger>
-        <TabsTrigger value="settings">设置</TabsTrigger>
+        <TabsTrigger className="text-ink-2" value="overview">
+          概览
+        </TabsTrigger>
+        <TabsTrigger className="text-ink-2" value="delivery">
+          交付
+        </TabsTrigger>
+        <TabsTrigger className="text-ink-2" value="execution">
+          执行记录
+        </TabsTrigger>
+        <TabsTrigger className="text-ink-2" value="settings">
+          设置
+        </TabsTrigger>
       </TabsList>
       <TabsContent value="overview" className="grid gap-5">
         <section>
@@ -108,9 +116,6 @@ export function TaskInspector({
               ? '已停止'
               : statusLabel(channel, run)}
           </p>
-          {channel.statusReason && (
-            <p className="mt-1 text-ink-2">{channel.statusReason}</p>
-          )}
         </section>
         <section>
           <h2 className="mb-2 font-medium">{goal ? '目标' : '事情描述'}</h2>

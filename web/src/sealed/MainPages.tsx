@@ -154,6 +154,7 @@ function PageHeader({
   children,
   compact = false,
   hasPageSearch = false,
+  truncateTitle = false,
 }: {
   title: string
   description: string
@@ -161,14 +162,24 @@ function PageHeader({
   children?: React.ReactNode
   compact?: boolean
   hasPageSearch?: boolean
+  truncateTitle?: boolean
 }) {
   return (
     <header className="page-header">
-      <div>
-        <h1>{title}</h1>
+      <div className={truncateTitle ? 'min-w-0 pr-3' : undefined}>
+        <h1
+          className={truncateTitle ? 'truncate' : undefined}
+          title={truncateTitle ? title : undefined}
+        >
+          {title}
+        </h1>
         {!compact && <p>{description}</p>}
       </div>
-      <div className="page-header-actions">
+      <div
+        className={
+          truncateTitle ? 'page-header-actions shrink-0' : 'page-header-actions'
+        }
+      >
         {children}
         <PageToolbar
           isDark={actions.isDark}
@@ -974,10 +985,17 @@ export function ConversationPage({
   }
 
   return (
-    <div className="conversation-page">
+    <div
+      className={
+        taskScope
+          ? 'conversation-page min-w-0 grid-cols-[minmax(0,1fr)]'
+          : 'conversation-page'
+      }
+    >
       <PageHeader
         actions={actions}
         compact={!taskScope}
+        truncateTitle={Boolean(taskScope)}
         description={
           taskScope
             ? taskScope.channel.status === 'cancelled'
@@ -1164,7 +1182,9 @@ export function ConversationPage({
             </div>
           </div>
         )}
-        {queuedMessages.length > 0 && (
+        {queuedMessages.some(
+          item => !taskScope || item.channel.id === taskScope.channel.id,
+        ) && (
           <div className="mx-auto mb-2 max-w-[1040px]">
             <p className="mb-1 text-[12px] text-ink-2">本标签页待发</p>
             <ol

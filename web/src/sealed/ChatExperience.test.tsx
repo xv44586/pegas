@@ -221,6 +221,7 @@ afterEach(() => {
 describe('CONV-002 task conversation', () => {
   function installTaskHistory(
     options: {
+      eventCount?: number
       stopped?: boolean
       failPage?: boolean
       noRecents?: boolean
@@ -228,11 +229,14 @@ describe('CONV-002 task conversation', () => {
     } = {},
     custom?: Parameters<typeof installChatFetch>[1],
   ) {
-    const events = Array.from({ length: 205 }, (_, index) => ({
-      ...baseEvent,
-      id: `history-${String(index)}`,
-      payload: { text: `事情内输入 ${String(index)}` },
-    }))
+    const events = Array.from(
+      { length: options.eventCount ?? 3 },
+      (_, index) => ({
+        ...baseEvent,
+        id: `history-${String(index)}`,
+        payload: { text: `事情内输入 ${String(index)}` },
+      }),
+    )
     const task = {
       ...channel,
       ...(options.stopped
@@ -261,7 +265,9 @@ describe('CONV-002 task conversation', () => {
               },
             ],
             runs: [],
-            ...(!cursor || options.loop ? { nextCursor: 'history-199' } : {}),
+            ...((!cursor && events.length > 200) || options.loop
+              ? { nextCursor: 'history-199' }
+              : {}),
           })
         }
         return undefined
@@ -271,7 +277,7 @@ describe('CONV-002 task conversation', () => {
   }
 
   it('opens an isolated page from recents and reads every history page without duplicates', async () => {
-    const { mock } = installTaskHistory()
+    const { mock } = installTaskHistory({ eventCount: 205 })
     render(<App />)
     fireEvent.click(await screen.findByRole('button', { name: channel.title }))
     expect(
@@ -340,7 +346,7 @@ describe('CONV-002 task conversation', () => {
       `/?view=conversation&task=${channel.id}`,
     )
     render(<App />)
-    expect(await screen.findByText('事情内输入 204')).toBeTruthy()
+    expect(await screen.findByText('事情内输入 2')).toBeTruthy()
     expect(screen.getByLabelText('就这件事继续聊天')).toBeTruthy()
   })
 
@@ -348,7 +354,7 @@ describe('CONV-002 task conversation', () => {
     installTaskHistory({ stopped: true })
     window.history.replaceState({}, '', `/?task=${channel.id}`)
     render(<App />)
-    expect(await screen.findByText('事情内输入 204')).toBeTruthy()
+    expect(await screen.findByText('事情内输入 2')).toBeTruthy()
     expect(screen.getByLabelText('就这件事继续聊天')).toHaveProperty(
       'disabled',
       true,
@@ -356,7 +362,7 @@ describe('CONV-002 task conversation', () => {
   })
 
   it('does not silently present truncated history when a later page fails', async () => {
-    const { options } = installTaskHistory({ failPage: true })
+    const { options } = installTaskHistory({ failPage: true, eventCount: 205 })
     window.history.replaceState({}, '', `/?task=${channel.id}`)
     render(<App />)
     expect(
@@ -448,7 +454,7 @@ describe('CONV-002 task conversation', () => {
   })
 
   it('retains accepted-send semantics when refreshing history fails', async () => {
-    const options = { failPage: false }
+    const options = { failPage: false, eventCount: 205 }
     const { mock } = installTaskHistory(options, (path, init) => {
       if (path === '/v1/events' && init?.method === 'POST')
         options.failPage = true
@@ -587,6 +593,30 @@ describe('CONV-002 task conversation', () => {
         ([path, init]) => path === '/v1/events' && init?.method === 'POST',
       ),
     ).toHaveLength(1)
+  })
+
+  it('does not expose or send another task queued draft', async () => {
+    const queued = [
+      {
+        id: 'other-queued',
+        text: '另一件事的排队稿',
+        channel: { ...channel, id: 'task-other' },
+      },
+    ]
+    sessionStorage.setItem('pegas-queued-messages', JSON.stringify(queued))
+    const { mock } = installTaskHistory()
+    window.history.replaceState({}, '', '/?task=task-1')
+    render(<App />)
+    await screen.findByLabelText('就这件事继续聊天')
+    expect(screen.queryByLabelText('排队消息')).toBeNull()
+    expect(sessionStorage.getItem('pegas-queued-messages')).toBe(
+      JSON.stringify(queued),
+    )
+    expect(
+      mock.mock.calls.filter(
+        ([path, init]) => path === '/v1/events' && init?.method === 'POST',
+      ),
+    ).toHaveLength(0)
   })
 
   it('offers the four supported inspector tabs with expandable execution history', async () => {

@@ -446,9 +446,13 @@ try {
   await page.getByText('我喜欢安静、白底、信息层级清楚的界面。').waitFor()
   await capture(page, 'desktop-memory.png', 'desktop-memory')
 
-  await page.getByLabel('主导航').getByRole('button', { name: /^对话/ }).click()
+  // Recents now enter the task conversation; explicit work-list detail remains supported.
   await page
     .getByLabel('主导航')
+    .getByRole('button', { name: /^所有事情/ })
+    .click()
+  await page
+    .locator('.work-list')
     .getByRole('button')
     .filter({ hasText: '封板' })
     .first()
