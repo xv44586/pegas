@@ -1252,3 +1252,7 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - **权威实现**：`web/src/sealed/DetailDrawer.tsx` 与 Chat 复用 `InlineReply`、`replyToMessageId`；`web/src/App.tsx` 统一已读落点；`web/src/sealed/types.ts` 按 action ID 消费既有结算事实。
 - **自动化证据**：旧核对类型、已解决待办消除、独立决定已读、直接打开详情已读及旧按钮回归先红后绿；App/ChatExperience/types 共 363 项通过。完整 `pnpm check` 152 文件 / 1677 测试；`pnpm smoke`、真实 Electron loopback `smoke:dsh-runtime`、无障碍审计通过。`verify-detail-closure.mjs` 已接入 UI review，桌面与 390px 验证四候选、局部输入、原事情归属、Chat 用户原文、公共草稿保留、已读计数及已结算待办消除，同时复验 216 次全站弹层操作与 24 次执行设置开关/保存回读。
 - **状态与下一缺口**：本次交互闭环验收，待绿色 PR CI 后合并并发布不可变 Candidate；整体 DESIGN-009 不升级。未对历史回复补生成候选、未调用付费模型评估建议质量，通知服务端分页仍为既有后续缺口。回滚保留已读事实与动作结算，只切换上一运行 Candidate。
+
+### SELF-001 发布后自动保留（2026-11-26）
+
+用户结果：每次成功上线后自动清理旧发布，保留最新 3 个及运行、启动、回滚所需版本。复用 Candidate manifest 和 Supervisor 状态作为事实来源，构建/物化/staging/清理共享发布锁、引用复核与失败诊断。权威实现：`src/self-change/release-retention.ts`、`release-directory-lock.ts`、`retention/main.ts`；Supervisor stable 钩子与 `scripts/release-hot.mjs` 接入。自动化：20 项 retention 回归、完整 check 1709 项测试与普通 smoke 通过，真实 Recovery API 锁冲突/接管/回滚 smoke 通过；验收、兼容升级与恢复边界见 `docs/candidate-evidence.md`。整体 SELF-001 维持 Usable；下一缺口为 artifact 签名及工作区清理，旧协调器升级前自动保留会明确跳过。

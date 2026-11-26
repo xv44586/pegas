@@ -609,3 +609,15 @@
 - Status：Promoted（安全边界问题一次确认即晋升）
 - Enforcement：`test/policy-gate.test.ts`、`test/approval-rule-bridge.test.ts` 与 `test/approval-rules.test.ts` 纳入完整 check；服务端规范选项、工作目录服务接入和有效规则不截断共同形成门禁。
 - Owner / next action：APPROVAL-001；新增文件工具或权限范围必须复用相同路径与文案权威来源。
+
+### LESSON-20261126-09：发布清理必须与引用发布互斥并保留完整路径链
+
+- Rule：清理、构建、依赖物化和 staging 共用发布目录锁；保护引用逐跳解析，不能只保留 realpath 的最终目标；所有协调器支持锁协议后才允许删除。残留锁不能自动抢占。
+- Why：发布前审查重现检查引用后并发 staging 导致删除新 active；自动回收残留锁可产生双持有者；仅保留符号链接最终目标会删掉中间 Candidate，启动配置链接遗漏会破坏下次启动。
+- Feature：SELF-001
+- Evidence：并发 staging 审查复现、两跳跨 Candidate 回归先失败后通过；linked startup 配置纳入生产扫描，旧 bundled/foreign/missing PID 检查保守阻止；真实 Recovery API staging 锁冲突纳入 self-change smoke。
+- Seen：1（2026-11-26）
+- Severity：data-loss / recovery
+- Status：Promoted（数据丢失与恢复生命线问题一次确认即晋升）
+- Enforcement：`test/release-retention.test.ts`、`scripts/smoke-self-change.mjs` 和运行时发布目录锁；未知引用/状态/协调器时保守停止删除。
+- Owner / next action：SELF-001；新增发布入口必须复用共享锁，新增启动形态必须有真实引用扫描证据。

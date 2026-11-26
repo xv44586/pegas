@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { withReleaseDirectoryLock } from '../self-change/release-directory-lock.js'
 
 import type { ReleaseRef } from '../core/domain.js'
 import { ensureInstanceBearer } from '../core/instance-token.js'
@@ -98,69 +99,77 @@ const recoveryServer = createRecoveryServer({
   onStage: async input =>
     lifecycleTransitions.begin(async () => {
       const manifest = readCandidateManifest(input.manifestPath)
-      verifyCandidateManifest(
-        manifest,
-        input.artifactPath,
-        input.reviewReportPath,
-      )
-      verifyCandidateReleaseTree(manifest.release.root, input.artifactPath)
-      const workflowVersion =
-        readTaskWorkflowContract(manifest.release.root)?.version ?? 0
-      if (
-        manifest.compatibility.taskWorkflowVersion !== undefined &&
-        manifest.compatibility.taskWorkflowVersion !== workflowVersion
-      )
-        throw new Error(
-          'Candidate Task workflow contract does not match its manifest',
-        )
-      const current = state.read()
-      const currentMaximum = current.active.compatibility?.maximumSchema
-      if (
-        currentMaximum !== undefined &&
-        manifest.compatibility.minimumSchema > currentMaximum
-      ) {
-        throw new Error(
-          'Candidate minimum schema exceeds the active release compatibility',
-        )
-      }
-      const destructive = assertMigrationApproval({
-        databasePath,
-        releaseId: manifest.release.id,
-        targetMaximumSchema: manifest.compatibility.maximumSchema,
-        ...(manifest.compatibility.destructiveMigrations
-          ? {
-              declaredMigrations: manifest.compatibility.destructiveMigrations,
-            }
-          : {}),
-        ...(input.migrationApproval ? { grant: input.migrationApproval } : {}),
-      })
-      if (destructive.length > 0) {
-        // Prove the migration on a verified copy and keep a fresh backup
-        // before the switch; the live database is not touched here.
-        await rehearseMigrations({
-          databasePath,
-          backupDirectory: resolve(
-            process.env.PEGAS_BACKUP_DIR ?? join(dataDir, 'backups'),
-          ),
-        })
-      }
-      lifecycle.restartRequested = true
-      await stopChildren()
-      assertRollbackCompatible(
-        databasePath,
-        manifest.compatibility.maximumSchema,
-        workflowVersion,
-      )
-      state.stage(
-        {
-          ...manifest,
-          compatibility: {
-            ...manifest.compatibility,
-            taskWorkflowVersion: workflowVersion,
-          },
+      return await withReleaseDirectoryLock(
+        dirname(dirname(resolve(manifest.release.root))),
+        async () => {
+          verifyCandidateManifest(
+            manifest,
+            input.artifactPath,
+            input.reviewReportPath,
+          )
+          verifyCandidateReleaseTree(manifest.release.root, input.artifactPath)
+          const workflowVersion =
+            readTaskWorkflowContract(manifest.release.root)?.version ?? 0
+          if (
+            manifest.compatibility.taskWorkflowVersion !== undefined &&
+            manifest.compatibility.taskWorkflowVersion !== workflowVersion
+          )
+            throw new Error(
+              'Candidate Task workflow contract does not match its manifest',
+            )
+          const current = state.read()
+          const currentMaximum = current.active.compatibility?.maximumSchema
+          if (
+            currentMaximum !== undefined &&
+            manifest.compatibility.minimumSchema > currentMaximum
+          ) {
+            throw new Error(
+              'Candidate minimum schema exceeds the active release compatibility',
+            )
+          }
+          const destructive = assertMigrationApproval({
+            databasePath,
+            releaseId: manifest.release.id,
+            targetMaximumSchema: manifest.compatibility.maximumSchema,
+            ...(manifest.compatibility.destructiveMigrations
+              ? {
+                  declaredMigrations:
+                    manifest.compatibility.destructiveMigrations,
+                }
+              : {}),
+            ...(input.migrationApproval
+              ? { grant: input.migrationApproval }
+              : {}),
+          })
+          if (destructive.length > 0) {
+            // Prove the migration on a verified copy and keep a fresh backup
+            // before the switch; the live database is not touched here.
+            await rehearseMigrations({
+              databasePath,
+              backupDirectory: resolve(
+                process.env.PEGAS_BACKUP_DIR ?? join(dataDir, 'backups'),
+              ),
+            })
+          }
+          lifecycle.restartRequested = true
+          await stopChildren()
+          assertRollbackCompatible(
+            databasePath,
+            manifest.compatibility.maximumSchema,
+            workflowVersion,
+          )
+          state.stage(
+            {
+              ...manifest,
+              compatibility: {
+                ...manifest.compatibility,
+                taskWorkflowVersion: workflowVersion,
+              },
+            },
+            input.artifactPath,
+            input.reviewReportPath,
+          )
         },
-        input.artifactPath,
-        input.reviewReportPath,
       )
     }),
   onRollback: reason =>
@@ -297,6 +306,34 @@ while (!lifecycle.stopRequested) {
       releaseId: release.id,
       message: `Release ${release.id} passed stabilization`,
     })
+    // A separate process keeps cleanup from blocking health checks and lifecycle requests.
+    const retentionEntry = join(
+      release.root,
+      'dist/self-change/retention/main.js',
+    )
+    if (existsSync(retentionEntry)) {
+      const housekeeping = spawn(
+        process.execPath,
+        [retentionEntry, release.root, statePath, dataDir],
+        {
+          env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+          stdio: 'ignore',
+        },
+      )
+      housekeeping.on('error', error =>
+        logger.error('release.retention_failed', error, {
+          message: 'Release is healthy; retention could not start',
+        }),
+      )
+      housekeeping.on('exit', code => {
+        if (code !== 0)
+          logger.info('release.retention_failed', {
+            message:
+              'Release is healthy; retention exited with code ' + String(code),
+          })
+      })
+      housekeeping.unref()
+    }
   }
 
   await Promise.race(children.map(child => onceChildExited(child)))
