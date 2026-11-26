@@ -25,7 +25,7 @@
 - `credential-boundary.mjs` 是凭据目录、环境清理和子进程隔离的共同事实来源。Git 忽略宿主 global/system config、关闭交互式取凭据；普通仓库本地配置仍在，但 helper 无法越过凭据目录/服务边界。服务端命令指纹与执行器使用相同清理后的环境，旧指纹不匹配时重新审批。
 - `dsh-credential-boundary.mjs` 无条件挂载，独立于 `approvalPolicy`、档位和一次性 grant。先注册默认拒绝 guard，再等待文件/子进程服务就绪；缺失服务不会静默裸跑。文件服务拒绝受保护路径，进程与终端入口都附加隔离；子进程不得继承模型连接密钥。
 - macOS 使用 Seatbelt：受保护目录禁止读写，拒绝本机 Mach 服务和 Unix socket 连接，只保留 DNS 的 mDNSResponder socket 与网络配置服务。已有 DSH 写沙箱合并同一 profile，避免嵌套沙箱失败；完全访问命令也必须添加凭据边界。SecurityServer 服务端口的合成探针只验证连接权限，不查询任何真实钥匙串条目。
-- Linux 需要 Bubblewrap（`/usr/bin/bwrap` 可执行，且主机允许其 namespace）；遮蔽凭据目录/文件并使用独立 PID namespace。缺失后端直接执行失败，无降级。它不承诺隔离所有未登记的同用户 IPC 服务；跨用户/不可信插件隔离需要容器、独立 OS 用户或远程执行能力，不由目录清单冒充。
+- Linux 需要 Bubblewrap（`/usr/bin/bwrap` 可执行，且主机允许其 namespace）；遮蔽凭据目录/文件并使用独立 PID namespace；已有 DSH Bubblewrap profile 合并同一次调用，保留原写限制，不依赖主机允许嵌套 namespace。缺失后端直接执行失败，无降级。它不承诺隔离所有未登记的同用户 IPC 服务；跨用户/不可信插件隔离需要容器、独立 OS 用户或远程执行能力，不由目录清单冒充。
 - 受保护位置包括 HOME 下 Git/GH/SSH、GPG、云 CLI、模型客户端、钥匙串和常见浏览器账号目录，以及宿主环境指向的 GH、云凭据和 SSH agent 等自定义路径。只传递路径，不读取秘密值；符号链接目的地同样保护。自定义业务配置中的秘密不属于这份目录清单。
 - `policy-gate.mjs` 提供 `credential-access` 明确拒绝。桥的 guard、pre-execute、approval/request 都不能被原 grant/持久规则/自动审阅放行；拒绝的旧 grant 通过既有幂等 outcome 记为 failed + notExecuted。外发审批的内容预览也不代读凭据目录。
 

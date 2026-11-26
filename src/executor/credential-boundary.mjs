@@ -201,6 +201,27 @@ export function credentialProcessArgv(
           ? ['--tmpfs', path]
           : ['--ro-bind', '/dev/null', path],
       )
+    if (['bwrap', '/usr/bin/bwrap', '/bin/bwrap'].includes(argv[0] ?? '')) {
+      const separator = argv.indexOf('--')
+      if (separator < 2)
+        throw new Error(
+          'Unsupported Bubblewrap profile; credential boundary cannot be enforced',
+        )
+      // Nesting user namespaces is unavailable on some supported hosts. Keep
+      // DSH's original read/write mounts and append masks in the same runner.
+      return [
+        '/usr/bin/bwrap',
+        ...argv.slice(1, separator),
+        '--die-with-parent',
+        '--unshare-pid',
+        '--unshare-ipc',
+        '--proc',
+        '/proc',
+        ...masks,
+        '--',
+        ...argv.slice(separator + 1),
+      ]
+    }
     return [
       '/usr/bin/bwrap',
       '--die-with-parent',

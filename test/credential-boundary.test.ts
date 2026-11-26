@@ -92,7 +92,10 @@ describe('host credential runtime boundary', () => {
             '/usr/bin/sandbox-exec',
             '-p',
             '(version 1)(allow default)(deny file-write*)',
-            '/usr/bin/touch',
+            '/bin/sh',
+            '-c',
+            'printf SANDBOX_BODY_STARTED; /usr/bin/touch "$1"',
+            'fixture',
             join(f.workspace, 'denied'),
           ]
         : [
@@ -101,12 +104,34 @@ describe('host credential runtime boundary', () => {
             '/',
             '/',
             '--',
-            '/usr/bin/touch',
+            '/bin/sh',
+            '-c',
+            'printf SANDBOX_BODY_STARTED; /usr/bin/touch "$1"',
+            'fixture',
             join(f.workspace, 'denied'),
           ]
     const result = run(credentialProcessArgv(inner, f.roots))
+    expect(result.stdout).toContain('SANDBOX_BODY_STARTED')
     expect(result.status).not.toBe(0)
     expect(result.stderr).toMatch(/permitted|read-only|denied/i)
+  })
+
+  it('merges Linux credential masks after the original read-only mounts without nesting namespaces', () => {
+    const f = fixture()
+    const args = credentialProcessArgv(
+      ['bwrap', '--ro-bind', '/', '/', '--', '/bin/true'],
+      f.roots,
+      'linux',
+    )
+    expect(
+      args.filter(arg => arg === 'bwrap' || arg === '/usr/bin/bwrap'),
+    ).toEqual(['/usr/bin/bwrap'])
+    expect(args.slice(1, 4)).toEqual(['--ro-bind', '/', '/'])
+    expect(args.indexOf('--tmpfs')).toBeGreaterThan(args.indexOf('--ro-bind'))
+    expect(args.slice(-2)).toEqual(['--', '/bin/true'])
+    expect(() =>
+      credentialProcessArgv(['bwrap', '/bin/true'], f.roots, 'linux'),
+    ).toThrow('cannot be enforced')
   })
 
   it('requires a fixed system runner instead of resolving a workspace-controlled PATH', () => {
