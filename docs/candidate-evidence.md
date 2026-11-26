@@ -61,10 +61,12 @@ Pegas 只有在 Candidate 的构建产物、Git commit 和验证证据属于同�
 
 权威实现为 `src/self-change/release-retention.ts`、`release-directory-lock.ts` 与独立进程入口 `retention/main.ts`；Supervisor 仅在稳定确认后启动清理，`scripts/release-hot.mjs` 完成实机验证后补调。`PEGAS_RELEASE_ROOT` 可显式指定持久发布根，默认仍为调用脚本仓库下的 `releases`。
 
-清理会核对主状态及 last-good、所有已登记 Supervisor PID、实际进程与打开文件、LaunchAgent/systemd 配置（包括符号链接）。保留树的符号链接逐跳解析，中间 Candidate 与最终依赖均受保护。无法读取、状态非 stable、旧协调进程、未知实例或引用变化均保留全部尚未删除的版本。最新诊断原子写入 `<发布根>/retention-last.json`；失败不影响健康版本。
+清理会核对主状态及 last-good、所有已登记 Supervisor PID、实际进程与打开文件、macOS LaunchAgent/LaunchDaemon 配置（包括符号链接）。保留树的符号链接逐跳解析，中间 Candidate 与最终依赖均受保护。无法读取、状态非 stable、旧协调进程、未知实例或引用变化均保留全部尚未删除的版本。最新诊断原子写入 `<发布根>/retention-last.json`；失败不影响健康版本。
 
 `.release-directory.lock` 不自动抢占：进程异常退出留下锁时，维护者先检查记录中的 PID、所有构建/发布/清理进程及当前状态，确认没有持有者后才移除该锁并重试。正常解锁同时核对 inode 与唯一 owner，不能移除后来者的锁。升级现有实例时，必须让其 Supervisor 启动路径也使用支持锁协议的新 Candidate；未升级时保持 skipped，不能据此宣称自动清理已生效。
 
 回滚继续使用 Supervisor 的 previous。清理不修改 schema；恢复旧协调器后自动清理会保守暂停。清理前检查与共享发布锁保护在役/回滚版本；删除旧历史不能撤销，不提供自动恢复已删除历史的承诺。
 
-自动化：`test/release-retention.test.ts` 19 项覆盖最新三份、双实例、启动/运行引用、跨 Candidate 多跳依赖、不可读启动链接、冻结目录与外部链接、损坏状态、引用变化、锁冲突/残留及旧协调器；`scripts/smoke-self-change.mjs` 使用实际 Recovery API 验证清理锁阻止 staging 后正常切换与失败回滚。完整 `pnpm check` 通过：153 个测试文件、1708 项测试；`pnpm smoke` 与真实 Supervisor self-change smoke 通过。上线前生产 dry-run 按预期识别两个旧协调器并零删除；协调器升级与最终实机结果另存本次发布审计证据。
+自动化：`test/release-retention.test.ts` 20 项覆盖最新三份、双实例、启动/运行引用、跨 Candidate 多跳依赖、不可读启动链接、冻结目录与外部链接、损坏状态、引用变化、锁冲突/残留及旧协调器；`scripts/smoke-self-change.mjs` 使用实际 Recovery API 验证清理锁阻止 staging 后正常切换与失败回滚。完整 `pnpm check` 通过：153 个测试文件、1709 项测试；`pnpm smoke` 与真实 Supervisor self-change smoke 通过。上线前生产 dry-run 按预期识别两个旧协调器并零删除；协调器升级与最终实机结果另存本次发布审计证据。
+
+本次自动清理仅启用 macOS；Linux 因尚未完整核对 systemd 有效 unit/drop-in 而保守跳过，不能仅扫描顶层 service 就删除其离线启动版本。对应生产 host inventory 分支有零删除回归。

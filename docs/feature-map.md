@@ -1255,4 +1255,4 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 
 ### SELF-001 发布后自动保留（2026-11-26）
 
-用户结果：每次成功上线后自动清理旧发布，保留最新 3 个及运行、启动、回滚所需版本。复用 Candidate manifest 和 Supervisor 状态作为事实来源，构建/物化/staging/清理共享发布锁、引用复核与失败诊断。权威实现：`src/self-change/release-retention.ts`、`release-directory-lock.ts`、`retention/main.ts`；Supervisor stable 钩子与 `scripts/release-hot.mjs` 接入。自动化：19 项 retention 回归、完整 check 1708 项测试与普通 smoke 通过，真实 Recovery API 锁冲突/接管/回滚 smoke 通过；验收、兼容升级与恢复边界见 `docs/candidate-evidence.md`。整体 SELF-001 维持 Usable；下一缺口为 artifact 签名及工作区清理，旧协调器升级前自动保留会明确跳过。
+用户结果：每次成功上线后自动清理旧发布，保留最新 3 个及运行、启动、回滚所需版本。复用 Candidate manifest 和 Supervisor 状态作为事实来源，构建/物化/staging/清理共享发布锁、引用复核与失败诊断。权威实现：`src/self-change/release-retention.ts`、`release-directory-lock.ts`、`retention/main.ts`；Supervisor stable 钩子与 `scripts/release-hot.mjs` 接入。自动化：20 项 retention 回归、完整 check 1709 项测试与普通 smoke 通过，真实 Recovery API 锁冲突/接管/回滚 smoke 通过；验收、兼容升级与恢复边界见 `docs/candidate-evidence.md`。整体 SELF-001 维持 Usable；下一缺口为 artifact 签名及工作区清理，旧协调器升级前自动保留会明确跳过。

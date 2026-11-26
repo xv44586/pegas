@@ -22,6 +22,7 @@ import {
 import { ReleaseStateStore } from '../src/supervisor/release-state.js'
 import {
   pruneReleaseHistory,
+  inspectReleaseHost,
   readStartupReferences,
   supervisorProcessProtection,
   type RetentionOptions,
@@ -125,6 +126,15 @@ function fixture() {
 }
 
 describe('post-release retention', () => {
+  it('fails closed on Linux until effective systemd unit/drop-in inventory is supported', async () => {
+    const f = fixture()
+    f.options.inspectHost = pids => inspectReleaseHost(f.root, pids, 'linux')
+    const result = await pruneReleaseHistory(f.options)
+    expect(result.status).toBe('skipped')
+    expect(result.reason).toMatch(/host inventory unsupported/)
+    expect(result.deleted).toEqual([])
+    expect(existsSync(join(f.root, 'candidates/release-4'))).toBe(true)
+  })
   it('detects legacy bundled, foreign-root and missing registered Supervisor processes', () => {
     const f = fixture(),
       supported = join(f.root, 'candidates/release-7')

@@ -379,11 +379,13 @@ function hash(bytes: string | Buffer) {
   return createHash('sha256').update(bytes).digest('hex')
 }
 /** OS inventory is intentionally fail-closed; unsupported hosts keep all releases. */
-async function inspectReleaseHost(
+export async function inspectReleaseHost(
   root: string,
   knownPids: readonly number[],
+  platform: NodeJS.Platform = process.platform,
 ): Promise<HostProtection> {
-  if (process.platform !== 'darwin' && process.platform !== 'linux')
+  // systemd effective units/drop-ins need a complete inventory before enabling Linux.
+  if (platform !== 'darwin')
     throw new Error('Release retention host inventory unsupported')
   const options = {
     encoding: 'utf8' as const,
@@ -395,21 +397,14 @@ async function inspectReleaseHost(
     ['-axo', 'pid=,command='],
     options,
   )
-  const { stdout: open } = await exec(
-    process.platform === 'darwin' ? '/usr/sbin/lsof' : 'lsof',
-    ['-nP', '-Fn'],
-    options,
-  )
+  const { stdout: open } = await exec('/usr/sbin/lsof', ['-nP', '-Fn'], options)
   const paths = [
     ps,
     open,
     ...(await readStartupReferences([
       join(homedir(), 'Library/LaunchAgents'),
-      join(homedir(), '.config/systemd/user'),
       '/Library/LaunchAgents',
       '/Library/LaunchDaemons',
-      '/etc/systemd/system',
-      '/etc/systemd/user',
     ])),
   ]
   return { paths, ...supervisorProcessProtection(ps, root, knownPids) }
