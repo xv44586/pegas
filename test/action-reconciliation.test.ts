@@ -53,6 +53,54 @@ describe('APPROVAL-001 human action reconciliation', () => {
     ).toThrow(/at most 2000/)
   })
 
+  it.each(['workflow', 'claim'] as const)(
+    'does not block a new follow-up after a recorded failed outcome: %s',
+    check => {
+      const store = new PegasStore(':memory:')
+      cleanups.push(() => store.close())
+      const failed = createBlockedAction(store, 'failed')
+      store.completeRun(failed.resumeRunId, 'worker-resumed', {
+        executorRef: 'session-failed',
+        output: '读取后台任务输出失败，已保留失败记录。',
+      })
+      const event = store.enqueueEvent({
+        userId: 'owner',
+        type: 'user.message',
+        source: 'web',
+        authenticatedActor: 'human',
+        payload: { text: '所以具体原因是什么？', taskId: failed.taskId },
+      }).event
+      const followup = store.applyRoutingDecision(
+        event,
+        {
+          kind: 'continue_task',
+          taskId: failed.taskId,
+          input: '所以具体原因是什么？',
+          reason: 'explicit follow-up after a settled failure',
+        },
+        'echo',
+      )
+      expect(followup.run.id).not.toBe(failed.resumeRunId)
+      expect(followup.run.status).toBe('queued')
+      if (check === 'workflow') {
+        expect(store.projectWorkChannel(followup.task).workflow).toEqual({
+          state: 'queued',
+        })
+      } else {
+        expect(store.claimNextRun('followup-worker')?.run.id).toBe(
+          followup.run.id,
+        )
+        expect(store.claimNextRun('another-worker')).toBeUndefined()
+      }
+      expect(store.getAction(failed.actionId, 'owner')).toMatchObject({
+        status: 'failed',
+      })
+      expect(
+        store.getAction(failed.actionId, 'owner')?.reconciliation,
+      ).toBeUndefined()
+    },
+  )
+
   it('reconciles an unknown outcome as succeeded and unblocks continuation', () => {
     const store = new PegasStore(':memory:')
     cleanups.push(() => store.close())
