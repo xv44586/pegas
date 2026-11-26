@@ -1,3 +1,6 @@
+import { InlineReply } from './InlineReply'
+import { answerFollowUps } from '../../../src/conversation/follow-ups'
+import { quotableAgentReply } from '../../../src/conversation/projection'
 import {
   AlertTriangle,
   CheckCircle2,
@@ -87,7 +90,7 @@ export function DetailDrawer({
   onRetry,
   onContinue,
   onWorkflowMessage,
-  onExplainResult,
+  onReplySent,
   onAnswerRouting,
   onCreateRelated,
   onStop,
@@ -108,7 +111,7 @@ export function DetailDrawer({
     channel: Extract<DrawerView, { kind: 'task' }>['channel'],
   ) => void
   onWorkflowMessage?: (id: string) => Promise<void>
-  onExplainResult?: (id: string) => Promise<void>
+  onReplySent?: () => Promise<void>
   onAnswerRouting?: () => void
   onCreateRelated?: (
     channel: Extract<DrawerView, { kind: 'task' }>['channel'],
@@ -219,7 +222,7 @@ export function DetailDrawer({
             deliveryError={view.deliveryError}
             onContinue={onContinue}
             onWorkflowMessage={onWorkflowMessage}
-            onExplainResult={onExplainResult}
+            onReplySent={onReplySent}
             onCreateRelated={onCreateRelated}
             onLoadRunActivity={onLoadRunActivity}
             onLoadRunSubagents={onLoadRunSubagents}
@@ -1233,7 +1236,7 @@ function TaskDetail({
   onRetry,
   onContinue,
   onWorkflowMessage,
-  onExplainResult,
+  onReplySent,
   onCreateRelated,
   onStop,
 }: {
@@ -1265,7 +1268,7 @@ function TaskDetail({
     channel: Extract<DrawerView, { kind: 'task' }>['channel'],
   ) => void
   onWorkflowMessage?: (id: string) => Promise<void>
-  onExplainResult?: (id: string) => Promise<void>
+  onReplySent?: () => Promise<void>
   onCreateRelated?: (
     channel: Extract<DrawerView, { kind: 'task' }>['channel'],
   ) => void
@@ -1306,6 +1309,10 @@ function TaskDetail({
       : undefined
   const attentionMessageId = workflow?.attentionMessageId
   const resultMessageId = workflow?.resultMessageId
+  const resultMessage = resultMessageId
+    ? timeline?.messages.find(message => message.id === resultMessageId)
+    : timeline?.messages.findLast(message => quotableAgentReply(message))
+  const reply = resultMessage ? quotableAgentReply(resultMessage) : undefined
   const closed =
     channel.status === 'completed' || channel.status === 'cancelled'
   const allowContinue = !workflow
@@ -1470,38 +1477,61 @@ function TaskDetail({
 
   return (
     <div className="drawer-body bui">
-      <StateHeader label={state} tone={statusTone(state)}>
-        {headline !== state && (
-          <h3 className="m-0 text-[13px] font-medium text-ink">{headline}</h3>
+      <div className="group/reply" data-detail-reply="">
+        <StateHeader label={state} tone={statusTone(state)}>
+          {headline !== state && (
+            <h3 className="m-0 text-[13px] font-medium text-ink">{headline}</h3>
+          )}
+          {completedOutput ? (
+            <div className="state-hero-markdown mt-1">
+              <MarkdownMessage
+                content={
+                  completedOutput.length > 600 && !summaryExpanded
+                    ? `${completedOutput.slice(0, 600)}…`
+                    : completedOutput
+                }
+              />
+            </div>
+          ) : (
+            <p className="mt-1">{stateDescription(state, run, workflow)}</p>
+          )}
+          {completedOutput && completedOutput.length > 600 && (
+            <button
+              className="inline-link mt-2 inline-flex items-center gap-[5px] font-medium text-accent-ink"
+              onClick={() => setSummaryExpanded(current => !current)}
+              type="button"
+            >
+              {summaryExpanded ? '收起结果' : '展开完整结果'}
+            </button>
+          )}
+        </StateHeader>
+        {api && resultMessage && reply && (
+          <InlineReply
+            key={resultMessage.id}
+            items={answerFollowUps(resultMessage.payload)}
+            taskTitle={channel.title}
+            excerpt={reply.text}
+            disabledReason={
+              channel.status === 'cancelled'
+                ? '事情已停止，无法继续发送。'
+                : undefined
+            }
+            onSend={async (text, dedupeKey) => {
+              await api.sendMessage(
+                text,
+                { replyToMessageId: resultMessage.id },
+                dedupeKey,
+              )
+            }}
+            onRefresh={onReplySent ?? (() => Promise.resolve())}
+          />
         )}
-        {completedOutput ? (
-          <div className="state-hero-markdown mt-1">
-            <MarkdownMessage
-              content={
-                completedOutput.length > 600 && !summaryExpanded
-                  ? `${completedOutput.slice(0, 600)}…`
-                  : completedOutput
-              }
-            />
-          </div>
-        ) : (
-          <p className="mt-1">{stateDescription(state, run, workflow)}</p>
-        )}
-        {completedOutput && completedOutput.length > 600 && (
-          <button
-            className="inline-link mt-2 inline-flex items-center gap-[5px] font-medium text-accent-ink"
-            onClick={() => setSummaryExpanded(current => !current)}
-            type="button"
-          >
-            {summaryExpanded ? '收起结果' : '展开完整结果'}
-          </button>
-        )}
-      </StateHeader>
+      </div>
       {(state === '失败' || run?.status === 'failed') && (
         <section className="mt-3.5 rounded-card bg-surface p-3.5 shadow-card">
           <p className="flex items-center gap-1.5 text-[13px] font-medium text-red-text">
             <AlertTriangle size={15} />
-            {workflow && state !== '失败' ? '所选运行失败' : '执行已停止'}
+            {workflow && state !== '失败' ? '历史运行失败' : '执行已停止'}
           </p>
           <p className="mt-1.5 text-[13px] leading-[1.6] text-ink-2">
             {run?.lastError ?? '服务端没有提供失败原因。'}
@@ -1856,99 +1886,90 @@ function TaskDetail({
           {workflowError || retryError}
         </p>
       )}
-      <footer className="drawer-footer">
-        {attentionMessageId && onWorkflowMessage && (
-          <Button
-            variant="accent"
-            size="sm"
-            disabled={openingAction}
-            type="button"
-            onClick={() =>
-              void openWorkflowAction(onWorkflowMessage, attentionMessageId)
-            }
-          >
-            {attentionLabel}
-          </Button>
-        )}
-        {retryTarget && (
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={retrying}
-            onClick={() => void retryRun()}
-            type="button"
-          >
-            <RotateCw size={16} />
-            {retrying ? '正在重试…' : '重试'}
-          </Button>
-        )}
-        {state === '待验收' && resultMessageId && onWorkflowMessage && (
-          <Button
-            variant="accent"
-            size="sm"
-            disabled={openingAction}
-            type="button"
-            onClick={() =>
-              void openWorkflowAction(onWorkflowMessage, resultMessageId)
-            }
-          >
-            审查交付
-          </Button>
-        )}
-        {resultMessageId && onExplainResult && (
-          <Button
-            variant={state === '待验收' ? 'secondary' : 'accent'}
-            size="sm"
-            disabled={openingAction}
-            type="button"
-            onClick={() =>
-              void openWorkflowAction(onExplainResult, resultMessageId)
-            }
-          >
-            解释这次结果
-          </Button>
-        )}
-        {allowContinue &&
-          !(attentionMessageId && onWorkflowMessage) &&
-          onContinue && (
+      {(!closed ||
+        Boolean(attentionMessageId) ||
+        Boolean(retryTarget) ||
+        (state === '待验收' && Boolean(resultMessageId)) ||
+        channel.status === 'cancelled' ||
+        channel.canStop) && (
+        <footer className="drawer-footer">
+          {attentionMessageId && onWorkflowMessage && (
             <Button
-              variant={
-                resultMessageId && onExplainResult ? 'secondary' : 'accent'
-              }
+              variant="accent"
               size="sm"
-              onClick={() => onContinue(channel)}
+              disabled={openingAction}
               type="button"
+              onClick={() =>
+                void openWorkflowAction(onWorkflowMessage, attentionMessageId)
+              }
             >
-              {workflow
-                ? closed
-                  ? '继续执行'
-                  : state === '待你补充'
-                    ? '补充信息'
-                    : '补充要求'
-                : '继续追问'}
+              {attentionLabel}
             </Button>
           )}
-        {closed && onCreateRelated && (
-          <Button
-            variant={channel.status === 'cancelled' ? 'accent' : 'secondary'}
-            size="sm"
-            onClick={() => onCreateRelated(channel)}
-            type="button"
-          >
-            新建相关事情
-          </Button>
-        )}
-        {channel.canStop && onStop && (
-          <Button
-            variant="danger"
-            size="sm"
-            onClick={() => setConfirmingStop(true)}
-            type="button"
-          >
-            停止事情
-          </Button>
-        )}
-      </footer>
+          {retryTarget && (
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={retrying}
+              onClick={() => void retryRun()}
+              type="button"
+            >
+              <RotateCw size={16} />
+              {retrying ? '正在重试…' : '重试'}
+            </Button>
+          )}
+          {state === '待验收' && resultMessageId && onWorkflowMessage && (
+            <Button
+              variant="accent"
+              size="sm"
+              disabled={openingAction}
+              type="button"
+              onClick={() =>
+                void openWorkflowAction(onWorkflowMessage, resultMessageId)
+              }
+            >
+              审查交付
+            </Button>
+          )}
+          {allowContinue &&
+            !closed &&
+            !(attentionMessageId && onWorkflowMessage) &&
+            onContinue && (
+              <Button
+                variant="accent"
+                size="sm"
+                onClick={() => onContinue(channel)}
+                type="button"
+              >
+                {workflow
+                  ? state === '待你补充'
+                    ? '补充信息'
+                    : '补充要求'
+                  : '继续追问'}
+              </Button>
+            )}
+          {channel.status === 'cancelled' && onCreateRelated && (
+            <Button
+              variant="accent"
+              size="sm"
+              onClick={() => onCreateRelated(channel)}
+              type="button"
+            >
+              新建相关事情
+            </Button>
+          )}
+          {channel.canStop && onStop && (
+            <Button
+              variant="danger"
+              size="sm"
+              onClick={() => setConfirmingStop(true)}
+              type="button"
+            >
+              停止事情
+            </Button>
+          )}
+        </footer>
+      )}
     </div>
   )
 }

@@ -585,3 +585,15 @@
 - Status：Observed
 - Enforcement：ChatExperience、InlineReply 回归与桌面/移动 UI review；尚未晋升通用仓库规则。
 - Owner / next action：DESIGN-009；后续增加其他客户端时复用服务端回复引用，不另建客户端路由。
+
+### LESSON-20261126-07：待办关闭与阅读必须分别消费对应事实
+
+- Rule：待办是否解决取决于匹配 ID 的领域结算事实；阅读范围由实际打开的内容决定。独立决定不借用同事情的失败组已读，详情的各入口共享读取成功后的已读逻辑。
+- Why：生产中动作已核对，旧 `action.outcome_unknown` 仍留在待办；点击旧通知又误标了同事情失败组，造成已完成但未读、未处理同时存在。只修正文案或把任务完成等同核对都无法闭环。
+- Feature：DESIGN-009
+- Evidence：2026-11-26 只读核查确认对应 action 已 reconciled 且已有 action.reconciled 通知；两种通知结算及独立已读四项回归修复前失败，详情直接打开已读回归同样先红后绿。详情候选/Chat 回显与时间线、已读失败恢复纳入门禁。
+- Seen：1（2026-11-26）
+- Severity：normal
+- Status：Observed
+- Enforcement：`web/src/sealed/types.test.ts`、`web/src/App.test.tsx` 与 `scripts/verify-detail-closure.mjs`；尚未晋升全仓强制规则。
+- Owner / next action：DESIGN-009；后续新增决定事件必须验证终态事实在 Chat、收件箱和详情中的一致性，不以已读代替领域结算。

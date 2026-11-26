@@ -1841,7 +1841,7 @@ describe('sealed Pegas UI', () => {
     expect(screen.getByText('较新的快照')).toBeTruthy()
   })
 
-  it('continues a completed task with the newest run and scopes the next message', async () => {
+  it('replies to a completed task result locally while displaying its newest run', async () => {
     const completedChannel: WorkChannel = {
       ...channel,
       status: 'completed',
@@ -1862,10 +1862,18 @@ describe('sealed Pegas UI', () => {
       status: 'completed',
       updatedAt: '2026-11-19T08:10:00.000Z',
     }
+    const source = snapshot.messages[0]
+    if (!source) throw new Error('Expected result fixture')
+    const result = {
+      ...source,
+      readAt: '2026-11-19T09:00:00Z',
+      payload: { type: 'run.completed', text: '已完成的方案' },
+    }
     const fetchMock = installSnapshotFetch({
       ...snapshot,
       channels: [completedChannel],
       runs: [latestRun, oldRun],
+      messages: [result],
     })
     render(<App />)
 
@@ -1875,23 +1883,27 @@ describe('sealed Pegas UI', () => {
       }),
     )
     expect(screen.getByText(/Run 1 · run-newe/)).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: '继续追问' }))
-    expect(screen.getByText(/继续事情：/)).toBeTruthy()
-    expect(new URLSearchParams(window.location.search).has('channel')).toBe(
-      false,
+    const detail = screen.getByLabelText('工作详情')
+    expect(
+      within(detail).queryByRole('button', { name: '继续追问' }),
+    ).toBeNull()
+    fireEvent.click(
+      await within(detail).findByRole('button', { name: '快速回复' }),
     )
-
-    const composer = screen.getByLabelText('给 Pegas 发消息')
+    const composer = within(detail).getByRole('textbox', { name: '回复内容' })
     fireEvent.change(composer, { target: { value: '继续补充验收证据' } })
-    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    fireEvent.keyDown(composer, { key: 'Enter' })
     await waitFor(() =>
       expect(
         fetchMock.mock.calls.some(([path, init]) => {
           if (path !== '/v1/events' || init?.method !== 'POST') return false
           const body = JSON.parse(
             typeof init.body === 'string' ? init.body : '{}',
-          ) as { payload?: { taskId?: string } }
-          return body.payload?.taskId === channel.id
+          ) as { payload?: { replyToMessageId?: string; text?: string } }
+          return (
+            body.payload?.replyToMessageId === 'message-1' &&
+            body.payload.text === '继续补充验收证据'
+          )
         }),
       ).toBe(true),
     )
@@ -7432,15 +7444,18 @@ describe('sealed Pegas UI', () => {
       payload: { type: 'run.completed', text: `第 ${String(minute)} 轮结果` },
     }))
     const readPaths: string[] = []
-    installSnapshotFetch({ ...snapshot, messages: members }, path => {
+    const fixture = { ...snapshot, messages: members }
+    installSnapshotFetch(fixture, path => {
       if (!path.endsWith('/read')) return undefined
       readPaths.push(path)
       const id = path.split('/')[3]
       const member = members.find(item => item.id === id)
       if (!member) throw new Error(`unexpected read path ${path}`)
-      return Response.json({
-        message: { ...member, readAt: '2026-11-19T09:00:00.000Z' },
-      })
+      const updated = { ...member, readAt: '2026-11-19T09:00:00.000Z' }
+      fixture.messages = fixture.messages.map(item =>
+        item.id === updated.id ? updated : item,
+      )
+      return Response.json({ message: updated })
     })
     render(<App />)
     fireEvent.click(
@@ -8297,76 +8312,96 @@ describe('sealed Pegas UI', () => {
     expect(screen.queryByText('人工核对结论')).toBeNull()
   })
 
-  it('opens the reconciliation drawer from an action notice and submits', async () => {
-    const sourceMessage = snapshot.messages[0]
-    if (!sourceMessage) throw new Error('Expected an outbox message fixture')
-    let action: DurableAction = {
-      ...actionFixture(approvalFixture('approval-notice')),
-      status: 'unknown',
-      result: { providerRequestId: 'req-unknown' },
-    }
-    const notice = {
-      ...sourceMessage,
-      id: 'notice-reconcile',
-      payload: {
-        type: 'action.reconciliation_required',
-        actionId: action.id,
-      },
-    }
-    let submitted: unknown
-    installSnapshotFetch({ ...snapshot, messages: [notice] }, (path, init) => {
-      if (path.startsWith(`/v1/actions/${action.id}?`))
-        return Response.json({ action })
-      if (
-        path === `/v1/actions/${action.id}/reconcile` &&
-        init?.method === 'POST'
-      ) {
-        submitted = JSON.parse(typeof init.body === 'string' ? init.body : '{}')
-        const draft = submitted as {
-          commandId: string
-          resolution: 'succeeded' | 'failed'
-          note: string
-        }
-        action = {
-          ...action,
-          status: 'reconciled',
-          reconciliation: {
-            id: 'recon-notice',
-            actionId: action.id,
-            commandId: draft.commandId,
-            resolution: draft.resolution,
-            note: draft.note,
-            previousStatus: 'unknown',
-            reconciledBy: 'owner',
-            createdAt: '2026-11-21T00:06:00.000Z',
-          },
-        }
-        return Response.json({ action }, { status: 201 })
+  it.each(['action.reconciliation_required', 'action.outcome_unknown'])(
+    'opens %s in its own reconciliation drawer and marks only that notice read',
+    async type => {
+      const sourceMessage = snapshot.messages[0]
+      if (!sourceMessage) throw new Error('Expected an outbox message fixture')
+      let action: DurableAction = {
+        ...actionFixture(approvalFixture('approval-notice')),
+        status: 'unknown',
+        result: { providerRequestId: 'req-unknown' },
       }
-      if (path.endsWith('/read'))
-        return Response.json({
-          message: { ...notice, readAt: '2026-11-21T00:01:00.000Z' },
-        })
-      return undefined
-    })
-    render(<App />)
-    fireEvent.click(
-      within(await screen.findByLabelText('主导航')).getByRole('button', {
-        name: /待你处理/,
-      }),
-    )
-    fireEvent.click(screen.getByRole('button', { name: /^去核对：/ }))
-    expect(await screen.findByText('高风险动作需要人工核对')).toBeTruthy()
-    expect(screen.getByText('结果未知，需核对')).toBeTruthy()
-    fireEvent.change(screen.getByLabelText('核对依据（必填）'), {
-      target: { value: '供应商后台确认请求已成功落地。' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: '提交核对结论' }))
-    await waitFor(() => expect(submitted).toBeTruthy())
-    expect((submitted as { resolution: string }).resolution).toBe('succeeded')
-    expect(await screen.findByText('人工核对：确认已成功')).toBeTruthy()
-    expect(screen.queryByRole('button', { name: '提交核对结论' })).toBeNull()
-  })
+      const notice = {
+        ...sourceMessage,
+        id: 'notice-reconcile',
+        payload: {
+          type,
+          actionId: action.id,
+        },
+      }
+      const reads: string[] = []
+      const sibling = {
+        ...sourceMessage,
+        id: 'unrelated-failure',
+        payload: { type: 'run.failed', error: '历史失败' },
+      }
+      let submitted: unknown
+      installSnapshotFetch(
+        { ...snapshot, messages: [notice, sibling] },
+        (path, init) => {
+          if (path.startsWith(`/v1/actions/${action.id}?`))
+            return Response.json({ action })
+          if (
+            path === `/v1/actions/${action.id}/reconcile` &&
+            init?.method === 'POST'
+          ) {
+            submitted = JSON.parse(
+              typeof init.body === 'string' ? init.body : '{}',
+            )
+            const draft = submitted as {
+              commandId: string
+              resolution: 'succeeded' | 'failed'
+              note: string
+            }
+            action = {
+              ...action,
+              status: 'reconciled',
+              reconciliation: {
+                id: 'recon-notice',
+                actionId: action.id,
+                commandId: draft.commandId,
+                resolution: draft.resolution,
+                note: draft.note,
+                previousStatus: 'unknown',
+                reconciledBy: 'owner',
+                createdAt: '2026-11-21T00:06:00.000Z',
+              },
+            }
+            return Response.json({ action }, { status: 201 })
+          }
+          if (path.endsWith('/read')) {
+            reads.push(path)
+            const original = path.includes(notice.id) ? notice : sibling
+            return Response.json({
+              message: { ...original, readAt: '2026-11-21T00:01:00.000Z' },
+            })
+          }
+          return undefined
+        },
+      )
+      render(<App />)
+      fireEvent.click(
+        within(await screen.findByLabelText('主导航')).getByRole('button', {
+          name: /待你处理/,
+        }),
+      )
+      fireEvent.click(screen.getByRole('button', { name: /^去核对：/ }))
+      expect(await screen.findByText('高风险动作需要人工核对')).toBeTruthy()
+      expect(screen.getByText('结果未知，需核对')).toBeTruthy()
+      await waitFor(() =>
+        expect(reads).toEqual([`/v1/outbox/${notice.id}/read`]),
+      )
+      fireEvent.change(screen.getByLabelText('核对依据（必填）'), {
+        target: { value: '供应商后台确认请求已成功落地。' },
+      })
+      fireEvent.click(screen.getByRole('button', { name: '提交核对结论' }))
+      await waitFor(() => expect(submitted).toBeTruthy())
+      expect((submitted as { resolution: string }).resolution).toBe('succeeded')
+      expect(await screen.findByText('人工核对：确认已成功')).toBeTruthy()
+      expect(screen.queryByRole('button', { name: '提交核对结论' })).toBeNull()
+    },
+  )
 
   it('shows goal, review pack criteria, and the evidence gallery in the task drawer', async () => {
     stubImagePreview()
@@ -12616,4 +12651,222 @@ describe('sealed Pegas UI', () => {
       ),
     ).toBe(false)
   })
+})
+
+describe('DESIGN-009 task detail closure', () => {
+  it('replaces the completed footer with exact-reply candidates and custom Enter sending', async () => {
+    const completed = {
+      ...channel,
+      status: 'completed' as const,
+      canResume: true,
+      canStop: false,
+      workflow: {
+        state: 'delivered' as const,
+        resultMessageId: 'detail-result',
+      },
+    }
+    const result: OutboxMessage = {
+      id: 'detail-result',
+      userId: 'owner',
+      taskId: channel.id,
+      status: 'sent',
+      createdAt: '2026-11-26T00:00:00Z',
+      payload: {
+        type: 'run.completed',
+        text: '完整调研结论',
+        followUps: [
+          '比较方案体积',
+          '分析内存使用',
+          '比较识别效果',
+          '查看示例流程',
+        ],
+      },
+      projection: { lane: 'work', weight: 'card' },
+    }
+    const fixture = {
+      ...snapshot,
+      channels: [completed],
+      runs: [{ ...run, status: 'completed' as const, output: '完整调研结论' }],
+      messages: [result],
+    }
+    const sends: { text: string; replyToMessageId: string }[] = []
+    installSnapshotFetch(fixture, (path, init) => {
+      if (path === '/v1/events' && init?.method === 'POST') {
+        if (typeof init.body !== 'string')
+          throw new Error('Expected event body')
+        const body = JSON.parse(init.body) as {
+          payload: { text: string; replyToMessageId: string }
+        }
+        sends.push(body.payload)
+        const event = {
+          id: `detail-send-${String(sends.length)}`,
+          userId: 'owner',
+          source: 'web',
+          type: 'user.message',
+          status: 'pending' as const,
+          payload: body.payload,
+          createdAt: new Date().toISOString(),
+        }
+        fixture.events = [...fixture.events, event]
+        return Response.json({ event }, { status: 202 })
+      }
+      if (path.endsWith('/read'))
+        return Response.json({
+          message: { ...result, readAt: new Date().toISOString() },
+        })
+      return undefined
+    })
+    render(<App />)
+    const composer = await screen.findByLabelText('给 Pegas 发消息')
+    fireEvent.change(composer, { target: { value: '保留公共草稿' } })
+    fireEvent.click(
+      within(screen.getByLabelText('主导航')).getByRole('button', {
+        name: /所有事情/,
+      }),
+    )
+    fireEvent.click(
+      await within(mainCanvas()).findByRole('button', {
+        name: new RegExp(channel.title),
+      }),
+    )
+    const detail = await screen.findByLabelText('工作详情')
+    await within(detail).findAllByText('完整调研结论')
+    for (const name of ['解释这次结果', '继续执行', '新建相关事情'])
+      expect(within(detail).queryByRole('button', { name })).toBeNull()
+    fireEvent.click(
+      await within(detail).findByRole('button', { name: '比较方案体积' }),
+    )
+    await waitFor(() =>
+      expect(sends).toEqual([
+        { text: '比较方案体积', replyToMessageId: 'detail-result' },
+      ]),
+    )
+    fireEvent.click(within(detail).getByRole('button', { name: '快速回复' }))
+    const input = within(detail).getByRole('textbox', { name: '回复内容' })
+    await waitFor(() => expect(input).toHaveProperty('disabled', false))
+    fireEvent.change(input, { target: { value: '还有哪些限制？' } })
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true, keyCode: 229 })
+    expect(sends).toHaveLength(1)
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() =>
+      expect(sends[1]).toEqual({
+        text: '还有哪些限制？',
+        replyToMessageId: 'detail-result',
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '关闭详情' }))
+    fireEvent.click(
+      within(screen.getByLabelText('主导航')).getByRole('button', {
+        name: '对话',
+      }),
+    )
+    await waitFor(() =>
+      expect(
+        document.querySelector(
+          '[data-message-id="detail-send-2"] .message-content',
+        )?.textContent,
+      ).toBe('还有哪些限制？'),
+    )
+    expect(screen.getByLabelText('给 Pegas 发消息')).toHaveProperty(
+      'value',
+      '保留公共草稿',
+    )
+    expect(screen.queryByRole('button', { name: '解释这次结果' })).toBeNull()
+  })
+
+  it('marks the loaded result and failure history read when opening a task directly, leaving decisions untouched', async () => {
+    const source = snapshot.messages[0]
+    if (!source) throw new Error('Expected source')
+    const notices = [
+      {
+        ...source,
+        id: 'read-result',
+        payload: { type: 'run.completed', text: '已有结果' },
+      },
+      {
+        ...source,
+        id: 'read-failure',
+        payload: { type: 'run.failed', error: '旧运行失败' },
+      },
+      {
+        ...source,
+        id: 'unread-decision',
+        payload: { type: 'approval.required', approvalId: 'pending-approval' },
+      },
+    ]
+    const fixture = { ...snapshot, messages: notices }
+    const reads: string[] = []
+    installSnapshotFetch(fixture, path => {
+      if (!path.endsWith('/read')) return undefined
+      const notice = notices.find(x => path.includes(x.id))
+      if (!notice) throw new Error('Unexpected read')
+      reads.push(notice.id)
+      const updated = { ...notice, readAt: new Date().toISOString() }
+      fixture.messages = fixture.messages.map(x =>
+        x.id === notice.id ? updated : x,
+      )
+      return Response.json({ message: updated })
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /所有事情/,
+      }),
+    )
+    fireEvent.click(
+      await within(mainCanvas()).findByRole('button', {
+        name: new RegExp(channel.title),
+      }),
+    )
+    await screen.findByLabelText('工作详情')
+    await waitFor(() =>
+      expect(new Set(reads)).toEqual(new Set(['read-result', 'read-failure'])),
+    )
+    expect(reads).toHaveLength(2)
+  })
+
+  it.each(['timeline', 'read'])(
+    'does not fake read state after a %s failure and retries on reopen',
+    async failure => {
+      const source = snapshot.messages[0]
+      if (!source) throw new Error('Expected source')
+      const notice = {
+        ...source,
+        payload: { type: 'run.completed', text: '等待阅读的结果' },
+      }
+      let failing = true
+      let reads = 0
+      const fixture = { ...snapshot, messages: [notice] }
+      installSnapshotFetch(fixture, path => {
+        if (failure === 'timeline' && failing && path.includes('/timeline?'))
+          return Response.json({ message: '时间线暂时不可用' }, { status: 503 })
+        if (!path.endsWith('/read')) return undefined
+        reads += 1
+        if (failing)
+          return Response.json({ message: '已读暂时不可用' }, { status: 503 })
+        const updated = { ...notice, readAt: new Date().toISOString() }
+        fixture.messages = [updated]
+        return Response.json({ message: updated })
+      })
+      render(<App />)
+      fireEvent.click(
+        within(await screen.findByLabelText('主导航')).getByRole('button', {
+          name: /所有事情/,
+        }),
+      )
+      const entry = await within(mainCanvas()).findByRole('button', {
+        name: new RegExp(channel.title),
+      })
+      fireEvent.click(entry)
+      await screen.findByText(
+        failure === 'timeline' ? '时间线暂时不可用' : '已读暂时不可用',
+      )
+      expect(reads).toBe(failure === 'timeline' ? 0 : 1)
+      fireEvent.click(screen.getByRole('button', { name: '关闭详情' }))
+      failing = false
+      fireEvent.click(entry)
+      await waitFor(() => expect(reads).toBe(failure === 'timeline' ? 1 : 2))
+      expect(fixture.messages[0]).toHaveProperty('readAt')
+    },
+  )
 })

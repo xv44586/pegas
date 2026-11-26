@@ -1241,3 +1241,14 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 ### APPROVAL-001 目录信任增量（2026-11-26，已实现，待集成验证）
 
 用户结果：一次授权同一目录后，后续文件读写不反复打断；本事情范围与同用户长期范围明确可选、可撤销。权威实现为 `src/executor/policy-gate.mjs`、`dsh-approval-bridge.mjs`、`src/storage/sqlite-store.ts`（schema v59）和 `web/src/sealed/DetailDrawer.tsx`。验收合同与证据见 `docs/approval-policy-gate.md` P9：check 152 文件/1677 通过/1 既有跳过，smoke、review:ui 与 a11y 通过。下一缺口：生产 DSH 连续跨目录任务验证与 Candidate 发布；任意不透明 shell 不在目录豁免范围内。
+
+### DESIGN-009：详情追问统一与待处理闭环（2026-11-26）
+
+- **基线与隔离**：已发布 main `24590030`；主目录存在未知的 `App.test.tsx` / `MainPages.tsx` 未提交改动，未触碰；独立 worktree `design-009-detail-closure` / `codex/fix-design-009-detail-closure`。
+- **根因**：收件箱只消除已解决审批，没有消除已有 `action.reconciled` 的核对通知；旧 `action.outcome_unknown` 未进入核对抽屉；独立决定的已读错误匹配同事情失败组。直接打开事情详情也未对实际加载的结果与失败通知标记已读。Chat/详情仍残留解释按钮和完成态通用操作，未复用新追问组件。
+- **验收**：Chat 与事情详情删除“解释这次结果”；完成详情以结果、0–4 候选和就地快速回复闭环，点击/Enter 精确回复到原事情并在 Chat 显示用户原文。已完成事情不要求继续或新建才可结束。阅读已成功加载的事情时间线标记结果/失败通知已读；独立确认、验收、核对仍逐项阅读且不自动作决定。匹配 action ID 的已核对事实消除旧待办，不根据 completed/已读推断已解决。两种核对事件均进入真实核对页；未知动作仍需用户事实依据。
+- **权限与非目标**：Web 投影与交互适配，复用既有回复、已读、核对 API；不补造候选、不伪造执行/核对结果、不自动验收或停止任务，不修改已保存的历史执行记录。
+- **失败与恢复**：时间线加载失败不标记已读；已读失败可重新打开重试；发送失败保稿同键重试；没有数据库迁移，可回滚上一 Candidate。
+- **权威实现**：`web/src/sealed/DetailDrawer.tsx` 与 Chat 复用 `InlineReply`、`replyToMessageId`；`web/src/App.tsx` 统一已读落点；`web/src/sealed/types.ts` 按 action ID 消费既有结算事实。
+- **自动化证据**：旧核对类型、已解决待办消除、独立决定已读、直接打开详情已读及旧按钮回归先红后绿；App/ChatExperience/types 共 363 项通过。完整 `pnpm check` 152 文件 / 1677 测试；`pnpm smoke`、真实 Electron loopback `smoke:dsh-runtime`、无障碍审计通过。`verify-detail-closure.mjs` 已接入 UI review，桌面与 390px 验证四候选、局部输入、原事情归属、Chat 用户原文、公共草稿保留、已读计数及已结算待办消除，同时复验 216 次全站弹层操作与 24 次执行设置开关/保存回读。
+- **状态与下一缺口**：本次交互闭环验收，待绿色 PR CI 后合并并发布不可变 Candidate；整体 DESIGN-009 不升级。未对历史回复补生成候选、未调用付费模型评估建议质量，通知服务端分页仍为既有后续缺口。回滚保留已读事实与动作结算，只切换上一运行 Candidate。

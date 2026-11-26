@@ -22,6 +22,8 @@ import {
   actionIdFromMessage,
   approvalIdFromMessage,
   attentionBoard,
+  attentionSection,
+  isAttentionMessage,
   clarificationQuestions,
   routingClarification,
   isReconciliationMessage,
@@ -29,7 +31,6 @@ import {
   reviewProjection,
   runIdFromMessage,
   taskAutomationActive,
-  textFromPayload,
   type AppData,
   type AppPage,
   type ComposerTarget,
@@ -1162,23 +1163,71 @@ export function App() {
     }
   }
 
-  async function markRead(message: OutboxMessage) {
-    const updated = await api.markOutboxRead(message.id)
-    setData(current => ({
-      ...current,
-      snapshot: {
-        ...current.snapshot,
-        messages: current.snapshot.messages.map(item =>
-          item.id === updated.id ? updated : item,
-        ),
-      },
-    }))
-    setDrawer(current =>
-      current?.kind === 'message' && current.message.id === updated.id
-        ? { ...current, message: updated }
-        : current,
+  const markRead = useCallback(
+    async (message: OutboxMessage) => {
+      const updated = await api.markOutboxRead(message.id)
+      setData(current => ({
+        ...current,
+        snapshot: {
+          ...current.snapshot,
+          messages: current.snapshot.messages.map(item =>
+            item.id === updated.id ? updated : item,
+          ),
+        },
+      }))
+      setDrawer(current =>
+        current?.kind === 'message' && current.message.id === updated.id
+          ? { ...current, message: updated }
+          : current?.kind === 'task' && current.timeline
+            ? {
+                ...current,
+                timeline: {
+                  ...current.timeline,
+                  messages: current.timeline.messages.map(item =>
+                    item.id === updated.id ? updated : item,
+                  ),
+                },
+              }
+            : current,
+      )
+    },
+    [api],
+  )
+
+  const taskReadAttemptsRef = useRef({ key: '', ids: new Set<string>() })
+  useEffect(() => {
+    const key = drawer?.kind === 'task' ? drawer.channel.id : ''
+    if (taskReadAttemptsRef.current.key !== key)
+      taskReadAttemptsRef.current = { key, ids: new Set() }
+    if (drawer?.kind !== 'task' || !drawer.timeline || drawer.timelineError)
+      return
+    const controller = new AbortController()
+    const notices = drawer.timeline.messages.filter(
+      message =>
+        !message.readAt &&
+        isAttentionMessage(message) &&
+        attentionSection(message) !== 'todo',
     )
-  }
+    void (async () => {
+      for (const message of notices) {
+        if (controller.signal.aborted) return
+        if (taskReadAttemptsRef.current.ids.has(message.id)) continue
+        taskReadAttemptsRef.current.ids.add(message.id)
+        try {
+          await markRead(message)
+        } catch (caught) {
+          setError(
+            caught instanceof Error
+              ? caught.message
+              : '标记已读失败，请重新打开详情重试。',
+          )
+        }
+      }
+    })()
+    return () => {
+      controller.abort()
+    }
+  }, [drawer, markRead])
 
   async function resolveOutbox(
     messageId: string,
@@ -1216,22 +1265,12 @@ export function App() {
     )
     const restored = await restoreAttentionDrawer(message, requestId)
     if (!restored) return
-    const board = attentionBoard(data.snapshot.messages, data.snapshot.channels)
-    const group = message.taskId
-      ? [...board.failed, ...board.activity].find(
-          candidate => candidate.taskId === message.taskId,
-        )
-      : undefined
-    const targets = (group ? group.messages : [message]).filter(
-      item => !item.readAt,
-    )
-    for (const target of targets) {
-      if (requestId !== attentionRequestRef.current) return
+    if (restored === 'task') return
+    if (!message.readAt) {
       try {
-        await markRead(target)
+        await markRead(message)
       } catch (caught) {
         handleAttentionError(caught)
-        return
       }
     }
   }
@@ -1248,7 +1287,7 @@ export function App() {
   async function restoreAttentionDrawer(
     message: OutboxMessage,
     requestId: number,
-  ): Promise<boolean> {
+  ): Promise<boolean | 'task'> {
     const routingQuestion = routingClarification(message)
     if (routingQuestion) {
       if (requestId !== attentionRequestRef.current) return false
@@ -1354,7 +1393,7 @@ export function App() {
       }),
     )
     void loadTaskDrawer(channel.id)
-    return true
+    return 'task'
   }
 
   useEffect(() => {
@@ -1768,14 +1807,9 @@ export function App() {
           onWorkflowMessage={async id =>
             openAttentionMessage(await workflowMessage(id))
           }
-          onExplainResult={async id => {
-            const message = await workflowMessage(id)
-            openComposer({
-              kind: 'reply',
-              id,
-              text: textFromPayload(message.payload),
-              explain: true,
-            })
+          onReplySent={async () => {
+            await loadSnapshot()
+            if (drawer?.kind === 'task') await loadTaskDrawer(drawer.channel.id)
           }}
           onAnswerRouting={() => {
             setComposerTarget(undefined)

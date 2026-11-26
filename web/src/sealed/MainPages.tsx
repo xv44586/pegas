@@ -776,9 +776,6 @@ export function ConversationPage({
               onJumpToMessage={jumpToMessage}
               onOpenAttention={onOpenAttention}
               onOpenTask={openTaskDetails}
-              onExplainResult={
-                selectQuote ? () => selectQuote(true) : undefined
-              }
               onToggleExpanded={() =>
                 setExpandedMessages(current => {
                   const next = new Set(current)
@@ -1618,7 +1615,6 @@ function FactCard({
   onOpenTask,
   onAnswerClarification,
   onOpenAttention,
-  onExplainResult,
 }: {
   message: FactCardMessage
   snapshot: Snapshot
@@ -1630,7 +1626,6 @@ function FactCard({
   onOpenTask: (taskId: string | undefined) => void
   onAnswerClarification: (channel: Snapshot['channels'][number]) => void
   onOpenAttention: (message: OutboxMessage) => Promise<void>
-  onExplainResult?: () => void
 }) {
   const heading = factCardHeading(message)
   const tone = factCardTone(message)
@@ -1752,17 +1747,6 @@ function FactCard({
             {decideLabel} <ArrowRight size={15} />
           </Button>
         </div>
-      )}
-      {channel?.workflow?.resultMessageId === message.id && onExplainResult && (
-        <Button
-          className="mt-2"
-          onClick={onExplainResult}
-          size="sm"
-          type="button"
-          variant="quiet"
-        >
-          解释这次结果
-        </Button>
       )}
     </section>
   )

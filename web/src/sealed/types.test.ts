@@ -695,3 +695,38 @@ describe('DESIGN-002 work list sort projection', () => {
     ).toEqual(['task-base', 'task-broken'])
   })
 })
+
+describe('DESIGN-009 resolved reconciliation inbox closure', () => {
+  it.each(['action.outcome_unknown', 'action.reconciliation_required'])(
+    'closes %s only with its matching action fact',
+    type => {
+      const pending: OutboxMessage = {
+        id: 'pending',
+        userId: 'owner',
+        taskId: 'task-1',
+        status: 'sent',
+        createdAt: '2026-11-26T00:00:00Z',
+        payload: { type, actionId: 'action-1' },
+      }
+      const other = {
+        ...pending,
+        id: 'other',
+        payload: { type, actionId: 'action-2' },
+      }
+      const resolved = {
+        ...pending,
+        id: 'resolved',
+        payload: {
+          type: 'action.reconciled',
+          actionId: 'action-1',
+          resolution: 'failed',
+        },
+      }
+      expect(attentionBoard([pending, other]).todo).toHaveLength(2)
+      expect(
+        attentionBoard([pending, other, resolved]).todo.map(item => item.id),
+      ).toEqual(['other'])
+      expect(attentionBoard([pending, other, resolved]).totalUnread).toBe(1)
+    },
+  )
+})
