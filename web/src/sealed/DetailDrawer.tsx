@@ -3868,6 +3868,7 @@ export function ApprovalRulesSection({
                 <Button
                   variant="secondary"
                   size="sm"
+                  className="shrink-0 whitespace-nowrap"
                   disabled={revokingId !== ''}
                   onClick={() => void revoke(rule)}
                   type="button"

@@ -431,6 +431,13 @@ try {
     ),
     'Authorization trace must wrap long paths',
   )
+  const revokeBounds = await tracePanel
+    .getByRole('button', { name: '撤销规则', exact: true })
+    .boundingBox()
+  assert(
+    revokeBounds && revokeBounds.width > revokeBounds.height,
+    'Revoke action must remain a readable single-line button',
+  )
   const traceBounds = await tracePanel.boundingBox()
   assert(
     traceBounds &&
