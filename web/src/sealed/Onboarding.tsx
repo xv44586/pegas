@@ -64,7 +64,7 @@ export function Onboarding({
   onContinueSettings: () => void
 }) {
   const [step, setStep] = useState(0)
-  const [editingConnection, setEditingConnection] = useState(false)
+  const [editingConnection, setEditingConnection] = useState(true)
   const [connectionDraft, setConnectionDraft] = useState<{
     providerId?: string
     baseUrl?: string
@@ -460,58 +460,64 @@ export function Onboarding({
                   {connectionNotice.message}
                 </p>
               )}
-              <div className="grid gap-1.5" role="group" aria-label="默认模型">
-                <span className="text-[13px] font-medium text-ink">
-                  默认模型
-                </span>
-                <ModelPicker
-                  ariaLabel="默认模型"
-                  boundaryRef={setupBodyRef}
-                  disabled={Boolean(connectionBusy)}
-                  description={
-                    showConnection
-                      ? '当前连接返回的模型列表'
-                      : '已配置模型服务的完整目录'
-                  }
-                  footer={
-                    showConnection
-                      ? '选好后保存连接和默认模型；保存前将验证模型可用性'
-                      : '选择立即保存到服务端；模型变更只作用于新建执行会话'
-                  }
-                  models={
-                    showConnection
-                      ? draftModels
-                      : models.length
-                        ? models
-                        : savedModel
-                          ? [savedModel]
-                          : []
-                  }
-                  onSelect={(_, model) => {
-                    if (!model) return
-                    if (showConnection) {
-                      setSelectedDraftModel(model)
-                      setConnectionNotice(undefined)
-                    } else return onSelectModel?.(model)
-                  }}
-                  placeholder={
-                    showConnection
-                      ? draftModels.length
-                        ? '选择默认模型'
-                        : '请先测试连接，获取模型列表'
-                      : (configuredModelId ?? '选择默认模型')
-                  }
-                  value={
-                    showConnection
-                      ? draftModel
-                        ? modelSelectionKey(draftModel)
-                        : ''
-                      : configuredModel
-                        ? modelSelectionKey(configuredModel)
-                        : ''
-                  }
-                />
-              </div>
+              {(!showConnection || draftModels.length > 0) && (
+                <div
+                  className="grid gap-1.5"
+                  role="group"
+                  aria-label="默认模型"
+                >
+                  <span className="text-[13px] font-medium text-ink">
+                    默认模型
+                  </span>
+                  <ModelPicker
+                    ariaLabel="默认模型"
+                    boundaryRef={setupBodyRef}
+                    disabled={Boolean(connectionBusy)}
+                    description={
+                      showConnection
+                        ? '当前连接返回的模型列表'
+                        : '已配置模型服务的完整目录'
+                    }
+                    footer={
+                      showConnection
+                        ? '选好后保存连接和默认模型；保存前将验证模型可用性'
+                        : '选择立即保存到服务端；模型变更只作用于新建执行会话'
+                    }
+                    models={
+                      showConnection
+                        ? draftModels
+                        : models.length
+                          ? models
+                          : savedModel
+                            ? [savedModel]
+                            : []
+                    }
+                    onSelect={(_, model) => {
+                      if (!model) return
+                      if (showConnection) {
+                        setSelectedDraftModel(model)
+                        setConnectionNotice(undefined)
+                      } else return onSelectModel?.(model)
+                    }}
+                    placeholder={
+                      showConnection
+                        ? draftModels.length
+                          ? '选择默认模型'
+                          : '请先测试连接，获取模型列表'
+                        : (configuredModelId ?? '选择默认模型')
+                    }
+                    value={
+                      showConnection
+                        ? draftModel
+                          ? modelSelectionKey(draftModel)
+                          : ''
+                        : configuredModel
+                          ? modelSelectionKey(configuredModel)
+                          : ''
+                    }
+                  />
+                </div>
+              )}
               {showConnection && draftModels.length > 0 && (
                 <Button
                   className="justify-self-end"

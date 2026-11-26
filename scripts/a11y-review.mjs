@@ -290,7 +290,14 @@ try {
   await onboardingPage
     .getByRole('heading', { name: '连接模型服务', exact: true })
     .waitFor()
+  await onboardingPage.getByRole('form', { name: '模型连接配置' }).waitFor()
+  if (await onboardingPage.getByRole('button', { name: /默认模型$/ }).count())
+    throw new Error('First-run setup must not assume an existing model')
   await audit(onboardingPage, 'onboarding-models')
+  await onboardingPage
+    .getByRole('button', { name: '测试连接', exact: true })
+    .click()
+  await onboardingPage.getByText(/已获取 34 个模型/).waitFor()
   await onboardingPage.getByRole('button', { name: /，默认模型$/ }).click()
   await onboardingPage.getByRole('dialog', { name: '选择模型' }).waitFor()
   await audit(onboardingPage, 'onboarding-model-picker')
