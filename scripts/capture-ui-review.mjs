@@ -1,4 +1,5 @@
 import { verifyDetailClosure } from './verify-detail-closure.mjs'
+import { verifyTaskConversation } from './verify-task-conversation.mjs'
 import { verifyAnswerFollowUps } from './verify-answer-follow-ups.mjs'
 import { execFileSync, spawn } from 'node:child_process'
 import {
@@ -290,6 +291,7 @@ try {
   await verifyUiOverlays(page, capture, 'desktop')
   await verifyAnswerFollowUps(page, capture, 'desktop')
   await verifyDetailClosure(page, capture, 'desktop')
+  await verifyTaskConversation(page, capture, 'desktop')
   await capture(page, 'desktop-conversation.png', 'desktop-conversation')
   await composerInput.focus()
   await capture(page, 'desktop-composer-focus.png', 'desktop-composer-focus')
@@ -788,6 +790,7 @@ try {
   await verifyUiOverlays(mobilePage, capture, 'mobile')
   await verifyAnswerFollowUps(mobilePage, capture, 'mobile')
   await verifyDetailClosure(mobilePage, capture, 'mobile')
+  await verifyTaskConversation(mobilePage, capture, 'mobile')
   await capture(mobilePage, 'mobile-conversation.png', 'mobile-conversation')
   await mobileComposer.focus()
   await capture(

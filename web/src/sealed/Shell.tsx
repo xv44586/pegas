@@ -60,6 +60,7 @@ const navItems: readonly {
 ]
 
 interface AppShellProps {
+  activeTaskId?: string
   page: AppPage
   connectionStatus: 'connecting' | 'online' | 'offline'
   onNavigate: (page: AppPage) => void
@@ -70,6 +71,7 @@ interface AppShellProps {
 }
 
 export function AppShell({
+  activeTaskId,
   page,
   connectionStatus,
   onNavigate,
@@ -90,7 +92,10 @@ export function AppShell({
           ariaLabel="主导航"
           fill
           showNewChat={false}
-          activeNav={page}
+          activeNav={activeTaskId ? '' : page}
+          activeRecentId={activeTaskId}
+          activeTitle={null}
+          navigateOnPick={false}
           navItems={navItems.map(({ id, label, icon: Icon }) => ({
             key: id,
             label,

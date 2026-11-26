@@ -72,6 +72,7 @@ interface Row {
 
 /** Product adapter for Prompt Bar interactions; all mutations reuse existing controls. */
 export function useComposerMenu({
+  lockedTask = false,
   draft,
   onDraftChange,
   inputRef,
@@ -86,6 +87,7 @@ export function useComposerMenu({
   onTask,
   onError,
 }: {
+  lockedTask?: boolean
   draft: string
   onDraftChange: (draft: string) => void
   inputRef: RefObject<HTMLTextAreaElement | null>
@@ -121,7 +123,7 @@ export function useComposerMenu({
     !dismissed && !disabled
       ? slashMatch && caret === draft.length
         ? { mode: 'commands' as const, query: slashMatch[1] ?? '', start: 0 }
-        : atMatch
+        : atMatch && !lockedTask
           ? {
               mode: 'tasks' as const,
               query: atMatch[2] ?? '',
@@ -161,11 +163,13 @@ export function useComposerMenu({
   function execute(command: Command, consume = false) {
     if (disabled) return
     const unavailable =
-      command === 'stop' && !canStop
-        ? '当前没有可停止的事情。'
-        : command === 'model' && !hasModels
-          ? '尚无可用模型，请先在设置中配置模型服务。'
-          : ''
+      command === 'auto' && lockedTask
+        ? '此页始终在当前事情内聊天。请回到对话页开启其他话题。'
+        : command === 'stop' && !canStop
+          ? '当前没有可停止的事情。'
+          : command === 'model' && !hasModels
+            ? '尚无可用模型，请先在设置中配置模型服务。'
+            : ''
     if (unavailable) {
       onError(unavailable)
       close()
@@ -182,20 +186,22 @@ export function useComposerMenu({
     if (command === 'stop') onStop()
     if (command === 'auto') onAuto()
   }
-  const commandRows: Row[] = commands.map(command => ({
-    ...command,
-    shortcut: `/${command.key}`,
-    description:
-      command.key === 'stop' && !canStop
-        ? '当前没有可停止的事情'
-        : command.key === 'model' && !hasModels
-          ? '请先在设置中配置模型服务'
-          : command.description,
-    disabled:
-      (command.key === 'stop' && !canStop) ||
-      (command.key === 'model' && !hasModels),
-    action: () => execute(command.key, completion),
-  }))
+  const commandRows: Row[] = commands
+    .filter(command => !lockedTask || command.key !== 'auto')
+    .map(command => ({
+      ...command,
+      shortcut: `/${command.key}`,
+      description:
+        command.key === 'stop' && !canStop
+          ? '当前没有可停止的事情'
+          : command.key === 'model' && !hasModels
+            ? '请先在设置中配置模型服务'
+            : command.description,
+      disabled:
+        (command.key === 'stop' && !canStop) ||
+        (command.key === 'model' && !hasModels),
+      action: () => execute(command.key, completion),
+    }))
   const rows: Row[] =
     menuMode === 'actions'
       ? [
@@ -216,7 +222,7 @@ export function useComposerMenu({
             shortcut: '/',
             action: () => show('commands'),
           },
-        ]
+        ].filter(row => !lockedTask || row.key !== 'tasks')
       : menuMode === 'tasks'
         ? channels
             .filter(

@@ -6337,8 +6337,8 @@ describe('sealed Pegas UI', () => {
       await screen.findByRole('button', { name: /进行中 · 安全自更新流程/ }),
     )
     fireEvent.click(screen.getByRole('button', { name: '继续追问' }))
-    expect(await screen.findByText(/继续事情：/)).toBeTruthy()
-    fireEvent.change(screen.getByLabelText('给 Pegas 发消息'), {
+    expect(await screen.findByLabelText('就这件事继续聊天')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('就这件事继续聊天'), {
       target: { value: '补充当前事情' },
     })
     fireEvent.click(screen.getByRole('button', { name: '发送' }))
@@ -8618,8 +8618,8 @@ describe('sealed Pegas UI', () => {
     expect(within(questions).getByText('允许影响哪些用户？')).toBeTruthy()
     const drawer = screen.getByRole('dialog')
     fireEvent.click(within(drawer).getByRole('button', { name: '去回答' }))
-    expect(await screen.findByText(/继续事情：/)).toBeTruthy()
-    const composer = screen.getByLabelText('给 Pegas 发消息')
+    expect(await screen.findByLabelText('就这件事继续聊天')).toBeTruthy()
+    const composer = screen.getByLabelText('就这件事继续聊天')
     fireEvent.change(composer, {
       target: { value: '今晚 22:00 发布，仅内部用户。' },
     })
@@ -8768,7 +8768,7 @@ describe('sealed Pegas UI', () => {
     const card = await screen.findByLabelText(/需要你补充：/)
     expect(card.textContent).toContain('发布窗口是哪个时间段？')
     fireEvent.click(screen.getByRole('button', { name: /去回答/ }))
-    expect(await screen.findByText(/继续事情：/)).toBeTruthy()
+    expect(await screen.findByLabelText('就这件事继续聊天')).toBeTruthy()
   })
 
   it('hides the inline clarification card once the task no longer waits', async () => {

@@ -230,14 +230,19 @@ export class PegasApi {
     return `/v1/runs/${encodeURIComponent(runId)}/activity/${encodeURIComponent(callId)}/output-file?userId=${user}`
   }
 
-  async channelTimeline(channelId: string): Promise<ChannelTimeline> {
+  async channelTimeline(
+    channelId: string,
+    cursor?: string,
+    signal?: AbortSignal,
+  ): Promise<ChannelTimeline> {
     const user = encodeURIComponent(this.#userId)
     const raw = await this.#get<unknown>(
-      `/v1/channels/${encodeURIComponent(channelId)}/timeline?userId=${user}&limit=200`,
+      `/v1/channels/${encodeURIComponent(channelId)}/timeline?userId=${user}&limit=200${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+      signal,
     )
     if (raw && typeof raw === 'object' && 'channel' in raw) {
-      const projected = raw as { channel: Partial<WorkChannel> }
-      if (typeof projected.channel.id === 'string')
+      const projected = raw as { channel?: Partial<WorkChannel> | null }
+      if (projected.channel && typeof projected.channel.id === 'string')
         projected.channel = {
           ...projected.channel,
           workerIconId: isWorkerIconId(projected.channel.workerIconId)
@@ -248,6 +253,26 @@ export class PegasApi {
     if (!isChannelTimeline(raw, channelId))
       throw new Error('服务端返回的 Channel 时间线不完整。')
     return raw
+  }
+
+  /** Drain the server's owner-scoped input cursor; Outbox and Runs are unpaged. */
+  async completeChannelTimeline(
+    channelId: string,
+    signal?: AbortSignal,
+  ): Promise<ChannelTimeline> {
+    const events = new Map<string, InboxEvent>()
+    const seen = new Set<string>()
+    let cursor: string | undefined
+    for (;;) {
+      signal?.throwIfAborted()
+      const page = await this.channelTimeline(channelId, cursor, signal)
+      for (const event of page.events) events.set(event.id, event)
+      if (!page.nextCursor) return { ...page, events: [...events.values()] }
+      if (seen.has(page.nextCursor))
+        throw new Error('事情历史游标未前进，请重新读取。')
+      seen.add(page.nextCursor)
+      cursor = page.nextCursor
+    }
   }
 
   async snapshot(channelId?: string): Promise<Snapshot> {
@@ -1355,8 +1380,11 @@ export class PegasApi {
     return this.#get<DshModelCatalog>('/v1/settings/agent-models')
   }
 
-  async #get<T>(path: string): Promise<T> {
-    const response = await fetch(path, { headers: this.#headers(false) })
+  async #get<T>(path: string, signal?: AbortSignal): Promise<T> {
+    const response = await fetch(path, {
+      headers: this.#headers(false),
+      signal,
+    })
     if (!response.ok) await throwResponse(response)
     return (await response.json()) as T
   }
@@ -1379,7 +1407,11 @@ function isChannelTimeline(
     candidate.channel?.id === channelId &&
     Array.isArray(candidate.events) &&
     Array.isArray(candidate.messages) &&
-    Array.isArray(candidate.runs)
+    Array.isArray(candidate.runs) &&
+    candidate.runs.every(run => run.taskId === channelId) &&
+    candidate.messages.every(message => message.taskId === channelId) &&
+    (candidate.nextCursor === undefined ||
+      typeof candidate.nextCursor === 'string')
   )
 }
 

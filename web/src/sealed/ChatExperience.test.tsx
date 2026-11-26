@@ -218,6 +218,418 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+describe('CONV-002 task conversation', () => {
+  function installTaskHistory(
+    options: {
+      stopped?: boolean
+      failPage?: boolean
+      noRecents?: boolean
+      loop?: boolean
+    } = {},
+    custom?: Parameters<typeof installChatFetch>[1],
+  ) {
+    const events = Array.from({ length: 205 }, (_, index) => ({
+      ...baseEvent,
+      id: `history-${String(index)}`,
+      payload: { text: `事情内输入 ${String(index)}` },
+    }))
+    const task = {
+      ...channel,
+      ...(options.stopped
+        ? { status: 'cancelled' as const, canStop: false }
+        : {}),
+    }
+    const mock = installChatFetch(
+      { ...baseSnapshot, channels: options.noRecents ? [] : [task] },
+      (path, init) => {
+        const overridden = custom?.(path, init)
+        if (overridden) return overridden
+        if (path.startsWith(`/v1/channels/${channel.id}/timeline?`)) {
+          const cursor = new URL(path, 'http://localhost').searchParams.get(
+            'cursor',
+          )
+          if (cursor && options.failPage)
+            return Response.json({ message: '历史续页失败' }, { status: 503 })
+          return Response.json({
+            channel: task,
+            events: cursor ? events.slice(199) : events.slice(0, 200),
+            messages: [
+              {
+                ...baseMessage,
+                id: 'task-answer',
+                payload: { type: 'agent.message', text: '这件事的回复' },
+              },
+            ],
+            runs: [],
+            ...(!cursor || options.loop ? { nextCursor: 'history-199' } : {}),
+          })
+        }
+        return undefined
+      },
+    )
+    return { mock, options }
+  }
+
+  it('opens an isolated page from recents and reads every history page without duplicates', async () => {
+    const { mock } = installTaskHistory()
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: channel.title }))
+    expect(
+      await screen.findByRole('heading', { name: channel.title, level: 1 }),
+    ).toBeTruthy()
+    expect(await screen.findByText('事情内输入 204')).toBeTruthy()
+    expect(screen.getAllByText('事情内输入 199')).toHaveLength(1)
+    expect(screen.queryByText('帮我整理季度数据')).toBeNull()
+    expect(screen.queryByRole('group', { name: '进行中的事情' })).toBeNull()
+    expect(screen.queryByText('继续事情：')).toBeNull()
+    expect(
+      mock.mock.calls.some(
+        ([path]) =>
+          typeof path === 'string' && path.includes('cursor=history-199'),
+      ),
+    ).toBe(true)
+  })
+
+  it('keeps successive sends targeted and restores separate main and task drafts', async () => {
+    const { mock } = installTaskHistory()
+    render(<App />)
+    const mainInput = await screen.findByLabelText('给 Pegas 发消息')
+    fireEvent.change(mainInput, { target: { value: '主聊天草稿' } })
+    fireEvent.click(await screen.findByRole('button', { name: channel.title }))
+    const input = await screen.findByLabelText('就这件事继续聊天')
+    for (const text of ['第一次补充', '第二次补充']) {
+      fireEvent.change(input, { target: { value: text } })
+      fireEvent.click(screen.getByRole('button', { name: '发送' }))
+      await waitFor(() => expect(input).toHaveProperty('value', ''))
+    }
+    const sends = mock.mock.calls.filter(
+      ([path, init]) => path === '/v1/events' && init?.method === 'POST',
+    )
+    expect(sends).toHaveLength(2)
+    for (const [, init] of sends)
+      expect(
+        (
+          JSON.parse(typeof init?.body === 'string' ? init.body : '{}') as {
+            dedupeKey?: string
+            payload?: { taskId?: string; replyToMessageId?: string }
+          }
+        ).payload?.taskId,
+      ).toBe(channel.id)
+    fireEvent.change(input, { target: { value: '事情草稿' } })
+    fireEvent.click(
+      within(screen.getByLabelText('主导航')).getByRole('button', {
+        name: '对话',
+      }),
+    )
+    expect(await screen.findByLabelText('给 Pegas 发消息')).toHaveProperty(
+      'value',
+      '主聊天草稿',
+    )
+    fireEvent.click(screen.getByRole('button', { name: channel.title }))
+    expect(await screen.findByLabelText('就这件事继续聊天')).toHaveProperty(
+      'value',
+      '事情草稿',
+    )
+  })
+
+  it('restores a direct task URL even outside the recent list', async () => {
+    installTaskHistory({ noRecents: true })
+    window.history.replaceState(
+      {},
+      '',
+      `/?view=conversation&task=${channel.id}`,
+    )
+    render(<App />)
+    expect(await screen.findByText('事情内输入 204')).toBeTruthy()
+    expect(screen.getByLabelText('就这件事继续聊天')).toBeTruthy()
+  })
+
+  it('makes a stopped task read-only', async () => {
+    installTaskHistory({ stopped: true })
+    window.history.replaceState({}, '', `/?task=${channel.id}`)
+    render(<App />)
+    expect(await screen.findByText('事情内输入 204')).toBeTruthy()
+    expect(screen.getByLabelText('就这件事继续聊天')).toHaveProperty(
+      'disabled',
+      true,
+    )
+  })
+
+  it('does not silently present truncated history when a later page fails', async () => {
+    const { options } = installTaskHistory({ failPage: true })
+    window.history.replaceState({}, '', `/?task=${channel.id}`)
+    render(<App />)
+    expect(
+      await screen.findByRole('button', { name: '重新读取事情历史' }),
+    ).toBeTruthy()
+    options.failPage = false
+    fireEvent.click(screen.getByRole('button', { name: '重新读取事情历史' }))
+    expect(await screen.findByText('事情内输入 204')).toBeTruthy()
+  })
+  it('fails visibly on a repeated history cursor instead of looping', async () => {
+    const { mock } = installTaskHistory({ loop: true })
+    window.history.replaceState({}, '', '/?task=task-1')
+    render(<App />)
+    expect(await screen.findByText(/游标未前进/)).toBeTruthy()
+    expect(
+      mock.mock.calls.filter(
+        ([path]) => typeof path === 'string' && path.includes('/timeline?'),
+      ),
+    ).toHaveLength(2)
+    expect(screen.queryByLabelText('就这件事继续聊天')).toBeNull()
+  })
+
+  it('does not display a foreign task response or fall back to main chat', async () => {
+    installTaskHistory({}, path =>
+      path.includes('/timeline?')
+        ? Response.json({
+            channel: { ...channel, id: 'foreign' },
+            events: [baseEvent],
+            messages: [baseMessage],
+            runs: [],
+          })
+        : undefined,
+    )
+    window.history.replaceState({}, '', '/?task=task-1')
+    render(<App />)
+    expect(
+      await screen.findByRole('button', { name: '重新读取事情历史' }),
+    ).toBeTruthy()
+    expect(screen.queryByText('帮我整理季度数据')).toBeNull()
+    expect(screen.queryByLabelText('给 Pegas 发消息')).toBeNull()
+  })
+
+  it('keeps the same dedupe key and quoted target after a failed send and page switch', async () => {
+    let fail = true
+    const { mock } = installTaskHistory({}, (path, init) =>
+      path === '/v1/events' && init?.method === 'POST' && fail
+        ? Response.json({ message: '临时离线' }, { status: 503 })
+        : undefined,
+    )
+    window.history.replaceState({}, '', '/?task=task-1')
+    render(<App />)
+    await screen.findByText('这件事的回复')
+    fireEvent.click(screen.getByRole('button', { name: '追问这条回复' }))
+    fireEvent.change(screen.getByLabelText('就这件事继续聊天'), {
+      target: { value: '引用追问草稿' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    await screen.findByText('临时离线')
+    fireEvent.click(
+      within(screen.getByLabelText('主导航')).getByRole('button', {
+        name: '对话',
+      }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: channel.title }))
+    const input = await screen.findByLabelText('就这件事继续聊天')
+    expect(input).toHaveProperty('value', '引用追问草稿')
+    expect(screen.getByRole('button', { name: '取消引用回复' })).toBeTruthy()
+    fail = false
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    await waitFor(() => expect(input).toHaveProperty('value', ''))
+    fireEvent.change(input, { target: { value: '普通续聊' } })
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    await waitFor(() => expect(input).toHaveProperty('value', ''))
+    const bodies = mock.mock.calls
+      .filter(
+        ([path, init]) => path === '/v1/events' && init?.method === 'POST',
+      )
+      .map(
+        ([, init]) =>
+          JSON.parse(typeof init?.body === 'string' ? init.body : '{}') as {
+            dedupeKey?: string
+            payload?: { taskId?: string; replyToMessageId?: string }
+          },
+      )
+    expect(bodies).toHaveLength(3)
+    expect(bodies[0]?.dedupeKey).toBe(bodies[1]?.dedupeKey)
+    expect(bodies[1]?.payload?.replyToMessageId).toBe('task-answer')
+    expect(bodies[2]?.payload?.taskId).toBe('task-1')
+  })
+
+  it('retains accepted-send semantics when refreshing history fails', async () => {
+    const options = { failPage: false }
+    const { mock } = installTaskHistory(options, (path, init) => {
+      if (path === '/v1/events' && init?.method === 'POST')
+        options.failPage = true
+      return undefined
+    })
+    window.history.replaceState({}, '', '/?task=task-1')
+    render(<App />)
+    const input = await screen.findByLabelText('就这件事继续聊天')
+    fireEvent.change(input, { target: { value: '已经送达' } })
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    await screen.findByRole('button', { name: '重新读取事情历史' })
+    expect(input).toHaveProperty('value', '')
+    expect(screen.getByText('事情内输入 204')).toBeTruthy()
+    options.failPage = false
+    fireEvent.click(screen.getByRole('button', { name: '重新读取事情历史' }))
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('button', { name: '重新读取事情历史' }),
+      ).toBeNull(),
+    )
+    expect(
+      mock.mock.calls.filter(
+        ([path, init]) => path === '/v1/events' && init?.method === 'POST',
+      ),
+    ).toHaveLength(1)
+  })
+
+  it('keeps the task fixed when typing @ or /auto and removes redundant task links', async () => {
+    installTaskHistory()
+    window.history.replaceState({}, '', '/?task=task-1')
+    render(<App />)
+    const input = await screen.findByLabelText('就这件事继续聊天')
+    expect(screen.queryByRole('button', { name: '查看工作详情' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '快速回复' })).toBeNull()
+    fireEvent.change(input, { target: { value: '@另一件事' } })
+    expect(screen.queryByRole('option')).toBeNull()
+    fireEvent.change(input, { target: { value: '/auto' } })
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    expect(await screen.findByText(/此页始终在当前事情内聊天/)).toBeTruthy()
+    expect(input).toHaveProperty('value', '/auto')
+  })
+
+  it('ignores an old task response when navigating between task URLs and restores the correct draft', async () => {
+    let resolveFirst: ((value: Response) => void) | undefined
+    const delayed = new Promise<Response>(resolve => {
+      resolveFirst = resolve
+    })
+    installTaskHistory({}, path => {
+      if (path.includes('/task-1/timeline?')) return delayed
+      if (path.includes('/task-2/timeline?'))
+        return Response.json({
+          channel: { ...channel, id: 'task-2', title: '第二件事' },
+          events: [
+            { ...baseEvent, id: 'second', payload: { text: '第二件事的历史' } },
+          ],
+          messages: [],
+          runs: [],
+        })
+      return undefined
+    })
+    window.history.replaceState({}, '', '/?task=task-1')
+    render(<App />)
+    await screen.findByText('正在读取完整事情历史…')
+    window.history.pushState({}, '', '/?task=task-2')
+    fireEvent.popState(window)
+    const input = await screen.findByLabelText('就这件事继续聊天')
+    fireEvent.change(input, { target: { value: '第二件事草稿' } })
+    resolveFirst?.(
+      Response.json({
+        channel,
+        events: [{ ...baseEvent, payload: { text: '不应串入的历史' } }],
+        messages: [],
+        runs: [],
+      }),
+    )
+    await waitFor(() => expect(screen.getByText('第二件事的历史')).toBeTruthy())
+    expect(screen.queryByText('不应串入的历史')).toBeNull()
+    window.history.pushState({}, '', '/')
+    fireEvent.popState(window)
+    expect(await screen.findByLabelText('给 Pegas 发消息')).toHaveProperty(
+      'value',
+      '',
+    )
+    window.history.pushState({}, '', '/?task=task-2')
+    fireEvent.popState(window)
+    expect(await screen.findByLabelText('就这件事继续聊天')).toHaveProperty(
+      'value',
+      '第二件事草稿',
+    )
+  })
+
+  it('adds one browser history entry per recent task selection', async () => {
+    installTaskHistory()
+    render(<App />)
+    const recent = await screen.findByRole('button', { name: channel.title })
+    const length = window.history.length
+    fireEvent.click(recent)
+    await screen.findByLabelText('就这件事继续聊天')
+    expect(window.history.length).toBe(length + 1)
+    expect(new URLSearchParams(window.location.search).get('task')).toBe(
+      channel.id,
+    )
+  })
+
+  it('retries only the attachment after its message was accepted', async () => {
+    let uploads = 0
+    const { mock } = installTaskHistory({}, (path, init) => {
+      if (path.includes('/event-new/attachment') && init?.method === 'POST') {
+        uploads += 1
+        return uploads === 1
+          ? Response.json({ message: '附件上传暂时失败' }, { status: 503 })
+          : Response.json({ ok: true })
+      }
+      return undefined
+    })
+    window.history.replaceState({}, '', '/?task=task-1')
+    render(<App />)
+    const input = await screen.findByLabelText('就这件事继续聊天')
+    fireEvent.change(screen.getByLabelText('选择附件文件'), {
+      target: {
+        files: [new File(['evidence'], 'evidence.txt', { type: 'text/plain' })],
+      },
+    })
+    fireEvent.change(input, { target: { value: '请看附件' } })
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    const retry = await screen.findByRole('button', { name: '重试上传附件' })
+    await waitFor(() => expect(retry).toHaveProperty('disabled', false))
+    expect(input).toHaveProperty('value', '')
+    fireEvent.click(retry)
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: '重试上传附件' })).toBeNull(),
+    )
+    expect(uploads).toBe(2)
+    expect(
+      mock.mock.calls.filter(
+        ([path, init]) => path === '/v1/events' && init?.method === 'POST',
+      ),
+    ).toHaveLength(1)
+  })
+
+  it('offers the four supported inspector tabs with expandable execution history', async () => {
+    installTaskHistory({}, path => {
+      if (path.includes('/timeline?'))
+        return Response.json({
+          channel,
+          events: [],
+          messages: [],
+          runs: [runningRun],
+        })
+      if (path.includes('/delivery?'))
+        return Response.json({ artifacts: [], evidence: [] })
+      if (path.includes('/run-1/activity'))
+        return Response.json({
+          runId: 'run-1',
+          taskId: 'task-1',
+          entries: [],
+          totalEntries: 2,
+          truncated: true,
+        })
+      return undefined
+    })
+    window.history.replaceState({}, '', '/?task=task-1')
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '事情信息' }))
+    for (const name of ['概览', '交付', '执行记录', '设置'])
+      expect(screen.getByRole('tab', { name })).toBeTruthy()
+    fireEvent.mouseDown(screen.getByRole('tab', { name: '执行记录' }), {
+      button: 0,
+      ctrlKey: false,
+    })
+    const record = await screen.findByText('进行中', { selector: 'strong' })
+    const summary = record.closest('summary')
+    const details = record.closest('details')
+    if (!summary || !details) throw new Error('Expected expandable Run')
+    fireEvent.click(summary)
+    details.open = true
+    fireEvent(details, new Event('toggle'))
+    expect(await screen.findByText(/0 \/ 2 条记录/)).toBeTruthy()
+  })
+})
+
 describe('DESIGN-003 run progress projection', () => {
   it('identifies run.acknowledged messages and picks the latest text per run', () => {
     const older = {

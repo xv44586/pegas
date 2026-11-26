@@ -1986,7 +1986,7 @@ function Meta({ label, value }: { label: string; value?: string }) {
   )
 }
 
-function evidencePreviewView(
+export function evidencePreviewView(
   evidence: ReviewEvidencePreview,
 ): Extract<DrawerView, { kind: 'preview' }> {
   const mime = evidence.artifact?.mimeType ?? ''
@@ -2126,7 +2126,7 @@ function CriteriaList({
   )
 }
 
-function DeliverySection({
+export function DeliverySection({
   api,
   channelId,
   delivery,
@@ -3062,7 +3062,7 @@ function collaborationRequestText(relation: ChannelRelation): string {
 }
 
 // These selects portal to body: z-80 keeps their menus above the z-70 drawer.
-function WorkerProfileSection({
+export function WorkerProfileSection({
   api,
   channel,
   profile,
@@ -3524,7 +3524,7 @@ function permissionChangeTierLabel(
   return permissionTierLabel(tier)
 }
 
-function PermissionTierHistorySection({
+export function PermissionTierHistorySection({
   api,
   channel,
 }: {
@@ -3586,7 +3586,7 @@ function PermissionTierHistorySection({
   )
 }
 
-function ApprovalRulesSection({
+export function ApprovalRulesSection({
   api,
   channel,
 }: {
