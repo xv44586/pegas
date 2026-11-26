@@ -622,3 +622,15 @@
 - Status：Promoted（数据丢失与恢复生命线问题一次确认即晋升）
 - Enforcement：`test/release-retention.test.ts`、`scripts/smoke-self-change.mjs` 和运行时发布目录锁；未知引用/状态/协调器时保守停止删除。
 - Owner / next action：SELF-001；新增发布入口必须复用共享锁，新增启动形态必须有真实引用扫描证据。
+
+### LESSON-20261127-01：事情页只有回复，执行记录藏在侧栏
+
+- Rule：验收“完整事情历史”时，必须在关闭侧栏的实际主对话中验证过程可见，并覆盖超过单页上限的执行记录。
+- Why：首次事情页复用了消息卡的追问/定位箭头，且只把 Run 活动接入右侧；用户主对话中仍无法阅读执行过程。
+- Feature：CONV-002
+- Evidence：2026-11-27 用户截图；`ChatExperience.test.tsx` 图标与 401 条过程回归先红后绿，`TaskConversationHistory.test.tsx` 与 `scripts/verify-task-conversation.mjs` 内联过程验证。
+- Seen：1（2026-11-27）
+- Severity：normal
+- Status：Observed
+- Enforcement：本 Feature 回归验证实际主对话与完整游标，未晋升为仓库规则。
+- Owner / next action：CONV-002；长历史性能和旧版未采集记录继续如实说明。

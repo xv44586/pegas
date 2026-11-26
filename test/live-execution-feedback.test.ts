@@ -526,6 +526,37 @@ describe('EXEC-006 durable run activity transcript', () => {
     expect(response.status).toBe(200)
     const body = (await response.json()) as { totalEntries: number }
     expect(body.totalEntries).toBe(6)
+    const page = await fetch(
+      `${base}/v1/runs/${claimed.run.id}/activity?userId=owner&limit=2`,
+    )
+    const last = (await page.json()) as {
+      entries: { seq: number }[]
+      nextBeforeSeq: number
+    }
+    expect(last.entries).toHaveLength(2)
+    const older = await fetch(
+      `${base}/v1/runs/${claimed.run.id}/activity?userId=owner&beforeSeq=${String(last.nextBeforeSeq)}`,
+    )
+    const olderBody = (await older.json()) as {
+      entries: { seq: number }[]
+      nextBeforeSeq?: number
+    }
+    expect(olderBody.entries).toHaveLength(4)
+    expect(
+      olderBody.entries.every(entry => entry.seq < last.nextBeforeSeq),
+    ).toBe(true)
+    expect(olderBody.nextBeforeSeq).toBeUndefined()
+    for (const invalid of ['0', '-1', 'abc', '1.5', 'Infinity']) {
+      const bad = await fetch(
+        `${base}/v1/runs/${claimed.run.id}/activity?userId=owner&beforeSeq=${invalid}`,
+      )
+      expect(bad.status).toBeGreaterThanOrEqual(400)
+    }
+    const foreignPage = await fetch(
+      `${base}/v1/runs/${claimed.run.id}/activity?userId=intruder&beforeSeq=${String(last.nextBeforeSeq)}`,
+    )
+    expect(foreignPage.status).toBeGreaterThanOrEqual(400)
+
     const foreign = await fetch(
       `${base}/v1/runs/${claimed.run.id}/activity?userId=intruder`,
     )
@@ -569,6 +600,7 @@ describe('EXEC-006 durable run activity transcript', () => {
       '条目 3',
       '条目 4',
     ])
+    expect(report).toHaveProperty('nextBeforeSeq', report?.entries[0]?.seq)
   })
 
   it('streams tool_result, thinking and step numbers from the DSH executor', async () => {

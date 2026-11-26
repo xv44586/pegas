@@ -15722,7 +15722,7 @@ export class PegasStore {
   listRunActivity(
     runId: string,
     userId: string,
-    options: { limit?: number } = {},
+    options: { limit?: number; beforeSeq?: number } = {},
   ): RunActivityReport | undefined {
     const run = this.#database
       .prepare(
@@ -15732,6 +15732,16 @@ export class PegasStore {
       )
       .get(runId, userId) as { id: string; task_id: string } | undefined
     if (!run) return undefined
+    if (
+      options.beforeSeq !== undefined &&
+      (!Number.isSafeInteger(options.beforeSeq) || options.beforeSeq < 1)
+    )
+      throw new Error('beforeSeq must be a positive integer')
+    if (
+      options.limit !== undefined &&
+      (!Number.isSafeInteger(options.limit) || options.limit < 1)
+    )
+      throw new Error('limit must be a positive integer')
     const limit = Math.min(Math.max(options.limit ?? 400, 1), 1000)
     const total = this.#database
       .prepare(
@@ -15742,10 +15752,14 @@ export class PegasStore {
       .prepare(
         `SELECT seq, kind, status, call_id, tool, step, label, detail_json,
            created_at, updated_at
-         FROM run_activity_entries WHERE run_id = ?
+         FROM run_activity_entries WHERE run_id = ? AND seq < ?
          ORDER BY seq DESC LIMIT ?`,
       )
-      .all(runId, limit) as unknown as {
+      .all(
+        runId,
+        options.beforeSeq ?? Number.MAX_SAFE_INTEGER,
+        limit + 1,
+      ) as unknown as {
       seq: number
       kind: RunActivityEntry['kind']
       status: RunActivityEntry['status'] | null
@@ -15758,6 +15772,7 @@ export class PegasStore {
       updated_at: string
     }[]
     const entries = rows
+      .slice(0, limit)
       .map(row => ({
         seq: row.seq,
         kind: row.kind,
@@ -15777,6 +15792,7 @@ export class PegasStore {
       entries,
       totalEntries: total.count,
       truncated: total.count > entries.length,
+      ...(rows.length > limit ? { nextBeforeSeq: entries[0]?.seq } : {}),
     }
   }
 

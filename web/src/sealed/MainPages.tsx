@@ -1,3 +1,4 @@
+import { TaskConversationHistory } from './TaskConversationHistory'
 import {
   taskAttachment,
   saveTaskAttachment,
@@ -845,7 +846,7 @@ export function ConversationPage({
               hideTaskTitle={Boolean(taskScope) || inThreadContinuation}
               message={message}
               onAnswerClarification={onAnswerClarification}
-              onJumpToMessage={jumpToMessage}
+              onJumpToMessage={taskScope ? undefined : jumpToMessage}
               onOpenAttention={onOpenAttention}
               onOpenTask={openTaskDetails}
               onToggleExpanded={() =>
@@ -989,7 +990,7 @@ export function ConversationPage({
             </MetaIconButton>
           )}
           <time dateTime={message.at}>{formatRelativeTime(message.at)}</time>
-          {selectQuote && (
+          {selectQuote && !taskScope && (
             <MetaIconButton label="追问这条回复" onClick={() => selectQuote()}>
               <Reply size={14} />
             </MetaIconButton>
@@ -1081,12 +1082,21 @@ export function ConversationPage({
         ref={chatScroll.scrollRef}
       >
         <div className="conversation-flow" ref={chatScroll.contentRef}>
-          {messages.length === 0 ? (
+          {messages.length === 0 &&
+          (!taskScope || snapshot.runs.length === 0) ? (
             <section className="conversation-welcome">
               <PegasMascot size={148} />
               <h2>{taskScope ? '这件事还没有对话' : '今天想一起完成什么？'}</h2>
               <p>告诉我目标。我会整理事情、推进执行，并在需要你决定时回来。</p>
             </section>
+          ) : taskScope ? (
+            <TaskConversationHistory
+              api={api}
+              taskId={taskScope.channel.id}
+              runs={snapshot.runs}
+              messages={messages}
+              renderMessage={renderMessage}
+            />
           ) : (
             messageBlocks.map(block =>
               block.kind === 'thread' ? (
@@ -1830,7 +1840,7 @@ function FactCard({
   expanded: boolean
   hideTaskTitle?: boolean
   onToggleExpanded: () => void
-  onJumpToMessage: (messageId: string) => void
+  onJumpToMessage?: (messageId: string) => void
   onOpenTask: (taskId: string | undefined) => void
   onAnswerClarification: (channel: Snapshot['channels'][number]) => void
   onOpenAttention: (message: OutboxMessage) => Promise<void>
@@ -1889,7 +1899,7 @@ function FactCard({
             {channel.title}
           </button>
         )}
-        {originVisible && originEventId && (
+        {originVisible && originEventId && onJumpToMessage && (
           <button
             aria-label="回到发起消息"
             className="fact-card-origin ml-auto flex size-6 items-center justify-center rounded-[6px] text-ink-3 transition-colors duration-100 hover:bg-hover-2 hover:text-ink"

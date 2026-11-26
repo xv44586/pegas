@@ -357,6 +357,7 @@ export interface RunActivityReport {
   entries: RunActivityEntry[]
   totalEntries: number
   truncated: boolean
+  nextBeforeSeq?: number
 }
 
 export interface RunActivityOutputPage {
