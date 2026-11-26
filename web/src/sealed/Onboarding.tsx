@@ -489,8 +489,10 @@ export function Onboarding({
                   }
                   onSelect={(_, model) => {
                     if (!model) return
-                    if (showConnection) setSelectedDraftModel(model)
-                    else return onSelectModel?.(model)
+                    if (showConnection) {
+                      setSelectedDraftModel(model)
+                      setConnectionNotice(undefined)
+                    } else return onSelectModel?.(model)
                   }}
                   placeholder={
                     showConnection
