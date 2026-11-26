@@ -511,6 +511,30 @@
 - Enforcement：HTTP 保存后立即读取目录的回归纳入 `pnpm check`；保留 UI 目录断言。
 - Owner / next action：SETTINGS-001。新增缓存时沿用同一设置版本边界。
 
+### LESSON-20261126-04：Portal 菜单需要真实抽屉层级与关闭顺序验证
+
+- Rule：修改抽屉内的 Portal 控件时，验证真实浏览器的绘制层级、鼠标命中、重复开关及 Escape 逐层关闭；父级键盘处理尊重子控件已消费的事件。
+- Why：执行设置迁移到 Radix Select 后，body 中 z-50 的菜单被 z-70 抽屉遮住；菜单仍持有交互锁，表现为点击无响应。抽屉无条件消费 Escape 又导致子菜单关闭时丢失整个详情与草稿。jsdom 的选项点击无法验证绘制遮挡。
+- Feature：DESIGN-009
+- Evidence：2026-11-26 用户截图；`scripts/capture-ui-review.mjs` 在未修复代码上报 `select is painted beneath the drawer`，两个 `web/src/App.test.tsx` Escape 回归先红；修复只提升事情执行设置的四个菜单层级并尊重 defaultPrevented。
+- Seen：1（2026-11-26）
+- Severity：normal
+- Status：Observed
+- Enforcement：上述自动化回归保留；尚未晋升为全仓强制规则。
+- Owner / next action：DESIGN-009；后续抽屉内新增 Portal 控件复用同类验证。
+
+### LESSON-20261126-05：表单同步不能把身份字段当作分隔协议
+
+- Rule：表单从结构化配置对象读取字段；用于轮询比较的依赖保持字段粒度，不能拼接 ID 后再按未转义分隔符拆出业务值。测试使用服务端真实的 ID 格式。
+- Why：WorkerProfile 的真实 ID 是 `worker-profile:<taskId>`。前端按冒号拆解拼接 key 时字段整体错位，保存成功后模型、推理档位与权限回填错误；原 Web fixture 使用不含冒号的 ID 掩盖了问题。
+- Feature：DESIGN-009（事情执行设置表单）
+- Evidence：2026-11-26 桌面浏览器保存回读失败；`web/src/App.test.tsx` 两条保存回归改用真实 ID 并断言回填，未修复时分别错误显示全局继承和默认执行池，修复后通过。
+- Seen：1（2026-11-26）
+- Severity：normal
+- Status：Observed
+- Enforcement：Web 保存回填回归与 UI review 保存再打开检查；尚未晋升为全仓强制规则。
+- Owner / next action：DESIGN-009；后续模型引用增加新字符格式时沿用结构化字段验证。
+
 <!--
 ### LESSON-YYYYMMDD-NN：简短标题
 
