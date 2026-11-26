@@ -431,7 +431,7 @@ function installFetch(
       return Promise.resolve(
         Response.json({
           profile: {
-            id: 'worker-profile-1',
+            id: 'worker-profile:task-1',
             taskId: 'task-1',
             revision: 1,
             modelMode: 'inherit',
@@ -440,7 +440,7 @@ function installFetch(
           },
           effective: {
             profile: {
-              id: 'worker-profile-1',
+              id: 'worker-profile:task-1',
               taskId: 'task-1',
               revision: 1,
               modelMode: 'inherit',
@@ -8991,7 +8991,7 @@ describe('sealed Pegas UI', () => {
           modelName?: string
         }
         const profile = {
-          id: 'worker-profile-1',
+          id: 'worker-profile:task-1',
           taskId: 'task-1',
           revision: draft.expectedRevision + 1,
           modelMode: draft.modelMode,
@@ -9054,11 +9054,71 @@ describe('sealed Pegas UI', () => {
     })
     expect(screen.getByText('这件事情的覆盖设置')).toBeTruthy()
     expect(screen.getByText('v2')).toBeTruthy()
+    await waitFor(() => {
+      expect(
+        screen.getByRole('combobox', { name: '执行模型' }).textContent,
+      ).toContain('为这件事情指定模型')
+      expect(
+        screen.getByRole('button', { name: /GPT-6.1 Sol.*，指定模型$/ }),
+      ).toBeTruthy()
+    })
     expect(
       fetchMock.mock.calls.filter(
         ([path]) => path === '/v1/settings/agent-models',
       ).length,
     ).toBeGreaterThan(0)
+  })
+
+  it('dismisses execution selects before the drawer and restores their trigger focus', async () => {
+    installFetch()
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(
+      within(mainCanvas()).getByRole('button', { name: /安全自更新流程/ }),
+    )
+    for (const label of ['执行模型', '执行池', '推理档位', '权限档位']) {
+      const trigger = await screen.findByRole('combobox', { name: label })
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        fireEvent.keyDown(trigger, { key: 'ArrowDown' })
+        const listbox = await screen.findByRole('listbox')
+        fireEvent.keyDown(listbox, { key: 'Escape' })
+        await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull())
+        expect(screen.getByRole('dialog', { name: '工作详情' })).toBeTruthy()
+        await waitFor(() => expect(document.activeElement).toBe(trigger))
+      }
+    }
+    fireEvent.keyDown(screen.getByRole('combobox', { name: '权限档位' }), {
+      key: 'Escape',
+    })
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: '工作详情' })).toBeNull(),
+    )
+  })
+
+  it('dismisses the nested task model picker without losing the execution draft', async () => {
+    installFetch()
+    render(<App />)
+    const mainNav = await screen.findByLabelText('主导航')
+    fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    fireEvent.click(
+      within(mainCanvas()).getByRole('button', { name: /安全自更新流程/ }),
+    )
+    await screen.findByRole('combobox', { name: '执行模型' })
+    await chooseOption('执行模型', '为这件事情指定模型')
+    const trigger = await screen.findByRole('button', { name: /，指定模型$/ })
+    await waitFor(() => expect(trigger).toHaveProperty('disabled', false))
+    fireEvent.click(trigger)
+    const picker = await screen.findByRole('dialog', { name: '选择模型' })
+    fireEvent.keyDown(within(picker).getByRole('searchbox'), { key: 'Escape' })
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: '选择模型' })).toBeNull(),
+    )
+    expect(screen.getByRole('dialog', { name: '工作详情' })).toBeTruthy()
+    expect(
+      screen.getByRole('combobox', { name: '执行模型' }).textContent,
+    ).toContain('为这件事情指定模型')
+    await waitFor(() => expect(document.activeElement).toBe(trigger))
   })
 
   it('saves a task-level execution pool and effort selection', async () => {
@@ -9076,7 +9136,7 @@ describe('sealed Pegas UI', () => {
           effort?: string
         }
         const profile = {
-          id: 'worker-profile-1',
+          id: 'worker-profile:task-1',
           taskId: 'task-1',
           revision: draft.expectedRevision + 1,
           modelMode: draft.modelMode,
@@ -9124,6 +9184,14 @@ describe('sealed Pegas UI', () => {
       effort: 'low',
     })
     expect(await screen.findByText('magpie/flash')).toBeTruthy()
+    await waitFor(() => {
+      expect(
+        screen.getByRole('combobox', { name: '执行池' }).textContent,
+      ).toContain('fast')
+      expect(
+        screen.getByRole('combobox', { name: '推理档位' }).textContent,
+      ).toContain('low')
+    })
   })
 
   it('switches the task permission tier with a full-access risk confirmation', async () => {
@@ -9140,7 +9208,7 @@ describe('sealed Pegas UI', () => {
           permissionMode?: string
         }
         const profile = {
-          id: 'worker-profile-1',
+          id: 'worker-profile:task-1',
           taskId: 'task-1',
           revision: draft.expectedRevision + 1,
           modelMode: draft.modelMode,

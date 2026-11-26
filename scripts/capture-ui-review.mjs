@@ -344,6 +344,7 @@ try {
   await page.getByRole('button', { name: '排序：最近创建' }).click()
   await page.getByRole('menuitemradio', { name: '最近更新' }).click()
   await capture(page, 'desktop-all-work.png', 'desktop-all-work')
+  await verifyExecutionSelects(page, 'desktop')
 
   await page
     .getByLabel('主导航')
@@ -821,6 +822,7 @@ try {
     element.scrollLeft = 0
   })
   await capture(mobilePage, 'mobile-all-work.png', 'mobile-all-work')
+  await verifyExecutionSelects(mobilePage, 'mobile')
   await mobilePage
     .getByLabel('移动端主导航')
     .getByRole('button', { name: /^待你处理/ })
@@ -1451,6 +1453,133 @@ try {
   ])
   await new Promise(resolveClose => modelGateway.close(resolveClose))
   rmSync(dataDirectory, { recursive: true, force: true })
+}
+
+async function verifyExecutionSelects(page, size) {
+  const errors = []
+  const recordError = error => errors.push(error.message)
+  page.on('pageerror', recordError)
+  try {
+    await page
+      .getByLabel(size === 'mobile' ? '移动端主导航' : '主导航')
+      .getByRole('button', { name: /^所有事情/ })
+      .click()
+    await page
+      .locator('.main-canvas')
+      .getByRole('button', { name: /调研托盘常驻显示方案/ })
+      .click()
+    const drawer = page.getByRole('dialog', { name: '工作详情' })
+    await drawer
+      .getByRole('heading', { name: '事情级执行设置', exact: true })
+      .waitFor()
+    for (const [label, option] of [
+      ['执行池', 'fast · 轻快省'],
+      ['推理档位', 'low · 轻快'],
+      ['权限档位', '严格 · 只读，写与网络都审批'],
+      ['执行模型', '为这件事情指定模型'],
+    ]) {
+      const trigger = page.getByRole('combobox', { name: label, exact: true })
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        await trigger.click()
+        const target = page.getByRole('option', { name: option, exact: true })
+        await target.waitFor()
+        await target.scrollIntoViewIfNeeded()
+        const aboveDrawer = await target.evaluate(element => {
+          const popup = element.closest('[data-radix-popper-content-wrapper]')
+          const backdrop = globalThis.document.querySelector('.drawer-backdrop')
+          return (
+            popup &&
+            backdrop &&
+            Number(globalThis.getComputedStyle(popup).zIndex) >
+              Number(globalThis.getComputedStyle(backdrop).zIndex)
+          )
+        })
+        if (!aboveDrawer)
+          throw new Error(
+            `${size} ${label}: select is painted beneath the drawer`,
+          )
+        const reachable = await target.evaluate(element => {
+          const rect = element.getBoundingClientRect()
+          const hit = globalThis.document.elementFromPoint(
+            rect.x + rect.width / 2,
+            rect.y + rect.height / 2,
+          )
+          return element.contains(hit)
+        })
+        if (!reachable)
+          throw new Error(
+            `${size} ${label}: option is covered by another layer`,
+          )
+        if (attempt === 0 && label === '执行模型')
+          await capture(
+            page,
+            `${size}-task-execution-select.png`,
+            `${size}-task-execution-select`,
+          )
+        await page.keyboard.press('Escape')
+        await page.getByRole('listbox').waitFor({ state: 'hidden' })
+        if (!(await drawer.isVisible()))
+          throw new Error(`${size} ${label}: Escape closed the drawer`)
+        await page.waitForFunction(
+          () =>
+            globalThis.document.activeElement?.getAttribute('role') ===
+            'combobox',
+        )
+      }
+      await trigger.press('ArrowDown')
+      await page.getByRole('option', { name: option, exact: true }).click()
+      await page.getByRole('listbox').waitFor({ state: 'hidden' })
+    }
+    const modelTrigger = drawer.getByRole('button', { name: /，指定模型$/ })
+    await modelTrigger.click()
+    await page.getByRole('dialog', { name: '选择模型' }).waitFor()
+    await page.keyboard.press('Escape')
+    await page
+      .getByRole('dialog', { name: '选择模型' })
+      .waitFor({ state: 'hidden' })
+    if (!(await drawer.isVisible()))
+      throw new Error(`${size}: model picker Escape closed the drawer`)
+    // Restore inheritance before saving: this path needs no external model execution.
+    await page.getByRole('combobox', { name: '执行模型', exact: true }).click()
+    await page
+      .getByRole('option', { name: '跟随 Pegas 全局设置', exact: true })
+      .click()
+    // The isolated fixture has no configured execution pools.
+    await page.getByRole('combobox', { name: '执行池', exact: true }).click()
+    await page
+      .getByRole('option', { name: '不指定（全局默认）', exact: true })
+      .click()
+    await drawer.getByRole('button', { name: '保存执行设置' }).click()
+    await drawer
+      .getByText('执行设置已保存，对后续运行生效。', { exact: true })
+      .waitFor()
+    await drawer.getByRole('button', { name: '关闭详情' }).click()
+    await page
+      .locator('.main-canvas')
+      .getByRole('button', { name: /调研托盘常驻显示方案/ })
+      .click()
+    for (const [label, value] of [
+      ['执行池', '不指定（全局默认）'],
+      ['推理档位', 'low'],
+      ['权限档位', '严格'],
+    ]) {
+      await page
+        .getByRole('combobox', { name: label, exact: true })
+        .filter({ hasText: value })
+        .waitFor()
+    }
+    await page.keyboard.press('Escape')
+    await drawer.waitFor({ state: 'hidden' })
+    if (errors.length)
+      throw new Error(
+        `${size} execution settings page errors: ${errors.join('; ')}`,
+      )
+    console.log(
+      `${size} execution settings: pointer hit tests, 12 reopen cycles, keyboard/Escape, save and reload passed`,
+    )
+  } finally {
+    page.off('pageerror', recordError)
+  }
 }
 
 async function seedConversation(apiPort) {
