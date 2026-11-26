@@ -82,6 +82,7 @@
 - Status：Promoted
 - Evidence（2026-11-26）：真实 job_output 已记录 failed outcome，路由允许新追问入队，claim 与 workflow 却仍按所有 failed 阻塞/误报待核对且没有通知入口。`test/action-reconciliation.test.ts` 新增 completed→新输入→queued→claim 与 workflow 两条回归，修复前分别无法领取、误报待核对。
 - Enforcement：上述回归纳入 `pnpm check`；`#blockingActionForInput` 与 `#wakeBlockedTaskEvents` 在存储层保证已记录 failed 结局与人工核对（两种结论）都不产生永久停放；claimNextRun 与 workflow 同步排除已记录 failed outcome 的动作，并以跨层回归防止入口与出口规则漂移；桥 `agent/status` idle 钩子保证未消费授权确定性结算。
+- Evidence（2026-11-26，工具审批重复记账）：桌面实例创建 PR #148 的工具 Action 已由桥在 23:04:01（Asia/Shanghai）记录 succeeded，执行合同仍要求 Agent 手动回写；补账命令再次审批并切换 Run，23:05:59 以新 claim 写旧 Action 返回 403。执行合同必须依据实际桥挂载状态区分 `dsh.tool.*` 自动结算与显式业务 Action 手动结算；带服务端核验 grant 的恢复不再注入手动回写示例。`test/dsh-approval-bridge.test.ts` 的 5 条回归先红后绿，真实桥/API 夹具替换原先手动写 outcome 的假闭环，覆盖单审批/双 Run、成功/失败、重复 hook 与跨 Run 403；仍纳入 `pnpm check`，本日期不重复增加 Seen。
 - Owner / next action：APPROVAL-001。新增执行面工具或授权形态时，先补分级合同与结算出口再上线。
 
 ### LESSON-20261125-08：凭证契约要在真实模型请求上验证

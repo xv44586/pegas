@@ -10,6 +10,16 @@ APPROVAL-001 为高风险外部动作提供服务端权威的持久等待与恢�
 - Web、macOS 和移动端只读取、显示和提交决定。Approval、Action、Decision、Inbox Event 和恢复 Run 的权威状态全部在 Control Plane。
 - 批准表示授权 Executor 继续，不表示外部副作用完成。恢复后的 Executor 必须另行记录 `succeeded`、`failed` 或 `unknown` outcome。
 
+## 工具审批的 outcome 归属（2026-11-26）
+
+`dsh.tool.*` 由 DSH 审批桥管理：桥创建审批、消费一次性 grant，并在 `tools/post-execute` 自动记录结果；未消费 grant 沿用 idle 失败结算。Agent 不为这些 Action 手动调用 outcomes API，也不为同一次工具调用再建业务审批。授权不是执行成功证据，工作结果仍以实际工具结果为准。
+
+`DshCliExecutor` 用实际挂载桥的条件（ask 且有 action capability）生成合同；Worker 已核验的 `toolApprovalGrant` 存在时，合同明确 `outcomeOwner=approval_bridge` 与当前 actionId/tool，并移除本次恢复中的手动 Approval/outcome 操作示例。初始 Run、拒绝恢复或业务审批恢复仍明确区分工具 Action 与 Agent 显式创建的非工具业务 Action；未挂载桥时不宣称自动结算。原会话中的旧手动回写指令由新合同覆盖。
+
+业务 Action 保留既有手动请求、停放、授权后继 Run 写 outcome 的接口；不得持新 Run claim 为历史 Action 补账。服务端 `assertActionOutcomeCapability` 仍核验指定 resume Run 和已有命令重放身份，跨 Run 写入仍返回 403。桥上报失败仍走原有 Run 失败/unknown/核对路径，不通过重复外部操作修复记账。
+
+本次修复无数据库或权限变更。回滚只需 revert Executor 合同变更；已落库 outcome 保留。测试使用真实审批桥、隔离 SQLite/HTTP 与 fake DSH 进程验证成功/失败结算、重复 post hook、拒绝恢复、单审批双 Run 闭环及跨 Run 403；不把这些确定性测试视为真实模型遵循度保证，存量会话仍需上线后观察。
+
 ## 状态与恢复
 
 ```text

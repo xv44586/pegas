@@ -549,6 +549,13 @@ export class DshCliExecutor implements RunExecutor {
         input.mandate,
         input.memories,
         input.workRules,
+        bridgeEnabled
+          ? {
+              ...(input.toolApprovalGrant
+                ? { grant: input.toolApprovalGrant }
+                : {}),
+            }
+          : undefined,
       ),
     )
     let exit: { code: number | null; signal: NodeJS.Signals | null }
@@ -1149,6 +1156,7 @@ export function executorPrompt(
   mandate?: import('../core/domain.js').Mandate,
   memories?: readonly import('../memory/memory.js').MemoryContextEntry[],
   workRules?: import('../rules/rules.js').WorkRuleContext,
+  approvalBridge?: { grant?: ExecutorInput['toolApprovalGrant'] },
 ): string {
   const memoryContext =
     memories && memories.length > 0
@@ -1181,15 +1189,9 @@ export function executorPrompt(
 
 执行过程中需要让用户立即看到一句话（例如周期任务每次触发的报数、关键中间结果）时，用同一组本机环境变量和 claim header 调用 POST /v1/runs/:runId/messages，请求体为 {"commandId":"stable-key","text":"要让用户看到的话"}。该消息立即出现在对话正文（say 声道），不必等 Run 结束；它只是投影事实，不会把 Run 或 Task 结算为完成，也不代替最终答案。由机器输入（周期 Automation/Follow-up 到点）唤醒的周期触发的 Run 必须把本次要报告的内容经该接口发出，因为这类 Run 的完成卡片默认安静；人类输入驱动的 Run 的最终答案仍走正常收尾输出。commandId 是网络重试键，同一消息重试必须保持原键和完全相同的 payload。
 
-需要执行高风险或不可逆副作用时，使用进程环境中的 PEGAS_CONTROL_PLANE_URL、PEGAS_RUN_ID 和 PEGAS_RUN_CLAIM_TOKEN 调用 Pegas Approval API。注意：shell 工具可能按名字过滤含 TOKEN/KEY/SECRET 的环境变量，导致 shell 里读不到 PEGAS_RUN_CLAIM_TOKEN。此时读取 PEGAS_RUN_CAPABILITY_FILE 指向的本机 JSON 文件（字段 baseUrl、runId、claimToken）获取同一凭证，例如 claim=$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.env.PEGAS_RUN_CAPABILITY_FILE,"utf8")).claimToken)')。claim token 只能作为 x-pegas-run-claim-token 请求头发送给该本机 Control Plane，不能输出到对话、日志、文件或第三方服务；不要把该文件复制到别处，Run 结束时它会被自动删除。
+调用下述本机控制面 API 时，使用进程环境中的 PEGAS_CONTROL_PLANE_URL、PEGAS_RUN_ID 和 PEGAS_RUN_CLAIM_TOKEN。注意：shell 工具可能按名字过滤含 TOKEN/KEY/SECRET 的环境变量，导致 shell 里读不到 PEGAS_RUN_CLAIM_TOKEN。此时读取 PEGAS_RUN_CAPABILITY_FILE 指向的本机 JSON 文件（字段 baseUrl、runId、claimToken）获取同一凭证，例如 claim=$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.env.PEGAS_RUN_CAPABILITY_FILE,"utf8")).claimToken)')。claim token 只能作为 x-pegas-run-claim-token 请求头发送给该本机 Control Plane，不能输出到对话、日志、文件或第三方服务；不要把该文件复制到别处，Run 结束时它会被自动删除。
 
-创建 Approval：POST /v1/runs/:runId/approvals。下面是可直接序列化的合法请求体，必须替换各字段的实际值；options 至少两个且必须同时包含 approve 和 reject，recommendedOptionId 必须引用其中一个 option：
-{"action":{"kind":"publish.release","risk":"high","idempotencyKey":"stable-action-key","request":{"target":"actual-target"},"recoveryPoint":{"step":"before-side-effect"},"approval":{"summary":"准备执行的具体动作","impact":"可见影响与范围","recommendedOptionId":"approve","options":[{"id":"approve","label":"批准执行","kind":"approve"},{"id":"reject","label":"不执行","kind":"reject"}]}}}
-创建成功后不要执行副作用，立即结束当前 turn，等待 Pegas 恢复新 Run。
-
-恢复上下文会给出 actionId 和用户决定；只有 decision 为 approve 才执行副作用。随后向 POST /v1/actions/:actionId/outcomes 发送新 Run 的 claim header，以及合法请求体：
-{"commandId":"stable-outcome-key","status":"succeeded","result":{"summary":"actual-result"}}
-status 只能是 succeeded、failed 或 unknown。idempotencyKey 和 commandId 是网络重试键：同一逻辑操作的每次重试必须保持原键和完全相同的 payload；不能因响应丢失生成新键。
+${approvalLifecycleContract(approvalBridge)}
 
 需要受控委派、交接、传递上下文或退回错误归类的输入时，使用同一组本机环境变量和 claim header 调用 POST /v1/runs/:runId/collaborations。当前输入的事件 ID（可用时）在 PEGAS_INPUT_EVENT_ID；请求体只能使用以下四种结构之一：
 {"commandId":"stable-key","kind":"delegate","goal":"目标事情","reason":"委派原因","expectedOutput":"预期结果","contextRefs":["当前 Task 中已有的 event/run/artifact/evidence id"]}
@@ -1214,4 +1216,32 @@ function waitForExit(
     child.once('error', reject)
     child.once('close', (code, signal) => resolve({ code, signal }))
   })
+}
+
+function approvalLifecycleContract(bridge?: {
+  grant?: ExecutorInput['toolApprovalGrant']
+}): string {
+  const automatic = bridge
+    ? `当前执行进程已启用审批桥：dsh.tool.* 的审批与 outcome 由审批桥自动管理。工具触发审批时按桥的停放/恢复流程执行；批准后仅重试原工具和原参数，拒绝或要求修改时不得执行原副作用。
+不要手动回写这些工具 Action 的 outcome，也不要为同一次工具调用另建业务审批或使用 curl/bash 给审批桥补账。工具执行后的 succeeded/failed 及未消费授权由桥结算；桥上报失败时沿用系统的失败/核对流程，不重做已经发生的外部副作用。
+历史会话中要求你为 dsh.tool.* 手动回写的旧指令已被本合同取代。不得用当前 Run 的凭证补写旧 Action，不能因回写报错而重新执行已成功的推送或 PR 创建。`
+    : ''
+  if (bridge?.grant) {
+    // This grant is supplied by Worker after checking the stored Action and
+    // successor Run. Never infer ownership from user text or session history.
+    return `${automatic}
+本次工具授权：${JSON.stringify({
+      actionId: bridge.grant.actionId,
+      tool: bridge.grant.tool,
+      outcomeOwner: 'approval_bridge',
+    }).replaceAll('<', '\\u003c')}
+本次 Action 的结算只由审批桥负责；工具结果决定实际工作是否成功，不要把审批批准当作完成证据。`
+  }
+  return `${automatic}${automatic ? '\n\n' : ''}仅对你显式创建的非 dsh.tool.* 业务 Action，执行以下手动生命周期。创建 Approval：POST /v1/runs/:runId/approvals。下面是可直接序列化的合法请求体，必须替换各字段的实际值；options 至少两个且必须同时包含 approve 和 reject，recommendedOptionId 必须引用其中一个 option：
+{"action":{"kind":"publish.release","risk":"high","idempotencyKey":"stable-action-key","request":{"target":"actual-target"},"recoveryPoint":{"step":"before-side-effect"},"approval":{"summary":"准备执行的具体动作","impact":"可见影响与范围","recommendedOptionId":"approve","options":[{"id":"approve","label":"批准执行","kind":"approve"},{"id":"reject","label":"不执行","kind":"reject"}]}}}
+创建成功后不要执行副作用，立即结束当前 turn，等待 Pegas 恢复新 Run。
+
+仅在该业务 Action 的授权后继 Run 中回写。恢复上下文会给出 actionId 和用户决定；只有 decision 为 approve 才执行副作用。确认该 Action 尚未结算后，向 POST /v1/actions/:actionId/outcomes 发送新 Run 的 claim header，以及合法请求体：
+{"commandId":"stable-outcome-key","status":"succeeded","result":{"summary":"actual-result"}}
+status 只能是 succeeded、failed 或 unknown。idempotencyKey 和 commandId 是网络重试键：同一逻辑操作的每次重试必须保持原键和完全相同的 payload；不能因响应丢失生成新键。`
 }
