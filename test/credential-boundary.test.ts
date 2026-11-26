@@ -109,6 +109,12 @@ describe('host credential runtime boundary', () => {
     expect(result.stderr).toMatch(/permitted|read-only|denied/i)
   })
 
+  it('requires a fixed system runner instead of resolving a workspace-controlled PATH', () => {
+    expect(credentialProcessArgv(['/bin/true'], [], 'linux')[0]).toBe(
+      '/usr/bin/bwrap',
+    )
+  })
+
   it('fails closed on unsupported backends and unsupported existing profiles', () => {
     expect(() => credentialProcessArgv(['/bin/true'], [], 'win32')).toThrow(
       'refusing unconfined',
@@ -213,7 +219,9 @@ describe('host credential runtime boundary', () => {
         },
       }) as { argv: string[]; env: NodeJS.ProcessEnv }
       expect(spec.argv[0]).toBe(
-        process.platform === 'darwin' ? '/usr/bin/sandbox-exec' : 'bwrap',
+        process.platform === 'darwin'
+          ? '/usr/bin/sandbox-exec'
+          : '/usr/bin/bwrap',
       )
       expect(spec.env.GH_TOKEN).toBeUndefined()
       expect(spec.env.PEGAS_DSH_MODEL_KEY_MAGPIE).toBeUndefined()

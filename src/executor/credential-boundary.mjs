@@ -202,7 +202,7 @@ export function credentialProcessArgv(
           : ['--ro-bind', '/dev/null', path],
       )
     return [
-      'bwrap',
+      '/usr/bin/bwrap',
       '--die-with-parent',
       '--unshare-pid',
       '--unshare-ipc',
