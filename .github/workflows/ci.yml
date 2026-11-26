@@ -31,6 +31,8 @@ jobs:
       - run: pnpm smoke
       - name: Verify DSH model authentication over loopback
         run: npm exec --yes --package=@deepseek-ai/dsh@0.2.2-rc.5 -- pnpm smoke:dsh-auth
+      - name: Verify real DSH boot, tool and resume inside Electron
+        run: npm exec --yes --package=@deepseek-ai/dsh@0.2.2-rc.5 -- pnpm smoke:dsh-runtime
       - name: Detect UI changes
         id: changed
         if: github.event_name == 'pull_request'

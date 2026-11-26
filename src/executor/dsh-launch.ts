@@ -1,6 +1,7 @@
 import { accessSync, closeSync, constants, openSync, readSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { delimiter, isAbsolute, join } from 'node:path'
+import { dshNodeRuntime } from './dsh-node-runtime.js'
 
 /** Resolve the same installed CLI for catalog reads and execution, including
  * Finder's minimal PATH. Never source shell startup files or a personal profile. */
@@ -35,9 +36,10 @@ export function dshLaunch(
     } catch {
       continue
     }
-    // Node CLIs use the already-running Node/Electron runtime, so an env-node
-    // shebang does not introduce another dependency on Finder's PATH.
+    // Read the shebang separately: runtime validation errors must propagate,
+    // never silently fall back to the original env-node launch.
     let descriptor: number | undefined
+    let nodeScript = false
     try {
       descriptor = openSync(candidate, 'r')
       const header = Buffer.alloc(256)
@@ -47,14 +49,14 @@ export function dshLaunch(
         .toString('utf8')
         .split('\n')[0]
         ?.trim()
-      if (shebang === '#!/usr/bin/env node') {
-        return { command: process.execPath, args: [candidate, ...args] }
-      }
+      nodeScript = shebang === '#!/usr/bin/env node'
     } catch {
       // Preserve the operating system's normal launch error for unreadable files.
     } finally {
       if (descriptor !== undefined) closeSync(descriptor)
     }
+    if (nodeScript)
+      return { command: dshNodeRuntime(), args: [candidate, ...args] }
     return { command: candidate, args }
   }
   return { command, args }

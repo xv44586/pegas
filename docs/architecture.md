@@ -173,6 +173,8 @@ Router 默认使用模型进行归属判断，但结果必须写入结构化数�
 
 Pegas 的 Model Provider 是小型控制面边界，不依赖本机 Agent 客户端或其登录态。第一版提供常见厂商、聚合网关、本地模型服务和自定义连接目录，通过 OpenAI Chat Completions 或 Anthropic Messages 协议完成结构化判断。Provider API key 由服务端实例密钥加密保存，读取接口只暴露是否已配置。同一份服务端模型连接也是 DSH Agent 的模型事实来源（EXEC-007）：Worker 与模型目录读取都通过受管临时 `--patch` 把连接目录（baseURL、协议映射、`apiKeyEnv` 引用）和当前 Agent 默认模型注入 DSH，明文 key 只经子进程环境传递、不落盘。DSH 使用 Pegas 数据目录内的隔离 home（`<dataDir>/dsh`，`PEGAS_DSH_HOME` 可覆盖），profile、session 与运行时文件不读写用户本机 `~/.dsh`；本机其他 DSH 项目或 magpie 对 `~/.dsh` 的改写不影响 Pegas。恢复已有 session 时沿用保存的模型快照生成同一份受管配置，不在恢复链路中途切换模型。
 
+DSH 的执行运行时与 Electron UI/服务宿主隔离（EXEC-007）。`ELECTRON_RUN_AS_NODE` 仅改变 Electron 启动模式，不保证独立 Node 的 native ABI 或内部模块 loader。每个构建在 `dist/runtime` 固化独立 Node、许可证及摘要；目录和 Executor 均通过共享启动器选择它，缺失或不兼容时停止。Supervisor 继续使用原服务宿主；Node 随不可变 Candidate 和安装包一起验证、切换和回滚。
+
 ### 4. Task Control Plane
 
 Task Control Plane 是 Pegas 的核心，也是 Task 状态的唯一事实来源。
