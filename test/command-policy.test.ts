@@ -48,6 +48,25 @@ function fixture() {
   return { root, repo, git }
 }
 describe('APPROVAL-001 command identity', () => {
+  it('uses the same credential-free identity in the server and executor', () => {
+    const f = fixture()
+    const base = { PATH: process.env.PATH, HOME: process.env.HOME }
+    const clean = required(
+      commandAuthorization('git fetch origin main', f.repo, [], base).selector,
+    )
+    const ambient = required(
+      commandAuthorization('git fetch origin main', f.repo, [], {
+        ...base,
+        SSH_AUTH_SOCK: '/tmp/personal-agent',
+        GH_CONFIG_DIR: '/tmp/personal-gh',
+        GIT_ASKPASS: '/tmp/personal-helper',
+      }).selector,
+    )
+    expect(commandFingerprint(ambient, 'exact')).toBe(
+      commandFingerprint(clean, 'exact'),
+    )
+  })
+
   it.each([
     "rg 'git fetch' docs",
     'git log --grep=fetch -1',
@@ -109,14 +128,14 @@ describe('APPROVAL-001 command identity', () => {
     },
   )
   it.each(['GIT_ASKPASS', 'SSH_ASKPASS'])(
-    'rejects interactive executable override %s',
+    'removes ambient interactive executable override %s',
     key => {
       expect(
         commandAuthorization('git fetch origin main', fixture().repo, [], {
           ...process.env,
           [key]: '/tmp/custom-script',
         }).selector,
-      ).toBeUndefined()
+      ).toBeDefined()
     },
   )
   it('does not persist SSH transport with unbound execution configuration', () => {
@@ -206,14 +225,14 @@ describe('APPROVAL-001 command identity', () => {
       ).toBeUndefined()
   })
   it.each(['BASH_ENV', 'ENV', 'BASH_FUNC_git%%', 'SHELLOPTS', 'BASHOPTS'])(
-    'rejects shell startup override %s',
+    'removes ambient shell startup override %s',
     key => {
       expect(
         commandAuthorization('git fetch origin main', fixture().repo, [], {
           ...process.env,
           [key]: 'injected',
         }).selector,
-      ).toBeUndefined()
+      ).toBeDefined()
     },
   )
   it('rechecks hooks and submodule topology after a grant was created', () => {

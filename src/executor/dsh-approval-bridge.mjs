@@ -1,4 +1,8 @@
 import {
+  hostCredentialRoots,
+  isCredentialPath,
+} from './credential-boundary.mjs'
+import {
   commandAuthorization,
   commandFingerprint,
   isCommandSelector,
@@ -106,7 +110,7 @@ export function apply(ctx, config = {}) {
     }
   }
 
-  const controlPlaneGuard =
+  const hardBoundaryGuard =
     /** @param {ToolExecution} exec */
     exec => {
       const classification = classifyToolCall(exec, {
@@ -116,7 +120,7 @@ export function apply(ctx, config = {}) {
             ? ctx.workingDirectory.get(exec.agent.session)
             : policy.workspaceRoot,
       })
-      if (classification.category === 'control-plane-mutation') {
+      if (classification.action === 'deny') {
         return {
           reason: classification.reason,
         }
@@ -124,7 +128,7 @@ export function apply(ctx, config = {}) {
       return undefined
     }
   if (ctx.tools && typeof ctx.tools.guard === 'function') {
-    ctx.tools.guard(controlPlaneGuard)
+    ctx.tools.guard(hardBoundaryGuard)
   }
 
   ctx.on(
@@ -156,6 +160,7 @@ export function apply(ctx, config = {}) {
       const classification =
         commandFacts.commandReviewRequired &&
         ![
+          'credential-access',
           'control-plane-mutation',
           'destructive-command',
           'network-egress',
@@ -202,6 +207,22 @@ export function apply(ctx, config = {}) {
           autoReviewEnabled: tierState.autoReviewEnabled,
           mandate: tierState.mandate,
         })
+      }
+      if (classification.category === 'credential-access') {
+        if (
+          exec.name === grant?.tool &&
+          stableHash(exec.arguments) === grant.argumentsHash
+        )
+          await settleUnconsumedGrant(classification.reason)
+        emit({
+          type: 'policy_decision',
+          callId: callKey,
+          tool: exec.name,
+          ...classification,
+          decision: 'deny',
+          tier: tierState.tier,
+        })
+        return { kind: 'deny', reason: classification.reason }
       }
       if (capability && callKey !== undefined) {
         const granted =
@@ -559,6 +580,26 @@ export function apply(ctx, config = {}) {
         : callKey === undefined
           ? undefined
           : gateDecisions.get(callKey)
+      if (classification?.category === 'credential-access') {
+        if (
+          grant &&
+          execution?.name === grant.tool &&
+          stableHash(execution.arguments) === grant.argumentsHash
+        )
+          await settleUnconsumedGrant(classification.reason)
+        if (callKey !== undefined) {
+          grantedCalls.delete(callKey)
+          reviewedCalls.delete(callKey)
+        }
+        emit({
+          type: 'policy_decision',
+          callId: callKey,
+          tool: request.toolName,
+          ...classification,
+          decision: 'deny',
+        })
+        return 'rejected'
+      }
       const grantValid =
         grant &&
         liveGrantTier &&
@@ -678,6 +719,7 @@ export function apply(ctx, config = {}) {
           seamFacts.commandReviewRequired &&
             seamTier &&
             ![
+              'credential-access',
               'control-plane-mutation',
               'destructive-command',
               'network-egress',
@@ -1068,7 +1110,12 @@ function ruleGrantMatches(grant, tier, execution, classification, policy) {
  * @returns {ApprovalRule | undefined}
  */
 function matchApprovalRule(tierState, execution, classification, policy) {
-  if (tierState.mismatch || tierState.tier === 'strict') return undefined
+  if (
+    classification.action === 'deny' ||
+    tierState.mismatch ||
+    tierState.tier === 'strict'
+  )
+    return undefined
   if (
     [
       'control-plane-mutation',
@@ -1230,6 +1277,9 @@ function normalizePolicy(value) {
   return {
     ...(workspaceRoot === undefined ? {} : { workspaceRoot }),
     protectedRoots,
+    credentialRoots: Array.isArray(record.credentialRoots)
+      ? record.credentialRoots.filter(root => typeof root === 'string')
+      : undefined,
   }
 }
 
@@ -1981,6 +2031,18 @@ function egressPayloadPreview(exec, classification, policy) {
         ? join(policy.workspaceRoot, path)
         : resolve(path)
     const canonical = canonicalRuleTarget(resolved, policy) ?? resolved
+    if (
+      isCredentialPath(
+        canonical,
+        policy.credentialRoots ?? hostCredentialRoots(),
+      )
+    ) {
+      items.push({
+        path: resolved,
+        error: '发送内容位于宿主凭据目录，未代为读取。',
+      })
+      continue
+    }
     const protectedRoots = (policy.protectedRoots ?? []).map(root =>
       canonicalRuleTarget(root, policy),
     )

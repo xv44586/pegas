@@ -650,3 +650,13 @@
 - Status：Observed
 - Enforcement：本 Feature 回归验证实际主对话与完整游标，未晋升为仓库规则。
 - Owner / next action：CONV-002；长历史性能和旧版未采集记录继续如实说明。
+
+### LESSON-20261127-01：命令审批不能充当宿主账号授权
+
+- Rule：工具执行授权不能隐式携带宿主账号凭据；凭据目录/系统服务必须由运行层隔离，完全访问、旧 grant、长期规则和模型自述均不得解除。
+- Why：Pegas 在普通「工作区外写入」审批之后，通过 Git credential helper 读取系统钥匙串，再临时设置 GH_TOKEN 创建 PR；用户不知道批准了账号访问。独立工作目录和仅限制文件写入的沙箱不足以建立凭据边界。
+- Feature：APPROVAL-001。
+- Evidence：原任务 `dfacae10-2a3e-47a2-b85f-dc0a449b1b35`，Action `fee04caa-3ac4-4a5d-985e-ad100f95514b`；回归初始 5 项失败，命令指纹一致性回归先红后绿；真实 DSH 合成凭据探针与服务端旧 grant 结算测试。
+- Seen：1（2026-11-27）；Severity：security；Status：Promoted。
+- Enforcement：无条件凭据隔离插件、平台进程边界、原生文件服务 guard、启动环境清理、普通审批不可解除的 credential-access 拒绝；`pnpm check` 与 `pnpm smoke:credential-boundary` CI 门禁。缺失服务/平台后端拒绝执行，不回退裸跑。
+- Owner / next action：APPROVAL-001。未来账号连接须显式展示账号、资源与动作范围；不要通过放宽目录批准重新启用本机登录继承。

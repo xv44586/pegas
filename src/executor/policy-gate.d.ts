@@ -1,6 +1,7 @@
 export type PolicyRisk = 'low' | 'high' | 'critical'
 
 export type PolicyCategory =
+  | 'credential-access'
   | 'read'
   | 'workspace-write'
   | 'out-of-workspace-write'
@@ -13,6 +14,7 @@ export interface PolicyRoots {
   workspaceRoot?: string
   currentDirectory?: string
   protectedRoots?: readonly string[]
+  credentialRoots?: readonly string[]
 }
 
 export interface ToolCallClassification {
