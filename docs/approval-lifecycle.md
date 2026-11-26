@@ -30,7 +30,7 @@ Run(running) + high-risk Action
 
 用户决定作为 append-only `approval_decisions` 记录和 `approval.decided` Inbox Event 持久化。写入决定、关闭原 Run、创建 successor、更新 Task 和写入 Outbox 在同一个事务中完成；因此旧版 Worker 即使只消费事件也不会吞掉尚未应用的决定。新版事件处理器只接受能回查到该内部 decision 记录的事件，客户端直接向通用 Event API 写同名事件会被拒绝。唯一 decision、event、`retry_of_run_id` 与 `resume_run_id` 使事件重放只返回同一个 successor。
 
-如果 Task 在提交 decision 前被用户停止，未决 Approval 变为 `cancelled`，Action 变为 `rejected`。已经授权但尚未记录 outcome 的 Action 会改为 `unknown`，并产生必须人工核对的 Outbox 通知。`failed` 或 `unknown` outcome 明确保留外部状态，系统不得通过普通 continuation、Run retry 或 Goal revision 绕过它，也不能完成 Task。
+如果 Task 在提交 decision 前被用户停止，未决 Approval 变为 `cancelled`，Action 变为 `rejected`。已经授权但尚未记录 outcome 的 Action 会改为 `unknown`，并产生必须人工核对的 Outbox 通知。`unknown` 或尚未记录 outcome 的 `failed` 保留未结算的外部状态，普通 continuation 和 Task 完成仍被阻止；已记录 `failed` outcome 的例外及其他操作的保护见下文。
 
 用户在 Action 未决期间发送的 continuation 不会恢复原 Executor，也不会因重试耗尽而丢失。Inbox Event 会以 `blocked_action` 关系持久停放；Approval 被拒绝/要求修改，或 Action 成功记录 outcome 后，Control Plane 会把原事件重新放回队列。批准后的 continuation 必须等待授权 successor 报告 outcome。Task 被停止时，仍停放的事件保留为明确失败记录。
 
@@ -103,13 +103,15 @@ Run capability 的 HTTP 传输固定使用 loopback。`PEGAS_API_HOST` 为 `0.0.
 
 ### 人工核对（reconciliation）
 
-`failed` 或 `unknown` outcome 会阻塞 continuation、retry、Goal revision、协作与新 Approval。用户在外部系统核实真实结果后，通过 reconcile API 提交一次性结论：
+已记录 `failed` outcome 的动作保留失败审计，但不阻塞新的用户输入及其 Run 领取；workflow 也不把这一已结算失败投影为「待核对」。路由、Worker claim 与状态投影必须使用相同判断，不能允许消息入队后又永久阻止领取。`unknown` 和未记录失败 outcome 的 `failed` 继续等待核对。新 Approval、原 Run retry、Goal revision 与协作仍遵循各自的严格保护，允许回答新的追问不表示允许重做外部副作用。
+
+`unknown` 或尚未记录 outcome 的 `failed` 会阻塞 continuation；已记录的失败允许新追问，不等于授予新的外部操作权限。原授权 successor 在失败未核对时不能请求下一项 Approval；新的 Run 请求新的 Approval 仍需走完整审批流程；人工确认失败则在整个 Task 范围阻止新 Approval。用户确实需要核对外部结果时，在外部系统核实后通过 reconcile API 提交一次性结论：
 
 - 核对记录 append-only：`action_reconciliations` 保存 resolution、note、核对前的 status 与 result 快照、核对人和时间；数据库 trigger 拒绝改写或删除。每个 Action 只允许一条核对记录，重复提交返回 `409 action_reconciliation_conflict`。
 - 相同 `commandId` 加相同 payload 幂等重放当前 Action 投影；不同 payload 复用 command 返回 409。不存在和跨 owner 一律 `404 not_found`。
 - Action 状态变为 `reconciled`，`result` 保存 `{resolution, note, previousStatus, previousResult?}`；原始 outcome 在核对记录中保持可审计。
 - `resolution=succeeded`：解除该 Action 的阻塞，唤醒停放的 continuation，Task 等待原因更新为 `action_reconciled`；failed Run 可以 retry；Review Pack 把该 side effect 视为已满足并附带核对信息。
-- `resolution=failed`：外部失败成为人工确认的事实。Task 保持开放并显示 `action_failed`，但 retry、Goal revision、协作与新 Approval 仍被拒绝——确认失败不等于问题已解决，后续处理需要用户显式停止或新的产品级恢复路径。Review Pack 不会把该 side effect 计为成功。
+- `resolution=failed`：外部失败成为人工确认的事实。Task 保持开放并显示 `action_failed`，停放的用户输入仍会唤醒，可在新 Run 中继续追问；retry、Goal revision、协作与新 Approval 仍被拒绝，确认失败不等于允许重做外部操作。Review Pack 不会把该 side effect 计为成功。
 - Task 停止后仍允许核对已 `unknown` 的 Action（外部副作用审计不随 Task 结束消失），但不再改写 ended Task 的状态。
 - 写入核对记录、Action 状态、Task 原因、唤醒事件与 `action.reconciled` Outbox 在同一事务提交。
 - **自动核对（EXEC-003，2026-11-24）**：对账进程可对文件写类 `unknown` Action 主动探测外部事实并走同一事务结算，核对人为 `system:auto-reconciliation`，commandId `auto-reconcile:<actionId>` 幂等；Outbox payload 带 `reconciledBy` 与自动核对文案。目标缺失或内容指纹不符只会结算为 `failed`，绝不判成功；非文件类动作保持 `unknown` 留人工。无静态指纹的复杂 bash 写由模型辅助对账（第五环）：以命令原文 + 逐目标现状为证据做严格 JSON 判定，模型失败/证据不足/inconclusive 一律留人工，note 标注模型判定；`PEGAS_MODEL_RECONCILE=disabled` 可关。核对记录带 `automatic=1` 标记（schema v44），详见 `docs/observability.md`。桥在创建 Action 时推导预期落盘字节（人工审批与自动审阅放行都带）：`write` 记录完整内容 sha256（`request.effect.contentHash`）；`edit` 与单文件 `apply_patch` 增量在原文件上重放推导最终字节（edit 用 contentHash，patch 用逐目标 `effect.targets` 映射）；无法静态推导（多文件/Delete/Move 补丁、命中不唯一等）不记录指纹，fail closed。

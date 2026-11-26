@@ -8819,9 +8819,9 @@ export class PegasStore {
 
   /**
    * APPROVAL-001: a failed Action whose failure is already a recorded
-   * outcome (nothing external happened) is a settled fact for input
-   * routing. It keeps blocking retries and new Approvals until a human
-   * reconciles it, but it must not park new user input forever.
+   * outcome is a settled fact for input routing, claim and projection.
+   * It must not park new user input forever. Approval and retry guards
+   * retain their own scope; continuing input grants no new authority.
    */
   #blockingActionForInput(taskId: string): { status: string } | undefined {
     return this.#database
@@ -10613,6 +10613,10 @@ export class PegasStore {
          ), reconciliation AS (
            SELECT id FROM actions WHERE task_id = $task AND protocol_version = 1
              AND status IN ('failed','unknown')
+             AND (status <> 'failed' OR NOT EXISTS (
+               SELECT 1 FROM action_outcomes
+               WHERE action_outcomes.action_id = actions.id
+                 AND action_outcomes.status = 'failed'))
            ORDER BY (status = 'unknown') DESC, updated_at DESC, rowid DESC LIMIT 1
          )
          SELECT
@@ -14141,6 +14145,10 @@ export class PegasStore {
              WHERE actions.task_id = runs.task_id
                AND actions.protocol_version = 1
                AND actions.status IN ('awaiting_approval','authorized','failed','unknown')
+               AND (actions.status <> 'failed' OR NOT EXISTS (
+                 SELECT 1 FROM action_outcomes
+                 WHERE action_outcomes.action_id = actions.id
+                   AND action_outcomes.status = 'failed'))
                AND (actions.resume_run_id IS NULL OR actions.resume_run_id <> runs.id)
            )) OR (status = 'running' AND lease_until <= ?)
              OR (status = 'waiting' AND lease_until <= ? AND task_id IN (
@@ -14424,9 +14432,9 @@ export class PegasStore {
         ? toDurableAction(blockingActionRow)
         : undefined
       const actionStatus = blockingAction?.status
-      // A failed Action with a recorded failed outcome is settled: nothing
-      // external happened, so the Run's own answer can complete the Task.
-      // New Approvals and retries stay blocked until a human reconciles it.
+      // A failed Action with a recorded failed outcome is settled, so the
+      // Run's own answer can complete the Task. This does not change the
+      // separate Approval and retry guards or mark the Action successful.
       const settledFailedAction =
         actionStatus === 'failed' &&
         Boolean(

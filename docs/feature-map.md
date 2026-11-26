@@ -1256,3 +1256,12 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 ### SELF-001 发布后自动保留（2026-11-26）
 
 用户结果：每次成功上线后自动清理旧发布，保留最新 3 个及运行、启动、回滚所需版本。复用 Candidate manifest 和 Supervisor 状态作为事实来源，构建/物化/staging/清理共享发布锁、引用复核与失败诊断。权威实现：`src/self-change/release-retention.ts`、`release-directory-lock.ts`、`retention/main.ts`；Supervisor stable 钩子与 `scripts/release-hot.mjs` 接入。自动化：20 项 retention 回归、完整 check 1709 项测试与普通 smoke 通过，真实 Recovery API 锁冲突/接管/回滚 smoke 通过；验收、兼容升级与恢复边界见 `docs/candidate-evidence.md`。整体 SELF-001 维持 Usable；下一缺口为 artifact 签名及工作区清理，旧协调器升级前自动保留会明确跳过。
+
+### APPROVAL-001：已记录失败后的追问执行与状态一致性（2026-11-26）
+
+- 用户结果：已明确记录 failed outcome 的工具失败后，新的追问可正常入队并被 Worker 领取，页面不再误报「待核对」。
+- 基线与隔离：1387a93f；独立分支/worktree `approval-001-reconciliation-entry`。主工作区既有两处未提交 UI 改动不纳入。
+- 根因：输入路由与 Run 完成已排除有 failed outcome 的失败动作，claimNextRun 与 workflow reconciliation 查询仍匹配所有 failed；真实 job_output 失败已落库，新追问被重复拦截且没有核对通知。
+- 验收：复现 completed → follow-up queued → claim 的全链路及服务端 workflow；有结果的 failed 不再拦新输入运行，unknown/未结算动作仍保持原保护；重试、新 Approval、目标变更仍遵循原有各自作用域的权限校验，新 Run 不复用旧动作授权。
+- 非目标：改写历史动作结果、自动提交人工核对、修改审批分类、增加新的恢复权限或前端猜测。无需数据库迁移；失败时保留原审计，回滚代码即恢复原行为，已排队 Run 不重建不复制。
+- 权威实现：`src/storage/sqlite-store.ts`；自动化：`test/action-reconciliation.test.ts` 两条回归先红后绿，相关审批测试 41 项通过；最终完整 `pnpm check` 153 文件、1711 项全过（无跳过），`pnpm smoke` 通过。真实事件的只读一致性快照验证：原 queued Run 能被领取为 running，workflow 为 queued，未改写生产库。证据保存在本地 `output/reconciliation-entry/`；发布需继续通过精确提交 CI 与 Supervisor Candidate 验证。APPROVAL-001 整体维持 Usable；下一缺口仍按本 Feature 主条目追踪。
