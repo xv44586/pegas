@@ -745,7 +745,7 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 
 ### SETTINGS-001：首次设置先发现模型再选择（2026-11-25）
 
-- **Intake / 状态**：本次修复 `DONE_WITH_CONCERNS`（独立提交待集成，未发布）；基线 `28509be3b7ead06a40db4e14b07dc4fe9b639d6c`，主工作区 clean；独立分支 `fix/settings-001-onboarding-discovery`、独立 worktree `pegas-settings-001-onboarding`。
+- **Intake / 状态**：本次修复验收通过（独立提交，等待最终集成和发布）；基线 `28509be3b7ead06a40db4e14b07dc4fe9b639d6c`，主工作区 clean；独立分支 `fix/settings-001-onboarding-discovery`、独立 worktree `pegas-settings-001-onboarding`。
 - **验收**：供应商预填 Base URL 始终可编辑；无需模型 ID 即可测试连接并读取模型目录；使用共享搜索/分页选择默认模型，一次保存连接和默认执行模型；修改供应商/URL/Key 后旧目录失效；未测试、未选模型或保存失败不能继续。
 - **非目标**：不重做普通设置页、不改变执行会话恢复模型，不新增供应商协议或 DSH 目录事实来源。
 - **数据与权限边界**：复用受认证 discovery/test/settings API，探测不持久化，Key 不回显且换地址不复用旧 Key；保存复用 revision 与加密事务。
@@ -753,7 +753,7 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 
 - **权威实现**：`web/src/sealed/Onboarding.tsx` + `web/src/App.tsx`；`src/settings/runtime-settings.ts` 共享连接校验支持预设 URL 编辑；`src/control-plane/server.ts` 无模型名目录发现、地址/凭证隔离及安全错误投影。
 - **自动化证据**：修复前 3 个回归失败、修复后通过；聚焦 4 文件 / 290 测试通过，覆盖可编辑预设、无需 ID 发现、原子保存、空目录/失败/参数变更、冲突重试、目录刷新失败仍显示已保存选择、认证/只读探测/换地址不泄漏旧 Key。`pnpm build`、`pnpm smoke`、`pnpm review:ui --force` 通过（桌面 + 390px，先选模型再保存、选择后关闭面板）；首次设置补充 axe 检查 7 场景 / 0 违例。
-- **完整门禁与剩余风险**：已同步 `origin/main`（仍为基线 commit）。`pnpm check` 的格式/品牌/lint/typecheck/deadcode 通过；全量 1595 测试中 1584 通过、11 失败，失败均在既有 4 个 live integration 文件（硬编码 `qwen-cn-2/qwen4-max` 的上游返回 401，Router 回退断言随之失败），未跳过测试。全站 `pnpm a11y:review` 在既有 dark-conversation 的两处对比度不足（4.03/4.12 < 4.5）停止；本次未修改该页或颜色。真实第三方供应商尚未逐家验证。回退本次独立提交即可，无 schema 变更；完整门禁恢复并完成 CI 前不得合并或替换运行版本。
+- **完整门禁与剩余风险（2026-11-26）**：合入 QUALITY-001 与 DESIGN-009 后，`PEGAS_LIVE_MODEL=deepseek/deepseek-flash pnpm check` 151 文件 / 1597 测试全通过，`pnpm smoke`、全站 `pnpm a11y:review`（零违例）、`pnpm review:ui --force` 通过。真实 Electron 独立数据目录验证：OpenAI/Magpie 默认 URL 可编辑、无模型 ID 发现 64 项目录、未选模型阻止保存和继续、DeepSeek 实际推理后保存默认值、四步完成与刷新持久化；选模型后清除过期错误提示回归先红后绿。最终集成需包含目录与桌面 DSH 启动修复并重新门禁，随后经精确 SHA 的 CI 和 Supervisor Candidate 发布。第三方供应商未逐家实测；无 schema 变更，回退代码或 previous Candidate，已保存设置兼容。
 
 ### SETTINGS-001：首次接入与执行模型目录刷新（2026-11-25）
 

@@ -3878,6 +3878,7 @@ describe('sealed Pegas UI', () => {
       await screen.findByText('请先测试连接并选择默认模型。')
       fireEvent.click(screen.getByRole('button', { name: /默认模型$/ }))
       fireEvent.click(await screen.findByRole('option', { name: /Model A/ }))
+      expect(screen.queryByText('请先测试连接并选择默认模型。')).toBeNull()
       fireEvent.click(screen.getByRole('button', { name: '保存连接' }))
       await screen.findByText('模型权限不足')
       expect(save).not.toHaveBeenCalled()
