@@ -76,14 +76,22 @@ export function ActivityTimeline({
   renderDelegation,
   dataAccess,
   onReviewJump,
+  chronological = false,
 }: {
   entries: readonly RunActivityEntry[]
   renderDelegation?: (entry: RunActivityEntry) => ReactNode
   dataAccess?: ActivityDataAccess
   onReviewJump?: () => void
+  chronological?: boolean
 }) {
-  const units = groupActivityEntries(entries)
-  const changes = summarizeRunChanges(entries)
+  const units = chronological
+    ? entries.map(entry => ({
+        kind: 'entry' as const,
+        key: String(entry.seq),
+        entry,
+      }))
+    : groupActivityEntries(entries)
+  const changes = chronological ? undefined : summarizeRunChanges(entries)
   return (
     <ActivityDataContext.Provider value={dataAccess}>
       <ol className="activity-timeline" role="list">
@@ -112,6 +120,7 @@ export function ActivityTimeline({
           ) : (
             <ActivityEntryRow
               entry={unit.entry}
+              chronological={chronological}
               key={unit.key}
               renderDelegation={renderDelegation}
             />
@@ -224,9 +233,11 @@ function ActivityBatch({
 function ActivityEntryRow({
   entry,
   renderDelegation,
+  chronological = false,
 }: {
   entry: RunActivityEntry
   renderDelegation?: (entry: RunActivityEntry) => ReactNode
+  chronological?: boolean
 }) {
   if (entry.kind === 'step') {
     if (entry.meta) {
@@ -253,7 +264,12 @@ function ActivityEntryRow({
         </li>
       )
     }
-    return null
+    return chronological ? (
+      <li className="activity-meta-row">
+        <span>{entry.label}</span>
+        <small>{formatRelativeTime(entry.createdAt)}</small>
+      </li>
+    ) : null
   }
   if (entry.kind === 'thinking') {
     return <ThinkingRow entry={entry} />
@@ -272,10 +288,16 @@ function ActivityEntryRow({
     const delegated = renderDelegation(entry)
     if (delegated) return <>{delegated}</>
   }
-  return <ToolEntryRow entry={entry} />
+  return <ToolEntryRow entry={entry} rawDetails={chronological} />
 }
 
-function ToolEntryRow({ entry }: { entry: RunActivityEntry }) {
+function ToolEntryRow({
+  entry,
+  rawDetails = false,
+}: {
+  entry: RunActivityEntry
+  rawDetails?: boolean
+}) {
   const headline = toolHeadline(entry)
   const running = entry.status === 'started'
   const failed = entry.status === 'error'
@@ -314,6 +336,29 @@ function ToolEntryRow({ entry }: { entry: RunActivityEntry }) {
           />
         </summary>
         <ToolResultBody entry={entry} />
+        {rawDetails &&
+          entry.detail &&
+          entry.semantic &&
+          entry.semantic.kind !== 'unknown' && (
+            <details className="m-2">
+              <summary className="cursor-pointer">
+                <ChevronDown
+                  aria-hidden="true"
+                  className="activity-chevron"
+                  size={14}
+                />
+                已保存的工具参数与结果
+              </summary>
+              <pre
+                className="activity-raw"
+                tabIndex={0}
+                role="region"
+                aria-label="已保存的工具参数与结果"
+              >
+                <code>{entry.detail}</code>
+              </pre>
+            </details>
+          )}
       </details>
     </li>
   )

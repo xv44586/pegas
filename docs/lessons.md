@@ -638,3 +638,15 @@
 - APPROVAL-001 同轮独立审查补证：Git 全局选项不能逃过 fetch 分类；配置驱动的 prune/refspec 必须与 CLI 参数同样校验；升级须回填已结束事情的旧规则；首次 grant 复核必须精确关联 Action，避免阻断后续独立审阅。四项均有先红后绿回归；授权命中原因不能在 Activity 适配层丢失，既有审计需有真实桌面查看与撤销入口。
 
 - APPROVAL-001 Linux CI 补证（2026-11-27）：bwrap 的私有 `/tmp` 会隐藏工作区外的测试远端，授权命中不等于命令成功。真实副作用门禁已捕获；夹具移至隔离用户目录，保留工作区外只读远端与原沙箱，并补充 Git 非零退出断言。
+
+### LESSON-20261127-01：事情页只有回复，执行记录藏在侧栏
+
+- Rule：验收“完整事情历史”时，必须在关闭侧栏的实际主对话中验证过程可见，并覆盖超过单页上限的执行记录。
+- Why：首次事情页复用了消息卡的追问/定位箭头，且只把 Run 活动接入右侧；用户主对话中仍无法阅读执行过程。
+- Feature：CONV-002
+- Evidence：2026-11-27 用户截图；`ChatExperience.test.tsx` 图标与 401 条过程回归先红后绿，`TaskConversationHistory.test.tsx` 与 `scripts/verify-task-conversation.mjs` 内联过程验证。
+- Seen：1（2026-11-27）
+- Severity：normal
+- Status：Observed
+- Enforcement：本 Feature 回归验证实际主对话与完整游标，未晋升为仓库规则。
+- Owner / next action：CONV-002；长历史性能和旧版未采集记录继续如实说明。

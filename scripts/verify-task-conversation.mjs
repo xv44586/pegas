@@ -123,6 +123,8 @@ export async function verifyTaskConversation(hostPage, capture, size) {
       callId: 'check-1',
       status: 'completed',
       label: '重新校验数据',
+      detail:
+        '[输入] python check_quarterly.py quarterly.csv\n[结果] 已校验，2 笔渠道费用待核实。',
       semantic: {
         kind: 'shell',
         command: 'python check_quarterly.py quarterly.csv',
@@ -241,6 +243,15 @@ export async function verifyTaskConversation(hostPage, capture, size) {
         },
       }),
     )
+    await page.route('**/v1/runs/conversation-*/subagents?*', route =>
+      route.fulfill({
+        json: {
+          runId: new URL(route.request().url()).pathname.split('/')[3],
+          taskId,
+          subagents: [],
+        },
+      }),
+    )
     await page.route('**/v1/events/history-204/trace?*', route =>
       route.fulfill({
         status: 503,
@@ -297,6 +308,54 @@ export async function verifyTaskConversation(hostPage, capture, size) {
         .count(),
       0,
     )
+    for (const name of ['追问这条回复', '回到发起消息'])
+      assert.equal(
+        await page.getByRole('button', { name, exact: true }).count(),
+        0,
+      )
+    const inline = page.locator(
+      '.conversation-flow [data-run-activity="conversation-run"]',
+    )
+    await inline.locator('summary').filter({ hasText: '思考' }).click()
+    await inline
+      .getByText(
+        '收入按已确认订单统计；渠道费用有两笔缺少凭据，因此将其标记为待核实，暂不计入确定结论。',
+      )
+      .waitFor({ state: 'visible' })
+    await inline.locator('summary').filter({ hasText: '更新任务清单' }).click()
+    await inline
+      .getByText('核对季度数据口径', { exact: true })
+      .waitFor({ state: 'visible' })
+    await inline.scrollIntoViewIfNeeded()
+    await capture(
+      page,
+      `${size}-task-inline-plan.png`,
+      `${size}-task-inline-plan`,
+    )
+    await inline
+      .locator('summary')
+      .filter({ hasText: 'python check_quarterly.py quarterly.csv' })
+      .click()
+    await inline.locator('.shell-output').scrollIntoViewIfNeeded()
+    await capture(
+      page,
+      `${size}-task-inline-tools.png`,
+      `${size}-task-inline-tools`,
+    )
+    const inlineFailed = page.locator(
+      '.conversation-flow [data-run-activity="conversation-failed"]',
+    )
+    await inlineFailed
+      .locator('summary')
+      .filter({ hasText: 'python check_quarterly.py missing.csv' })
+      .click()
+    await inlineFailed.locator('.shell-output').scrollIntoViewIfNeeded()
+    await capture(
+      page,
+      `${size}-task-inline-retry.png`,
+      `${size}-task-inline-retry`,
+    )
+    await composer.scrollIntoViewIfNeeded()
     await capture(
       page,
       `${size}-task-conversation.png`,

@@ -201,10 +201,56 @@ export class PegasApi {
     )
   }
 
-  async runSubagents(runId: string): Promise<RunSubagentReport> {
+  /** Read the complete owner-scoped activity history, keeping older clients unchanged. */
+  async completeRunActivity(
+    runId: string,
+    taskId: string,
+    signal?: AbortSignal,
+  ): Promise<RunActivityReport> {
+    let cursor: number | undefined
+    const entries = new Map<number, RunActivityReport['entries'][number]>()
+    let totalEntries = 0
+    do {
+      const params = new URLSearchParams({ userId: this.#userId, limit: '400' })
+      if (cursor !== undefined) params.set('beforeSeq', String(cursor))
+      const page = await this.#get<RunActivityReport>(
+        `/v1/runs/${encodeURIComponent(runId)}/activity?${params}`,
+        signal,
+      )
+      if (page.runId !== runId || page.taskId !== taskId)
+        throw new Error('执行记录归属不匹配。')
+      if (cursor === undefined) totalEntries = page.totalEntries
+      for (const entry of page.entries) entries.set(entry.seq, entry)
+      const next = page.nextBeforeSeq
+      if (
+        next !== undefined &&
+        (!Number.isSafeInteger(next) ||
+          next < 1 ||
+          (cursor !== undefined && next >= cursor))
+      )
+        throw new Error('执行记录分页游标没有前进。')
+      cursor = next
+    } while (cursor !== undefined)
+    // An older server without pagination must not silently masquerade as complete.
+    if (entries.size < totalEntries)
+      throw new Error('执行记录尚未完整读取，请重试或更新服务。')
+    return {
+      runId,
+      taskId,
+      entries: [...entries.values()].sort((a, b) => a.seq - b.seq),
+      totalEntries: entries.size,
+      truncated: false,
+    }
+  }
+
+  async runSubagents(
+    runId: string,
+    signal?: AbortSignal,
+  ): Promise<RunSubagentReport> {
     const user = encodeURIComponent(this.#userId)
     return this.#get<RunSubagentReport>(
       `/v1/runs/${encodeURIComponent(runId)}/subagents?userId=${user}`,
+      signal,
     )
   }
 

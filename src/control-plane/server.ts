@@ -2340,7 +2340,12 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
           const report = options.store.listRunActivity(
             decodeURIComponent(activityMatch[1] ?? ''),
             userId,
-            limitParam ? { limit: Number(limitParam) } : {},
+            {
+              ...(limitParam !== null ? { limit: Number(limitParam) } : {}),
+              ...(url.searchParams.has('beforeSeq')
+                ? { beforeSeq: Number(url.searchParams.get('beforeSeq')) }
+                : {}),
+            },
           )
           if (!report) throw new Error('Run not found')
           return sendJson(response, 200, report)

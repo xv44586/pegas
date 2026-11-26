@@ -16,13 +16,13 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - **Usable**：目标场景可使用，有自动化验证和明确的事实来源。
 - **Hardened**：经过故障、恢复、安全和运维验证，可长期依赖。
 
-## CONV-002：独立事情对话页（2026-11-26）
+## CONV-002：独立事情对话页（2026-11-27）
 
 - **状态**：Partial；完整历史与定向续聊闭环已实现，旧详情入口继续兼容。
-- **用户结果**：进入具体事情后浏览完整归属历史并持续定向续聊；右侧概览、交付、执行记录、设置复用已有事实。
+- **用户结果**：进入具体事情后浏览完整归属历史并持续定向续聊；主对话直接按时间展示所有已保存的 Run 过程（思考说明、规划、步骤、中间结果、工具参数/结果、子 Agent）；右侧概览、交付、执行记录、设置复用已有事实。
 - **权威实现**：`src/storage/sqlite-store.ts` 的事情事件关联与分页、`src/control-plane/server.ts` 的 Channel timeline、`web/src/api.ts`、`web/src/App.tsx` 与 `web/src/sealed/`。不创建第二套 Conversation 或 Task 状态。
-- **验收与边界**：见 [事情对话页](task-conversation.md)；优先完整历史、定向续聊、草稿隔离和稳定导航，移除事情内重复归属入口；调用链集中到执行记录，侧栏关闭再打开保留 tab；顶部仅保留当前事情搜索与侧栏开关，最近执行过程默认展开。
-- **自动化证据**：`ChatExperience.test.tsx` 的 21 个 CONV-002 回归、`channel-timeline.test.ts`、`scripts/verify-task-conversation.mjs`；集成最新基线后 `pnpm check` 1733 个测试通过；smoke、桌面/窄屏 UI review 与 a11y review 通过。
+- **验收与边界**：见 [事情对话页](task-conversation.md)；优先完整历史、定向续聊、草稿隔离和稳定导航，移除事情内重复归属入口；调用链集中到执行记录，侧栏关闭再打开保留 tab；顶部仅保留当前事情搜索与侧栏开关，移除追问/回到发起消息箭头；主对话用 `TaskConversationHistory.tsx` 读取 `completeRunActivity` 的 beforeSeq 全分页，侧栏仍提供执行索引与诊断。
+- **自动化证据**：`ChatExperience.test.tsx` 的图标清理与 401 条内联混排回归，`TaskConversationHistory.test.tsx` 的完整分页、循环/跨事情拒绝、失败重试、实时刷新、子 Agent 和缓存验证，`live-execution-feedback.test.ts` 的 beforeSeq/owner 校验，以及 `scripts/verify-task-conversation.mjs` 的桌面/窄屏内联过程截图；完整 `pnpm check` 154 个文件 / 1745 个测试通过（无跳过），smoke 与桌面/窄屏 UI review 通过，事情页/搜索的 axe 0 violations。
 - **下一缺口**：统一旧详情入口；超长历史的增量刷新/虚拟化；跨设备草稿不在本轮范围。
 
 ## 能力地图

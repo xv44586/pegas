@@ -276,6 +276,100 @@ describe('CONV-002 task conversation', () => {
     return { mock, options }
   }
 
+  it('removes redundant reply and origin arrows only in the task conversation', async () => {
+    installTaskHistory({}, path =>
+      path.includes('/timeline?')
+        ? Response.json({
+            channel,
+            events: [baseEvent],
+            runs: [],
+            messages: [
+              {
+                ...baseMessage,
+                projection: {
+                  lane: 'work',
+                  weight: 'card',
+                  anchor: { taskId: channel.id, eventId: baseEvent.id },
+                },
+                payload: {
+                  type: 'agent.message',
+                  text: '可以直接继续聊天的回复',
+                },
+              },
+            ],
+          })
+        : undefined,
+    )
+    window.history.replaceState({}, '', '/?task=task-1')
+    render(<App />)
+    await screen.findByText('可以直接继续聊天的回复')
+    expect(screen.queryByRole('button', { name: '追问这条回复' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '回到发起消息' })).toBeNull()
+    expect(screen.getAllByRole('button', { name: '复制消息' })).toHaveLength(2)
+  })
+
+  it('shows every page of execution details chronologically in the main conversation without opening the inspector', async () => {
+    const entries = Array.from({ length: 401 }, (_, index) => ({
+      seq: index + 1,
+      kind: 'text',
+      label: `执行中间结果 ${String(index + 1)}`,
+      detail: `执行中间结果 ${String(index + 1)}`,
+      createdAt:
+        index === 0 ? '2026-11-22T08:00:01.000Z' : '2026-11-22T08:02:00.000Z',
+      updatedAt: runningRun.updatedAt,
+    }))
+    const { mock } = installTaskHistory({}, path => {
+      if (path.includes('/timeline?'))
+        return Response.json({
+          channel,
+          events: [baseEvent],
+          messages: [
+            {
+              ...baseMessage,
+              payload: { type: 'agent.message', text: '中途汇报' },
+            },
+          ],
+          runs: [runningRun],
+        })
+      if (path.includes('/run-1/activity?')) {
+        const earlier = path.includes('beforeSeq=2')
+        return Response.json({
+          runId: 'run-1',
+          taskId: 'task-1',
+          totalEntries: 401,
+          entries: earlier ? entries.slice(0, 1) : entries.slice(1),
+          truncated: true,
+          ...(!earlier ? { nextBeforeSeq: 2 } : {}),
+        })
+      }
+      if (path.includes('/run-1/subagents?'))
+        return Response.json({
+          runId: 'run-1',
+          taskId: 'task-1',
+          subagents: [],
+        })
+      return undefined
+    })
+    window.history.replaceState({}, '', '/?task=task-1')
+    render(<App />)
+    const first = await screen.findByText('执行中间结果 1')
+    const last = await screen.findByText('执行中间结果 401')
+    const reply = screen.getByText('中途汇报')
+    expect(first.closest('.conversation-flow')).toBeTruthy()
+    expect(
+      first.compareDocumentPosition(reply) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+    expect(
+      reply.compareDocumentPosition(last) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+    expect(
+      mock.mock.calls.some(
+        ([path]) => typeof path === 'string' && path.includes('beforeSeq=2'),
+      ),
+    ).toBe(true)
+    expect(screen.queryByRole('tab', { name: '执行记录' })).toBeNull()
+  })
+
   it('opens an isolated page from recents and reads every history page without duplicates', async () => {
     const { mock } = installTaskHistory({ eventCount: 205 })
     render(<App />)
@@ -413,9 +507,15 @@ describe('CONV-002 task conversation', () => {
         : undefined,
     )
     window.history.replaceState({}, '', '/?task=task-1')
+    sessionStorage.setItem(
+      'pegas-task-draft:task-1',
+      JSON.stringify({
+        text: '',
+        quote: { kind: 'reply', id: 'task-answer', text: '这件事的回复' },
+      }),
+    )
     render(<App />)
-    await screen.findByText('这件事的回复')
-    fireEvent.click(screen.getByRole('button', { name: '追问这条回复' }))
+    await screen.findByLabelText('就这件事继续聊天')
     fireEvent.change(screen.getByLabelText('就这件事继续聊天'), {
       target: { value: '引用追问草稿' },
     })
@@ -694,7 +794,7 @@ describe('CONV-002 task conversation', () => {
     expect(screen.queryByRole('dialog', { name: '搜索当前事情' })).toBeNull()
   })
 
-  it('opens the latest execution process only when visiting execution records', async () => {
+  it('keeps the inspector latest run open while full histories also load in the conversation', async () => {
     const { mock } = installTaskHistory({}, path => {
       if (path.includes('/timeline?'))
         return Response.json({
@@ -736,7 +836,7 @@ describe('CONV-002 task conversation', () => {
       mock.mock.calls.some(
         ([path]) => typeof path === 'string' && path.includes('/activity'),
       ),
-    ).toBe(false)
+    ).toBe(true)
     fireEvent.mouseDown(screen.getByRole('tab', { name: '执行记录' }), {
       button: 0,
       ctrlKey: false,
@@ -746,13 +846,17 @@ describe('CONV-002 task conversation', () => {
     expect(
       screen.getByText('执行过程 · 历史执行').closest('details')?.open,
     ).toBe(false)
-    expect(await screen.findByText('先核对口径，再汇总变化。')).toBeTruthy()
+    expect(
+      await within(latest.closest('details') ?? latest).findByText(
+        '先核对口径，再汇总变化。',
+      ),
+    ).toBeTruthy()
     expect(
       mock.mock.calls.some(
         ([path]) =>
           typeof path === 'string' && path.includes('/old-run/activity'),
       ),
-    ).toBe(false)
+    ).toBe(true)
   })
 
   it('moves task message traces into execution records and opens the exact input trace', async () => {
