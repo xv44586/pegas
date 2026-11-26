@@ -572,3 +572,15 @@
 - Status：Observed
 - Enforcement：本 Feature 的收集隔离与 fetch 回环约束回归纳入默认 check；尚未晋升通用仓库规则。
 - Owner / next action：QUALITY-001。后续增加子进程网络隔离与付费验收预算上限；原有模型配置 Lesson 继续适用于显式验收。
+
+### LESSON-20261126-06：回复操作必须绑定原事情，不能借用公共草稿表达归属
+
+- Rule：多事情并行时，回复下的候选与快速回复必须就地关联来源，并以确切回复 ID 提交；公共输入器的选择与草稿不能隐式改变目标。
+- Why：初版候选只预填公共输入器，用户无法确定发送归属；独立解释车道也不满足继续原事情的需求。
+- Feature：DESIGN-009
+- Evidence：2026-11-26 用户纠正；旧实现下最多四项、候选直发、多事情隔离与局部快速回复四个回归失败，修订后纳入自动门禁。
+- Seen：1（2026-11-26）
+- Severity：normal
+- Status：Observed
+- Enforcement：ChatExperience、InlineReply 回归与桌面/移动 UI review；尚未晋升通用仓库规则。
+- Owner / next action：DESIGN-009；后续增加其他客户端时复用服务端回复引用，不另建客户端路由。
