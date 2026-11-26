@@ -1,3 +1,4 @@
+import { InlineReply } from './InlineReply'
 import { answerFollowUps } from '../../../src/conversation/follow-ups'
 import {
   ArrowUp,
@@ -61,7 +62,6 @@ import { useVoiceDictation } from '../useVoiceDictation'
 import { PegasAgentIcon } from '../PegasAgentIcon'
 import {
   Button,
-  FollowUpList,
   Dialog,
   DialogContent,
   DialogTitle,
@@ -720,10 +720,11 @@ export function ConversationPage({
             (message.lane === 'say' || message.lane === 'work')
           ? { channel: workEntryChannel, label: '查看工作详情' }
           : undefined
+    const replyQuote = message.source
+      ? quotableAgentReply(message.source)
+      : undefined
     const quote =
-      message.source && workEntryChannel?.status !== 'cancelled'
-        ? quotableAgentReply(message.source)
-        : undefined
+      workEntryChannel?.status === 'cancelled' ? undefined : replyQuote
     const selectQuote = quote
       ? (explain = workEntryChannel?.status === 'completed') => {
           if (sending || dictationBusy) return
@@ -744,16 +745,10 @@ export function ConversationPage({
         workEntryChannel?.workflow?.resultMessageId === message.id)
         ? answerFollowUps(message.source?.payload)
         : []
-    const followUpDisabled =
-      sending || dictationBusy
-        ? '请等待当前输入处理完成。'
-        : draft.trim() || attachment
-          ? '先发送或清空当前草稿，再选择追问。'
-          : undefined
     return (
       <article
         className={[
-          'message-row',
+          'message-row group/reply',
           `is-${message.role}`,
           message.role === 'pegas' && message.lane !== 'say'
             ? `is-lane-${message.lane}`
@@ -840,15 +835,24 @@ export function ConversationPage({
             </button>
           )}
         </div>
-        {followUps.length > 0 && selectQuote && (
-          <FollowUpList
+        {replyQuote && (
+          <InlineReply
             items={followUps}
-            disabledReason={followUpDisabled}
-            onSelect={text => {
-              if (followUpDisabled) return
-              selectQuote(true)
-              onDraftChange(text)
+            taskTitle={workEntryChannel?.title ?? message.source?.taskId}
+            excerpt={replyQuote.text}
+            disabledReason={
+              workEntryChannel?.status === 'cancelled'
+                ? '事情已停止，无法继续发送。'
+                : undefined
+            }
+            onSend={async (text, dedupeKey) => {
+              await api.sendMessage(
+                text,
+                { replyToMessageId: message.id },
+                dedupeKey,
+              )
             }}
+            onRefresh={onSent}
           />
         )}
         <div className="message-meta">

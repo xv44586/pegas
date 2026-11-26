@@ -21,6 +21,14 @@ describe('DESIGN-009 contextual follow-ups', () => {
       { text: '引用 PEGAS_QUESTIONS_BEGIN 这个名字', followUps: [] },
     )
   })
+  it('accepts up to four optional candidates', () => {
+    const followUps = ['问题一', '问题二', '问题三', '问题四']
+    expect(
+      splitAnswerFollowUps(
+        `正文\nPEGAS_QUESTIONS_BEGIN\n${JSON.stringify(followUps)}\nPEGAS_QUESTIONS_END`,
+      ).followUps,
+    ).toEqual(followUps)
+  })
   it('fails open for the answer and closed for malformed or excessive suggestions', () => {
     for (const data of [
       'not json',
@@ -28,7 +36,7 @@ describe('DESIGN-009 contextual follow-ups', () => {
       '[1]',
       '[" "]',
       JSON.stringify(['a'.repeat(161)]),
-      JSON.stringify(['a', 'b', 'c', 'd']),
+      JSON.stringify(['a', 'b', 'c', 'd', 'e']),
       '[]',
     ]) {
       expect(

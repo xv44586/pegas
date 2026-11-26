@@ -1461,6 +1461,12 @@ describe('DESIGN-003 chat page', () => {
 })
 
 describe('DESIGN-009 contextual follow-ups', () => {
+  const questions = [
+    '哪些因素推动了增长？',
+    '比较两个季度的毛利率',
+    '哪些假设会影响结论？',
+    '进一步分析成本结构',
+  ]
   function suggestionsSnapshot(
     options: { streaming?: boolean; empty?: boolean } = {},
   ): Snapshot {
@@ -1474,8 +1480,17 @@ describe('DESIGN-009 contextual follow-ups', () => {
           canStop: false,
           workflow: { state: 'delivered', resultMessageId: 'current-result' },
         },
+        {
+          ...channel,
+          id: 'other-task',
+          taskId: 'other-task',
+          title: '分析其他产品',
+        },
       ],
-      runs: [{ ...runningRun, status: 'completed' }],
+      runs: [
+        { ...runningRun, status: 'completed' },
+        { ...runningRun, id: 'other-run', taskId: 'other-task' },
+      ],
       messages: [
         {
           ...baseMessage,
@@ -1493,103 +1508,146 @@ describe('DESIGN-009 contextual follow-ups', () => {
           payload: {
             type: 'run.completed',
             text: '收入增长分析',
-            followUps: options.empty
-              ? []
-              : ['哪些因素推动了增长？', '比较两个季度的毛利率'],
+            followUps: options.empty ? [] : questions,
             ...(options.streaming ? { streaming: true } : {}),
           },
           projection: { lane: 'work', weight: 'card' },
         },
-      ],
-    }
-  }
-  it('prefills a concrete question with its exact reply reference, sends only on request and retains a failed draft', async () => {
-    const fetchMock = installChatFetch(suggestionsSnapshot(), (path, init) =>
-      path === '/v1/events' && init?.method === 'POST'
-        ? Response.json({ message: '追问发送失败' }, { status: 503 })
-        : undefined,
-    )
-    render(<App />)
-    const question = await screen.findByRole('button', {
-      name: '哪些因素推动了增长？',
-    })
-    expect(screen.queryByRole('button', { name: '过期的问题' })).toBeNull()
-    fireEvent.click(question)
-    const composer = screen.getByLabelText('给 Pegas 发消息')
-    expect(composer).toHaveProperty('value', '哪些因素推动了增长？')
-    expect(document.activeElement).toBe(composer)
-    expect(
-      fetchMock.mock.calls.filter(
-        ([path, init]) => path === '/v1/events' && init?.method === 'POST',
-      ),
-    ).toHaveLength(0)
-    fireEvent.click(screen.getByRole('button', { name: '发送' }))
-    await screen.findByText('追问发送失败')
-    expect(composer).toHaveProperty('value', '哪些因素推动了增长？')
-    const post = fetchMock.mock.calls.find(
-      ([path, init]) => path === '/v1/events' && init?.method === 'POST',
-    )
-    const body = post?.[1]?.body
-    if (typeof body !== 'string') throw new Error('Expected JSON message')
-    const sent = JSON.parse(body) as { payload: unknown }
-    expect(sent.payload).toEqual({
-      text: '哪些因素推动了增长？',
-      replyToMessageId: 'current-result',
-      intent: 'explain',
-    })
-  })
-  it('preserves a draft and does not change its target when a suggestion is unavailable', async () => {
-    installChatFetch(suggestionsSnapshot())
-    render(<App />)
-    const composer = await screen.findByLabelText('给 Pegas 发消息')
-    fireEvent.change(composer, { target: { value: '用户自己的问题' } })
-    const question = await screen.findByRole('button', {
-      name: '哪些因素推动了增长？',
-    })
-    expect(question.getAttribute('aria-disabled')).toBe('true')
-    fireEvent.click(question)
-    expect(composer).toHaveProperty('value', '用户自己的问题')
-    expect(screen.queryByText('解释这次结果：')).toBeNull()
-    expect(screen.getByText('先发送或清空当前草稿，再选择追问。')).toBeTruthy()
-  })
-  it.each([{ streaming: true }, { empty: true }])(
-    'renders no follow-up placeholder for %j',
-    async options => {
-      installChatFetch(suggestionsSnapshot(options))
-      render(<App />)
-      await screen.findByText('收入增长分析')
-      expect(screen.queryByText('继续深入')).toBeNull()
-      expect(
-        screen.queryByRole('button', { name: '哪些因素推动了增长？' }),
-      ).toBeNull()
-    },
-  )
-  it('offers questions on ordinary conversation replies without requiring a work channel', async () => {
-    installChatFetch({
-      ...baseSnapshot,
-      messages: [
         {
           ...baseMessage,
-          id: 'say-result',
-          taskId: 'conversation-task',
+          id: 'other-reply',
+          taskId: 'other-task',
           payload: {
             type: 'agent.message',
-            text: '两种产品的对比',
-            followUps: ['冬季适合哪一种？'],
+            text: '其他产品的分析',
+            followUps: ['比较其他产品的销量'],
           },
           projection: { lane: 'say', weight: 'inline' },
         },
       ],
+    }
+  }
+  function installSuggestionsFetch(snapshot: Snapshot, failFirst = false) {
+    let fails = failFirst
+    return installChatFetch(snapshot, (path, init) => {
+      if (path !== '/v1/events' || init?.method !== 'POST') return undefined
+      if (fails) {
+        fails = false
+        return Response.json({ message: '追问发送失败' }, { status: 503 })
+      }
+      if (typeof init.body !== 'string') throw new Error('Expected JSON event')
+      const body = JSON.parse(init.body) as {
+        payload: InboxEvent['payload']
+      }
+      const event: InboxEvent = {
+        id: `followup-event-${String(snapshot.events.length)}`,
+        userId: 'owner',
+        type: 'user.message',
+        source: 'web',
+        payload: body.payload,
+        status: 'pending',
+        createdAt: new Date().toISOString(),
+      }
+      snapshot.events = [...snapshot.events, event]
+      return Response.json({ event, inserted: true }, { status: 202 })
     })
+  }
+  function posts(mock: ReturnType<typeof installChatFetch>) {
+    return mock.mock.calls
+      .filter(
+        ([path, init]) => path === '/v1/events' && init?.method === 'POST',
+      )
+      .map(([, init]) => {
+        if (typeof init?.body !== 'string')
+          throw new Error('Expected JSON event')
+        return JSON.parse(init.body) as { payload: unknown; dedupeKey: string }
+      })
+  }
+  it('sends four choices directly to their own replies while preserving another task and the global draft', async () => {
+    const mock = installSuggestionsFetch(suggestionsSnapshot())
     render(<App />)
-    fireEvent.click(
-      await screen.findByRole('button', { name: '冬季适合哪一种？' }),
+    const tray = await screen.findByRole('group', { name: '进行中的事情' })
+    fireEvent.click(within(tray).getByRole('button', { name: /分析其他产品/ }))
+    const composer = screen.getByLabelText('给 Pegas 发消息')
+    fireEvent.change(composer, { target: { value: '写给另一件事情的草稿' } })
+    for (const question of questions)
+      expect(await screen.findByRole('button', { name: question })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '过期的问题' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: questions[0] }))
+    await waitFor(() => expect(posts(mock)).toHaveLength(1))
+    expect(posts(mock)[0]?.payload).toEqual({
+      text: questions[0],
+      replyToMessageId: 'current-result',
+    })
+    expect(composer).toHaveProperty('value', '写给另一件事情的草稿')
+    await waitFor(() =>
+      expect(document.querySelectorAll('.message-row.is-user')).toHaveLength(2),
     )
-    expect(screen.getByLabelText('给 Pegas 发消息')).toHaveProperty(
-      'value',
-      '冬季适合哪一种？',
-    )
+    const sent = document.querySelector('[data-message-id="followup-event-1"]')
+    expect(sent?.textContent).toContain(questions[0])
+    expect(sent?.textContent).not.toContain('收入增长分析')
+    expect(screen.getByText(/继续事情：/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '比较其他产品的销量' }))
+    await waitFor(() => expect(posts(mock)).toHaveLength(2))
+    expect(posts(mock)[1]?.payload).toEqual({
+      text: '比较其他产品的销量',
+      replyToMessageId: 'other-reply',
+    })
+    expect(composer).toHaveProperty('value', '写给另一件事情的草稿')
   })
+  it('retains a failed suggestion at its reply and retries with the same key', async () => {
+    const mock = installSuggestionsFetch(suggestionsSnapshot(), true)
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: questions[0] }))
+    await screen.findByText('追问发送失败')
+    fireEvent.click(screen.getByRole('button', { name: '重试发送' }))
+    await waitFor(() => expect(posts(mock)).toHaveLength(2))
+    expect(posts(mock)[0]).toEqual(posts(mock)[1])
+    expect(screen.getByLabelText('给 Pegas 发消息')).toHaveProperty('value', '')
+  })
+  it('supports an inline custom reply without sending IME composition or touching the common composer', async () => {
+    const mock = installSuggestionsFetch(suggestionsSnapshot())
+    render(<App />)
+    const message = (await screen.findByText('收入增长分析')).closest('article')
+    if (!message) throw new Error('Expected result article')
+    fireEvent.click(within(message).getByRole('button', { name: '快速回复' }))
+    const editor = within(message).getByRole('textbox', { name: '回复内容' })
+    await waitFor(() => expect(document.activeElement).toBe(editor))
+    expect(
+      within(message).getByRole('form', { name: '发送到「整理季度数据」' }),
+    ).toBeTruthy()
+    expect(
+      within(message).queryByText('发送到「整理季度数据」', { exact: true }),
+    ).toBeNull()
+    fireEvent.change(editor, { target: { value: '展开收入的季节性影响' } })
+    fireEvent.compositionStart(editor)
+    fireEvent.keyDown(editor, { key: 'Enter', keyCode: 229 })
+    expect(posts(mock)).toHaveLength(0)
+    fireEvent.compositionEnd(editor)
+    fireEvent.keyDown(editor, { key: 'Enter' })
+    await waitFor(() => expect(posts(mock)).toHaveLength(1))
+    expect(posts(mock)[0]?.payload).toEqual({
+      text: '展开收入的季节性影响',
+      replyToMessageId: 'current-result',
+    })
+    await waitFor(() =>
+      expect(
+        document.querySelector('[data-message-id="followup-event-1"]')
+          ?.textContent,
+      ).toContain('展开收入的季节性影响'),
+    )
+    expect(screen.getByLabelText('给 Pegas 发消息')).toHaveProperty('value', '')
+  })
+  it.each([{ streaming: true }, { empty: true }])(
+    'does not invent candidates for %j',
+    async options => {
+      installChatFetch(suggestionsSnapshot(options))
+      render(<App />)
+      await screen.findByText('收入增长分析')
+      for (const question of questions)
+        expect(screen.queryByRole('button', { name: question })).toBeNull()
+    },
+  )
 })
 
 describe('DESIGN-009 prompt bar', () => {

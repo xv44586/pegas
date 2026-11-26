@@ -1214,7 +1214,7 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - **当前状态**：P1 Gate 覆盖面、P2 权限档位对象、P3 规则批准、P4 审批卡升级与 P5 自动审阅已实现并通过完整门禁（证据见上方 APPROVAL-001 小节）；APPROVAL-001 保持 Partial（自动对账、逐调用独立审计表、档位审计列表 UI 未做）。UI 设计稿（审批卡/档位选择器/规则管理，封板合同）已随 P2–P4 落地，差异见各阶段实现记录。
 - **合并与生产发布（2026-11-24）**：PR #63（P1–P5 全链 + QUALITY-001 canary 门禁闭环）合入 main（merge `5604c6c`），远程 CI run 45218751479 success：`pnpm check`、`pnpm smoke`、UI 采集与「Collect redacted real-service canary」全部通过，评审证据 `ready-for-review`（102 artifacts，含 `notification-real-service-canary.json`，零 Not tried，绑定 head `ea36beb`）。此前 2026-11-23 已把含全部 P1–P5 运行时字节的 `138de03` 经 Candidate `approval-001-138de03-r1` 上线并真机验证（明确授权写区外文件→审阅 allow→落盘→succeeded；验证后 autoReviewEnabled 已关回 false）。本次隔离 worktree `release-5604c6c`（exact commit，frozen-lockfile 安装 + build）完整门禁复跑：`pnpm check` 121 文件 / 1270 测试全绿（stmt 85.75 / br 78.65 / fn 90.03 / line 88.9）、`pnpm smoke` + `pnpm smoke:crash` 通过、canary 六断言 + UI 采集 + evidence `ready-for-review`。经 `buildSelfChangeCandidate` 构建不可变 Candidate `main-5604c6c-r1`（local-self-change-gate attestation；baseCommit 99c2b4c；featureIds APPROVAL-001/QUALITY-001；schema 31–42 无破坏性迁移；reviewer `pegas-release-agent`；notTried 登记逐调用审计表、档位审计 UI、三档位真实探针、medium 语义误判评测、自动对账、模型/ASR 凭证 canary）。依赖 APFS clonefile 重锚定（1532 symlinks 全部树内相对，attestation/manifest 重算并 `verifyCandidateManifest` + `verifyCandidateReleaseTree` 通过，记录 `releases/candidates/main-5604c6c-r1.reanchor.json`，本地不入库）。Supervisor staging 202 → verifying → stable，active=`main-5604c6c-r1`、previous=`approval-001-138de03-r1` 保留可回滚（再往前 `main-a275a94-r1` 需先处理 v40–42 Guard）。restart 后连续 7 次采样 `/readyz` 均报告 `main-5604c6c-r1`、recovery integrity ok；`/v1/events|channels|runs|outbox` 200，settings rev10 `autoReviewEnabled=false`，schema_migrations=42；线上 CSS/JS 与 Candidate dist sha256 逐字节一致。运行时行为与 `approval-001-138de03-r1` 等价（138de03..5604c6c 仅 scripts/test/docs/CI 与 DESIGN-002 web 修复），本次发布使 Release 身份与 main HEAD 一致。
 
-### DESIGN-009：按需的上下文追问（2026-11-26）
+### DESIGN-009：按需的上下文追问（2026-11-26 初版，交互已被下方修订替代）
 
 - **基线与隔离**：main `f019b334`，主工作区干净；集成最新 main `54390e2a` 后重跑门禁；独立 worktree `design-009-contextual-followups` / 分支 `codex/feat-design-009-contextual-followups`。
 - **用户结果与验收**：实际回答模型可在回复结束时给出 0–3 条与内容有关的深入追问，按 BUI Follow-ups 行展示；没有有价值的方向则不显示，不生成固定兜底。普通对话和当前交付均支持，流式/历史交付/失败或等待审批不展示。点击或键盘激活只填入空草稿并引用确切回复，发送仍需用户操作；已有草稿与附件不被覆盖，失败保留草稿和目标。
@@ -1227,3 +1227,13 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 ### EXEC-007：独立 DSH Node 运行时（2026-11-26）
 
 复现并修复 Electron 目录成功但执行 Unsupported/no-context：独立 Node >=24.9.0 随 dist/安装包/Candidate 固化，启动前验证身份和版本，失效时明确失败。验收边界见 [runtime intake](exec-007-runtime-intake.md)。自动化：dsh-node-runtime 单元回归；smoke:dsh-runtime 真实 Electron、最小 PATH、真实 DSH 目录+read 工具+session 恢复；eslint 禁止 executor 直接使用宿主可执行文件，CI 始终运行新 smoke。整体 EXEC-007 保持 Partial，不抹去既有未完成边界。无 schema 迁移，随 Supervisor Candidate 回滚；依赖 DSH CLI 已安装，Windows wrapper 及外部 DSH 自动升级兼容性仍需独立验收。
+
+### DESIGN-009：事情内的候选直发与快速回复（2026-11-26 修订）
+
+- **基线与隔离**：main `73ecec83`，工作区干净；合入最新 main `ed5687cf` 后重跑门禁；独立 `design-009-inline-followups` worktree / `codex/fix-design-009-inline-followups` 分支。
+- **验收**：每条定稿回复最多 4 个按需生成的候选；点击/键盘激活直接向该回复所属事情提交候选文本和确切回复引用，不经过公共输入器，不受当前选中事情影响。候选与局部输入就地置于原回复下方同一区域，以位置表达归属，不增加目标/摘要说明组（仅保留读屏上下文）。发送后 Chat 显示一条用户原文消息；引用正文不混入消息文本。鼠标悬停回复时下方显现快速回复框；键盘聚焦、点击和触屏同样可达。局部草稿与公共草稿互不覆盖，失败保留原目标、文本及重试键，连续点击不重复提交，Enter 发送、Shift+Enter 换行，中文输入法确认不误发。
+- **权威与权限**：复用 ROUTE-001 `replyToMessageId`；服务端鉴权后解析原 Task 与正文，确定性 `continue_task`，不同时信任客户端 taskId，不再使用独立 `intent:explain` 车道。已完成事情续接、停止、Mandate 与权限校验保持原服务端规则。
+- **非目标**：不改 Router、调度 Follow-up、历史元数据补生成或全局输入器；不将候选视为新增授权。
+- **失败与恢复**：网络失败同键手动重试；服务端接受后的列表刷新失败不能重新发送；无 schema 迁移，可通过上一 Candidate 回滚，4 项元数据在旧版最多 3 项校验下可降级不显示。
+- **自动化证据**：修复前四项回归失败；修复后 `answer-follow-ups` 5 项覆盖 0–4/超限/流式协议，`ChatExperience` 5 项覆盖候选直发、并行事情隔离、局部 Enter/IME 与 Chat 用户原文回显，`InlineReply` 4 项覆盖重复点击、网络同键重试、刷新失败不重发、轮询保稿与停止禁用。既有 `chat-lane` 验证精确回复→原 Task/原 session、原文上下文、owner 隔离与服务端幂等。完整 `pnpm check` 152 文件 / 1670 测试全绿；`pnpm smoke`、真实 Electron `smoke:dsh-runtime`、无障碍审计通过。桌面/390px UI review 验证四候选、Tab/Enter、悬停/触屏输入、用户原文回显与无溢出，复验 216 次全站下拉/弹层交互及详情执行设置 24 次开关、键盘、保存回读。另以真实触屏几何断言先复现发送按钮被 44px 最小触控高度撑出输入框，修订为 48px 输入框内的 44px 发送目标，并纳入桌面/移动 UI 门禁。
+- **状态与下一缺口**：本次修订验收通过，待绿色 PR CI 后合并和 Candidate 发布；DESIGN-009 整体状态不升级。旧回复不补生成；真实模型建议质量未做付费抽样，可能没有候选；局部草稿不跨刷新持久化，已发送候选仅在本次挂载期间防重复。证据保存在本地 `output/inline-followups/` 与 `output/feature-review/inline-followups/`，不入库。

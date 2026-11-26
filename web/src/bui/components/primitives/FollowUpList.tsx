@@ -7,10 +7,12 @@ export function FollowUpList({
   onSelect,
   label = '继续深入',
   disabledReason,
+  sentItems = [],
 }: {
   items: readonly string[]
   onSelect?: (text: string, index: number) => void
   label?: string
+  sentItems?: readonly string[]
   disabledReason?: string
 }) {
   const labelId = useId()
@@ -30,10 +32,13 @@ export function FollowUpList({
           <li key={text}>
             <button
               type="button"
-              aria-disabled={disabledReason ? true : undefined}
+              aria-disabled={
+                disabledReason || sentItems.includes(text) ? true : undefined
+              }
               aria-describedby={disabledReason ? hintId : undefined}
               onClick={() => {
-                if (!disabledReason) onSelect?.(text, index)
+                if (!disabledReason && !sentItems.includes(text))
+                  onSelect?.(text, index)
               }}
               className="flex min-h-9 w-full items-center gap-2 rounded-[7px] border-b border-line px-1.5 py-1.5 text-left text-[12.5px] text-ink transition-colors duration-100 hover:bg-hover-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent aria-disabled:opacity-60"
             >
@@ -43,6 +48,9 @@ export function FollowUpList({
                 aria-hidden="true"
               />
               <span className="min-w-0 break-words">{text}</span>
+              {sentItems.includes(text) && (
+                <span className="shrink-0 text-[11px] text-ink-2">已发送</span>
+              )}
             </button>
           </li>
         ))}
