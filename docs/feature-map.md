@@ -1281,5 +1281,5 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - 基线与隔离：ebc5b433；独立 codex/approval-001-command-grants。验收、范围、失败恢复、增量 schema 60 与回滚边界见 docs/command-authorization.md。
 - 权威实现：src/executor/command-policy.mjs、src/executor/dsh-approval-bridge.mjs、src/storage/sqlite-store.ts、src/worker/processor.ts；客户端仅适配服务端事实。
 - 自动化证据：命令/目录双入口、去重绑定、首次撤销重审批、终态失效、真实 Worker 首调用 outcome、历史界面测试；实际 Electron + Worker + DSH fetch 的复用、SQLite/桌面重启、worktree、撤销不执行与重新询问已验证。证据位于 output/command-grants/。
-- 本地验证：154 文件 / 1775 测试、完整 check 与 smoke 通过；真实 Electron + Worker + DSH 连续副作用验证、窄屏及授权记录追溯通过。独立安全/对抗/测试审查及 Codex CLI 的已确认发现均经回归修复。集成最新 main 后重跑门禁；精确提交 CI 与 Supervisor 发布尚待执行。
+- 本地验证：154 文件 / 1797 测试、完整 check 与 smoke 通过；真实 Electron + Worker + DSH 连续副作用验证、窄屏及授权记录追溯通过。独立安全/对抗/测试审查及 Codex CLI 的已确认发现均经回归修复。已集成 main 34c2b9da，并将同一授权记录组件接到新的事情执行面板；集成后完整 check、smoke 与真实桌面（含新事情面板授权记录）再次通过；精确提交 CI 与 Supervisor 发布尚待执行。
 - 下一边界：本版持久命令适配为受约束的 HTTPS/本地 git fetch；SSH、自定义 helper、其他程序及危险选项继续单次审批，不宣称支持任意命令永久授权。

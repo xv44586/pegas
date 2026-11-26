@@ -405,7 +405,8 @@ try {
   assert(worktreeResult.events.some(e => e.ruleId === rule.id))
   assert(fetched(), 'Worktree fetch must update its FETCH_HEAD')
   commandDirectory = repo
-  await window.goto(baseUrl + '/?view=tasks&task=' + current.task.id)
+  await window.goto(baseUrl + '/?task=' + current.task.id)
+  await window.getByRole('tab', { name: '执行记录', exact: true }).click()
   await window.getByText('授权执行记录', { exact: true }).first().click()
   await window
     .getByText(/已按长期命令授权执行/)

@@ -3670,7 +3670,13 @@ export function PermissionTierHistorySection({
   )
 }
 
-function AuthorizationTrace({ api, runId }: { api: PegasApi; runId: string }) {
+export function AuthorizationTrace({
+  api,
+  runId,
+}: {
+  api: PegasApi
+  runId: string
+}) {
   const [page, setPage] =
     useState<Awaited<ReturnType<PegasApi['policyAudit']>>>()
   const [error, setError] = useState('')
@@ -3715,7 +3721,7 @@ function AuthorizationTrace({ api, runId }: { api: PegasApi; runId: string }) {
       <ul>
         {page?.entries.map(entry => (
           <li key={entry.id} className="my-2 text-[13px]">
-            <p>{entry.reason}</p>
+            <p className="break-words">{entry.reason}</p>
             <small>{formatRelativeTime(entry.createdAt)}</small>
             {entry.ruleId && (
               <button

@@ -11,6 +11,7 @@ import type {
 import { ActivityTimeline } from './ActivityTimeline'
 import {
   ApprovalRulesSection,
+  AuthorizationTrace,
   DeliverySection,
   PermissionTierHistorySection,
   WorkerProfileSection,
@@ -356,6 +357,7 @@ function RunRecord({
               </>
             )}
           </dl>
+          <AuthorizationTrace api={api} runId={run.id} />
           {error && (
             <div role="alert">
               <p>{error}</p>
