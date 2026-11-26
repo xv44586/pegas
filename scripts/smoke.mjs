@@ -9,7 +9,14 @@ import { join, resolve } from 'node:path'
 const dataDirectory = mkdtempSync(join(tmpdir(), 'pegas-smoke-'))
 const port = await availablePort()
 const deliveries = []
+const unexpectedModelRequests = []
 const webhookServer = createHttpServer(async (request, response) => {
+  if (request.url !== '/push') {
+    unexpectedModelRequests.push(request.url)
+    request.resume()
+    response.writeHead(503).end('Unexpected model request in offline smoke')
+    return
+  }
   const chunks = []
   for await (const chunk of request) chunks.push(Buffer.from(chunk))
   deliveries.push({
@@ -37,6 +44,12 @@ const environment = {
   PEGAS_SCHEDULER_POLL_MS: '25',
   PEGAS_EXECUTOR: 'echo',
   PEGAS_ROUTER: 'rules',
+  PEGAS_MEMORY_PROVIDER: 'disabled',
+  PEGAS_REWRITE_MODE: 'disabled',
+  PEGAS_MODEL_PROVIDER: 'custom',
+  PEGAS_MODEL_NAME: 'offline-smoke-fixture',
+  PEGAS_MODEL_API_KEY: 'offline-smoke-fixture',
+  PEGAS_MODEL_BASE_URL: `http://127.0.0.1:${webhookAddress.port}/v1`,
   PEGAS_PUSH_MODE: 'webhook',
   PEGAS_PUSH_WEBHOOK_URL: `http://127.0.0.1:${webhookAddress.port}/push`,
   PEGAS_OUTBOX_POLL_MS: '25',
@@ -134,6 +147,8 @@ try {
   if (completionDelivery.body?.payload?.type !== 'run.completed')
     throw new Error('Webhook did not receive the completion payload')
   await verifyScheduledAutomation(port)
+  if (unexpectedModelRequests.length > 0)
+    throw new Error('Offline smoke unexpectedly attempted model requests')
   console.log(`Smoke test passed with task ${task.id} and run ${run.id}`)
 } finally {
   for (const child of children) child.kill('SIGTERM')

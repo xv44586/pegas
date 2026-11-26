@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url'
-import { defineConfig } from 'vitest/config'
+import { configDefaults, defineConfig } from 'vitest/config'
+import { liveTestInclude } from './test/support/test-suites.js'
 
 export const testInclude = [
   'test/**/*.test.ts',
@@ -14,6 +15,8 @@ export default defineConfig({
   },
   test: {
     include: [...testInclude],
+    exclude: [...configDefaults.exclude, ...liveTestInclude],
+    setupFiles: ['./test/support/offline-setup.ts'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json-summary', 'html'],

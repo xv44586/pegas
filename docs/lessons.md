@@ -560,3 +560,15 @@
 - Status：Observed
 - Enforcement：共享启动器回归加入 `pnpm check`，未扩张仓库强制标准。
 - Owner / next action：SETTINGS-001。2026-11-26 用户授权使用已充值的 DeepSeek，合入 QUALITY-001 共享模型配置后 1,601 测试与 smoke 全绿；后续打包验证继续覆盖 GUI 最小 PATH。
+
+### LESSON-20261126-04：本机模型网关可用不代表允许付费测试
+
+- Rule：普通质量门禁与付费模型验收分开收集；真实验收必须显式开启。测试依赖不可用时，显式请求的验收失败而非跳过。
+- Why：四组真实模型用例以网关可达 / DSH 已安装为启动条件，被普通 coverage/check 自动收集；每次检查都可能触发真实 Router 与工具执行请求。普通 smoke 的默认 local memory 也存在蒸馏出口。
+- Feature：QUALITY-001
+- Evidence：`test/offline-test-boundary.test.ts` 默认收集 4 项与 smoke 隔离 1 项在旧实现失败；`test/live-model.test.ts` 验证未授权零探测、DSH 缺失、网关失败和显式开启。
+- Seen：1（2026-11-26）
+- Severity：normal
+- Status：Observed
+- Enforcement：本 Feature 的收集隔离与 fetch 回环约束回归纳入默认 check；尚未晋升通用仓库规则。
+- Owner / next action：QUALITY-001。后续增加子进程网络隔离与付费验收预算上限；原有模型配置 Lesson 继续适用于显式验收。
