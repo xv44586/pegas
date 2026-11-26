@@ -344,8 +344,18 @@ export function unresolvedAttentionMessages(
       .map(approvalIdFromMessage)
       .filter((id): id is string => Boolean(id)),
   )
+  const reconciledActionIds = new Set(
+    messages
+      .filter(message => payloadType(message.payload) === 'action.reconciled')
+      .map(actionIdFromMessage)
+      .filter((id): id is string => Boolean(id)),
+  )
   return messages.filter(message => {
     if (!isAttentionMessage(message)) return false
+    if (isReconciliationMessage(message)) {
+      const actionId = actionIdFromMessage(message)
+      if (actionId && reconciledActionIds.has(actionId)) return false
+    }
     if (attentionKind(message) !== 'approval') return true
     const approvalId = approvalIdFromMessage(message)
     return !approvalId || !resolvedApprovalIds.has(approvalId)
@@ -733,7 +743,8 @@ export function actionIdFromMessage(
 
 export function isReconciliationMessage(message: OutboxMessage): boolean {
   return (
-    payloadType(message.payload) === 'action.reconciliation_required' &&
+    (payloadType(message.payload) === 'action.reconciliation_required' ||
+      payloadType(message.payload) === 'action.outcome_unknown') &&
     Boolean(actionIdFromMessage(message))
   )
 }
