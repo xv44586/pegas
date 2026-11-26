@@ -17,6 +17,7 @@ import { relative, resolve, sep } from 'node:path'
 import { chromium } from 'playwright'
 
 import { verifyUiOverlays } from './verify-ui-overlays.mjs'
+import { verifyComposerMenu } from './verify-composer-menu.mjs'
 
 const repositoryRoot = resolve(import.meta.dirname, '..')
 const args = process.argv.slice(2)
@@ -284,6 +285,7 @@ try {
   await page.goto(`http://127.0.0.1:${String(port)}/`)
   const composerInput = page.getByRole('textbox', { name: '给 Pegas 发消息' })
   await composerInput.waitFor()
+  await verifyComposerMenu(page, capture, 'desktop')
   await verifyUiOverlays(page, capture, 'desktop')
   await verifyAnswerFollowUps(page, capture, 'desktop')
   await capture(page, 'desktop-conversation.png', 'desktop-conversation')
@@ -780,6 +782,7 @@ try {
     name: '给 Pegas 发消息',
   })
   await mobileComposer.waitFor()
+  await verifyComposerMenu(mobilePage, capture, 'mobile')
   await verifyUiOverlays(mobilePage, capture, 'mobile')
   await verifyAnswerFollowUps(mobilePage, capture, 'mobile')
   await capture(mobilePage, 'mobile-conversation.png', 'mobile-conversation')
@@ -2193,20 +2196,18 @@ async function assertGeometry(page, label) {
       const composerStyle = globalThis.getComputedStyle(composer)
       const inputStyle = globalThis.getComputedStyle(composerInput)
       const sendRect = sendButton.getBoundingClientRect()
-      const multiline = composer.classList.contains('is-multiline')
-      if (composerStyle.transitionProperty.includes('border-radius')) {
-        await new Promise(resolve => setTimeout(resolve, 260))
+      const expectedRadius = globalThis.innerWidth <= 820 ? '20px' : '24px'
+      for (const property of [
+        'borderTopLeftRadius',
+        'borderTopRightRadius',
+        'borderBottomLeftRadius',
+        'borderBottomRightRadius',
+      ]) {
+        if (composerStyle[property] !== expectedRadius)
+          out.push(
+            `composer must keep four rounded corners: ${property}=${composerStyle[property]}, expected ${expectedRadius}`,
+          )
       }
-      const settledStyle = globalThis.getComputedStyle(composer)
-      const radius = Number.parseFloat(settledStyle.borderRadius)
-      if (multiline && radius > 26)
-        out.push(
-          `multiline composer is too pill-shaped (${settledStyle.borderRadius})`,
-        )
-      if (!multiline && radius < 100)
-        out.push(
-          `single-line composer is not a capsule (${settledStyle.borderRadius})`,
-        )
       if (inputStyle.fieldSizing !== 'content')
         out.push(
           `composer textarea does not auto-size (${inputStyle.fieldSizing})`,
