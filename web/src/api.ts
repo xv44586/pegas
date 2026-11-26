@@ -1283,14 +1283,34 @@ export class PegasApi {
     return ((await response.json()) as { approval: Approval }).approval
   }
 
-  async approvalRules(taskId: string): Promise<ApprovalRule[]> {
+  async approvalRules(taskId?: string): Promise<ApprovalRule[]> {
     const params = new URLSearchParams({ userId: this.#userId })
     const response = await fetch(
-      `/v1/tasks/${encodeURIComponent(taskId)}/approval-rules?${params.toString()}`,
+      taskId
+        ? `/v1/tasks/${encodeURIComponent(taskId)}/approval-rules?${params.toString()}`
+        : `/v1/approval-rules?${params.toString()}`,
       { headers: this.#headers(true) },
     )
     if (!response.ok) await throwResponse(response)
     return ((await response.json()) as { rules: ApprovalRule[] }).rules
+  }
+
+  async policyAudit(
+    runId: string,
+    cursor?: string,
+  ): Promise<{
+    entries: {
+      id: string
+      reason: string
+      ruleId?: string
+      decision: string
+      createdAt: string
+    }[]
+    nextCursor?: string
+  }> {
+    const params = new URLSearchParams({ userId: this.#userId, runId })
+    if (cursor) params.set('cursor', cursor)
+    return this.#get(`/v1/policy-audit?${params.toString()}`)
   }
 
   async revokeApprovalRule(

@@ -74,6 +74,9 @@ export interface ToolApprovalGrant {
   actionId: string
   tool: string
   argumentsHash: string
+  commandSelector?: import('./command-policy.mjs').CommandSelector
+  ruleId?: string
+  ruleRequired?: boolean
 }
 
 export interface ExecutorResult {

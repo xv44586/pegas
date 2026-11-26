@@ -107,6 +107,11 @@ describe('policy gate classifier', () => {
       command.replace('+ok', 'PATCH\necho unsafe'),
       command.replace("<<'PATCH'", '<<PATCH'),
       'echo x > ' + target,
+      command.replace(
+        `*** Add File: ${target}\n+ok`,
+        `*** Delete File: ${target}`,
+      ),
+      command.replace('+ok', `*** Move to: ${target}.moved`),
     ]) {
       expect(approvalDirectories('bash', [target], unsafe)).toEqual([])
     }
@@ -114,6 +119,15 @@ describe('policy gate classifier', () => {
     expect(approvalDirectories('unknown', [target])).toEqual([])
     expect(approvalDirectories('write', ['relative/file'])).toEqual([])
     expect(approvalDirectories('write', [])).toEqual([])
+    const missing = join(
+      realpathSync(roots.workspace),
+      'new',
+      'nested',
+      'file.txt',
+    )
+    expect(approvalDirectories('write', [missing])).toEqual([
+      join(realpathSync(roots.workspace), 'new', 'nested'),
+    ])
   })
 
   it('allows Pegas read-only projection tools without approval', () => {

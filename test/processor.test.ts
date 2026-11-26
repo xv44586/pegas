@@ -17,6 +17,151 @@ import {
 } from '../src/worker/processor.js'
 
 describe('event and run processing', () => {
+  it('passes a persistent approval decision through the same first-call outcome grant as a single approval', async () => {
+    const store = new PegasStore(':memory:')
+    store.enqueueEvent({
+      userId: 'user-1',
+      type: 'user.message',
+      source: 'web',
+      authenticatedActor: 'human',
+      payload: { text: 'Write an outside file' },
+    })
+    await processNextEvent(
+      store,
+      new RoutingEventHandler(new RuleBasedTaskRouter(), 'fixture'),
+      'fixture-worker',
+    )
+    const first = store.claimNextRun('fixture-worker')
+    if (!first) throw new Error('Expected Run')
+    const pending = store.requestApproval(first.run.id, first.claimToken, {
+      kind: 'dsh.tool.write',
+      risk: 'high',
+      idempotencyKey: 'rule-first',
+      request: {
+        tool: 'write',
+        argumentsHash: 'fixture-hash',
+        category: 'out-of-workspace-write',
+        targets: ['/tmp/granted-file'],
+        tier: 'standard',
+      },
+      recoveryPoint: { step: 'before_tool_call' },
+      approval: {
+        summary: 'Write',
+        impact: 'Outside',
+        recommendedOptionId: 'approve',
+        options: [
+          { id: 'approve', label: 'Once', kind: 'approve' },
+          { id: 'approve_rule', label: 'Task', kind: 'approve_rule' },
+          { id: 'reject', label: 'No', kind: 'reject' },
+        ],
+      },
+    })
+    store.decideApproval(pending.approval.id, 'user-1', {
+      commandId: 'grant-persistent',
+      optionId: 'approve_rule',
+    })
+    const resumed = store.claimNextRun('fixture-worker')
+    if (!resumed) throw new Error('Expected successor')
+    let grant: ExecutorInput['toolApprovalGrant']
+    await executeClaimedRun(
+      store,
+      {
+        name: 'fixture',
+        execute: input => {
+          grant = input.toolApprovalGrant
+          store.recordActionOutcome(pending.action.id, resumed.claimToken, {
+            commandId: 'fixture-outcome',
+            status: 'succeeded',
+            result: {},
+          })
+          return Promise.resolve({ executorRef: 'session', output: 'Done' })
+        },
+      },
+      resumed,
+      'fixture-worker',
+      process.cwd(),
+      new AbortController().signal,
+      'http://127.0.0.1:4317',
+    )
+    expect(grant).toMatchObject({
+      actionId: pending.action.id,
+      argumentsHash: 'fixture-hash',
+    })
+    expect(store.getAction(pending.action.id, 'user-1')?.status).toBe(
+      'succeeded',
+    )
+    store.close()
+  })
+  it('does not let a late session-ref callback turn a parked approval into an executor error', async () => {
+    const store = new PegasStore(':memory:')
+    store.enqueueEvent({
+      userId: 'user-1',
+      type: 'user.message',
+      source: 'web',
+      authenticatedActor: 'human',
+      payload: { text: 'Run a command' },
+    })
+    await processNextEvent(
+      store,
+      new RoutingEventHandler(new RuleBasedTaskRouter(), 'fixture'),
+      'fixture-worker',
+    )
+    const claimed = store.claimNextRun('fixture-worker')
+    if (!claimed) throw new Error('Expected Run')
+    let finished = false
+    await executeClaimedRun(
+      store,
+      {
+        name: 'fixture',
+        execute: input => {
+          input.onExecutorRef?.('real-session')
+          const pending = store.requestApproval(
+            claimed.run.id,
+            claimed.claimToken,
+            {
+              kind: 'dsh.tool.bash',
+              risk: 'high',
+              idempotencyKey: 'fixture-park',
+              request: { tool: 'bash' },
+              recoveryPoint: { step: 'before_tool_call' },
+              approval: {
+                summary: 'Run command',
+                impact: 'fixture',
+                recommendedOptionId: 'approve',
+                options: [
+                  { id: 'approve', kind: 'approve', label: 'Once' },
+                  { id: 'reject', kind: 'reject', label: 'Reject' },
+                ],
+              },
+            },
+          )
+          input.onExecutorRef?.('real-session')
+          finished = true
+          return Promise.resolve({
+            executorRef: 'real-session',
+            output: 'Waiting',
+            approvalPending: {
+              actionId: pending.action.id,
+              approvalId: pending.approval.id,
+              callId: 'fixture',
+              tool: 'bash',
+            },
+          })
+        },
+      },
+      claimed,
+      'fixture-worker',
+      process.cwd(),
+      new AbortController().signal,
+      'http://127.0.0.1:4317',
+    )
+    expect(finished).toBe(true)
+    expect(store.listRuns()[0]).toMatchObject({
+      status: 'waiting',
+      executorRef: 'real-session',
+    })
+    store.close()
+  })
   it('keeps the Run capability transport on loopback', () => {
     expect(localControlPlaneBaseUrl('127.0.0.1', 4317)).toBe(
       'http://127.0.0.1:4317',

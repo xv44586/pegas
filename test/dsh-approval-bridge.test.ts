@@ -406,7 +406,15 @@ console.log(JSON.stringify({
     expect(await processNextEvent(store, handler, 'event-drift')).toBe(true)
     expect(
       store.listEvents('owner').find(event => event.id === continuation.id),
-    ).toMatchObject({ status: 'processed' })
+    ).toMatchObject({ status: 'processing' })
+    const replacement = store
+      .listOutbox('owner')
+      .map(message => message.payload as { type?: string; approvalId?: string })
+      .findLast(payload => payload.type === 'approval.required')
+    expect(replacement).toBeDefined()
+    expect(
+      store.getApproval(String(replacement?.approvalId), 'owner')?.status,
+    ).toBe('pending')
     store.close()
   })
 

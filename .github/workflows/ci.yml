@@ -49,6 +49,8 @@ jobs:
       - name: Capture temporary UI review media
         if: github.event_name == 'pull_request' && steps.changed.outputs.ui == 'true'
         run: pnpm review:ui -- --changed-from "origin/${{ github.base_ref }}"
+      - name: Verify desktop command authorization reuse and revocation
+        run: xvfb-run --auto-servernum npm exec --yes --package=@deepseek-ai/dsh@0.2.2-rc.5 -- pnpm smoke:command-authorization
       - name: Detect external-service changes
         id: external
         if: github.event_name == 'pull_request'
@@ -87,5 +89,13 @@ jobs:
         with:
           name: feature-review-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
           path: output/feature-review
+          retention-days: 7
+          if-no-files-found: warn
+      - name: Upload command authorization evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: command-authorization-${{ github.sha }}
+          path: output/command-grants
           retention-days: 7
           if-no-files-found: warn

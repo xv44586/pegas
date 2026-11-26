@@ -97,3 +97,5 @@ Feature：CONV-002。状态：Partial（2026-11-27；独立事情页纵向闭环
 实现说明：`TaskConversationHistory.tsx` 将各 Run 的活动与用户输入/Outbox 按时间混排，时间相同按用户输入 → Run → 活动 → 子 Agent → 回复稳定排序；主对话不折叠合并历史思考和计划快照。复用 `ActivityTimeline` 的 `chronological` 模式，原始工具参数与结果可在工具卡内展开，输出归档仍用既有分页接口。每次最多读取 3 个 Run；完成的版本缓存复用，运行中的记录每 5 秒更新。读取失败保留此前成功结果和所有消息/草稿，分别显示根 Run 与子 Agent 错误；页面切换取消旧请求。根 Run 查询新增 `nextBeforeSeq` 和严格递减游标，owner 检查及旧 limit 语义保持。
 
 验证：最初 3 个回归先红（两个冗余箭头、主对话无过程、活动无分页），修改后通过。最终 `pnpm check`：154 文件、1745 测试全绿，无跳过；语句 79.03%、分支 72.71%、函数 75.99%、行 82.01%。`TaskConversationHistory.test.tsx` 10 个用例覆盖翻页失败重试、完整工具/子 Agent、异步归属、实时轮询保留旧数据、慢子记录不阻断根记录、完成版本缓存；`ChatExperience` 新增 2 个主对话回归，并保留旧引用草稿兼容测试。smoke、桌面 1440×900 与窄屏 390×844 UI review 通过；新增 6 张 task-inline-{plan,tools,retry} 截图，主对话可见规划/思考/工具输出且无冗余箭头；事情页与搜索 axe 为 0 violations。复盘新增 `LESSON-20261127-01`（Observed）。
+
+集成补充：PR 创建期间 `origin/main` 更新为 `23b3d45e`（APPROVAL-001 命令授权）。本分支合并目标分支，保留新增审批逻辑与双方 Lesson；代码无人工冲突。合并态重新运行完整门禁及 smoke/UI，发布兼容性以该基线的 schema 合同为准。

@@ -324,6 +324,8 @@ Approval 是持久对象，可以跨进程和设备等待。审批通过只授�
 
 APPROVAL-001 的具体状态机、能力令牌、幂等与恢复协议见 `docs/approval-lifecycle.md`。批准只代表授权继续，不能作为外部副作用已成功的证据；恢复 Run 必须单独回报 Action outcome，无法判断时保存为 `unknown` 并停止自动重试。
 
+命令授权复用同一服务端规则与决定链路：已适配的 `git fetch` 可按准确参数或命令族授权，期限独立选择本事情或长期；两类执行入口均重新验证规则、实际运行组件与资源上下文。首次恢复也绑定实际规则并记录 outcome，事情结束撤销事情规则，长期规则按 owner 隔离。当前适配边界、schema 60、撤销与回滚合同见 [命令授权](command-authorization.md)。
+
 ### 8. Notification
 
 Notification 根据 Task 事件决定是否以及在哪里联系用户。

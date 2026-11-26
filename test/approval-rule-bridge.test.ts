@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process'
+import { writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import {
   mkdirSync,
@@ -16,6 +18,12 @@ import { createControlPlane } from '../src/control-plane/server.js'
 import { loadConfig } from '../src/core/config.js'
 import { runtimeSettingsDefaults } from '../src/settings/runtime-settings.js'
 import { PegasStore } from '../src/storage/sqlite-store.js'
+import { assertRollbackCompatible } from '../src/supervisor/rollback-compatibility.js'
+
+function required<T>(value: T | undefined): T {
+  if (value === undefined) throw new Error('Expected fixture value')
+  return value
+}
 
 const temporaryDirectories: string[] = []
 
@@ -146,6 +154,422 @@ function restoreEnvironment(previous: NodeJS.ProcessEnv): void {
 }
 
 describe('DSH bridge approval rules', () => {
+  it.each(["rg 'git fetch' docs", 'git log --grep=fetch -1'])(
+    'keeps query %s out of command approvals',
+    async command => {
+      const bridge = await loadBridge(),
+        harness = gateHarness(),
+        roots = gateRoots()
+      bridge.apply(harness.ctx, {
+        policy: { workspaceRoot: roots.workspace },
+        emit: (event: unknown) =>
+          harness.events.push(event as Record<string, unknown>),
+      })
+      const result = await required(harness.handlers.get('tools/pre-execute'))(
+        { callId: 'read', name: 'bash', arguments: { command } },
+        () => Promise.resolve({ kind: 'allow' }),
+      )
+      expect(result).toEqual({ kind: 'allow' })
+    },
+  )
+  it.each([
+    'git -C. fetch origin main',
+    'git --no-pager fetch origin main',
+    'git -cfoo=bar fetch origin main',
+    "git -C '/tmp/repo  name' fetch origin main",
+    'git f"etch" origin main',
+    'git fetch origin "$BRANCH"',
+  ])(
+    'requires confirmation for unsupported valid fetch syntax: %s',
+    async command => {
+      const bridge = await loadBridge(),
+        harness = gateHarness(),
+        roots = gateRoots()
+      bridge.apply(harness.ctx, {
+        policy: { workspaceRoot: roots.workspace },
+        emit: (event: unknown) =>
+          harness.events.push(event as Record<string, unknown>),
+      })
+      const result = await required(harness.handlers.get('tools/pre-execute'))(
+        { callId: 'unsupported', name: 'bash', arguments: { command } },
+        () => Promise.resolve({ kind: 'allow' }),
+      )
+      expect(result).toMatchObject({ kind: 'ask' })
+    },
+  )
+  it.each([
+    'family_task',
+    'family_user',
+    'exact_task',
+    'exact_user',
+    'family_user:before',
+    'family_user:seam',
+  ])(
+    'persists and revokes real HTTP command authorization %s at both hooks',
+    async scenario => {
+      const [rawSuffix, revocationTiming] = scenario.split(':')
+      const suffix = required(rawSuffix)
+      const roots = gateRoots()
+      const repository = realpathSync(roots.shared)
+      const git = (...args: string[]) =>
+        execFileSync('git', ['-C', repository, ...args], { encoding: 'utf8' })
+      git('init', '-q')
+      git('config', 'user.name', 'Fixture')
+      git('config', 'user.email', 'fixture@example.invalid')
+      writeFileSync(join(repository, 'a'), 'a')
+      git('add', 'a')
+      git('commit', '-qm', 'initial')
+      git('remote', 'add', 'origin', 'https://example.invalid/repo.git')
+      const database = join(roots.workspace, 'commands.db')
+      const store = new PegasStore(database)
+      const claimed = createClaimedRun(store, 'command-request')
+      const server = createControlPlane({ store, apiToken: 'command-fixture' })
+      await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+      const previous = { ...process.env }
+      Object.assign(process.env, {
+        PEGAS_APPROVAL_BRIDGE: '1',
+        PEGAS_CONTROL_PLANE_URL: `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`,
+        PEGAS_RUN_ID: claimed.run.id,
+        PEGAS_RUN_CLAIM_TOKEN: claimed.claimToken,
+      })
+      const command =
+        'env -u GIT_CONFIG_COUNT -u GIT_CONFIG_KEY_0 -u GIT_CONFIG_VALUE_0 git fetch origin main'
+      const bridge = await loadBridge()
+      const make = (grant?: Record<string, unknown>) => {
+        const harness = gateHarness()
+        bridge.apply(harness.ctx, {
+          ...(grant ? { grant } : {}),
+          emit: (event: unknown) =>
+            harness.events.push(event as Record<string, unknown>),
+          policy: {
+            workspaceRoot: roots.workspace,
+            protectedRoots: [roots.dataDir],
+          },
+        })
+        return harness
+      }
+      const call = (callId: string) => ({
+        agent: {},
+        callId,
+        name: 'bash',
+        arguments: { command, workdir: repository },
+      })
+      try {
+        const first = make()
+        await required(first.handlers.get('tools/pre-execute'))(
+          call('first'),
+          () => Promise.resolve({ kind: 'allow' }),
+        )
+        await required(first.handlers.get('approval/request'))(
+          { callId: 'first', toolName: 'bash' },
+          () => Promise.resolve('unavailable'),
+        )
+        const pending = first.events.find(e => e.type === 'approval_pending')
+        expect(pending, JSON.stringify(first.events)).toBeDefined()
+        const approval = required(
+          store.getApproval(String(required(pending).approvalId), 'owner'),
+        )
+        expect(approval.prompt.options.map(o => o.id)).toContain(
+          'approve_command_' + suffix,
+        )
+        expect(() => assertRollbackCompatible(database, 59, 1)).toThrow(
+          /command authorization/,
+        )
+        const originalAction = required(
+          store.getAction(approval.actionId, 'owner'),
+        )
+        const duplicateClaim =
+          suffix.endsWith('user') && !revocationTiming
+            ? createClaimedRun(store, 'duplicate-command')
+            : undefined
+        const duplicate = duplicateClaim
+          ? store.requestApproval(
+              duplicateClaim.run.id,
+              duplicateClaim.claimToken,
+              {
+                kind: originalAction.kind,
+                risk: originalAction.risk,
+                idempotencyKey: 'duplicate-command',
+                request: originalAction.request,
+                recoveryPoint: originalAction.recoveryPoint,
+                approval: {
+                  ...approval.prompt,
+                  options: approval.prompt.options.filter(
+                    option => option.kind !== 'approve',
+                  ),
+                  recommendedOptionId: 'approve_command_' + suffix,
+                },
+              },
+            )
+          : undefined
+        if (duplicate)
+          expect(duplicate.approval.prompt.recommendedOptionId).toBe('reject')
+        store.decideApproval(approval.id, 'owner', {
+          commandId: 'command-decision',
+          optionId: 'approve_command_' + suffix,
+        })
+        const rule = required(
+          store.listApprovalRules(claimed.task.id, 'owner')[0],
+        )
+        if (duplicate) {
+          store.decideApproval(duplicate.approval.id, 'owner', {
+            commandId: 'duplicate-grant',
+            optionId: 'approve_command_' + suffix,
+          })
+          expect(
+            store.approvalRuleIdForAction(duplicate.action.id, 'owner'),
+          ).toBe(rule.id)
+          expect(
+            store
+              .listUserApprovalRules('owner')
+              .filter(r => r.kind === 'command'),
+          ).toHaveLength(1)
+        }
+        expect(rule).toMatchObject({
+          kind: 'command',
+          lifetime: suffix.endsWith('user') ? 'user' : 'task',
+          command: {
+            precision: suffix.startsWith('family') ? 'family' : 'exact',
+          },
+        })
+        const reopened = new PegasStore(database)
+        expect(reopened.listApprovalRules(claimed.task.id, 'owner')[0]).toEqual(
+          rule,
+        )
+        reopened.close()
+        const resumed = required(store.claimNextRun('command-resumed'))
+        if (revocationTiming) {
+          process.env.PEGAS_RUN_ID = resumed.run.id
+          process.env.PEGAS_RUN_CLAIM_TOKEN = resumed.claimToken
+          const restoring = make({
+            actionId: approval.actionId,
+            tool: 'bash',
+            argumentsHash: originalAction.request.argumentsHash,
+            commandSelector: originalAction.request.commandSelector,
+            ruleId: rule.id,
+          })
+          if (revocationTiming === 'before')
+            store.revokeApprovalRule(rule.taskId, rule.id, 'owner', {
+              commandId: 'revoke-before-first',
+            })
+          const preResult = await required(
+            restoring.handlers.get('tools/pre-execute'),
+          )(call('restoring'), () => Promise.resolve({ kind: 'allow' }))
+          expect(preResult).toMatchObject({
+            kind: revocationTiming === 'before' ? 'ask' : 'allow',
+          })
+          if (revocationTiming === 'seam')
+            store.revokeApprovalRule(rule.taskId, rule.id, 'owner', {
+              commandId: 'revoke-at-seam',
+            })
+          expect(
+            await required(restoring.handlers.get('approval/request'))(
+              { callId: 'restoring', toolName: 'bash' },
+              () => Promise.resolve('unavailable'),
+            ),
+          ).toBe('rejected')
+          expect(store.getAction(approval.actionId, 'owner')).toMatchObject({
+            status: 'failed',
+            result: { notExecuted: true },
+          })
+          const newPending = required(
+            restoring.events.find(e => e.type === 'approval_pending'),
+          )
+          const newApproval = required(
+            store.getApproval(String(newPending.approvalId), 'owner'),
+          )
+          store.decideApproval(newApproval.id, 'owner', {
+            commandId: 'approve-rechecked',
+            optionId: 'approve',
+          })
+          const retried = required(store.claimNextRun('rechecked'))
+          process.env.PEGAS_RUN_ID = retried.run.id
+          process.env.PEGAS_RUN_CLAIM_TOKEN = retried.claimToken
+          const action = required(
+            store.getAction(newApproval.actionId, 'owner'),
+          )
+          const retryBridge = make({
+            actionId: action.id,
+            tool: 'bash',
+            argumentsHash: action.request.argumentsHash,
+            commandSelector: action.request.commandSelector,
+          })
+          await required(retryBridge.handlers.get('tools/pre-execute'))(
+            call('retry'),
+            () => Promise.resolve({ kind: 'allow' }),
+          )
+          expect(
+            await required(retryBridge.handlers.get('approval/request'))(
+              { callId: 'retry', toolName: 'bash' },
+              () => Promise.resolve('unavailable'),
+            ),
+          ).toBe('allowed-once')
+          await required(retryBridge.handlers.get('tools/post-execute'))(
+            call('retry'),
+            { isError: false },
+            () => Promise.resolve({ kind: 'allow' }),
+          )
+          expect(store.getAction(action.id, 'owner')?.status).toBe('succeeded')
+          return
+        }
+        store.recordActionOutcome(approval.actionId, resumed.claimToken, {
+          commandId: 'fixture-first-result',
+          status: 'succeeded',
+          result: { fixture: true },
+        })
+        if (duplicateClaim)
+          store.stopTask(duplicateClaim.task.id, 'owner', 'close-duplicate')
+        process.env.PEGAS_RUN_ID = resumed.run.id
+        process.env.PEGAS_RUN_CLAIM_TOKEN = resumed.claimToken
+        const second = make(),
+          pre = required(second.handlers.get('tools/pre-execute')),
+          seam = required(second.handlers.get('approval/request'))
+        expect(
+          await pre(call('repeat'), () => Promise.resolve({ kind: 'allow' })),
+        ).toEqual({ kind: 'allow' })
+        expect(
+          await seam({ callId: 'repeat', toolName: 'bash' }, () =>
+            Promise.resolve('unavailable'),
+          ),
+        ).toBe('allowed-once')
+        expect(second.events).toContainEqual(
+          expect.objectContaining({ ruleId: rule.id, decision: 'allow' }),
+        )
+        if (suffix.startsWith('exact')) {
+          const changed = call('parameters')
+          changed.arguments.command = command.replace(
+            'origin main',
+            'origin other',
+          )
+          const changedResult = (await pre(changed, () =>
+            Promise.resolve({ kind: 'allow' }),
+          )) as { kind: string; reason: string }
+          expect(changedResult.kind).toBe('ask')
+          expect(changedResult.reason).toContain('参数')
+        }
+        git(
+          'remote',
+          'set-url',
+          'origin',
+          'https://example.invalid/changed.git',
+        )
+        const remoteResult = (await pre(call('changed-remote'), () =>
+          Promise.resolve({ kind: 'allow' }),
+        )) as { kind: string; reason: string }
+        expect(remoteResult.kind).toBe('ask')
+        expect(remoteResult.reason).toContain('远端')
+        git('remote', 'set-url', 'origin', 'https://example.invalid/repo.git')
+        const profile = store.getWorkerProfile(claimed.task.id, 'owner')
+        store.updateWorkerProfile(claimed.task.id, 'owner', {
+          commandId: 'strict-command',
+          expectedRevision: profile.revision,
+          modelMode: 'inherit',
+          permissionMode: 'strict',
+        })
+        const strictResult = (await pre(call('strict-command'), () =>
+          Promise.resolve({ kind: 'allow' }),
+        )) as { kind: string; reason: string }
+        expect(strictResult.kind).toBe('ask')
+        expect(strictResult.reason).toMatch(/严格|收紧/)
+        store.updateWorkerProfile(claimed.task.id, 'owner', {
+          commandId: 'restore-command',
+          expectedRevision: profile.revision + 1,
+          modelMode: 'inherit',
+          permissionMode: 'inherit',
+        })
+        const another = createClaimedRun(store, 'command-other')
+        expect(
+          store
+            .runPermissionProjection(another.run.id, another.claimToken)
+            .rules.some(r => r.id === rule.id),
+        ).toBe(suffix.endsWith('user'))
+        const foreign = createClaimedRun(
+          store,
+          'command-foreign',
+          'other-owner',
+        )
+        expect(
+          store
+            .runPermissionProjection(foreign.run.id, foreign.claimToken)
+            .rules.some(r => r.id === rule.id),
+        ).toBe(false)
+        const listing = await fetch(
+          required(process.env.PEGAS_CONTROL_PLANE_URL) +
+            '/v1/approval-rules?userId=owner',
+          { headers: { authorization: 'Bearer command-fixture' } },
+        )
+        expect(
+          ((await listing.json()) as { rules: unknown[] }).rules,
+        ).toContainEqual(expect.objectContaining({ id: rule.id }))
+        expect(
+          (
+            await fetch(
+              required(process.env.PEGAS_CONTROL_PLANE_URL) +
+                '/v1/approval-rules?userId=owner',
+            )
+          ).status,
+        ).toBe(401)
+        const foreignListing = await fetch(
+          required(process.env.PEGAS_CONTROL_PLANE_URL) +
+            '/v1/approval-rules?userId=other-owner',
+          { headers: { authorization: 'Bearer command-fixture' } },
+        )
+        expect(
+          ((await foreignListing.json()) as { rules: unknown[] }).rules,
+        ).toEqual([])
+        // Revoke between pre-execute and the sandbox seam: stale first-hook approval cannot win.
+        expect(
+          await pre(call('revoke-race'), () =>
+            Promise.resolve({ kind: 'allow' }),
+          ),
+        ).toEqual({ kind: 'allow' })
+        store.revokeApprovalRule(rule.taskId, rule.id, 'owner', {
+          commandId: 'command-revoke',
+        })
+        expect(
+          await seam({ callId: 'revoke-race', toolName: 'bash' }, () =>
+            Promise.resolve('unavailable'),
+          ),
+        ).toBe('rejected')
+        expect(
+          store
+            .listApprovalRules(rule.taskId, 'owner')
+            .find(r => r.id === rule.id)?.status,
+        ).toBe('revoked')
+        const reapprovalId = second.events.findLast(
+          e => e.type === 'approval_pending',
+        )?.approvalId
+        expect(reapprovalId).toBeTruthy()
+        expect(
+          store.getApproval(String(reapprovalId), 'owner')?.prompt.impact,
+        ).toContain('已撤销')
+        store.decideApproval(String(reapprovalId), 'owner', {
+          commandId: 'command-regrant',
+          optionId: 'approve_command_' + suffix,
+        })
+        const active = required(
+          store
+            .listApprovalRules(rule.taskId, 'owner')
+            .find(r => r.status === 'active'),
+        )
+        expect(active).toBeDefined()
+        store.stopTask(rule.taskId, 'owner', 'command-end')
+        expect(
+          store
+            .listApprovalRules(rule.taskId, 'owner')
+            .find(r => r.id === active.id)?.status,
+        ).toBe(suffix.endsWith('user') ? 'active' : 'revoked')
+      } finally {
+        restoreEnvironment(previous)
+        await new Promise<void>((resolve, reject) =>
+          server.close(e => (e ? reject(e) : resolve())),
+        )
+        store.close()
+      }
+    },
+    20_000,
+  )
+
   it('rechecks the actual session directory and bash workdir at both approval hooks', async () => {
     const roots = gateRoots()
     const previous = { ...process.env }
@@ -246,9 +670,17 @@ describe('DSH bridge approval rules', () => {
       restoreEnvironment(previous)
     }
   })
-  it.each(['approve_rule', 'approve_directory_task', 'approve_directory_user'])(
+  it.each([
+    'approve_rule',
+    'approve_directory_task',
+    'approve_directory_user',
+    'approve_directory_user:before',
+    'approve_directory_user:seam',
+  ])(
     'supports %s, persists scope and re-asks after revocation',
-    async optionId => {
+    async scopeScenario => {
+      const [rawOption, revocationTiming] = scopeScenario.split(':')
+      const optionId = required(rawOption)
       const roots = gateRoots()
       const databasePath = join(roots.workspace, 'test.db')
       const store = new PegasStore(databasePath)
@@ -324,6 +756,61 @@ describe('DSH bridge approval rules', () => {
         if (!successor) throw new Error('Expected successor claim')
         process.env.PEGAS_RUN_ID = successor.run.id
         process.env.PEGAS_RUN_CLAIM_TOKEN = successor.claimToken
+
+        if (revocationTiming) {
+          const original = required(
+            store.getAction(required(approval).actionId, 'owner'),
+          )
+          const restoring = gateHarness()
+          expect(store.approvalRuleIdForAction(original.id, 'owner')).toBe(
+            rule.id,
+          )
+          bridge.apply(restoring.ctx, {
+            emit: (event: unknown) =>
+              restoring.events.push(event as Record<string, unknown>),
+            grant: {
+              actionId: original.id,
+              tool: 'write',
+              argumentsHash: original.request.argumentsHash,
+              ruleId: rule.id,
+              ruleRequired: true,
+            },
+            policy: {
+              workspaceRoot: roots.workspace,
+              protectedRoots: [roots.dataDir],
+            },
+          })
+          if (revocationTiming === 'before')
+            store.revokeApprovalRule(rule.taskId, rule.id, 'owner', {
+              commandId: 'revoke-first-write',
+            })
+          expect(
+            await required(restoring.handlers.get('tools/pre-execute'))(
+              writeCall,
+              () => Promise.resolve({ kind: 'allow' }),
+            ),
+          ).toMatchObject({
+            kind: revocationTiming === 'before' ? 'ask' : 'allow',
+          })
+          if (revocationTiming === 'seam')
+            store.revokeApprovalRule(rule.taskId, rule.id, 'owner', {
+              commandId: 'revoke-first-write',
+            })
+          expect(
+            await required(restoring.handlers.get('approval/request'))(
+              { callId: writeCall.callId, toolName: 'write' },
+              () => Promise.resolve('unavailable'),
+            ),
+          ).toBe('rejected')
+          expect(store.getAction(original.id, 'owner')).toMatchObject({
+            status: 'failed',
+            result: { notExecuted: true },
+          })
+          expect(
+            restoring.events.some(event => event.type === 'approval_pending'),
+          ).toBe(true)
+          return
+        }
 
         const secondBridge = await loadBridge()
         const secondHarness = gateHarness()

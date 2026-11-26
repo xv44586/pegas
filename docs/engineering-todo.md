@@ -2,7 +2,7 @@
 
 > 状态：Living Document
 >
-> 更新日期：2026-11-24
+> 更新日期：2026-11-26
 
 这里记录值得逐步采用、但尚未被 Pegas 自身事故证明为强制标准的工程规则。它们不是完成声明；开始实现时必须回到 Feature Intake，确认归属、验收条件和隔离 worktree。
 
@@ -26,8 +26,11 @@
 | 新 route 声明认证、body 上限、幂等性和副作用等级                                                                                                           | Control Plane 扩展                           | route inventory Guard Test                                                      |
 | Provider 拒绝先区分账号、模型、请求内容和 endpoint，再决定重试或熔断                                                                                       | Model / ASR provider                         | 分类错误与第二账号/模型对照测试                                                 |
 | 高频路径按最大输入和真实调用频率做性能预算                                                                                                                 | polling、stream、恢复扫描                    | 基线与上界测试                                                                  |
+| 测试夹具通过路由事件关联取回所建 Task，避免同毫秒排序偶发选错                                                                                              | `CONV-002` / channel timeline 测试           | 固定同毫秒双任务，按路由事件确认所建 Task 与引用归属                            |
 | 外部副作用调用前先持久化 effect intent；恢复按三态处理：已提交且身份匹配只补 checkpoint、不存在执行同一 intent、unknown 一律 hold 后续 effect 并转人工核对 | `APPROVAL-001` 自动对账 / DSH tool-call 代理 | 丢失响应不重放副作用、unknown 不自动放行、同一 intent 幂等重放与身份 fence 回归 |
 | 完成事实要求验证、持久写回、用量记账三段 receipt 在同一 effect 身份下全部 committed；缺失或矛盾一律拒绝而非推断                                            | `GOAL-001` 完成门禁加固                      | 三段中任意一步崩溃后的确定性恢复回归、缺失/矛盾 receipt 拒绝、不重复记账        |
+
+CONV-002 夹具观察（2026-11-26）：授权门禁曾 1/1797 失败；既有 `test/channel-timeline.test.ts` helper 用 `listTasks(userId)[0]`，同毫秒创建可能取到另一 Task。完整重跑 1797 通过，原日志保留 `output/command-grants/check-inherited-conv-flake.log`；本轮只登记后续验证，不改该 Feature 代码。
 
 上表末两条为外部调研候选（LoopX，2026-11-22），设计参考见本地研究笔记 `research/loopx/LOOPX-ANALYSIS.md`；采用前需按 Pegas 自身合同重新设计并以自有测试验证，不直接复制第三方实现。
 

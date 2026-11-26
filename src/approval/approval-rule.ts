@@ -1,3 +1,10 @@
+import type { CommandSelector } from '../executor/command-policy.mjs'
+
+interface CommandGrant {
+  selector: CommandSelector
+  precision: 'exact' | 'family'
+}
+
 export interface ApprovalRule {
   id: string
   taskId: string
@@ -5,6 +12,10 @@ export interface ApprovalRule {
   category: string
   targets: string[]
   scope?: 'exact' | 'task_directory' | 'user_directory'
+  kind?: 'operation' | 'command'
+  lifetime?: 'task' | 'user'
+  command?: CommandGrant
+  lastUsedAt?: string
   fingerprint: string
   status: 'active' | 'revoked'
   createdFromApprovalId: string
@@ -21,6 +32,9 @@ export interface ApprovalRuleProjection {
   category: string
   targets: string[]
   scope?: 'exact' | 'task_directory' | 'user_directory'
+  kind?: 'operation' | 'command'
+  lifetime?: 'task' | 'user'
+  command?: CommandGrant
   fingerprint: string
 }
 
