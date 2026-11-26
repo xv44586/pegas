@@ -69,6 +69,29 @@ function classify(
 }
 
 describe('policy gate classifier', () => {
+  it('resolves patch paths from the actual session cwd and bash workdir without widening workspace permissions', () => {
+    const roots = gateRoots()
+    const command =
+      "apply_patch <<'PATCH'\n*** Begin Patch\n*** Add File: file.md\n+ok\n*** End Patch\nPATCH"
+    for (const workdir of [roots.dataDir, '../data']) {
+      expect(classify('bash', { command, workdir }, roots)).toMatchObject({
+        category: 'control-plane-mutation',
+        action: 'deny',
+        targets: [join(realpathSync(roots.dataDir), 'file.md')],
+      })
+    }
+    expect(
+      classifyToolCall(
+        { name: 'write', arguments: { file_path: 'file.md' } },
+        {
+          workspaceRoot: roots.workspace,
+          currentDirectory: roots.dataDir,
+          protectedRoots: [roots.dataDir],
+        },
+      ),
+    ).toMatchObject({ category: 'control-plane-mutation', action: 'deny' })
+  })
+
   it('offers directory trust only for bounded file operations and quoted patch shells', () => {
     const roots = gateRoots()
     const target = join(realpathSync(roots.dshHome), 'file.md')

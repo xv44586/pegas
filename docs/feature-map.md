@@ -1238,9 +1238,9 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - **自动化证据**：修复前四项回归失败；修复后 `answer-follow-ups` 5 项覆盖 0–4/超限/流式协议，`ChatExperience` 5 项覆盖候选直发、并行事情隔离、局部 Enter/IME 与 Chat 用户原文回显，`InlineReply` 4 项覆盖重复点击、网络同键重试、刷新失败不重发、轮询保稿与停止禁用。既有 `chat-lane` 验证精确回复→原 Task/原 session、原文上下文、owner 隔离与服务端幂等。完整 `pnpm check` 152 文件 / 1670 测试全绿；`pnpm smoke`、真实 Electron `smoke:dsh-runtime`、无障碍审计通过。桌面/390px UI review 验证四候选、Tab/Enter、悬停/触屏输入、用户原文回显与无溢出，复验 216 次全站下拉/弹层交互及详情执行设置 24 次开关、键盘、保存回读。另以真实触屏几何断言先复现发送按钮被 44px 最小触控高度撑出输入框，修订为 48px 输入框内的 44px 发送目标，并纳入桌面/移动 UI 门禁。
 - **状态与下一缺口**：本次修订验收通过，待绿色 PR CI 后合并和 Candidate 发布；DESIGN-009 整体状态不升级。旧回复不补生成；真实模型建议质量未做付费抽样，可能没有候选；局部草稿不跨刷新持久化，已发送候选仅在本次挂载期间防重复。证据保存在本地 `output/inline-followups/` 与 `output/feature-review/inline-followups/`，不入库。
 
-### APPROVAL-001 目录信任增量（2026-11-26，已实现，待集成验证）
+### APPROVAL-001 目录信任增量（2026-11-26，集成验证通过，待发布）
 
-用户结果：一次授权同一目录后，后续文件读写不反复打断；本事情范围与同用户长期范围明确可选、可撤销。权威实现为 `src/executor/policy-gate.mjs`、`dsh-approval-bridge.mjs`、`src/storage/sqlite-store.ts`（schema v59）和 `web/src/sealed/DetailDrawer.tsx`。验收合同与证据见 `docs/approval-policy-gate.md` P9：check 152 文件/1677 通过/1 既有跳过，smoke、review:ui 与 a11y 通过。下一缺口：生产 DSH 连续跨目录任务验证与 Candidate 发布；任意不透明 shell 不在目录豁免范围内。
+用户结果：一次授权同一目录后，后续文件读写不反复打断；本事情范围与同用户长期范围明确可选、可撤销。权威实现为 `src/executor/policy-gate.mjs`、`dsh-approval-bridge.mjs`、`src/storage/sqlite-store.ts`（schema v59）和 `web/src/sealed/DetailDrawer.tsx`。验收合同与证据见 `docs/approval-policy-gate.md` P9：合并 main 11298995 后 check 152 文件/1689 测试通过，smoke、真实 Electron DSH 回环、review:ui 与 a11y 通过。审查补齐实际 cwd/workdir、服务端授权文案与全部有效规则可撤销回归。下一缺口：生产 DSH 连续跨目录任务验证与 Candidate 发布；任意不透明 shell 不在目录豁免范围内。
 
 ### DESIGN-009：详情追问统一与待处理闭环（2026-11-26）
 

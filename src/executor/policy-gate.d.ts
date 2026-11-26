@@ -11,6 +11,7 @@ export type PolicyCategory =
 
 export interface PolicyRoots {
   workspaceRoot?: string
+  currentDirectory?: string
   protectedRoots?: readonly string[]
 }
 

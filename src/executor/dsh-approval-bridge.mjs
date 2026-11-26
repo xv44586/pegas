@@ -17,7 +17,7 @@ import { deriveWriteEffect } from './write-effect.mjs'
 /** @typedef {{ tier: import('./policy-gate.d.ts').PolicyTier, generation: string, mismatch: boolean, rules: ApprovalRule[], autoReviewEnabled: boolean, mandate: MandateProjection }} TierState */
 /** @typedef {{ tool: string, argumentsHash: string, command?: string, effect?: { contentHash?: string, targets?: Record<string, string>, absent?: string[] }, classification?: import('./policy-gate.d.ts').ToolCallClassification }} CapturedCall */
 /** @typedef {{ session?: { requestHeader?: () => { config?: { provider?: unknown, model?: unknown } } | undefined } }} ReviewAgent */
-/** @typedef {{ callId?: string | number, name: string, arguments?: unknown, agent?: ReviewAgent }} ToolExecution */
+/** @typedef {{ callId?: string | number, name: string, arguments?: unknown, agent?: ReviewAgent, signal?: AbortSignal }} ToolExecution */
 /** @typedef {{ callId?: string | number, toolName: string, reason?: string, signal?: { aborted?: boolean } }} ApprovalRequest */
 /** @typedef {{ kind: 'accept' | 'block' }} PostToolDecision */
 /** @typedef {{ kind: 'allow' } | { kind: 'ask', reason: string } | { kind: 'deny', reason: string }} PreToolGate */
@@ -26,10 +26,10 @@ import { deriveWriteEffect } from './write-effect.mjs'
 /** @typedef {{ stream?: (options: Record<string, unknown>) => AsyncIterable<Record<string, unknown>> }} LlmService */
 
 export const name = 'pegas-approval-bridge'
-export const inject = ['tools', 'llm']
+export const inject = ['tools', 'llm', 'workingDirectory']
 
 /**
- * @param {{ on: (event: string, listener: (...args: never[]) => unknown) => void, tools?: { guard: (guard: (exec: ToolExecution) => { reason: string } | undefined) => unknown }, llm?: LlmService }} ctx
+ * @param {{ on: (event: string, listener: (...args: never[]) => unknown) => void, tools?: { guard: (guard: (exec: ToolExecution) => { reason: string } | undefined) => unknown }, llm?: LlmService, workingDirectory?: { get: (session: NonNullable<ReviewAgent['session']>) => string, ensure: (agent: ReviewAgent, signal?: AbortSignal) => Promise<string> } }} ctx
  * @param {{ emit?: (event: Record<string, unknown>) => void, grant?: unknown, policy?: unknown }} [config]
  */
 export function apply(ctx, config = {}) {
@@ -42,6 +42,16 @@ export function apply(ctx, config = {}) {
   const policy = normalizePolicy(config.policy)
   /** @type {Map<string, CapturedCall>} */
   const toolCalls = new Map()
+  /** @type {Map<string, ToolExecution>} */
+  const executions = new Map()
+  /** @param {ToolExecution} exec */
+  async function executionPolicy(exec) {
+    const currentDirectory =
+      ctx.workingDirectory && exec.agent
+        ? await ctx.workingDirectory.ensure(exec.agent, exec.signal)
+        : policy.workspaceRoot
+    return { ...policy, currentDirectory }
+  }
   /** @type {Map<string, string>} */
   const grantedCalls = new Map()
   /** @type {Map<string, import('./policy-gate.d.ts').ToolCallClassification>} */
@@ -93,7 +103,13 @@ export function apply(ctx, config = {}) {
   const controlPlaneGuard =
     /** @param {ToolExecution} exec */
     exec => {
-      const classification = classifyToolCall(exec, policy)
+      const classification = classifyToolCall(exec, {
+        ...policy,
+        currentDirectory:
+          ctx.workingDirectory && exec.agent?.session
+            ? ctx.workingDirectory.get(exec.agent.session)
+            : policy.workspaceRoot,
+      })
       if (classification.category === 'control-plane-mutation') {
         return {
           reason: classification.reason,
@@ -124,8 +140,10 @@ export function apply(ctx, config = {}) {
             autoReviewEnabled: false,
             mandate: { instructions: [], omitted: false },
           }
-      const classification = classifyToolCall(exec, policy, tierState.tier)
+      const callPolicy = await executionPolicy(exec)
+      const classification = classifyToolCall(exec, callPolicy, tierState.tier)
       if (callKey !== undefined) {
+        executions.set(callKey, exec)
         toolCalls.set(callKey, {
           tool: exec.name,
           argumentsHash: stableHash(exec.arguments),
@@ -135,7 +153,7 @@ export function apply(ctx, config = {}) {
           typeof exec.arguments.command === 'string'
             ? { command: exec.arguments.command }
             : {}),
-          ...capturedWriteEffect(exec, policy),
+          ...capturedWriteEffect(exec, callPolicy),
           classification,
         })
         gateDecisions.set(callKey, classification)
@@ -479,8 +497,17 @@ export function apply(ctx, config = {}) {
         request.callId === undefined ? undefined : String(request.callId)
       const captured =
         callKey === undefined ? undefined : toolCalls.get(callKey)
-      const classification =
-        callKey === undefined ? undefined : gateDecisions.get(callKey)
+      const execution =
+        callKey === undefined ? undefined : executions.get(callKey)
+      const classification = execution
+        ? classifyToolCall(
+            execution,
+            await executionPolicy(execution),
+            capability ? (await readTierState(capability)).tier : 'standard',
+          )
+        : callKey === undefined
+          ? undefined
+          : gateDecisions.get(callKey)
       if (classification?.category === 'control-plane-mutation') {
         if (!capability || callKey === undefined || parked) return 'rejected'
         try {
@@ -544,13 +571,7 @@ export function apply(ctx, config = {}) {
           tierState &&
           matchApprovalRule(
             tierState,
-            {
-              name: request.toolName,
-              arguments:
-                captured?.command === undefined
-                  ? undefined
-                  : { command: captured.command },
-            },
+            execution ?? { name: request.toolName },
             classification,
             policy,
           )
@@ -1602,7 +1623,16 @@ function stableHash(value) {
  * @returns {{ effect?: { contentHash?: string, targets?: Record<string, string>, absent?: string[] } }}
  */
 function capturedWriteEffect(exec, policy) {
-  const effect = deriveWriteEffect(exec, policy)
+  const sessionDirectory = policy.currentDirectory ?? policy.workspaceRoot
+  const args =
+    exec.arguments && typeof exec.arguments === 'object'
+      ? /** @type {Record<string, unknown>} */ (exec.arguments)
+      : undefined
+  const workspaceRoot =
+    exec.name === 'bash' && typeof args?.workdir === 'string'
+      ? canonicalRuleTarget(args.workdir, { workspaceRoot: sessionDirectory })
+      : sessionDirectory
+  const effect = deriveWriteEffect(exec, { ...policy, workspaceRoot })
   return effect === undefined ? {} : { effect }
 }
 

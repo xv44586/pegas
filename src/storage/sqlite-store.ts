@@ -4056,10 +4056,16 @@ export class PegasStore {
     if (task.userId !== userId) throw new Error('Task belongs to another user')
     const rows = this.#database
       .prepare(
-        `SELECT * FROM approval_rules
-         WHERE task_id = ? OR (scope = 'user_directory' AND created_by = ?)
-         ORDER BY created_at DESC, id DESC
-         LIMIT 100`,
+        `WITH visible AS (
+           SELECT * FROM approval_rules
+           WHERE task_id = ? OR (scope = 'user_directory' AND created_by = ?)
+         ), recent_history AS (
+           SELECT * FROM visible WHERE status = 'revoked'
+           ORDER BY created_at DESC, id DESC LIMIT 100
+         )
+         SELECT * FROM visible WHERE status = 'active'
+         UNION ALL SELECT * FROM recent_history
+         ORDER BY created_at DESC, id DESC`,
       )
       .all(taskId, userId) as unknown as ApprovalRuleRow[]
     return rows.map(row => toApprovalRule(row))
@@ -13089,6 +13095,7 @@ export class PegasStore {
           'A human-confirmed failed Action blocks new Approvals on this Task',
         )
       }
+      const approvalPrompt = canonicalDirectoryApprovalPrompt(draft)
       const now = this.#clock.now().toISOString()
       const actionId = randomUUID()
       const approvalId = randomUUID()
@@ -13126,7 +13133,7 @@ export class PegasStore {
           task.userId,
           task.id,
           actionId,
-          JSON.stringify(draft.approval),
+          JSON.stringify(approvalPrompt),
           now,
         )
       const autoReview =
@@ -13159,9 +13166,9 @@ export class PegasStore {
             approvalId,
             actionId,
             risk: draft.risk,
-            summary: draft.approval.summary,
-            impact: draft.approval.impact,
-            prompt: draft.approval,
+            summary: approvalPrompt.summary,
+            impact: approvalPrompt.impact,
+            prompt: approvalPrompt,
           },
         })
       }
@@ -19382,4 +19389,49 @@ function deriveLegacySemantic(
         : undefined,
     ),
   }
+}
+
+function canonicalDirectoryApprovalPrompt(
+  draft: ActionRequestDraft,
+): ApprovalPrompt {
+  const directoryOptions = draft.approval.options.filter(
+    option =>
+      option.kind === 'approve_rule' &&
+      (option.id === 'approve_directory_task' ||
+        option.id === 'approve_directory_user'),
+  )
+  if (!directoryOptions.length) return draft.approval
+  const targets = draft.request.targets
+  const directories =
+    typeof draft.request.tool === 'string' &&
+    Array.isArray(targets) &&
+    targets.every(target => typeof target === 'string')
+      ? approvalDirectories(
+          draft.request.tool,
+          targets,
+          typeof draft.request.command === 'string'
+            ? draft.request.command
+            : undefined,
+        )
+      : []
+  const options = draft.approval.options.map(option => {
+    if (!directoryOptions.includes(option)) return option
+    const persistent = option.id === 'approve_directory_user'
+    return {
+      ...option,
+      label: persistent ? '始终信任这些目录' : '本事情内信任这些目录',
+      description: directories.length
+        ? `允许文件工具读写这些目录及子目录：${directories.join('、')}。${persistent ? '对你以后的事情持续有效，可在任意事情详情撤销' : '本事情内有效，可在事情详情撤销'}；外发、破坏性操作和无法确定范围的命令仍需确认。`
+        : '目录范围无法验证，无法建立目录授权。',
+    }
+  })
+  const recommendedOptionId = directoryOptions.some(
+    option => option.id === draft.approval.recommendedOptionId,
+  )
+    ? ((
+        options.find(option => option.kind === 'approve') ??
+        options.find(option => option.kind === 'reject')
+      )?.id ?? draft.approval.recommendedOptionId)
+    : draft.approval.recommendedOptionId
+  return { ...draft.approval, options, recommendedOptionId }
 }

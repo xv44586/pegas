@@ -597,3 +597,15 @@
 - Status：Observed
 - Enforcement：`web/src/sealed/types.test.ts`、`web/src/App.test.tsx` 与 `scripts/verify-detail-closure.mjs`；尚未晋升全仓强制规则。
 - Owner / next action：DESIGN-009；后续新增决定事件必须验证终态事实在 Chat、收件箱和详情中的一致性，不以已读代替领域结算。
+
+### LESSON-20261126-08：目录授权必须绑定实际路径和可信授权文案
+
+- Rule：授权检查解析路径时使用执行工具实际 session cwd 与 workdir，不能把工作区边界当成相对路径基准；持久权限的目录和有效期由服务端生成，不能接受执行器的一次性标签。有效授权必须始终可见、可撤销。
+- Why：发布前对抗审查重现相对 patch 在不同 workdir 写入未授权目录；执行器可用保留 option ID 搭配误导标签创建长期规则；规则总数超过 100 时旧有效规则被历史挤出界面。
+- Feature：APPROVAL-001
+- Evidence：三项失败回归修复后通过；桥测试覆盖两个钩子间 cwd 改变仍拒绝控制面写入；列表测试验证 102 条有效规则及 101 条撤销历史下仍可撤销旧授权。
+- Seen：1（2026-11-26）
+- Severity：security
+- Status：Promoted（安全边界问题一次确认即晋升）
+- Enforcement：`test/policy-gate.test.ts`、`test/approval-rule-bridge.test.ts` 与 `test/approval-rules.test.ts` 纳入完整 check；服务端规范选项、工作目录服务接入和有效规则不截断共同形成门禁。
+- Owner / next action：APPROVAL-001；新增文件工具或权限范围必须复用相同路径与文案权威来源。

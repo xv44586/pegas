@@ -1,5 +1,11 @@
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+} from 'node:fs'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -140,6 +146,106 @@ function restoreEnvironment(previous: NodeJS.ProcessEnv): void {
 }
 
 describe('DSH bridge approval rules', () => {
+  it('rechecks the actual session directory and bash workdir at both approval hooks', async () => {
+    const roots = gateRoots()
+    const previous = { ...process.env }
+    Object.assign(process.env, {
+      PEGAS_APPROVAL_BRIDGE: '1',
+      PEGAS_CONTROL_PLANE_URL: 'http://127.0.0.1:1',
+      PEGAS_RUN_ID: 'cwd-run',
+      PEGAS_RUN_CLAIM_TOKEN: 'cwd-test-token',
+    })
+    vi.stubGlobal('fetch', () =>
+      Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            effectiveTier: 'standard',
+            rules: [
+              {
+                id: 'trusted',
+                tool: '*',
+                scope: 'user_directory',
+                category: 'out-of-workspace-write',
+                targets: [realpathSync(roots.shared)],
+                fingerprint: 'test',
+              },
+            ],
+          }),
+      }),
+    )
+    try {
+      const bridge = await loadBridge()
+      const harness = gateHarness()
+      let cwd = roots.shared
+      bridge.apply(
+        {
+          ...harness.ctx,
+          workingDirectory: {
+            get: () => cwd,
+            ensure: () => Promise.resolve(cwd),
+          },
+        },
+        {
+          emit: (event: unknown) =>
+            harness.events.push(event as Record<string, unknown>),
+          policy: {
+            workspaceRoot: roots.workspace,
+            protectedRoots: [roots.dataDir],
+          },
+        },
+      )
+      const pre = harness.handlers.get('tools/pre-execute')
+      const seam = harness.handlers.get('approval/request')
+      if (!pre || !seam) throw new Error('Expected approval hooks')
+      const command =
+        "apply_patch <<'PATCH'\n*** Begin Patch\n*** Add File: file.md\n+test\n*** End Patch\nPATCH"
+      const execution = {
+        agent: { session: {} },
+        callId: 'relative',
+        name: 'bash',
+        arguments: { command },
+      }
+      expect(
+        await pre(execution, () => Promise.resolve({ kind: 'allow' })),
+      ).toEqual({
+        kind: 'allow',
+      })
+      expect(
+        await seam({ callId: 'relative', toolName: 'bash' }, () =>
+          Promise.resolve('unavailable'),
+        ),
+      ).toBe('allowed-once')
+      // Explicit workdir takes precedence over the session cwd.
+      expect(
+        await pre(
+          {
+            ...execution,
+            callId: 'workdir',
+            arguments: { command, workdir: roots.dataDir },
+          },
+          () => Promise.resolve({ kind: 'allow' }),
+        ),
+      ).not.toEqual({ kind: 'allow' })
+      // A cwd change between hooks cannot reuse a decision for the trusted directory.
+      cwd = roots.dataDir
+      expect(
+        await seam({ callId: 'relative', toolName: 'bash' }, () =>
+          Promise.resolve('unavailable'),
+        ),
+      ).toBe('rejected')
+      expect(harness.events).toContainEqual(
+        expect.objectContaining({
+          callId: 'workdir',
+          category: 'control-plane-mutation',
+          targets: [join(realpathSync(roots.dataDir), 'file.md')],
+        }),
+      )
+    } finally {
+      vi.unstubAllGlobals()
+      restoreEnvironment(previous)
+    }
+  })
   it.each(['approve_rule', 'approve_directory_task', 'approve_directory_user'])(
     'supports %s, persists scope and re-asks after revocation',
     async optionId => {
