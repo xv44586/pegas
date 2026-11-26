@@ -139,6 +139,7 @@ export interface ChannelTimeline {
   events: InboxEvent[]
   messages: OutboxMessage[]
   runs: Run[]
+  nextCursor?: string
 }
 
 export interface ModelUsageRecord {

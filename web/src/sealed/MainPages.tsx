@@ -1,4 +1,12 @@
+import {
+  taskAttachment,
+  saveTaskAttachment,
+  readSendAttempt,
+  writeSendAttempt,
+  type SendAttempt,
+} from './taskConversationDraft'
 import { InlineReply } from './InlineReply'
+import { TaskHistorySearch } from './TaskHistorySearch'
 import { answerFollowUps } from '../../../src/conversation/follow-ups'
 import {
   ArrowUp,
@@ -18,6 +26,8 @@ import {
   LoaderCircle,
   Mic,
   PauseCircle,
+  PanelRightOpen,
+  PanelRightClose,
   Plus,
   Reply,
   RotateCw,
@@ -147,6 +157,8 @@ function PageHeader({
   children,
   compact = false,
   hasPageSearch = false,
+  showToolbar = true,
+  truncateTitle = false,
 }: {
   title: string
   description: string
@@ -154,21 +166,34 @@ function PageHeader({
   children?: React.ReactNode
   compact?: boolean
   hasPageSearch?: boolean
+  showToolbar?: boolean
+  truncateTitle?: boolean
 }) {
   return (
     <header className="page-header">
-      <div>
-        <h1>{title}</h1>
+      <div className={truncateTitle ? 'min-w-0 pr-3' : undefined}>
+        <h1
+          className={truncateTitle ? 'truncate' : undefined}
+          title={truncateTitle ? title : undefined}
+        >
+          {title}
+        </h1>
         {!compact && <p>{description}</p>}
       </div>
-      <div className="page-header-actions">
+      <div
+        className={
+          truncateTitle ? 'page-header-actions shrink-0' : 'page-header-actions'
+        }
+      >
         {children}
-        <PageToolbar
-          isDark={actions.isDark}
-          onSearch={actions.onSearch}
-          onToggleAppearance={actions.onToggleAppearance}
-          showSearch={!hasPageSearch}
-        />
+        {showToolbar && (
+          <PageToolbar
+            isDark={actions.isDark}
+            onSearch={actions.onSearch}
+            onToggleAppearance={actions.onToggleAppearance}
+            showSearch={!hasPageSearch}
+          />
+        )}
       </div>
     </header>
   )
@@ -193,9 +218,17 @@ export function ConversationPage({
   onDraftChange,
   speechEnabled,
   onConfigureVoice,
+  taskScope,
 }: {
   api: PegasApi
   snapshot: Snapshot
+  taskScope?: {
+    channel: WorkChannel
+    detailsOpen: boolean
+    detailsId: string
+    onDetails: () => void
+    onSettings: () => void
+  }
   snapshotReady?: boolean
   actions: PageActions
   onSent: () => Promise<void>
@@ -213,26 +246,37 @@ export function ConversationPage({
   speechEnabled: boolean
   onConfigureVoice: () => void
 }) {
+  const readOnly = taskScope?.channel.status === 'cancelled'
   const [sending, setSending] = useState(false)
   const [modelOpenRequest, setModelOpenRequest] = useState(0)
   const [error, setError] = useState('')
-  const [attachment, setAttachment] = useState<File>()
+  const [attachment, setAttachmentState] = useState(
+    () => taskAttachment(taskScope?.channel.id)?.file,
+  )
+  const [attachmentEventId, setAttachmentEventId] = useState(
+    () => taskAttachment(taskScope?.channel.id)?.eventId,
+  )
+  function setAttachment(file: File | undefined, eventId?: string) {
+    saveTaskAttachment(
+      taskScope?.channel.id,
+      file ? { file, eventId } : undefined,
+    )
+    setAttachmentState(file)
+    setAttachmentEventId(eventId)
+  }
   const [voiceDirectSend, setVoiceDirectSend] = useState(false)
   const attachmentInputRef = useRef<HTMLInputElement>(null)
   const composerInputRef = useRef<HTMLTextAreaElement>(null)
-  const pendingSendRef = useRef<
-    | {
-        text: string
-        target?: ComposerTarget
-        dedupeKey: string
-      }
-    | undefined
-  >(undefined)
+  const pendingSendRef = useRef<SendAttempt | undefined>(
+    readSendAttempt(taskScope?.channel.id),
+  )
   const voiceTargetRef = useRef<ComposerTarget | undefined>(undefined)
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(
     () => new Set(),
   )
   const chatScroll = useChatScroll()
+  const [taskSearchOpen, setTaskSearchOpen] = useState(false)
+  const taskSearchButton = useRef<HTMLButtonElement>(null)
   const [copiedMessageId, setCopiedMessageId] = useState<string>()
   const [retryingMessageId, setRetryingMessageId] = useState<string>()
   const [queuedMessages, setQueuedMessages] = useState(readQueuedMessages)
@@ -336,12 +380,13 @@ export function ConversationPage({
     if (!attachment) return
     try {
       await api.uploadEventAttachment(eventId, attachment)
+      setAttachment(undefined)
     } catch (caught) {
+      setAttachment(attachment, eventId)
       setError(
         `消息已发送，但附件上传失败：${caught instanceof Error ? caught.message : '请重试。'}`,
       )
     }
-    setAttachment(undefined)
   }
 
   const dictation = useVoiceDictation({
@@ -406,11 +451,15 @@ export function ConversationPage({
     onDraftChange,
     inputRef: composerInputRef,
     channels: snapshot.channels,
-    disabled: sending || dictationBusy,
+    disabled: sending || dictationBusy || readOnly,
+    lockedTask: Boolean(taskScope),
     canStop: Boolean(summaryActive && summaryChannel?.canStop),
-    hasModels: models.length > 0,
+    hasModels: Boolean(taskScope) || models.length > 0,
     onAttach: () => attachmentInputRef.current?.click(),
-    onModel: () => setModelOpenRequest(current => current + 1),
+    onModel: () =>
+      taskScope
+        ? taskScope.onSettings()
+        : setModelOpenRequest(current => current + 1),
     onStop: () => setStopTarget(summaryChannel),
     onAuto: () => onClearTarget(target),
     onTask: channel => onTargetChange({ kind: 'task', channel }),
@@ -419,7 +468,8 @@ export function ConversationPage({
 
   async function send() {
     const text = draft.trim()
-    if (!text || sending || dictationBusy) return
+    if (!text || sending || dictationBusy || readOnly || attachmentEventId)
+      return
     if (composerMenu.consumeSubmit()) return
     sendOriginRef.current = captureSendOrigin()
     setSending(true)
@@ -427,20 +477,31 @@ export function ConversationPage({
     try {
       const last = pendingSendRef.current
       const attempt =
-        last?.text === text && last.target === target
+        last?.text === text &&
+        last.targetKey === JSON.stringify(messageTarget(target))
           ? last
-          : { text, target, dedupeKey: crypto.randomUUID() }
+          : {
+              text,
+              targetKey: JSON.stringify(messageTarget(target)),
+              dedupeKey: crypto.randomUUID(),
+            }
       pendingSendRef.current = attempt
+      writeSendAttempt(taskScope?.channel.id, attempt)
       const event = await api.sendMessage(
         text,
         messageTarget(target),
         attempt.dedupeKey,
       )
       pendingSendRef.current = undefined
+      writeSendAttempt(taskScope?.channel.id)
       await attachToSentMessage(event.id)
       onDraftChange(current => (current === draft ? '' : current))
       onClearTarget(target)
-      await onSent()
+      try {
+        await onSent()
+      } catch {
+        setError('消息已发送，历史刷新失败，请重新读取。')
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '发送失败，请重试。')
     } finally {
@@ -450,7 +511,7 @@ export function ConversationPage({
 
   async function steer() {
     const text = draft.trim()
-    if (!text || !steerTarget || sending || dictationBusy) return
+    if (!text || !steerTarget || sending || dictationBusy || readOnly) return
     sendOriginRef.current = captureSendOrigin()
     setSending(true)
     setError('')
@@ -471,7 +532,7 @@ export function ConversationPage({
 
   function queueDraft() {
     const text = draft.trim()
-    if (!text || !continuationChannel) return
+    if (!text || !continuationChannel || readOnly) return
     if (attachment || sending || dictationBusy) return
     setQueuedMessages(current => [
       ...current,
@@ -496,7 +557,9 @@ export function ConversationPage({
 
   useEffect(() => {
     if (!snapshotReady || sending || dictationBusy) return
-    const next = queuedMessages[0]
+    const next = taskScope
+      ? queuedMessages.find(item => item.channel.id === taskScope.channel.id)
+      : queuedMessages[0]
     if (!next || next.error) return
     const channel = snapshot.channels.find(item => item.id === next.channel.id)
     function markFailure(message: string) {
@@ -548,6 +611,7 @@ export function ConversationPage({
     sending,
     dictationBusy,
     snapshotReady,
+    taskScope,
     snapshot.channels,
     snapshot.runs,
     api,
@@ -674,14 +738,21 @@ export function ConversationPage({
   const highlightTimerRef = useRef<number>(0)
   useEffect(() => () => window.clearTimeout(highlightTimerRef.current), [])
 
-  function jumpToMessage(messageId: string) {
+  function jumpToMessage(messageId: string, focus = false) {
     const content = chatScroll.contentRef.current
     const row = content?.querySelector<HTMLElement>(
       `[data-message-id="${CSS.escape(messageId)}"]`,
     )
     if (!row) return
     if ('scrollIntoView' in row)
-      row.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      row.scrollIntoView({
+        block: 'center',
+        behavior: focus ? 'instant' : 'smooth',
+      })
+    if (focus) {
+      row.focus({ preventScroll: true })
+      chatScroll.onScroll()
+    }
     setHighlightedId(messageId)
     window.clearTimeout(highlightTimerRef.current)
     highlightTimerRef.current = window.setTimeout(
@@ -761,6 +832,7 @@ export function ConversationPage({
         ]
           .filter(Boolean)
           .join(' ')}
+        tabIndex={taskScope ? -1 : undefined}
         data-message-id={message.id}
         data-result-trace={message.role === 'pegas' ? message.id : undefined}
         key={message.id}
@@ -770,7 +842,7 @@ export function ConversationPage({
             <FactCard
               actions={actions}
               expanded={expandedMessages.has(message.id)}
-              hideTaskTitle={inThreadContinuation}
+              hideTaskTitle={Boolean(taskScope) || inThreadContinuation}
               message={message}
               onAnswerClarification={onAnswerClarification}
               onJumpToMessage={jumpToMessage}
@@ -788,7 +860,7 @@ export function ConversationPage({
             />
           ) : (
             <>
-              {message.role === 'pegas' && message.cue && (
+              {!taskScope && message.role === 'pegas' && message.cue && (
                 <p className="message-context-cue">
                   <span>「{message.cue.title}」</span>
                 </p>
@@ -805,11 +877,32 @@ export function ConversationPage({
             </>
           )}
           {message.role === 'user' && message.attachment && (
-            <span className="message-attachment">
+            <button
+              type="button"
+              className="message-attachment"
+              onClick={() => {
+                const attachment = message.attachment
+                if (!attachment) return
+                const mime = attachment.mediaType
+                actions.onOpenDrawer({
+                  kind: 'preview',
+                  preview: mime.startsWith('image/')
+                    ? 'image'
+                    : mime.startsWith('video/')
+                      ? 'video'
+                      : mime === 'text/html'
+                        ? 'web'
+                        : 'file',
+                  title: attachment.fileName,
+                  mimeType: mime,
+                  contentUrl: api.eventAttachmentUrl(message.id),
+                })
+              }}
+            >
               <FileText size={14} />
               {message.attachment.fileName} ·{' '}
               {formatFileSize(message.attachment.byteSize)}
-            </span>
+            </button>
           )}
           {message.text.length > 520 && message.lane === 'say' && (
             <button
@@ -834,6 +927,7 @@ export function ConversationPage({
         </div>
         {replyQuote && (
           <InlineReply
+            hideEditor={Boolean(taskScope)}
             items={followUps}
             taskTitle={workEntryChannel?.title ?? message.source?.taskId}
             excerpt={replyQuote.text}
@@ -855,14 +949,14 @@ export function ConversationPage({
         <div className="message-meta">
           {message.role === 'user' && (
             <UserMessageStatus
-              message={message}
+              message={taskScope ? { ...message, derivedIds: [] } : message}
               onOpenTask={openTaskDetails}
               onRetry={() => void retryMessage(message.id)}
               retrying={retryingMessageId === message.id}
               snapshot={snapshot}
             />
           )}
-          {workEntry && (
+          {workEntry && !taskScope && (
             <WorkEntryButton
               label={workEntry.label}
               onClick={() => {
@@ -884,7 +978,7 @@ export function ConversationPage({
               taskTitle={workEntry.channel.title}
             />
           )}
-          {message.role === 'user' && (
+          {message.role === 'user' && !taskScope && (
             <MetaIconButton
               label="查看调用链"
               onClick={() =>
@@ -910,13 +1004,77 @@ export function ConversationPage({
   }
 
   return (
-    <div className="conversation-page">
+    <div
+      className={
+        taskScope
+          ? 'conversation-page min-w-0 grid-cols-[minmax(0,1fr)]'
+          : 'conversation-page'
+      }
+    >
       <PageHeader
         actions={actions}
-        compact
-        description="你的私人智能工作伙伴"
-        title="Pegas"
-      />
+        compact={!taskScope}
+        showToolbar={!taskScope}
+        truncateTitle={Boolean(taskScope)}
+        description={
+          taskScope
+            ? taskScope.channel.status === 'cancelled'
+              ? '已停止 · 历史只读'
+              : statusLabel(
+                  taskScope.channel,
+                  latestRunForTask(snapshot.runs, taskScope.channel.id),
+                )
+            : '你的私人智能工作伙伴'
+        }
+        title={taskScope?.channel.title ?? 'Pegas'}
+      >
+        {taskScope && (
+          <Button
+            aria-label="搜索当前事情"
+            title="搜索当前事情"
+            className="size-10 shrink-0 p-0 pointer-coarse:size-11"
+            size="sm"
+            variant="quiet"
+            ref={taskSearchButton}
+            onClick={() => setTaskSearchOpen(true)}
+          >
+            <Search size={20} aria-hidden="true" />
+          </Button>
+        )}
+        {taskScope && (
+          <Button
+            data-task-info=""
+            aria-label={taskScope.detailsOpen ? '收起事情信息' : '展开事情信息'}
+            title={taskScope.detailsOpen ? '收起事情信息' : '展开事情信息'}
+            aria-expanded={taskScope.detailsOpen}
+            aria-controls={
+              taskScope.detailsOpen ? taskScope.detailsId : undefined
+            }
+            className="size-10 shrink-0 p-0 pointer-coarse:size-11"
+            size="sm"
+            variant="quiet"
+            onClick={taskScope.onDetails}
+          >
+            {taskScope.detailsOpen ? (
+              <PanelRightClose size={20} aria-hidden="true" />
+            ) : (
+              <PanelRightOpen size={20} aria-hidden="true" />
+            )}
+          </Button>
+        )}
+      </PageHeader>
+      {taskScope && (
+        <TaskHistorySearch
+          open={taskSearchOpen}
+          onOpenChange={setTaskSearchOpen}
+          messages={messages}
+          onRestoreFocus={() => taskSearchButton.current?.focus()}
+          onSelect={messageId => {
+            setExpandedMessages(current => new Set([...current, messageId]))
+            requestAnimationFrame(() => jumpToMessage(messageId, true))
+          }}
+        />
+      )}
       <div
         className="conversation-scroll"
         onScroll={chatScroll.onScroll}
@@ -926,7 +1084,7 @@ export function ConversationPage({
           {messages.length === 0 ? (
             <section className="conversation-welcome">
               <PegasMascot size={148} />
-              <h2>今天想一起完成什么？</h2>
+              <h2>{taskScope ? '这件事还没有对话' : '今天想一起完成什么？'}</h2>
               <p>告诉我目标。我会整理事情、推进执行，并在需要你决定时回来。</p>
             </section>
           ) : (
@@ -954,7 +1112,7 @@ export function ConversationPage({
             )
           )}
 
-          {summaryChannel && summaryRun && (
+          {!taskScope && summaryChannel && summaryRun && (
             <RunStatusBar
               api={api}
               channel={summaryChannel}
@@ -991,7 +1149,7 @@ export function ConversationPage({
         className="composer-wrap bui relative px-[42px] pt-3 pb-6 max-[820px]:px-3.5 max-[820px]:pt-2.5 max-[820px]:pb-3.5"
         ref={chatScroll.composerRef}
       >
-        {trayChannels.length > 0 && (
+        {!taskScope && trayChannels.length > 0 && (
           <div
             aria-label="进行中的事情"
             className="task-tray mx-auto mb-2 flex max-w-[1040px] gap-2 overflow-x-auto pb-0.5 [scrollbar-width:thin]"
@@ -1080,87 +1238,115 @@ export function ConversationPage({
             </div>
           </div>
         )}
-        {queuedMessages.length > 0 && (
+        {queuedMessages.some(
+          item => !taskScope || item.channel.id === taskScope.channel.id,
+        ) && (
           <div className="mx-auto mb-2 max-w-[1040px]">
             <p className="mb-1 text-[12px] text-ink-2">本标签页待发</p>
             <ol
               aria-label="排队消息"
               className="composer-queue mx-auto mb-2 grid w-full max-w-[1040px] gap-1.5"
             >
-              {queuedMessages.map((item, index) => (
-                <li
-                  className="flex min-h-9 items-center gap-2 rounded-card bg-surface px-2 py-1 text-[13px] shadow-hairline"
-                  key={item.id}
-                >
-                  <span
-                    className="composer-queue-preview min-w-0 flex-1 truncate text-ink-2"
-                    title={item.text}
+              {queuedMessages
+                .filter(
+                  item =>
+                    !taskScope || item.channel.id === taskScope.channel.id,
+                )
+                .map((item, index) => (
+                  <li
+                    className="flex min-h-9 items-center gap-2 rounded-card bg-surface px-2 py-1 text-[13px] shadow-hairline"
+                    key={item.id}
                   >
-                    <strong className="mr-2">{item.channel.title}</strong>
-                    {item.text}
+                    <span
+                      className="composer-queue-preview min-w-0 flex-1 truncate text-ink-2"
+                      title={item.text}
+                    >
+                      <strong className="mr-2">{item.channel.title}</strong>
+                      {item.text}
+                      {item.error && (
+                        <small
+                          className="block whitespace-normal text-red-text"
+                          role="alert"
+                        >
+                          {item.error}
+                        </small>
+                      )}
+                    </span>
                     {item.error && (
-                      <small
-                        className="block whitespace-normal text-red-text"
-                        role="alert"
+                      <Button
+                        disabled={sending || dictationBusy}
+                        onClick={() =>
+                          setQueuedMessages(current =>
+                            current.map(entry =>
+                              entry.id === item.id
+                                ? { ...entry, error: undefined }
+                                : entry,
+                            ),
+                          )
+                        }
+                        size="xs"
+                        type="button"
+                        variant="quiet"
                       >
-                        {item.error}
-                      </small>
+                        重试发送
+                      </Button>
                     )}
-                  </span>
-                  {item.error && (
                     <Button
-                      disabled={sending || dictationBusy}
+                      aria-label={`编辑排队消息 ${String(index + 1)}`}
+                      disabled={
+                        Boolean(draft.trim()) || sending || dictationBusy
+                      }
+                      onClick={() => {
+                        setQueuedMessages(current =>
+                          current.filter(entry => entry.id !== item.id),
+                        )
+                        onTargetChange({ kind: 'task', channel: item.channel })
+                        onDraftChange(item.text)
+                        composerInputRef.current?.focus()
+                      }}
+                      size="xs"
+                      type="button"
+                      variant="quiet"
+                    >
+                      编辑
+                    </Button>
+                    <Button
+                      aria-label={`删除排队消息 ${String(index + 1)}`}
+                      className="w-7 px-0"
+                      disabled={sending}
                       onClick={() =>
                         setQueuedMessages(current =>
-                          current.map(entry =>
-                            entry.id === item.id
-                              ? { ...entry, error: undefined }
-                              : entry,
-                          ),
+                          current.filter(entry => entry.id !== item.id),
                         )
                       }
                       size="xs"
                       type="button"
                       variant="quiet"
                     >
-                      重试发送
+                      <Trash2 size={14} />
                     </Button>
-                  )}
-                  <Button
-                    aria-label={`编辑排队消息 ${String(index + 1)}`}
-                    disabled={Boolean(draft.trim()) || sending || dictationBusy}
-                    onClick={() => {
-                      setQueuedMessages(current =>
-                        current.filter(entry => entry.id !== item.id),
-                      )
-                      onTargetChange({ kind: 'task', channel: item.channel })
-                      onDraftChange(item.text)
-                      composerInputRef.current?.focus()
-                    }}
-                    size="xs"
-                    type="button"
-                    variant="quiet"
-                  >
-                    编辑
-                  </Button>
-                  <Button
-                    aria-label={`删除排队消息 ${String(index + 1)}`}
-                    className="w-7 px-0"
-                    disabled={sending}
-                    onClick={() =>
-                      setQueuedMessages(current =>
-                        current.filter(entry => entry.id !== item.id),
-                      )
-                    }
-                    size="xs"
-                    type="button"
-                    variant="quiet"
-                  >
-                    <Trash2 size={14} />
-                  </Button>
-                </li>
-              ))}
+                  </li>
+                ))}
             </ol>
+          </div>
+        )}
+        {attachmentEventId && (
+          <div className="mx-auto mb-2 max-w-[1040px] text-[13px] text-ink-2">
+            <p>消息已发送。附件仍保留在此处，请重试上传或移除后继续。</p>
+            <Button
+              size="sm"
+              disabled={sending || readOnly}
+              onClick={() => {
+                setSending(true)
+                setError('')
+                void attachToSentMessage(attachmentEventId)
+                  .then(onSent)
+                  .catch(() => setError('附件已上传，历史刷新失败。'))
+                  .finally(() => setSending(false))
+              }}
+            >
+              重试上传附件
+            </Button>
           </div>
         )}
         {error && (
@@ -1196,7 +1382,7 @@ export function ConversationPage({
             </MetaIconButton>
           </div>
         )}
-        {continuationChannel && (
+        {!taskScope && continuationChannel && (
           <div
             className="composer-context mx-auto mb-2 flex min-h-[38px] w-full max-w-[1040px] items-center justify-between gap-3 rounded-card bg-accent-tint px-3 py-1.5 text-[13px] text-ink-2"
             role="status"
@@ -1267,7 +1453,7 @@ export function ConversationPage({
           }}
         >
           <label className="visually-hidden" htmlFor="pegas-message">
-            给 Pegas 发消息
+            {taskScope ? '就这件事继续聊天' : '给 Pegas 发消息'}
           </label>
           <textarea
             className={`w-full min-w-0 resize-none overflow-y-auto border-0 bg-transparent py-[7px] text-[16px] leading-[1.55] caret-accent outline-none [field-sizing:content] [max-block-size:6lh] placeholder:text-ink-2 placeholder:opacity-55 ${
@@ -1275,6 +1461,7 @@ export function ConversationPage({
                 ? 'min-h-[54px] pb-3 max-[820px]:min-h-[46px] max-[820px]:pt-[5px]'
                 : 'min-h-[38px] max-[820px]:min-h-[46px] max-[820px]:pt-[5px]'
             }`}
+            disabled={readOnly}
             enterKeyHint="send"
             id="pegas-message"
             name="message"
@@ -1305,7 +1492,11 @@ export function ConversationPage({
                 ? voiceDirectSend
                   ? `正在听，说完直接发送 · ${String(dictation.elapsedSeconds)} 秒`
                   : `正在听 · ${String(dictation.elapsedSeconds)} 秒`
-                : '和 Pegas 一起工作，/ 命令 · @ 事情'
+                : readOnly
+                  ? '事情已停止，历史仍可查看'
+                  : taskScope
+                    ? '就这件事继续聊…'
+                    : '和 Pegas 一起工作，/ 命令 · @ 事情'
             }
             ref={composerInputRef}
             rows={1}
@@ -1385,36 +1576,46 @@ export function ConversationPage({
                     排队
                   </Button>
                 )}
-              <ModelPicker
-                ariaLabel="选择执行模型"
-                openRequest={modelOpenRequest}
-                footer="模型变更只作用于新建执行会话"
-                models={models}
-                onSelect={(_, model) => {
-                  if (model) return onSelectModel(model)
-                }}
-                placeholder="执行模型"
-                value={
-                  selectedModelId
-                    ? modelSelectionKey(
-                        models.find(
-                          model =>
-                            model.id === selectedModelId &&
-                            (!modelProvider ||
-                              model.provider === modelProvider),
-                        ) ??
+              {taskScope ? (
+                <Button
+                  size="sm"
+                  variant="quiet"
+                  onClick={taskScope.onSettings}
+                >
+                  执行设置
+                </Button>
+              ) : (
+                <ModelPicker
+                  ariaLabel="选择执行模型"
+                  openRequest={modelOpenRequest}
+                  footer="模型变更只作用于新建执行会话"
+                  models={models}
+                  onSelect={(_, model) => {
+                    if (model) return onSelectModel(model)
+                  }}
+                  placeholder="执行模型"
+                  value={
+                    selectedModelId
+                      ? modelSelectionKey(
                           models.find(
-                            model => model.id === selectedModelId,
-                          ) ?? {
-                            provider: modelProvider ?? '',
-                            id: selectedModelId,
-                            name: selectedModelId,
-                          },
-                      )
-                    : ''
-                }
-                variant="composer"
-              />
+                            model =>
+                              model.id === selectedModelId &&
+                              (!modelProvider ||
+                                model.provider === modelProvider),
+                          ) ??
+                            models.find(
+                              model => model.id === selectedModelId,
+                            ) ?? {
+                              provider: modelProvider ?? '',
+                              id: selectedModelId,
+                              name: selectedModelId,
+                            },
+                        )
+                      : ''
+                  }
+                  variant="composer"
+                />
+              )}
               <Button
                 aria-label={
                   dictation.state === 'recording' ? '停止录音' : '语音输入'
@@ -1434,6 +1635,7 @@ export function ConversationPage({
                   dictation.toggle()
                 }}
                 size="sm"
+                disabled={readOnly || Boolean(attachmentEventId)}
                 title={voiceDirectSend ? '录音并直接发送' : '语音转文字'}
                 type="button"
                 variant="quiet"
@@ -1457,7 +1659,13 @@ export function ConversationPage({
                 <Button
                   aria-label="发送"
                   className="send-button size-[42px] rounded-full bg-ink p-0 text-canvas hover:bg-ink hover:text-canvas hover:opacity-90 disabled:bg-line-strong disabled:text-ink-2 disabled:opacity-100 pointer-coarse:size-11"
-                  disabled={!draft.trim() || sending || dictationBusy}
+                  disabled={
+                    !draft.trim() ||
+                    sending ||
+                    dictationBusy ||
+                    readOnly ||
+                    Boolean(attachmentEventId)
+                  }
                   size="sm"
                   type="submit"
                   variant="quiet"

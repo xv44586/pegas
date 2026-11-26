@@ -1,4 +1,5 @@
 import { verifyDetailClosure } from './verify-detail-closure.mjs'
+import { verifyTaskConversation } from './verify-task-conversation.mjs'
 import { verifyAnswerFollowUps } from './verify-answer-follow-ups.mjs'
 import { execFileSync, spawn } from 'node:child_process'
 import {
@@ -290,6 +291,7 @@ try {
   await verifyUiOverlays(page, capture, 'desktop')
   await verifyAnswerFollowUps(page, capture, 'desktop')
   await verifyDetailClosure(page, capture, 'desktop')
+  await verifyTaskConversation(page, capture, 'desktop')
   await capture(page, 'desktop-conversation.png', 'desktop-conversation')
   await composerInput.focus()
   await capture(page, 'desktop-composer-focus.png', 'desktop-composer-focus')
@@ -444,9 +446,13 @@ try {
   await page.getByText('我喜欢安静、白底、信息层级清楚的界面。').waitFor()
   await capture(page, 'desktop-memory.png', 'desktop-memory')
 
-  await page.getByLabel('主导航').getByRole('button', { name: /^对话/ }).click()
+  // Recents now enter the task conversation; explicit work-list detail remains supported.
   await page
     .getByLabel('主导航')
+    .getByRole('button', { name: /^所有事情/ })
+    .click()
+  await page
+    .locator('.work-list')
     .getByRole('button')
     .filter({ hasText: '封板' })
     .first()
@@ -788,6 +794,7 @@ try {
   await verifyUiOverlays(mobilePage, capture, 'mobile')
   await verifyAnswerFollowUps(mobilePage, capture, 'mobile')
   await verifyDetailClosure(mobilePage, capture, 'mobile')
+  await verifyTaskConversation(mobilePage, capture, 'mobile')
   await capture(mobilePage, 'mobile-conversation.png', 'mobile-conversation')
   await mobileComposer.focus()
   await capture(

@@ -65,6 +65,8 @@ const DEFAULT_RECENTS: SidebarRecent[] = [
 ]
 
 interface SidebarNavProps {
+  activeRecentId?: string
+  navigateOnPick?: boolean
   activeTitle?: string | null
   /** accessible name of the rail landmark (host apps keep their own) */
   ariaLabel?: string
@@ -251,6 +253,8 @@ function WorkspaceMenu({
 }
 
 export default function SidebarNav({
+  activeRecentId,
+  navigateOnPick = true,
   activeTitle,
   ariaLabel = '工作区导航',
   className = '',
@@ -493,7 +497,10 @@ export default function SidebarNav({
 
           <GlideGroup>
             {visibleRecents.map(item => {
-              const active = item.label === selectedTitle
+              const active =
+                activeRecentId !== undefined
+                  ? item.id === activeRecentId
+                  : item.label === selectedTitle
               return (
                 <button
                   key={item.id}
@@ -501,7 +508,7 @@ export default function SidebarNav({
                   type="button"
                   title={item.label}
                   onClick={() => {
-                    selectNav(item.navKey ?? recentsNavKey)
+                    if (navigateOnPick) selectNav(item.navKey ?? recentsNavKey)
                     if (activeTitle === undefined)
                       setDemoActiveTitle(item.label)
                     onPick?.(item.id, item.label, item.prompt)

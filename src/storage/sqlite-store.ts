@@ -10099,7 +10099,18 @@ export class PegasStore {
              AND inbox_events.type = 'user.message'
              AND inbox_events.status IN ('pending', 'processing', 'failed')
              AND json_valid(inbox_events.payload_json)
-             AND json_extract(inbox_events.payload_json, '$.taskId') = ?
+             AND (
+               json_extract(inbox_events.payload_json, '$.taskId') = ?
+               OR (
+                 json_extract(inbox_events.payload_json, '$.taskId') IS NULL
+                 AND EXISTS (
+                   SELECT 1 FROM outbox_messages
+                   WHERE outbox_messages.id = json_extract(inbox_events.payload_json, '$.replyToMessageId')
+                     AND outbox_messages.task_id = ?
+                     AND outbox_messages.user_id = inbox_events.user_id
+                 )
+               )
+             )
              AND NOT EXISTS (
                SELECT 1 FROM task_events
                WHERE task_events.event_id = inbox_events.id
@@ -10114,6 +10125,7 @@ export class PegasStore {
         taskId,
         userId,
         userId,
+        taskId,
         taskId,
         cursorRow?.rowid ?? null,
         cursorRow?.rowid ?? null,

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@bui/index'
 
 import { ApiError, PegasApi } from './api'
+import { TaskConversationPage } from './sealed/TaskConversationPage'
 import { DetailDrawer } from './sealed/DetailDrawer'
 import {
   AttentionPage,
@@ -78,6 +79,9 @@ export function App() {
   const [data, setData] = useState<AppData>({ snapshot: emptySnapshot })
   const [agentModels, setAgentModels] = useState<DshModelCatalog>()
   const [page, setPage] = useState<AppPage>(() => pageFromLocation())
+  const [taskPageId, setTaskPageId] = useState(
+    () => new URLSearchParams(window.location.search).get('task') ?? undefined,
+  )
   const [drawer, setDrawer] = useState<DrawerView>()
   const [composerTarget, setComposerTarget] = useState<ComposerTarget>()
   const [composerDraft, setComposerDraft] = useState('')
@@ -707,9 +711,13 @@ export function App() {
     attentionRequestRef.current += 1
     drawerReturnRef.current = undefined
     const url = new URL(window.location.href)
-    if (url.searchParams.has('channel') || url.searchParams.has('task')) {
+    if (
+      url.searchParams.has('channel') ||
+      (taskPageId && url.searchParams.has('outbox'))
+    ) {
+      if (taskPageId) url.searchParams.delete('outbox')
       url.searchParams.delete('channel')
-      url.searchParams.delete('task')
+      if (!taskPageId) url.searchParams.delete('task')
       window.history.replaceState(
         {},
         '',
@@ -907,7 +915,10 @@ export function App() {
 
   function navigate(nextPage: AppPage, nextSettingsSection?: SettingsSection) {
     setPage(nextPage)
+    setTaskPageId(undefined)
     const url = new URL(window.location.href)
+    url.searchParams.delete('task')
+    url.searchParams.delete('channel')
     if (nextPage === 'conversation') url.searchParams.delete('view')
     else
       url.searchParams.set(
@@ -1019,7 +1030,9 @@ export function App() {
     const restorePage = () => {
       const attentionRequestId = attentionRequestRef.current + 1
       attentionRequestRef.current = attentionRequestId
-      setPage(pageFromLocation())
+      const taskId = new URLSearchParams(window.location.search).get('task')
+      setTaskPageId(taskId ?? undefined)
+      setPage(taskId ? 'conversation' : pageFromLocation())
       setSettingsSection(settingsSectionFromLocation())
       const messageId = new URLSearchParams(window.location.search).get(
         'outbox',
@@ -1030,7 +1043,11 @@ export function App() {
         return
       }
       const parameters = new URLSearchParams(window.location.search)
-      const channelId = parameters.get('channel') ?? parameters.get('task')
+      if (parameters.has('task')) {
+        setDrawer(undefined)
+        return
+      }
+      const channelId = parameters.get('channel')
       const channel = data.snapshot.channels.find(item => item.id === channelId)
       if (channel) {
         setDrawer({
@@ -1256,7 +1273,7 @@ export function App() {
     attentionRequestRef.current = requestId
     rememberFocus()
     const url = new URL(window.location.href)
-    url.searchParams.set('view', 'outbox')
+    if (!taskPageId) url.searchParams.set('view', 'outbox')
     url.searchParams.set('outbox', message.id)
     window.history.replaceState(
       {},
@@ -1403,11 +1420,15 @@ export function App() {
     const message = data.snapshot.messages.find(item => item.id === messageId)
     if (message) {
       restoredDetailRef.current = true
-      setPage('attention')
+      setPage(parameters.has('task') ? 'conversation' : 'attention')
       void openAttentionMessage(message)
       return
     }
-    const channelId = parameters.get('channel') ?? parameters.get('task')
+    if (parameters.has('task')) {
+      restoredDetailRef.current = true
+      return
+    }
+    const channelId = parameters.get('channel')
     const channel = data.snapshot.channels.find(item => item.id === channelId)
     if (!channelId || channel) restoredDetailRef.current = true
     if (!channel) return
@@ -1461,8 +1482,19 @@ export function App() {
       document.querySelector<HTMLTextAreaElement>('#pegas-message')?.focus(),
     )
   }
+  function openTaskPage(taskId: string) {
+    attentionRequestRef.current += 1
+    setDrawer(undefined)
+    setPage('conversation')
+    setTaskPageId(taskId)
+    const url = new URL(window.location.href)
+    for (const key of ['channel', 'outbox', 'view', 'section'])
+      url.searchParams.delete(key)
+    url.searchParams.set('task', taskId)
+    window.history.pushState({}, '', `${url.pathname}${url.search}${url.hash}`)
+  }
   function continueChannel(channel: WorkChannel) {
-    openComposer({ kind: 'task', channel })
+    openTaskPage(channel.id)
   }
 
   async function workflowMessage(id: string) {
@@ -1501,14 +1533,9 @@ export function App() {
             navigate(nextPage, 'pegas')
           } else navigate(nextPage)
         }}
-        onOpenChannel={channel =>
-          openDrawer({
-            kind: 'task',
-            channel,
-            run: latestRunForTask(data.snapshot.runs, channel.id),
-          })
-        }
+        onOpenChannel={channel => openTaskPage(channel.id)}
         page={page}
+        activeTaskId={taskPageId ?? ''}
         attentionTodoCount={attentionTodoCount}
       >
         {loading && <div className="top-progress" aria-label="正在加载" />}
@@ -1528,7 +1555,24 @@ export function App() {
             </button>
           </div>
         )}
-        {page === 'conversation' && (
+        {page === 'conversation' && taskPageId && (
+          <TaskConversationPage
+            key={taskPageId}
+            taskId={taskPageId}
+            api={api}
+            actions={actions}
+            models={availableAgentModels}
+            onOpenAttention={openAttentionMessage}
+            speechEnabled={
+              data.settings?.speech?.provider === 'openai-compatible'
+            }
+            onConfigureVoice={() => {
+              setSettingsSection('voice')
+              navigate('settings', 'voice')
+            }}
+          />
+        )}
+        {page === 'conversation' && !taskPageId && (
           <ConversationPage
             actions={actions}
             api={api}

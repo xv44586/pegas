@@ -4,6 +4,7 @@ import { Button, FollowUpList, TextArea } from '@bui/index'
 
 /** One reply owns its target, draft, request and retry key throughout polling. */
 export function InlineReply({
+  hideEditor = false,
   items,
   taskTitle,
   excerpt,
@@ -11,6 +12,7 @@ export function InlineReply({
   onSend,
   onRefresh,
 }: {
+  hideEditor?: boolean
   items: readonly string[]
   taskTitle?: string
   excerpt: string
@@ -85,80 +87,86 @@ export function InlineReply({
           onSelect={text => void send(text, true)}
         />
       )}
-      <Button
-        type="button"
-        size="sm"
-        variant="quiet"
-        className="sr-only focus:not-sr-only focus:mt-1"
-        aria-controls={id}
-        onClick={() => {
-          setExpanded(true)
-          // Opening by click/tap is an intentional focus change; hover never steals focus.
-          requestAnimationFrame(() => editorRef.current?.focus())
-        }}
-      >
-        快速回复
-      </Button>
+      {!hideEditor && (
+        <Button
+          type="button"
+          size="sm"
+          variant="quiet"
+          className="sr-only focus:not-sr-only focus:mt-1"
+          aria-controls={id}
+          onClick={() => {
+            setExpanded(true)
+            // Opening by click/tap is an intentional focus change; hover never steals focus.
+            requestAnimationFrame(() => editorRef.current?.focus())
+          }}
+        >
+          快速回复
+        </Button>
+      )}
       <form
         id={id}
         aria-label={context}
-        className={`${expanded || draft || error || pending ? 'grid' : 'hidden group-hover/reply:grid group-focus-within/reply:grid [@media(hover:none)]:grid'} mt-2 gap-2`}
+        className={`${(hideEditor ? Boolean(error) : expanded || draft || error || pending) ? 'grid' : hideEditor ? 'hidden' : 'hidden group-hover/reply:grid group-focus-within/reply:grid [@media(hover:none)]:grid'} mt-2 gap-2`}
         onSubmit={event => {
           event.preventDefault()
           void send(draft)
         }}
       >
-        <label className="visually-hidden" htmlFor={`${id}-input`}>
-          回复内容
-        </label>
-        <span id={`${id}-context`} className="visually-hidden">
-          {context}，回复：{excerpt.slice(0, 120)}
-        </span>
-        <div className="relative">
-          <TextArea
-            id={`${id}-input`}
-            ref={editorRef}
-            aria-describedby={`${id}-context`}
-            rows={1}
-            className="block min-h-12 w-full resize-none pr-14"
-            enterKeyHint="send"
-            value={draft}
-            disabled={pending || Boolean(disabledReason)}
-            placeholder="继续追问…"
-            onChange={event => setDraft(event.target.value)}
-            onCompositionStart={() => {
-              composingRef.current = true
-            }}
-            onCompositionEnd={() => {
-              composingRef.current = false
-            }}
-            onKeyDown={event => {
-              // Safari can end composition before its confirming keydown.
-              const legacyKeyCode = (
-                event.nativeEvent as unknown as { keyCode?: number }
-              ).keyCode
-              if (
-                event.key !== 'Enter' ||
-                event.shiftKey ||
-                composingRef.current ||
-                event.nativeEvent.isComposing ||
-                legacyKeyCode === 229
-              )
-                return
-              event.preventDefault()
-              event.currentTarget.form?.requestSubmit()
-            }}
-          />
-          <Button
-            type="submit"
-            size="sm"
-            className="absolute right-0.5 top-0.5 h-11 w-11 p-0"
-            aria-label="发送回复"
-            disabled={pending || Boolean(disabledReason) || !draft.trim()}
-          >
-            <ArrowUp size={15} aria-hidden="true" />
-          </Button>
-        </div>
+        {!hideEditor && (
+          <>
+            <label className="visually-hidden" htmlFor={`${id}-input`}>
+              回复内容
+            </label>
+            <span id={`${id}-context`} className="visually-hidden">
+              {context}，回复：{excerpt.slice(0, 120)}
+            </span>
+            <div className="relative">
+              <TextArea
+                id={`${id}-input`}
+                ref={editorRef}
+                aria-describedby={`${id}-context`}
+                rows={1}
+                className="block min-h-12 w-full resize-none pr-14"
+                enterKeyHint="send"
+                value={draft}
+                disabled={pending || Boolean(disabledReason)}
+                placeholder="继续追问…"
+                onChange={event => setDraft(event.target.value)}
+                onCompositionStart={() => {
+                  composingRef.current = true
+                }}
+                onCompositionEnd={() => {
+                  composingRef.current = false
+                }}
+                onKeyDown={event => {
+                  // Safari can end composition before its confirming keydown.
+                  const legacyKeyCode = (
+                    event.nativeEvent as unknown as { keyCode?: number }
+                  ).keyCode
+                  if (
+                    event.key !== 'Enter' ||
+                    event.shiftKey ||
+                    composingRef.current ||
+                    event.nativeEvent.isComposing ||
+                    legacyKeyCode === 229
+                  )
+                    return
+                  event.preventDefault()
+                  event.currentTarget.form?.requestSubmit()
+                }}
+              />
+              <Button
+                type="submit"
+                size="sm"
+                className="absolute right-0.5 top-0.5 h-11 w-11 p-0"
+                aria-label="发送回复"
+                disabled={pending || Boolean(disabledReason) || !draft.trim()}
+              >
+                <ArrowUp size={15} aria-hidden="true" />
+              </Button>
+            </div>
+          </>
+        )}
         {disabledReason && (
           <p className="text-[12px] text-ink-2">{disabledReason}</p>
         )}

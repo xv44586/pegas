@@ -64,6 +64,53 @@ describe('channel timeline pagination and routing facts', () => {
     ).toThrow(/cursor is invalid/)
   })
 
+  it('includes pending quoted replies only in the authoritative owner task', async () => {
+    const store = new PegasStore(':memory:')
+    cleanups.push(() => store.close())
+    const first = await createRoutedTask(store, 'owner', '第一件事情')
+    const second = await createRoutedTask(store, 'owner', '另一件事情')
+    const reply = store.enqueueOutbox({
+      userId: 'owner',
+      taskId: first.taskId,
+      channel: 'conversation',
+      dedupeKey: 'reply',
+      payload: { type: 'agent.message', text: '可追问的回复' },
+    })
+    const pending = store.enqueueEvent({
+      userId: 'owner',
+      type: 'user.message',
+      source: 'web',
+      payload: { text: '引用追问', replyToMessageId: reply.id },
+    }).event
+    const crossOwner = store.enqueueEvent({
+      userId: 'other',
+      type: 'user.message',
+      source: 'web',
+      payload: { text: '越权引用', replyToMessageId: reply.id },
+    }).event
+    expect(() =>
+      store.enqueueEvent({
+        userId: 'owner',
+        type: 'user.message',
+        source: 'web',
+        payload: {
+          text: '冲突目标',
+          taskId: second.taskId,
+          replyToMessageId: reply.id,
+        },
+      }),
+    ).toThrow(/cannot be combined/)
+    expect(
+      store.listChannelEvents(first.taskId, 'owner').map(event => event.id),
+    ).toContain(pending.id)
+    expect(
+      store.listChannelEvents(second.taskId, 'owner').map(event => event.id),
+    ).not.toContain(pending.id)
+    expect(
+      store.listChannelEvents(first.taskId, 'other').map(event => event.id),
+    ).not.toContain(crossOwner.id)
+  })
+
   it('returns owner-scoped routing reasons and paginated HTTP timeline', async () => {
     const store = new PegasStore(':memory:')
     const server = createControlPlane({ store })
