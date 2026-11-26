@@ -13,6 +13,23 @@ export async function verifyUiOverlays(page, capture, size) {
     // Wait for actual pointer actionability, retaining the independent hit test.
     try {
       await locator.click({ trial: true })
+
+      assert.equal(
+        await locator.evaluate(element => {
+          const rect = element.getBoundingClientRect()
+          const x = rect.left + rect.width / 2
+          const y = rect.top + rect.height / 2
+          return (
+            x >= 0 &&
+            y >= 0 &&
+            x < globalThis.innerWidth &&
+            y < globalThis.innerHeight &&
+            element.contains(globalThis.document.elementFromPoint(x, y))
+          )
+        }),
+        true,
+        `${size} ${label}: clipped or covered`,
+      )
     } catch (error) {
       console.error(
         'Overlay hit failure',
@@ -43,22 +60,6 @@ export async function verifyUiOverlays(page, capture, size) {
       )
       throw error
     }
-    assert.equal(
-      await locator.evaluate(element => {
-        const rect = element.getBoundingClientRect()
-        const x = rect.left + rect.width / 2
-        const y = rect.top + rect.height / 2
-        return (
-          x >= 0 &&
-          y >= 0 &&
-          x < globalThis.innerWidth &&
-          y < globalThis.innerHeight &&
-          element.contains(globalThis.document.elementFromPoint(x, y))
-        )
-      }),
-      true,
-      `${size} ${label}: clipped or covered`,
-    )
   }
   async function restored(trigger) {
     await page.waitForFunction(
@@ -85,7 +86,7 @@ export async function verifyUiOverlays(page, capture, size) {
         await hit(popup.getByRole('option').last(), label)
         if (cycle === 2) {
           const selected = popup.locator(
-            '[role="option"][aria-selected="true"]',
+            '[role="option"][data-state="checked"]',
           )
           await (
             (await selected.count())
