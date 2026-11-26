@@ -163,7 +163,6 @@ export function CopyMessageButton({
   )
 }
 
-/** follow-up prompt row — same visual language as StreamingText follow-ups */
 /** settled/streaming say body: markdown when settled, BUI StreamText while streaming */
 export function SayBody({
   text,

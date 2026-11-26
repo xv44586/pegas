@@ -1,3 +1,4 @@
+import { answerFollowUps } from '../../../src/conversation/follow-ups'
 import {
   ArrowUp,
   ArrowUpToLine,
@@ -60,6 +61,7 @@ import { useVoiceDictation } from '../useVoiceDictation'
 import { PegasAgentIcon } from '../PegasAgentIcon'
 import {
   Button,
+  FollowUpList,
   Dialog,
   DialogContent,
   DialogTitle,
@@ -716,6 +718,19 @@ export function ConversationPage({
           composerInputRef.current?.focus()
         }
       : undefined
+    const followUps =
+      quote &&
+      !message.streaming &&
+      (message.lane === 'say' ||
+        workEntryChannel?.workflow?.resultMessageId === message.id)
+        ? answerFollowUps(message.source?.payload)
+        : []
+    const followUpDisabled =
+      sending || dictationBusy
+        ? '请等待当前输入处理完成。'
+        : draft.trim() || attachment
+          ? '先发送或清空当前草稿，再选择追问。'
+          : undefined
     return (
       <article
         className={[
@@ -806,6 +821,17 @@ export function ConversationPage({
             </button>
           )}
         </div>
+        {followUps.length > 0 && selectQuote && (
+          <FollowUpList
+            items={followUps}
+            disabledReason={followUpDisabled}
+            onSelect={text => {
+              if (followUpDisabled) return
+              selectQuote(true)
+              onDraftChange(text)
+            }}
+          />
+        )}
         <div className="message-meta">
           {message.role === 'user' && (
             <UserMessageStatus

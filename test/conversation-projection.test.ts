@@ -514,3 +514,32 @@ describe('CONV-006 projection API', () => {
     expect(message?.projection).toMatchObject({ lane: 'say', weight: 'inline' })
   })
 })
+
+describe('DESIGN-009 persisted answer suggestions', () => {
+  it('saves optional questions on completed work with a clean answer and owner isolation', () => {
+    const store = openStore()
+    const { taskId, runId } = seedTask(store)
+    store.claimNextRun('worker')
+    store.completeRun(runId, 'worker', {
+      executorRef: 'test',
+      output:
+        '季度分析。\nPEGAS_QUESTIONS_BEGIN\n["收入变化的主要原因是什么？"]\nPEGAS_QUESTIONS_END',
+    })
+    const message = store
+      .listOutbox('owner')
+      .find(
+        item => (item.payload as { type?: string }).type === 'run.completed',
+      )
+    expect(message?.payload).toMatchObject({
+      text: '季度分析。',
+      followUps: ['收入变化的主要原因是什么？'],
+    })
+    if (!message) throw new Error('Expected completed message')
+    expect(store.listRuns(taskId)[0]?.output).toBe('季度分析。')
+    expect(store.listOutbox('other')).toEqual([])
+    expect(
+      store.conversationReply({ id: message.id, mode: 'explain' }, 'owner')
+        .text,
+    ).toBe('季度分析。')
+  })
+})

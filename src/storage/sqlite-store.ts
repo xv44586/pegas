@@ -3,6 +3,8 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
+import { splitAnswerFollowUps } from '../conversation/follow-ups.js'
+
 import { systemClock, type Clock } from '../core/clock.js'
 import { assignWorkerIconId, isWorkerIconId } from '../brand/agent-icon.js'
 import { DeterministicPrivacyMasker } from '../privacy/masker.js'
@@ -12216,6 +12218,11 @@ export class PegasStore {
     text: string,
     options: { streaming: boolean },
   ): void {
+    const answer = splitAnswerFollowUps(text, options.streaming)
+    text = answer.text
+    const followUpFields = answer.followUps.length
+      ? { followUps: answer.followUps }
+      : {}
     const run = this.#runById(runId)
     if (run.claimedBy !== workerId || run.status !== 'running') return
     const task = this.#taskById(run.taskId)
@@ -12240,6 +12247,7 @@ export class PegasStore {
             taskId: task.id,
             runId,
             text,
+            ...followUpFields,
             ...(options.streaming ? { streaming: true } : {}),
           }),
           this.#clock.now().toISOString(),
@@ -12259,6 +12267,7 @@ export class PegasStore {
         taskId: task.id,
         runId,
         text,
+        ...followUpFields,
         ...(options.streaming ? { streaming: true } : {}),
       },
     })
@@ -12270,6 +12279,8 @@ export class PegasStore {
     workerAuthority: string | { claimToken: string },
     draft: WorkerReportDraft,
   ): { report: WorkerReport; reviewPack?: ReviewPack; completed: boolean } {
+    const answer = splitAnswerFollowUps(draft.summary)
+    draft = { ...draft, summary: answer.text }
     this.#database.exec('BEGIN IMMEDIATE')
     try {
       const run = this.#runById(runId)
@@ -12586,6 +12597,7 @@ export class PegasStore {
             reviewPackId: reviewPack.id,
             ...(goal.requireAcceptance ? { requiresAcceptance: true } : {}),
             text: draft.summary,
+            ...(answer.followUps.length ? { followUps: answer.followUps } : {}),
             review: this.#reviewPackPreview(
               task.id,
               task.userId,
@@ -14297,6 +14309,8 @@ export class PegasStore {
   }
 
   completeRun(runId: string, workerId: string, result: ExecutorResult): void {
+    const answer = splitAnswerFollowUps(result.output)
+    result = { ...result, output: answer.text }
     const nowDate = this.#clock.now()
     const now = nowDate.toISOString()
     this.#database.exec('BEGIN IMMEDIATE')
@@ -14542,7 +14556,13 @@ export class PegasStore {
           !actionBlocksCompletion &&
           !requiresEvidence
             ? {}
-            : { text: result.output }),
+            : { text: answer.text }),
+          ...(!awaitingClarification &&
+          !actionBlocksCompletion &&
+          !requiresEvidence &&
+          answer.followUps.length
+            ? { followUps: answer.followUps }
+            : {}),
         },
       })
       if (

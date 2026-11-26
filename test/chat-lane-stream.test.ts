@@ -373,3 +373,57 @@ console.log(JSON.stringify({
     store.close()
   }, 20_000)
 })
+
+describe('DESIGN-009 optional follow-ups in conversation streaming', () => {
+  it('hides all protocol chunks and settles one say fact with questions', async () => {
+    const store = new PegasStore(':memory:')
+    try {
+      const claimed = await seedConversationClaim(store, '分析季度收入')
+      const output =
+        '收入上升。\nPEGAS_QUESTIONS_BEGIN\n["哪些因素推动了增长？"]\nPEGAS_QUESTIONS_END'
+      const observed: unknown[] = []
+      await executeClaimedRun(
+        store,
+        {
+          name: 'suggestion-test',
+          execute: async input => {
+            for (const text of output) {
+              input.onProgress?.({ type: 'message', text })
+              const say = store
+                .listOutbox('owner')
+                .find(
+                  item =>
+                    (item.payload as { type?: string }).type ===
+                    'agent.message',
+                )
+              if (say) observed.push(say.payload)
+            }
+            return await Promise.resolve({ executorRef: 'session', output })
+          },
+        },
+        claimed,
+        'chat-worker',
+        process.cwd(),
+        new AbortController().signal,
+        'http://127.0.0.1:4317',
+      )
+      expect(JSON.stringify(observed)).not.toContain('PEGAS_QUESTIONS')
+      expect(JSON.stringify(observed)).not.toContain('哪些因素')
+      const says = store
+        .listOutbox('owner')
+        .filter(
+          item => (item.payload as { type?: string }).type === 'agent.message',
+        )
+      expect(says).toHaveLength(1)
+      expect(says[0]?.payload).toMatchObject({
+        text: '收入上升。',
+        followUps: ['哪些因素推动了增长？'],
+      })
+      expect(
+        (says[0]?.payload as { streaming?: boolean }).streaming,
+      ).toBeUndefined()
+    } finally {
+      store.close()
+    }
+  })
+})
