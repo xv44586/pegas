@@ -1103,6 +1103,92 @@ describe('control plane', () => {
     )
   })
 
+  it.each([false, true])(
+    'invalidates saved model catalogs across revisions (old load pending: %s)',
+    async pendingOld => {
+      const store = new PegasStore(':memory:')
+      store.initializeRuntimeSettings({
+        routerMode: 'rules',
+        modelProvider: 'magpie',
+        modelName: 'old',
+        agentModelMode: 'override',
+        agentModelProvider: 'magpie',
+        agentModelName: 'old',
+        privacyMode: 'disabled',
+        rewriteMode: 'disabled',
+      })
+      const config = loadConfig({})
+      const catalog = (model: string) => ({
+        defaultProvider: 'magpie',
+        defaultModel: model,
+        models: [{ provider: 'magpie', id: model, name: model }],
+      })
+      let releaseOld!: (value: ReturnType<typeof catalog>) => void
+      const old = new Promise<ReturnType<typeof catalog>>(resolve => {
+        releaseOld = resolve
+      })
+      let calls = 0
+      const server = createControlPlane({
+        store,
+        modelCredentialVault: new ModelCredentialVault(Buffer.alloc(32, 3)),
+        settingsCapabilities: () =>
+          settingsCapabilities(
+            config,
+            store.listModelProviderConnectionSummaries(),
+          ),
+        agentModelCatalogTtlMs: 60_000,
+        agentModelCatalog: () => {
+          calls += 1
+          return calls === 1
+            ? old
+            : Promise.resolve(catalog(store.getRuntimeSettings().modelName))
+        },
+      })
+      await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+      cleanups.push(
+        () => new Promise<void>(resolve => server.close(() => resolve())),
+        () => Promise.resolve(store.close()),
+      )
+      const origin = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+      const first = fetch(origin + '/v1/settings/agent-models')
+      await vi.waitFor(() => expect(calls).toBe(1))
+      if (!pendingOld) {
+        releaseOld(catalog('old'))
+        await first
+      }
+      const saved = await fetch(origin + '/v1/settings', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          ...store.getRuntimeSettings(),
+          expectedRevision: 1,
+          modelName: 'new',
+          agentModelName: 'new',
+          provider: {
+            name: 'Magpie',
+            protocol: 'openai-chat',
+            baseUrl: 'http://127.0.0.1:3425/v1',
+          },
+        }),
+      })
+      expect(saved.status).toBe(200)
+      const requested = new Promise<void>(resolve =>
+        server.once('request', () => resolve()),
+      )
+      const fresh = fetch(origin + '/v1/settings/agent-models')
+      await requested
+      releaseOld(catalog('old'))
+      expect(await (await fresh).json()).toEqual(catalog('new'))
+      expect(await (await first).json()).toEqual(catalog('old'))
+      // A late old response must neither replace the new cache nor become a
+      // shared load for a client observing the saved revision.
+      expect(
+        await (await fetch(origin + '/v1/settings/agent-models')).json(),
+      ).toEqual(catalog('new'))
+      expect(calls).toBe(2)
+    },
+  )
+
   it('shares an in-flight Agent model catalog load and retries failures', async () => {
     const store = new PegasStore(':memory:')
     let calls = 0

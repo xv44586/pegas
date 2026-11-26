@@ -465,6 +465,10 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
   const loadAgentModelCatalog = cachedAgentModelCatalog(
     options.agentModelCatalog,
     options.agentModelCatalogTtlMs,
+    () =>
+      options.store.hasRuntimeSettings()
+        ? options.store.getRuntimeSettings().revision
+        : 0,
   )
   const logger = options.logger
   const metrics = options.metrics
@@ -2734,23 +2738,36 @@ function metricRoute(path: string): string {
 function cachedAgentModelCatalog(
   load: ControlPlaneOptions['agentModelCatalog'],
   ttlMs = 5_000,
+  revision: () => number = () => 0,
 ): (() => Promise<DshModelCatalog>) | undefined {
   if (!load) return undefined
-  let cached: { value: DshModelCatalog; expiresAt: number } | undefined
-  let inFlight: Promise<DshModelCatalog> | undefined
+  let cached:
+    { value: DshModelCatalog; expiresAt: number; revision: number } | undefined
+  let inFlight:
+    { promise: Promise<DshModelCatalog>; revision: number } | undefined
   return async () => {
+    const currentRevision = revision()
     const now = Date.now()
-    if (cached && cached.expiresAt > now) return cached.value
-    if (inFlight) return inFlight
-    inFlight = load()
+    if (cached?.revision === currentRevision && cached.expiresAt > now)
+      return cached.value
+    if (inFlight?.revision === currentRevision) return inFlight.promise
+    const pending: Promise<DshModelCatalog> = load()
       .then(value => {
-        cached = { value, expiresAt: Date.now() + Math.max(0, ttlMs) }
+        // A load started before a settings save belongs only to its original
+        // callers; it must never populate the new revision's cache.
+        if (revision() === currentRevision)
+          cached = {
+            value,
+            expiresAt: Date.now() + Math.max(0, ttlMs),
+            revision: currentRevision,
+          }
         return value
       })
       .finally(() => {
-        inFlight = undefined
+        if (inFlight?.promise === pending) inFlight = undefined
       })
-    return inFlight
+    inFlight = { promise: pending, revision: currentRevision }
+    return pending
   }
 }
 
