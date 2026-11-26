@@ -110,7 +110,7 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - **验收**：已处理状态继续显示文字标记并撤下处理按钮，历史正文保持语义文字色、不叠加容器透明度；明暗主题全站 axe、完整 check 和 smoke 通过。
 - **非目标 / 边界**：不改颜色 token、不改变审批或事实状态；仅修复客户端可读性，不写服务端数据。
 - **失败与回滚**：可独立回退此提交，无配置与 schema 变更。
-- **证据 / 状态**：回归先红后绿，`ChatExperience.test.tsx` 34 测试通过；`pnpm build` 与全站 `pnpm a11y:review` 通过（明暗主题、首次设置、强制颜色、移动端均零违例）。完整 check 与 smoke 待共享真实模型门禁修复合入后复验。
+- **证据 / 状态**：回归先红后绿，`ChatExperience.test.tsx` 34 测试通过；`pnpm build` 与全站 `pnpm a11y:review` 通过（明暗主题、首次设置、强制颜色、移动端均零违例）。合入共享真实模型门禁修复后，`PEGAS_LIVE_MODEL=codex/gpt-5.6-luna pnpm check` 151 文件 / 1593 测试全通过，`pnpm smoke` 通过；独立提交待 CI / 集成。
 
 ### DESIGN-004：字号阶梯、字重与层级收敛（2026-11-22）
 
