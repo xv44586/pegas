@@ -87,6 +87,7 @@ import {
   type FactTone,
 } from './ConversationBui'
 import { ModelPicker, modelSelectionKey } from './ModelPicker'
+import { useComposerMenu } from './useComposerMenu'
 import { PegasMascot } from './PegasMascot'
 import { EmptyCapability, PageToolbar } from './Shell'
 import {
@@ -213,6 +214,7 @@ export function ConversationPage({
   onConfigureVoice: () => void
 }) {
   const [sending, setSending] = useState(false)
+  const [modelOpenRequest, setModelOpenRequest] = useState(0)
   const [error, setError] = useState('')
   const [attachment, setAttachment] = useState<File>()
   const [voiceDirectSend, setVoiceDirectSend] = useState(false)
@@ -399,9 +401,26 @@ export function ConversationPage({
     continuationChannel.status !== 'cancelled' &&
     summaryActive
 
+  const composerMenu = useComposerMenu({
+    draft,
+    onDraftChange,
+    inputRef: composerInputRef,
+    channels: snapshot.channels,
+    disabled: sending || dictationBusy,
+    canStop: Boolean(summaryActive && summaryChannel?.canStop),
+    hasModels: models.length > 0,
+    onAttach: () => attachmentInputRef.current?.click(),
+    onModel: () => setModelOpenRequest(current => current + 1),
+    onStop: () => setStopTarget(summaryChannel),
+    onAuto: () => onClearTarget(target),
+    onTask: channel => onTargetChange({ kind: 'task', channel }),
+    onError: setError,
+  })
+
   async function send() {
     const text = draft.trim()
     if (!text || sending || dictationBusy) return
+    if (composerMenu.consumeSubmit()) return
     sendOriginRef.current = captureSendOrigin()
     setSending(true)
     setError('')
@@ -1258,8 +1277,18 @@ export function ConversationPage({
             enterKeyHint="send"
             id="pegas-message"
             name="message"
-            onChange={event => onDraftChange(event.target.value)}
+            {...composerMenu.inputProps}
+            onChange={event =>
+              composerMenu.onInput(
+                event.target.value,
+                event.target.selectionStart,
+              )
+            }
+            onSelect={event =>
+              composerMenu.onSelect(event.currentTarget.selectionStart)
+            }
             onKeyDown={event => {
+              if (composerMenu.onKeyDown(event)) return
               if (event.key === 'Enter' && !event.shiftKey) {
                 const legacyKeyCode = (
                   event.nativeEvent as unknown as { keyCode?: number }
@@ -1275,7 +1304,7 @@ export function ConversationPage({
                 ? voiceDirectSend
                   ? `正在听，说完直接发送 · ${String(dictation.elapsedSeconds)} 秒`
                   : `正在听 · ${String(dictation.elapsedSeconds)} 秒`
-                : '和 Pegas 一起工作'
+                : '和 Pegas 一起工作，/ 命令 · @ 事情'
             }
             ref={composerInputRef}
             rows={1}
@@ -1297,18 +1326,7 @@ export function ConversationPage({
                 tabIndex={-1}
                 type="file"
               />
-              <Button
-                aria-label="添加附件"
-                className="composer-add-button size-10 rounded-full p-0 text-ink-3 hover:bg-hover hover:text-ink pointer-coarse:size-11"
-                disabled={sending || dictationBusy}
-                onClick={() => attachmentInputRef.current?.click()}
-                size="sm"
-                title="添加附件（最大 25MB，随下一条消息发送）"
-                type="button"
-                variant="quiet"
-              >
-                <Plus size={22} />
-              </Button>
+              {composerMenu.menu}
               <Button
                 aria-label="说完直接发送"
                 aria-pressed={voiceDirectSend}
@@ -1334,34 +1352,41 @@ export function ConversationPage({
                   正在整理…
                 </span>
               )}
-              {canSteer && draft.trim() && !attachment && (
-                <Button
-                  className="composer-steer-button h-[34px] rounded-full bg-accent-tint px-3 text-[13px] font-medium text-accent-ink hover:bg-accent-tint hover:brightness-95"
-                  disabled={sending || dictationBusy}
-                  onClick={() => void steer()}
-                  size="xs"
-                  title="不打断当前执行，把这条指示立即交给正在做的事情"
-                  type="button"
-                  variant="quiet"
-                >
-                  <Zap size={15} /> 插话
-                </Button>
-              )}
-              {canQueue && draft.trim() && !attachment && (
-                <Button
-                  className="composer-queue-button h-[34px] rounded-full bg-accent-tint px-3 text-[13px] font-medium text-accent-ink hover:bg-accent-tint hover:brightness-95"
-                  disabled={sending || dictationBusy}
-                  onClick={queueDraft}
-                  size="xs"
-                  title="选中的事情完成后自动发送这条消息"
-                  type="button"
-                  variant="quiet"
-                >
-                  排队
-                </Button>
-              )}
+              {canSteer &&
+                draft.trim() &&
+                !draft.trimStart().startsWith('/') &&
+                !attachment && (
+                  <Button
+                    className="composer-steer-button h-[34px] rounded-full bg-accent-tint px-3 text-[13px] font-medium text-accent-ink hover:bg-accent-tint hover:brightness-95"
+                    disabled={sending || dictationBusy}
+                    onClick={() => void steer()}
+                    size="xs"
+                    title="不打断当前执行，把这条指示立即交给正在做的事情"
+                    type="button"
+                    variant="quiet"
+                  >
+                    <Zap size={15} /> 插话
+                  </Button>
+                )}
+              {canQueue &&
+                draft.trim() &&
+                !draft.trimStart().startsWith('/') &&
+                !attachment && (
+                  <Button
+                    className="composer-queue-button h-[34px] rounded-full bg-accent-tint px-3 text-[13px] font-medium text-accent-ink hover:bg-accent-tint hover:brightness-95"
+                    disabled={sending || dictationBusy}
+                    onClick={queueDraft}
+                    size="xs"
+                    title="选中的事情完成后自动发送这条消息"
+                    type="button"
+                    variant="quiet"
+                  >
+                    排队
+                  </Button>
+                )}
               <ModelPicker
                 ariaLabel="选择执行模型"
+                openRequest={modelOpenRequest}
                 footer="模型变更只作用于新建执行会话"
                 models={models}
                 onSelect={(_, model) => {

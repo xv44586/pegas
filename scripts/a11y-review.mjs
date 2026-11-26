@@ -243,6 +243,16 @@ try {
     await page.goto(`http://127.0.0.1:${port}/`)
     await page.getByRole('textbox', { name: '给 Pegas 发消息' }).waitFor()
     await audit(page, `${theme}-conversation`)
+    const composer = page.getByRole('textbox', { name: '给 Pegas 发消息' })
+    await page.getByRole('button', { name: '添加内容', exact: true }).click()
+    await page.getByRole('menu', { name: '添加内容', exact: true }).waitFor()
+    await audit(page, `${theme}-composer-add`)
+    await page.keyboard.press('Escape')
+    await composer.fill('/')
+    await page.getByRole('listbox', { name: '基础命令' }).waitFor()
+    await audit(page, `${theme}-composer-commands`)
+    await composer.press('Escape')
+    await composer.fill('')
     for (const [nav, heading] of [
       ['所有事情', '所有事情'],
       ['待你处理', '待你处理'],
