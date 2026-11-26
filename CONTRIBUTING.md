@@ -33,6 +33,8 @@ pnpm smoke
 
 `pnpm check` 依次验证格式、ESLint、TypeScript、无用代码、覆盖率阈值和生产构建。`pnpm test` 可用于快速反馈，但提交前必须运行完整检查。
 
+本地 Magpie 与 DSH 可用时，真实集成测试使用产品默认模型；上游路由不可用时可显式运行 `PEGAS_LIVE_MODEL=codex/gpt-5.6-luna pnpm check`（或指定当前可用的模型）。覆盖只影响测试，不修改产品配置；错误仍使门禁失败，不能跳过断言或静默替换供应商。目录可访问不代表推理配额和凭证可用。
+
 UI 改动由 CI 在隔离 Pegas 实例中生成短期截图；本地可运行 `pnpm review:ui -- --changed-from origin/main`。`pnpm review:evidence` 把准确 SHA、命令结果和媒体哈希写入 `output/feature-review/`。这些运行产物只供审核和 Candidate stage 使用，不进入主分支；详见 [Feature Review 门禁](docs/feature-review-gate.md)。
 
 覆盖率基线由 `vitest.config.ts` 管理。阈值只能在新增验证后保持或提高；不要通过降低阈值掩盖缺失测试。动态入口导致 Knip 误报时，只添加精确到文件或符号的例外。

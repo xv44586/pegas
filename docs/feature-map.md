@@ -146,6 +146,14 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - **阶段 4–5 证据（2026-11-22）**：标题 `text-wrap: balance` 全局生效；26px 大标题统一行高 1.2/字距 -0.03em，20px 区块标题行高 1.25/字距 -0.02em（page-header/welcome/about/setup/access/settings-heading/drawer/empty-capability/settings-nav/provider/usage-metrics）。删除 `.file-preview` 死代码（ui-serif 一并移除）、抽屉 eyebrow（`drawerEyebrow` 函数与 `<small>`）、state-hero 冗余状态小标（任务与交付审查两处，审查结论并入正文保留 outcomeLabel 事实）、`.provider-detail h4 b` 计数药丸（改纯文本「可用模型（N）」）、`.composer-queue-position` 序号徽章。修正：worker-_.png 是 `scripts/generate-brand-icons.mjs` 生成 agent-_.webp 的源图，非死资产，保留。`test/sealed-ui-typography.test.ts` 扩至 14 测试（新增 6 项先红后绿）；`App.test.tsx` 审查抽屉断言随文案合并更新。完整门禁：`pnpm check` 93 文件 / 908 测试全绿（statement 84.89%、branch 77.76%、function 89.5%、line 88.14%）；`pnpm smoke`、`pnpm review:ui -- --force`（66 截图+几何断言）、`pnpm a11y:review`（0 违例）、`pnpm smoke:desktop` 通过；目检对话/抽屉/设置/用量/引导/移动端截图确认无回归。
 - **二次合并复验（2026-11-22）**：合入 `main`（`29cb57b`，EXEC-007 legacy session 重开 + CONV-005 链接预览不可用重试）后，将 CONV-005 新增的 `12.5px` 一次性字号收敛为 `--text-caption`（13px 提示文本）与 `--text-small`（12px 重试按钮，邻近文本 -1px）。复跑完整门禁：`pnpm check` 93 文件 / 911 测试全绿（statement 84.89%、branch 77.78%、function 89.53%、line 88.15%；首轮 dsh-cli-executor 一例并行计时抖动，隔离与复跑均稳定通过）；`pnpm smoke`、`pnpm review:ui -- --force`、`pnpm a11y:review`（0 违例）、`pnpm smoke:desktop` 全部通过。
 
+### QUALITY-001：真实模型门禁共享默认配置（2026-11-26）
+
+- **Intake**：基线 `28509be3`，主工作区 clean，独立 `fix/quality-001-live-model-default` worktree；现有 11 项真实模型测试写死已返回 401 的供应商路由。
+- **验收**：四个真实模型集成套件共享产品默认模型，并支持 `PEGAS_LIVE_MODEL` 显式覆盖；无效覆盖不得静默切换或跳过，原有执行、权限和路由断言全部保留；完整 check 与 smoke 通过。
+- **边界 / 非目标**：只修复测试配置，不修改生产凭证、模型路由和产品默认值；真实调用仍用隔离临时任务/数据库，不发送用户数据。
+- **失败与回滚**：上游失败继续让测试失败；可指定恢复后的模型重跑；回退本提交不影响生产状态。
+- **证据 / 状态**：两项配置回归先红后绿；`PEGAS_LIVE_MODEL=codex/gpt-5.6-luna pnpm check` 151 文件 / 1592 测试通过，首次 build 前既有 instance-token 条件跳过 1 项（构建后补跑）；11 项真实模型测试全通过，原断言未改。格式、品牌、Lint、类型、Knip、覆盖率与构建通过；`pnpm smoke` 通过。实测旧路由 401，产品默认路由完整请求遇 429；显式覆盖不改变产品默认或用户设置。独立提交待 CI / 集成；后续仍需维护可用的上游路由。
+
 ### QUALITY-001：真实依赖 canary runner 首环——通知投递（2026-11-24）
 
 - **用户结果**：改动 `src/model|speech|notification` 或 `services` 的 PR 不再因缺少脱敏 canary 被评审证据门禁误拦；CI 在临时数据目录里用真实 notification dispatcher 向 loopback webhook 接收器投递一条 approval.required，自动核验幂等键、消息 ID、`/?view=outbox&outbox=<id>` 深链、prompt 不出信任边界、落库 sent、站内保留完整 payload 六项断言，并生成只含字段名与断言结论的 `notification-real-service-canary.json` 短期 artifact。APPROVAL-001 P4 通知深链由此获得第一份端到端真实投递证据（此前只有单元测试）。

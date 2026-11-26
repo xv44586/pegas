@@ -1,3 +1,4 @@
+import { liveModelName } from './support/live-model.js'
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import {
@@ -61,7 +62,7 @@ describe.skipIf(!dshAvailable || !gatewayReachable)(
           },
         ],
         vault: { decrypt: () => 'placeholder-key' },
-        agentModel: { provider: 'magpie', model: 'qwen-cn-2/qwen4-max' },
+        agentModel: { provider: 'magpie', model: liveModelName() },
       })
       const store = new PegasStore(':memory:')
       store.initializeRuntimeSettings(runtimeSettingsDefaults(loadConfig({})))
@@ -200,7 +201,7 @@ describe.skipIf(!dshAvailable || !gatewayReachable)(
           },
         ],
         vault: { decrypt: () => 'placeholder-key' },
-        agentModel: { provider: 'magpie', model: 'qwen-cn-2/qwen4-max' },
+        agentModel: { provider: 'magpie', model: liveModelName() },
       })
       const store = new PegasStore(':memory:')
       store.initializeRuntimeSettings(runtimeSettingsDefaults(loadConfig({})))
@@ -335,7 +336,7 @@ describe.skipIf(!dshAvailable || !gatewayReachable)(
           },
         ],
         vault: { decrypt: () => 'placeholder-key' },
-        agentModel: { provider: 'magpie', model: 'qwen-cn-2/qwen4-max' },
+        agentModel: { provider: 'magpie', model: liveModelName() },
       })
       const store = new PegasStore(':memory:')
       store.initializeRuntimeSettings(runtimeSettingsDefaults(loadConfig({})))
@@ -462,7 +463,7 @@ describe.skipIf(!dshAvailable || !gatewayReachable)(
           },
         ],
         vault: { decrypt: () => 'placeholder-key' },
-        agentModel: { provider: 'magpie', model: 'qwen-cn-2/qwen4-max' },
+        agentModel: { provider: 'magpie', model: liveModelName() },
       })
       const store = new PegasStore(':memory:')
       store.initializeRuntimeSettings(runtimeSettingsDefaults(loadConfig({})))
@@ -592,7 +593,7 @@ describe.skipIf(!dshAvailable || !gatewayReachable)(
           },
         ],
         vault: { decrypt: () => 'placeholder-key' },
-        agentModel: { provider: 'magpie', model: 'qwen-cn-2/qwen4-max' },
+        agentModel: { provider: 'magpie', model: liveModelName() },
       })
       const store = new PegasStore(':memory:')
       store.initializeRuntimeSettings(runtimeSettingsDefaults(loadConfig({})))

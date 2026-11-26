@@ -1,3 +1,4 @@
+import { liveModelName } from './support/live-model.js'
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import type { AddressInfo } from 'node:net'
@@ -53,7 +54,7 @@ describe.skipIf(!dshAvailable || !gatewayReachable)(
           },
         ],
         vault: { decrypt: () => 'placeholder-key' },
-        agentModel: { provider: 'magpie', model: 'qwen-cn-2/qwen4-max' },
+        agentModel: { provider: 'magpie', model: liveModelName() },
       })
       try {
         const executor = new DshCliExecutor({
@@ -173,7 +174,7 @@ describe.skipIf(!dshAvailable || !gatewayReachable)(
           },
         ],
         vault: { decrypt: () => 'placeholder-key' },
-        agentModel: { provider: 'magpie', model: 'qwen-cn-2/qwen4-max' },
+        agentModel: { provider: 'magpie', model: liveModelName() },
       })
       try {
         const executor = new DshCliExecutor({
