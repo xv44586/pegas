@@ -27,12 +27,16 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Install credential isolation backend
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
       - run: pnpm check
       - run: pnpm smoke
       - name: Verify DSH model authentication over loopback
         run: npm exec --yes --package=@deepseek-ai/dsh@0.2.2-rc.5 -- pnpm smoke:dsh-auth
       - name: Verify real DSH boot, tool and resume inside Electron
         run: npm exec --yes --package=@deepseek-ai/dsh@0.2.2-rc.5 -- pnpm smoke:dsh-runtime
+      - name: Verify credential isolation with real DSH
+        run: npm exec --yes --package=@deepseek-ai/dsh@0.2.2-rc.5 -- pnpm smoke:credential-boundary
       - name: Detect UI changes
         id: changed
         if: github.event_name == 'pull_request'
@@ -99,3 +103,23 @@ jobs:
           path: output/command-grants
           retention-days: 7
           if-no-files-found: warn
+
+  credential-boundary-macos:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.25.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec vitest run test/credential-boundary.test.ts
+      - run: pnpm build:server
+      - name: Verify real Keychain and credential isolation
+        run: npm exec --yes --package=@deepseek-ai/dsh@0.2.2-rc.5 -- pnpm smoke:credential-boundary

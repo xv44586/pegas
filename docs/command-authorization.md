@@ -1,5 +1,7 @@
 # APPROVAL-001 命令授权与真实桌面闭环
 
+当前宿主账号边界见 [宿主账号凭据边界](credential-boundary.md)：命令、目录与完全访问授权均不包含本机账号登录；旧版本关于凭据 helper 可用性的记录不构成当前授权。
+
 2026-11-26 用户确认统一授权设计 v1。基线 ebc5b433；独立分支及 worktree 为 `codex/approval-001-command-grants`。主工作区不参与开发。
 
 ## 用户行为与范围

@@ -26,6 +26,31 @@ afterEach(() => {
 })
 
 describe('DshCliExecutor', () => {
+  it('does not inherit personal account credentials or agent sockets', () => {
+    expect(
+      executorEnvironment({
+        PATH: '/usr/bin',
+        HOME: '/home/fixture',
+        GH_TOKEN: 'synthetic',
+        GITHUB_TOKEN: 'synthetic',
+        SSH_AUTH_SOCK: '/tmp/agent',
+        AWS_ACCESS_KEY_ID: 'synthetic',
+        AWS_SECRET_ACCESS_KEY: 'synthetic',
+        GOOGLE_APPLICATION_CREDENTIALS: '/tmp/key.json',
+        GH_CONFIG_DIR: '/tmp/gh',
+        GIT_ASKPASS: '/tmp/helper',
+        DBUS_SESSION_BUS_ADDRESS: 'unix:path=/tmp/bus',
+      }),
+    ).toEqual({
+      PATH: '/usr/bin',
+      HOME: '/home/fixture',
+      GIT_CONFIG_GLOBAL: '/dev/null',
+      GIT_CONFIG_SYSTEM: '/dev/null',
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_TERMINAL_PROMPT: '0',
+    })
+  })
+
   it('keeps final question metadata out of work activity even across stream chunks', async () => {
     const output =
       '分析完成。\nPEGAS_QUESTIONS_BEGIN\n["为什么出现差异？"]\nPEGAS_QUESTIONS_END'
@@ -70,7 +95,13 @@ console.log(JSON.stringify({type:'final',sessionId:'followups',text:${JSON.strin
         DSH_HOME: '/Users/someone/.dsh-stale',
         PEGAS_DSH_MODEL_KEY_MAGPIE: 'stale-model-key',
       }),
-    ).toEqual({ PATH: '/usr/bin', DSH_API_KEY: 'executor-owned' })
+    ).toEqual({
+      PATH: '/usr/bin',
+      GIT_CONFIG_GLOBAL: '/dev/null',
+      GIT_CONFIG_SYSTEM: '/dev/null',
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_TERMINAL_PROMPT: '0',
+    })
   })
 
   it('runs DSH inside the isolated home with the managed model configuration', async () => {
@@ -907,8 +938,9 @@ console.log(JSON.stringify({
       args: string[]
       patch?: string
     }
-    expect(resumedOutput.args).not.toContain('--patch')
-    expect(resumedOutput.patch).toBeUndefined()
+    expect(resumedOutput.args).toContain('--patch')
+    expect(resumedOutput.patch).toContain('pegas-credential-boundary')
+    expect(resumedOutput.patch).not.toContain('agent-default-model')
   })
 
   it('preserves the session and terminates a malformed event stream', async () => {

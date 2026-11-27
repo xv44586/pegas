@@ -1,3 +1,7 @@
+import {
+  hostCredentialRoots,
+  credentialFreeEnvironment,
+} from './credential-boundary.mjs'
 import { spawn } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -228,6 +232,7 @@ export class DshCliExecutor implements RunExecutor {
           input.toolApprovalGrant,
           {
             workspaceRoot: input.workingDirectory,
+            credentialRoots: hostCredentialRoots(),
             protectedRoots: [
               ...this.#policyProtectedRoots,
               ...(this.#home ? [this.#home] : []),
@@ -274,6 +279,8 @@ export class DshCliExecutor implements RunExecutor {
     const capabilityFile = capabilitySource
       ? createRunCapabilityFile(capabilitySource)
       : undefined
+    const credentialRoots = hostCredentialRoots()
+    const credentialPatch = createCredentialBoundaryPatch(credentialRoots)
     const arguments_ = [
       '--profile',
       this.#profile,
@@ -284,6 +291,8 @@ export class DshCliExecutor implements RunExecutor {
       ...(bridgePatch ? ['--patch', bridgePatch.path] : []),
       ...(readonlyPatch ? ['--patch', readonlyPatch.path] : []),
       ...(historyPatch ? ['--patch', historyPatch.path] : []),
+      '--patch',
+      credentialPatch.path,
       '--json',
       '--permission-mode',
       this.#permissionMode,
@@ -564,6 +573,7 @@ export class DshCliExecutor implements RunExecutor {
       readonlyPatch?.remove()
       historyPatch?.remove()
       capabilityFile?.remove()
+      credentialPatch.remove()
     }
     const { code, signal } = exit
     const stderr = Buffer.concat(stderrChunks).toString('utf8')
@@ -652,7 +662,7 @@ export function executorEnvironment(
     'DSH_HOME',
   ])
   return Object.fromEntries(
-    Object.entries(source).filter(
+    Object.entries(credentialFreeEnvironment(source)).filter(
       ([key]) =>
         !protectedKeys.has(key) && !key.startsWith('PEGAS_DSH_MODEL_KEY_'),
     ),
@@ -835,7 +845,11 @@ function createReadonlySurfacePatch(
 function createApprovalBridgePatch(
   bridgePath: string,
   grant?: ExecutorInput['toolApprovalGrant'],
-  policy?: { workspaceRoot: string; protectedRoots: string[] },
+  policy?: {
+    workspaceRoot: string
+    protectedRoots: string[]
+    credentialRoots?: string[]
+  },
 ): { path: string; remove: () => void } {
   const directory = mkdtempSync(join(tmpdir(), 'pegas-dsh-approval-'))
   const path = join(directory, 'approval-bridge.json')
@@ -1215,4 +1229,33 @@ function waitForExit(
     child.once('error', reject)
     child.once('close', (code, signal) => resolve({ code, signal }))
   })
+}
+
+function createCredentialBoundaryPatch(credentialRoots: string[]): {
+  path: string
+  remove: () => void
+} {
+  const directory = mkdtempSync(join(tmpdir(), 'pegas-dsh-credentials-'))
+  const path = join(directory, 'credential-boundary.json')
+  writeFileSync(
+    path,
+    JSON.stringify([
+      {
+        insert: [
+          {
+            id: 'pegas-credential-boundary',
+            name: fileURLToPath(
+              new URL('./dsh-credential-boundary.mjs', import.meta.url),
+            ),
+            config: { credentialRoots },
+          },
+        ],
+      },
+    ]),
+    { mode: 0o600 },
+  )
+  return {
+    path,
+    remove: () => rmSync(directory, { recursive: true, force: true }),
+  }
 }

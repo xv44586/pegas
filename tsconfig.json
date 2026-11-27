@@ -17,6 +17,8 @@
     "src/**/*.ts",
     "src/executor/dsh-approval-bridge.mjs",
     "src/executor/policy-gate.mjs",
+    "src/executor/credential-boundary.mjs",
+    "src/executor/dsh-credential-boundary.mjs",
     "src/executor/dsh-readonly-surface.mjs",
     "test/**/*.ts",
     "scripts/**/*.ts",

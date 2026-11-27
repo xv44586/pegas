@@ -1,5 +1,7 @@
 # 权限档位与审批 Policy Gate（APPROVAL-001 第二阶段）
 
+当前宿主账号边界见 [宿主账号凭据边界](credential-boundary.md)：命令、目录与完全访问授权均不包含本机账号登录；旧版本关于凭据 helper 可用性的记录不构成当前授权。
+
 > 状态：P1–P9 的阶段记录保留如下；统一命令与目录授权已通过本地集成验证，精确提交 CI 与 Candidate 发布状态见 Feature Map
 > 更新日期：2026-11-26
 > 基线：`origin/main` `74c2f8c`（Intake 初稿基线 `4baab43`）

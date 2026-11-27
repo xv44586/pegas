@@ -159,6 +159,103 @@ describe('DSH approval bridge plugin', () => {
     }
   })
 
+  it('settles a legacy credential grant as failed without executing or asking again', async () => {
+    const store = new PegasStore(':memory:')
+    const claimed = createClaimedRun(store, 'owner', 'worker-grant')
+    const server = createControlPlane({ store, apiToken: 'bridge-test' })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const baseUrl = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+    const requested = store.requestApproval(
+      claimed.run.id,
+      claimed.claimToken,
+      {
+        kind: 'dsh.tool.bash',
+        risk: 'high',
+        idempotencyKey: 'dsh-tool:grant-1',
+        request: {
+          tool: 'bash',
+          callId: 'call-7',
+          reason: 'escalate sandbox',
+          argumentsHash: stableHash({ command: 'git credential fill' }),
+        },
+        recoveryPoint: { step: 'before_tool_call' },
+        approval: {
+          summary: '批准 bash',
+          impact: '一次越权命令',
+          recommendedOptionId: 'approve',
+          options: [
+            { id: 'approve', label: '批准', kind: 'approve' },
+            { id: 'reject', label: '拒绝', kind: 'reject' },
+          ],
+        },
+      },
+    )
+    store.decideApproval(requested.approval.id, 'owner', {
+      commandId: 'grant-decision',
+      optionId: 'approve',
+    })
+    const resumed = store.claimNextRun('worker-grant-resumed')
+    if (!resumed) throw new Error('Expected approved successor Run')
+    const grant: ToolApprovalGrant = {
+      actionId: requested.action.id,
+      tool: 'bash',
+      argumentsHash: stableHash({ command: 'git credential fill' }),
+    }
+    const previous = { ...process.env }
+    process.env.PEGAS_APPROVAL_BRIDGE = '1'
+    process.env.PEGAS_CONTROL_PLANE_URL = baseUrl
+    process.env.PEGAS_RUN_ID = resumed.run.id
+    process.env.PEGAS_RUN_CLAIM_TOKEN = resumed.claimToken
+    try {
+      const bridge = await loadBridge()
+      const ctx = bridgeContext()
+      const events: Record<string, unknown>[] = []
+      bridge.apply(ctx, {
+        grant,
+        emit: (event: unknown) => events.push(event as Record<string, unknown>),
+      })
+      const preExecute = ctx.handlers.get('tools/pre-execute')
+      const approvalRequest = ctx.handlers.get('approval/request')
+      const postExecute = ctx.handlers.get('tools/post-execute')
+      if (!preExecute || !approvalRequest || !postExecute) {
+        throw new Error('bridge did not register its hooks')
+      }
+      const exec = {
+        agent: {},
+        callId: 'call-new',
+        name: 'bash',
+        arguments: { command: 'git credential fill' },
+      }
+      expect(
+        await preExecute(exec, () => Promise.resolve({ kind: 'allow' })),
+      ).toMatchObject({ kind: 'deny' })
+      expect(
+        await approvalRequest({ toolName: 'bash', callId: 'call-new' }, () =>
+          Promise.resolve('allowed-once'),
+        ),
+      ).toBe('rejected')
+      expect(store.getAction(requested.action.id, 'owner')).toMatchObject({
+        status: 'failed',
+        result: { tool: 'bash', notExecuted: true },
+      })
+      expect(
+        events.filter(event => event.type === 'approval_pending'),
+      ).toHaveLength(0)
+      expect(
+        events.filter(event => event.type === 'approval_grant_settled'),
+      ).toHaveLength(1)
+      // Repeated hooks cannot duplicate the outcome or resurrect the grant.
+      await preExecute(exec, () => Promise.resolve({ kind: 'allow' }))
+      expect(
+        events.filter(event => event.type === 'approval_grant_settled'),
+      ).toHaveLength(1)
+    } finally {
+      restoreEnvironment(previous)
+      await new Promise<void>(resolve => server.close(() => resolve()))
+      store.close()
+    }
+  })
+
   it('grants exactly the approved call once and records the real outcome', async () => {
     const store = new PegasStore(':memory:')
     const claimed = createClaimedRun(store, 'owner', 'worker-grant')

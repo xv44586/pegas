@@ -1,3 +1,4 @@
+import { credentialAccess, credentialDenial } from './credential-boundary.mjs'
 import { realpathSync, statSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 
@@ -68,6 +69,14 @@ const WRITE_COMMANDS = new Set([
  * @returns {ToolCallClassification}
  */
 export function classifyToolCall(execution, roots, tier = 'standard') {
+  if (credentialAccess(execution, roots))
+    return decision(
+      'credential-access',
+      'critical',
+      'deny',
+      credentialDenial,
+      [],
+    )
   const workspaceRoot = canonicalRoot(roots.workspaceRoot)
   const protectedRoots = (roots.protectedRoots ?? [])
     .map(root => canonicalRoot(root))

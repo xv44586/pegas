@@ -1,3 +1,4 @@
+import { credentialFreeEnvironment } from './credential-boundary.mjs'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
@@ -135,6 +136,7 @@ export function commandAuthorization(
   environment = process.env,
 ) {
   try {
+    environment = credentialFreeEnvironment(environment)
     const words = literalArgv(command)
     if (!words?.length)
       return { reason: '命令包含复合执行或动态展开，无法建立持久命令授权。' }

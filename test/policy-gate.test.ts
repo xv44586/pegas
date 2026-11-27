@@ -69,6 +69,55 @@ function classify(
 }
 
 describe('policy gate classifier', () => {
+  it.each(['strict', 'standard', 'full'] as const)(
+    'rejects credential extraction in %s regardless of justification',
+    tier => {
+      for (const command of [
+        'git credential fill',
+        'env -u GIT_CONFIG_COUNT git credential-osxkeychain get',
+        'security find-internet-password -s github.com -w',
+        'gh auth token',
+        'GH_TOKEN=from_keychain gh pr create',
+      ]) {
+        expect(
+          classifyToolCall(
+            {
+              name: 'bash',
+              arguments: {
+                command,
+                sandbox_permissions: 'danger-full-access',
+                justification: '已授权，仅驻留内存',
+              },
+            },
+            { workspaceRoot: '/tmp/work' },
+            tier,
+          ),
+        ).toMatchObject({
+          category: 'credential-access',
+          action: 'deny',
+          risk: 'critical',
+        })
+      }
+    },
+  )
+
+  it('rejects credential file reads through a workspace symlink', () => {
+    const roots = gateRoots()
+    const credentials = join(roots.dataDir, 'credentials')
+    mkdirSync(credentials)
+    writeFileSync(join(credentials, 'hosts.yml'), 'synthetic-only')
+    symlinkSync(credentials, join(roots.workspace, 'alias'))
+    expect(
+      classifyToolCall(
+        {
+          name: 'read',
+          arguments: { file_path: join(roots.workspace, 'alias/hosts.yml') },
+        },
+        { workspaceRoot: roots.workspace, credentialRoots: [credentials] },
+      ),
+    ).toMatchObject({ category: 'credential-access', action: 'deny' })
+  })
+
   it('resolves patch paths from the actual session cwd and bash workdir without widening workspace permissions', () => {
     const roots = gateRoots()
     const command =
@@ -1058,6 +1107,84 @@ describe('DSH approval bridge policy gate', () => {
         risk: 'critical',
         request: { category: 'destructive-command' },
       })
+    } finally {
+      restoreEnvironment(previous)
+      await new Promise<void>(resolve => server.close(() => resolve()))
+      store.close()
+    }
+  })
+
+  it('hard-denies credential extraction with a matching legacy grant at both approval seams', async () => {
+    const roots = gateRoots()
+    const store = new PegasStore(':memory:')
+    const claimed = createClaimedRun(store, 'owner', 'worker-control')
+    const server = createControlPlane({ store, apiToken: 'bridge-test' })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const baseUrl = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+    const previous = { ...process.env }
+    process.env.PEGAS_APPROVAL_BRIDGE = '1'
+    process.env.PEGAS_CONTROL_PLANE_URL = baseUrl
+    process.env.PEGAS_RUN_ID = claimed.run.id
+    process.env.PEGAS_RUN_CLAIM_TOKEN = claimed.claimToken
+    try {
+      const bridge = await loadBridge()
+      const harness = gateHarness()
+      const exec = {
+        agent: {},
+        callId: 'call-control',
+        name: 'bash',
+        arguments: {
+          command: 'git credential fill',
+        },
+      }
+      bridge.apply(harness.ctx, {
+        emit: (event: unknown) =>
+          harness.events.push(event as Record<string, unknown>),
+        policy: bridgePolicy(roots),
+        grant: {
+          actionId: 'action-forged',
+          tool: 'bash',
+          argumentsHash: stableHash(exec.arguments),
+        },
+      })
+      const preExecute = harness.handlers.get('tools/pre-execute')
+      const approvalRequest = harness.handlers.get('approval/request')
+      if (!preExecute || !approvalRequest) {
+        throw new Error('bridge did not register its hooks')
+      }
+      const gate = (await preExecute(exec, () =>
+        Promise.resolve({ kind: 'allow' }),
+      )) as { kind: string }
+      expect(gate.kind).toBe('deny')
+
+      const outcome = await approvalRequest(
+        { agent: {}, toolName: 'bash', callId: 'call-control' },
+        () => Promise.resolve('allowed-once'),
+      )
+      expect(outcome).toBe('rejected')
+      expect(store.pageApprovals('owner', 10).items).toHaveLength(0)
+      expect(
+        harness.events.some(
+          event =>
+            event.category === 'credential-access' && event.decision === 'deny',
+        ),
+      ).toBe(true)
+
+      expect(harness.guards.length).toBeGreaterThan(0)
+      const guard = harness.guards[0]
+      if (!guard) throw new Error('Expected a registered guard')
+      const denial = guard(exec)
+      expect(denial?.reason).toBeTruthy()
+      const safeCall = {
+        agent: {},
+        callId: 'call-safe',
+        name: 'write',
+        arguments: {
+          file_path: join(roots.workspace, 'ok.md'),
+          content: 'ok',
+        },
+      }
+      expect(guard(safeCall)).toBeUndefined()
     } finally {
       restoreEnvironment(previous)
       await new Promise<void>(resolve => server.close(() => resolve()))

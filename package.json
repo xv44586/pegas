@@ -12,7 +12,7 @@
   "scripts": {
     "build": "pnpm build:server && pnpm build:web && pnpm build:desktop",
     "build:desktop": "tsc -p desktop/tsconfig.json",
-    "build:server": "tsc -p tsconfig.build.json && cp src/executor/dsh-approval-bridge.mjs dist/executor/dsh-approval-bridge.mjs && cp src/executor/command-policy.mjs dist/executor/command-policy.mjs && cp src/executor/policy-gate.mjs dist/executor/policy-gate.mjs && cp src/executor/write-effect.mjs dist/executor/write-effect.mjs && cp src/executor/dsh-readonly-surface.mjs dist/executor/dsh-readonly-surface.mjs && cp src/executor/dsh-history-tools.mjs dist/executor/dsh-history-tools.mjs && cp src/supervisor/task-workflow-contract.json dist/supervisor/task-workflow-contract.json && node scripts/build-dsh-runtime.mjs",
+    "build:server": "tsc -p tsconfig.build.json && cp src/executor/dsh-approval-bridge.mjs dist/executor/dsh-approval-bridge.mjs && cp src/executor/command-policy.mjs dist/executor/command-policy.mjs && cp src/executor/policy-gate.mjs dist/executor/policy-gate.mjs && cp src/executor/credential-boundary.mjs dist/executor/credential-boundary.mjs && cp src/executor/dsh-credential-boundary.mjs dist/executor/dsh-credential-boundary.mjs && cp src/executor/write-effect.mjs dist/executor/write-effect.mjs && cp src/executor/dsh-readonly-surface.mjs dist/executor/dsh-readonly-surface.mjs && cp src/executor/dsh-history-tools.mjs dist/executor/dsh-history-tools.mjs && cp src/supervisor/task-workflow-contract.json dist/supervisor/task-workflow-contract.json && node scripts/build-dsh-runtime.mjs",
     "build:web": "vite build --config web/vite.config.ts",
     "check": "pnpm format:check && pnpm brand:check && pnpm lint && pnpm typecheck && pnpm deadcode && pnpm test:coverage && pnpm build",
     "deadcode": "knip --treat-config-hints-as-errors",
@@ -35,6 +35,7 @@
     "review:canary": "node scripts/capture-dependency-canary.mjs",
     "review:ui": "node scripts/capture-ui-review.mjs",
     "smoke": "node scripts/smoke.mjs",
+    "smoke:credential-boundary": "node scripts/smoke-credential-boundary.mjs",
     "smoke:dsh-auth": "tsx scripts/lint-dsh-auth.ts --live",
     "smoke:crash": "pnpm build && node scripts/smoke-crash-recovery.mjs",
     "smoke:self-change": "pnpm build && node scripts/smoke-self-change.mjs",

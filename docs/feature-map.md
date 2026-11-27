@@ -1283,3 +1283,11 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - 自动化证据：命令/目录双入口、去重绑定、首次撤销重审批、终态失效、真实 Worker 首调用 outcome、历史界面测试；实际 Electron + Worker + DSH fetch 的复用、SQLite/桌面重启、worktree、撤销不执行与重新询问已验证。证据位于 output/command-grants/。
 - 本地验证：154 文件 / 1797 测试、完整 check 与 smoke 通过；真实 Electron + Worker + DSH 连续副作用验证、窄屏及授权记录追溯通过。独立安全/对抗/测试审查及 Codex CLI 的已确认发现均经回归修复。已集成 main 34c2b9da，并将同一授权记录组件接到新的事情执行面板；集成后完整 check、smoke 与真实桌面（含新事情面板授权记录）再次通过；精确提交 CI 与 Supervisor 发布尚待执行。
 - 下一边界：本版持久命令适配为受约束的 HTTPS/本地 git fetch；SSH、自定义 helper、其他程序及危险选项继续单次审批，不宣称支持任意命令永久授权。
+
+### APPROVAL-001：宿主账号凭据边界（2026-11-27）
+
+- 用户结果：普通命令/目录批准不能让执行器提取或复用宿主账号登录；完全访问和历史 grant 同样受限。需要认证的外部操作明确失败，不能自动从本机其他登录来源尝试。
+- 基线与隔离：`a8ec5c85`；独立 `fix/APPROVAL-001-credential-boundary` worktree。验收、非目标、权限边界、失败恢复和回滚合同见 [宿主账号凭据边界](credential-boundary.md)。无数据库迁移，未替换运行实例。
+- 权威实现：`src/executor/credential-boundary.mjs`、`dsh-credential-boundary.mjs`、`policy-gate.mjs`、`dsh-approval-bridge.mjs`、`dsh-cli-executor.ts`、`command-policy.mjs`。运行层硬限制与分类解释分开；服务端和执行器共用无宿主凭据的命令环境。
+- 自动化证据：旧实现 5 项回归失败；新增命令环境指纹回归先红后绿。`test/credential-boundary.test.ts`、`test/policy-gate.test.ts`、`test/dsh-approval-bridge.test.ts`、`test/dsh-cli-executor.test.ts`、`test/command-policy.test.ts`；真实 DSH 凭据探针 4 场景及桌面命令授权/撤销/重启/worktree 门禁通过。本地完整 `pnpm check` 156 文件 / 1826 测试全过（无跳过），`pnpm smoke`、`smoke:credential-boundary`、`smoke:dsh-runtime` 与 `smoke:command-authorization` 均通过；重新获取的目标 main 仍为基线提交。CI 增加 Linux 与 macOS 真实凭据隔离门禁；精确提交 CI 与 Candidate 发布仍以 PR / 发布记录为准。
+- 状态与下一缺口：APPROVAL-001 整体仍为 Usable；账号连接与限定仓库/动作的凭据代理尚未实现。当前仅承诺受保护目录和指定系统服务的隔离，不把同用户执行器描述成虚拟机；自定义路径中的业务秘密、不可信同进程插件及 Linux 未登记 IPC 不在该承诺内。回滚会恢复旧缺口，需停止执行任务后操作。
