@@ -1,3 +1,4 @@
+import { verifyClipboardPaste } from './verify-clipboard-paste.mjs'
 import { verifyWorkspacePicker } from './verify-workspace-picker.mjs'
 import { verifyDetailClosure } from './verify-detail-closure.mjs'
 import { verifyTaskConversation } from './verify-task-conversation.mjs'
@@ -289,6 +290,7 @@ try {
   const composerInput = page.getByRole('textbox', { name: '给 Pegas 发消息' })
   await composerInput.waitFor()
   await verifyComposerMenu(page, capture, 'desktop')
+  await verifyClipboardPaste(page, capture, 'desktop')
   await verifyUiOverlays(page, capture, 'desktop')
   await verifyAnswerFollowUps(page, capture, 'desktop')
   await verifyDetailClosure(page, capture, 'desktop')
@@ -793,6 +795,7 @@ try {
   })
   await mobileComposer.waitFor()
   await verifyComposerMenu(mobilePage, capture, 'mobile')
+  await verifyClipboardPaste(mobilePage, capture, 'mobile')
   await verifyUiOverlays(mobilePage, capture, 'mobile')
   await verifyAnswerFollowUps(mobilePage, capture, 'mobile')
   await verifyDetailClosure(mobilePage, capture, 'mobile')

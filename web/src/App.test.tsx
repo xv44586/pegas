@@ -3674,6 +3674,19 @@ describe('sealed Pegas UI', () => {
       'disabled',
       true,
     )
+    const image = new File(['recording'], 'recording.png', {
+      type: 'image/png',
+    })
+    expect(
+      fireEvent.paste(composer, {
+        clipboardData: {
+          types: ['Files', 'text/plain'],
+          files: [image],
+          items: [],
+        },
+      }),
+    ).toBe(true)
+    expect(screen.queryByText('recording.png')).toBeNull()
     const recordingForm = composer.closest('form')
     if (!recordingForm) throw new Error('Expected the composer form')
     fireEvent.submit(recordingForm)
@@ -12552,6 +12565,157 @@ describe('sealed Pegas UI', () => {
       ).toBe(true),
     )
     expect(screen.queryByText(/附件：/)).toBeNull()
+  })
+
+  it.each([200, 500])(
+    'does not replace an in-flight attachment when pasting an image (upload %s)',
+    async status => {
+      let finishUpload!: (response: Response) => void
+      let uploadStarted = false
+      const upload = new Promise<Response>(resolve => {
+        finishUpload = resolve
+      })
+      installFetch((path, init) => {
+        if (
+          path.startsWith('/v1/events/event-new/attachments?') &&
+          init?.method === 'POST'
+        ) {
+          uploadStarted = true
+          return upload
+        }
+        return undefined
+      })
+      render(<App />)
+      const composer = await screen.findByLabelText('给 Pegas 发消息')
+      const first = new File(['first'], 'first.png', { type: 'image/png' })
+      fireEvent.change(screen.getByLabelText('选择附件文件'), {
+        target: { files: [first] },
+      })
+      fireEvent.change(composer, { target: { value: 'send first' } })
+      fireEvent.click(screen.getByRole('button', { name: '发送' }))
+      await waitFor(() => expect(uploadStarted).toBe(true))
+      const second = new File(['second'], 'second.png', { type: 'image/png' })
+      fireEvent.paste(composer, {
+        clipboardData: {
+          files: [second],
+          items: [{ kind: 'file', type: 'image/png', getAsFile: () => second }],
+        },
+      })
+      expect(screen.queryByText('second.png')).toBeNull()
+      expect(screen.getByText('first.png')).toBeTruthy()
+      await act(async () => {
+        finishUpload(
+          Response.json(
+            status === 200
+              ? { attachment: { id: 'a' } }
+              : { error: 'upload failed' },
+            { status },
+          ),
+        )
+        await upload
+      })
+      await waitFor(() => expect(screen.queryByText('正在整理…')).toBeNull())
+      expect(screen.queryByText('second.png')).toBeNull()
+      if (status === 500) {
+        expect(
+          await screen.findByRole('button', { name: '重试上传附件' }),
+        ).toBeTruthy()
+        expect(screen.getByText('first.png')).toBeTruthy()
+      } else {
+        expect(screen.queryByText('first.png')).toBeNull()
+      }
+    },
+  )
+
+  it('preserves native text paste when clipboard has both text and an image', async () => {
+    installFetch()
+    render(<App />)
+    const composer =
+      await screen.findByLabelText<HTMLTextAreaElement>('给 Pegas 发消息')
+    const image = new File(['image'], 'mixed.png', { type: 'image/png' })
+    const text = '请分析这张图'
+    const defaultAllowed = fireEvent.paste(composer, {
+      clipboardData: {
+        types: ['Files', 'text/plain'],
+        files: [image],
+        items: [
+          {
+            kind: 'string',
+            type: 'text/plain',
+            getAsString: (cb: (s: string) => void) => cb(text),
+          },
+          { kind: 'file', type: 'image/png', getAsFile: () => image },
+        ],
+        getData: (type: string) => (type === 'text/plain' ? text : ''),
+      },
+    })
+    expect(screen.getByText('mixed.png')).toBeTruthy()
+    expect(defaultAllowed).toBe(true)
+  })
+
+  it('uses the clipboard file list fallback and ignores non-image files', async () => {
+    installFetch()
+    render(<App />)
+    const composer = await screen.findByLabelText('给 Pegas 发消息')
+    const other = new File(['pdf'], 'report.pdf', { type: 'application/pdf' })
+    expect(
+      fireEvent.paste(composer, {
+        clipboardData: {
+          types: ['Files'],
+          files: [other],
+          items: [],
+        },
+      }),
+    ).toBe(true)
+    expect(screen.queryByText('report.pdf')).toBeNull()
+    const image = new File(['image'], 'fallback.png', { type: 'image/png' })
+    expect(
+      fireEvent.paste(composer, {
+        clipboardData: {
+          types: ['Files'],
+          files: [other, image],
+          items: [{ kind: 'file', type: 'image/png', getAsFile: () => null }],
+        },
+      }),
+    ).toBe(false)
+    expect(screen.getByText('fallback.png')).toBeTruthy()
+  })
+
+  it('adds a pasted image as an attachment without intercepting text paste', async () => {
+    installFetch()
+    render(<App />)
+    const composer = await screen.findByLabelText('给 Pegas 发消息')
+    const image = new File(['image bytes'], 'clipboard.png', {
+      type: 'image/png',
+    })
+
+    expect(
+      fireEvent.paste(composer, {
+        clipboardData: {
+          types: ['Files'],
+          files: [image],
+          items: [
+            {
+              getAsFile: () => image,
+              kind: 'file',
+              type: 'image/png',
+            },
+          ],
+        },
+      }),
+    ).toBe(false)
+    expect(await screen.findByText(/附件：/)).toBeTruthy()
+    expect(screen.getByText('clipboard.png')).toBeTruthy()
+
+    expect(
+      fireEvent.paste(composer, {
+        clipboardData: {
+          types: ['text/plain'],
+          files: [],
+          items: [{ kind: 'string', type: 'text/plain' }],
+        },
+      }),
+    ).toBe(true)
   })
 
   it('opens an uploaded attachment preview from the task timeline', async () => {

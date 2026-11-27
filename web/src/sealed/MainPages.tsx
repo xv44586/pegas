@@ -1513,6 +1513,22 @@ export function ConversationPage({
                 event.currentTarget.form?.requestSubmit()
               }
             }}
+            onPaste={event => {
+              if (sending || dictationBusy || readOnly) return
+              const imageItem = Array.from(event.clipboardData.items).find(
+                item => item.kind === 'file' && item.type.startsWith('image/'),
+              )
+              const image =
+                imageItem?.getAsFile() ??
+                Array.from(event.clipboardData.files).find(file =>
+                  file.type.startsWith('image/'),
+                )
+              if (!image) return
+              // Let the textarea insert accompanying text at its native selection.
+              if (!event.clipboardData.types.includes('text/plain'))
+                event.preventDefault()
+              selectAttachment(image)
+            }}
             placeholder={
               dictation.state === 'recording'
                 ? voiceDirectSend

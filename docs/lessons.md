@@ -671,3 +671,13 @@
 - Severity：quality
 - Status：Observed
 - Enforcement：Feature 回归与 smoke；不增加全局 worktree 强制规则。
+
+### LESSON-20261127-02：新增输入入口必须遵守发送状态并保留原生编辑行为
+
+- Rule：附件粘贴与文件选择共享发送/录音/只读边界；处理图片不能吞掉同次剪贴板的文字，原生光标和选区行为需由真实浏览器验证。
+- Why：PR #148 只覆盖空闲时纯图片和纯文本，发送在途允许替换附件导致完成回调清掉新图片，图文混合被 preventDefault 一并取消。
+- Feature：CONV-001。
+- Evidence：两条回归在原 PR 实现失败；App 覆盖成功/失败在途上传、混合载荷、录音与文件回退；ChatExperience 停止事情；`scripts/verify-clipboard-paste.mjs` 真实 Chromium 剪贴板桌面/移动选区替换与纯文本/图片断言。
+- Seen：1（2026-11-27）；Severity：quality；Status：Observed。
+- Enforcement：本 Feature 回归及 review:ui，未扩张全局仓库规则。
+- Owner / next action：CONV-001；多附件与操作系统剪贴板格式差异继续作为后续边界。
