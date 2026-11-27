@@ -7,6 +7,15 @@ import {
   writeSendAttempt,
   type SendAttempt,
 } from './taskConversationDraft'
+import {
+  ChannelOrganizationActions,
+  type OrganizeChannel,
+} from './ChannelOrganization'
+import {
+  useChannelPage,
+  channelListKey,
+  type ChannelListClient,
+} from './useChannelPage'
 import { InlineReply } from './InlineReply'
 import { TaskHistorySearch } from './TaskHistorySearch'
 import { answerFollowUps } from '../../../src/conversation/follow-ups'
@@ -2089,15 +2098,39 @@ function RunStatusBar({
 export function WorkPage({
   snapshot,
   actions,
+  client,
+  onOrganize,
 }: {
   snapshot: Snapshot
   actions: PageActions
+  client?: ChannelListClient
+  onOrganize?: OrganizeChannel
 }) {
   const [filter, setFilter] = useState<
-    'all' | 'active' | 'waiting' | 'completed' | 'archived'
+    | 'all'
+    | 'active'
+    | 'waiting'
+    | 'completed'
+    | 'stopped'
+    | 'archived'
+    | 'pinned'
   >('all')
   const [query, setQuery] = useState('')
   const [sort, setSort] = useState<ChannelSearchSort>('updated')
+  const page = useChannelPage(
+    client,
+    query,
+    {
+      sort,
+      archived: filter === 'archived',
+      ...(filter === 'pinned' ? { pinned: true } : {}),
+      ...(filter === 'active' ? { ended: false, waiting: false } : {}),
+      ...(filter === 'waiting' ? { waiting: true } : {}),
+      ...(filter === 'completed' ? { statuses: ['completed' as const] } : {}),
+      ...(filter === 'stopped' ? { statuses: ['cancelled' as const] } : {}),
+    },
+    channelListKey(snapshot.channels),
+  )
   const [sortMenuOpen, setSortMenuOpen] = useState(false)
   const sortTriggerRef = useRef<HTMLButtonElement>(null)
   const sortMenuRef = useRef<HTMLDivElement>(null)
@@ -2126,32 +2159,38 @@ export function WorkPage({
       document.removeEventListener('keydown', escape)
     }
   }, [sortMenuOpen])
-  const visible = sortWorkChannels(snapshot.channels, sort).filter(channel => {
-    const run = latestRunForTask(snapshot.runs, channel.id)
-    if (
-      query &&
-      !`${channel.title} ${channel.goal} ${run?.output ?? ''}`
-        .toLowerCase()
-        .includes(query.toLowerCase())
-    )
-      return false
-    if (filter === 'all') return true
-    if (filter === 'completed') return channel.status === 'completed'
-    if (filter === 'archived') return channel.status === 'cancelled'
-    if (
-      filter === 'waiting' &&
-      (channel.status === 'completed' || channel.status === 'cancelled')
-    )
-      return false
-    if (filter === 'waiting') return !run || run.status === 'waiting'
-    if (channel.status === 'completed' || channel.status === 'cancelled')
-      return false
-    return (
-      run?.status === 'queued' ||
-      run?.status === 'running' ||
-      run?.status === 'failed'
-    )
-  })
+  const visible = client
+    ? page.channels
+    : sortWorkChannels(snapshot.channels, sort).filter(channel => {
+        if (filter === 'archived')
+          return Boolean(channel.organization?.archived)
+        if (channel.organization?.archived) return false
+        if (filter === 'pinned') return Boolean(channel.organization?.pinned)
+        const run = latestRunForTask(snapshot.runs, channel.id)
+        if (
+          query &&
+          !`${channel.title} ${channel.goal} ${run?.output ?? ''}`
+            .toLowerCase()
+            .includes(query.toLowerCase())
+        )
+          return false
+        if (filter === 'all') return true
+        if (filter === 'completed') return channel.status === 'completed'
+        if (filter === 'stopped') return channel.status === 'cancelled'
+        if (
+          filter === 'waiting' &&
+          (channel.status === 'completed' || channel.status === 'cancelled')
+        )
+          return false
+        if (filter === 'waiting') return !run || run.status === 'waiting'
+        if (channel.status === 'completed' || channel.status === 'cancelled')
+          return false
+        return (
+          run?.status === 'queued' ||
+          run?.status === 'running' ||
+          run?.status === 'failed'
+        )
+      })
   return (
     <div className="standard-page">
       <PageHeader
@@ -2174,22 +2213,24 @@ export function WorkPage({
       </PageHeader>
       <div className="filter-row-wrap relative" ref={sortMenuRef}>
         <div
-          className="filter-row flex items-center gap-2 border-b border-line pb-4"
+          className="filter-row flex flex-wrap items-center gap-2 border-b border-line pb-4"
           role="group"
           aria-label="筛选"
         >
           {(
             [
               ['all', '全部'],
+              ['pinned', '已固定'],
               ['active', '进行中'],
               ['waiting', '等待中'],
               ['completed', '已完成'],
+              ['stopped', '已停止'],
               ['archived', '已归档'],
             ] as const
           ).map(([id, label]) => (
             <Button
               aria-pressed={filter === id}
-              className="h-9 rounded-full px-4 text-[13px] aria-pressed:bg-accent-tint aria-pressed:text-accent-ink"
+              className="h-9 shrink-0 whitespace-nowrap rounded-full px-4 text-[13px] aria-pressed:bg-accent-tint aria-pressed:text-accent-ink"
               key={id}
               onClick={() => setFilter(id)}
               size="xs"
@@ -2204,7 +2245,7 @@ export function WorkPage({
             aria-expanded={sortMenuOpen}
             aria-haspopup="menu"
             aria-label={`排序：${WORK_SORT_LABELS[sort]}`}
-            className="sort-button ml-auto h-9 rounded-full px-4 text-[13px]"
+            className="sort-button ml-auto h-9 shrink-0 whitespace-nowrap rounded-full px-4 text-[13px]"
             onClick={() => setSortMenuOpen(current => !current)}
             ref={sortTriggerRef}
             size="xs"
@@ -2253,46 +2294,74 @@ export function WorkPage({
           </div>
         )}
       </div>
-      <section className="work-list mb-10" aria-label="事情列表">
+      <p className="my-3 text-[12px] text-ink-2">
+        归档只收起事情，执行与通知保持原有状态。
+      </p>
+      <section
+        className="work-list mb-10"
+        aria-label="事情列表"
+        aria-busy={client ? page.loading : false}
+      >
+        {client && page.error && (
+          <div role="alert">
+            {page.error}
+            <Button onClick={page.loadMore} type="button" variant="quiet">
+              重试
+            </Button>
+          </div>
+        )}
+        {client && page.loading && <p className="py-3 text-ink-2">正在加载…</p>}
         {visible.length ? (
           visible.map(channel => {
             const run = latestRunForTask(snapshot.runs, channel.id)
             const state = statusLabel(channel, run)
             return (
-              <button
-                className="grid w-full min-h-[78px] grid-cols-[38px_minmax(0,1fr)_auto] items-center gap-2.5 border-b border-line px-3 py-3 text-left transition-colors duration-100 hover:bg-hover min-[521px]:gap-4 min-[521px]:grid-cols-[42px_minmax(160px,1fr)_100px_80px] min-[1121px]:grid-cols-[42px_minmax(180px,1fr)_130px_90px]"
+              <div
                 key={channel.id}
-                onClick={() =>
-                  actions.onOpenDrawer({ kind: 'task', channel, run })
-                }
-                type="button"
+                className="flex items-center border-b border-line"
               >
-                <span className="work-icon flex size-[38px] items-center justify-center">
-                  <PegasAgentIcon iconId={channel.workerIconId} size={38} />
-                </span>
-                <span className="work-copy grid min-w-0 gap-[5px]">
-                  <strong className="truncate text-[14px] font-medium text-ink">
-                    {channel.title}
-                  </strong>
-                  <small className="truncate text-[12px] text-ink-2">
-                    {channel.goal}
-                  </small>
-                  <small className="work-context truncate text-[11px] text-ink-3">
-                    {run
-                      ? [run.executor, run.executionContext?.model]
-                          .filter(Boolean)
-                          .join(' · ')
-                      : '尚未分配执行器'}
-                  </small>
-                </span>
-                <time className="hidden text-[12px] text-ink-3 min-[521px]:block">
-                  {formatRelativeTime(channel.latestActivityAt)}
-                </time>
-                <RowStatusPill label={state} />
-              </button>
+                <button
+                  className="grid min-w-0 flex-1 min-h-[78px] grid-cols-[38px_minmax(0,1fr)_auto] items-center gap-2.5 px-3 py-3 text-left transition-colors duration-100 hover:bg-hover min-[521px]:gap-4 min-[521px]:grid-cols-[42px_minmax(0,1fr)_100px_80px] min-[1121px]:grid-cols-[42px_minmax(0,1fr)_130px_90px]"
+                  onClick={() =>
+                    actions.onOpenDrawer({ kind: 'task', channel, run })
+                  }
+                  type="button"
+                >
+                  <span className="work-icon flex size-[38px] items-center justify-center">
+                    <PegasAgentIcon iconId={channel.workerIconId} size={38} />
+                  </span>
+                  <span className="work-copy grid min-w-0 gap-[5px]">
+                    <strong className="truncate text-[14px] font-medium text-ink">
+                      {channel.title}
+                    </strong>
+                    <small className="truncate text-[12px] text-ink-2">
+                      {channel.goal}
+                    </small>
+                    <small className="work-context truncate text-[11px] text-ink-3">
+                      {run
+                        ? [run.executor, run.executionContext?.model]
+                            .filter(Boolean)
+                            .join(' · ')
+                        : '尚未分配执行器'}
+                    </small>
+                  </span>
+                  <time className="hidden text-[12px] text-ink-3 min-[521px]:block">
+                    {formatRelativeTime(channel.latestActivityAt)}
+                  </time>
+                  <RowStatusPill label={state} />
+                </button>
+                {onOrganize && (
+                  <div className="shrink-0 px-1">
+                    <ChannelOrganizationActions
+                      channel={channel}
+                      onOrganize={onOrganize}
+                    />
+                  </div>
+                )}
+              </div>
             )
           })
-        ) : (
+        ) : !page.loading && !page.error ? (
           <EmptyCapability
             icon={FileText}
             title={
@@ -2304,6 +2373,17 @@ export function WorkPage({
                 : '在对话中告诉 Pegas 一个目标，事情会自动出现在这里。'
             }
           />
+        ) : null}
+        {client && page.nextCursor && (
+          <Button
+            className="mt-4"
+            disabled={page.loading}
+            onClick={page.loadMore}
+            type="button"
+            variant="secondary"
+          >
+            加载更多事情
+          </Button>
         )}
       </section>
     </div>

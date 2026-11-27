@@ -3345,6 +3345,8 @@ export interface RewriteConnectionWrite extends RewriteConnection {
   clearApiKey?: boolean
 }
 
+export class ChannelOrganizationConflictError extends Error {}
+
 export class SettingsRevisionConflictError extends Error {
   constructor() {
     super('设置已在其他设备更新，请刷新后重试')
@@ -3617,6 +3619,17 @@ export class PegasStore {
     `,
     )
     this.#migrate(61, projectWorkspaceMigration)
+    this.#migrate(
+      62,
+      `
+      CREATE TABLE channel_organization (
+        task_id TEXT PRIMARY KEY REFERENCES tasks(id),
+        pinned INTEGER NOT NULL DEFAULT 0 CHECK (pinned IN (0, 1)),
+        archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1)),
+        revision INTEGER NOT NULL CHECK (revision >= 1)
+      );
+    `,
+    )
   }
 
   listProjects(userId: string): Project[] {
@@ -11001,10 +11014,67 @@ export class PegasStore {
         owner: task.userId,
         reason: task.statusReason ?? null,
       })
-    return projectWorkChannel(
-      task,
-      facts as unknown as Parameters<typeof projectWorkChannel>[1],
-    )
+    const organization = this.#database
+      .prepare(
+        'SELECT pinned, archived, revision FROM channel_organization WHERE task_id = ?',
+      )
+      .get(task.id) as
+      { pinned: number; archived: number; revision: number } | undefined
+    return {
+      ...projectWorkChannel(
+        task,
+        facts as unknown as Parameters<typeof projectWorkChannel>[1],
+      ),
+      organization: {
+        pinned: Boolean(organization?.pinned),
+        archived: Boolean(organization?.archived),
+        revision: organization?.revision ?? 0,
+      },
+    }
+  }
+
+  updateChannelOrganization(
+    taskId: string,
+    userId: string,
+    update: { pinned: boolean; archived: boolean; expectedRevision: number },
+  ): WorkChannel | undefined {
+    return this.#runInTransaction(() => {
+      const task = this.findTask(taskId, userId)
+      if (!task || task.kind === 'conversation') return undefined
+      if (
+        typeof update.pinned !== 'boolean' ||
+        typeof update.archived !== 'boolean' ||
+        !Number.isSafeInteger(update.expectedRevision) ||
+        update.expectedRevision < 0
+      )
+        throw new Error('Invalid channel organization update')
+      const current = this.projectWorkChannel(task).organization
+      if (
+        current.pinned === update.pinned &&
+        current.archived === update.archived
+      )
+        return this.projectWorkChannel(task)
+      if (current.revision !== update.expectedRevision)
+        throw new ChannelOrganizationConflictError(
+          '事情列表已更新，请刷新后重试。',
+        )
+      this.#database
+        .prepare(
+          `
+        INSERT INTO channel_organization (task_id, pinned, archived, revision)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(task_id) DO UPDATE SET pinned = excluded.pinned,
+          archived = excluded.archived, revision = excluded.revision
+      `,
+        )
+        .run(
+          taskId,
+          Number(update.pinned),
+          Number(update.archived),
+          current.revision + 1,
+        )
+      return this.projectWorkChannel(task)
+    })
   }
 
   searchChannels(
@@ -11077,6 +11147,18 @@ export class PegasStore {
            )`
         : '1 = 1',
       options.workerIconId ? 'tasks.worker_icon_id = ?' : '1 = 1',
+      ...(['pinned', 'archived'] as const).flatMap(key =>
+        options[key] === undefined
+          ? []
+          : [
+              `COALESCE((SELECT ${key} FROM channel_organization WHERE task_id = tasks.id), 0) = ${options[key] ? '1' : '0'}`,
+            ],
+      ),
+      options.waiting === undefined
+        ? '1 = 1'
+        : `tasks.status NOT IN ('completed','cancelled') AND
+        COALESCE((SELECT status FROM runs WHERE task_id = tasks.id ORDER BY created_at DESC, rowid DESC LIMIT 1), 'waiting')
+        ${options.waiting ? "= 'waiting'" : "IN ('queued','running','failed')"}`,
     ]
     const sortExpression = taskSearchSortExpression(options.sort ?? 'updated')
     if (cursorValue !== undefined) {

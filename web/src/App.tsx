@@ -1460,6 +1460,33 @@ export function App() {
   if (window.__PEGAS_UI_REVIEW__)
     return <UiReviewHarness fixture={window.__PEGAS_UI_REVIEW__} />
 
+  async function organizeChannel(
+    channel: WorkChannel,
+    change: { pinned?: boolean; archived?: boolean },
+  ) {
+    try {
+      const updated = await api.organizeChannel(channel, change)
+      // A poll started before this write must not restore an older preference.
+      snapshotRequestRef.current += 1
+      setData(current => ({
+        ...current,
+        snapshot: {
+          ...current.snapshot,
+          channels: current.snapshot.channels.some(
+            item => item.id === updated.id,
+          )
+            ? current.snapshot.channels.map(item =>
+                item.id === updated.id ? updated : item,
+              )
+            : [...current.snapshot.channels, updated],
+        },
+      }))
+    } catch (error) {
+      void loadSnapshot()
+      throw error
+    }
+  }
+
   const actions = {
     onSearch: openSearch,
     onToggleAppearance: () => setTheme(isDark ? 'light' : 'dark'),
@@ -1525,6 +1552,8 @@ export function App() {
   return (
     <>
       <AppShell
+        client={api}
+        onOrganize={organizeChannel}
         channels={data.snapshot.channels}
         connectionStatus={loading ? 'connecting' : error ? 'offline' : 'online'}
         onNavigate={nextPage => {
@@ -1607,7 +1636,12 @@ export function App() {
           />
         )}
         {page === 'work' && (
-          <WorkPage actions={actions} snapshot={data.snapshot} />
+          <WorkPage
+            actions={actions}
+            snapshot={data.snapshot}
+            client={api}
+            onOrganize={organizeChannel}
+          />
         )}
         {page === 'attention' && (
           <AttentionPage

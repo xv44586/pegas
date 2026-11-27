@@ -1,3 +1,4 @@
+import { ChannelOrganizationConflictError } from '../storage/sqlite-store.js'
 import { randomUUID, timingSafeEqual } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { readFile, stat as statFile } from 'node:fs/promises'
@@ -1845,6 +1846,49 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         })
       }
 
+      const organizationMatch = channelTimelineUrl?.pathname.match(
+        /^\/v1\/channels\/([^/]+)\/organization$/,
+      )
+      if (organizationMatch) {
+        if (request.method !== 'PUT')
+          return sendJson(response, 405, { error: 'method_not_allowed' })
+        const body = await readJson(request)
+        if (!isRecord(body)) throw new Error('Request body must be an object')
+        const userId = requiredString(body.userId, 'userId')
+        const taskId = decodeURIComponent(organizationMatch[1] ?? '')
+        if (!options.store.findTask(taskId, userId))
+          return sendJson(response, 404, { error: 'not_found' })
+        if (
+          typeof body.pinned !== 'boolean' ||
+          typeof body.archived !== 'boolean'
+        )
+          throw new Error('pinned and archived must be booleans')
+        try {
+          const channel = options.store.updateChannelOrganization(
+            taskId,
+            userId,
+            {
+              pinned: body.pinned,
+              archived: body.archived,
+              expectedRevision: nonnegativeInteger(
+                body.expectedRevision,
+                'expectedRevision',
+              ),
+            },
+          )
+          return channel
+            ? sendJson(response, 200, { channel })
+            : sendJson(response, 404, { error: 'not_found' })
+        } catch (error) {
+          if (error instanceof ChannelOrganizationConflictError)
+            return sendJson(response, 409, {
+              error: 'organization_conflict',
+              message: error.message,
+            })
+          throw error
+        }
+      }
+
       if (channelTimelineUrl?.pathname === '/v1/channels/search') {
         if (request.method !== 'GET') {
           return sendJson(response, 405, { error: 'method_not_allowed' })
@@ -1868,7 +1912,14 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         const workerIconId = parseWorkerIconQuery(
           channelTimelineUrl.searchParams.get('workerIconId'),
         )
+        const organizationFilters = Object.fromEntries(
+          ['pinned', 'archived', 'waiting'].flatMap(key => {
+            const value = optionalBooleanQuery(channelTimelineUrl, key)
+            return value === undefined ? [] : [[key, value]]
+          }),
+        )
         const searchOptions: ChannelSearchOptions = {
+          ...organizationFilters,
           ...(query ? { query } : {}),
           ...(statuses ? { statuses } : {}),
           ...(ended === undefined ? {} : { ended }),

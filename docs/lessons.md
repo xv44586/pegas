@@ -671,3 +671,15 @@
 - Severity：quality
 - Status：Observed
 - Enforcement：Feature 回归与 smoke；不增加全局 worktree 强制规则。
+
+### LESSON-20261127-02：列表整理不能借用执行终态
+
+- Rule：归档、固定属于可逆的列表偏好，不能直接映射 cancelled 等执行终态；列表必须让非首屏条目可达。
+- Why：最近的事情固定截断为 8 条，「已归档」实际筛选永久停止的事情，长期笔记和讨论无法独立整理与恢复。
+- Feature：CHANNEL-004
+- Evidence：`test/channel-organization.test.ts` 验证归档不改 Task/Run、停止与归档独立、重启持久化和全量分页；`web/src/sealed/ChannelOrganization.test.tsx` 的停止误归档回归在原实现失败，新增实现通过；浏览器验证列表续页与归档恢复。
+- Seen：1（2026-11-27）
+- Severity：normal
+- Status：Observed
+- Enforcement：上述回归测试进入 `pnpm check`，不新增未经重复证据支持的全仓强制规则。
+- Owner / next action：CHANNEL-004 后续只在明确需求下扩展文件夹、批量整理与手动排序。

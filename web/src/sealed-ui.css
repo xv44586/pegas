@@ -3086,6 +3086,9 @@ a {
 }
 
 @media (pointer: coarse) {
+  .channel-organization-trigger {
+    min-width: 44px;
+  }
   button,
   input:not([type='checkbox']):not([type='radio']),
   select {
