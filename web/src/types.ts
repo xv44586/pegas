@@ -836,6 +836,7 @@ export interface ChannelRelation {
 export interface WorkerProfileResponse {
   profile: WorkerProfile
   effective: EffectiveWorkerProfile
+  taskStatus?: WorkChannel['status']
 }
 
 export interface PermissionTierChange {

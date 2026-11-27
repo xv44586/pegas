@@ -117,7 +117,7 @@ Run capability 的 HTTP 传输固定使用 loopback。`PEGAS_API_HOST` 为 `0.0.
 - 写入核对记录、Action 状态、Task 原因、唤醒事件与 `action.reconciled` Outbox 在同一事务提交。
 - **自动核对（EXEC-003，2026-11-24）**：对账进程可对文件写类 `unknown` Action 主动探测外部事实并走同一事务结算，核对人为 `system:auto-reconciliation`，commandId `auto-reconcile:<actionId>` 幂等；Outbox payload 带 `reconciledBy` 与自动核对文案。目标缺失或内容指纹不符只会结算为 `failed`，绝不判成功；非文件类动作保持 `unknown` 留人工。无静态指纹的复杂 bash 写由模型辅助对账（第五环）：以命令原文 + 逐目标现状为证据做严格 JSON 判定，模型失败/证据不足/inconclusive 一律留人工，note 标注模型判定；`PEGAS_MODEL_RECONCILE=disabled` 可关。核对记录带 `automatic=1` 标记（schema v44），详见 `docs/observability.md`。桥在创建 Action 时推导预期落盘字节（人工审批与自动审阅放行都带）：`write` 记录完整内容 sha256（`request.effect.contentHash`）；`edit` 与单文件 `apply_patch` 增量在原文件上重放推导最终字节（edit 用 contentHash，patch 用逐目标 `effect.targets` 映射）；无法静态推导（多文件/Delete/Move 补丁、命中不唯一等）不记录指纹，fail closed。
 
-创建 Action 的 `idempotencyKey`、决定的 `commandId` 和 outcome 的 `commandId` 都是幂等键。相同键和相同 payload 返回已有对象；相同键配不同 payload 会拒绝，不会悄悄覆盖审计事实。Run claim token 只保存 SHA-256 digest，不通过 API 或 Outbox 回显。
+创建 Action 的 `idempotencyKey`、决定的 `commandId` 和 outcome 的 `commandId` 都是幂等键。相同键和相同 payload 返回已有对象；相同键配不同 payload 会拒绝，不会悄悄覆盖审计事实。Run claim token 只保存 SHA-256 digest，不通过 API 或 Outbox 回显。诊断工具使用该活跃 claim 访问 `GET /v1/runs/:runId/history/task-state?taskId=`，仅返回同 owner 正式事情的有界状态；这个精确只读路由不是 owner bearer 或通用内部 API 代理。
 
 Capability 写入的首次 mutation 必须发生在 Run claim lease 内。成功提交后，服务端保存 capability digest 与 payload fingerprint；即使 lease 随后过期，完全相同的请求仍可只读重放首次创建时的不可变 pending 响应，不能创建、修改或读取后续决定、恢复 Run 与 Action outcome。错误 token 始终返回 `403 run_claim_invalid`。
 
@@ -220,7 +220,7 @@ Gate 的边界事实来自 Executor 注入的 patch config `policy { workspaceRo
 
 ### 规则批准（APPROVAL-001，含统一命令与目录授权）
 
-`approve_rule` 将用户选择的范围、实际规则与决定同事务保存；规则为一等持久对象，撤销保留历史。普通文件写入可选择本事情或同用户长期目录授权；已适配的 `git fetch` 可选择准确参数或命令族，各有事情 / 长期期限，默认仍是仅本次批准。命令许可不按字符串前缀推断，外发、破坏性操作、控制面修改及未适配命令不因普通规则获得持久权限。具体适配、路径与配置边界见 [命令授权](command-authorization.md)。
+`approve_rule` 将用户选择的范围、实际规则与决定同事务保存；规则为一等持久对象，撤销保留历史。普通文件写入可选择本事情或同用户长期目录授权；已适配的 `git fetch` 可选择准确参数或命令族，各有事情 / 长期期限，默认仍是仅本次批准。命令许可不按字符串前缀推断，外发、破坏性操作、控制面修改及未适配命令不因目录/命令规则获得持久权限。用户另可显式选择非默认的“本事情内允许所有工具操作”：仅限该 owner 的当前事情，覆盖普通复合脚本、网络和破坏性操作；完成/停止即撤销，重开不继承。严格档、档位不一致、凭据和控制面保护仍优先，静态分类不能替代进程及文件服务硬边界。服务端规范生成旧 pending 审批的选项；已决定的历史审批不升级。首次恢复绑定实际规则并记录真实 outcome，撤销或收紧后首次恢复也不得放行。具体适配、路径与配置边界见 [命令授权](command-authorization.md)。
 
 桥的 pre-execute 与 approval/request 均重新读取本事情及同 owner 长期有效规则，并重新核验实际资源；strict 档与 mismatch 下不复用。事情规则在事情完成或停止时撤销，重开不复活；长期规则跨事情和重启保留。每次匹配通过 `policy_decision` 的 ruleId 写入独立逐调用审计，事情执行面板可查看授权依据；后续复用不逐次创建 Action/outcome，首次批准恢复的 Action 则必须结算真实 outcome。设置 → 隐私 → 授权管理或事情详情可撤销，尚未开始的下一次调用重新审批，进行中的进程沿用现有停止能力。
 

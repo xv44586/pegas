@@ -20,7 +20,7 @@ export const inject = ['tools']
  * Mount the denial first. Missing/changed providers never leave tools running
  * without the boundary while Cordis waits for their dependencies.
  * @param {{ tools: { guard: (guard: () => { reason: string } | undefined) => void }, inject: (deps: string[], callback: (ctx: RuntimeContext) => void) => unknown }} ctx
- * @param {{ credentialRoots?: string[] }} [config]
+ * @param {{ credentialRoots?: string[], protectedRoots?: string[], readableFiles?: string[] }} [config]
  */
 export function apply(ctx, config = {}) {
   let ready = false
@@ -36,9 +36,13 @@ export function apply(ctx, config = {}) {
   })
 }
 
-/** @param {RuntimeContext} ctx @param {{ credentialRoots?: string[] }} config */
+/** @param {RuntimeContext} ctx @param {{ credentialRoots?: string[], protectedRoots?: string[], readableFiles?: string[] }} config */
 function install(ctx, config) {
   const roots = config.credentialRoots ?? hostCredentialRoots()
+  // General tools must neither mutate the approval database nor read its
+  // owner bearer. Trusted service/plugin code still uses its bounded APIs.
+  const protectedRoots = config.protectedRoots ?? []
+  const readableFiles = config.readableFiles ?? []
   /** @param {Service} service @param {string} key @param {(original: Method) => Method} wrap */
   const replace = (service, key, wrap) => {
     const original = service[key]
@@ -75,7 +79,16 @@ function install(ctx, config) {
           }
           return original.call(
             this,
-            { ...spec, env, argv: credentialProcessArgv(spec.argv, roots) },
+            {
+              ...spec,
+              env,
+              argv: credentialProcessArgv(
+                spec.argv,
+                [...roots, ...protectedRoots],
+                process.platform,
+                readableFiles,
+              ),
+            },
             ...args.slice(1),
           )
         },
@@ -103,6 +116,19 @@ function install(ctx, config) {
             const path = ctx.fs.processPath?.(target)
             if (typeof path !== 'string' || isCredentialPath(path, roots))
               throw new Error(credentialDenial)
+            if (
+              isCredentialPath(path, protectedRoots) &&
+              (![
+                'readText',
+                'readBytes',
+                'readByteRange',
+                'streamText',
+              ].includes(key) ||
+                !isCredentialPath(path, readableFiles))
+            )
+              throw new Error(
+                '禁止通用工具读取或修改控制面数据；事情授权不包含此系统边界，请使用已注册的只读状态工具。',
+              )
           }
           return original.apply(this, args)
         },

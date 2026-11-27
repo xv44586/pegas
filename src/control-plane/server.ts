@@ -1440,11 +1440,12 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
       if (workerProfileMatch && request.method === 'GET') {
         const taskId = decodeURIComponent(workerProfileMatch[1] ?? '')
         const userId = requiredQuery(taskResourceUrl, 'userId')
-        if (!options.store.findTask(taskId, userId))
-          return sendJson(response, 404, { error: 'not_found' })
+        const task = options.store.findTask(taskId, userId)
+        if (!task) return sendJson(response, 404, { error: 'not_found' })
         const profile = options.store.getWorkerProfile(taskId, userId)
         return sendJson(response, 200, {
           profile,
+          taskStatus: task.status,
           effective: effectiveWorkerProfile(
             profile,
             options.store.getRuntimeSettings(),
@@ -2529,6 +2530,30 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
           } catch (error) {
             if (error instanceof RunClaimError)
               return sendJson(response, 403, { error: 'run_claim_invalid' })
+            throw error
+          }
+        }
+        const taskStateMatch =
+          /^\/v1\/runs\/([^/]+)\/history\/task-state$/.exec(url.pathname)
+        if (taskStateMatch) {
+          const claimToken = runClaimToken(request)
+          if (!claimToken)
+            return sendJson(response, 403, { error: 'run_claim_required' })
+          try {
+            return sendJson(
+              response,
+              200,
+              options.store.readTaskStateForRun(
+                decodeURIComponent(taskStateMatch[1] ?? ''),
+                claimToken,
+                url.searchParams.get('taskId') ?? '',
+              ),
+            )
+          } catch (error) {
+            if (error instanceof RunClaimError)
+              return sendJson(response, 403, { error: 'run_claim_invalid' })
+            if (error instanceof MemoryNotFoundError)
+              return sendJson(response, 404, { error: 'not_found' })
             throw error
           }
         }
@@ -3621,7 +3646,7 @@ function isConversationStateRead(request: IncomingMessage): boolean {
 function isRunHistoryRead(request: IncomingMessage): boolean {
   if (request.method !== 'GET' || !request.url) return false
   const pathname = new URL(request.url, 'http://localhost').pathname
-  return /^\/v1\/runs\/[^/]+\/history\/(search|read)$/.test(pathname)
+  return /^\/v1\/runs\/[^/]+\/history\/(search|read|task-state)$/.test(pathname)
 }
 
 function isRunPermissionRead(request: IncomingMessage): boolean {

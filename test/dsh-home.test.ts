@@ -101,6 +101,12 @@ describe('createDshModelConfiguration', () => {
       agentModel: { provider: 'magpie', model: 'gateway/model-a' },
     })
     try {
+      expect(configuration.patchPath).toContain(
+        join(
+          tmpdir(),
+          `pegas-runtime-private-${String(process.getuid?.() ?? 'local')}`,
+        ),
+      )
       const entries = JSON.parse(
         readFileSync(configuration.patchPath, 'utf8'),
       ) as { id: string; config: Record<string, unknown> }[]

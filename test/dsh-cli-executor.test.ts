@@ -1156,8 +1156,10 @@ console.log(JSON.stringify({
     expect(entry?.config?.masker).toBeUndefined()
   })
 
-  it('mounts history tools for work Runs with an action capability and cleans up the patch', async () => {
-    const command = fakeDsh(`
+  it.each(['workspace-write', 'read-only'] as const)(
+    'mounts bounded state tools for %s work Runs with an action capability and cleans up the patch',
+    async permissionMode => {
+      const command = fakeDsh(`
 const fs = require('node:fs')
 const patchPaths = process.argv
   .map((value, index) => (value === '--patch' ? process.argv[index + 1] : undefined))
@@ -1170,65 +1172,66 @@ console.log(JSON.stringify({
   reason: { kind: 'completed' }
 }))
 `)
-    const executor = new DshCliExecutor({
-      command,
-      permissionMode: 'workspace-write',
-    })
-    const result = await executor.execute({
-      runId: 'run-work',
-      taskId: 'task-work',
-      prompt: '上次那个表放哪了',
-      workingDirectory: process.cwd(),
-      actionCapability: {
-        baseUrl: 'http://127.0.0.1:4317',
-        claimToken: 'claim-token',
-      },
-    })
-    const output = JSON.parse(result.output) as {
-      patchPaths: string[]
-      patches: {
-        insert?: {
-          id: string
-          name: string
-          config?: { capability?: unknown }
-        }[]
-      }[][]
-    }
-    const entry = output.patches
-      .flat()
-      .flatMap(patch => patch.insert ?? [])
-      .find(candidate => candidate.id === 'pegas-history-tools')
-    expect(entry?.name).toContain('dsh-history-tools.mjs')
-    expect(entry?.config?.capability).toEqual({
-      baseUrl: 'http://127.0.0.1:4317',
-      runId: 'run-work',
-      claimToken: 'claim-token',
-      privacyMode: 'disabled',
-    })
-    for (const path of output.patchPaths) {
-      expect(existsSync(path)).toBe(false)
-    }
-
-    // Without an action capability the work lane gets no history patch.
-    const bare = await executor.execute({
-      runId: 'run-bare',
-      taskId: 'task-work',
-      prompt: '干活',
-      workingDirectory: process.cwd(),
-    })
-    const bareOutput = JSON.parse(bare.output) as {
-      patches: { insert?: { id: string }[] }[][]
-    }
-    expect(
-      bareOutput.patches
+      const executor = new DshCliExecutor({
+        command,
+        permissionMode,
+      })
+      const result = await executor.execute({
+        runId: 'run-work',
+        taskId: 'task-work',
+        prompt: '上次那个表放哪了',
+        workingDirectory: process.cwd(),
+        actionCapability: {
+          baseUrl: 'http://127.0.0.1:4317',
+          claimToken: 'claim-token',
+        },
+      })
+      const output = JSON.parse(result.output) as {
+        patchPaths: string[]
+        patches: {
+          insert?: {
+            id: string
+            name: string
+            config?: { capability?: unknown }
+          }[]
+        }[][]
+      }
+      const entry = output.patches
         .flat()
-        .some(patch =>
-          patch.insert?.some(
-            candidate => candidate.id === 'pegas-history-tools',
+        .flatMap(patch => patch.insert ?? [])
+        .find(candidate => candidate.id === 'pegas-history-tools')
+      expect(entry?.name).toContain('dsh-history-tools.mjs')
+      expect(entry?.config?.capability).toEqual({
+        baseUrl: 'http://127.0.0.1:4317',
+        runId: 'run-work',
+        claimToken: 'claim-token',
+        privacyMode: 'disabled',
+      })
+      for (const path of output.patchPaths) {
+        expect(existsSync(path)).toBe(false)
+      }
+
+      // Without an action capability the work lane gets no history patch.
+      const bare = await executor.execute({
+        runId: 'run-bare',
+        taskId: 'task-work',
+        prompt: '干活',
+        workingDirectory: process.cwd(),
+      })
+      const bareOutput = JSON.parse(bare.output) as {
+        patches: { insert?: { id: string }[] }[][]
+      }
+      expect(
+        bareOutput.patches
+          .flat()
+          .some(patch =>
+            patch.insert?.some(
+              candidate => candidate.id === 'pegas-history-tools',
+            ),
           ),
-        ),
-    ).toBe(false)
-  })
+      ).toBe(false)
+    },
+  )
 })
 
 function fakeDsh(body: string): string {

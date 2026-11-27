@@ -243,7 +243,10 @@ export function apply(ctx, config = {}) {
             category: classification.category,
             risk: classification.risk,
             decision: 'allow',
-            reason: '已按你批准的一次性授权放行本次调用。',
+            reason: grant.ruleId
+              ? '已按你保存的授权规则放行本次恢复调用。'
+              : '已按你批准的一次性授权放行本次调用。',
+            ...(grant.ruleId ? { ruleId: grant.ruleId } : {}),
             actionId: grant.actionId,
             tier: tierState.tier,
             generation: tierState.generation,
@@ -302,9 +305,12 @@ export function apply(ctx, config = {}) {
             category: classification.category,
             risk: classification.risk,
             decision: 'allow',
-            reason: matchedRule.command
-              ? `已按${matchedRule.lifetime === 'user' ? '长期' : '本事情'}命令授权执行：git fetch · ${matchedRule.command.selector.repository} · ${matchedRule.command.selector.remote}。`
-              : `命中已批准规则：${matchedRule.tool}（${matchedRule.targets.join('、')}）。`,
+            reason:
+              matchedRule.category === 'task-tools'
+                ? '已按本事情所有工具授权执行；事情完成或停止后失效，可随时撤销。'
+                : matchedRule.command
+                  ? `已按${matchedRule.lifetime === 'user' ? '长期' : '本事情'}命令授权执行：git fetch · ${matchedRule.command.selector.repository} · ${matchedRule.command.selector.remote}。`
+                  : `命中已批准规则：${matchedRule.tool}（${matchedRule.targets.join('、')}）。`,
             ruleId: matchedRule.id,
             tier: tierState.tier,
             generation: tierState.generation,
@@ -1116,6 +1122,18 @@ function matchApprovalRule(tierState, execution, classification, policy) {
     tierState.tier === 'strict'
   )
     return undefined
+  if (classification.category === 'control-plane-mutation') return undefined
+  const taskToolsRule = tierState.rules.find(
+    rule =>
+      rule.category === 'task-tools' &&
+      rule.tool === '*' &&
+      rule.targets.length === 0 &&
+      (rule.scope === undefined || rule.scope === 'exact') &&
+      rule.kind !== 'command' &&
+      rule.fingerprint ===
+        createHash('sha256').update('task-tools:v1').digest('hex'),
+  )
+  if (taskToolsRule) return taskToolsRule
   if (
     [
       'control-plane-mutation',

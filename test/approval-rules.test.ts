@@ -227,6 +227,127 @@ describe('approval rule contract', () => {
 })
 
 describe('approval rule persistence', () => {
+  it('withdraws the task-wide option from a pending approval after live permission tightening', () => {
+    const store = new PegasStore(':memory:')
+    try {
+      const parked = parkOutsideWrite(
+        store,
+        'tighten',
+        '/tmp/shared/file',
+        'tighten',
+      )
+      const profile = store.getWorkerProfile(parked.taskId, 'owner')
+      store.updateWorkerProfile(parked.taskId, 'owner', {
+        commandId: 'tighten',
+        expectedRevision: profile.revision,
+        modelMode: 'inherit',
+        permissionMode: 'strict',
+      })
+      expect(
+        store
+          .getApproval(parked.approvalId, 'owner')
+          ?.prompt.options.some(o => o.id === 'approve_task_tools'),
+      ).toBe(false)
+      expect(() =>
+        store.decideApproval(parked.approvalId, 'owner', {
+          commandId: 'stale-selection',
+          optionId: 'approve_task_tools',
+        }),
+      ).toThrow('option does not exist')
+      expect(store.listApprovalRules(parked.taskId, 'owner')).toHaveLength(0)
+    } finally {
+      store.close()
+    }
+  })
+  it.each(['completed', 'cancelled'])(
+    'offers task-wide authorization on legacy pending approvals and expires on %s',
+    endStatus => {
+      const databasePath = join(workspaceRoot(), 'task-tools.db')
+      const store = new PegasStore(databasePath)
+      const db = new DatabaseSync(databasePath)
+      try {
+        const parked = parkOutsideWrite(
+          store,
+          'task-tools',
+          '/tmp/shared/file',
+          'task-tools',
+        )
+        // Simulate an approval persisted before this option existed.
+        const row = db
+          .prepare('SELECT prompt_json FROM approvals WHERE id = ?')
+          .get(parked.approvalId) as { prompt_json: string }
+        const prompt = JSON.parse(row.prompt_json) as {
+          options: { id: string }[]
+        }
+        prompt.options = prompt.options.filter(
+          o => o.id !== 'approve_task_tools',
+        )
+        db.prepare('UPDATE approvals SET prompt_json = ? WHERE id = ?').run(
+          JSON.stringify(prompt),
+          parked.approvalId,
+        )
+        const pending = store.getApproval(parked.approvalId, 'owner')
+        expect(pending?.prompt.options).toContainEqual(
+          expect.objectContaining({
+            id: 'approve_task_tools',
+            kind: 'approve_rule',
+            label: '本事情内允许所有工具操作',
+          }),
+        )
+        expect(pending?.prompt.recommendedOptionId).toBe('approve')
+        expect(
+          store
+            .pageApprovals('owner', 20)
+            .items.find(a => a.id === parked.approvalId)?.prompt,
+        ).toEqual(pending?.prompt)
+        store.decideApproval(parked.approvalId, 'owner', {
+          commandId: 'all-tools',
+          optionId: 'approve_task_tools',
+        })
+        const rule = store.listApprovalRules(parked.taskId, 'owner')[0]
+        expect(rule).toMatchObject({
+          tool: '*',
+          category: 'task-tools',
+          targets: [],
+          status: 'active',
+        })
+        expect(store.approvalRuleIdForAction(parked.actionId, 'owner')).toBe(
+          rule?.id,
+        )
+        const resumed = claimSuccessor(store, parked.actionId)
+        expect(
+          store.runPermissionProjection(resumed.run.id, resumed.claimToken)
+            .rules,
+        ).toContainEqual(expect.objectContaining({ id: rule?.id }))
+        const decided = store.getApproval(parked.approvalId, 'owner')
+        expect(decided?.prompt.options).toContainEqual(
+          expect.objectContaining({ id: 'approve_task_tools' }),
+        )
+        if (endStatus === 'cancelled')
+          store.stopTask(parked.taskId, 'owner', 'stop-all-tools')
+        else
+          db.prepare("UPDATE tasks SET status = 'completed' WHERE id = ?").run(
+            parked.taskId,
+          )
+        expect(store.listApprovalRules(parked.taskId, 'owner')[0]?.status).toBe(
+          'revoked',
+        )
+        db.prepare("UPDATE tasks SET status = 'started' WHERE id = ?").run(
+          parked.taskId,
+        )
+        expect(store.listApprovalRules(parked.taskId, 'owner')[0]?.status).toBe(
+          'revoked',
+        )
+        expect(store.getApproval(parked.approvalId, 'owner')?.prompt).toEqual(
+          decided?.prompt,
+        )
+      } finally {
+        db.close()
+        store.close()
+      }
+    },
+  )
+
   it('renders persistent scope and paths from trusted server facts instead of executor labels', () => {
     const store = new PegasStore(':memory:')
     try {

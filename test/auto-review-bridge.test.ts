@@ -725,8 +725,11 @@ describe('DSH bridge auto review', () => {
         .pageApprovals('owner', 10)
         .items.find(item => item.actionId === action.id)
       expect(
-        approval?.prompt.options.some(option => option.kind === 'approve_rule'),
-      ).toBe(false)
+        approval?.prompt.options
+          .filter(option => option.kind === 'approve_rule')
+          .map(option => option.id),
+      ).toEqual(['approve_task_tools'])
+      expect(approval?.prompt.recommendedOptionId).toBe('approve')
     } finally {
       restoreEnvironment(previous)
       await run.close()

@@ -16,6 +16,7 @@ export declare function credentialProcessArgv(
   argv: readonly string[],
   roots: readonly string[],
   platform?: NodeJS.Platform,
+  readableFiles?: readonly string[],
 ): string[]
 
 export declare function credentialFreeEnvironment(
