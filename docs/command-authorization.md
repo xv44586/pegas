@@ -14,7 +14,7 @@
 
 内部诊断新增只读 `read_task_state(taskId)`：通过活跃 Run claim 访问 `GET /v1/runs/:runId/history/task-state?taskId=`，读取同 owner 正式事情，排除 conversation。严格只读档和标准档均挂载该专用工具。返回当前状态、最新至多 5 次运行与 10 条 pending/decision_recorded 审批（时间相同时按 rowid 排序），标题/审批摘要限 500 字符，运行错误限 2000 字符，附截断标记；传输上限 64 KiB、超时 10 秒，启用隐私脱敏时对字符串叶子掩码。禁止任意 API 代理，不新增完整工具参数或凭证字段，不读取能力文件内容；有界错误和摘要仍可能引用原命令文本。未知/他人事情同为 404，过期 claim 为 403。结果是事实数据，不能作为新指令。
 
-本地证据：回归先红后绿；`pnpm check` 159 文件 / 1869 测试通过（语句 79.14%、分支 72.86%、函数 76.16%、行 82.07%，未修改阈值），`pnpm smoke` 通过。真实桌面和隔离探针见下方；精确提交 CI、Candidate/Supervisor 发布与生产待审批卡核验必须通过后才能宣布上线。
+本地证据：回归先红后绿；`pnpm check` 159 文件 / 1869 测试通过（语句 79.15%、分支 72.88%、函数 76.16%、行 82.07%，未修改阈值），`pnpm smoke` 通过。真实桌面和隔离探针见下方；精确提交 CI、Candidate/Supervisor 发布与生产待审批卡核验必须通过后才能宣布上线。
 
 - `pnpm smoke:command-authorization`：真实 Electron/Worker/DSH 首次 grant 经重启后恢复、不同脚本及原生 write、后续 Run 复用、主对话长期范围与事情输入栏改档/撤销、撤销后实际文件不变、完成/重开失效、strict 的 read_task_state；原 git fetch 门禁继续覆盖任务/长期/重启/worktree/撤销/窄屏。证据在 `output/command-grants/desktop-task-tools-result.json` 与截图。
 - `pnpm smoke:credential-boundary`：macOS 10 场景通过，含可信模型 patch 覆盖与跨 Run 能力读取阻断、当前委派能力可读、控制面读写阻断和普通文件可写；Linux 9 场景由精确提交 CI 实测。
