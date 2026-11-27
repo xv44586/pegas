@@ -1,0 +1,161 @@
+name: Nightly
+
+on:
+  schedule:
+    # 03:17 Asia/Shanghai; GitHub cron defaults to UTC.
+    - cron: '17 19 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# This group is deliberately separate from CI and hot releases.
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  nightly:
+    name: Nightly / ${{ matrix.suite }}
+    runs-on: [self-hosted, Linux, X64, pegas-ci]
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        suite: [baseline, recovery, browser, stability]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - id: checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - id: pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 11.25.0
+      - id: node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Prepare evidence directory
+        id: evidence
+        run: mkdir -p output/nightly
+      - name: Install locked dependencies
+        id: install
+        run: pnpm install --frozen-lockfile 2>&1 | tee output/nightly/install.log
+      - name: Verify preinstalled credential isolation backend
+        id: isolation
+        run: command -v bwrap
+      - name: Install review browser
+        id: browser_install
+        if: matrix.suite == 'browser'
+        run: pnpm exec playwright install chromium
+      - name: Full quality gate
+        id: check
+        if: matrix.suite == 'baseline'
+        run: pnpm check 2>&1 | tee output/nightly/check.log
+      - name: Build isolated test runtime
+        id: build
+        if: matrix.suite != 'baseline'
+        run: pnpm build 2>&1 | tee output/nightly/build.log
+      - name: Ordinary offline smoke
+        id: smoke
+        if: ${{ !cancelled() && matrix.suite == 'baseline' && steps.check.outcome == 'success' }}
+        env:
+          PEGAS_MEMORY_PROVIDER: disabled
+          PEGAS_REWRITE_MODE: disabled
+          PEGAS_MODEL_RECONCILE: disabled
+          PEGAS_LIVE_TESTS: '0'
+        run: pnpm smoke 2>&1 | tee output/nightly/smoke.log
+      - name: Worker crash recovery
+        id: crash
+        if: ${{ !cancelled() && matrix.suite == 'recovery' && steps.build.outcome == 'success' }}
+        env:
+          PEGAS_MEMORY_PROVIDER: disabled
+          PEGAS_REWRITE_MODE: disabled
+          PEGAS_MODEL_RECONCILE: disabled
+          PEGAS_LIVE_TESTS: '0'
+        run: node scripts/smoke-crash-recovery.mjs 2>&1 | tee output/nightly/crash.log
+      - name: Isolated Candidate takeover and rollback
+        id: self_change
+        if: ${{ !cancelled() && matrix.suite == 'recovery' && steps.build.outcome == 'success' }}
+        env:
+          PEGAS_MEMORY_PROVIDER: disabled
+          PEGAS_REWRITE_MODE: disabled
+          PEGAS_MODEL_RECONCILE: disabled
+          PEGAS_LIVE_TESTS: '0'
+        run: node scripts/smoke-self-change.mjs 2>&1 | tee output/nightly/self_change.log
+      - name: Healthcheck outage and recovery
+        id: healthcheck
+        if: ${{ !cancelled() && matrix.suite == 'recovery' && steps.build.outcome == 'success' }}
+        env:
+          PEGAS_MEMORY_PROVIDER: disabled
+          PEGAS_REWRITE_MODE: disabled
+          PEGAS_MODEL_RECONCILE: disabled
+          PEGAS_LIVE_TESTS: '0'
+        run: node scripts/smoke-healthcheck.mjs 2>&1 | tee output/nightly/healthcheck.log
+      - name: Full browser acceptance
+        id: browser
+        if: ${{ !cancelled() && matrix.suite == 'browser' && steps.build.outcome == 'success' }}
+        env:
+          PEGAS_MEMORY_PROVIDER: disabled
+          PEGAS_REWRITE_MODE: disabled
+          PEGAS_MODEL_RECONCILE: disabled
+          PEGAS_LIVE_TESTS: '0'
+        run: pnpm review:ui -- --force 2>&1 | tee output/nightly/browser.log
+      - name: Repeat durability tests ten times
+        id: stability
+        if: ${{ !cancelled() && matrix.suite == 'stability' && steps.build.outcome == 'success' }}
+        run: |
+          failed=0
+          for round in {1..10}; do
+            if pnpm exec vitest run test/router-lease-fencing.test.ts test/approval.test.ts test/outbox-delivery-policy.test.ts test/backup.test.ts --reporter=default --reporter=json --outputFile="output/nightly/stability-$round.json" 2>&1 | tee "output/nightly/stability-$round.log"; then
+              echo "Round $round passed"
+            else
+              failed=1
+              echo "Round $round failed; keeping its evidence and running remaining rounds"
+            fi
+          done
+          exit "$failed"
+      - name: Write job summary
+        if: always()
+        env:
+          NIGHTLY_STEPS: ${{ toJSON(steps) }}
+          NIGHTLY_SUITE: ${{ matrix.suite }}
+        run: |
+          mkdir -p output/nightly
+          node --input-type=module <<'JS'
+          import { appendFileSync, writeFileSync } from 'node:fs'
+          const steps = JSON.parse(process.env.NIGHTLY_STEPS)
+          const report = {
+            sha: process.env.GITHUB_SHA,
+            suite: process.env.NIGHTLY_SUITE,
+            run: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`,
+            attempt: process.env.GITHUB_RUN_ATTEMPT,
+            generatedAt: new Date().toISOString(),
+            node: process.version,
+            steps,
+          }
+          writeFileSync('output/nightly/result.json', JSON.stringify(report, null, 2) + '\n')
+          const rows = Object.entries(steps).map(([name, step]) => `| ${name} | ${step.outcome} |`)
+          const summary = [
+            `### Nightly / ${report.suite}`,
+            `Commit: ${report.sha}`, `Run: ${report.run} (attempt ${report.attempt})`,
+            'Test counts and assertions are in the attached logs / stability JSON reports.',
+            'This workflow does not deploy or change the running App.',
+            '', '| Check | Outcome |', '| --- | --- |', ...rows, '',
+          ].join('\n')
+          writeFileSync('output/nightly/summary.md', summary)
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary)
+          JS
+      - name: Preserve nightly evidence on the self-hosted machine
+        if: always()
+        env:
+          PEGAS_CI_STEPS: ${{ toJSON(steps) }}
+          PEGAS_CI_SUITE: ${{ matrix.suite }}
+        run: node scripts/archive-ci-evidence.ts

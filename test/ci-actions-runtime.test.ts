@@ -11,7 +11,6 @@ const workflow = readFileSync(
 const node24MinimumMajors: Record<string, number> = {
   'actions/checkout': 7,
   'actions/setup-node': 7,
-  'actions/upload-artifact': 7,
   'pnpm/action-setup': 6,
 }
 
@@ -35,6 +34,36 @@ describe('CI actions run on the node24 runtime (QUALITY-001)', () => {
       'ref: ${{ github.event.pull_request.head.sha || github.sha }}',
     )
     expect(workflow).toContain('node-version: 24')
-    expect(workflow).toContain('cache: pnpm')
+    expect(workflow).not.toContain('cache: pnpm')
+    expect(workflow).not.toContain('actions/upload-artifact')
+  })
+})
+
+describe('CI stays on owned machines without weakening gates', () => {
+  it('requires repository-specific self-hosted Linux and macOS runners', () => {
+    expect(workflow.match(/runs-on:.+/g)).toEqual([
+      'runs-on: [self-hosted, Linux, X64, pegas-ci]',
+      'runs-on: [self-hosted, macOS, ARM64, pegas-ci]',
+    ])
+    expect(workflow).not.toMatch(
+      /ubuntu-latest|macos-latest|actions\/cache|actions\/upload-artifact/,
+    )
+    expect(workflow).toContain('persist-credentials: false')
+  })
+
+  it('keeps every existing quality and real-executor gate', () => {
+    for (const command of [
+      'pnpm check',
+      'pnpm smoke',
+      'pnpm smoke:dsh-auth',
+      'pnpm smoke:dsh-runtime',
+      'pnpm smoke:credential-boundary',
+      'pnpm smoke:command-authorization',
+      'pnpm exec vitest run test/credential-boundary.test.ts',
+    ]) {
+      expect(workflow).toContain(command)
+    }
+    expect(workflow).toContain('credential-boundary-macos:')
+    expect(workflow).not.toContain('continue-on-error')
   })
 })

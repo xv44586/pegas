@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, pegas-ci]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -19,23 +19,30 @@ jobs:
           # Pull request workflows otherwise test GitHub's synthetic merge
           # commit, which cannot be bound to an immutable Pegas Candidate.
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - uses: pnpm/action-setup@v6
         with:
           version: 11.25.0
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - name: Install credential isolation backend
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap
-      - run: pnpm check
-      - run: pnpm smoke
+      - id: install
+        run: pnpm install --frozen-lockfile
+      - name: Verify preinstalled credential isolation backend
+        id: isolation
+        run: command -v bwrap
+      - id: check
+        run: pnpm check
+      - id: smoke
+        run: pnpm smoke
       - name: Verify DSH model authentication over loopback
+        id: dsh_auth
         run: npm exec --yes --package=@deepseek-ai/dsh@0.2.2-rc.5 -- pnpm smoke:dsh-auth
       - name: Verify real DSH boot, tool and resume inside Electron
+        id: dsh_runtime
         run: npm exec --yes --package=@deepseek-ai/dsh@0.2.2-rc.5 -- pnpm smoke:dsh-runtime
       - name: Verify credential isolation with real DSH
+        id: credentials
         run: npm exec --yes --package=@deepseek-ai/dsh@0.2.2-rc.5 -- pnpm smoke:credential-boundary
       - name: Detect UI changes
         id: changed
@@ -54,6 +61,7 @@ jobs:
         if: github.event_name == 'pull_request' && steps.changed.outputs.ui == 'true'
         run: pnpm review:ui -- --changed-from "origin/${{ github.base_ref }}"
       - name: Verify desktop command authorization reuse and revocation
+        id: commands
         run: xvfb-run --auto-servernum npm exec --yes --package=@deepseek-ai/dsh@0.2.2-rc.5 -- pnpm smoke:command-authorization
       - name: Detect external-service changes
         id: external
@@ -87,39 +95,39 @@ jobs:
           if [ -f output/feature-review/summary.md ]; then
             cat output/feature-review/summary.md >> "$GITHUB_STEP_SUMMARY"
           fi
-      - name: Upload temporary review evidence
-        if: always() && github.event_name == 'pull_request'
-        uses: actions/upload-artifact@v7
-        with:
-          name: feature-review-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
-          path: output/feature-review
-          retention-days: 7
-          if-no-files-found: warn
-      - name: Upload command authorization evidence
+      - name: Retain evidence on the self-hosted machine
         if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: command-authorization-${{ github.sha }}
-          path: output/command-grants
-          retention-days: 7
-          if-no-files-found: warn
+        env:
+          PEGAS_CI_STEPS: ${{ toJSON(steps) }}
+          PEGAS_TESTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node scripts/archive-ci-evidence.ts
 
   credential-boundary-macos:
-    runs-on: macos-latest
+    runs-on: [self-hosted, macOS, ARM64, pegas-ci]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - uses: pnpm/action-setup@v6
         with:
           version: 11.25.0
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm exec vitest run test/credential-boundary.test.ts
-      - run: pnpm build:server
+      - id: install
+        run: pnpm install --frozen-lockfile
+      - id: credential_tests
+        run: pnpm exec vitest run test/credential-boundary.test.ts
+      - id: build
+        run: pnpm build:server
       - name: Verify real Keychain and credential isolation
+        id: keychain
         run: npm exec --yes --package=@deepseek-ai/dsh@0.2.2-rc.5 -- pnpm smoke:credential-boundary
+      - name: Retain evidence on the self-hosted machine
+        if: always()
+        env:
+          PEGAS_CI_STEPS: ${{ toJSON(steps) }}
+          PEGAS_TESTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node scripts/archive-ci-evidence.ts
