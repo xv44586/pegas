@@ -17,10 +17,11 @@ concurrency:
 jobs:
   nightly:
     name: Nightly / ${{ matrix.suite }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, pegas-ci]
     timeout-minutes: 30
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         suite: [baseline, recovery, browser, stability]
     defaults:
@@ -41,20 +42,19 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: pnpm
       - name: Prepare evidence directory
         id: evidence
         run: mkdir -p output/nightly
       - name: Install locked dependencies
         id: install
         run: pnpm install --frozen-lockfile 2>&1 | tee output/nightly/install.log
-      - name: Install credential isolation backend
+      - name: Verify preinstalled credential isolation backend
         id: isolation
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+        run: command -v bwrap
       - name: Install review browser
         id: browser_install
         if: matrix.suite == 'browser'
-        run: pnpm exec playwright install --with-deps chromium
+        run: pnpm exec playwright install chromium
       - name: Full quality gate
         id: check
         if: matrix.suite == 'baseline'
@@ -153,13 +153,9 @@ jobs:
           writeFileSync('output/nightly/summary.md', summary)
           appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary)
           JS
-      - name: Preserve nightly evidence
+      - name: Preserve nightly evidence on the self-hosted machine
         if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: nightly-${{ matrix.suite }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            output/nightly
-            output/feature-review
-          retention-days: 7
-          if-no-files-found: warn
+        env:
+          PEGAS_CI_STEPS: ${{ toJSON(steps) }}
+          PEGAS_CI_SUITE: ${{ matrix.suite }}
+        run: node scripts/archive-ci-evidence.ts

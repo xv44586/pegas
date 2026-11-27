@@ -29,7 +29,7 @@ interface Workflow {
   jobs: Record<
     string,
     {
-      'runs-on': string
+      'runs-on': string[]
       'timeout-minutes': number
       strategy: { 'fail-fast': boolean; matrix: { suite: string[] } }
       defaults: { run: { shell: string } }
@@ -67,9 +67,9 @@ describe('QUALITY-001 nightly execution and hot-update boundary', () => {
     expect(Object.keys(ci.on).sort()).toEqual(['pull_request', 'push'])
   })
 
-  it('uses disposable runners, one exact SHA and read-only credentials without deployment', () => {
+  it('uses self-hosted runners, one exact SHA and read-only credentials without deployment', () => {
     expect(workflow.permissions).toEqual({ contents: 'read' })
-    expect(job['runs-on']).toBe('ubuntu-latest')
+    expect(job['runs-on']).toEqual(['self-hosted', 'Linux', 'X64', 'pegas-ci'])
     expect(job['timeout-minutes']).toBeLessThanOrEqual(30)
     const checkout = job.steps.find(value =>
       value.uses?.startsWith('actions/checkout@'),
@@ -79,7 +79,7 @@ describe('QUALITY-001 nightly execution and hot-update boundary', () => {
       'persist-credentials': false,
     })
     expect(source).not.toMatch(
-      /secrets\.|release:hot|release-hot\.mjs|gh pr merge|test:live|smoke:memory|self-hosted/,
+      /secrets\.|release:hot|release-hot\.mjs|gh pr merge|test:live|smoke:memory/,
     )
     expect(job.steps.every(value => !value['continue-on-error'])).toBe(true)
   })
@@ -113,14 +113,13 @@ describe('QUALITY-001 nightly execution and hot-update boundary', () => {
     expect(step('stability').run).toContain('failed=1')
     expect(step('stability').run).toContain('exit "$failed"')
     expect(step('stability').run).toContain('stability-$round.json')
-    const upload = job.steps.find(value =>
-      value.uses?.startsWith('actions/upload-artifact@'),
+    const archive = job.steps.find(
+      value => value.run === 'node scripts/archive-ci-evidence.ts',
     )
-    expect(upload?.if).toBe('always()')
-    expect(upload?.with?.name).toContain('${{ github.sha }}')
-    expect(upload?.with?.name).toContain('${{ github.run_attempt }}')
-    expect(upload?.with?.path).toContain('output/nightly')
-    expect(upload?.with?.['retention-days']).toBe(7)
+    expect(archive?.if).toBe('always()')
+    expect(archive?.env?.PEGAS_CI_SUITE).toBe('${{ matrix.suite }}')
+    expect(source).not.toContain('actions/upload-artifact')
+    expect(source).not.toContain('cache: pnpm')
     const summary = job.steps.find(value => value.name === 'Write job summary')
     expect(summary?.if).toBe('always()')
     expect(summary?.run).toContain('step.outcome')
