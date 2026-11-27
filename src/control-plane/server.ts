@@ -10,6 +10,10 @@ import {
 import { extname, resolve, sep } from 'node:path'
 
 import { createLocalWebAccess } from './local-web-access.js'
+import {
+  eventProjectId,
+  eventDirectory,
+} from '../project/project-workspaces.js'
 import { replyReference } from '../conversation/projection.js'
 import { isTaskResumeSource } from '../task/task-lifecycle.js'
 import { spillBodyForGap } from '../activity/tool-semantics.js'
@@ -750,6 +754,45 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
             error: 'agent_models_unavailable',
           })
         }
+      }
+
+      const projectUrl = new URL(request.url ?? '/', 'http://localhost')
+      if (projectUrl.pathname === '/v1/projects') {
+        if (request.method === 'GET')
+          return sendJson(response, 200, {
+            projects: options.store.listProjects(
+              requiredQuery(projectUrl, 'userId'),
+            ),
+          })
+        if (request.method === 'POST') {
+          const result = options.store.createProject(await readJson(request))
+          return sendJson(response, result.created ? 201 : 200, result)
+        }
+        return sendJson(response, 405, { error: 'method_not_allowed' })
+      }
+      const projectBindingMatch = /^\/v1\/tasks\/([^/]+)\/project$/.exec(
+        projectUrl.pathname,
+      )
+      if (projectBindingMatch) {
+        const taskId = decodeURIComponent(projectBindingMatch[1] ?? '')
+        const userId = requiredQuery(projectUrl, 'userId')
+        if (request.method === 'GET')
+          return sendJson(
+            response,
+            200,
+            options.store.taskProjectBinding(taskId, userId),
+          )
+        if (request.method === 'PUT')
+          return sendJson(
+            response,
+            200,
+            options.store.updateTaskProjectBinding(
+              taskId,
+              userId,
+              await readJson(request),
+            ),
+          )
+        return sendJson(response, 405, { error: 'method_not_allowed' })
       }
 
       if (request.url === '/v1/events' && request.method === 'POST') {
@@ -2794,12 +2837,40 @@ function validateMessageTarget(
   store: PegasStore,
 ): void {
   if (input.type !== 'user.message') return
+  const directory = eventDirectory(input)
+  if (directory && !store.executionNode(directory.nodeId))
+    throw new Error('Execution node does not exist')
+  const projectId = eventProjectId(input)
+  if (projectId) store.project(projectId, input.userId)
   const reference = replyReference(input.payload)
-  if (reference) store.conversationReply(reference, input.userId)
+  if (reference) {
+    const reply = store.conversationReply(reference, input.userId)
+    if (directory) {
+      const task = store.findTask(reply.taskId, input.userId)
+      if (
+        task?.workingDirectory !== directory.directory ||
+        task.workspaceNodeId !== directory.nodeId
+      )
+        throw new Error('Message directory does not match the referenced task')
+    }
+    if (
+      projectId &&
+      store.findTask(reply.taskId, input.userId)?.projectId !== projectId
+    )
+      throw new Error('Message project does not match the referenced task')
+  }
   const taskId = explicitTaskId(input)
   if (taskId) {
     const task = store.findTask(taskId, input.userId)
     if (!task) throw new Error(`Task ${taskId} does not exist for user`)
+    if (
+      directory &&
+      (task.workingDirectory !== directory.directory ||
+        task.workspaceNodeId !== directory.nodeId)
+    )
+      throw new Error('Message directory does not match the task binding')
+    if (projectId && task.projectId !== projectId)
+      throw new Error('Message project does not match the task binding')
     if (task.status === 'cancelled')
       throw new Error('Task was stopped by the user')
     if (explicitSteerIntent(input)) {
@@ -3180,7 +3251,11 @@ async function acceptVoiceMessage(
   const sourceTaskId = optionalQuery(url, 'sourceTaskId')
   const replyToMessageId = url.searchParams.get('replyToMessageId')
   const intent = url.searchParams.get('intent')
+  const projectId = optionalQuery(url, 'projectId')
+  const workspace = optionalQuery(url, 'workspace')
   const target = {
+    ...(projectId ? { projectId } : {}),
+    ...(workspace ? { workspace: JSON.parse(workspace) as unknown } : {}),
     ...(taskId ? { taskId } : {}),
     ...(sourceTaskId ? { sourceTaskId } : {}),
     ...(replyToMessageId === null ? {} : { replyToMessageId }),

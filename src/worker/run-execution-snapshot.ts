@@ -60,14 +60,23 @@ export function decodeDshExecutionSnapshot(
   input: Pick<ExecutorInput, 'executionContractVersion' | 'executionContext'>,
   defaults: DshExecutionDefaults,
 ): DshExecutionSnapshot {
-  if (input.executionContractVersion === 2) {
+  if (
+    input.executionContractVersion === 2 ||
+    input.executionContractVersion === 3
+  ) {
     return decodeVersion2(input.executionContext)
   }
   return decodeLegacy(input.executionContext, defaults)
 }
 
 export function runExecutionWorkspace(run: Run, fallback: string): string {
-  if (run.executionContractVersion !== 2) {
+  if (
+    run.executionContractVersion !== 2 &&
+    !(
+      run.executionContractVersion === 3 &&
+      run.executionContext.protocol === 'dsh-headless-v1'
+    )
+  ) {
     return run.executionContext.workspace ?? fallback
   }
   return decodeVersion2(run.executionContext).workspace

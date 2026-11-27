@@ -1,3 +1,4 @@
+import type { Project, ProjectBinding } from '../../src/project/types'
 import type { ReviewDecisionDraft } from '../../src/goal/goal-delivery'
 import type {
   BrowserTraceReceipt,
@@ -59,7 +60,11 @@ import type {
 import { fallbackWorkerIconId, isWorkerIconId } from './agent-icon-id'
 
 export type MessageTarget =
-  { taskId: string } | { sourceTaskId: string } | { replyToMessageId: string }
+  | { taskId: string }
+  | { sourceTaskId: string }
+  | { replyToMessageId: string }
+  | { projectId: string }
+  | { workspace: { directory: string; nodeId: string } }
 
 export interface VoiceTranscript {
   text: string
@@ -407,6 +412,53 @@ export class PegasApi {
       canResume: task.status === 'completed',
       canStop: ['backlog', 'unstarted', 'started'].includes(task.status),
     }))
+  }
+
+  async projects(): Promise<Project[]> {
+    return (
+      await this.#get<{ projects: Project[] }>(
+        `/v1/projects?userId=${encodeURIComponent(this.#userId)}`,
+      )
+    ).projects
+  }
+
+  async createProject(
+    draft: Omit<Project, 'userId' | 'createdAt'>,
+  ): Promise<Project> {
+    const response = await fetch('/v1/projects', {
+      method: 'POST',
+      headers: this.#headers(true),
+      body: JSON.stringify({ ...draft, userId: this.#userId }),
+    })
+    if (!response.ok) await throwResponse(response)
+    return ((await response.json()) as { project: Project }).project
+  }
+
+  async taskProject(taskId: string): Promise<ProjectBinding> {
+    return this.#get(
+      `/v1/tasks/${encodeURIComponent(taskId)}/project?userId=${encodeURIComponent(this.#userId)}`,
+    )
+  }
+
+  async updateTaskProject(
+    taskId: string,
+    draft: {
+      projectId: string | null
+      workingDirectory?: string
+      nodeId?: string
+      expectedRevision: number
+    },
+  ): Promise<ProjectBinding> {
+    const response = await fetch(
+      `/v1/tasks/${encodeURIComponent(taskId)}/project?userId=${encodeURIComponent(this.#userId)}`,
+      {
+        method: 'PUT',
+        headers: this.#headers(true),
+        body: JSON.stringify(draft),
+      },
+    )
+    if (!response.ok) await throwResponse(response)
+    return (await response.json()) as ProjectBinding
   }
 
   async sendMessage(
@@ -901,7 +953,9 @@ export class PegasApi {
       userId: this.#userId,
       language,
       source: 'web',
-      ...target,
+      ...(target && 'workspace' in target
+        ? { workspace: JSON.stringify(target.workspace) }
+        : target),
     })
     const response = await fetch(`/v1/voice/messages?${params.toString()}`, {
       method: 'POST',
@@ -1525,3 +1579,12 @@ async function throwResponse(response: Response): Promise<never> {
   }
   throw new ApiError(response.status, message)
 }
+
+export type WorkspaceApi = Pick<
+  PegasApi,
+  | 'projects'
+  | 'createProject'
+  | 'taskProject'
+  | 'updateTaskProject'
+  | 'executionNodes'
+>

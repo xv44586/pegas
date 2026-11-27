@@ -135,6 +135,10 @@ function workflowState(
  * persisted Task/Run references.
  */
 export interface WorkChannel {
+  projectId?: string
+  workingDirectory?: string
+  workspaceNodeId?: string
+  workspaceRevision?: number
   id: string
   taskId: string
   userId: string
@@ -166,6 +170,14 @@ export function projectWorkChannel(task: Task, facts: WorkFacts): WorkChannel {
     goal: task.goal,
     status: task.status,
     workerIconId: task.workerIconId,
+    ...(task.projectId ? { projectId: task.projectId } : {}),
+    ...(task.workingDirectory
+      ? { workingDirectory: task.workingDirectory }
+      : {}),
+    ...(task.workspaceNodeId ? { workspaceNodeId: task.workspaceNodeId } : {}),
+    ...(task.workspaceRevision
+      ? { workspaceRevision: task.workspaceRevision }
+      : {}),
     ...(task.statusReason ? { statusReason: task.statusReason } : {}),
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,

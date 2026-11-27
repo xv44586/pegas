@@ -37,6 +37,34 @@ const validContext: ExecutionContext = {
 }
 
 describe('versioned Run execution snapshots', () => {
+  it('keeps bound-directory contract v3 permissions frozen and rejects malformed snapshots', () => {
+    const context = {
+      ...validContext,
+      nodeId: 'selected-node',
+      workspaceBinding: { revision: 1 },
+    }
+    expect(
+      decodeDshExecutionSnapshot(
+        { executionContractVersion: 3, executionContext: context },
+        defaults,
+      ),
+    ).toMatchObject({
+      workspace: '/snapshot-workspace',
+      permissionMode: 'read-only',
+      approvalPolicy: 'ask',
+      additionalDirectories: ['/snapshot-extra'],
+    })
+    expect(() =>
+      decodeDshExecutionSnapshot(
+        {
+          executionContractVersion: 3,
+          executionContext: { ...context, permissions: '{}' },
+        },
+        defaults,
+      ),
+    ).toThrow(/execution contract/)
+  })
+
   it('decodes every persisted DSH option without consulting current defaults', () => {
     expect(
       decodeDshExecutionSnapshot(

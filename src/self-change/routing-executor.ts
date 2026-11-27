@@ -36,7 +36,10 @@ export class SelfChangeRoutingExecutor implements RunExecutor {
 
   #isSelfChange(taskId: string): boolean {
     for (const task of this.#store.listTasks()) {
-      if (task.id === taskId) return task.targetResource === 'pegas_repository'
+      if (task.id === taskId)
+        return (
+          !task.workingDirectory && task.targetResource === 'pegas_repository'
+        )
     }
     throw new Error('Task is missing for self-change dispatch')
   }

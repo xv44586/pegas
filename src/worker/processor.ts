@@ -6,6 +6,7 @@ import type {
   Task,
 } from '../core/domain.js'
 import { buildToolSemantic } from '../activity/tool-semantics.js'
+import { validateProjectWorkspace } from '../project/project-workspaces.js'
 import { replyReference } from '../conversation/projection.js'
 import { conversationProgressText } from '../executor/conversation-executor.js'
 import {
@@ -899,6 +900,8 @@ function mergeableMessage(event: InboxEvent): boolean {
     return false
   if (!isRecordPayload(event.payload)) return false
   if (
+    event.payload.projectId !== undefined ||
+    event.payload.workspace !== undefined ||
     event.payload.taskId !== undefined ||
     event.payload.sourceTaskId !== undefined ||
     event.payload.replyToMessageId !== undefined
@@ -1041,6 +1044,12 @@ export async function executeClaimedRun(
 
   let result
   try {
+    if (
+      claimed.run.executionContractVersion === 3 &&
+      !claimed.run.executionContext.workspaceBinding
+    )
+      throw new Error('Project execution snapshot is missing')
+    validateProjectWorkspace(claimed.run.executionContext)
     const inputEventId = store.resolveRunInputEventId(claimed.run.id)
     const explicitMemories = store.memoryContextEntriesForTask(
       claimed.task.userId,

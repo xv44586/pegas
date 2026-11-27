@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { execFileSync, spawn } from 'node:child_process'
 import {
   lstatSync,
+  realpathSync,
   readFileSync,
   mkdirSync,
   mkdtempSync,
@@ -52,12 +53,15 @@ if (!process.argv.includes('--electron-child')) {
     'executor/dsh-home.js',
   )
   const { ModelCredentialVault } = await load('model/model-credential-vault.js')
-  const workspace = mkdtempSync(join(tmpdir(), 'pegas-runtime-gate-'))
+  const workspace = realpathSync(
+    mkdtempSync(join(tmpdir(), 'pegas-runtime-gate-')),
+  )
   const home = join(workspace, 'dsh-home')
   let configuration
   let requests = 0
   let observedRead = false
   let fixtureError
+  const rulesMarker = 'PEGAS_PROJECT_RULES_MUST_REACH_MODEL'
   const marker = 'PEGAS_RUNTIME_FILE_CONTENT'
   const answer = 'PEGAS_RUNTIME_TOOL_OK'
   const gateway = createServer((request, response) => {
@@ -70,6 +74,10 @@ if (!process.argv.includes('--electron-child')) {
         assert.equal(request.url, '/v1/chat/completions')
         const input = JSON.parse(body)
         requests++
+        assert(
+          JSON.stringify(input.messages).includes(rulesMarker),
+          'Project AGENTS.md must reach the real model request',
+        )
         const result = input.messages.find(
           message =>
             message.role === 'tool' &&
@@ -119,6 +127,10 @@ if (!process.argv.includes('--electron-child')) {
     })
   })
   try {
+    writeFileSync(
+      join(workspace, 'AGENTS.md'),
+      `# Project rules\n${rulesMarker}\nUse the user-selected directory. No worktree is required.\n`,
+    )
     mkdirSync(join(workspace, '.local', 'bin'), { recursive: true })
     symlinkSync(process.argv.at(-1), join(workspace, '.local', 'bin', 'dsh'))
     process.env.HOME = workspace
@@ -198,6 +210,19 @@ if (!process.argv.includes('--electron-child')) {
       taskId: 'runtime',
       prompt: 'Read fixture.txt using the read tool.',
       workingDirectory: workspace,
+      executionContractVersion: 3,
+      executionContext: {
+        executor: 'dsh-headless',
+        workspace,
+        nodeId: 'fixture',
+        workspaceBinding: { revision: 1 },
+        project: {
+          id: 'fixture-project',
+          name: 'Fixture',
+          directory: workspace,
+          revision: 1,
+        },
+      },
     }
     const result = await executor.execute(input)
     assert.ifError(fixtureError)
@@ -218,6 +243,7 @@ if (!process.argv.includes('--electron-child')) {
         electron: process.versions.electron,
         node: fingerprint.node,
         catalog: 'passed',
+        projectRules: 'passed',
         tool: 'passed',
         resume: 'passed',
         requests,

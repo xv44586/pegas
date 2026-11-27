@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { createServer as createHttpServer } from 'node:http'
 import { createServer } from 'node:net'
@@ -146,6 +146,7 @@ try {
     throw new Error('Completion was not delivered with its idempotency key')
   if (completionDelivery.body?.payload?.type !== 'run.completed')
     throw new Error('Webhook did not receive the completion payload')
+  await verifyProjectWorkspaces(port)
   await verifyScheduledAutomation(port)
   if (unexpectedModelRequests.length > 0)
     throw new Error('Offline smoke unexpectedly attempted model requests')
@@ -321,4 +322,62 @@ function wait(milliseconds) {
 function waitForExit(child) {
   if (child.exitCode !== null) return Promise.resolve()
   return new Promise(resolveExit => child.once('exit', resolveExit))
+}
+
+async function verifyProjectWorkspaces(apiPort) {
+  const base = `http://127.0.0.1:${apiPort}`
+  const call = async (path, body) => {
+    const response = await fetch(`${base}${path}`, {
+      method: body ? 'POST' : 'GET',
+      headers: {
+        authorization: `Bearer ${apiToken}`,
+        'content-type': 'application/json',
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    })
+    if (!response.ok)
+      throw new Error(`Project smoke API failed: ${path} ${response.status}`)
+    return response.json()
+  }
+  const { nodes } = await call('/v1/nodes')
+  const node = nodes[0]
+  if (!node) throw new Error('Project smoke needs a registered execution node')
+  const directory = realpathSync(dataDirectory)
+  const { project } = await call('/v1/projects', {
+    id: 'smoke-project',
+    userId: 'smoke-user',
+    name: 'Smoke documents',
+    nodeId: node.id,
+    directory,
+  })
+  for (const selection of [
+    { projectId: project.id },
+    { workspace: { directory, nodeId: node.id } },
+  ]) {
+    const { event } = await call('/v1/events', {
+      userId: 'smoke-user',
+      source: 'web',
+      type: 'user.message',
+      payload: { text: 'Inspect the selected directory', ...selection },
+    })
+    let task
+    for (let attempt = 0; attempt < 100; attempt++) {
+      task = (await call('/v1/tasks?userId=smoke-user')).tasks.find(
+        item => item.originEventId === event.id,
+      )
+      if (task) break
+      await wait(50)
+    }
+    if (!task) throw new Error('Project smoke task was not routed')
+    const run = await waitForCompletedRun(apiPort, task.id)
+    if (
+      run.executionContractVersion !== 3 ||
+      run.executionContext.workspace !== directory ||
+      run.executionContext.nodeId !== node.id
+    )
+      throw new Error('Explicit directory did not reach the execution snapshot')
+    if ((task.projectId ?? null) !== (selection.projectId ?? null))
+      throw new Error('Standalone folder was turned into a project')
+  }
+  console.log('Project and standalone folder execution smoke passed')
 }

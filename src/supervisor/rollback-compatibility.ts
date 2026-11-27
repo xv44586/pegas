@@ -34,6 +34,28 @@ export function assertRollbackCompatible(
       .get() as { version: number | null }
     const currentVersion = current.version ?? 0
     if (
+      currentVersion >= 61 &&
+      targetMaximumSchema < 61 &&
+      (database
+        .prepare(
+          "SELECT 1 FROM tasks WHERE working_directory IS NOT NULL AND status NOT IN ('completed','cancelled') LIMIT 1",
+        )
+        .get() ||
+        database
+          .prepare(
+            "SELECT 1 FROM inbox_events WHERE required_contract_version >= 5 AND status IN ('pending','processing') LIMIT 1",
+          )
+          .get() ||
+        database
+          .prepare(
+            "SELECT 1 FROM runs WHERE execution_contract_version >= 3 AND status IN ('queued','running','waiting') LIMIT 1",
+          )
+          .get())
+    )
+      throw new RollbackCompatibilityError(
+        'Rollback is unsafe while project or directory work still needs the workspace contract',
+      )
+    if (
       currentVersion >= 60 &&
       targetMaximumSchema < 60 &&
       database

@@ -1,3 +1,4 @@
+import { validateProjectWorkspace } from '../project/project-workspaces.js'
 import {
   hostCredentialRoots,
   credentialFreeEnvironment,
@@ -184,6 +185,18 @@ export class DshCliExecutor implements RunExecutor {
   }
 
   async execute(input: ExecutorInput): Promise<ExecutorResult> {
+    if (
+      input.executionContractVersion === 3 &&
+      !input.executionContext?.workspaceBinding
+    )
+      throw new Error('Project execution snapshot is missing')
+    if (input.executionContext?.workspaceBinding) {
+      if (input.workingDirectory !== input.executionContext.workspace)
+        throw new Error(
+          'Executor directory does not match its workspace binding',
+        )
+      validateProjectWorkspace(input.executionContext)
+    }
     const sessionBusyDeadline = Date.now() + sessionBusyWaitMs()
     for (;;) {
       try {
