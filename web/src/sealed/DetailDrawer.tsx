@@ -3300,7 +3300,7 @@ export function WorkerProfileSection({
       setResponse(saved)
       setSaveNotice(
         permissionsOnly
-          ? '权限已保存。收紧对下一次工具调用生效，放宽对后续运行生效。'
+          ? '权限已保存。收紧在下次调用生效；放宽不超过当前运行的原有上限。'
           : '执行设置已保存，对后续运行生效。',
       )
     } catch (caught) {
@@ -3523,7 +3523,7 @@ export function WorkerProfileSection({
                 </Select>
               </FormField>
               <p className="drawer-footnote mt-2.5 text-[12px] leading-[1.6] text-ink-2">
-                收紧对下一次工具调用立即生效；放宽只影响后续运行，不越过已排队运行的能力上限。
+                收紧对下一次工具调用立即生效；放宽不超过当前运行的原有权限上限，超出时需新运行。
               </p>
               {!permissionsOnly && modelMode === 'override' && (
                 <div className="my-3.5 grid gap-1.5">

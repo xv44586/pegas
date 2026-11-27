@@ -167,7 +167,7 @@ describe('conversation permission management', () => {
     )
     expect(
       await screen.findByText(
-        '权限已保存。收紧对下一次工具调用生效，放宽对后续运行生效。',
+        '权限已保存。收紧在下次调用生效；放宽不超过当前运行的原有上限。',
       ),
     ).toBeTruthy()
     expect(screen.queryByLabelText('执行模型')).toBeNull()

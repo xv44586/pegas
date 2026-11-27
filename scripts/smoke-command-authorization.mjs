@@ -481,7 +481,7 @@ try {
     .getByRole('button', { name: '保存权限', exact: true })
     .click()
   await permissions
-    .getByText('权限已保存。收紧对下一次工具调用生效，放宽对后续运行生效。')
+    .getByText('权限已保存。收紧在下次调用生效；放宽不超过当前运行的原有上限。')
     .waitFor()
   assert.equal(
     store.getWorkerProfile(allTask.task.id, 'owner').permissionMode,
