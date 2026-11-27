@@ -27,4 +27,6 @@ export interface RuntimeSettingsSelection {
   permissionTier?: PermissionTier
   /** Optional model pre-review of ask decisions (APPROVAL-001 P5); defaults to off. */
   autoReviewEnabled?: boolean
+  /** Optional code-change SVG in work reports; defaults to off. */
+  visualDiffEnabled?: boolean
 }

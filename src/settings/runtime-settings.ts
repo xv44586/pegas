@@ -75,6 +75,7 @@ export function runtimeSettingsDefaults(
     rewriteMode: config.rewriteMode,
     chatLaneEnabled: config.chatLaneEnabled,
     routingUncertainty: 'new_task',
+    visualDiffEnabled: false,
   }
 }
 
@@ -207,6 +208,14 @@ export function parseRuntimeSettingsUpdate(
             'standard',
             'full',
           ]),
+        }),
+    ...(value.visualDiffEnabled === undefined
+      ? {}
+      : {
+          visualDiffEnabled: booleanValue(
+            value.visualDiffEnabled,
+            'visualDiffEnabled',
+          ),
         }),
     ...(value.autoReviewEnabled === undefined
       ? {}

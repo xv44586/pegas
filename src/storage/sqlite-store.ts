@@ -3294,6 +3294,7 @@ interface RuntimeSettingsRow {
   execution_pools_json?: string | null
   permission_tier?: string | null
   auto_review_enabled?: number | null
+  visual_diff_enabled?: number | null
   model_provider: string
   model_connection_id: string | null
   model_name: string
@@ -3617,6 +3618,19 @@ export class PegasStore {
     `,
     )
     this.#migrate(61, projectWorkspaceMigration)
+    this.#migrate(
+      62,
+      `
+ALTER TABLE runtime_settings ADD COLUMN visual_diff_enabled INTEGER NOT NULL DEFAULT 0 CHECK (visual_diff_enabled IN (0, 1));
+CREATE TABLE run_visual_diffs (
+  run_id TEXT PRIMARY KEY REFERENCES runs(id),
+  user_id TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  svg TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+`,
+    )
   }
 
   listProjects(userId: string): Project[] {
@@ -3770,8 +3784,8 @@ export class PegasStore {
           (id, revision, router_mode, model_provider, model_connection_id, model_name,
            agent_model_mode, agent_model_provider, agent_model_name,
            privacy_mode, rewrite_mode, chat_lane_enabled, routing_uncertainty,
-           execution_pools_json, permission_tier, auto_review_enabled, updated_at)
-         VALUES (1, 1, ?, 'openai-compatible', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           execution_pools_json, permission_tier, auto_review_enabled, visual_diff_enabled, updated_at)
+         VALUES (1, 1, ?, 'openai-compatible', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         defaults.routerMode,
@@ -3787,6 +3801,7 @@ export class PegasStore {
         JSON.stringify(defaults.executionPools ?? {}),
         defaults.permissionTier ?? 'standard',
         defaults.autoReviewEnabled ? 1 : 0,
+        defaults.visualDiffEnabled ? 1 : 0,
         now,
       )
     return this.getRuntimeSettings()
@@ -8527,6 +8542,7 @@ export class PegasStore {
              execution_pools_json = COALESCE(?, execution_pools_json),
              permission_tier = COALESCE(?, permission_tier),
              auto_review_enabled = COALESCE(?, auto_review_enabled),
+             visual_diff_enabled = COALESCE(?, visual_diff_enabled),
              updated_at = ?
          WHERE id = 1 AND revision = ?`,
       )
@@ -8552,6 +8568,11 @@ export class PegasStore {
         settings.autoReviewEnabled === undefined
           ? null
           : settings.autoReviewEnabled
+            ? 1
+            : 0,
+        settings.visualDiffEnabled === undefined
+          ? null
+          : settings.visualDiffEnabled
             ? 1
             : 0,
         this.#clock.now().toISOString(),
@@ -8709,6 +8730,7 @@ export class PegasStore {
                execution_pools_json = COALESCE(?, execution_pools_json),
                permission_tier = COALESCE(?, permission_tier),
                auto_review_enabled = COALESCE(?, auto_review_enabled),
+             visual_diff_enabled = COALESCE(?, visual_diff_enabled),
                updated_at = ?
            WHERE id = 1 AND revision = ?`,
         )
@@ -8734,6 +8756,11 @@ export class PegasStore {
           settings.autoReviewEnabled === undefined
             ? null
             : settings.autoReviewEnabled
+              ? 1
+              : 0,
+          settings.visualDiffEnabled === undefined
+            ? null
+            : settings.visualDiffEnabled
               ? 1
               : 0,
           now,
@@ -14725,6 +14752,18 @@ export class PegasStore {
       throw new Error(`Worker ${workerId} does not own run ${runId}`)
   }
 
+  runVisualDiff(
+    runId: string,
+    userId: string,
+  ): { svg: string; contentHash: string } | undefined {
+    const row = this.#database
+      .prepare(
+        'SELECT svg, content_hash FROM run_visual_diffs WHERE run_id = ? AND user_id = ?',
+      )
+      .get(runId, userId) as { svg: string; content_hash: string } | undefined
+    return row ? { svg: row.svg, contentHash: row.content_hash } : undefined
+  }
+
   completeRun(runId: string, workerId: string, result: ExecutorResult): void {
     const answer = splitAnswerFollowUps(result.output)
     result = { ...result, output: answer.text }
@@ -14738,6 +14777,31 @@ export class PegasStore {
       }
       this.#assertNoPendingSteering(runId)
       const task = this.#taskById(run.taskId)
+      if (
+        result.visualDiff &&
+        !result.approvalPending &&
+        (task.kind ?? 'work') === 'work' &&
+        this.hasRuntimeSettings() &&
+        this.getRuntimeSettings().visualDiffEnabled === true
+      ) {
+        this.#database
+          .prepare(
+            'INSERT INTO run_visual_diffs (run_id, user_id, content_hash, svg, created_at) VALUES (?, ?, ?, ?, ?)',
+          )
+          .run(
+            runId,
+            task.userId,
+            result.visualDiff.contentHash,
+            result.visualDiff.svg,
+            now,
+          )
+        const contentUrl = `/v1/runs/${encodeURIComponent(runId)}/visual-diff?userId=${encodeURIComponent(task.userId)}`
+        result = {
+          ...result,
+          output: `${result.output}\n\n![代码变更流程图](${contentUrl})`,
+        }
+      }
+
       const resumedAction = this.#database
         .prepare(
           `SELECT * FROM actions WHERE resume_run_id = ?
@@ -14973,7 +15037,7 @@ export class PegasStore {
           !actionBlocksCompletion &&
           !requiresEvidence
             ? {}
-            : { text: answer.text }),
+            : { text: result.output }),
           ...(!awaitingClarification &&
           !actionBlocksCompletion &&
           !requiresEvidence &&
@@ -18795,6 +18859,7 @@ function toRuntimeSettings(row: RuntimeSettingsRow): RuntimeSettings {
       ? row.permission_tier
       : 'standard',
     autoReviewEnabled: row.auto_review_enabled === 1,
+    visualDiffEnabled: row.visual_diff_enabled === 1,
     updatedAt: row.updated_at,
   }
 }

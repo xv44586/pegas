@@ -1190,16 +1190,35 @@ function PegasSettings({
         </div>
       )}
       {tab === 'behavior' && (
-        <BehaviorSettings
-          behaviorPreferences={behaviorPreferences}
-          behaviorPreferencesError={behaviorPreferencesError}
-          onOpenDrawer={onOpenDrawer}
-          onReloadWorkRules={onReloadWorkRules}
-          onSaveBehavior={onSaveBehavior}
-          onToggleWorkRule={onToggleWorkRule}
-          workRules={workRules}
-          workRulesError={workRulesError}
-        />
+        <>
+          <div className="setting-section py-[18px]">
+            <div className="switch-row bui flex items-center justify-between py-3">
+              <span className="text-[13px] text-ink">代码变更流程图</span>
+              <Switch
+                label="代码变更流程图"
+                checked={draft.visualDiffEnabled === true}
+                onChange={checked =>
+                  onChange({ ...draft, visualDiffEnabled: checked })
+                }
+              />
+            </div>
+            <p className="text-[12px] leading-[1.6] text-ink-2">
+              开启后，Pegas
+              在代码工作汇报中按需附上修改前后的动态图，标明流程变化与复用部分。
+              纯格式、类型标注或局部重命名不强行画图。保存后对后续工作生效。
+            </p>
+          </div>
+          <BehaviorSettings
+            behaviorPreferences={behaviorPreferences}
+            behaviorPreferencesError={behaviorPreferencesError}
+            onOpenDrawer={onOpenDrawer}
+            onReloadWorkRules={onReloadWorkRules}
+            onSaveBehavior={onSaveBehavior}
+            onToggleWorkRule={onToggleWorkRule}
+            workRules={workRules}
+            workRulesError={workRulesError}
+          />
+        </>
       )}
       {tab === 'autonomy' && (
         <div className="setting-section py-[18px]">

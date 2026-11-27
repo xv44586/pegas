@@ -441,6 +441,8 @@ export interface RuntimeSettings {
   routingUncertainty?: 'new_task' | 'ask_first' | 'continue_recent'
   permissionTier?: 'strict' | 'standard' | 'full'
   autoReviewEnabled?: boolean
+  /** Optional code-change SVG in work reports; defaults to off. */
+  visualDiffEnabled?: boolean
   executionPools?: Partial<
     Record<'fast' | 'balanced' | 'deep', { provider: string; model: string }>
   >

@@ -1,3 +1,7 @@
+import {
+  verifyVisualDiffPreview,
+  verifyVisualDiffSetting,
+} from './verify-visual-diff.mjs'
 import { verifyWorkspacePicker } from './verify-workspace-picker.mjs'
 import { verifyDetailClosure } from './verify-detail-closure.mjs'
 import { verifyTaskConversation } from './verify-task-conversation.mjs'
@@ -290,6 +294,7 @@ try {
   await composerInput.waitFor()
   await verifyComposerMenu(page, capture, 'desktop')
   await verifyUiOverlays(page, capture, 'desktop')
+  await verifyVisualDiffPreview(page, capture, 'desktop')
   await verifyAnswerFollowUps(page, capture, 'desktop')
   await verifyDetailClosure(page, capture, 'desktop')
   await verifyTaskConversation(page, capture, 'desktop')
@@ -471,6 +476,7 @@ try {
 
   await page.getByLabel('主导航').getByRole('button', { name: /^设置/ }).click()
   await page.getByRole('heading', { name: 'Pegas', exact: true }).waitFor()
+  await verifyVisualDiffSetting(page, capture)
   await capture(page, 'desktop-settings-pegas.png', 'desktop-settings-pegas')
   await page.getByRole('button', { name: '更换模型' }).click()
   await assertPickerPagination(page, 'desktop settings execution picker', {
@@ -794,6 +800,7 @@ try {
   await mobileComposer.waitFor()
   await verifyComposerMenu(mobilePage, capture, 'mobile')
   await verifyUiOverlays(mobilePage, capture, 'mobile')
+  await verifyVisualDiffPreview(mobilePage, capture, 'mobile')
   await verifyAnswerFollowUps(mobilePage, capture, 'mobile')
   await verifyDetailClosure(mobilePage, capture, 'mobile')
   await verifyTaskConversation(mobilePage, capture, 'mobile')

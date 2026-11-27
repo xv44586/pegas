@@ -1420,6 +1420,9 @@ export class PegasApi {
         ...(settings.permissionTier === undefined
           ? {}
           : { permissionTier: settings.permissionTier }),
+        ...(settings.visualDiffEnabled === undefined
+          ? {}
+          : { visualDiffEnabled: settings.visualDiffEnabled }),
         ...(settings.autoReviewEnabled === undefined
           ? {}
           : { autoReviewEnabled: settings.autoReviewEnabled }),

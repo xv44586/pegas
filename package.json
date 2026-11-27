@@ -65,7 +65,8 @@
     "brand:generate": "node scripts/generate-brand-icons.mjs",
     "brand:check": "node scripts/generate-brand-icons.mjs --check",
     "smoke:dsh-runtime": "node scripts/smoke-dsh-runtime.mjs",
-    "smoke:command-authorization": "node scripts/smoke-command-authorization.mjs"
+    "smoke:command-authorization": "node scripts/smoke-command-authorization.mjs",
+    "package:visual-diff": "pnpm build:server && node scripts/package-visual-diff.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
