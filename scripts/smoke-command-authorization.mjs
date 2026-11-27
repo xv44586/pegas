@@ -3,6 +3,8 @@ import { execFileSync } from 'node:child_process'
 import {
   mkdirSync,
   mkdtempSync,
+  existsSync,
+  readFileSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -63,6 +65,7 @@ git(repo, 'remote', 'add', 'origin', remote)
 const command = 'env -u GIT_CONFIG_COUNT git fetch origin main'
 let repeatWithinRun = false,
   commandDirectory = repo
+let scriptCalls
 let toolResults = 0,
   requests = 0,
   application,
@@ -83,7 +86,8 @@ const gateway = createServer((request, response) => {
       const completedTools = input.messages
         .slice(latestUser + 1)
         .filter(message => message.role === 'tool').length
-      const result = completedTools >= (repeatWithinRun ? 2 : 1)
+      const result =
+        completedTools >= (scriptCalls?.length ?? (repeatWithinRun ? 2 : 1))
       if (repeatWithinRun && completedTools === 1) advanceRemote()
       if (result) toolResults++
       const delta = result
@@ -94,14 +98,21 @@ const gateway = createServer((request, response) => {
                 index: 0,
                 id: `fetch-fixture-${requests}`,
                 type: 'function',
-                function: {
-                  name: 'bash',
-                  arguments: JSON.stringify({
-                    command,
-                    workdir: commandDirectory,
-                    description: 'Fetch the local fixture remote',
-                  }),
-                },
+                function: scriptCalls
+                  ? {
+                      name: scriptCalls[completedTools].name,
+                      arguments: JSON.stringify(
+                        scriptCalls[completedTools].arguments,
+                      ),
+                    }
+                  : {
+                      name: 'bash',
+                      arguments: JSON.stringify({
+                        command,
+                        workdir: commandDirectory,
+                        description: 'Fetch the local fixture remote',
+                      }),
+                    },
               },
             ],
           }
@@ -165,7 +176,7 @@ async function desktop() {
     .waitFor()
   if (await skip.isVisible()) await skip.click()
 }
-function claim(taskId) {
+function claim(taskId, requireEvidence = false) {
   const event = store.enqueueEvent({
     userId: 'owner',
     type: 'user.message',
@@ -212,16 +223,56 @@ function claim(taskId) {
       }),
   )
   store.completeEvent(e.id, 'fixture-router')
+  if (requireEvidence) {
+    const task = store
+      .listTasks('owner')
+      .find(item => item.originEventId === event.id)
+    assert(task)
+    store.createGoalContract(task.id, 'owner', 'task-tools-goal', {
+      basedOnEventIds: [event.id],
+      desiredOutcome: 'Verify task tool authorization with evidence',
+      beneficiaries: ['owner'],
+      successCriteria: [
+        {
+          criterionId: 'verified',
+          observableStatement:
+            'The fixture has an independently verified result',
+          required: true,
+          evidencePlanRef: 'verification',
+        },
+      ],
+      nonGoals: [],
+      constraints: [],
+      contextSources: [],
+      assumptions: [],
+      unknowns: [],
+      prerequisites: [],
+      permissionBoundary: {},
+      reviewCheckpoints: [],
+      evidencePlan: [
+        {
+          id: 'verification',
+          criterionId: 'verified',
+          acceptedKinds: ['observation'],
+          acceptedTrustClasses: ['independent'],
+          minimumCount: 1,
+          presentation: 'inline',
+        },
+      ],
+      failureAndRecovery: 'Stop the fixture task',
+      feedbackSignals: [],
+    })
+  }
   const run = store.claimNextRun('fixture-worker', 300000)
   assert(run)
   return run
 }
-async function execute(claimed) {
+async function execute(claimed, permissionMode = 'workspace-write') {
   const events = []
   const executor = new DshCliExecutor({
     home,
     modelConfiguration: configuration,
-    permissionMode: 'workspace-write',
+    permissionMode,
     approvalPolicy: 'ask',
     timeoutMs: 45000,
   })
@@ -257,11 +308,18 @@ async function execute(claimed) {
     JSON.stringify({ result, events }, null, 2),
   )
   for (const event of events) {
-    if (event.type === 'tool_result')
+    if (event.type === 'tool_result') {
+      if (!result.approvalPending)
+        assert.equal(
+          event.status,
+          'completed',
+          `Real tool failed: ${event.result}`,
+        )
       assert(
         !/\[exit code: [1-9]\d*\]/.test(event.result ?? ''),
         `The real Git command failed: ${event.result}`,
       )
+    }
   }
   return { result, events }
 }
@@ -276,7 +334,11 @@ async function openApproval(approvalId) {
   assert(message)
   await window.goto(`${baseUrl}/?view=outbox&outbox=${message.id}`)
   await window.getByRole('radiogroup', { name: '你的决定' }).waitFor()
-  assert((await window.locator('body').innerText()).includes('git fetch'))
+  assert(
+    (await window.locator('body').innerText()).includes(
+      scriptCalls ? '本事情内允许所有工具操作' : 'git fetch',
+    ),
+  )
   return store.getApproval(approvalId, 'owner')
 }
 function fetched() {
@@ -322,10 +384,230 @@ try {
     agentModel: { provider: 'magpie', model: 'fixture' },
   })
   await openServer()
+  await desktop()
+  // Real, differing shell scripts outside the workspace. The fixture never
+  // grants permissions to a business task or uses a user's stored credentials.
+  const taskMarker = join(fixture, 'task-tools-marker')
+  const namedMarker = join(fixture, 'named-tool-marker')
+  const scripts = value => [
+    {
+      name: 'bash',
+      arguments: {
+        command: `node -e 'require("fs").writeFileSync(${JSON.stringify(taskMarker)},${JSON.stringify(value)})'`,
+        workdir: repo,
+        description: 'Write the isolated task authorization fixture',
+      },
+    },
+    {
+      name: 'bash',
+      arguments: {
+        command: `for x in a b; do printf "$x"; done >> '${taskMarker}'`,
+        workdir: repo,
+        description: 'Append through a different compound script',
+      },
+    },
+    { name: 'write', arguments: { file_path: namedMarker, content: value } },
+  ]
+  scriptCalls = scripts('first')
+  let allTask = claim(void 0, true)
+  const allPending = await execute(allTask)
+  assert(allPending.result.approvalPending)
+  assert(!existsSync(taskMarker), 'No file effect before authorization')
+  await openApproval(allPending.result.approvalPending.approvalId)
+  await window
+    .getByRole('radio', { name: '本事情内允许所有工具操作', exact: true })
+    .click()
+  await window.screenshot({
+    path: join(output, 'desktop-task-tools-choice.png'),
+  })
+  await window.getByRole('button', { name: '提交决定', exact: true }).click()
+  await window.getByRole('region', { name: '审批结果' }).waitFor()
+  const allRule = store
+    .listUserApprovalRules('owner')
+    .find(rule => rule.category === 'task-tools' && rule.status === 'active')
+  assert(allRule)
+  await application.close()
+  application = undefined
+  await new Promise(resolve => server.close(resolve))
+  store.close()
+  await openServer()
+  await desktop()
+  allTask = store.claimNextRun('fixture-worker', 300000)
+  assert(allTask)
+  const allFirst = await execute(allTask)
+  assert(!allFirst.result.approvalPending)
+  assert.equal(readFileSync(taskMarker, 'utf8'), 'firstab')
+  assert.equal(readFileSync(namedMarker, 'utf8'), 'first')
+  assert(allFirst.events.some(e => e.ruleId === allRule.id))
+  assert.equal(
+    store.listUserApprovalRules('owner').find(rule => rule.id === allRule.id)
+      ?.status,
+    'active',
+  )
+  scriptCalls = scripts('later')
+  allTask = claim(allTask.task.id)
+  const allLater = await execute(allTask)
+  assert(!allLater.result.approvalPending)
+  assert.equal(readFileSync(taskMarker, 'utf8'), 'laterab')
+  assert.equal(readFileSync(namedMarker, 'utf8'), 'later')
+  await window.goto(baseUrl)
+  await window.getByRole('button', { name: '权限管理', exact: true }).click()
+  await window.getByRole('dialog', { name: '权限管理', exact: true }).waitFor()
+  await window.getByRole('button', { name: '长期授权', exact: true }).click()
+  assert.equal(
+    await window.getByText('本事情内所有工具授权', { exact: true }).count(),
+    0,
+  )
+  await window.screenshot({
+    path: join(output, 'desktop-main-permissions.png'),
+  })
+  await window
+    .getByRole('button', { name: '关闭权限管理', exact: true })
+    .click()
+  await window.goto(`${baseUrl}/?task=${allTask.task.id}`)
+  await window.getByRole('button', { name: '权限管理', exact: true }).click()
+  const permissions = window.getByRole('dialog', {
+    name: '权限管理',
+    exact: true,
+  })
+  await permissions
+    .getByRole('button', { name: '保存权限', exact: true })
+    .waitFor()
+  await permissions.getByLabel('权限档位', { exact: true }).click()
+  await window
+    .getByRole('option', { name: '严格 · 只读，写与网络都审批', exact: true })
+    .click()
+  await permissions
+    .getByRole('button', { name: '保存权限', exact: true })
+    .click()
+  await permissions
+    .getByText('权限已保存。收紧对下一次工具调用生效，放宽对后续运行生效。')
+    .waitFor()
+  assert.equal(
+    store.getWorkerProfile(allTask.task.id, 'owner').permissionMode,
+    'strict',
+  )
+  await permissions.getByLabel('权限档位', { exact: true }).click()
+  await window
+    .getByRole('option', { name: '标准 · 区内放行，越界审批', exact: true })
+    .click()
+  await Promise.all([
+    window.waitForResponse(
+      response =>
+        response
+          .url()
+          .includes(`/v1/tasks/${allTask.task.id}/worker-profile`) &&
+        response.request().method() === 'PUT' &&
+        response.status() === 200,
+    ),
+    permissions.getByRole('button', { name: '保存权限', exact: true }).click(),
+  ])
+  assert.equal(
+    store.getWorkerProfile(allTask.task.id, 'owner').permissionMode,
+    'standard',
+  )
+  const allRow = permissions
+    .locator('.approval-rule-item')
+    .filter({ hasText: '本事情内所有工具授权' })
+  await allRow.getByRole('button', { name: '撤销规则', exact: true }).click()
+  await allRow.getByText(/已撤销/).waitFor()
+  await window.screenshot({
+    path: join(output, 'desktop-task-tools-revoked.png'),
+  })
+  scriptCalls = scripts('blocked')
+  allTask = claim(allTask.task.id)
+  const allRevoked = await execute(allTask)
+  assert(allRevoked.result.approvalPending)
+  assert.equal(
+    readFileSync(taskMarker, 'utf8'),
+    'laterab',
+    'Revocation prevents real writes',
+  )
+  assert.equal(readFileSync(namedMarker, 'utf8'), 'later')
+  store.stopTask(allTask.task.id, 'owner', 'fixture-stop-task-tools')
+  // End expiry on a task without an evidence contract, then reopen that task.
+  scriptCalls = scripts('ended')
+  let endTask = claim()
+  const endPending = await execute(endTask)
+  assert(endPending.result.approvalPending)
+  await openApproval(endPending.result.approvalPending.approvalId)
+  await window
+    .getByRole('radio', { name: '本事情内允许所有工具操作', exact: true })
+    .click()
+  await window.getByRole('button', { name: '提交决定', exact: true }).click()
+  await window.getByRole('region', { name: '审批结果' }).waitFor()
+  const endRule = store
+    .listUserApprovalRules('owner')
+    .find(rule => rule.category === 'task-tools' && rule.status === 'active')
+  assert(endRule)
+  endTask = store.claimNextRun('fixture-worker', 300000)
+  assert(endTask)
+  await execute(endTask)
+  assert.equal(readFileSync(taskMarker, 'utf8'), 'endedab')
+  assert.equal(
+    store.listUserApprovalRules('owner').find(rule => rule.id === endRule.id)
+      ?.status,
+    'revoked',
+  )
+  scriptCalls = scripts('reopened')
+  endTask = claim(endTask.task.id)
+  const reopenedTask = await execute(endTask)
+  assert(reopenedTask.result.approvalPending)
+  assert.equal(readFileSync(taskMarker, 'utf8'), 'endedab')
+  store.stopTask(endTask.task.id, 'owner', 'fixture-stop-reopened')
+  scriptCalls = [
+    { name: 'read_task_state', arguments: { taskId: endTask.task.id } },
+  ]
+  const diagnosticTask = claim()
+  const diagnosticProfile = store.getWorkerProfile(
+    diagnosticTask.task.id,
+    'owner',
+  )
+  store.updateWorkerProfile(diagnosticTask.task.id, 'owner', {
+    commandId: 'strict-diagnosis',
+    expectedRevision: diagnosticProfile.revision,
+    modelMode: 'inherit',
+    permissionMode: 'strict',
+  })
+  const diagnostic = await execute(diagnosticTask, 'read-only')
+  assert(
+    !diagnostic.result.approvalPending,
+    'Internal state reads never need shell approval',
+  )
+  assert(
+    diagnostic.events.some(
+      event =>
+        event.type === 'tool_result' &&
+        event.status === 'completed' &&
+        event.result?.includes(endTask.task.id) &&
+        event.result?.includes('cancelled'),
+    ),
+  )
+  scriptCalls = undefined
+  writeFileSync(
+    join(output, 'desktop-task-tools-result.json'),
+    JSON.stringify(
+      {
+        desktop: 'actual Electron main',
+        executor: 'real DSH bash',
+        firstGrantAfterRestart: true,
+        differentScriptsInRun: true,
+        laterRunReuse: true,
+        desktopRevocation: true,
+        composerPermissionManagement: true,
+        composerTierSaved: true,
+        namedWriteToolReuse: true,
+        strictReadonlyStateQuery: true,
+        revokedCallNoEffect: true,
+        endExpiryAndReopen: true,
+      },
+      null,
+      2,
+    ),
+  )
   let taskProbe = claim()
   const taskPending = await execute(taskProbe)
   assert(taskPending.result.approvalPending)
-  await desktop()
   await openApproval(taskPending.result.approvalPending.approvalId)
   await window
     .getByRole('radio', { name: '本事情内允许 git fetch', exact: true })

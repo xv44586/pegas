@@ -219,6 +219,43 @@ afterEach(() => {
 })
 
 describe('CONV-002 task conversation', () => {
+  it.each(['main', 'task'])(
+    'opens permission management from the %s composer without losing the draft',
+    async scope => {
+      installTaskHistory()
+      window.history.replaceState(
+        {},
+        '',
+        scope === 'task' ? '/?task=task-1' : '/',
+      )
+      render(<App />)
+      const input = await screen.findByLabelText(
+        scope === 'task' ? '就这件事继续聊天' : '给 Pegas 发消息',
+      )
+      fireEvent.change(input, { target: { value: '尚未发送的草稿' } })
+      const trigger = screen.getByRole('button', {
+        name: '权限管理',
+      })
+      trigger.focus()
+      fireEvent.click(trigger)
+      const dialog = await screen.findByRole('dialog', { name: '权限管理' })
+      expect(
+        within(dialog).getByText(
+          scope === 'task'
+            ? '当前事情：整理季度数据'
+            : '选择要调整权限的事情，或管理跨事情生效的长期授权。',
+        ),
+      ).toBeTruthy()
+      if (scope === 'task') fireEvent.keyDown(dialog, { key: 'Escape' })
+      else
+        fireEvent.click(
+          within(dialog).getByRole('button', { name: '关闭权限管理' }),
+        )
+      await waitFor(() => expect(document.activeElement).toBe(trigger))
+      expect(input).toHaveProperty('value', '尚未发送的草稿')
+    },
+  )
+
   function installTaskHistory(
     options: {
       eventCount?: number

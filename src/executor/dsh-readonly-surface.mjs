@@ -29,6 +29,7 @@ export const READONLY_TOOL_NAMES = Object.freeze([
   'web_fetch',
   'web_search',
   'working_directory',
+  'read_task_state',
 ])
 
 export const CONVERSATION_STATE_TOOL_NAMES = Object.freeze([

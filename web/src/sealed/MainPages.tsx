@@ -1,4 +1,5 @@
 import { WorkspacePicker } from './WorkspacePicker'
+import { ConversationPermissions } from './ConversationPermissions'
 import { TaskConversationHistory } from './TaskConversationHistory'
 import {
   taskAttachment,
@@ -255,6 +256,7 @@ export function ConversationPage({
     return messageTarget(value) ?? workspaceTarget
   }
   const [sending, setSending] = useState(false)
+  const [permissionsOpen, setPermissionsOpen] = useState(false)
   const [modelOpenRequest, setModelOpenRequest] = useState(0)
   const [error, setError] = useState('')
   const [attachment, setAttachmentState] = useState(
@@ -1546,6 +1548,19 @@ export function ConversationPage({
               />
               {composerMenu.menu}
               <Button
+                aria-label="权限管理"
+                aria-haspopup="dialog"
+                className="h-10 min-w-10 rounded-full px-2 text-ink-3 hover:bg-hover hover:text-ink pointer-coarse:min-h-11"
+                onClick={() => setPermissionsOpen(true)}
+                size="sm"
+                title="管理事情权限与已保存的授权"
+                type="button"
+                variant="quiet"
+              >
+                <ShieldCheck size={18} aria-hidden="true" />
+                <span className="max-[420px]:sr-only">权限</span>
+              </Button>
+              <Button
                 aria-label="说完直接发送"
                 aria-pressed={voiceDirectSend}
                 className="size-10 rounded-full p-0 text-ink-3 hover:bg-hover hover:text-ink aria-pressed:bg-accent-tint aria-pressed:text-accent-ink pointer-coarse:size-11"
@@ -1702,6 +1717,14 @@ export function ConversationPage({
             </div>
           </div>
         </form>
+        {permissionsOpen && (
+          <ConversationPermissions
+            api={api}
+            channel={taskScope?.channel}
+            channels={snapshot.channels}
+            onClose={() => setPermissionsOpen(false)}
+          />
+        )}
       </div>
     </div>
   )

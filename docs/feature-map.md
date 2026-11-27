@@ -1,5 +1,12 @@
 # Pegas Feature Map
 
+### APPROVAL-001：本事情所有工具授权、对话权限入口与内部诊断（2026-11-27，本地验收通过）
+
+- 用户结果：明确一次授权后，当前事情的脚本和工具操作不再反复询问；事情结束立即失效，可随时撤销。符合条件的旧 pending 卡片也可选择；旧已决定卡片不升级。主/事情对话输入栏可调整事情档位、管理和撤销授权。
+- 边界、验收与恢复：[命令授权](command-authorization.md) 的本事情授权增量；基线 `7527f4f6`，独立 worktree/branch `fix/approval-001-state-query`。
+- 权威实现：`src/storage/sqlite-store.ts` / Control Plane 的 Approval/Rule 与 profile 合同，`src/executor/dsh-approval-bridge.mjs` 双入口；`dsh-history-tools.mjs` 的同 owner 只读状态工具；`runtime-private-root.ts` / credential boundary 保护七类可信运行文件；`web/src/sealed/ConversationPermissions.tsx` 复用权限与撤销组件。状态：Usable（本地目标场景验收通过；精确提交 CI 与发布独立验证，不以此状态宣称已上线）。
+- 下一缺口：本地真实 Electron/Worker/DSH 已证明首次授权重启、跨脚本/原生 write/后续 Run 复用、输入栏改档与撤销后文件不变、结束/重开失效、严格档诊断；macOS 10 项真实隔离探针通过。最终 `pnpm check` 159 文件 / 1869 测试与 `pnpm smoke` 通过；测试包含任务结束时未确认的 full 选择关闭、迟到保存服务端拒绝及 Escape 焦点恢复。Linux CI 与 Candidate 上线核验仍须通过；证据与平台限制见上述合同。
+
 > 最新 Feature 更新：2026-11-25（MEMORY-001 M2–M5 经 PR #102/#103/#104/#105 合入 main（最终 merge 523e67d，PR CI 与 main CI run 45549354710 均 success；M3 merge 后首跑 main CI 45548014723 因既有 App.test.tsx 保存提示竞态失败，同代码 PR head CI 与后续 main CI 均绿，LESSON-20261124-02 第二次观察已登记（Seen 2））并经 Candidate main-523e67d-r1 上线运行实例：schema 52→55 纯增量、clonefile 依赖实体化、restart 与删除发布 worktree 后 readyz 不变，运行实例已切换 PEGAS_MEMORY_PROVIDER=local（memory.key 自动生成 0600），派生记忆默认档生效；真实确认消息 canary（conversation lane）遇上游模型配额 429，按设计不产生派生 job 并走用户失败通知，local 蒸馏闭环待配额恢复后由真实使用验证；previous=main-93d1d44-r1 可回滚（存在有效 local 记忆时 Guard 拒 <v53，运行时可切 disabled）；详见 MEMORY-001「M2–M5 合并与生产发布」小节。同日早前：MEMORY-001 经 PR #100 合入 main（merge 93d1d44，PR/main CI 均 success）并经 Candidate main-93d1d44-r1 上线运行实例：schema 48→52 纯增量、clonefile 依赖实体化、两次 restart 与删除发布 worktree 后 readyz 不变、线上资产字节一致，previous=main-f2c4031-r1 可回滚；当时运行实例 PEGAS_MEMORY_PROVIDER=disabled 保持，现已被 local 档取代，Hindsight 启用步骤见 docs/memory.md「运行实例启用手册（运维）」；详见 MEMORY-001 M1 小节发布记录。）
 
 > 状态：Living Document

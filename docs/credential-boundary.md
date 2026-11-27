@@ -24,6 +24,7 @@
 
 - `credential-boundary.mjs` 是凭据目录、环境清理和子进程隔离的共同事实来源。Git 忽略宿主 global/system config、关闭交互式取凭据；普通仓库本地配置仍在，但 helper 无法越过凭据目录/服务边界。服务端命令指纹与执行器使用相同清理后的环境，旧指纹不匹配时重新审批。
 - `dsh-credential-boundary.mjs` 无条件挂载，独立于 `approvalPolicy`、档位和一次性 grant。先注册默认拒绝 guard，再等待文件/子进程服务就绪；缺失服务不会静默裸跑。文件服务拒绝受保护路径，进程与终端入口都附加隔离；子进程不得继承模型连接密钥。
+- 本事情全工具授权增量将控制面数据目录与 DSH home 纳入同一个通用工具读写拒绝。只禁止写入不足以阻止读取 `api-token` 后通过 API 提权；因此二者均拒绝。Linux 隐藏目录挂载完成后 remount 为只读，避免脚本在临时遮罩中写入后误报成功。所有 Run 的 capability、可信插件 patch 与模型配置 patch 统一迁入按 uid 创建并校验 0700/所有者/非符号链接的运行私有根。该根拒绝通用工具读写；唯一例外是当前 Run 的精确 capability 文件只读，其他 Run 和配置文件仍不可读写。Linux 的顺序为遮蔽、当前文件精确 ro-bind、所有受保护目录 remount-ro；macOS 为精确 literal 读例外。可信插件和服务端内部访问保持原合同。
 - macOS 使用 Seatbelt：受保护目录禁止读写，拒绝本机 Mach 服务和 Unix socket 连接，只保留 DNS 的 mDNSResponder socket 与网络配置服务。已有 DSH 写沙箱合并同一 profile，避免嵌套沙箱失败；完全访问命令也必须添加凭据边界。SecurityServer 服务端口的合成探针只验证连接权限，不查询任何真实钥匙串条目。
 - Linux 需要 Bubblewrap（`/usr/bin/bwrap` 可执行，且主机允许其 namespace）；遮蔽凭据目录/文件并使用独立 PID namespace；已有 DSH Bubblewrap profile 合并同一次调用，保留原写限制，不依赖主机允许嵌套 namespace。缺失后端直接执行失败，无降级。它不承诺隔离所有未登记的同用户 IPC 服务；跨用户/不可信插件隔离需要容器、独立 OS 用户或远程执行能力，不由目录清单冒充。
 - 受保护位置包括 HOME 下 Git/GH/SSH、GPG、云 CLI、模型客户端、钥匙串和常见浏览器账号目录，以及宿主环境指向的 GH、云凭据和 SSH agent 等自定义路径。只传递路径，不读取秘密值；符号链接目的地同样保护。自定义业务配置中的秘密不属于这份目录清单。
@@ -33,6 +34,6 @@
 
 回归首先在旧实现得到 5 项失败（3 个权限档位、链接读取、环境继承），其余 60 项通过；命令指纹兼容回归也先失败后修复。自动化覆盖原调用、文件服务、脚本、符号链接、缺失后端/服务、旧 grant 结算、子进程模型密钥清理及服务端环境一致性。
 
-`pnpm smoke:credential-boundary` 使用真实 DSH、临时 HOME、合成凭据和本机模型夹具网关，默认全访问、无人工审批，验证原本可读的秘密无法进入模型、普通写入成功；macOS 同时验证 SecurityServer 不可连接。CI 在 Linux 安装 Bubblewrap 后执行同一脚本，并在独立 macOS job 验证真实 Keychain 服务拒绝，避免只用 Linux 测试替代平台证据。完整 check/smoke 与命令授权桌面门禁的最终数量、提交及发布状态见 Feature Map。
+`pnpm smoke:credential-boundary` 使用真实 DSH、临时 HOME、合成凭据和本机模型夹具网关，默认全访问、无人工审批，验证原本可读的秘密无法进入模型、普通写入成功；macOS 同时验证 SecurityServer 不可连接。本轮共 10 个 macOS 场景（Linux 无 Keychain 为 9 个），包含其他 Run 能力不可读、自己的已委派文件可读、可信模型 patch 不可改写、控制面文件读写拒绝；检查真实文件副作用，不能仅依据模型返回成功。CI 在 Linux 安装 Bubblewrap 后执行同一脚本，并在独立 macOS job 验证真实 Keychain 服务拒绝，避免只用 Linux 测试替代平台证据。完整 check/smoke 与命令授权桌面门禁的最终数量、提交及发布状态见 Feature Map。
 
 兼容性影响：Pegas 不再借用本机 gh、Git helper、SSH agent 或云 CLI 的登录状态；需要认证的外部操作必须等待独立、明确的账号连接能力，当前不能通过通用批准恢复。宿主 gh 的登录状态未修改，用户仍可在自己的终端完成认证操作。

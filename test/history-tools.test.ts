@@ -4,6 +4,9 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { createControlPlane } from '../src/control-plane/server.js'
 import type { ClaimedRun } from '../src/core/domain.js'
+import { loadConfig } from '../src/core/config.js'
+import { runtimeSettingsDefaults } from '../src/settings/runtime-settings.js'
+import type { HistoryToolDefinition } from '../src/executor/dsh-history-tools.d.ts'
 import {
   historyTools,
   normalizeCapability,
@@ -74,6 +77,174 @@ function seedWorkRun(
 }
 
 describe('MEMORY-001 M5 history retrieval', () => {
+  it('caps pending approval summaries and excludes conversation targets', () => {
+    const store = new PegasStore(':memory:', {
+      clock: { now: () => new Date('2026-11-27T00:00:00Z') },
+    })
+    cleanups.push(() => store.close())
+    store.initializeRuntimeSettings({
+      ...runtimeSettingsDefaults(loadConfig({})),
+      autoReviewEnabled: true,
+      chatLaneEnabled: true,
+    })
+    const active = seedWorkRun(store, 'owner', 'diagnose approvals')
+    const ids: string[] = []
+    // Review requests do not park the Run; projection still counts pending facts.
+    for (let i = 0; i < 11; i++) {
+      const pending = store.requestApproval(active.run.id, active.claimToken, {
+        kind: 'dsh.tool.write',
+        risk: 'high',
+        idempotencyKey: `pending-${String(i)}`,
+        request: {
+          tool: 'write',
+          category: 'out-of-workspace-write',
+          targets: ['/tmp/fixture'],
+          autoReview: true,
+        },
+        recoveryPoint: { step: 'before_tool_call' },
+        approval: {
+          summary: `summary-${String(i)}`,
+          impact: 'fixture',
+          recommendedOptionId: 'approve',
+          options: [
+            { id: 'approve', kind: 'approve', label: 'once' },
+            { id: 'reject', kind: 'reject', label: 'no' },
+          ],
+        },
+      })
+      ids.push(pending.approval.id)
+    }
+    const projection = store.readTaskStateForRun(
+      active.run.id,
+      active.claimToken,
+      active.task.id,
+    )
+    expect(projection.approvals.map(approval => approval.id)).toEqual(
+      ids.slice(-10).reverse(),
+    )
+    expect(projection.approvalsTruncated).toBe(true)
+    const event = store.enqueueEvent({
+      userId: 'owner',
+      type: 'user.message',
+      source: 'web',
+      payload: { text: 'hello' },
+    }).event
+    const conversation = store.applyRoutingDecision(
+      event,
+      { kind: 'reply', input: 'hello', reason: 'test' },
+      'dsh-headless',
+    )
+    expect(() =>
+      store.readTaskStateForRun(
+        active.run.id,
+        active.claimToken,
+        conversation.task.id,
+      ),
+    ).toThrow()
+  })
+
+  it('orders latest task runs by insertion when timestamps tie and caps the projection', () => {
+    const store = new PegasStore(':memory:', {
+      clock: { now: () => new Date('2026-11-27T00:00:00Z') },
+    })
+    cleanups.push(() => store.close())
+    let active = seedWorkRun(store, 'owner', 'same-clock')
+    const ids = [active.run.id]
+    for (let i = 0; i < 6; i++) {
+      store.completeRun(active.run.id, 'worker', {
+        executorRef: 'fixture',
+        output: `result-${String(i)}`,
+      })
+      const event = store.enqueueEvent({
+        userId: 'owner',
+        type: 'user.message',
+        source: 'web',
+        authenticatedActor: 'human',
+        payload: { text: 'continue', taskId: active.task.id },
+      }).event
+      const claimed = store.claimNextEvent('setup')
+      if (!claimed) throw new Error('Expected event')
+      store.applyRoutingDecision(
+        claimed,
+        {
+          kind: 'continue_task',
+          taskId: active.task.id,
+          input: 'continue',
+          reason: 'test',
+        },
+        'dsh-headless',
+      )
+      store.completeEvent(event.id, 'setup')
+      const next = store.claimNextRun('worker')
+      if (!next) throw new Error('Expected Run')
+      active = next
+      ids.push(next.run.id)
+    }
+    const projection = store.readTaskStateForRun(
+      active.run.id,
+      active.claimToken,
+      active.task.id,
+    )
+    expect(projection.runs.map(run => run.id)).toEqual(ids.slice(-5).reverse())
+    expect(projection.runsTruncated).toBe(true)
+    expect(projection.approvals).toEqual([])
+    expect(projection.approvalsTruncated).toBe(false)
+  })
+
+  it('reads bounded task failure state with a live owner claim, without bearer or shell', async () => {
+    const store = new PegasStore(':memory:')
+    const failed = seedWorkRun(store, 'owner', 'failed download')
+    store.failRun(
+      failed.run.id,
+      'worker',
+      'download failed: ' + 'x'.repeat(8000),
+      { terminalProvider: true },
+    )
+    const other = seedWorkRun(store, 'other', 'private task')
+    const active = seedWorkRun(store, 'owner', 'diagnose')
+    const server = createControlPlane({ store, apiToken: 'fixture-api-token' })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    cleanups.push(
+      () => store.close(),
+      () => new Promise<void>(resolve => server.close(() => resolve())),
+    )
+    const baseUrl = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+    const tool = historyTools({
+      baseUrl,
+      runId: active.run.id,
+      claimToken: active.claimToken,
+      privacyMode: 'disabled',
+    }).find(t => t.name === 'read_task_state') as
+      HistoryToolDefinition | undefined
+    if (!tool) throw new Error('Expected task state tool')
+    const output = await tool.execute(
+      { taskId: failed.task.id },
+      { signal: new AbortController().signal },
+    )
+    const state = JSON.parse(output.json) as {
+      task: { id: string }
+      runs: { status: string; lastError: string; truncated: boolean }[]
+    }
+    expect(state.task.id).toBe(failed.task.id)
+    expect(state.runs[0]).toMatchObject({ status: 'failed', truncated: true })
+    expect(state.runs[0]?.lastError).toContain('download failed:')
+    expect(output.json.length).toBeLessThan(10000)
+    for (const id of [other.task.id, 'missing']) {
+      await expect(
+        tool.execute({ taskId: id }, { signal: new AbortController().signal }),
+      ).rejects.toThrow('404')
+    }
+    store.failRun(active.run.id, 'worker', 'stopped', {
+      terminalProvider: true,
+    })
+    await expect(
+      tool.execute(
+        { taskId: failed.task.id },
+        { signal: new AbortController().signal },
+      ),
+    ).rejects.toThrow('403')
+  })
+
   it('searches closed tasks across the owner history with bounded snippets', () => {
     const store = new PegasStore(':memory:')
     cleanups.push(() => store.close())
@@ -198,6 +369,7 @@ describe('MEMORY-001 M5 history retrieval', () => {
       },
     )
     expect(tools.map(tool => tool.name)).toEqual([
+      'read_task_state',
       'search_history',
       'read_history',
     ])

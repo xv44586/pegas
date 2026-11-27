@@ -17,6 +17,7 @@ const READ_TOOLS = new Set([
   'working_directory',
   'search_history',
   'read_history',
+  'read_task_state',
   'pegas_tasks',
   'pegas_memories',
 ])

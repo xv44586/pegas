@@ -23,9 +23,18 @@ const cli = execFileSync('which', ['dsh'], { encoding: 'utf8' }).trim()
 const root = mkdtempSync(join(tmpdir(), 'pegas-credential-smoke-'))
 const home = join(root, 'home'),
   workspace = join(root, 'workspace'),
-  dshHome = join(root, 'dsh')
+  dshHome = join(root, 'dsh'),
+  control = join(root, 'control')
 const secret = join(home, '.config', 'gh', 'hosts.yml')
 const marker = 'SYNTHETIC_ACCOUNT_SECRET_MUST_NOT_REACH_MODEL'
+const privateRoot = join(
+  tmpdir(),
+  `pegas-runtime-private-${String(process.getuid?.() ?? 'local')}`,
+)
+mkdirSync(privateRoot, { recursive: true, mode: 0o700 })
+const otherRun = mkdtempSync(join(privateRoot, 'fixture-other-run-'))
+const otherCapability = join(otherRun, 'capability.json')
+writeFileSync(otherCapability, marker, { mode: 0o600 })
 let scenario, failure, configuration
 const evidence = []
 const gateway = createServer((request, response) => {
@@ -87,6 +96,9 @@ const previous = { ...process.env }
 try {
   mkdirSync(join(home, '.config', 'gh'), { recursive: true })
   mkdirSync(workspace)
+  mkdirSync(control)
+  const controlToken = join(control, 'api-token')
+  writeFileSync(controlToken, marker)
   writeFileSync(secret, marker)
   // Establish that the fixture is readable by an unconfined process first.
   assert.equal(execFileSync('/bin/cat', [secret], { encoding: 'utf8' }), marker)
@@ -115,8 +127,43 @@ try {
   )
   const safeFile = join(workspace, 'safe.txt')
   const deny = result =>
-    assert.match(result, /账号凭据|not permitted|denied|directory|read-only/i)
+    assert.match(
+      result,
+      /账号凭据|控制面|not permitted|denied|directory|read-only/i,
+    )
   const cases = [
+    {
+      name: 'trusted-model-patch-write',
+      tool: 'bash',
+      args: {
+        command: `node -e 'require("fs").writeFileSync(process.argv[1],"injected")' ${JSON.stringify(configuration.patchPath)}`,
+      },
+      verify: result => {
+        deny(result)
+        assert.notEqual(
+          readFileSync(configuration.patchPath, 'utf8'),
+          'injected',
+        )
+      },
+    },
+    {
+      name: 'other-run-capability',
+      tool: 'bash',
+      args: {
+        command: `${JSON.stringify(process.execPath)} ${JSON.stringify(script)} ${JSON.stringify(otherCapability)}`,
+      },
+      verify: deny,
+    },
+    {
+      name: 'current-run-delegated-capability',
+      tool: 'bash',
+      args: {
+        command:
+          'node -e \'const c=JSON.parse(require("fs").readFileSync(process.env.PEGAS_RUN_CAPABILITY_FILE,"utf8")); console.log(c.runId)\'',
+      },
+      verify: result =>
+        assert.match(result, /current-run-delegated-capability/),
+    },
     {
       name: 'native-read',
       tool: 'read',
@@ -136,6 +183,31 @@ try {
       tool: 'bash',
       args: { command: `printf safe > ${JSON.stringify(safeFile)}` },
       verify: () => assert.equal(readFileSync(safeFile, 'utf8'), 'safe'),
+    },
+    {
+      name: 'opaque-control-plane-read',
+      tool: 'bash',
+      args: {
+        command: `${JSON.stringify(process.execPath)} ${JSON.stringify(script)} ${JSON.stringify(controlToken)}`,
+      },
+      verify: deny,
+    },
+    {
+      name: 'native-control-plane-read',
+      tool: 'read',
+      args: { file_path: controlToken },
+      verify: deny,
+    },
+    {
+      name: 'opaque-control-plane-write',
+      tool: 'bash',
+      args: {
+        command: `node -e 'require("fs").writeFileSync(require("path").join(${JSON.stringify(control)},"api-"+"token"),"overwritten")'`,
+      },
+      verify: result => {
+        assert.match(result, /permitted|read-only|denied/i)
+        assert.equal(readFileSync(controlToken, 'utf8'), marker)
+      },
     },
   ]
   if (process.platform === 'darwin') {
@@ -163,6 +235,7 @@ try {
       modelConfiguration: configuration,
       permissionMode: 'danger-full-access',
       approvalPolicy: 'never',
+      policyProtectedRoots: [control],
       timeoutMs: 20_000,
     })
     const result = await executor.execute({
@@ -170,6 +243,10 @@ try {
       taskId: item.name,
       prompt: 'Run the fixture tool once.',
       workingDirectory: workspace,
+      actionCapability: {
+        baseUrl: `http://127.0.0.1:${gateway.address().port}`,
+        claimToken: 'synthetic-run-claim',
+      },
     })
     if (failure) throw failure
     assert.match(result.output, /FIXTURE_COMPLETED/)
@@ -187,4 +264,5 @@ try {
   await new Promise(resolve => gateway.close(resolve))
   process.env = previous
   rmSync(root, { recursive: true, force: true })
+  rmSync(otherRun, { recursive: true, force: true })
 }

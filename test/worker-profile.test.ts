@@ -37,6 +37,37 @@ const settings: RuntimeSettings = {
 }
 
 describe('WORKER-001 profile contracts', () => {
+  it('rejects a late permission change after the task completes without changing the saved revision', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'pegas-ended-permission-'))
+    const path = join(directory, 'pegas.sqlite')
+    const store = new PegasStore(path)
+    try {
+      store.initializeRuntimeSettings(settings)
+      const task = createTask(store, 'owner')
+      const db = new DatabaseSync(path)
+      db.prepare("UPDATE tasks SET status = 'completed' WHERE id = ?").run(
+        task.id,
+      )
+      db.close()
+      expect(() =>
+        store.updateWorkerProfile(task.id, 'owner', {
+          commandId: 'late-full',
+          expectedRevision: 1,
+          modelMode: 'inherit',
+          permissionMode: 'full',
+        }),
+      ).toThrow(/read-only/)
+      expect(store.getWorkerProfile(task.id, 'owner')).toMatchObject({
+        revision: 1,
+      })
+      expect(store.getWorkerProfile(task.id, 'owner').permissionMode).not.toBe(
+        'full',
+      )
+    } finally {
+      store.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
   it('validates inherit and override updates without accepting ambiguous input', () => {
     expect(
       parseWorkerProfileUpdate({

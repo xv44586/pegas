@@ -21,7 +21,7 @@ import {
   ShieldCheck,
   X,
 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 
 import type { ReviewDecisionDraft } from '../../../src/goal/goal-delivery'
 import { ApiError, webAccessHeaders, type PegasApi } from '../api'
@@ -3151,12 +3151,15 @@ export function WorkerProfileSection({
   channel,
   profile,
   profileError,
+  permissionsOnly = false,
 }: {
   api?: PegasApi
   channel: Extract<DrawerView, { kind: 'task' }>['channel']
   profile?: WorkerProfileResponse
   profileError?: string
+  permissionsOnly?: boolean
 }) {
+  const permissionId = useId()
   const [response, setResponse] = useState<WorkerProfileResponse>()
   const [catalog, setCatalog] = useState<DshModelCatalog>()
   const [catalogError, setCatalogError] = useState('')
@@ -3215,7 +3218,14 @@ export function WorkerProfileSection({
     current?.profile.effort,
     current?.profile.permissionMode,
   ])
-  const readOnly = channel.status === 'cancelled'
+  const readOnly =
+    channel.status === 'cancelled' ||
+    current?.taskStatus === 'cancelled' ||
+    (permissionsOnly &&
+      (channel.status === 'completed' || current?.taskStatus === 'completed'))
+  useEffect(() => {
+    if (readOnly) setConfirmingFullAccess(false)
+  }, [readOnly])
   if (!current && !profileError) return null
   const selectedModel = catalog?.models.find(
     model => `${model.provider}/${model.id}` === modelKey,
@@ -3247,8 +3257,8 @@ export function WorkerProfileSection({
     await loadCatalog()
   }
   async function save(skipFullAccessConfirmation = false) {
-    if (!api || !current || saving) return
-    if (modelMode === 'override' && !selectedModel) {
+    if (!api || !current || saving || readOnly) return
+    if (!permissionsOnly && modelMode === 'override' && !selectedModel) {
       setSaveError('请选择一个目录中可用的执行模型。')
       return
     }
@@ -3266,19 +3276,33 @@ export function WorkerProfileSection({
     try {
       const saved = await api.saveWorkerProfile(channel.id, {
         expectedRevision: current.profile.revision,
-        modelMode,
-        ...(modelMode === 'override' && selectedModel
+        ...(permissionsOnly
           ? {
-              modelProvider: selectedModel.provider,
-              modelName: selectedModel.id,
+              modelMode: current.profile.modelMode,
+              modelProvider: current.profile.modelProvider,
+              modelName: current.profile.modelName,
+              pool: current.profile.pool,
+              effort: current.profile.effort,
             }
-          : {}),
-        ...(modelMode === 'inherit' && pool ? { pool } : {}),
-        ...(effort.trim() ? { effort: effort.trim() } : {}),
+          : {
+              modelMode,
+              ...(modelMode === 'override' && selectedModel
+                ? {
+                    modelProvider: selectedModel.provider,
+                    modelName: selectedModel.id,
+                  }
+                : {}),
+              ...(modelMode === 'inherit' && pool ? { pool } : {}),
+              ...(effort.trim() ? { effort: effort.trim() } : {}),
+            }),
         permissionMode,
       })
       setResponse(saved)
-      setSaveNotice('执行设置已保存，对后续运行生效。')
+      setSaveNotice(
+        permissionsOnly
+          ? '权限已保存。收紧对下一次工具调用生效，放宽对后续运行生效。'
+          : '执行设置已保存，对后续运行生效。',
+      )
     } catch (caught) {
       if (caught instanceof ApiError && caught.status === 409) {
         setSaveError(
@@ -3300,7 +3324,7 @@ export function WorkerProfileSection({
   }
   return (
     <section className="detail-section worker-profile-section">
-      <h3>事情级执行设置</h3>
+      <h3>{permissionsOnly ? '事情权限档位' : '事情级执行设置'}</h3>
       {profileError && (
         <p
           className="settings-error mb-3 rounded-card bg-red-tint px-3 py-2.5 text-[13px] text-red-text shadow-[0_0_0_1px_color-mix(in_srgb,var(--red)_22%,transparent)]"
@@ -3313,24 +3337,28 @@ export function WorkerProfileSection({
         <>
           <div className="metadata-list">
             <dl>
-              <Meta label="生效模型" value={current.effective.modelRef} />
-              <Meta
-                label="设置来源"
-                value={
-                  current.effective.source === 'task'
-                    ? '这件事情的覆盖设置'
-                    : 'Pegas 全局设置'
-                }
-              />
-              <Meta
-                label="设置版本"
-                value={`v${String(current.profile.revision)}`}
-              />
-              {current.effective.pool && (
-                <Meta label="执行池" value={current.effective.pool} />
-              )}
-              {current.effective.effort && (
-                <Meta label="推理档位" value={current.effective.effort} />
+              {!permissionsOnly && (
+                <>
+                  <Meta label="生效模型" value={current.effective.modelRef} />
+                  <Meta
+                    label="设置来源"
+                    value={
+                      current.effective.source === 'task'
+                        ? '这件事情的覆盖设置'
+                        : 'Pegas 全局设置'
+                    }
+                  />
+                  <Meta
+                    label="设置版本"
+                    value={`v${String(current.profile.revision)}`}
+                  />
+                  {current.effective.pool && (
+                    <Meta label="执行池" value={current.effective.pool} />
+                  )}
+                  {current.effective.effort && (
+                    <Meta label="推理档位" value={current.effective.effort} />
+                  )}
+                </>
               )}
               <Meta
                 label="权限档位"
@@ -3345,107 +3373,119 @@ export function WorkerProfileSection({
           {readOnly || !api ? (
             <p className="drawer-footnote mt-2.5 text-[12px] leading-[1.6] text-ink-2">
               {readOnly
-                ? '事情已归档，执行设置为只读。'
+                ? permissionsOnly
+                  ? '事情已结束，权限设置为只读；已有授权仍可撤销。'
+                  : '事情已归档，执行设置为只读。'
                 : '当前为只读预览，无法修改执行设置。'}
             </p>
           ) : (
             <>
-              <FormField
-                className="my-3.5"
-                htmlFor="task-model-mode"
-                label="执行模型"
-              >
-                <Select
-                  disabled={saving}
-                  onValueChange={value =>
-                    void openEditor(
-                      value === 'override' ? 'override' : 'inherit',
-                    )
-                  }
-                  value={modelMode}
-                >
-                  <SelectTrigger
-                    className="h-10 w-full rounded-control bg-field shadow-inset-field hover:bg-field"
-                    id="task-model-mode"
+              {!permissionsOnly && (
+                <>
+                  <FormField
+                    className="my-3.5"
+                    htmlFor="task-model-mode"
+                    label="执行模型"
                   >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="z-[80]">
-                    <SelectItem value="inherit">跟随 Pegas 全局设置</SelectItem>
-                    <SelectItem value="override">为这件事情指定模型</SelectItem>
-                  </SelectContent>
-                </Select>
-              </FormField>
-              {modelMode === 'inherit' && (
-                <FormField
-                  className="my-3.5"
-                  htmlFor="task-pool"
-                  label="执行池"
-                >
-                  <Select
-                    disabled={saving}
-                    onValueChange={value =>
-                      setPool(
-                        value === 'fast' ||
-                          value === 'balanced' ||
-                          value === 'deep'
-                          ? value
-                          : '',
-                      )
-                    }
-                    value={pool || 'default'}
-                  >
-                    <SelectTrigger
-                      className="h-10 w-full rounded-control bg-field shadow-inset-field hover:bg-field"
-                      id="task-pool"
+                    <Select
+                      disabled={saving}
+                      onValueChange={value =>
+                        void openEditor(
+                          value === 'override' ? 'override' : 'inherit',
+                        )
+                      }
+                      value={modelMode}
                     >
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent className="z-[80]">
-                      <SelectItem value="default">
-                        不指定（全局默认）
-                      </SelectItem>
-                      <SelectItem value="fast">fast · 轻快省</SelectItem>
-                      <SelectItem value="balanced">balanced · 均衡</SelectItem>
-                      <SelectItem value="deep">deep · 深度</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </FormField>
+                      <SelectTrigger
+                        className="h-10 w-full rounded-control bg-field shadow-inset-field hover:bg-field"
+                        id="task-model-mode"
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="z-[80]">
+                        <SelectItem value="inherit">
+                          跟随 Pegas 全局设置
+                        </SelectItem>
+                        <SelectItem value="override">
+                          为这件事情指定模型
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </FormField>
+                  {modelMode === 'inherit' && (
+                    <FormField
+                      className="my-3.5"
+                      htmlFor="task-pool"
+                      label="执行池"
+                    >
+                      <Select
+                        disabled={saving}
+                        onValueChange={value =>
+                          setPool(
+                            value === 'fast' ||
+                              value === 'balanced' ||
+                              value === 'deep'
+                              ? value
+                              : '',
+                          )
+                        }
+                        value={pool || 'default'}
+                      >
+                        <SelectTrigger
+                          className="h-10 w-full rounded-control bg-field shadow-inset-field hover:bg-field"
+                          id="task-pool"
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="z-[80]">
+                          <SelectItem value="default">
+                            不指定（全局默认）
+                          </SelectItem>
+                          <SelectItem value="fast">fast · 轻快省</SelectItem>
+                          <SelectItem value="balanced">
+                            balanced · 均衡
+                          </SelectItem>
+                          <SelectItem value="deep">deep · 深度</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </FormField>
+                  )}
+                  <FormField
+                    className="my-3.5"
+                    htmlFor="task-effort"
+                    label="推理档位"
+                  >
+                    <Select
+                      disabled={saving}
+                      onValueChange={value =>
+                        setEffort(value === 'default' ? '' : value)
+                      }
+                      value={effort || 'default'}
+                    >
+                      <SelectTrigger
+                        className="h-10 w-full rounded-control bg-field shadow-inset-field hover:bg-field"
+                        id="task-effort"
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="z-[80]">
+                        <SelectItem value="default">跟随模型默认</SelectItem>
+                        <SelectItem value="low">low · 轻快</SelectItem>
+                        <SelectItem value="medium">medium · 均衡</SelectItem>
+                        <SelectItem value="high">high · 深入</SelectItem>
+                        <SelectItem value="max">max · 全力</SelectItem>
+                        {effort &&
+                          !['low', 'medium', 'high', 'max'].includes(
+                            effort,
+                          ) && <SelectItem value={effort}>{effort}</SelectItem>}
+                      </SelectContent>
+                    </Select>
+                  </FormField>
+                </>
               )}
               <FormField
                 className="my-3.5"
-                htmlFor="task-effort"
-                label="推理档位"
-              >
-                <Select
-                  disabled={saving}
-                  onValueChange={value =>
-                    setEffort(value === 'default' ? '' : value)
-                  }
-                  value={effort || 'default'}
-                >
-                  <SelectTrigger
-                    className="h-10 w-full rounded-control bg-field shadow-inset-field hover:bg-field"
-                    id="task-effort"
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="z-[80]">
-                    <SelectItem value="default">跟随模型默认</SelectItem>
-                    <SelectItem value="low">low · 轻快</SelectItem>
-                    <SelectItem value="medium">medium · 均衡</SelectItem>
-                    <SelectItem value="high">high · 深入</SelectItem>
-                    <SelectItem value="max">max · 全力</SelectItem>
-                    {effort &&
-                      !['low', 'medium', 'high', 'max'].includes(effort) && (
-                        <SelectItem value={effort}>{effort}</SelectItem>
-                      )}
-                  </SelectContent>
-                </Select>
-              </FormField>
-              <FormField
-                className="my-3.5"
-                htmlFor="task-permission-tier"
+                htmlFor={permissionId}
                 label="权限档位"
               >
                 <Select
@@ -3463,7 +3503,8 @@ export function WorkerProfileSection({
                 >
                   <SelectTrigger
                     className="h-10 w-full rounded-control bg-field shadow-inset-field hover:bg-field"
-                    id="task-permission-tier"
+                    id={permissionId}
+                    aria-label="权限档位"
                   >
                     <SelectValue />
                   </SelectTrigger>
@@ -3484,7 +3525,7 @@ export function WorkerProfileSection({
               <p className="drawer-footnote mt-2.5 text-[12px] leading-[1.6] text-ink-2">
                 收紧对下一次工具调用立即生效；放宽只影响后续运行，不越过已排队运行的能力上限。
               </p>
-              {modelMode === 'override' && (
+              {!permissionsOnly && modelMode === 'override' && (
                 <div className="my-3.5 grid gap-1.5">
                   <span className="text-[13px] font-medium text-ink">
                     指定模型
@@ -3538,21 +3579,30 @@ export function WorkerProfileSection({
                 variant="secondary"
                 size="sm"
                 disabled={
-                  saving || (modelMode === 'override' && !selectedModel)
+                  saving ||
+                  (!permissionsOnly &&
+                    modelMode === 'override' &&
+                    !selectedModel)
                 }
                 onClick={() => void save()}
                 type="button"
               >
-                {saving ? '正在保存…' : '保存执行设置'}
+                {saving
+                  ? '正在保存…'
+                  : permissionsOnly
+                    ? '保存权限'
+                    : '保存执行设置'}
               </Button>
               <p className="drawer-footnote mt-2.5 text-[12px] leading-[1.6] text-ink-2">
-                只影响这件事情的后续运行；已完成的运行记录不会改写。
+                {permissionsOnly
+                  ? '已开始的操作不会中断；已完成的运行记录不会改写。'
+                  : '只影响这件事情的后续运行；已完成的运行记录不会改写。'}
               </p>
             </>
           )}
         </>
       )}
-      {confirmingFullAccess && (
+      {confirmingFullAccess && !readOnly && (
         <div
           aria-labelledby="full-access-risk-title"
           aria-modal="true"
@@ -3753,10 +3803,12 @@ export function ApprovalRulesSection({
   api,
   channel,
   ruleId,
+  lifetime,
 }: {
   api?: PegasApi
   channel?: Extract<DrawerView, { kind: 'task' }>['channel']
   ruleId?: string
+  lifetime?: 'user'
 }) {
   const [rules, setRules] = useState<ApprovalRule[]>()
   const [loadError, setLoadError] = useState('')
@@ -3772,7 +3824,15 @@ export function ApprovalRulesSection({
       .approvalRules(channel?.id)
       .then(loaded => {
         if (!cancelled)
-          setRules(ruleId ? loaded.filter(rule => rule.id === ruleId) : loaded)
+          setRules(
+            loaded.filter(
+              rule =>
+                (!ruleId || rule.id === ruleId) &&
+                (!lifetime ||
+                  rule.lifetime === 'user' ||
+                  rule.scope === 'user_directory'),
+            ),
+          )
       })
       .catch((caught: unknown) => {
         if (!cancelled)
@@ -3783,7 +3843,7 @@ export function ApprovalRulesSection({
     return () => {
       cancelled = true
     }
-  }, [api, channel?.id, ruleId])
+  }, [api, channel?.id, ruleId, lifetime])
   if (!api) return null
   async function revoke(rule: ApprovalRule) {
     if (!api || revokingId) return
@@ -3804,7 +3864,7 @@ export function ApprovalRulesSection({
   }
   return (
     <section className="detail-section">
-      <h3>{channel ? '已批准规则' : '授权管理'}</h3>
+      <h3>{channel ? '已批准规则' : lifetime ? '长期授权' : '授权管理'}</h3>
       <p className="text-[13px] text-ink-2">
         撤销会影响下一次尚未开始的调用；长期授权的撤销也影响其他事情。历史记录保留。
       </p>
@@ -3821,7 +3881,7 @@ export function ApprovalRulesSection({
         </p>
       ) : rules.length === 0 ? (
         <p className="drawer-footnote mt-2.5 text-[12px] leading-[1.6] text-ink-2">
-          还没有持久规则。批准审批时选择「本事情内同类不再询问」会在这里生成可撤销的规则。
+          还没有已保存的授权。审批具体工具时可选择事情、目录或命令授权，之后在这里查看和撤销。
         </p>
       ) : (
         <ul className="approval-rule-list">
@@ -3829,19 +3889,23 @@ export function ApprovalRulesSection({
             <li className="approval-rule-item" key={rule.id}>
               <div>
                 <strong>
-                  {rule.command
-                    ? `${rule.lifetime === 'user' ? '长期' : '本事情'}命令授权 · ${rule.command.precision === 'family' ? 'git fetch' : '准确命令'}`
-                    : rule.scope === 'user_directory'
-                      ? '始终信任目录'
-                      : rule.scope === 'task_directory'
-                        ? '本事情内信任目录'
-                        : `${rule.tool} · ${approvalRuleCategoryLabel(rule.category)}`}
+                  {rule.category === 'task-tools'
+                    ? '本事情内所有工具授权'
+                    : rule.command
+                      ? `${rule.lifetime === 'user' ? '长期' : '本事情'}命令授权 · ${rule.command.precision === 'family' ? 'git fetch' : '准确命令'}`
+                      : rule.scope === 'user_directory'
+                        ? '始终信任目录'
+                        : rule.scope === 'task_directory'
+                          ? '本事情内信任目录'
+                          : `${rule.tool} · ${approvalRuleCategoryLabel(rule.category)}`}
                   {rule.scope && rule.scope !== 'exact' && ' · 含子目录'}
                 </strong>
                 <small>
-                  {rule.command
-                    ? `${rule.command.selector.repository} · ${rule.command.selector.remote} (${rule.command.selector.remoteUrl})`
-                    : rule.targets.join('、')}
+                  {rule.category === 'task-tools'
+                    ? '含脚本、文件读写/删除与网络；完成或停止后失效，重开不继承。宿主凭据与控制面保护、严格档限制仍有效。'
+                    : rule.command
+                      ? `${rule.command.selector.repository} · ${rule.command.selector.remote} (${rule.command.selector.remoteUrl})`
+                      : rule.targets.join('、')}
                 </small>
                 {rule.command?.precision === 'exact' && (
                   <small>

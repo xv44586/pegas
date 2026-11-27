@@ -3868,6 +3868,12 @@ export class PegasStore {
       }
       if (task.status === 'cancelled') throw new WorkerProfileReadOnlyError()
       const current = this.#workerProfileByTaskId(taskId)
+      if (
+        task.status === 'completed' &&
+        (current.permissionMode ?? 'inherit') !==
+          (update.permissionMode ?? 'inherit')
+      )
+        throw new WorkerProfileReadOnlyError()
       if (current.revision !== update.expectedRevision)
         throw new WorkerProfileRevisionConflictError()
       const unchanged =
@@ -4038,6 +4044,56 @@ export class PegasStore {
     optionId: string,
   ): void {
     const action = this.#actionById(approval.actionId)
+    if (optionId === 'approve_task_tools') {
+      if (!this.#taskToolsEligible(action))
+        throw new Error('Task tool authorization is unavailable')
+      const fingerprint = createHash('sha256')
+        .update('task-tools:v1')
+        .digest('hex')
+      const existing = this.#database
+        .prepare(
+          `SELECT id FROM approval_rules WHERE task_id = ? AND created_by = ? AND category = 'task-tools' AND fingerprint = ? AND status = 'active'`,
+        )
+        .get(approval.taskId, userId, fingerprint) as { id: string } | undefined
+      const id = existing?.id ?? randomUUID()
+      if (!existing) {
+        this.#database
+          .prepare(
+            `INSERT INTO approval_rules
+           (id,task_id,tool,category,targets_json,fingerprint,status,created_from_approval_id,created_from_decision_id,created_by,created_at,scope,kind,lifetime)
+           VALUES (?,?,'*','task-tools','[]',?,'active',?,?,?,?,'exact','operation','task')`,
+          )
+          .run(
+            id,
+            approval.taskId,
+            fingerprint,
+            approval.id,
+            decisionId,
+            userId,
+            now,
+          )
+        this.enqueueOutbox({
+          userId,
+          taskId: approval.taskId,
+          channel: 'timeline',
+          dedupeKey: `approval-rule-created:${id}`,
+          payload: {
+            type: 'task.approval_rule_changed',
+            taskId: approval.taskId,
+            ruleId: id,
+            change: 'created',
+            approvalId: approval.id,
+            text: '已允许本事情内所有工具操作；事情完成或停止后失效，可在授权管理中随时撤销。宿主凭据隔离、控制面保护及严格档限制仍有效。',
+          },
+        })
+      }
+      this.#database
+        .prepare(
+          'INSERT INTO approval_rule_bindings (decision_id,rule_id) VALUES (?,?)',
+        )
+        .run(decisionId, id)
+      return
+    }
     if (optionId.startsWith('approve_command_')) {
       this.#createCommandRule(
         approval,
@@ -4338,7 +4394,10 @@ export class PegasStore {
             change: 'revoked',
             tool: row.tool,
             category: row.category,
-            text: `已撤销同类操作规则：${row.tool}，后续同类调用将重新请求你的审批。`,
+            text:
+              row.category === 'task-tools'
+                ? '已撤销本事情所有工具授权，后续尚未开始且需要授权的调用将重新询问。'
+                : `已撤销同类操作规则：${row.tool}，后续同类调用将重新请求你的审批。`,
           },
         })
       }
@@ -12424,6 +12483,49 @@ export class PegasStore {
    * the search surface indexes are readable; content is capped so one read
    * can never flood the context. Cross-owner reads return not found.
    */
+  readTaskStateForRun(runId: string, claimToken: string, taskId: string) {
+    this.#claimForCapability(runId, claimToken)
+    const owner = this.#taskById(this.#runById(runId).taskId).userId
+    const task = this.#database
+      .prepare(
+        `SELECT id, substr(title,1,500) AS title, status, status_reason AS statusReason, updated_at AS updatedAt
+       FROM tasks WHERE id = ? AND user_id = ? AND kind <> 'conversation'`,
+      )
+      .get(taskId, owner)
+    if (!task) throw new MemoryNotFoundError()
+    const runs = this.#database
+      .prepare(
+        `SELECT id, status, executor, created_at AS createdAt, updated_at AS updatedAt,
+       substr(last_error,1,2000) AS lastError, length(last_error) > 2000 AS truncated
+       FROM runs WHERE task_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 6`,
+      )
+      .all(taskId) as {
+      id: string
+      status: Run['status']
+      executor: string
+      createdAt: string
+      updatedAt: string
+      lastError: string | null
+      truncated: number | null
+    }[]
+    const approvals = this.#database
+      .prepare(
+        `SELECT id, status, action_id AS actionId, substr(json_extract(prompt_json,'$.summary'),1,500) AS summary
+       FROM approvals WHERE task_id = ? AND status IN ('pending','decision_recorded') AND protocol_version = 1
+       ORDER BY created_at DESC, rowid DESC LIMIT 11`,
+      )
+      .all(taskId)
+    return {
+      task,
+      runs: runs
+        .slice(0, 5)
+        .map(run => ({ ...run, truncated: run.truncated === 1 })),
+      runsTruncated: runs.length > 5,
+      approvals: approvals.slice(0, 10),
+      approvalsTruncated: approvals.length > 10,
+    }
+  }
+
   readHistoryForRun(
     runId: string,
     claimToken: string,
@@ -13441,7 +13543,10 @@ export class PegasStore {
           'A human-confirmed failed Action blocks new Approvals on this Task',
         )
       }
-      const approvalPrompt = canonicalCommandApprovalPrompt(draft)
+      const approvalPrompt = withTaskToolsOption(
+        canonicalCommandApprovalPrompt(draft),
+        draft,
+      )
       const now = this.#clock.now().toISOString()
       const actionId = randomUUID()
       const approvalId = randomUUID()
@@ -14025,7 +14130,9 @@ export class PegasStore {
             cursorId,
             limit + 1,
           )) as unknown as ApprovalProjectionRow[]
-    return cursorPage(rows, limit, toApprovalProjection)
+    return cursorPage(rows, limit, row =>
+      this.#withPendingTaskTools(toApprovalProjection(row)),
+    )
   }
 
   decideApproval(
@@ -14086,7 +14193,10 @@ export class PegasStore {
         option => option.id === draft.optionId,
       )
       if (!option) throw new Error('Approval option does not exist')
-      if (option.kind === 'approve_rule') {
+      if (
+        option.kind === 'approve_rule' &&
+        option.id !== 'approve_task_tools'
+      ) {
         const action = this.#actionById(approval.actionId)
         if (action.risk !== 'high') {
           throw new Error(
@@ -14129,10 +14239,10 @@ export class PegasStore {
         )
       this.#database
         .prepare(
-          `UPDATE approvals SET status = 'decision_recorded'
+          `UPDATE approvals SET status = 'decision_recorded', prompt_json = ?
            WHERE id = ? AND status = 'pending'`,
         )
-        .run(approvalId)
+        .run(JSON.stringify(approval.prompt), approvalId)
       if (option.kind === 'approve_rule') {
         this.#createApprovalRuleInTransaction(
           approval,
@@ -17755,7 +17865,34 @@ export class PegasStore {
     const decision = this.#database
       .prepare('SELECT * FROM approval_decisions WHERE approval_id = ?')
       .get(row.id) as unknown as ApprovalDecisionRow | undefined
-    return toApproval(row, action.requestRunId, decision)
+    return this.#withPendingTaskTools(
+      toApproval(row, action.requestRunId, decision),
+    )
+  }
+
+  #withPendingTaskTools(approval: Approval): Approval {
+    if (approval.status !== 'pending') return approval
+    const action = this.#actionById(approval.actionId)
+    return {
+      ...approval,
+      prompt: withTaskToolsOption(
+        approval.prompt,
+        action,
+        this.#taskToolsEligible(action),
+      ),
+    }
+  }
+
+  #taskToolsEligible(action: DurableAction): boolean {
+    if (!taskToolsEligible(action) || !this.hasRuntimeSettings()) return false
+    const effective = effectiveWorkerProfile(
+      this.#workerProfileByTaskId(action.taskId),
+      this.getRuntimeSettings(),
+    )
+    return (
+      effective.permissionTier !== 'strict' &&
+      effective.permissionTier === action.request.tier
+    )
   }
 
   #decisionByApprovalId(approvalId: string): ApprovalDecision {
@@ -19794,6 +19931,52 @@ function validatedCommandSelector(request: Record<string, unknown>) {
   )
     return undefined
   return actual
+}
+
+function taskToolsEligible(
+  action: Pick<DurableAction, 'kind' | 'request' | 'risk'>,
+): boolean {
+  return (
+    typeof action.request.tool === 'string' &&
+    action.kind === `dsh.tool.${action.request.tool}` &&
+    (action.risk === 'high' || action.risk === 'critical') &&
+    (action.request.tier === 'standard' || action.request.tier === 'full') &&
+    action.request.tierMismatch !== true &&
+    typeof action.request.category === 'string' &&
+    !['credential-access', 'control-plane-mutation'].includes(
+      action.request.category,
+    )
+  )
+}
+
+function withTaskToolsOption(
+  prompt: ApprovalPrompt,
+  action: Pick<DurableAction, 'kind' | 'request' | 'risk'>,
+  eligible = taskToolsEligible(action),
+): ApprovalPrompt {
+  const options = prompt.options.filter(
+    option => option.id !== 'approve_task_tools',
+  )
+  if (eligible) {
+    const index = options.findIndex(option => option.kind === 'reject')
+    options.splice(index < 0 ? options.length : index, 0, {
+      id: 'approve_task_tools',
+      kind: 'approve_rule',
+      label: '本事情内允许所有工具操作',
+      description:
+        '允许本事情后续所有工具操作，包括复合脚本、文件读写/删除和网络访问。事情完成或停止后立即失效，重开不继承，可随时撤销。宿主账号凭据隔离、控制面保护及严格档限制仍有效。',
+    })
+  }
+  return {
+    ...prompt,
+    options,
+    recommendedOptionId:
+      prompt.recommendedOptionId === 'approve_task_tools'
+        ? (options.find(option => option.kind === 'approve')?.id ??
+          options.find(option => option.kind === 'reject')?.id ??
+          '')
+        : prompt.recommendedOptionId,
+  }
 }
 
 function canonicalCommandApprovalPrompt(

@@ -147,22 +147,34 @@ function sbpl(value) {
  * @param {readonly string[]} argv
  * @param {readonly string[]} roots
  * @param {NodeJS.Platform} [platform]
+ * @param {readonly string[]} [readableFiles] Current Run's explicitly delegated, read-only capability only.
  * @returns {string[]}
  */
 export function credentialProcessArgv(
   argv,
   roots,
   platform = process.platform,
+  readableFiles = [],
 ) {
   const paths = [
     ...new Set(
       roots.flatMap(root => [resolve(root), canonical(resolve(root))]),
     ),
   ]
+  const readablePaths = [
+    ...new Set(
+      readableFiles.flatMap(file => [resolve(file), canonical(resolve(file))]),
+    ),
+  ]
   if (platform === 'darwin') {
     const restrictions = [
-      ...paths.map(
-        path => `(deny file-read* file-write* (subpath ${sbpl(path)}))`,
+      ...paths.flatMap(path =>
+        readablePaths.length
+          ? [
+              `(deny file-read* (require-all (subpath ${sbpl(path)}) ${readablePaths.map(file => `(require-not (literal ${sbpl(file)}))`).join(' ')}))`,
+              `(deny file-write* (subpath ${sbpl(path)}))`,
+            ]
+          : [`(deny file-read* file-write* (subpath ${sbpl(path)}))`],
       ),
       '(deny mach-lookup)',
       '(deny job-creation)',
@@ -201,6 +213,16 @@ export function credentialProcessArgv(
           ? ['--tmpfs', path]
           : ['--ro-bind', '/dev/null', path],
       )
+    // Re-expose only the current delegated file, never a directory or another
+    // Run's plugin config. Bubblewrap resolves bind sources in the host tree.
+    masks.push(...readablePaths.flatMap(file => ['--ro-bind', file, file]))
+    // Hidden directories must also reject writes, including full-access calls.
+    // Remount only after all masks are built so nested protected roots work.
+    masks.push(
+      ...paths
+        .filter(path => existsSync(path) && statSync(path).isDirectory())
+        .flatMap(path => ['--remount-ro', path]),
+    )
     if (['bwrap', '/usr/bin/bwrap', '/bin/bwrap'].includes(argv[0] ?? '')) {
       const separator = argv.indexOf('--')
       if (separator < 2)

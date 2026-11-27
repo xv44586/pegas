@@ -47,6 +47,102 @@ function run(argv: string[]) {
 }
 
 describe('host credential runtime boundary', () => {
+  it('only permits the current delegated capability, never another Run or its patches', () => {
+    const f = fixture(),
+      privateRoot = join(f.root, 'runtime-private')
+    mkdirSync(privateRoot)
+    const own = join(privateRoot, 'own.json'),
+      other = join(privateRoot, 'other.json')
+    writeFileSync(own, 'CURRENT_RUN')
+    writeFileSync(other, 'OTHER_RUN')
+    const read = (path: string) =>
+      run(
+        credentialProcessArgv(
+          ['/bin/cat', path],
+          [privateRoot],
+          process.platform,
+          [own],
+        ),
+      )
+    expect(read(own).stdout).toBe('CURRENT_RUN')
+    expect(read(other).status).not.toBe(0)
+    const write = run(
+      credentialProcessArgv(
+        [
+          process.execPath,
+          '-e',
+          'require("fs").writeFileSync(process.argv[1],"changed")',
+          own,
+        ],
+        [privateRoot],
+        process.platform,
+        [own],
+      ),
+    )
+    expect(write.status).not.toBe(0)
+    expect(readFileSync(own, 'utf8')).toBe('CURRENT_RUN')
+  })
+
+  it('blocks computed control-plane reads and writes at the process and file-service seams', () => {
+    const f = fixture(),
+      control = join(f.root, 'control')
+    mkdirSync(control)
+    const target = join(control, 'api-token')
+    writeFileSync(target, 'SYNTHETIC_CONTROL_CAPABILITY')
+    const fs: Record<string, (...args: unknown[]) => unknown> = {
+      processPath: target => target,
+    }
+    for (const key of [
+      'readText',
+      'streamText',
+      'readBytes',
+      'readByteRange',
+      'listDir',
+      'writeText',
+      'editText',
+      'patchText',
+      'deleteFile',
+      'moveFile',
+    ])
+      fs[key] = () => 'executed'
+    const subprocess = {
+      spawn: (spec: unknown) => spec,
+      spawnTerminal: (spec: unknown) => spec,
+    }
+    apply(
+      {
+        tools: { guard: () => undefined },
+        inject: (_deps, callback) =>
+          callback({
+            fs,
+            subprocess,
+            effect: effect => {
+              effect()
+            },
+          }),
+      },
+      { credentialRoots: f.roots, protectedRoots: [control] },
+    )
+    for (const key of ['readText', 'writeText', 'deleteFile'])
+      expect(() => fs[key]?.(target)).toThrow('控制面')
+    for (const operation of ['readFileSync', 'writeFileSync']) {
+      const spec = subprocess.spawn({
+        argv: [
+          process.execPath,
+          '-e',
+          `const p = require('path').join(process.argv[1], 'api-' + 'token'); const v = require('fs').${operation}(p${operation === 'writeFileSync' ? ", 'overwritten'" : ''}); if(v) process.stdout.write(v)`,
+          control,
+        ],
+      }) as { argv: string[] }
+      const result = run(spec.argv)
+      expect(result.error).toBeUndefined()
+      expect(result.status).not.toBe(0)
+      expect(result.stdout).not.toContain('SYNTHETIC_CONTROL_CAPABILITY')
+      expect(readFileSync(target, 'utf8')).toBe('SYNTHETIC_CONTROL_CAPABILITY')
+    }
+    expect(fs.writeText?.(join(f.workspace, 'ordinary'))).toBe('executed')
+  })
+
   it('blocks indirect scripts and symlink reads while allowing workspace writes', () => {
     const f = fixture()
     // Demonstrate the original ambient capability without reading a real account.

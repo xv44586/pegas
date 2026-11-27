@@ -5,7 +5,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { runtimePrivateRoot } from './runtime-private-root.js'
 import { join } from 'node:path'
 
 import type { ModelCredentialVault } from '../model/model-credential-vault.js'
@@ -133,7 +133,7 @@ export function createDshModelConfiguration(options: {
       models,
     }
   }
-  const directory = mkdtempSync(join(tmpdir(), 'pegas-dsh-config-'))
+  const directory = mkdtempSync(join(runtimePrivateRoot(), 'pegas-dsh-config-'))
   const patchPath = join(directory, 'model-configuration.json')
   writeFileSync(
     patchPath,

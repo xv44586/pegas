@@ -17,7 +17,7 @@
 - 普通测试的 fetch 只允许带端口的 HTTP 回环地址，拒绝本机 3425 网关；强制禁止自动重定向，手动重定向的下一次 fetch 再检查。测试可注入固定响应；已有 Provider HTTP 协议测试仍走真实本地夹具。
 - 此防护只覆盖 Vitest 进程中的全局 fetch，不能作为系统网络沙箱：原生 http/net、独立子进程及其他端口上的本机转发服务不在其保证范围。四组真实 DSH 启动由独立收集与入口授权隔离。新增真实模型套件须登记到独立集合；进一步子进程网络隔离与预算计量是后续缺口。
 - 普通 `pnpm smoke` 显式关闭记忆蒸馏和输入改写；模型配置指向本次测试创建的回环拒绝端点，用例末尾断言没有模型请求，避免继承开发环境中的模型配置。`pnpm smoke:memory` 是独立的真实 Hindsight 验收，会消耗模型 token；`pnpm smoke:dsh-auth` 使用真实 DSH 对接假响应回环网关，不消耗付费模型 token。
-- `pnpm smoke:command-authorization` 使用真实 Electron、Worker 和 DSH，模型请求只访问脚本创建的确定性回环网关，Git fetch 只访问隔离本地 bare remote。它验证实际 FETCH_HEAD 变化与撤销后不执行，不验证外部模型语义或 HTTPS 远端服务；运行前置条件与 CI 证据见 [命令授权](command-authorization.md#验证证据)。
+- `pnpm smoke:command-authorization` 使用真实 Electron、Worker 和 DSH，模型请求只访问脚本创建的确定性回环网关，Git fetch 只访问隔离本地 bare remote。它验证实际 FETCH_HEAD 变化、脚本及原生 write 的文件变化、跨 Run/重启复用、事情结束/重开失效、严格档只读状态查询，以及从真实桌面对话输入栏修改档位和撤销后不执行，不验证外部模型语义或 HTTPS 远端服务；运行前置条件与 CI 证据见 [命令授权](command-authorization.md#验证证据)。
 
 ## 验证记录
 
