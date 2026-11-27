@@ -1,3 +1,5 @@
+import { ChannelSidebar, type OrganizeChannel } from './ChannelOrganization'
+import type { ChannelListClient } from './useChannelPage'
 import {
   Archive,
   Bot,
@@ -65,6 +67,8 @@ interface AppShellProps {
   connectionStatus: 'connecting' | 'online' | 'offline'
   onNavigate: (page: AppPage) => void
   channels: WorkChannel[]
+  client?: ChannelListClient
+  onOrganize?: OrganizeChannel
   attentionTodoCount: number
   onOpenChannel: (channel: WorkChannel) => void
   children: React.ReactNode
@@ -77,6 +81,8 @@ export function AppShell({
   onNavigate,
   channels,
   attentionTodoCount,
+  client,
+  onOrganize,
   onOpenChannel,
   children,
 }: AppShellProps) {
@@ -109,6 +115,19 @@ export function AppShell({
             const target = APP_PAGES.find(item => item === key)
             if (target) onNavigate(target)
           }}
+          recentsSlot={
+            page === 'settings' ? (
+              <></>
+            ) : (
+              <ChannelSidebar
+                channels={channels}
+                {...(activeTaskId ? { activeTaskId } : {})}
+                {...(client ? { client } : {})}
+                onOpen={onOpenChannel}
+                {...(onOrganize ? { onOrganize } : {})}
+              />
+            )
+          }
           recentsLabel="最近的事情"
           recentsNavKey="conversation"
           recents={channels.slice(0, 8).map(channel => ({

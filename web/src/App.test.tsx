@@ -16,7 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { App, formatRelativeTime } from './App'
 import { DetailDrawer } from './sealed/DetailDrawer'
 import { Onboarding } from './sealed/Onboarding'
-import { unresolvedAttentionMessages } from './sealed/types'
+import { unresolvedAttentionMessages, sortWorkChannels } from './sealed/types'
 import type {
   Approval,
   DurableAction,
@@ -361,6 +361,64 @@ async function completeSetupConnection(modelName: RegExp) {
   await screen.findByText('连接和默认模型已保存')
 }
 
+function channelSearchResponse(path: string, data: Snapshot): Response {
+  const params = new URL(path, 'http://localhost').searchParams
+  const query = (params.get('q') ?? '').toLowerCase()
+  const sort = params.get('sort')
+  const matched = sortWorkChannels(
+    data.channels,
+    sort === 'created' || sort === 'ended' ? sort : 'updated',
+  ).filter(item => {
+    for (const key of ['pinned', 'archived'] as const) {
+      if (
+        params.has(key) &&
+        Boolean(item.organization?.[key]) !== (params.get(key) === 'true')
+      )
+        return false
+    }
+    const ended = ['completed', 'cancelled'].includes(item.status)
+    if (params.has('ended') && ended !== (params.get('ended') === 'true'))
+      return false
+    if (
+      params.has('status') &&
+      !params.get('status')?.split(',').includes(item.status)
+    )
+      return false
+    const run = data.runs.filter(run => run.taskId === item.id).at(-1)
+    if (params.has('waiting')) {
+      const waiting = !run || run.status === 'waiting'
+      if (ended || waiting !== (params.get('waiting') === 'true')) return false
+    }
+    return `${item.title} ${item.goal} ${run?.output ?? ''}`
+      .toLowerCase()
+      .includes(query)
+  })
+  return Response.json({
+    channels: matched,
+    matches: matched.map(item => ({
+      channelId: item.id,
+      sourceKind: 'title',
+      sourceId: item.id,
+      snippet: `服务端命中：${item.title}`,
+    })),
+  })
+}
+
+async function waitForWorkList() {
+  if (vi.isFakeTimers()) {
+    await act(async () => vi.advanceTimersByTimeAsync(1))
+    expect(screen.getByLabelText('事情列表').getAttribute('aria-busy')).toBe(
+      'false',
+    )
+    return
+  }
+  await waitFor(() =>
+    expect(screen.getByLabelText('事情列表').getAttribute('aria-busy')).toBe(
+      'false',
+    ),
+  )
+}
+
 function installFetch(
   custom?: (
     path: string,
@@ -384,26 +442,8 @@ function installFetch(
       )
     if (path.startsWith('/v1/events?'))
       return Promise.resolve(Response.json({ events: snapshot.events }))
-    if (path.startsWith('/v1/channels/search?')) {
-      const query =
-        new URL(path, 'http://localhost').searchParams.get('q') ?? ''
-      const matched = snapshot.channels.filter(item =>
-        `${item.title} ${item.goal}`
-          .toLowerCase()
-          .includes(query.toLowerCase()),
-      )
-      return Promise.resolve(
-        Response.json({
-          channels: matched,
-          matches: matched.map(item => ({
-            channelId: item.id,
-            sourceKind: 'title',
-            sourceId: item.id,
-            snippet: `服务端命中：${item.title}`,
-          })),
-        }),
-      )
-    }
+    if (path.startsWith('/v1/channels/search?'))
+      return Promise.resolve(channelSearchResponse(path, snapshot))
     if (path.startsWith('/v1/channels?'))
       return Promise.resolve(Response.json({ channels: snapshot.channels }))
     if (path.startsWith('/v1/channels/task-1/timeline?'))
@@ -603,6 +643,8 @@ function installSnapshotFetch(
   return installFetch((path, init) => {
     const overridden = custom?.(path, init)
     if (overridden) return overridden
+    if (path.startsWith('/v1/channels/search?'))
+      return channelSearchResponse(path, nextSnapshot)
     if (path.startsWith('/v1/events?'))
       return Response.json({ events: nextSnapshot.events })
     if (path.startsWith('/v1/channels?'))
@@ -676,9 +718,12 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     expect(screen.getByRole('heading', { name: '所有事情' })).toBeTruthy()
     fireEvent.click(
-      within(mainCanvas()).getByRole('button', { name: /安全自更新流程/ }),
+      await within(mainCanvas()).findByRole('button', {
+        name: /安全自更新流程/,
+      }),
     )
     expect(screen.getByRole('heading', { name: '安全自更新流程' })).toBeTruthy()
     expect(screen.getByText('Pegas 正在推进这件事')).toBeTruthy()
@@ -1789,6 +1834,7 @@ describe('sealed Pegas UI', () => {
         name: /所有事情/,
       }),
     )
+    await waitForWorkList()
     fireEvent.click(
       within(screen.getByLabelText('主导航')).getByRole('button', {
         name: /^对话$/,
@@ -1988,11 +2034,14 @@ describe('sealed Pegas UI', () => {
         name: /所有事情/,
       }),
     )
+    await waitForWorkList()
     const list = screen.getByLabelText('事情列表')
     expect(within(list).getByText(channel.title)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '进行中' }))
+    await waitForWorkList()
     expect(within(list).queryByText(channel.title)).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '等待中' }))
+    await waitForWorkList()
     expect(within(list).getByText(channel.title)).toBeTruthy()
   })
 
@@ -2007,6 +2056,7 @@ describe('sealed Pegas UI', () => {
         name: /所有事情/,
       }),
     )
+    await waitForWorkList()
     const list = screen.getByLabelText('事情列表')
     expect(within(list).getByText(channel.title)).toBeTruthy()
     expect(within(list).getByText('进行中')).toBeTruthy()
@@ -2023,6 +2073,7 @@ describe('sealed Pegas UI', () => {
         name: /所有事情/,
       }),
     )
+    await waitForWorkList()
     const list = screen.getByLabelText('事情列表')
     expect(within(list).getByText(channel.title)).toBeTruthy()
     expect(within(list).getByText('失败')).toBeTruthy()
@@ -2036,6 +2087,7 @@ describe('sealed Pegas UI', () => {
         name: /所有事情/,
       }),
     )
+    await waitForWorkList()
     const list = screen.getByLabelText('事情列表')
     expect(list.querySelector('.work-artifacts')).toBeNull()
   })
@@ -3584,8 +3636,11 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     fireEvent.click(
-      within(mainCanvas()).getByRole('button', { name: /安全自更新流程/ }),
+      await within(mainCanvas()).findByRole('button', {
+        name: /安全自更新流程/,
+      }),
     )
     expect(await screen.findByText('事情级执行设置')).toBeTruthy()
     const drawer = await screen.findByLabelText('工作详情')
@@ -3693,6 +3748,7 @@ describe('sealed Pegas UI', () => {
         name: /所有事情/,
       }),
     )
+    await waitForWorkList()
     expect(screen.getByRole('heading', { name: '所有事情' })).toBeTruthy()
     window.history.back()
     await waitFor(() =>
@@ -4863,7 +4919,7 @@ describe('sealed Pegas UI', () => {
     expect(screen.getByText('帮我设计一个安全的自更新流程。')).toBeTruthy()
   })
 
-  it('shows the server failure reason and keeps archived work out of waiting', async () => {
+  it('shows the server failure reason and keeps stopped work out of waiting', async () => {
     const sourceMessage = snapshot.messages[0]
     if (!sourceMessage) throw new Error('Expected an outbox message fixture')
     installSnapshotFetch({
@@ -4889,9 +4945,12 @@ describe('sealed Pegas UI', () => {
         name: /所有事情/,
       }),
     )
+    await waitForWorkList()
     fireEvent.click(screen.getByRole('button', { name: '等待中' }))
+    await waitForWorkList()
     expect(within(mainCanvas()).queryByText(channel.title)).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: '已归档' }))
+    fireEvent.click(screen.getByRole('button', { name: '已停止' }))
+    await waitForWorkList()
     expect(within(mainCanvas()).getByText(channel.title)).toBeTruthy()
   })
 
@@ -5209,6 +5268,7 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     fireEvent.click(
       await within(mainCanvas()).findByRole('button', {
         name: new RegExp(channel.title),
@@ -5341,6 +5401,7 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     fireEvent.click(
       await within(mainCanvas()).findByRole('button', {
         name: new RegExp(channel.title),
@@ -5423,6 +5484,7 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     fireEvent.click(
       await within(mainCanvas()).findByRole('button', {
         name: new RegExp(channel.title),
@@ -5537,6 +5599,7 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     fireEvent.click(
       await within(mainCanvas()).findByRole('button', {
         name: new RegExp(channel.title),
@@ -5664,6 +5727,7 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     fireEvent.click(
       await within(mainCanvas()).findByRole('button', {
         name: new RegExp(channel.title),
@@ -5947,7 +6011,8 @@ describe('sealed Pegas UI', () => {
         name: /所有事情/,
       }),
     )
-    const trigger = within(mainCanvas()).getByRole('button', {
+    await waitForWorkList()
+    const trigger = await within(mainCanvas()).findByRole('button', {
       name: /安全自更新流程/,
     })
     trigger.focus()
@@ -6026,8 +6091,11 @@ describe('sealed Pegas UI', () => {
           name: /所有事情/,
         }),
       )
+      await waitForWorkList()
       fireEvent.click(
-        within(mainCanvas()).getByRole('button', { name: /安全自更新流程/ }),
+        within(mainCanvas()).getByRole('button', {
+          name: /安全自更新流程/,
+        }),
       )
       await act(async () => {
         await vi.advanceTimersByTimeAsync(0)
@@ -6074,8 +6142,11 @@ describe('sealed Pegas UI', () => {
           name: /所有事情/,
         }),
       )
+      await waitForWorkList()
       fireEvent.click(
-        within(mainCanvas()).getByRole('button', { name: /安全自更新流程/ }),
+        within(mainCanvas()).getByRole('button', {
+          name: /安全自更新流程/,
+        }),
       )
       await act(async () => vi.advanceTimersByTimeAsync(5_000))
       expect(screen.getByText('较新的时间线')).toBeTruthy()
@@ -6127,6 +6198,7 @@ describe('sealed Pegas UI', () => {
         name: /所有事情/,
       }),
     )
+    await waitForWorkList()
     window.history.back()
     expect(await screen.findByLabelText('工作详情')).toBeTruthy()
     expect(window.location.search).toContain('outbox=message-1')
@@ -6290,8 +6362,11 @@ describe('sealed Pegas UI', () => {
         name: /所有事情/,
       }),
     )
+    await waitForWorkList()
     fireEvent.click(
-      within(mainCanvas()).getByRole('button', { name: /安全自更新流程/ }),
+      await within(mainCanvas()).findByRole('button', {
+        name: /安全自更新流程/,
+      }),
     )
     expect(await screen.findByText('只属于当前 Channel 的输入')).toBeTruthy()
   })
@@ -6308,8 +6383,11 @@ describe('sealed Pegas UI', () => {
         name: /所有事情/,
       }),
     )
+    await waitForWorkList()
     fireEvent.click(
-      within(mainCanvas()).getByRole('button', { name: /安全自更新流程/ }),
+      await within(mainCanvas()).findByRole('button', {
+        name: /安全自更新流程/,
+      }),
     )
     expect(await screen.findByText('时间线暂时不可用')).toBeTruthy()
   })
@@ -6464,8 +6542,11 @@ describe('sealed Pegas UI', () => {
         name: /所有事情/,
       }),
     )
+    await waitForWorkList()
     fireEvent.click(
-      within(mainCanvas()).getByRole('button', { name: /安全自更新流程/ }),
+      await within(mainCanvas()).findByRole('button', {
+        name: /安全自更新流程/,
+      }),
     )
     const drawer = await screen.findByLabelText('工作详情')
     expect(within(drawer).getByText(/Run 1/)).toBeTruthy()
@@ -6517,8 +6598,11 @@ describe('sealed Pegas UI', () => {
         name: /所有事情/,
       }),
     )
+    await waitForWorkList()
     fireEvent.click(
-      within(mainCanvas()).getByRole('button', { name: /安全自更新流程/ }),
+      await within(mainCanvas()).findByRole('button', {
+        name: /安全自更新流程/,
+      }),
     )
     fireEvent.click(await screen.findByRole('button', { name: '重试' }))
     const drawer = await screen.findByLabelText('工作详情')
@@ -6828,7 +6912,9 @@ describe('sealed Pegas UI', () => {
         name: /所有事情/,
       }),
     )
+    await waitForWorkList()
     fireEvent.click(screen.getByRole('button', { name: '已完成' }))
+    await waitForWorkList()
     const list = screen.getByLabelText('事情列表')
     expect(
       list.querySelector(
@@ -6838,6 +6924,7 @@ describe('sealed Pegas UI', () => {
     expect(within(list).getByText(/dsh · deepseek-v4.1-flash/)).toBeTruthy()
     const search = screen.getByPlaceholderText('搜索事情或结果')
     fireEvent.change(search, { target: { value: '独特验收结果' } })
+    await waitForWorkList()
     expect(within(mainCanvas()).getByText(channel.title)).toBeTruthy()
   })
 
@@ -6847,6 +6934,7 @@ describe('sealed Pegas UI', () => {
     const mainNav = await screen.findByLabelText('主导航')
     expect(screen.getAllByRole('button', { name: '全局搜索' })).toHaveLength(1)
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     expect(screen.getByPlaceholderText('搜索事情或结果')).toBeTruthy()
     expect(screen.queryByRole('button', { name: '全局搜索' })).toBeNull()
     fireEvent.click(within(mainNav).getByRole('button', { name: /待你处理/ }))
@@ -6855,6 +6943,7 @@ describe('sealed Pegas UI', () => {
     fireEvent.click(within(mainNav).getByRole('button', { name: /自动化/ }))
     expect(screen.getAllByRole('button', { name: '全局搜索' })).toHaveLength(1)
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     fireEvent.keyDown(window, { key: 'k', metaKey: true })
     expect(screen.getByRole('dialog', { name: '全局搜索' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '关闭搜索' }))
@@ -6898,6 +6987,7 @@ describe('sealed Pegas UI', () => {
         name: /所有事情/,
       }),
     )
+    await waitForWorkList()
     const list = screen.getByLabelText('事情列表')
     const titlesInOrder = () =>
       Array.from(list.querySelectorAll('.work-copy > strong')).map(
@@ -6911,6 +7001,7 @@ describe('sealed Pegas UI', () => {
     const sortTrigger = screen.getByRole('button', { name: /排序：最近更新/ })
     fireEvent.click(sortTrigger)
     fireEvent.click(screen.getByRole('menuitemradio', { name: '最近创建' }))
+    await waitForWorkList()
     expect(titlesInOrder()).toEqual([
       channel.title,
       endedLast.title,
@@ -6919,6 +7010,7 @@ describe('sealed Pegas UI', () => {
     expect(screen.getByRole('button', { name: /排序：最近创建/ })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: /排序：最近创建/ }))
     fireEvent.click(screen.getByRole('menuitemradio', { name: '最近结束' }))
+    await waitForWorkList()
     expect(titlesInOrder()).toEqual([
       endedLast.title,
       createdFirst.title,
@@ -6940,6 +7032,7 @@ describe('sealed Pegas UI', () => {
         name: /所有事情/,
       }),
     )
+    await waitForWorkList()
     expect(screen.getByText('这里还没有事情')).toBeTruthy()
     expect(screen.queryByText('服务端能力尚未启用')).toBeNull()
   })
@@ -7021,6 +7114,7 @@ describe('sealed Pegas UI', () => {
         name: /所有事情/,
       }),
     )
+    await waitForWorkList()
     const list = screen.getByLabelText('事情列表')
     expect(within(list).getByText(channel.title)).toBeTruthy()
     expect(
@@ -7028,6 +7122,7 @@ describe('sealed Pegas UI', () => {
     ).toBe('true')
     expect(screen.queryByText('这里还没有事情')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '进行中' }))
+    await waitForWorkList()
     expect(screen.getByText('当前筛选下没有事情')).toBeTruthy()
   })
 
@@ -8054,12 +8149,16 @@ describe('sealed Pegas UI', () => {
     expect(
       fetchMock.mock.calls.some(
         ([path]) =>
-          typeof path === 'string' && path.startsWith('/v1/channels/search?'),
+          typeof path === 'string' &&
+          path.startsWith('/v1/channels/search?') &&
+          new URL(path, 'http://localhost').searchParams.has('q'),
       ),
     ).toBe(true)
     const searchCall = fetchMock.mock.calls.find(
       ([path]) =>
-        typeof path === 'string' && path.startsWith('/v1/channels/search?'),
+        typeof path === 'string' &&
+        path.startsWith('/v1/channels/search?') &&
+        new URL(path, 'http://localhost').searchParams.has('q'),
     )
     const searchUrl = new URL(
       typeof searchCall?.[0] === 'string' ? searchCall[0] : '',
@@ -8072,7 +8171,10 @@ describe('sealed Pegas UI', () => {
   it('shows a retryable error when server search fails', async () => {
     let failures = 0
     installFetch(path => {
-      if (path.startsWith('/v1/channels/search?')) {
+      if (
+        path.startsWith('/v1/channels/search?') &&
+        new URL(path, 'http://localhost').searchParams.has('q')
+      ) {
         failures += 1
         if (failures === 1)
           return Response.json({ message: '搜索暂时不可用' }, { status: 500 })
@@ -8397,8 +8499,11 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     fireEvent.click(
-      within(mainCanvas()).getByRole('button', { name: /安全自更新流程/ }),
+      await within(mainCanvas()).findByRole('button', {
+        name: /安全自更新流程/,
+      }),
     )
     expect(await screen.findByText('目标与交付')).toBeTruthy()
     expect(
@@ -8438,8 +8543,11 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     fireEvent.click(
-      within(mainCanvas()).getByRole('button', { name: /安全自更新流程/ }),
+      await within(mainCanvas()).findByRole('button', {
+        name: /安全自更新流程/,
+      }),
     )
     expect(await screen.findByText('目标与交付')).toBeTruthy()
     expect(await screen.findByText('读取交付失败')).toBeTruthy()
@@ -9089,8 +9197,11 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     fireEvent.click(
-      within(mainCanvas()).getByRole('button', { name: /安全自更新流程/ }),
+      await within(mainCanvas()).findByRole('button', {
+        name: /安全自更新流程/,
+      }),
     )
     expect(await screen.findByText('事情级执行设置')).toBeTruthy()
     expect(await screen.findByText('Pegas 全局设置')).toBeTruthy()
@@ -9139,8 +9250,11 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     fireEvent.click(
-      within(mainCanvas()).getByRole('button', { name: /安全自更新流程/ }),
+      await within(mainCanvas()).findByRole('button', {
+        name: /安全自更新流程/,
+      }),
     )
     for (const label of ['执行模型', '执行池', '推理档位', '权限档位']) {
       const trigger = await screen.findByRole('combobox', { name: label })
@@ -9166,8 +9280,11 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     fireEvent.click(
-      within(mainCanvas()).getByRole('button', { name: /安全自更新流程/ }),
+      await within(mainCanvas()).findByRole('button', {
+        name: /安全自更新流程/,
+      }),
     )
     await screen.findByRole('combobox', { name: '执行模型' })
     await chooseOption('执行模型', '为这件事情指定模型')
@@ -9229,8 +9346,11 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     fireEvent.click(
-      within(mainCanvas()).getByRole('button', { name: /安全自更新流程/ }),
+      await within(mainCanvas()).findByRole('button', {
+        name: /安全自更新流程/,
+      }),
     )
     expect(await screen.findByText('事情级执行设置')).toBeTruthy()
     await screen.findByLabelText('执行池')
@@ -9309,8 +9429,11 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     fireEvent.click(
-      within(mainCanvas()).getByRole('button', { name: /安全自更新流程/ }),
+      await within(mainCanvas()).findByRole('button', {
+        name: /安全自更新流程/,
+      }),
     )
     expect(await screen.findByText('事情级执行设置')).toBeTruthy()
     await screen.findByLabelText('权限档位')
@@ -9381,8 +9504,11 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     fireEvent.click(
-      within(mainCanvas()).getByRole('button', { name: /安全自更新流程/ }),
+      await within(mainCanvas()).findByRole('button', {
+        name: /安全自更新流程/,
+      }),
     )
     expect(await screen.findByText('权限变更记录')).toBeTruthy()
     expect(await screen.findByText('严格 → 完全访问 · v3')).toBeTruthy()
@@ -9721,7 +9847,9 @@ describe('sealed Pegas UI', () => {
       }),
     )
     fireEvent.click(
-      within(mainCanvas()).getByRole('button', { name: /安全自更新流程/ }),
+      await within(mainCanvas()).findByRole('button', {
+        name: /安全自更新流程/,
+      }),
     )
     const summary = (await screen.findAllByText('授权执行记录'))[0]
     const details = summary?.closest('details')
@@ -9789,8 +9917,11 @@ describe('sealed Pegas UI', () => {
           name: /所有事情/,
         }),
       )
+      await waitForWorkList()
       fireEvent.click(
-        within(mainCanvas()).getByRole('button', { name: /安全自更新流程/ }),
+        await within(mainCanvas()).findByRole('button', {
+          name: /安全自更新流程/,
+        }),
       )
       expect(await screen.findByText('已批准规则')).toBeTruthy()
       expect(await screen.findByText('/tmp/shared/plan.md')).toBeTruthy()
@@ -9921,7 +10052,9 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
-    fireEvent.click(await screen.findByRole('button', { name: '已归档' }))
+    await waitForWorkList()
+    fireEvent.click(screen.getByRole('button', { name: '已停止' }))
+    await waitForWorkList()
     fireEvent.click(
       await within(mainCanvas()).findByRole('button', {
         name: new RegExp(channel.title),
@@ -10034,6 +10167,7 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     fireEvent.click(
       await within(mainCanvas()).findByRole('button', {
         name: new RegExp(channel.title),
@@ -10189,6 +10323,7 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     fireEvent.click(
       await within(mainCanvas()).findByRole('button', {
         name: new RegExp(channel.title),
@@ -10366,6 +10501,7 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     fireEvent.click(
       await within(mainCanvas()).findByRole('button', {
         name: new RegExp(channel.title),
@@ -10514,6 +10650,7 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     fireEvent.click(
       await within(mainCanvas()).findByRole('button', {
         name: new RegExp(channel.title),
@@ -10669,6 +10806,7 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     fireEvent.click(
       await within(mainCanvas()).findByRole('button', {
         name: new RegExp(channel.title),
@@ -10816,6 +10954,7 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     fireEvent.click(
       await within(mainCanvas()).findByRole('button', {
         name: new RegExp(channel.title),
@@ -10928,6 +11067,7 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     fireEvent.click(
       await within(mainCanvas()).findByRole('button', {
         name: new RegExp(channel.title),
@@ -11040,6 +11180,7 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     fireEvent.click(
       await within(mainCanvas()).findByRole('button', {
         name: new RegExp(channel.title),
@@ -11159,6 +11300,7 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     fireEvent.click(
       await within(mainCanvas()).findByRole('button', {
         name: new RegExp(channel.title),
@@ -11264,6 +11406,7 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     fireEvent.click(
       await within(mainCanvas()).findByRole('button', {
         name: new RegExp(channel.title),
@@ -11382,6 +11525,7 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     fireEvent.click(
       await within(mainCanvas()).findByRole('button', {
         name: new RegExp(channel.title),
@@ -11480,6 +11624,7 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     fireEvent.click(
       await within(mainCanvas()).findByRole('button', {
         name: new RegExp(channel.title),
@@ -11536,8 +11681,11 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     fireEvent.click(
-      within(mainCanvas()).getByRole('button', { name: /安全自更新流程/ }),
+      await within(mainCanvas()).findByRole('button', {
+        name: /安全自更新流程/,
+      }),
     )
     expect(await screen.findByText('协作记录')).toBeTruthy()
     expect(screen.getByText('委派 · 已完成')).toBeTruthy()
@@ -11573,8 +11721,11 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     fireEvent.click(
-      within(mainCanvas()).getByRole('button', { name: /安全自更新流程/ }),
+      await within(mainCanvas()).findByRole('button', {
+        name: /安全自更新流程/,
+      }),
     )
     expect(await screen.findByText('目标与交付')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '查看历史修订' }))
@@ -11763,8 +11914,11 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     fireEvent.click(
-      within(mainCanvas()).getByRole('button', { name: /安全自更新流程/ }),
+      await within(mainCanvas()).findByRole('button', {
+        name: /安全自更新流程/,
+      }),
     )
     expect(await screen.findByText('目标与交付')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '查看历史修订' }))
@@ -11842,8 +11996,11 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     fireEvent.click(
-      within(mainCanvas()).getByRole('button', { name: /安全自更新流程/ }),
+      await within(mainCanvas()).findByRole('button', {
+        name: /安全自更新流程/,
+      }),
     )
     expect(await screen.findByText('目标与交付')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '查看历史修订' }))
@@ -11920,8 +12077,11 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     fireEvent.click(
-      within(mainCanvas()).getByRole('button', { name: /安全自更新流程/ }),
+      await within(mainCanvas()).findByRole('button', {
+        name: /安全自更新流程/,
+      }),
     )
     expect(await screen.findByText('协作记录')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '打开目标事情' }))
@@ -11974,8 +12134,11 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     fireEvent.click(
-      within(mainCanvas()).getByRole('button', { name: /安全自更新流程/ }),
+      await within(mainCanvas()).findByRole('button', {
+        name: /安全自更新流程/,
+      }),
     )
     expect(await screen.findByText('协作记录')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '打开目标事情' }))
@@ -12041,8 +12204,11 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     fireEvent.click(
-      within(mainCanvas()).getByRole('button', { name: /安全自更新流程/ }),
+      await within(mainCanvas()).findByRole('button', {
+        name: /安全自更新流程/,
+      }),
     )
     expect(await screen.findByText('协作记录')).toBeTruthy()
     const rootItem = screen.getByText('根协作任务').closest('li')
@@ -12086,8 +12252,11 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     fireEvent.click(
-      within(mainCanvas()).getByRole('button', { name: /安全自更新流程/ }),
+      await within(mainCanvas()).findByRole('button', {
+        name: /安全自更新流程/,
+      }),
     )
     expect(await screen.findByText('目标与交付')).toBeTruthy()
     expect(await screen.findByText('有 1 条证据等待可信验证。')).toBeTruthy()
@@ -12578,8 +12747,11 @@ describe('sealed Pegas UI', () => {
     render(<App />)
     const mainNav = await screen.findByLabelText('主导航')
     fireEvent.click(within(mainNav).getByRole('button', { name: /所有事情/ }))
+    await waitForWorkList()
     fireEvent.click(
-      within(mainCanvas()).getByRole('button', { name: /安全自更新流程/ }),
+      await within(mainCanvas()).findByRole('button', {
+        name: /安全自更新流程/,
+      }),
     )
     const attachmentButton = await screen.findByRole('button', {
       name: /架构草图.png/,
@@ -12778,6 +12950,7 @@ describe('DESIGN-009 task detail closure', () => {
         name: /所有事情/,
       }),
     )
+    await waitForWorkList()
     fireEvent.click(
       await within(mainCanvas()).findByRole('button', {
         name: new RegExp(channel.title),
@@ -12867,6 +13040,7 @@ describe('DESIGN-009 task detail closure', () => {
         name: /所有事情/,
       }),
     )
+    await waitForWorkList()
     fireEvent.click(
       await within(mainCanvas()).findByRole('button', {
         name: new RegExp(channel.title),
@@ -12908,6 +13082,7 @@ describe('DESIGN-009 task detail closure', () => {
           name: /所有事情/,
         }),
       )
+      await waitForWorkList()
       const entry = await within(mainCanvas()).findByRole('button', {
         name: new RegExp(channel.title),
       })

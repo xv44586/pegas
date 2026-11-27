@@ -704,6 +704,27 @@ export class PegasApi {
     )
   }
 
+  async organizeChannel(
+    channel: WorkChannel,
+    change: { pinned?: boolean; archived?: boolean },
+  ): Promise<WorkChannel> {
+    const response = await fetch(
+      `/v1/channels/${encodeURIComponent(channel.id)}/organization`,
+      {
+        method: 'PUT',
+        headers: this.#headers(true),
+        body: JSON.stringify({
+          userId: this.#userId,
+          pinned: change.pinned ?? channel.organization?.pinned ?? false,
+          archived: change.archived ?? channel.organization?.archived ?? false,
+          expectedRevision: channel.organization?.revision ?? 0,
+        }),
+      },
+    )
+    if (!response.ok) await throwResponse(response)
+    return ((await response.json()) as { channel: WorkChannel }).channel
+  }
+
   async searchChannels(
     query: string,
     filters: ChannelSearchFilters = {},
@@ -715,6 +736,11 @@ export class PegasApi {
       sort: filters.sort ?? 'updated',
     })
     if (query.trim()) params.set('q', query.trim())
+    for (const key of ['pinned', 'archived', 'waiting'] as const) {
+      if (filters[key] !== undefined) params.set(key, String(filters[key]))
+    }
+    if (filters.statuses?.length)
+      params.set('status', filters.statuses.join(','))
     if (filters.ended !== undefined) params.set('ended', String(filters.ended))
     if (filters.needsAttention) params.set('needsAttention', 'true')
     if (filters.workerIconId) params.set('workerIconId', filters.workerIconId)

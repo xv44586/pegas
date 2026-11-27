@@ -4,6 +4,9 @@ import type { WorkerIconId } from '../brand/agent-icon.js'
 export type ChannelSearchSort = 'updated' | 'created' | 'ended'
 
 export interface ChannelSearchOptions {
+  pinned?: boolean
+  archived?: boolean
+  waiting?: boolean
   query?: string
   statuses?: TaskStatus[]
   ended?: boolean
@@ -157,6 +160,7 @@ export interface WorkChannel {
   canResume: boolean
   canStop: boolean
   workflow: WorkWorkflow
+  organization: { pinned: boolean; archived: boolean; revision: number }
 }
 
 export function projectWorkChannel(task: Task, facts: WorkFacts): WorkChannel {
@@ -185,6 +189,7 @@ export function projectWorkChannel(task: Task, facts: WorkFacts): WorkChannel {
     ...(ended ? { endedAt: task.ended?.at ?? task.updatedAt } : {}),
     ...(task.ended ? { ended: task.ended, endedKind: task.ended.outcome } : {}),
     workflow: workWorkflow(task, facts),
+    organization: { pinned: false, archived: false, revision: 0 },
     canResume: task.status === 'completed',
     canStop: ['backlog', 'unstarted', 'started'].includes(task.status),
   }

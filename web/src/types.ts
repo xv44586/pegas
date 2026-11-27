@@ -6,6 +6,10 @@ export type WorkerIconId = 'car' | 'camera' | 'computer' | 'phone'
 export type ChannelSearchSort = 'updated' | 'created' | 'ended'
 
 export interface ChannelSearchFilters {
+  pinned?: boolean
+  archived?: boolean
+  waiting?: boolean
+  statuses?: TaskStatus[]
   ended?: boolean
   needsAttention?: boolean
   workerIconId?: WorkerIconId
@@ -44,6 +48,7 @@ export interface Task {
 import type { WorkWorkflow } from '../../src/channel/work-channel'
 
 export interface WorkChannel extends Task {
+  organization?: { pinned: boolean; archived: boolean; revision: number }
   taskId: string
   workerIconId: WorkerIconId
   latestActivityAt: string

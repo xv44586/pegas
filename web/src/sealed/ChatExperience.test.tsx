@@ -127,8 +127,19 @@ function installChatFetch(
     if (overridden) return Promise.resolve(overridden)
     if (path.startsWith('/v1/events?'))
       return Promise.resolve(Response.json({ events: snapshot.events }))
-    if (path.startsWith('/v1/channels/search?'))
-      return Promise.resolve(Response.json({ channels: [], matches: [] }))
+    if (path.startsWith('/v1/channels/search?')) {
+      const params = new URL(path, 'http://localhost').searchParams
+      const channels = snapshot.channels.filter(
+        channel =>
+          (!params.has('pinned') ||
+            Boolean(channel.organization?.pinned) ===
+              (params.get('pinned') === 'true')) &&
+          (!params.has('archived') ||
+            Boolean(channel.organization?.archived) ===
+              (params.get('archived') === 'true')),
+      )
+      return Promise.resolve(Response.json({ channels, matches: [] }))
+    }
     if (path.startsWith('/v1/channels?'))
       return Promise.resolve(Response.json({ channels: snapshot.channels }))
     if (path.startsWith('/v1/runs?'))
@@ -425,7 +436,7 @@ describe('CONV-002 task conversation', () => {
       'value',
       '主聊天草稿',
     )
-    fireEvent.click(screen.getByRole('button', { name: channel.title }))
+    fireEvent.click(await screen.findByRole('button', { name: channel.title }))
     expect(await screen.findByLabelText('就这件事继续聊天')).toHaveProperty(
       'value',
       '事情草稿',
@@ -526,7 +537,7 @@ describe('CONV-002 task conversation', () => {
         name: '对话',
       }),
     )
-    fireEvent.click(screen.getByRole('button', { name: channel.title }))
+    fireEvent.click(await screen.findByRole('button', { name: channel.title }))
     const input = await screen.findByLabelText('就这件事继续聊天')
     expect(input).toHaveProperty('value', '引用追问草稿')
     expect(screen.getByRole('button', { name: '取消引用回复' })).toBeTruthy()
@@ -750,7 +761,10 @@ describe('CONV-002 task conversation', () => {
     expect(window.location.search).toBe('?task=task-1')
     expect(
       mock.mock.calls.some(
-        ([path]) => typeof path === 'string' && path.includes('/search'),
+        ([path]) =>
+          typeof path === 'string' &&
+          path.includes('/search') &&
+          new URL(path, 'http://localhost').searchParams.has('q'),
       ),
     ).toBe(false)
   })
