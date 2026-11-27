@@ -1,3 +1,7 @@
+import {
+  eventProjectId,
+  eventDirectory,
+} from '../project/project-workspaces.js'
 import type {
   InboxEvent,
   RoutingCandidate,
@@ -27,6 +31,15 @@ export function prefilterDecision(
   if (event.payload.taskId !== undefined) return undefined
   if (event.payload.sourceTaskId !== undefined) return undefined
   const text = rawText.trim()
+  if (eventProjectId(event) || eventDirectory(event))
+    return {
+      kind: 'create_task',
+      title: text.slice(0, 120),
+      goal: text,
+      input: text,
+      reason:
+        'The user explicitly started a task in a selected project or directory.',
+    }
 
   const stopTarget = stopCommandTarget(text)
   if (stopTarget !== undefined) {

@@ -13,6 +13,10 @@ export interface ChannelSearchFilters {
 }
 
 export interface Task {
+  projectId?: string
+  workingDirectory?: string
+  workspaceNodeId?: string
+  workspaceRevision?: number
   id: string
   userId: string
   originEventId: string

@@ -38,6 +38,8 @@ export interface TaskEnd {
 export interface ExecutionContext {
   executor: string
   executorProfile?: string
+  workspaceBinding?: { revision: number }
+  project?: { id: string; name: string; directory: string; revision: number }
   workspace?: string
   /** Execution node this Run is pinned to; only that node may claim it. */
   nodeId?: string
@@ -119,6 +121,10 @@ export interface Task {
   kind?: TaskKind
   workerIconId: WorkerIconId
   statusReason?: string
+  projectId?: string
+  workingDirectory?: string
+  workspaceNodeId?: string
+  workspaceRevision?: number
   targetResource?: 'pegas_repository'
   mandate: Mandate
   ended?: TaskEnd

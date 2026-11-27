@@ -1,3 +1,10 @@
+import type { Project, ProjectBinding } from '../project/types.js'
+import {
+  ProjectWorkspaces,
+  projectWorkspaceMigration,
+  eventProjectId,
+  eventDirectory,
+} from '../project/project-workspaces.js'
 import {
   commandAuthorization,
   commandFingerprint,
@@ -357,7 +364,7 @@ const maximumCollaborationsPerRoot = 32
 const maximumCollaborationDepth = 4
 const maximumPendingContextNotesPerTarget = 4
 const maximumActiveCollaborationsPerOwner = 64
-const currentInboxContractVersion = 4
+const currentInboxContractVersion = 5
 const automationReviewWaitReasons = [
   'awaiting_delivery_acceptance',
   'review_rework_queued',
@@ -2740,6 +2747,10 @@ interface ExecutionNodeRow {
 }
 
 interface TaskRow {
+  project_id?: string | null
+  working_directory?: string | null
+  workspace_node_id?: string | null
+  workspace_revision?: number
   id: string
   user_id: string
   origin_event_id: string
@@ -3605,6 +3616,43 @@ export class PegasStore {
       END;
     `,
     )
+    this.#migrate(61, projectWorkspaceMigration)
+  }
+
+  listProjects(userId: string): Project[] {
+    return new ProjectWorkspaces(this.#database).list(userId)
+  }
+
+  project(id: string, userId: string): Project {
+    return new ProjectWorkspaces(this.#database).get(id, userId)
+  }
+
+  createProject(input: unknown): { project: Project; created: boolean } {
+    return this.#runInTransaction(() =>
+      new ProjectWorkspaces(this.#database).create(
+        input,
+        this.#clock.now().toISOString(),
+      ),
+    )
+  }
+
+  taskProjectBinding(taskId: string, userId: string): ProjectBinding {
+    return new ProjectWorkspaces(this.#database).binding(taskId, userId)
+  }
+
+  updateTaskProjectBinding(
+    taskId: string,
+    userId: string,
+    input: unknown,
+  ): ProjectBinding {
+    return this.#runInTransaction(() =>
+      new ProjectWorkspaces(this.#database).bind(
+        taskId,
+        userId,
+        input,
+        Boolean(this.#blockingActionForInput(taskId)),
+      ),
+    )
   }
 
   #backfillWorkerIconIds(): void {
@@ -3794,7 +3842,7 @@ export class PegasStore {
     const settings = this.getRuntimeSettings()
     return workerExecutionContext(
       effectiveWorkerProfile(this.getWorkerProfile(taskId, userId), settings),
-      base,
+      new ProjectWorkspaces(this.#database).forTask(taskId, userId, base),
       settings.revision,
     )
   }
@@ -8705,14 +8753,37 @@ export class PegasStore {
     const createdAt = this.#clock.now().toISOString()
     const reference =
       input.type === 'user.message' ? replyReference(input.payload) : undefined
+    const projectId = eventProjectId(input)
+    const directory = eventDirectory(input)
+    if (
+      directory &&
+      (input.authenticatedActor !== 'human' ||
+        !this.executionNode(directory.nodeId))
+    )
+      throw new Error(
+        'Directory selection requires human input and an existing execution node',
+      )
+    if (projectId) {
+      if (input.authenticatedActor !== 'human')
+        throw new Error('Project selection requires authenticated human input')
+      this.project(projectId, input.userId)
+    }
     const requiredContractVersion =
-      reference?.mode === 'explain'
-        ? 4
-        : reference
-          ? 3
-          : input.source === 'collaboration'
-            ? 2
-            : 1
+      projectId ||
+      directory ||
+      (input.payload &&
+        typeof input.payload === 'object' &&
+        'taskId' in input.payload &&
+        typeof input.payload.taskId === 'string' &&
+        this.findTask(input.payload.taskId, input.userId)?.workingDirectory)
+        ? 5
+        : reference?.mode === 'explain'
+          ? 4
+          : reference
+            ? 3
+            : input.source === 'collaboration'
+              ? 2
+              : 1
     const result = this.#database
       .prepare(
         `INSERT OR IGNORE INTO inbox_events
@@ -9798,6 +9869,34 @@ export class PegasStore {
         throw new Error('Collaboration target is already assigned')
       }
 
+      const selectedProjectId = eventProjectId(event)
+      const selectedDirectory = eventDirectory(event)
+      if (selectedProjectId || selectedDirectory) {
+        if (event.authenticatedActor !== 'human')
+          throw new Error(
+            'Project selection requires authenticated human input',
+          )
+        if (decision.kind === 'create_task') {
+          this.updateTaskProjectBinding(task.id, event.userId, {
+            projectId: selectedProjectId ?? null,
+            ...(selectedDirectory
+              ? {
+                  workingDirectory: selectedDirectory.directory,
+                  nodeId: selectedDirectory.nodeId,
+                }
+              : {}),
+            expectedRevision: 0,
+          })
+          task = this.#taskById(task.id)
+        } else if (
+          selectedProjectId
+            ? task.projectId !== selectedProjectId
+            : task.workingDirectory !== selectedDirectory?.directory ||
+              task.workspaceNodeId !== selectedDirectory?.nodeId
+        ) {
+          throw new Error('Message project does not match the task binding')
+        }
+      }
       const resumed =
         decision.kind === 'continue_task' && task.status === 'completed'
       let resolvedExecutionContext =
@@ -9812,9 +9911,28 @@ export class PegasStore {
           task.id,
         )
       }
-      const executionContractVersion =
-        resolvedExecutionContext.protocol === 'dsh-headless-v1' &&
-        resolvedExecutionContext.workerProfile
+      if (
+        collaboration &&
+        decision.kind === 'create_task' &&
+        resolvedExecutionContext.workspaceBinding
+      ) {
+        this.updateTaskProjectBinding(task.id, task.userId, {
+          projectId: resolvedExecutionContext.project?.id ?? null,
+          workingDirectory: resolvedExecutionContext.workspace,
+          nodeId: resolvedExecutionContext.nodeId,
+          expectedRevision: 0,
+        })
+        task = this.#taskById(task.id)
+      }
+      resolvedExecutionContext = new ProjectWorkspaces(this.#database).forTask(
+        task.id,
+        task.userId,
+        resolvedExecutionContext,
+      )
+      const executionContractVersion = resolvedExecutionContext.workspaceBinding
+        ? 3
+        : resolvedExecutionContext.protocol === 'dsh-headless-v1' &&
+            resolvedExecutionContext.workerProfile
           ? 2
           : 1
       const blockingAction = this.#blockingActionForInput(task.id)
@@ -14358,7 +14476,7 @@ export class PegasStore {
         .prepare(
           `SELECT * FROM runs
            WHERE task_id IN (SELECT id FROM tasks WHERE status NOT IN ('completed','cancelled'))
-           AND execution_contract_version <= 2
+           AND execution_contract_version <= 3
            AND (? IS NULL OR task_id IN (SELECT id FROM tasks WHERE kind = ?))
            AND (json_extract(execution_context_json, '$.nodeId') IS NULL
              OR json_extract(execution_context_json, '$.nodeId') = ?)
@@ -14512,7 +14630,7 @@ export class PegasStore {
         this.#database
           .prepare(
             `UPDATE runs SET claimed_by = ?, lease_until = ?,
-             claim_token_hash = ?, claimed_contract_version = 2,
+             claim_token_hash = ?, claimed_contract_version = 3,
              updated_at = ? WHERE id = ?`,
           )
           .run(workerId, leaseUntil, claimTokenHash, now.toISOString(), row.id)
@@ -14521,7 +14639,7 @@ export class PegasStore {
           .prepare(
             `UPDATE runs
              SET status = 'running', claimed_by = ?, lease_until = ?,
-                 claim_token_hash = ?, claimed_contract_version = 2,
+                 claim_token_hash = ?, claimed_contract_version = 3,
                  attempts = attempts + 1, updated_at = ?
              WHERE id = ?`,
           )
@@ -18794,6 +18912,14 @@ function toTask(row: TaskRow): Task {
     status: row.status,
     kind: row.kind === 'conversation' ? 'conversation' : 'work',
     workerIconId,
+    ...(row.project_id ? { projectId: row.project_id } : {}),
+    ...(row.working_directory
+      ? { workingDirectory: row.working_directory }
+      : {}),
+    ...(row.workspace_node_id
+      ? { workspaceNodeId: row.workspace_node_id }
+      : {}),
+    workspaceRevision: row.workspace_revision ?? 0,
     ...(row.status_reason ? { statusReason: row.status_reason } : {}),
     ...(row.target_resource === 'pegas_repository'
       ? { targetResource: 'pegas_repository' as const }

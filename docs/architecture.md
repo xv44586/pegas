@@ -241,6 +241,12 @@ Worker Runtime 是可释放的执行资源，不是 WorkerProfile 或 WorkChanne
 
 WorkerProfile 的角色和记忆范围必须服从 Pegas 的统一身份、Policy 与授权边界。它不能拥有绕过 Control Plane 的外部身份或私有 Worker 通信通道。
 
+#### 项目与普通工作目录
+
+EXEC-009 在 Task 上持久保存可选项目身份和独立的工作目录/节点/绑定版本。用户可以登记项目，也可以直接选择资料夹或照片目录，不要求 Git。新 Run 将选择固化到执行快照，Worker 在目标节点验证物理路径后，以该 cwd 启动 Agent 原生规则加载器。普通未绑定会话保留 EXEC-008 默认目录。
+
+目录绑定是显式用户选择，Router 不授予路径权限；是否创建 worktree、分支与是否允许修改主目录由用户和项目规则决定。项目/目录不隐含宿主外部账号授权。忙碌任务不原地切换；空闲更改后新 Run 不复用另一目录的 session。服务端接口、inbox v5 / Run v3 / schema v61 fence 和回滚要求见 `docs/project-workspaces.md`。
+
 #### 委派、交接与结果回传
 
 跨 Task/WorkChannel 协作由 Control Plane 调解：

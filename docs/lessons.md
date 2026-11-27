@@ -660,3 +660,14 @@
 - Seen：1（2026-11-27）；Severity：security；Status：Promoted。
 - Enforcement：无条件凭据隔离插件、平台进程边界、原生文件服务 guard、启动环境清理、普通审批不可解除的 credential-access 拒绝；`pnpm check` 与 `pnpm smoke:credential-boundary` CI 门禁。缺失服务/平台后端拒绝执行，不回退裸跑。
 - Owner / next action：APPROVAL-001。未来账号连接须显式展示账号、资源与动作范围；不要通过放宽目录批准重新启用本机登录继承。
+
+### LESSON-20261127-01：目录归属必须进入执行上下文，harness 不决定开发策略
+
+- Rule：用户选择的项目或普通目录必须进入 Task 与 Run 快照，真实 Agent 从该 cwd 加载适用规则。项目身份、执行目录和外部账号权限分开；不从项目类型推导强制 worktree 策略。
+- Why：PR #148 执行会话在通用工作区启动，随后通过绝对路径读另一个仓库，没有加载那个仓库的 AGENTS；单条 shell 命令设置 workdir 无法证明整个会话规则范围已改变。EXEC-008 的普通会话隔离仍需保留。
+- Feature：EXEC-009（关联 EXEC-008、MEMORY-001）
+- Evidence：`test/project-workspaces.test.ts` 的两个初始回归在旧实现分别得到 404 和错误接受输入的 202；后端绑定与实际 DSH 规则加载由 `scripts/smoke.mjs`、`scripts/smoke-dsh-runtime.mjs` 检查。普通照片文件夹无需项目/Git/AGENTS 的回归防止把开发约定施加到办公场景。
+- Seen：1（2026-11-27）
+- Severity：quality
+- Status：Observed
+- Enforcement：Feature 回归与 smoke；不增加全局 worktree 强制规则。

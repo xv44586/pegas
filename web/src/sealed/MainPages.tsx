@@ -1,3 +1,4 @@
+import { WorkspacePicker } from './WorkspacePicker'
 import { TaskConversationHistory } from './TaskConversationHistory'
 import {
   taskAttachment,
@@ -248,6 +249,11 @@ export function ConversationPage({
   onConfigureVoice: () => void
 }) {
   const readOnly = taskScope?.channel.status === 'cancelled'
+  const [workspaceTarget, setWorkspaceTarget] =
+    useState<import('../api').MessageTarget>()
+  function executionTarget(value: ComposerTarget | undefined) {
+    return messageTarget(value) ?? workspaceTarget
+  }
   const [sending, setSending] = useState(false)
   const [modelOpenRequest, setModelOpenRequest] = useState(0)
   const [error, setError] = useState('')
@@ -396,7 +402,7 @@ export function ConversationPage({
       const recordedTarget = voiceTargetRef.current
       const result = await api.sendVoiceMessage(
         blob,
-        messageTarget(recordedTarget),
+        executionTarget(recordedTarget),
       )
       await attachToSentMessage(result.event.id)
       onClearTarget(recordedTarget)
@@ -479,18 +485,18 @@ export function ConversationPage({
       const last = pendingSendRef.current
       const attempt =
         last?.text === text &&
-        last.targetKey === JSON.stringify(messageTarget(target))
+        last.targetKey === JSON.stringify(executionTarget(target))
           ? last
           : {
               text,
-              targetKey: JSON.stringify(messageTarget(target)),
+              targetKey: JSON.stringify(executionTarget(target)),
               dedupeKey: crypto.randomUUID(),
             }
       pendingSendRef.current = attempt
       writeSendAttempt(taskScope?.channel.id, attempt)
       const event = await api.sendMessage(
         text,
-        messageTarget(target),
+        executionTarget(target),
         attempt.dedupeKey,
       )
       pendingSendRef.current = undefined
@@ -1340,6 +1346,16 @@ export function ConversationPage({
             </ol>
           </div>
         )}
+        <div hidden={!taskScope && Boolean(target)}>
+          <WorkspacePicker
+            key={taskScope?.channel.id ?? 'conversation'}
+            api={api}
+            taskId={taskScope?.channel.id}
+            disabled={sending || dictationBusy || readOnly}
+            onSelect={setWorkspaceTarget}
+            onSaved={onSent}
+          />
+        </div>
         {attachmentEventId && (
           <div className="mx-auto mb-2 max-w-[1040px] text-[13px] text-ink-2">
             <p>消息已发送。附件仍保留在此处，请重试上传或移除后继续。</p>
