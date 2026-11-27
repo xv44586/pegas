@@ -368,6 +368,18 @@ describe('CONV-002 task conversation', () => {
       ),
     ).toBe(true)
     expect(screen.queryByRole('tab', { name: '执行记录' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '搜索当前事情' }))
+    const searchDialog = await screen.findByRole('dialog', {
+      name: '搜索当前事情',
+    })
+    fireEvent.change(within(searchDialog).getByRole('searchbox'), {
+      target: { value: '执行中间结果 1' },
+    })
+    expect(
+      within(searchDialog).getByRole('button', {
+        name: '定位记录：执行中间结果 1',
+      }),
+    ).toBeTruthy()
   })
 
   it('opens an isolated page from recents and reads every history page without duplicates', async () => {
@@ -730,14 +742,14 @@ describe('CONV-002 task conversation', () => {
     fireEvent.click(screen.getByRole('button', { name: '搜索当前事情' }))
     const dialog = await screen.findByRole('dialog', { name: '搜索当前事情' })
     const search = within(dialog).getByRole('searchbox', {
-      name: '搜索当前事情的对话',
+      name: '搜索当前事情的记录',
     })
     fireEvent.change(search, { target: { value: '这件事的回复' } })
     expect(
       within(dialog).getByRole('button', { name: /定位消息：这件事的回复/ }),
     ).toBeTruthy()
     fireEvent.change(search, { target: { value: '事情内输入 204' } })
-    expect(within(dialog).getByText('找到 1 条消息')).toBeTruthy()
+    expect(within(dialog).getByText('找到 1 条记录')).toBeTruthy()
     fireEvent.click(
       within(dialog).getByRole('button', { name: /定位消息：事情内输入 204/ }),
     )
@@ -753,6 +765,176 @@ describe('CONV-002 task conversation', () => {
         ([path]) => typeof path === 'string' && path.includes('/search'),
       ),
     ).toBe(false)
+  })
+
+  it('searches and reveals tool parameters, results, plan snapshots, thinking and child records in the main conversation', async () => {
+    const entries = [
+      {
+        seq: 1,
+        kind: 'tool_call',
+        tool: 'bash',
+        label: '运行核对',
+        detail: '参数独有暗号\n结果独有暗号',
+        semantic: {
+          kind: 'shell',
+          command: 'python audit.py',
+          output: '结果独有暗号',
+        },
+      },
+      {
+        seq: 2,
+        kind: 'tool_call',
+        tool: 'todo_write',
+        label: '更新计划',
+        semantic: {
+          kind: 'todo',
+          items: [{ content: '历史规划暗号', status: 'pending' }],
+        },
+      },
+      { seq: 3, kind: 'thinking', label: '思考', detail: '决策说明暗号' },
+      { seq: 4, kind: 'text', label: '中间结果暗号', detail: '中间结果暗号' },
+    ].map(entry => ({
+      ...entry,
+      createdAt: runningRun.createdAt,
+      updatedAt: runningRun.updatedAt,
+    }))
+    installTaskHistory({}, path => {
+      if (path.includes('/timeline?'))
+        return Response.json({
+          channel,
+          events: [baseEvent],
+          messages: [],
+          runs: [runningRun],
+        })
+      if (path.includes('/run-1/activity?'))
+        return Response.json({
+          runId: 'run-1',
+          taskId: 'task-1',
+          entries,
+          totalEntries: entries.length,
+          truncated: false,
+        })
+      if (path.includes('/run-1/subagents?'))
+        return Response.json({
+          runId: 'run-1',
+          taskId: 'task-1',
+          subagents: [
+            {
+              sessionId: 'child-1',
+              parentSessionId: 'root',
+              delegationDepth: 1,
+              label: '检查助手',
+              prompt: '子任务要求暗号',
+              createdAt: runningRun.createdAt,
+              entries: [
+                {
+                  ...entries[0],
+                  semantic: undefined,
+                  detail: '子任务结果暗号',
+                },
+              ],
+              totalEntries: 1,
+              truncated: false,
+            },
+          ],
+        })
+      return undefined
+    })
+    window.history.replaceState({}, '', '/?task=task-1')
+    render(<App />)
+    const composer = await screen.findByLabelText('就这件事继续聊天')
+    fireEvent.change(composer, { target: { value: '搜索不丢草稿' } })
+    await screen.findByText('中间结果暗号')
+    for (const query of [
+      '参数独有暗号',
+      '结果独有暗号',
+      '历史规划暗号',
+      '决策说明暗号',
+      '中间结果暗号',
+      '子任务要求暗号',
+      '子任务结果暗号',
+    ]) {
+      fireEvent.click(screen.getByRole('button', { name: '搜索当前事情' }))
+      const dialog = await screen.findByRole('dialog', { name: '搜索当前事情' })
+      fireEvent.change(within(dialog).getByRole('searchbox'), {
+        target: { value: query },
+      })
+      const result = await within(dialog).findByRole('button', {
+        name: new RegExp(`定位记录：.*${query}`, 's'),
+      })
+      fireEvent.click(result)
+      await waitFor(() =>
+        expect(document.activeElement?.textContent).toContain(query),
+      )
+      const target = document.activeElement as HTMLElement
+      expect(target.closest('.conversation-flow')).toBeTruthy()
+      expect(target.querySelectorAll('details:not([open])')).toHaveLength(0)
+      expect(target.closest('details:not([open])')).toBeNull()
+      expect(composer).toHaveProperty('value', '搜索不丢草稿')
+      expect(window.location.search).toBe('?task=task-1')
+    }
+    expect(screen.queryByRole('tab', { name: '执行记录' })).toBeNull()
+  })
+
+  it('reports incomplete activity search, retains messages, and retries without another data source', async () => {
+    let fail = true
+    installTaskHistory({}, path => {
+      if (path.includes('/timeline?'))
+        return Response.json({
+          channel,
+          events: [baseEvent],
+          messages: [],
+          runs: [runningRun],
+        })
+      if (path.includes('/run-1/activity?'))
+        return fail
+          ? Response.json({ message: '过程暂不可读' }, { status: 503 })
+          : Response.json({
+              runId: 'run-1',
+              taskId: 'task-1',
+              entries: [
+                {
+                  seq: 1,
+                  kind: 'text',
+                  label: '重试可搜索结果',
+                  createdAt: runningRun.createdAt,
+                  updatedAt: runningRun.updatedAt,
+                },
+              ],
+              totalEntries: 1,
+              truncated: false,
+            })
+      if (path.includes('/run-1/subagents?'))
+        return Response.json({
+          runId: 'run-1',
+          taskId: 'task-1',
+          subagents: [],
+        })
+      return undefined
+    })
+    window.history.replaceState({}, '', '/?task=task-1')
+    render(<App />)
+    await screen.findByText(/执行记录未完整读取/)
+    fireEvent.click(screen.getByRole('button', { name: '搜索当前事情' }))
+    const dialog = await screen.findByRole('dialog', { name: '搜索当前事情' })
+    const search = within(dialog).getByRole('searchbox')
+    fireEvent.change(search, { target: { value: '重试可搜索结果' } })
+    expect(within(dialog).getByText(/部分执行记录读取失败/)).toBeTruthy()
+    expect(within(dialog).queryByText('当前事情中没有匹配的记录。')).toBeNull()
+    fireEvent.change(search, { target: { value: '帮我整理季度数据' } })
+    expect(
+      within(dialog).getByRole('button', { name: /定位消息/ }),
+    ).toBeTruthy()
+    fail = false
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: '重试读取执行记录' }),
+    )
+    fireEvent.change(search, { target: { value: '重试可搜索结果' } })
+    expect(
+      await within(dialog).findByRole('button', {
+        name: /定位记录：.*重试可搜索结果/,
+      }),
+    ).toBeTruthy()
   })
 
   it('searches folded message text and restores focus when cancelling', async () => {
@@ -777,7 +959,7 @@ describe('CONV-002 task conversation', () => {
     fireEvent.change(within(dialog).getByRole('searchbox'), {
       target: { value: '另一件事的内容' },
     })
-    expect(within(dialog).getByText('当前事情中没有匹配的消息。')).toBeTruthy()
+    expect(within(dialog).getByText('当前事情中没有匹配的记录。')).toBeTruthy()
     fireEvent.click(
       within(dialog).getByRole('button', { name: '关闭事情搜索' }),
     )

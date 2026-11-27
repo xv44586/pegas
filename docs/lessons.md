@@ -645,6 +645,7 @@
 - Why：首次事情页复用了消息卡的追问/定位箭头，且只把 Run 活动接入右侧；用户主对话中仍无法阅读执行过程。
 - Feature：CONV-002
 - Evidence：2026-11-27 用户截图；`ChatExperience.test.tsx` 图标与 401 条过程回归先红后绿，`TaskConversationHistory.test.tsx` 与 `scripts/verify-task-conversation.mjs` 内联过程验证。
+- 同日补证：主对话可读不代表搜索范围完整。工具/规划/中间结果及子 Agent 搜索回归先红后绿，复用同一活动数据；401 条早期记录、跨事情旧响应、失败与运行中更新加入索引断言，桌面/窄屏验证搜索后原记录可见且获得焦点。展开后对比度问题由 axe 门禁发现并修正。
 - Seen：1（2026-11-27）
 - Severity：normal
 - Status：Observed

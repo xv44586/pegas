@@ -9,6 +9,10 @@ import {
 } from './taskConversationDraft'
 import { InlineReply } from './InlineReply'
 import { TaskHistorySearch } from './TaskHistorySearch'
+import {
+  revealActivitySearchTarget,
+  type TaskActivitySearchSnapshot,
+} from './taskActivitySearch'
 import { answerFollowUps } from '../../../src/conversation/follow-ups'
 import {
   ArrowUp,
@@ -283,6 +287,8 @@ export function ConversationPage({
   )
   const chatScroll = useChatScroll()
   const [taskSearchOpen, setTaskSearchOpen] = useState(false)
+  const [activitySearch, setActivitySearch] =
+    useState<TaskActivitySearchSnapshot>()
   const taskSearchButton = useRef<HTMLButtonElement>(null)
   const [copiedMessageId, setCopiedMessageId] = useState<string>()
   const [retryingMessageId, setRetryingMessageId] = useState<string>()
@@ -1075,10 +1081,21 @@ export function ConversationPage({
           open={taskSearchOpen}
           onOpenChange={setTaskSearchOpen}
           messages={messages}
+          activity={
+            activitySearch?.taskId === taskScope.channel.id
+              ? activitySearch
+              : undefined
+          }
           onRestoreFocus={() => taskSearchButton.current?.focus()}
-          onSelect={messageId => {
-            setExpandedMessages(current => new Set([...current, messageId]))
-            requestAnimationFrame(() => jumpToMessage(messageId, true))
+          onSelect={record => {
+            if (record.role === 'activity') {
+              const content = chatScroll.contentRef.current
+              if (content) revealActivitySearchTarget(content, record.id)
+              chatScroll.onScroll()
+            } else {
+              setExpandedMessages(current => new Set([...current, record.id]))
+              requestAnimationFrame(() => jumpToMessage(record.id, true))
+            }
           }}
         />
       )}
@@ -1102,6 +1119,7 @@ export function ConversationPage({
               runs={snapshot.runs}
               messages={messages}
               renderMessage={renderMessage}
+              onSearchSnapshot={setActivitySearch}
             />
           ) : (
             messageBlocks.map(block =>

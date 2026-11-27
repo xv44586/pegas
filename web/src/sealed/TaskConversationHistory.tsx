@@ -1,5 +1,6 @@
 import {
   Fragment,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -16,6 +17,12 @@ import type {
   SubagentTranscript,
 } from '../types'
 import { ActivityTimeline } from './ActivityTimeline'
+import {
+  activitySearchId,
+  activitySearchRecord,
+  type TaskActivitySearchSnapshot,
+  type TaskSearchRecord,
+} from './taskActivitySearch'
 import { formatRelativeTime, runStatusLabel } from './types'
 
 interface RecordState {
@@ -38,7 +45,7 @@ function useActivityRecords(api: PegasApi, taskId: string, inputRuns: Run[]) {
     inputRuns.filter(run => run.taskId === taskId),
   )
   const runs = useMemo(() => JSON.parse(serialized) as Run[], [serialized])
-  const cache = useRef<Record<string, RecordState>>({})
+  const cache = useRef<Partial<Record<string, RecordState>>>({})
   const [records, setRecords] = useState(cache.current)
   const [retry, setRetry] = useState(0)
   useEffect(() => {
@@ -116,7 +123,8 @@ function useActivityRecords(api: PegasApi, taskId: string, inputRuns: Run[]) {
       clearTimeout(timer)
     }
   }, [api, taskId, runs, retry])
-  return { runs, records, retry: () => setRetry(value => value + 1) }
+  const retryRecords = useCallback(() => setRetry(value => value + 1), [])
+  return { runs, records, retry: retryRecords }
 }
 
 type Item<T> =
@@ -143,11 +151,13 @@ export function TaskConversationHistory<T extends Message>({
   runs: inputRuns,
   messages,
   renderMessage,
+  onSearchSnapshot,
 }: {
   api: PegasApi
   taskId: string
   runs: Run[]
   messages: T[]
+  onSearchSnapshot?: (snapshot: TaskActivitySearchSnapshot) => void
   renderMessage: (
     message: T,
     grouped: boolean,
@@ -155,6 +165,36 @@ export function TaskConversationHistory<T extends Message>({
   ) => ReactNode
 }) {
   const { runs, records, retry } = useActivityRecords(api, taskId, inputRuns)
+  useEffect(() => {
+    if (!onSearchSnapshot) return
+    const entries: TaskSearchRecord[] = []
+    let pending = false
+    let failed = false
+    let truncated = false
+    for (const run of runs) {
+      const record = records[run.id]
+      pending ||=
+        Boolean(record?.loading) ||
+        (!record?.activity && !record?.error) ||
+        (!record.children && !record.childrenError)
+      failed ||= Boolean(record?.error ?? record?.childrenError)
+      for (const entry of record?.activity?.entries ?? [])
+        entries.push(activitySearchRecord(run.id, entry))
+      for (const child of record?.children?.subagents ?? []) {
+        truncated ||= child.truncated
+        entries.push({
+          id: activitySearchId(run.id, undefined, child.sessionId),
+          role: 'activity',
+          label: '子 Agent 任务',
+          at: child.createdAt,
+          text: [child.label, child.prompt].filter(Boolean).join('\n'),
+        })
+        for (const entry of child.entries)
+          entries.push(activitySearchRecord(run.id, entry, child.sessionId))
+      }
+    }
+    onSearchSnapshot({ taskId, entries, pending, failed, truncated, retry })
+  }, [runs, records, taskId, retry, onSearchSnapshot])
   const items: Item<T>[] = messages.map(message => ({
     kind: 'message',
     at: message.at,
@@ -229,6 +269,7 @@ export function TaskConversationHistory<T extends Message>({
             >
               <ActivityTimeline
                 chronological
+                entryAnchor={entry => activitySearchId(block.run.id, entry.seq)}
                 entries={block.entries}
                 dataAccess={{
                   runId: block.run.id,
@@ -245,6 +286,12 @@ export function TaskConversationHistory<T extends Message>({
           return (
             <details
               key={block.key}
+              data-activity-id={activitySearchId(
+                block.run.id,
+                undefined,
+                block.child.sessionId,
+              )}
+              tabIndex={-1}
               className="task-inline-activity bui min-w-0 rounded-card bg-inset p-3"
             >
               <summary className="cursor-pointer">
@@ -256,7 +303,17 @@ export function TaskConversationHistory<T extends Message>({
                   {block.child.prompt}
                 </p>
               )}
-              <ActivityTimeline entries={block.child.entries} chronological />
+              <ActivityTimeline
+                entries={block.child.entries}
+                chronological
+                entryAnchor={entry =>
+                  activitySearchId(
+                    block.run.id,
+                    entry.seq,
+                    block.child.sessionId,
+                  )
+                }
+              />
               {block.child.truncated && (
                 <p>
                   子 Agent 已保存 {block.child.entries.length} /{' '}

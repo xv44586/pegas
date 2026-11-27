@@ -23,6 +23,7 @@ Feature Map 是 Pegas 的功能事实索引。任何功能开发开始前先查�
 - **权威实现**：`src/storage/sqlite-store.ts` 的事情事件关联与分页、`src/control-plane/server.ts` 的 Channel timeline、`web/src/api.ts`、`web/src/App.tsx` 与 `web/src/sealed/`。不创建第二套 Conversation 或 Task 状态。
 - **验收与边界**：见 [事情对话页](task-conversation.md)；优先完整历史、定向续聊、草稿隔离和稳定导航，移除事情内重复归属入口；调用链集中到执行记录，侧栏关闭再打开保留 tab；顶部仅保留当前事情搜索与侧栏开关，移除追问/回到发起消息箭头；主对话用 `TaskConversationHistory.tsx` 读取 `completeRunActivity` 的 beforeSeq 全分页，侧栏仍提供执行索引与诊断。
 - **自动化证据**：`ChatExperience.test.tsx` 的图标清理与 401 条内联混排回归，`TaskConversationHistory.test.tsx` 的完整分页、循环/跨事情拒绝、失败重试、实时刷新、子 Agent 和缓存验证，`live-execution-feedback.test.ts` 的 beforeSeq/owner 校验，以及 `scripts/verify-task-conversation.mjs` 的桌面/窄屏内联过程截图；完整 `pnpm check` 154 个文件 / 1745 个测试通过（无跳过），smoke 与桌面/窄屏 UI review 通过，事情页/搜索的 axe 0 violations。
+- **执行记录搜索补充（2026-11-27）**：`TaskHistorySearch` 与主对话共用已读取的完整活动；`taskActivitySearch.ts` 生成带 Run/子 session/seq 定位键的临时索引，搜索工具名、参数/结果、规划快照、过程说明和中间结果，点击展开并聚焦原记录。保留加载/失败/源端截断提示和局部重试；不读附件与独立归档文件全文。95 项定向回归及完整 check（158 文件 / 1846 测试）、smoke、桌面/窄屏 UI review 通过，详见事情对话页。
 - **下一缺口**：统一旧详情入口；超长历史的增量刷新/虚拟化；跨设备草稿不在本轮范围。
 
 ## 能力地图

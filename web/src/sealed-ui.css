@@ -1871,6 +1871,10 @@ a {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.task-inline-activity .activity-thinking-preview,
+.task-inline-activity .preview-meta {
+  color: var(--muted);
+}
 .activity-thinking .activity-title {
   font-family: inherit;
 }
