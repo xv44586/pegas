@@ -453,6 +453,11 @@ describe('CONV-002 task conversation', () => {
       'disabled',
       true,
     )
+    const image = new File(['image'], 'stopped.png', { type: 'image/png' })
+    fireEvent.paste(screen.getByLabelText('就这件事继续聊天'), {
+      clipboardData: { types: ['Files'], items: [], files: [image] },
+    })
+    expect(screen.queryByText('stopped.png')).toBeNull()
   })
 
   it('does not silently present truncated history when a later page fails', async () => {
