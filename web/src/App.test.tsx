@@ -12280,6 +12280,54 @@ describe('sealed Pegas UI', () => {
     expect(failures).toBe(2)
   })
 
+  it('persists the opt-in visual diff setting from the behavior tab', async () => {
+    let current = {
+      ...settingsResponse,
+      settings: { ...settingsResponse.settings, visualDiffEnabled: false },
+    }
+    const saves: boolean[] = []
+    installFetch((path, init) => {
+      if (path === '/v1/settings' && init?.method === 'PUT') {
+        const update = JSON.parse(
+          typeof init.body === 'string' ? init.body : '{}',
+        ) as { visualDiffEnabled: boolean }
+        saves.push(update.visualDiffEnabled)
+        current = {
+          ...current,
+          settings: {
+            ...current.settings,
+            visualDiffEnabled: update.visualDiffEnabled,
+            revision: current.settings.revision + 1,
+          },
+        }
+        return Response.json(current)
+      }
+      if (path === '/v1/settings') return Response.json(current)
+      return undefined
+    })
+    render(<App />)
+    fireEvent.click(
+      within(await screen.findByLabelText('主导航')).getByRole('button', {
+        name: /设置/,
+      }),
+    )
+    fireEvent.click(await screen.findByRole('tab', { name: '行为与规则' }))
+    const toggle = await screen.findByRole('switch', { name: '代码变更流程图' })
+    expect(toggle.getAttribute('aria-checked')).toBe('false')
+    fireEvent.click(toggle)
+    fireEvent.click(await screen.findByRole('button', { name: '保存更改' }))
+    await screen.findByText('更改已保存')
+    expect(saves).toEqual([true])
+    expect(
+      screen
+        .getByRole('switch', { name: '代码变更流程图' })
+        .getAttribute('aria-checked'),
+    ).toBe('true')
+    fireEvent.click(screen.getByRole('switch', { name: '代码变更流程图' }))
+    fireEvent.click(await screen.findByRole('button', { name: '保存更改' }))
+    await waitFor(() => expect(saves).toEqual([true, false]))
+  })
+
   it('lists server work rules and toggles them with revision', async () => {
     let rules: unknown[] = [
       {

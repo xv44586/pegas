@@ -8,6 +8,7 @@ import type { WorkRuleContext } from '../rules/rules.js'
 
 export interface ExecutorInput {
   explainOnly?: boolean
+  visualDiffEnabled?: boolean
   runId: string
   taskId: string
   inputEventId?: string
@@ -82,6 +83,7 @@ export interface ToolApprovalGrant {
 export interface ExecutorResult {
   executorRef: string
   output: string
+  visualDiff?: import('../visual-diff/protocol.js').PreparedVisualDiff
   usage?: ModelUsageSample
   durationMs?: number
   approvalPending?: {

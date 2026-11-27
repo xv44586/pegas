@@ -1,3 +1,4 @@
+import { isVisualDiffUrl, VisualDiffImage } from './VisualDiffImage'
 import Markdown, { type Components } from 'react-markdown'
 import { useMemo } from 'react'
 import remarkGfm from 'remark-gfm'
@@ -17,6 +18,13 @@ export function MarkdownMessage({
 }) {
   const components = useMemo<Components>(
     () => ({
+      img({ src, alt }) {
+        return typeof src === 'string' && isVisualDiffUrl(src) ? (
+          <VisualDiffImage src={src} alt={alt ?? '代码变更流程图'} />
+        ) : (
+          <img src={src} alt={alt ?? ''} />
+        )
+      },
       pre({ children }) {
         return <pre tabIndex={0}>{children}</pre>
       },

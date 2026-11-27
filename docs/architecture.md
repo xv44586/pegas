@@ -349,6 +349,8 @@ Notification 根据 Task 事件决定是否以及在哪里联系用户。
 
 Task 结果通知优先携带 Review Pack 摘要和可预览 evidence；代码、工具调用与过程日志只通过 Channel/Run 审计链接按需进入。多张截图、关键帧、测试与外部确认按 success criterion 聚合去重，不能各自产生通知噪声。产品已读、外部投递状态、用户接受结果和 evidence 有效性是四个独立事实。
 
+用户可在「设置 → Pegas → 行为与规则」开启 NOTIFY-007 代码变更流程图（默认关闭，沿用实例级运行设置）。实际 Executor 根据真实 Git 差异编写有版本的结构化说明，Worker 在已授权工作目录校验固定提交及代码引用，纯渲染器生成动态 SVG；Router 不判断是否画图。SVG 与 Run 输出及 Outbox 同事务保存，鉴权读取端点只返回对应 owner 的产物。Web 以图片隔离预览并提供下载，不执行 Agent 提供的 HTML/SVG。失败只降级为文字汇报，流程图不能作为运行或测试证据。协议、可移植技能与回滚边界见 [代码变更流程图](visual-diff-reports.md)。
+
 Notification 从持久 Outbox 领取待投递消息，处理重试、顺序、合并、静默时段、目标渠道和未知投递结果。Control Plane 提交任务状态与待发消息后即可释放当前 Run，不依赖客户端保持在线。
 
 第一版 Dispatcher 使用独立进程和 SQLite lease。每次投递增加尝试次数，失败后指数退避，超过上限进入 Failed；Webhooks 同时携带稳定 delivery ID 与 idempotency key，使接收端可以消除网络重试造成的重复通知。Supervisor 在启用推送时一并守护 Dispatcher。Webhook 是首个真实通道，后续 Web Push、APNs 或消息平台适配器复用同一接口。

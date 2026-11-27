@@ -2305,6 +2305,29 @@ export function createControlPlane(options: ControlPlaneOptions): Server {
         return sendJson(response, 200, { evidence })
       }
 
+      const visualDiffMatch = /^\/v1\/runs\/([^/]+)\/visual-diff$/.exec(
+        taskResourceUrl.pathname,
+      )
+      if (visualDiffMatch && request.method === 'GET') {
+        const content = options.store.runVisualDiff(
+          decodeURIComponent(visualDiffMatch[1] ?? ''),
+          requiredQuery(taskResourceUrl, 'userId'),
+        )
+        if (!content) return sendJson(response, 404, { error: 'not_found' })
+        response.writeHead(200, {
+          'content-type': 'image/svg+xml',
+          'content-length': String(Buffer.byteLength(content.svg)),
+          'content-disposition': 'inline; filename="pegas-visual-diff.svg"',
+          'x-pegas-content-sha256': content.contentHash,
+          'cache-control': 'private, no-store',
+          'content-security-policy':
+            "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+          'x-content-type-options': 'nosniff',
+        })
+        response.end(content.svg)
+        return
+      }
+
       const evidenceContentMatch = /^\/v1\/evidence\/([^/]+)\/content$/.exec(
         taskResourceUrl.pathname,
       )

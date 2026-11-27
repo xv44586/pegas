@@ -3,6 +3,7 @@
   "ignoreBinaries": ["dsh"],
   "entry": [
     "src/**/main.ts",
+    "src/visual-diff/cli.ts",
     "src/desktop/main.ts",
     "scripts/**/*.mjs",
     "test/**/*.test.ts",

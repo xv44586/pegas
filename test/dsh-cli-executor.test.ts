@@ -75,6 +75,30 @@ console.log(JSON.stringify({type:'final',sessionId:'followups',text:${JSON.strin
     expect(executorPrompt('分析')).toContain('不必每轮给建议')
   })
 
+  it('keeps visual diff JSON out of streaming work activity across every chunk boundary', async () => {
+    const output =
+      '已修改流程。\n<pegas_visual_diff>{"version":1,"title":"private graph data"}</pegas_visual_diff>'
+    const command = fakeDsh(`
+console.log(JSON.stringify({type:'text',text:'开始检查代码。'}))
+console.log(JSON.stringify({type:'tool_call',callId:'read-1',tool:'read'}))
+for (const text of ${JSON.stringify(output)}) console.log(JSON.stringify({type:'text',text}))
+console.log(JSON.stringify({type:'final',sessionId:'visual',text:${JSON.stringify(output)},reason:{kind:'completed'}}))
+`)
+    const messages: string[] = []
+    const result = await new DshCliExecutor({ command }).execute({
+      runId: 'run',
+      taskId: 'task',
+      prompt: '修改',
+      workingDirectory: process.cwd(),
+      visualDiffEnabled: true,
+      onProgress: event => {
+        if (event.type === 'message') messages.push(event.text)
+      },
+    })
+    expect(messages.join('').trim()).toBe('已修改流程。')
+    expect(result.output).toBe(output)
+  })
+
   it('does not expose Pegas control-plane credentials to the Executor process', () => {
     expect(
       executorEnvironment({

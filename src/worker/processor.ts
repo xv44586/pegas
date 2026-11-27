@@ -1,3 +1,4 @@
+import { prepareVisualDiffReport } from '../visual-diff/protocol.js'
 import type {
   ClaimedRun,
   ExecutionContext,
@@ -1164,6 +1165,9 @@ export async function executeClaimedRun(
       ...(inputEventId ? { inputEventId } : {}),
       prompt: claimed.run.input,
       workingDirectory: runExecutionWorkspace(claimed.run, workingDirectory),
+      visualDiffEnabled:
+        store.hasRuntimeSettings() &&
+        store.getRuntimeSettings().visualDiffEnabled === true,
       executionContext: claimed.run.executionContext,
       executionContractVersion: claimed.run.executionContractVersion,
       mandate: claimed.task.mandate,
@@ -1323,6 +1327,15 @@ export async function executeClaimedRun(
       },
       signal: runAbort.signal,
     })
+    result = {
+      ...result,
+      ...(await prepareVisualDiffReport(
+        result.output,
+        store.hasRuntimeSettings() &&
+          store.getRuntimeSettings().visualDiffEnabled === true,
+        runExecutionWorkspace(claimed.run, workingDirectory),
+      )),
+    }
   } catch (error) {
     clearInterval(leaseHeartbeat)
     signal.removeEventListener('abort', abortRun)
@@ -1423,7 +1436,7 @@ export async function executeClaimedRun(
       reportSequence: 0,
       status: 'ready',
       evidenceRefIds,
-      summary: result.output,
+      summary: persistedRun.output ?? result.output,
       limitations:
         evidenceRefIds.length === 0 ? ['本次运行没有产出结构化证据引用。'] : [],
       remainingRisks: [

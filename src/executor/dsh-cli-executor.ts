@@ -1,3 +1,5 @@
+import { visualDiffContract } from '../visual-diff/contract.js'
+import { visibleVisualDiffText } from '../visual-diff/protocol.js'
 import { validateProjectWorkspace } from '../project/project-workspaces.js'
 import {
   hostCredentialRoots,
@@ -436,7 +438,9 @@ export class DshCliExecutor implements RunExecutor {
         }
         if (event.type === 'text' && acknowledgementEmitted) {
           progressText += event.text
-          const visible = splitAnswerFollowUps(progressText, true).text
+          const visible = visibleVisualDiffText(
+            splitAnswerFollowUps(progressText, true).text,
+          )
           const delta = visible.slice(emittedProgressLength)
           if (delta) {
             input.onProgress?.({ type: 'message', text: delta })
@@ -451,7 +455,9 @@ export class DshCliExecutor implements RunExecutor {
           !acknowledgementEmitted &&
           pendingAssistantText.length > 0
         ) {
-          const text = pendingAssistantText.join('').trim()
+          const text = visibleVisualDiffText(
+            pendingAssistantText.join(''),
+          ).trim()
           pendingAssistantText = []
           if (text) {
             input.onProgress?.({ type: 'acknowledgement', text })
@@ -571,6 +577,7 @@ export class DshCliExecutor implements RunExecutor {
         input.mandate,
         input.memories,
         input.workRules,
+        input.visualDiffEnabled,
       ),
     )
     let exit: { code: number | null; signal: NodeJS.Signals | null }
@@ -1177,6 +1184,7 @@ export function executorPrompt(
   mandate?: import('../core/domain.js').Mandate,
   memories?: readonly import('../memory/memory.js').MemoryContextEntry[],
   workRules?: import('../rules/rules.js').WorkRuleContext,
+  visualDiffEnabled = false,
 ): string {
   const memoryContext =
     memories && memories.length > 0
@@ -1232,6 +1240,7 @@ status 只能是 succeeded、failed 或 unknown。idempotencyKey 和 commandId �
 
 用户意图不完整、需要形成或修订可验收目标时，由你（实际 Executor）在检查真实工具与权限后提交 Goal Contract：POST /v1/runs/:runId/goal-proposals，使用同一 claim header。请求体为 {"commandId":"stable-key","goal":{完整 GoalContractDraft}}。goal 必须包含 basedOnEventIds（引用本 Task 已有输入事件，含 PEGAS_INPUT_EVENT_ID）、desiredOutcome、successCriteria（每条含稳定 criterionId、observableStatement、required、evidencePlanRef）、evidencePlan（每条含 id、criterionId、acceptedKinds、acceptedTrustClasses、minimumCount、presentation）以及 beneficiaries、nonGoals、constraints、contextSources、assumptions、unknowns、prerequisites、permissionBoundary、reviewCheckpoints、failureAndRecovery、feedbackSignals 数组/对象字段。只把会实质改变结果、成本、权限或风险的未知项标记 unknowns[].blocking=true；存在 blocking 未知项时 Pegas 会把问题交给用户并暂停执行，你提交后应立即结束当前 turn 等待用户回答。没有 blocking 未知项时提交成功后继续按新合同执行。用户明确要求交付后由其验收时，在 goal 中设置 requireAcceptance:true；其他事情省略该字段。不要为简单明确的低风险请求强行发起访谈；目标或权限范围扩大必须通过新 revision 而不是覆盖原始输入。commandId 是网络重试键，同一提案重试必须保持原键和完全相同的 payload。
 ${answerFollowUpsContract}
+${visualDiffEnabled ? visualDiffContract : ''}
 </pegas_execution_contract>`
 }
 
