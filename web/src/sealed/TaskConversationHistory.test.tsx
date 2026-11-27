@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PegasApi } from '../api'
 import type { Run, RunActivityEntry } from '../types'
 import { TaskConversationHistory } from './TaskConversationHistory'
+import type { TaskActivitySearchSnapshot } from './taskActivitySearch'
 
 const run: Run = {
   id: 'run-a',
@@ -58,7 +59,10 @@ const messages = [
 const renderMessage = (message: (typeof messages)[number]) => (
   <p>{message.text}</p>
 )
-function mount(api: PegasApi) {
+function mount(
+  api: PegasApi,
+  onSearchSnapshot?: (snapshot: TaskActivitySearchSnapshot) => void,
+) {
   return render(
     <TaskConversationHistory
       api={api}
@@ -66,6 +70,7 @@ function mount(api: PegasApi) {
       runs={[run]}
       messages={messages}
       renderMessage={renderMessage}
+      onSearchSnapshot={onSearchSnapshot}
     />,
   )
 }
@@ -77,6 +82,7 @@ afterEach(() => {
 
 describe('CONV-002 inline execution history', () => {
   it('keeps messages available when a later page fails and retries all pages without duplicates', async () => {
+    const search = vi.fn<(snapshot: TaskActivitySearchSnapshot) => void>()
     let fail = true
     const api = install(path =>
       path.includes('/activity?')
@@ -92,15 +98,27 @@ describe('CONV-002 inline execution history', () => {
             })
         : undefined,
     )
-    mount(api)
+    mount(api, search)
     await screen.findByRole('alert')
     expect(screen.getByText('保留的输入')).toBeTruthy()
     expect(screen.queryByText('近期过程')).toBeNull()
+    expect(search.mock.lastCall?.[0]).toMatchObject({
+      pending: false,
+      failed: true,
+      entries: [],
+    })
     fail = false
     fireEvent.click(screen.getByRole('button', { name: '重新读取本轮过程' }))
     expect(await screen.findByText('早期过程')).toBeTruthy()
     expect(screen.getAllByText('近期过程')).toHaveLength(1)
     expect(screen.queryByRole('alert')).toBeNull()
+    await waitFor(() =>
+      expect(search.mock.lastCall?.[0]).toMatchObject({
+        pending: false,
+        failed: false,
+        entries: [{ text: '早期过程' }, { text: '近期过程' }],
+      }),
+    )
   })
 
   it('reveals saved thinking, planning, tool input and output, and child transcript in the conversation', async () => {
@@ -191,6 +209,7 @@ describe('CONV-002 inline execution history', () => {
   )
 
   it('does not let an old response replace another task after navigation', async () => {
+    const search = vi.fn<(snapshot: TaskActivitySearchSnapshot) => void>()
     let resolve!: (response: Response) => void
     const api = install(path =>
       path.includes('/run-a/activity?')
@@ -207,8 +226,13 @@ describe('CONV-002 inline execution history', () => {
             ? Response.json({ runId: 'run-b', taskId: 'task-b', subagents: [] })
             : undefined,
     )
-    const view = mount(api)
+    const view = mount(api, search)
     await waitFor(() => expect(resolve).toBeTypeOf('function'))
+    expect(search.mock.lastCall?.[0]).toMatchObject({
+      taskId: 'task-a',
+      pending: true,
+      entries: [],
+    })
     view.rerender(
       <TaskConversationHistory
         api={api}
@@ -216,14 +240,20 @@ describe('CONV-002 inline execution history', () => {
         runs={[{ ...run, id: 'run-b', taskId: 'task-b' }]}
         messages={[]}
         renderMessage={renderMessage}
+        onSearchSnapshot={search}
       />,
     )
     await screen.findByText('B 的过程')
     resolve(Response.json(report([entry(1, 'A 的旧响应')])))
     await waitFor(() => expect(screen.queryByText('A 的旧响应')).toBeNull())
+    expect(search.mock.lastCall?.[0]).toMatchObject({
+      taskId: 'task-b',
+      entries: [{ text: 'B 的过程' }],
+    })
   })
 
   it('refreshes an active run even before its version changes and preserves earlier records on a failed refresh', async () => {
+    const search = vi.fn<(snapshot: TaskActivitySearchSnapshot) => void>()
     let count = 0
     const api = install(path =>
       path.includes('/activity?')
@@ -246,21 +276,34 @@ describe('CONV-002 inline execution history', () => {
           runs={[{ ...run, status: 'running' }]}
           messages={messages}
           renderMessage={renderMessage}
+          onSearchSnapshot={search}
         />,
       )
       await act(async () => {
         await vi.advanceTimersByTimeAsync(1)
       })
       expect(screen.getByText('持续可读的过程')).toBeTruthy()
+      expect(search.mock.lastCall?.[0]).toMatchObject({
+        failed: false,
+        entries: [{ text: '持续可读的过程' }],
+      })
       await act(async () => {
         await vi.advanceTimersByTimeAsync(5000)
       })
       expect(screen.getByRole('alert').textContent).toContain('临时离线')
+      expect(search.mock.lastCall?.[0]).toMatchObject({
+        failed: true,
+        entries: [{ text: '持续可读的过程' }],
+      })
       expect(screen.getByText('持续可读的过程')).toBeTruthy()
       await act(async () => {
         await vi.advanceTimersByTimeAsync(5000)
       })
       expect(screen.getByText('新增过程')).toBeTruthy()
+      expect(search.mock.lastCall?.[0]).toMatchObject({
+        failed: false,
+        entries: [{ text: '持续可读的过程' }, { text: '新增过程' }],
+      })
       expect(screen.queryByRole('alert')).toBeNull()
     } finally {
       cleanup()

@@ -419,13 +419,63 @@ export async function verifyTaskConversation(hostPage, capture, size) {
     assert.equal(await composer.inputValue(), '搜索期间保留的草稿')
     await searchToggle.click()
     await searchInput.fill('不存在的关键词')
-    await searchDialog.getByText('当前事情中没有匹配的消息。').waitFor()
+    await searchDialog.getByText('当前事情中没有匹配的记录。').waitFor()
     await page.keyboard.press('Escape')
     await page.waitForFunction(
       () =>
         globalThis.document.activeElement?.getAttribute('aria-label') ===
         '搜索当前事情',
     )
+    for (const [query, seq] of [
+      ['列出尚待核实的数据', 1],
+      ['暂不计入确定结论', 2],
+      ['[结果] 已校验', 4],
+    ]) {
+      // Collapse the original card first, so a hit must reveal its nested content.
+      const anchor = JSON.stringify([run.id, null, seq])
+      await page.evaluate(id => {
+        const target = [
+          ...globalThis.document.querySelectorAll('[data-activity-id]'),
+        ].find(item => item.getAttribute('data-activity-id') === id)
+        for (const details of target.querySelectorAll('details'))
+          details.open = false
+      }, anchor)
+      await searchToggle.click()
+      await searchInput.fill(query)
+      if (seq === 4)
+        await capture(
+          page,
+          `${size}-task-search-activity.png`,
+          `${size}-task-search-activity`,
+        )
+      await searchDialog.getByRole('button', { name: /定位记录/ }).click()
+      await page.waitForFunction(
+        id =>
+          globalThis.document.activeElement?.getAttribute(
+            'data-activity-id',
+          ) === id,
+        anchor,
+      )
+      const selected = page.locator('[data-activity-id]:focus')
+      assert.equal(await selected.locator('details:not([open])').count(), 0)
+      assert.ok((await selected.innerText()).includes(query))
+      const bounds = await selected.boundingBox()
+      const viewport = await page.locator('.conversation-scroll').boundingBox()
+      assert.ok(
+        bounds &&
+          viewport &&
+          bounds.y < viewport.y + viewport.height &&
+          bounds.y + bounds.height > viewport.y,
+      )
+      assert.equal(await composer.inputValue(), '搜索期间保留的草稿')
+      assert.equal(new URL(page.url()).searchParams.get('task'), taskId)
+      if (seq === 4)
+        await capture(
+          page,
+          `${size}-task-search-activity-target.png`,
+          `${size}-task-search-activity-target`,
+        )
+    }
     for (const text of ['请再核对一次数据来源', '只保留可以核实的结论']) {
       await composer.fill(text)
       await page.getByRole('button', { name: '发送', exact: true }).click()

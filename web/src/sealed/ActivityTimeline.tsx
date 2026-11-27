@@ -77,12 +77,14 @@ export function ActivityTimeline({
   dataAccess,
   onReviewJump,
   chronological = false,
+  entryAnchor,
 }: {
   entries: readonly RunActivityEntry[]
   renderDelegation?: (entry: RunActivityEntry) => ReactNode
   dataAccess?: ActivityDataAccess
   onReviewJump?: () => void
   chronological?: boolean
+  entryAnchor?: (entry: RunActivityEntry) => string
 }) {
   const units = chronological
     ? entries.map(entry => ({
@@ -120,6 +122,7 @@ export function ActivityTimeline({
           ) : (
             <ActivityEntryRow
               entry={unit.entry}
+              anchor={entryAnchor?.(unit.entry)}
               chronological={chronological}
               key={unit.key}
               renderDelegation={renderDelegation}
@@ -234,10 +237,12 @@ function ActivityEntryRow({
   entry,
   renderDelegation,
   chronological = false,
+  anchor,
 }: {
   entry: RunActivityEntry
   renderDelegation?: (entry: RunActivityEntry) => ReactNode
   chronological?: boolean
+  anchor?: string
 }) {
   if (entry.kind === 'step') {
     if (entry.meta) {
@@ -245,6 +250,8 @@ function ActivityEntryRow({
       const failed = entry.status === 'error'
       return (
         <li
+          data-activity-id={anchor}
+          tabIndex={anchor ? -1 : undefined}
           className={`activity-meta-row ${steered ? 'is-steered' : 'is-compaction'}${failed ? ' is-error' : ''}`}
         >
           <span className="activity-icon" aria-hidden="true">
@@ -265,18 +272,26 @@ function ActivityEntryRow({
       )
     }
     return chronological ? (
-      <li className="activity-meta-row">
+      <li
+        className="activity-meta-row"
+        data-activity-id={anchor}
+        tabIndex={anchor ? -1 : undefined}
+      >
         <span>{entry.label}</span>
         <small>{formatRelativeTime(entry.createdAt)}</small>
       </li>
     ) : null
   }
   if (entry.kind === 'thinking') {
-    return <ThinkingRow entry={entry} />
+    return <ThinkingRow entry={entry} anchor={anchor} />
   }
   if (entry.kind === 'text') {
     return (
-      <li className="activity-message">
+      <li
+        className="activity-message"
+        data-activity-id={anchor}
+        tabIndex={anchor ? -1 : undefined}
+      >
         <div className="activity-prose">
           <MarkdownMessage content={entry.detail ?? entry.label} />
         </div>
@@ -288,21 +303,29 @@ function ActivityEntryRow({
     const delegated = renderDelegation(entry)
     if (delegated) return <>{delegated}</>
   }
-  return <ToolEntryRow entry={entry} rawDetails={chronological} />
+  return (
+    <ToolEntryRow entry={entry} rawDetails={chronological} anchor={anchor} />
+  )
 }
 
 function ToolEntryRow({
   entry,
   rawDetails = false,
+  anchor,
 }: {
   entry: RunActivityEntry
   rawDetails?: boolean
+  anchor?: string
 }) {
   const headline = toolHeadline(entry)
   const running = entry.status === 'started'
   const failed = entry.status === 'error'
   return (
-    <li className="activity-tool">
+    <li
+      className="activity-tool"
+      data-activity-id={anchor}
+      tabIndex={anchor ? -1 : undefined}
+    >
       <details>
         <summary>
           <span className="activity-icon" aria-hidden="true">
@@ -1148,10 +1171,20 @@ function TodoFoldUnit({
   )
 }
 
-function ThinkingRow({ entry }: { entry: RunActivityEntry }) {
+function ThinkingRow({
+  entry,
+  anchor,
+}: {
+  entry: RunActivityEntry
+  anchor?: string
+}) {
   const running = entry.status === 'started'
   return (
-    <li className="activity-thinking">
+    <li
+      className="activity-thinking"
+      data-activity-id={anchor}
+      tabIndex={anchor ? -1 : undefined}
+    >
       <details>
         <summary>
           <span className="activity-icon" aria-hidden="true">
